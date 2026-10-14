@@ -23,7 +23,7 @@ public static class CilEmitter
         var runtimeRef = new AssemblyNameReference("System.Runtime", new Version(10, 0, 0, 0));
         module.AssemblyReferences.Add(runtimeRef);
         var objectType = new TypeReference("System", "Object", module, runtimeRef);
-        var int64Type = new TypeReference("System", "Int64", module, runtimeRef, isValueType: true);
+        var int64Type = new TypeReference("System", "Int64", module, runtimeRef, true);
         var type = new TypeDefinition("Oreslang.Generated", "OresProgram",
             TypeAttributes.Public | TypeAttributes.Abstract | TypeAttributes.Sealed | TypeAttributes.Class,
             objectType);
