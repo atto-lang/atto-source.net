@@ -22,8 +22,16 @@ public static class CilEmitter
         // framework-era mscorlib types from Cecil's default TypeSystem.
         var runtimeRef = new AssemblyNameReference("System.Runtime", new Version(10, 0, 0, 0));
         module.AssemblyReferences.Add(runtimeRef);
-        var objectType = new TypeReference("System", "Object", module, runtimeRef);
-        var int64Type = new TypeReference("System", "Int64", module, runtimeRef, true);
+        // Cecil's TypeSystem applies the correct primitive element-type tags
+        // (ELEMENT_TYPE_OBJECT and ELEMENT_TYPE_I8). A manually constructed
+        // TypeReference("System", "Int64", ..., true) is only ELEMENT_TYPE_VALUETYPE,
+        // which changes the method signature and may break Native AOT binding.
+        var objectType = module.TypeSystem.Object;
+        var int64Type = module.TypeSystem.Int64;
+        if (objectType.Scope is not AssemblyNameReference { Name: "System.Runtime" } ||
+            int64Type.Scope is not AssemblyNameReference { Name: "System.Runtime" } ||
+            int64Type.MetadataType != MetadataType.Int64)
+            throw new InvalidOperationException("CIL primitive types are not bound to System.Runtime");
         var type = new TypeDefinition("Oreslang.Generated", "OresProgram",
             TypeAttributes.Public | TypeAttributes.Abstract | TypeAttributes.Sealed | TypeAttributes.Class,
             objectType);
