@@ -66,3 +66,34 @@ jobs:
           name: oreslang-net-win-x64
           path: artifacts/apps/win-x64/
           if-no-files-found: error
+
+  # The Windows release remains mandatory. Linux is an independent diagnostic
+  # for compiler/CIL correctness when Windows hosted runners fail before steps.
+  linux-aot-diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install Linux Native AOT prerequisites
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
+      - name: Run frontend, metadata and mailbox regressions
+        run: dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
+      - name: Emit generated CIL using the compiler
+        run: |
+          mkdir -p artifacts/generated
+          dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -- compile examples/hello.ores --out artifacts/generated/OresGenerated.dll
+      - name: Native AOT publish generated application (diagnostic only)
+        run: |
+          dotnet publish host/Ores.Net.NativeHost/Ores.Net.NativeHost.csproj -c Release -r linux-x64 \
+            -o artifacts/linux-x64 "-p:GeneratedAssembly=$GITHUB_WORKSPACE/artifacts/generated/OresGenerated.dll" -warnaserror
+      - name: Execute Linux Native AOT generated application
+        run: |
+          set -euo pipefail
+          test -x artifacts/linux-x64/oreslang-app
+          test "$(artifacts/linux-x64/oreslang-app)" = 14
+          file artifacts/linux-x64/oreslang-app | grep -q 'ELF 64-bit'
+          test ! -f artifacts/linux-x64/oreslang-app.runtimeconfig.json
+          test ! -f artifacts/linux-x64/OresGenerated.dll
