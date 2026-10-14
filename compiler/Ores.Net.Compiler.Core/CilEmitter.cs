@@ -20,7 +20,11 @@ public static class CilEmitter
         var module = assembly.MainModule;
         // Refer to .NET's facade assembly explicitly instead of emitting
         // framework-era mscorlib types from Cecil's default TypeSystem.
-        var runtimeRef = new AssemblyNameReference("System.Runtime", new Version(10, 0, 0, 0));
+        var runtimeRef = new AssemblyNameReference("System.Runtime", new Version(10, 0, 0, 0))
+        {
+            // System.Runtime reference-assembly strong-name identity.
+            PublicKeyToken = new byte[] { 0xb0, 0x3f, 0x5f, 0x7f, 0x11, 0xd5, 0x0a, 0x3a }
+        };
         module.AssemblyReferences.Add(runtimeRef);
         // Cecil's TypeSystem applies the correct primitive element-type tags
         // (ELEMENT_TYPE_OBJECT and ELEMENT_TYPE_I8). A manually constructed
