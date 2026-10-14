@@ -121,6 +121,10 @@ InvalidSend(() => mailbox.Send(before, value), "stopped");
 var after = mailbox.Restart();
 Require(after.Generation > before.Generation, "new generation");
 Require(after != before, "restart rotates local actor capability");
+Require(after.Id == before.Id, "restart preserves actor identity");
+InvalidSend(() => mailbox.Send(default, value), "default actor ref must be rejected");
+Require(after.ToString().Contains("Generation", StringComparison.Ordinal),
+    "actor ref diagnostics retain safe generation field");
 InvalidSend(() => mailbox.Send(duplicateActor.CurrentRef, value),
     "other mailbox capability remains invalid after restart");
 InvalidSend(() => mailbox.Send(before, value), "stale reference");
