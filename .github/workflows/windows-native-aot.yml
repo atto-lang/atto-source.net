@@ -23,8 +23,9 @@ jobs:
       - name: Reject oversized and invalid UTF-8 compiler input
         shell: pwsh
         run: |
+          $PSNativeCommandUseErrorActionPreference = $false
           $oversize = Join-Path $env:RUNNER_TEMP 'oversize.ores'
-          [IO.File]::WriteAllBytes($oversize, (New-Object byte[] (1048577)))
+          [IO.File]::WriteAllBytes($oversize, [byte[]]::new(1048577))
           dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -- check $oversize
           if ($LASTEXITCODE -eq 0) { throw 'Compiler accepted oversized source file' }
           $invalid = Join-Path $env:RUNNER_TEMP 'invalid-utf8.ores'
