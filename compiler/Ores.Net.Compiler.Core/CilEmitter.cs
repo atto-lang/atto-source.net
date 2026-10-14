@@ -18,13 +18,19 @@ public static class CilEmitter
             new AssemblyNameDefinition("OresGenerated", new Version(1, 0, 0, 0)),
             "OresGenerated", ModuleKind.Dll);
         var module = assembly.MainModule;
+        // Refer to .NET's facade assembly explicitly instead of emitting
+        // framework-era mscorlib types from Cecil's default TypeSystem.
+        var runtimeRef = new AssemblyNameReference("System.Runtime", new Version(10, 0, 0, 0));
+        module.AssemblyReferences.Add(runtimeRef);
+        var objectType = new TypeReference("System", "Object", module, runtimeRef);
+        var int64Type = new TypeReference("System", "Int64", module, runtimeRef, isValueType: true);
         var type = new TypeDefinition("Oreslang.Generated", "OresProgram",
             TypeAttributes.Public | TypeAttributes.Abstract | TypeAttributes.Sealed | TypeAttributes.Class,
-            module.TypeSystem.Object);
+            objectType);
         module.Types.Add(type);
         var method = new MethodDefinition("Run",
             MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.HideBySig,
-            module.TypeSystem.Int64);
+            int64Type);
         type.Methods.Add(method);
         method.Body.MaxStackSize = 256;
         var il = method.Body.GetILProcessor();
