@@ -97,7 +97,8 @@ public static class CilEmitter
             new MetadataRootBuilder(metadata),
             ilStream,
             strongNameSignatureSize: 0,
-            flags: CorFlags.ILOnly);
+            flags: CorFlags.ILOnly,
+            deterministicIdProvider: DeterministicImageId);
         var peBytes = new BlobBuilder();
         pe.Serialize(peBytes);
 
@@ -113,6 +114,17 @@ public static class CilEmitter
         {
             if (File.Exists(temporary)) File.Delete(temporary);
         }
+    }
+
+    // Without an explicit provider PEBuilder creates a time-based COFF stamp,
+    // even when the metadata MVID is stable. Hash the entire pre-stamped
+    // content to produce a reproducible native-toolchain input.
+    private static BlobContentId DeterministicImageId(IEnumerable<Blob> blobs)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        foreach (var blob in blobs)
+            hash.AppendData(blob.GetBytes());
+        return BlobContentId.FromHash(hash.GetHashAndReset());
     }
 
     private readonly record struct Pending(Expression Node, bool EmitOperator);
