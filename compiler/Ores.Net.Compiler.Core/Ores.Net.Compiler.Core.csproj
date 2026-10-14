@@ -2,7 +2,6 @@
   <PropertyGroup>
     <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
-  <ItemGroup>
-    <PackageReference Include="Mono.Cecil" Version="0.11.6" />
-  </ItemGroup>
+  <!-- The production Native AOT compiler uses System.Reflection.Metadata only.
+       Mono.Cecil remains a verification-only dependency, not a published runtime. -->
 </Project>
