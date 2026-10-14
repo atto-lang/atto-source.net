@@ -42,6 +42,17 @@ try
     string generated = Path.Combine(folder, "OresGenerated.dll");
     CilEmitter.EmitLibrary(positive, generated);
     Require(File.Exists(generated), "assembly emission");
+    var reproducible = Path.Combine(folder, "OresGenerated.repro.dll");
+    CilEmitter.EmitLibrary(positive, reproducible);
+    Require(File.ReadAllBytes(generated).AsSpan().SequenceEqual(File.ReadAllBytes(reproducible)),
+        "generated CIL must be byte-for-byte deterministic");
+
+    var illegalOutput = Path.Combine(folder, "OresGenerated.invalid.dll");
+    Reject(() => CilEmitter.EmitLibrary(
+        new Binary('%', new Literal(2), new Literal(3)), illegalOutput),
+        "unknown AST opcode is rejected");
+    Require(!File.Exists(illegalOutput), "failed lowering must not publish a partial DLL");
+
 
     // Compiler-time metadata inspection only, never Assembly.Load or Reflection.Emit.
     using var assembly = AssemblyDefinition.ReadAssembly(generated);
@@ -71,6 +82,9 @@ try
     Require(flatMethod.Body.MaxStackSize <= 3, "flat expression stack bound");
     Require(flatMethod.Body.Instructions.Count(i => i.OpCode.Code == Code.Add_Ovf) == 2047,
         "flat expression lowering");
+    Require(flatMethod.Body.Instructions.Last().OpCode.Code == Code.Ret,
+        "flat expression must have terminal return");
+
 
     // Artificially assembled right-deep trees cannot demand arbitrary CIL stack.
     Expression pathological = new Literal(1);
