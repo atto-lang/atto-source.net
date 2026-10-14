@@ -52,7 +52,7 @@ public static class CilEmitter
             metadata.GetOrAddString("System.Runtime"),
             new Version(10, 0, 0, 0),
             culture: default,
-            publicKeyOrToken: default,
+            // System.Runtime carries the Microsoft strong-name token; emitting a\n            // token-less reference prevents downstream C# and Native AOT binding.\n            publicKeyOrToken: metadata.GetOrAddBlob(new byte[] { 0xB0, 0x3F, 0x5F, 0x7F, 0x11, 0xD5, 0x0A, 0x3A }),
             flags: default,
             hashValue: default);
         var systemObject = metadata.AddTypeReference(
