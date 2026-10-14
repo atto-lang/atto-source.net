@@ -63,6 +63,9 @@ jobs:
             $acceptedManaged = $false
           }
           if ($acceptedManaged) { throw 'Native image verifier accepted managed test assembly' }
+      - name: Execute Native AOT checked-arithmetic error cases
+        shell: pwsh
+        run: ./verification/assert-native-arithmetic.ps1 -Rid win-x64
       - name: Upload native executable
         uses: actions/upload-artifact@v4
         with:
