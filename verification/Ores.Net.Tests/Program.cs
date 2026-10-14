@@ -52,6 +52,28 @@ try
     var ops = entry.Body.Instructions.Select(i => i.OpCode.Code).ToArray();
     Require(ops.Contains(Code.Add_Ovf) && ops.Contains(Code.Mul_Ovf), "checked CIL operations");
     Require(ops[^1] == Code.Ret, "CIL return");
+    Require(entry.Body.MaxStackSize is >= 2 and <= 256, "CIL stack bounds");
+
+    // Flat left-associated expressions are valid without recursive emitter
+    // stack overflow; 2048 additions should require only a small CIL stack.
+    var longSource = "fnc main():int{return " +
+        string.Join("+", Enumerable.Repeat("1", 2048)) + ";}";
+    var deepFlat = Path.Combine(folder, "OresGenerated.flat.dll");
+    CilEmitter.EmitLibrary(OresParser.Parse(longSource), deepFlat);
+    using var flatAssembly = AssemblyDefinition.ReadAssembly(deepFlat);
+    var flatMethod = flatAssembly.MainModule.Types.Single(t =>
+        t.FullName == "Oreslang.Generated.OresProgram").Methods.Single(m => m.Name == "Run");
+    Require(flatMethod.Body.MaxStackSize <= 3, "flat expression stack bound");
+    Require(flatMethod.Body.Instructions.Count(i => i.OpCode.Code == Code.Add_Ovf) == 2047,
+        "flat expression lowering");
+
+    // Artificially assembled right-deep trees cannot demand arbitrary CIL stack.
+    Expression pathological = new Literal(1);
+    for (var i = 0; i < 258; i++)
+        pathological = new Binary('+', new Literal(1), pathological);
+    Reject(() => CilEmitter.EmitLibrary(pathological,
+        Path.Combine(folder, "OresGenerated.pathological.dll")), "CIL stack budget");
+
 }
 finally
 {
@@ -75,6 +97,25 @@ Require(after.Generation > before.Generation, "new generation");
 InvalidSend(() => mailbox.Send(before, value), "stale reference");
 mailbox.Send(after, value);
 Require(mailbox.QueuedMessages == 1, "new generation send");
+mailbox.Stop();
+Require(mailbox.QueuedMessages == 0, "stop clears messages");
+var concurrent = new ActorMailbox(99, maxMessages: 200, maxQueuedBytes: 200);
+var concurrentRef = concurrent.CurrentRef;
+Parallel.For(0, 200, i =>
+{
+    concurrent.Send(concurrentRef, new byte[] { (byte)i });
+});
+Require(concurrent.QueuedMessages == 200, "linearizable concurrent sends");
+var seen = new bool[200];
+for (int i = 0; i < 200; i++)
+{
+    Require(concurrent.TryReceive(out var received) && received is not null,
+        "concurrent receive");
+    seen[received![0]] = true;
+}
+Require(seen.All(x => x) && concurrent.QueuedMessages == 0,
+    "concurrent delivery exactly once");
+
 
 int count = 0;
 Require(RuntimeHost.Execute(() => { count++; return 7; }) == 0 && count == 1,
