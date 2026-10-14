@@ -8,5 +8,9 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Ores.Net.Compiler.Core/Ores.Net.Compiler.Core.csproj" />
+    <!-- Mono.Cecil is a build-time IL emitter. Preserve the full fixed
+         Cecil implementation when publishing the compiler with Native AOT,
+         rather than suppressing trimming diagnostics globally. -->
+    <TrimmerRootAssembly Include="Mono.Cecil" />
   </ItemGroup>
 </Project>
