@@ -13,7 +13,9 @@ namespace Ores.Net.Compiler;
 public static class CilEmitter
 {
     private const int MaxAstNodes = 100_000;
-    private const int MaxDepth = 128;
+    // The CLR method header stores the maximum evaluation stack depth.
+    // Keep this far below the ECMA-335 maximum to bound compiler work.
+    private const int MaxEvaluationStack = 256;
 
     public static void EmitLibrary(Expression program, string outputFile)
     {
@@ -24,10 +26,9 @@ public static class CilEmitter
         var bodyStream = new MethodBodyStreamEncoder(ilStream);
         var methodCode = new BlobBuilder();
         var instructions = new InstructionEncoder(methodCode);
-        int nodes = 0;
-        Write(program, instructions, 0, ref nodes);
+        int maxStack = Write(program, instructions);
         instructions.OpCode(ILOpCode.Ret);
-        int bodyOffset = bodyStream.AddMethodBody(instructions, maxStack: 256);
+        int bodyOffset = bodyStream.AddMethodBody(instructions, maxStack: maxStack);
 
         var metadata = new MetadataBuilder();
         // Derive a reproducible module ID from the verified IL stream. A fixed
@@ -114,37 +115,74 @@ public static class CilEmitter
         }
     }
 
-    private static void Write(Expression node, InstructionEncoder il, int depth, ref int nodes)
+    private readonly record struct Pending(Expression Node, bool EmitOperator);
+
+    // A flat expression such as a+b+c+... may create thousands of AST nodes,
+    // even with shallow source nesting. Traversal MUST NOT recurse on the CLR
+    // call stack. Emit exact postorder CIL and track its evaluation stack.
+    private static int Write(Expression root, InstructionEncoder il)
     {
-        if (++nodes > MaxAstNodes || depth > MaxDepth)
-            throw new FormatException("AST budget exceeded");
-        switch (node)
+        var pending = new Stack<Pending>();
+        pending.Push(new Pending(root, false));
+        int nodes = 0;
+        int evaluationDepth = 0;
+        int maximum = 0;
+
+        while (pending.Count > 0)
         {
-            case Literal literal:
-                il.LoadConstantI8(literal.Value);
-                return;
-            case Unary { Operator: '+' } unary:
-                Write(unary.Value, il, depth + 1, ref nodes);
-                return;
-            case Unary { Operator: '-' } unary:
-                il.LoadConstantI8(0);
-                Write(unary.Value, il, depth + 1, ref nodes);
-                il.OpCode(ILOpCode.Sub_ovf);
-                return;
-            case Binary binary:
-                Write(binary.Left, il, depth + 1, ref nodes);
-                Write(binary.Right, il, depth + 1, ref nodes);
-                il.OpCode(binary.Operator switch
+            var work = pending.Pop();
+            if (work.EmitOperator)
+            {
+                if (evaluationDepth < 2)
+                    throw new FormatException("Invalid CIL operator stack");
+                var opcode = work.Node switch
                 {
-                    '+' => ILOpCode.Add_ovf,
-                    '-' => ILOpCode.Sub_ovf,
-                    '*' => ILOpCode.Mul_ovf,
-                    '/' => ILOpCode.Div,
-                    _ => throw new FormatException("Unknown operator")
-                });
-                return;
-            default:
-                throw new FormatException("Unrecognized syntax tree node");
+                    Unary { Operator: '-' } => ILOpCode.Sub_ovf,
+                    Binary { Operator: '+' } => ILOpCode.Add_ovf,
+                    Binary { Operator: '-' } => ILOpCode.Sub_ovf,
+                    Binary { Operator: '*' } => ILOpCode.Mul_ovf,
+                    Binary { Operator: '/' } => ILOpCode.Div,
+                    _ => throw new FormatException("Invalid CIL operator")
+                };
+                il.OpCode(opcode);
+                evaluationDepth--;
+            }
+            else
+            {
+                if (++nodes > MaxAstNodes)
+                    throw new FormatException("AST budget exceeded");
+
+                switch (work.Node)
+                {
+                    case Literal literal:
+                        il.LoadConstantI8(literal.Value);
+                        evaluationDepth++;
+                        break;
+                    case Unary { Operator: '+' } unary:
+                        pending.Push(new Pending(unary.Value, false));
+                        break;
+                    case Unary { Operator: '-' } unary:
+                        il.LoadConstantI8(0);
+                        evaluationDepth++;
+                        pending.Push(new Pending(unary, true));
+                        pending.Push(new Pending(unary.Value, false));
+                        break;
+                    case Binary binary when binary.Operator is '+' or '-' or '*' or '/':
+                        pending.Push(new Pending(binary, true));
+                        pending.Push(new Pending(binary.Right, false));
+                        pending.Push(new Pending(binary.Left, false));
+                        break;
+                    default:
+                        throw new FormatException("Unsupported AST expression");
+                }
+            }
+            maximum = Math.Max(maximum, evaluationDepth);
+            if (maximum > MaxEvaluationStack)
+                throw new FormatException("CIL evaluation stack budget exceeded");
         }
+
+        if (evaluationDepth != 1 || maximum < 1)
+            throw new FormatException("Invalid final CIL stack");
+        return maximum;
     }
 }
