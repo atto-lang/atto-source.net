@@ -32,10 +32,8 @@ public static class CilEmitter
             MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.HideBySig,
             int64Type);
         type.Methods.Add(method);
-        method.Body.MaxStackSize = 256;
         var il = method.Body.GetILProcessor();
-        int nodes = 0;
-        Write(program, il, 0, ref nodes);
+        method.Body.MaxStackSize = Write(program, il);
         il.Emit(OpCodes.Ret);
         // Write the completed assembly atomically to prevent a truncated DLL on failure.
         var tempPath = fullPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
@@ -50,37 +48,72 @@ public static class CilEmitter
         }
     }
 
-    private static void Write(Expression node, ILProcessor il, int depth, ref int nodes)
+    // Iterative postorder lowering: a valid flat left-associative expression can
+    // contain tens of thousands of operations without exhausting the C# call stack.
+    // Track actual evaluation stack use and reject malformed or excessive trees.
+    private readonly record struct Pending(Expression Node, bool Finish);
+
+    private static int Write(Expression root, ILProcessor il)
     {
-        if (++nodes > MaxAstNodes || depth > 128)
-            throw new FormatException("AST budget exceeded");
-        switch (node)
+        const int maxEvaluationStack = 256;
+        var pending = new Stack<Pending>();
+        pending.Push(new Pending(root, false));
+        int visited = 0, stackDepth = 0, maximum = 0;
+
+        while (pending.Count != 0)
         {
-            case Literal literal:
-                il.Emit(OpCodes.Ldc_I8, literal.Value);
-                return;
-            case Unary { Operator: '+' } unary:
-                Write(unary.Value, il, depth + 1, ref nodes);
-                return;
-            case Unary { Operator: '-' } unary:
-                il.Emit(OpCodes.Ldc_I8, 0L);
-                Write(unary.Value, il, depth + 1, ref nodes);
-                il.Emit(OpCodes.Sub_Ovf);
-                return;
-            case Binary binary:
-                Write(binary.Left, il, depth + 1, ref nodes);
-                Write(binary.Right, il, depth + 1, ref nodes);
-                il.Emit(binary.Operator switch
+            var item = pending.Pop();
+            if (item.Finish)
+            {
+                if (stackDepth < 2)
+                    throw new FormatException("Invalid CIL evaluation stack");
+                var op = item.Node switch
                 {
-                    '+' => OpCodes.Add_Ovf,
-                    '-' => OpCodes.Sub_Ovf,
-                    '*' => OpCodes.Mul_Ovf,
-                    '/' => OpCodes.Div,
-                    _ => throw new FormatException("Unknown operator")
-                });
-                return;
-            default:
-                throw new FormatException("Unrecognized syntax tree node");
+                    Unary { Operator: '-' } => OpCodes.Sub_Ovf,
+                    Binary { Operator: '+' } => OpCodes.Add_Ovf,
+                    Binary { Operator: '-' } => OpCodes.Sub_Ovf,
+                    Binary { Operator: '*' } => OpCodes.Mul_Ovf,
+                    Binary { Operator: '/' } => OpCodes.Div,
+                    _ => throw new FormatException("Unsupported operator")
+                };
+                il.Emit(op);
+                stackDepth--;
+            }
+            else
+            {
+                if (++visited > MaxAstNodes)
+                    throw new FormatException("AST instruction budget exceeded");
+                switch (item.Node)
+                {
+                    case Literal literal:
+                        il.Emit(OpCodes.Ldc_I8, literal.Value);
+                        stackDepth++;
+                        break;
+                    case Unary { Operator: '+' } unary:
+                        pending.Push(new Pending(unary.Value, false));
+                        break;
+                    case Unary { Operator: '-' } unary:
+                        il.Emit(OpCodes.Ldc_I8, 0L);
+                        stackDepth++;
+                        pending.Push(new Pending(unary, true));
+                        pending.Push(new Pending(unary.Value, false));
+                        break;
+                    case Binary binary when binary.Operator is '+' or '-' or '*' or '/':
+                        pending.Push(new Pending(binary, true));
+                        pending.Push(new Pending(binary.Right, false));
+                        pending.Push(new Pending(binary.Left, false));
+                        break;
+                    default:
+                        throw new FormatException("Unrecognized syntax tree node");
+                }
+            }
+            maximum = Math.Max(maximum, stackDepth);
+            if (maximum > maxEvaluationStack)
+                throw new FormatException("CIL evaluation stack limit exceeded");
         }
+
+        if (stackDepth != 1 || maximum == 0)
+            throw new FormatException("Invalid final CIL evaluation stack");
+        return maximum;
     }
 }
