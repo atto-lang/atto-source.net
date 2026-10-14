@@ -27,6 +27,9 @@ if ($LASTEXITCODE -ne 0) { throw 'Native AOT publish failed' }
 $binary = Join-Path $publishOut 'oreslang-app.exe'
 if (-not (Test-Path $binary)) { throw "Expected native executable is missing: $binary" }
 & $checkNative -Binary $binary -Rid $Rid
+if (Test-Path (Join-Path $publishOut 'OresGenerated.dll')) {
+    throw 'Managed generated assembly was copied to native publish output'
+}
 if (Test-Path (Join-Path $publishOut 'oreslang-app.runtimeconfig.json')) {
     throw 'Framework-dependent runtime configuration unexpectedly found'
 }
