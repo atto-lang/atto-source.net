@@ -49,6 +49,11 @@ try
         t.FullName == "Oreslang.Generated.OresProgram").Methods.Single(m => m.Name == "Run");
     Require(entry.IsStatic && entry.IsPublic && entry.ReturnType.MetadataType == MetadataType.Int64,
         "static entry signature");
+    Require(entry.ReturnType.Scope is AssemblyNameReference { Name: "System.Runtime" },
+        "primitive i64 CIL type points to System.Runtime");
+    Require(entry.DeclaringType.BaseType?.MetadataType == MetadataType.Object,
+        "System.Object CIL primitive type");
+
     var ops = entry.Body.Instructions.Select(i => i.OpCode.Code).ToArray();
     Require(ops.Contains(Code.Add_Ovf) && ops.Contains(Code.Mul_Ovf), "checked CIL operations");
     Require(ops[^1] == Code.Ret, "CIL return");
