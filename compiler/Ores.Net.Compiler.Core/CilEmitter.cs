@@ -1,131 +1,149 @@
-using Mono.Cecil;
-using Mono.Cecil.Cil;
+using System.Configuration.Assemblies;
+using System.Reflection;
+using System.Reflection.Metadata;
+using System.Reflection.Metadata.Ecma335;
+using System.Reflection.PortableExecutable;
+using System.Security.Cryptography;
 
 namespace Ores.Net.Compiler;
 
-/// <summary>Emits a statically referenced managed DLL; the published executable is Native AOT.</summary>
+/// <summary>
+/// Build-time, metadata-only CIL emitter. Never loads generated assemblies or
+/// generates runtime code; compatible with .NET Native AOT and strict trimming.
+/// </summary>
 public static class CilEmitter
 {
     private const int MaxAstNodes = 100_000;
+    private const int MaxDepth = 128;
 
     public static void EmitLibrary(Expression program, string outputFile)
     {
         ArgumentNullException.ThrowIfNull(program);
         ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
+
+        var ilStream = new BlobBuilder();
+        var bodyStream = new MethodBodyStreamEncoder(ilStream);
+        var methodCode = new BlobBuilder();
+        var instructions = new InstructionEncoder(methodCode);
+        int nodes = 0;
+        Write(program, instructions, 0, ref nodes);
+        instructions.OpCode(ILOpCode.Ret);
+        int bodyOffset = bodyStream.AddMethodBody(instructions, maxStack: 256);
+
+        var metadata = new MetadataBuilder();
+        // Derive a reproducible module ID from the verified IL stream. A fixed
+        // MVID for unrelated programs would let assembly caches conflate them.
+        byte[] hash = SHA256.HashData(methodCode.ToArray());
+        var moduleId = new Guid(hash.AsSpan(0, 16));
+        metadata.AddModule(
+            generation: 0,
+            moduleName: metadata.GetOrAddString("OresGenerated.dll"),
+            mvid: metadata.GetOrAddGuid(moduleId),
+            encId: default,
+            encBaseId: default);
+        metadata.AddAssembly(
+            metadata.GetOrAddString("OresGenerated"),
+            new Version(1, 0, 0, 0),
+            culture: default,
+            publicKey: default,
+            flags: AssemblyFlags.None,
+            hashAlgorithm: AssemblyHashAlgorithm.None);
+
+        var runtime = metadata.AddAssemblyReference(
+            metadata.GetOrAddString("System.Runtime"),
+            new Version(10, 0, 0, 0),
+            culture: default,
+            publicKeyOrToken: default,
+            flags: AssemblyFlags.None,
+            hashValue: default);
+        var systemObject = metadata.AddTypeReference(
+            runtime,
+            metadata.GetOrAddString("System"),
+            metadata.GetOrAddString("Object"));
+
+        var signature = new BlobBuilder();
+        new BlobEncoder(signature).MethodSignature().Parameters(
+            0,
+            returnType => returnType.Type().Int64(),
+            parameters => { });
+
+        // Method and type tables are ordered deliberately: <Module> owns zero
+        // methods, and the public static OresProgram owns method row #1.
+        var run = metadata.AddMethodDefinition(
+            MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.HideBySig,
+            MethodImplAttributes.IL,
+            metadata.GetOrAddString("Run"),
+            metadata.GetOrAddBlob(signature),
+            bodyOffset,
+            MetadataTokens.ParameterHandle(1));
+
+        metadata.AddTypeDefinition(
+            default, default, metadata.GetOrAddString("<Module>"),
+            default, MetadataTokens.FieldDefinitionHandle(1), run);
+        metadata.AddTypeDefinition(
+            TypeAttributes.Public | TypeAttributes.Abstract | TypeAttributes.Sealed |
+            TypeAttributes.Class | TypeAttributes.BeforeFieldInit,
+            metadata.GetOrAddString("Oreslang.Generated"),
+            metadata.GetOrAddString("OresProgram"),
+            systemObject,
+            MetadataTokens.FieldDefinitionHandle(1),
+            run);
+
+        var pe = new ManagedPEBuilder(
+            new PEHeaderBuilder(imageCharacteristics:
+                Characteristics.ExecutableImage | Characteristics.Dll),
+            new MetadataRootBuilder(metadata),
+            ilStream,
+            strongNameSignatureSize: 0,
+            flags: CorFlags.ILOnly);
+        var peBytes = new BlobBuilder();
+        pe.Serialize(peBytes);
+
         var fullPath = Path.GetFullPath(outputFile);
         Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
-        using var assembly = AssemblyDefinition.CreateAssembly(
-            new AssemblyNameDefinition("OresGenerated", new Version(1, 0, 0, 0)),
-            "OresGenerated", ModuleKind.Dll);
-        var module = assembly.MainModule;
-        // Refer to .NET's facade assembly explicitly instead of emitting
-        // framework-era mscorlib types from Cecil's default TypeSystem.
-        var runtimeRef = new AssemblyNameReference("System.Runtime", new Version(10, 0, 0, 0))
-        {
-            // System.Runtime reference-assembly strong-name identity.
-            PublicKeyToken = new byte[] { 0xb0, 0x3f, 0x5f, 0x7f, 0x11, 0xd5, 0x0a, 0x3a }
-        };
-        module.AssemblyReferences.Add(runtimeRef);
-        // Cecil's TypeSystem applies the correct primitive element-type tags
-        // (ELEMENT_TYPE_OBJECT and ELEMENT_TYPE_I8). A manually constructed
-        // TypeReference("System", "Int64", ..., true) is only ELEMENT_TYPE_VALUETYPE,
-        // which changes the method signature and may break Native AOT binding.
-        var objectType = module.TypeSystem.Object;
-        var int64Type = module.TypeSystem.Int64;
-        if (objectType.Scope is not AssemblyNameReference { Name: "System.Runtime" } ||
-            int64Type.Scope is not AssemblyNameReference { Name: "System.Runtime" } ||
-            int64Type.MetadataType != MetadataType.Int64)
-            throw new InvalidOperationException("CIL primitive types are not bound to System.Runtime");
-        var type = new TypeDefinition("Oreslang.Generated", "OresProgram",
-            TypeAttributes.Public | TypeAttributes.Abstract | TypeAttributes.Sealed | TypeAttributes.Class,
-            objectType);
-        module.Types.Add(type);
-        var method = new MethodDefinition("Run",
-            MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.HideBySig,
-            int64Type);
-        type.Methods.Add(method);
-        var il = method.Body.GetILProcessor();
-        method.Body.MaxStackSize = Write(program, il);
-        il.Emit(OpCodes.Ret);
-        // Write the completed assembly atomically to prevent a truncated DLL on failure.
-        var tempPath = fullPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        var temporary = fullPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
-            assembly.Write(tempPath);
-            File.Move(tempPath, fullPath, true);
+            File.WriteAllBytes(temporary, peBytes.ToArray());
+            File.Move(temporary, fullPath, overwrite: true);
         }
         finally
         {
-            if (File.Exists(tempPath)) File.Delete(tempPath);
+            if (File.Exists(temporary)) File.Delete(temporary);
         }
     }
 
-    // Iterative postorder lowering: a valid flat left-associative expression can
-    // contain tens of thousands of operations without exhausting the C# call stack.
-    // Track actual evaluation stack use and reject malformed or excessive trees.
-    private readonly record struct Pending(Expression Node, bool Finish);
-
-    private static int Write(Expression root, ILProcessor il)
+    private static void Write(Expression node, InstructionEncoder il, int depth, ref int nodes)
     {
-        const int maxEvaluationStack = 256;
-        var pending = new Stack<Pending>();
-        pending.Push(new Pending(root, false));
-        int visited = 0, stackDepth = 0, maximum = 0;
-
-        while (pending.Count != 0)
+        if (++nodes > MaxAstNodes || depth > MaxDepth)
+            throw new FormatException("AST budget exceeded");
+        switch (node)
         {
-            var item = pending.Pop();
-            if (item.Finish)
-            {
-                if (stackDepth < 2)
-                    throw new FormatException("Invalid CIL evaluation stack");
-                var op = item.Node switch
+            case Literal literal:
+                il.LoadConstantI8(literal.Value);
+                return;
+            case Unary { Operator: '+' } unary:
+                Write(unary.Value, il, depth + 1, ref nodes);
+                return;
+            case Unary { Operator: '-' } unary:
+                il.LoadConstantI8(0);
+                Write(unary.Value, il, depth + 1, ref nodes);
+                il.OpCode(ILOpCode.Sub_ovf);
+                return;
+            case Binary binary:
+                Write(binary.Left, il, depth + 1, ref nodes);
+                Write(binary.Right, il, depth + 1, ref nodes);
+                il.OpCode(binary.Operator switch
                 {
-                    Unary { Operator: '-' } => OpCodes.Sub_Ovf,
-                    Binary { Operator: '+' } => OpCodes.Add_Ovf,
-                    Binary { Operator: '-' } => OpCodes.Sub_Ovf,
-                    Binary { Operator: '*' } => OpCodes.Mul_Ovf,
-                    Binary { Operator: '/' } => OpCodes.Div,
-                    _ => throw new FormatException("Unsupported operator")
-                };
-                il.Emit(op);
-                stackDepth--;
-            }
-            else
-            {
-                if (++visited > MaxAstNodes)
-                    throw new FormatException("AST instruction budget exceeded");
-                switch (item.Node)
-                {
-                    case Literal literal:
-                        il.Emit(OpCodes.Ldc_I8, literal.Value);
-                        stackDepth++;
-                        break;
-                    case Unary { Operator: '+' } unary:
-                        pending.Push(new Pending(unary.Value, false));
-                        break;
-                    case Unary { Operator: '-' } unary:
-                        il.Emit(OpCodes.Ldc_I8, 0L);
-                        stackDepth++;
-                        pending.Push(new Pending(unary, true));
-                        pending.Push(new Pending(unary.Value, false));
-                        break;
-                    case Binary binary when binary.Operator is '+' or '-' or '*' or '/':
-                        pending.Push(new Pending(binary, true));
-                        pending.Push(new Pending(binary.Right, false));
-                        pending.Push(new Pending(binary.Left, false));
-                        break;
-                    default:
-                        throw new FormatException("Unrecognized syntax tree node");
-                }
-            }
-            maximum = Math.Max(maximum, stackDepth);
-            if (maximum > maxEvaluationStack)
-                throw new FormatException("CIL evaluation stack limit exceeded");
+                    '+' => ILOpCode.Add_ovf,
+                    '-' => ILOpCode.Sub_ovf,
+                    '*' => ILOpCode.Mul_ovf,
+                    '/' => ILOpCode.Div,
+                    _ => throw new FormatException("Unknown operator")
+                });
+                return;
+            default:
+                throw new FormatException("Unrecognized syntax tree node");
         }
-
-        if (stackDepth != 1 || maximum == 0)
-            throw new FormatException("Invalid final CIL evaluation stack");
-        return maximum;
     }
 }
