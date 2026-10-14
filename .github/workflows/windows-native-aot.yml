@@ -36,6 +36,9 @@ jobs:
       - name: Publish native compiler and native application
         shell: pwsh
         run: ./scripts/publish-windows.ps1 -Source examples/hello.ores -Rid win-x64
+      - name: Exercise the released Native AOT compiler CLI
+        shell: pwsh
+        run: ./verification/assert-native-compiler-cli.ps1 -Compiler ./artifacts/compiler/win-x64/oresnet.exe -ValidSource examples/hello.ores
       - name: Execute real Windows Native AOT binary
         shell: pwsh
         run: |
