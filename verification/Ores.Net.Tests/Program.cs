@@ -108,11 +108,21 @@ InvalidSend(() => mailbox.Send(before, value), "bounded queue");
 Require(mailbox.TryReceive(out var copy) && copy is not null && copy[0] == 1,
     "mailbox owns payload bytes");
 Require(!mailbox.TryReceive(out _), "queue drained");
-InvalidSend(() => mailbox.Send(new ActorRef(43, before.Generation), value), "wrong actor");
+// A different mailbox cannot spoof even a matching numeric actor ID/generation.
+var wrongActor = new ActorMailbox(43, maxMessages: 1, maxQueuedBytes: 4);
+InvalidSend(() => mailbox.Send(wrongActor.CurrentRef, value), "wrong actor");
+var duplicateActor = new ActorMailbox(42, maxMessages: 1, maxQueuedBytes: 4);
+InvalidSend(() => mailbox.Send(duplicateActor.CurrentRef, value),
+    "same numeric ID and generation must not forge mailbox capability");
+Require(!before.ToString().Contains("Nonce", StringComparison.OrdinalIgnoreCase),
+    "actor reference string must not disclose nonce");
 mailbox.Stop();
 InvalidSend(() => mailbox.Send(before, value), "stopped");
 var after = mailbox.Restart();
 Require(after.Generation > before.Generation, "new generation");
+Require(after != before, "restart rotates local actor capability");
+InvalidSend(() => mailbox.Send(duplicateActor.CurrentRef, value),
+    "other mailbox capability remains invalid after restart");
 InvalidSend(() => mailbox.Send(before, value), "stale reference");
 mailbox.Send(after, value);
 Require(mailbox.QueuedMessages == 1, "new generation send");
