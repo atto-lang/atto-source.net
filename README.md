@@ -1,0 +1,77 @@
+# Oreslang .NET — Windows Native AOT backend
+
+Independent **CIL compiler + .NET Native AOT runtime** for Oreslang. No LLVM, GraalVM, JIT, runtime CIL generation, or dynamic assembly loading is used by released binaries.
+
+> **Status: bootstrap prototype, NOT the full Oreslang implementation.** Only a one-function checked signed-i64 arithmetic subset is implemented today. Native AOT compilation is required for distributed compiler and application artifacts.
+
+## Native AOT pipeline
+
+\`\`\`text
+Oreslang source (.ores)
+    -> frontend (lexer, parser, AST)
+    -> Mono.Cecil CIL emission: OresGenerated.dll
+    -> compile-time static reference from Ores.Net.NativeHost
+    -> dotnet publish -c Release -r win-x64 (Native AOT)
+    -> standalone oreslang-app.exe
+\`\`\`
+
+Unlike managed .NET publishing, the final executable is compiled ahead of time by the .NET toolchain and does not require an installed .NET runtime. Dynamic compilation and JIT fallback are **not** permitted. For Windows Native AOT install the .NET 10 SDK and Visual Studio C++ build tools / Desktop development with C++ workload.
+
+## Native build on Windows
+
+~~~powershell
+./scripts/publish-windows.ps1 -Source examples/hello.ores -Rid win-x64
+./artifacts/apps/win-x64/oreslang-app.exe
+# 14
+~~~
+
+This script **first publishes the compiler itself using Native AOT**, runs the native compiler to generate \`OresGenerated.dll\`, then publishes the statically linked application via Native AOT. The generated DLL is a build artifact, **not** dynamically loaded at runtime.
+
+Manual version:
+
+~~~powershell
+dotnet publish compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -r win-x64 -o artifacts/compiler/win-x64
+./artifacts/compiler/win-x64/oresnet.exe compile examples/hello.ores --out artifacts/generated/OresGenerated.dll
+$generated = (Resolve-Path artifacts/generated/OresGenerated.dll).Path
+dotnet publish host/Ores.Net.NativeHost/Ores.Net.NativeHost.csproj -c Release -r win-x64 -o artifacts/apps/win-x64 "-p:GeneratedAssembly=$generated"
+./artifacts/apps/win-x64/oreslang-app.exe
+~~~
+
+Windows ARM64 is a planned target: script accepts \`-Rid win-arm64\`, but CI coverage and compatible Windows ARM64 build infrastructure remain to be established.
+
+## Current language support
+
+The compiler accepts exactly this shape with optional \`define\`/\`pub\` modifiers:
+
+~~~ores
+define pub fnc main() : int {
+    return 2 + 3 * 4;
+}
+~~~
+
+Features: decimal signed 64-bit literals (including \`-9223372036854775808\`), parentheses, unary plus/minus, signed addition/subtraction/multiplication/division, checked overflow and divide-by-zero errors. The supported syntax is a deliberate **subset** and not the definitive shared Oreslang grammar. No variables, actor syntax, imports, general functions, typechecker, borrow checker or async/await yet.
+
+### Component map
+
+| Directory | Purpose |
+| --- | --- |
+| \`compiler/Ores.Net.Compiler.Core\` | Lexer/parser/AST and direct Mono.Cecil CIL emission |
+| \`compiler/Ores.Net.Compiler\` | Native AOT-compiled CLI (\`oresnet\`) |
+| \`host/Ores.Net.NativeHost\` | Statically references generated CIL and Native AOT publishes it |
+| \`runtime/Ores.Net.Runtime\` | AOT-compatible runtime API, bounded byte mailbox prototype |
+| \`verification/Ores.Net.Tests\` | Parser/CIL metadata/mailbox tests |
+| \`scripts/\` | Windows-only Native AOT publish pipeline |
+| \`docs/\` | Backend contracts and implementation roadmap |
+
+## Verification
+
+~~~powershell
+dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
+./scripts/publish-windows.ps1 -Source examples/hello.ores -Rid win-x64
+~~~
+
+Unit tests use a managed development-time test harness; this is **not part of the shipped compiler or application**. CI must publish both deliverables to native executables and execute the resulting Windows binary. The absence of a \`.runtimeconfig.json\` is a supplemental check; the successful Native AOT publish is the decisive proof. CI status must be checked before claiming working Windows artifacts.
+
+**Runtime limitations:** This is a single-process actor mailbox prototype. .NET Native AOT still includes managed GC; it does **not** intrinsically provide per-actor heaps or a zero-GC runtime. Numeric actor generations are not secure capabilities. No in-process hot-code reload can rely on \`Assembly.Load\`; full code replacement requires process-generation rollout.
+
+See [architecture](docs/architecture.md), [roadmap](docs/roadmap.md), and [security and verification](verification/README.md). This repository's license remains unspecified and should be chosen by its maintainers.
