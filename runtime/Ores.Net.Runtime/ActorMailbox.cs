@@ -4,7 +4,25 @@ namespace Ores.Net.Runtime;
 /// Actor-private bounded byte transport prototype. No closures, methods, pointers,
 /// reflection-created types, or mutable objects cross a mailbox boundary.
 /// </summary>
-public readonly record struct ActorRef(ulong Id, ulong Generation);
+// This is a LOCAL mailbox capability, not a transferable wire-format token.
+// The private random value prevents another mailbox with the same numeric ID
+// and generation from accidentally satisfying capability checks.
+public readonly record struct ActorRef
+{
+    public ulong Id { get; }
+    public ulong Generation { get; }
+    internal Guid Nonce { get; }
+
+    internal ActorRef(ulong id, ulong generation, Guid nonce)
+    {
+        Id = id;
+        Generation = generation;
+        Nonce = nonce;
+    }
+
+    // Never log the bearer nonce in generated record ToString output.
+    public override string ToString() => $"ActorRef(Id={Id}, Generation={Generation})";
+}
 
 public sealed class ActorMailbox
 {
@@ -16,6 +34,7 @@ public sealed class ActorMailbox
     private readonly int _maxMessages;
     private readonly int _maxQueuedBytes;
     private ulong _generation = 1;
+    private Guid _nonce = Guid.NewGuid();
     private int _queuedBytes;
     private bool _closed;
 
@@ -30,7 +49,7 @@ public sealed class ActorMailbox
 
     public ActorRef CurrentRef
     {
-        get { lock (_gate) return new ActorRef(_id, _generation); }
+        get { lock (_gate) return new ActorRef(_id, _generation, _nonce); }
     }
 
     public int QueuedMessages
@@ -44,7 +63,8 @@ public sealed class ActorMailbox
             throw new ArgumentOutOfRangeException(nameof(data), "Message exceeds 1 MiB");
         lock (_gate)
         {
-            if (_closed || destination.Id != _id || destination.Generation != _generation)
+            if (_closed || destination.Id != _id || destination.Generation != _generation ||
+                destination.Nonce != _nonce)
                 throw new InvalidOperationException("Actor reference is stale or mailbox is closed");
             if (_messages.Count >= _maxMessages || data.Length > _maxQueuedBytes - _queuedBytes)
                 throw new InvalidOperationException("Mailbox capacity exceeded");
@@ -87,6 +107,7 @@ public sealed class ActorMailbox
             if (_generation == ulong.MaxValue)
                 throw new OverflowException("Actor generation exhausted");
             _generation++;
+            _nonce = Guid.NewGuid();
             _closed = false;
             _messages.Clear();
             _queuedBytes = 0;
