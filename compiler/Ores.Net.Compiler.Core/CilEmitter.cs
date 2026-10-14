@@ -46,7 +46,7 @@ public static class CilEmitter
             culture: default,
             publicKey: default,
             flags: default,
-            hashAlgorithm: System.Configuration.Assemblies.AssemblyHashAlgorithm.None);
+            hashAlgorithm: System.Reflection.AssemblyHashAlgorithm.None);
 
         var runtime = metadata.AddAssemblyReference(
             metadata.GetOrAddString("System.Runtime"),
