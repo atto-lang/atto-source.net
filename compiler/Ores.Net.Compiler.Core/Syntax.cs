@@ -65,7 +65,7 @@ public static class OresParser
                     _i++;
                 return new Token(text[start.._i], start);
             }
-            if ("()+-*/{}:;".Contains(ch, StringComparison.Ordinal))
+            if ("()+-*/{}:;".IndexOf(ch) >= 0)
             {
                 _i++;
                 return new Token(text[start.._i], start);
