@@ -9,7 +9,7 @@ Independent **CIL compiler + .NET Native AOT runtime** for Oreslang. No LLVM, Gr
 ```text
 Oreslang source (.ores)
     -> frontend (lexer, parser, AST)
-    -> Mono.Cecil CIL emission: OresGenerated.dll
+    -> System.Reflection.Metadata CIL emission: OresGenerated.dll
     -> compile-time static reference from Ores.Net.NativeHost
     -> dotnet publish -c Release -r win-x64 (Native AOT)
     -> standalone oreslang-app.exe
@@ -55,11 +55,11 @@ Features: decimal signed 64-bit literals (including `-9223372036854775808`), par
 
 | Directory | Purpose |
 | --- | --- |
-| `compiler/Ores.Net.Compiler.Core` | Lexer/parser/AST and direct Mono.Cecil CIL emission |
+| `compiler/Ores.Net.Compiler.Core` | Lexer/parser/AST and direct System.Reflection.Metadata CIL emission |
 | `compiler/Ores.Net.Compiler` | Native AOT-compiled CLI (`oresnet`) |
 | `host/Ores.Net.NativeHost` | Statically references generated CIL and Native AOT publishes it |
 | `runtime/Ores.Net.Runtime` | AOT-compatible runtime API, bounded byte mailbox prototype |
-| `verification/Ores.Net.Tests` | Parser/CIL metadata/mailbox tests |
+| `verification/Ores.Net.Tests` | Parser/CIL metadata/mailbox tests (Mono.Cecil is test-only) |
 | `scripts/` | Windows-only Native AOT publish pipeline |
 | `docs/` | Backend contracts and implementation roadmap |
 
@@ -74,4 +74,4 @@ Unit tests use a managed development-time test harness; this is **not part of th
 
 **Runtime limitations:** This is a single-process actor mailbox prototype. .NET Native AOT still includes managed GC; it does **not** intrinsically provide per-actor heaps or a zero-GC runtime. Numeric actor generations are not secure capabilities. No in-process hot-code reload can rely on `Assembly.Load`; full code replacement requires process-generation rollout.
 
-See [architecture](docs/architecture.md), [roadmap](docs/roadmap.md), and [security and verification](verification/README.md). This repository's license remains unspecified and should be chosen by its maintainers.
+See [architecture](docs/architecture.md), [roadmap](docs/roadmap.md), [CI recovery runbook](docs/ci-recovery.md), and [security and verification](verification/README.md). This repository's license remains unspecified and should be chosen by its maintainers.
