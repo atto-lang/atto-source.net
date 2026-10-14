@@ -20,6 +20,17 @@ jobs:
       - name: Verify compiler and runtime source
         shell: pwsh
         run: dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
+      - name: Reject oversized and invalid UTF-8 compiler input
+        shell: pwsh
+        run: |
+          $oversize = Join-Path $env:RUNNER_TEMP 'oversize.ores'
+          [IO.File]::WriteAllBytes($oversize, (New-Object byte[] (1048577)))
+          dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -- check $oversize
+          if ($LASTEXITCODE -eq 0) { throw 'Compiler accepted oversized source file' }
+          $invalid = Join-Path $env:RUNNER_TEMP 'invalid-utf8.ores'
+          [IO.File]::WriteAllBytes($invalid, [byte[]]@(0xFF,0xFE,0xFF))
+          dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -- check $invalid
+          if ($LASTEXITCODE -eq 0) { throw 'Compiler accepted invalid UTF-8' }
       - name: Publish native compiler and native application
         shell: pwsh
         run: ./scripts/publish-windows.ps1 -Source examples/hello.ores -Rid win-x64
