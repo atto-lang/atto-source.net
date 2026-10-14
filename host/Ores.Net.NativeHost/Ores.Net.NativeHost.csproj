@@ -12,7 +12,8 @@
     <ProjectReference Include="../../runtime/Ores.Net.Runtime/Ores.Net.Runtime.csproj" />
     <Reference Include="OresGenerated">
       <HintPath>$(GeneratedAssembly)</HintPath>
-      <Private>true</Private>
+      <!-- Compile-time reference only: never copy managed CIL to native publish output. -->
+      <Private>false</Private>
     </Reference>
   </ItemGroup>
   <Target Name="ValidateGeneratedAssembly" BeforeTargets="ResolveReferences">
