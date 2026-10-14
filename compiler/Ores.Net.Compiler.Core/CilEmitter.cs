@@ -1,4 +1,3 @@
-using System.Configuration.Assemblies;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
@@ -46,15 +45,15 @@ public static class CilEmitter
             new Version(1, 0, 0, 0),
             culture: default,
             publicKey: default,
-            flags: AssemblyFlags.None,
-            hashAlgorithm: AssemblyHashAlgorithm.None);
+            flags: default,
+            hashAlgorithm: System.Configuration.Assemblies.AssemblyHashAlgorithm.None);
 
         var runtime = metadata.AddAssemblyReference(
             metadata.GetOrAddString("System.Runtime"),
             new Version(10, 0, 0, 0),
             culture: default,
             publicKeyOrToken: default,
-            flags: AssemblyFlags.None,
+            flags: default,
             hashValue: default);
         var systemObject = metadata.AddTypeReference(
             runtime,
