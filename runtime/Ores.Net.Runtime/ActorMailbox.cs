@@ -111,7 +111,7 @@ public sealed class ActorMailbox
             _closed = false;
             _messages.Clear();
             _queuedBytes = 0;
-            return new ActorRef(_id, _generation);
+            return new ActorRef(_id, _generation, _nonce);
         }
     }
 }
