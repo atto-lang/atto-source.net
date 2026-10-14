@@ -1,8 +1,11 @@
 using Ores.Net.Compiler;
 using System.Text;
 
-if (args.Length is not 2 and not 4 || args[0] is not ("compile" or "check") ||
-    (args.Length == 4 && (args[0] != "compile" || args[2] != "--out")))
+// Reject invalid shapes before indexing args[3]. Previously "compile file.ores"
+// passed validation then crashed with IndexOutOfRangeException instead of usage.
+bool validCheck = args.Length == 2 && args[0] == "check";
+bool validCompile = args.Length == 4 && args[0] == "compile" && args[2] == "--out";
+if (!validCheck && !validCompile)
 {
     Console.Error.WriteLine("usage: oresnet check input.ores | oresnet compile input.ores --out path/OresGenerated.dll");
     return 2;
