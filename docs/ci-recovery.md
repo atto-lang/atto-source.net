@@ -8,6 +8,12 @@ Before changing application code in response to a failing runner, examine the in
 
 Never mirror this *private* source repository into a public test repository to obtain Actions minutes. If the source must be mirrored to another GitHub organization, use a private destination controlled by the repository owners, explicit access controls, no secrets, and purge temporary branches after validation.
 
+## Independent no-source runner probe
+
+A temporary private diagnostic PR in `3FA-app/3fa-app-e2e` ran a workflow that only printed `dotnet --info` on `windows-2022` and `ubuntu-latest`. [Run 38658939713](https://github.com/3FA-app/3fa-app-e2e/actions/runs/38658939713) also concluded **failure** for both jobs with **zero returned steps**. No Oreslang source or secrets were copied. The probe PR was closed without merge and its temporary workflow file deleted.
+
+This is consistent with a runner allocation, Actions billing, or organization/platform policy problem affecting more than one repository, **not proof of a particular cause**. Do not repeatedly consume workflow attempts without investigating Actions settings. Check spending and available minutes in each organization and GitHub-hosted runner allocation/status; review the Actions UI for scheduling notices, then retry a simple no-source `dotnet --info` job before full Native AOT compilation.
+
 ## Local Windows release verification
 
 From a Windows x64 host with Native AOT prerequisites installed:
