@@ -54,3 +54,9 @@ foreach ($case in $cases) {
     }
     Write-Host "Verified Native AOT negative case: $($case.Name)"
 }
+
+# Each negative native fixture intentionally exits 70. Reset the shell's
+# process status only after every expected failure has been checked, so the
+# enclosing GitHub Actions pwsh step cannot falsely report a failed test.
+$global:LASTEXITCODE = 0
+Write-Host 'All Native AOT checked-arithmetic negative fixtures passed'
