@@ -29,11 +29,15 @@ try {
     if ($ActualHead -ine $ExpectedCommit) {
         throw "Wrong source commit: expected $ExpectedCommit, got $ActualHead"
     }
-    Invoke-RequiredNative 'Git tracked working-tree status' {
-        $script:DirtyTracked = @(git status --porcelain --untracked-files=no)
+    # Do not let untracked .cs/.props/.targets, generated input assemblies,
+    # or other checkout-local build inputs influence the reviewed source.
+    # Git status respects .gitignore for normal SDK obj/bin/artifact outputs.
+    Invoke-RequiredNative 'Git checkout cleanliness' {
+        $script:CheckoutChanges = @(git status --porcelain=v1 --untracked-files=all)
     }
-    if ($DirtyTracked.Count -gt 0 -and ($DirtyTracked -join '').Trim() -ne '') {
-        throw 'Tracked files are modified: verification requires exact checked-out source'
+    if ($CheckoutChanges.Count -gt 0 -and ($CheckoutChanges -join '').Trim() -ne '') {
+        throw ('Checkout contains modified or untracked files: ' +
+            ($CheckoutChanges -join '; '))
     }
 
     Invoke-RequiredNative '.NET SDK information' {
