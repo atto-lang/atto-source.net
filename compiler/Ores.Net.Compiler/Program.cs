@@ -15,15 +15,18 @@ try
 {
     var source = ReadBoundedSource(args[1]);
     var expression = OresParser.Parse(source);
+    // Both check and compile require successfully verified typed IR.
+    // Production CIL must not bypass SSA/type validation.
+    var verified = OresIrLowering.Lower(expression);
     if (args[0] == "compile")
     {
         if (!string.Equals(Path.GetFileName(args[3]), "OresGenerated.dll",
             StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Generated assembly must be named OresGenerated.dll");
-        CilEmitter.EmitLibrary(expression, args[3]);
+        CilEmitter.EmitLibrary(verified, args[3]);
         Console.WriteLine($"Emitted CIL: {Path.GetFullPath(args[3])}");
     }
-    else Console.WriteLine("Oreslang subset syntax: OK");
+    else Console.WriteLine("Oreslang subset syntax and typed OresIR: OK");
     return 0;
 }
 catch (Exception ex) when (ex is FormatException or IOException or UnauthorizedAccessException or ArgumentException)
