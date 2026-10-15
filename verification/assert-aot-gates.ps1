@@ -43,4 +43,8 @@ foreach ($project in $projects) {
     Assert-Gate -Project $project -Label 'unsupported target RID' -Success $false -Overrides @('RuntimeIdentifier=osx-arm64')
     Assert-Gate -Project $project -Label 'wrong framework' -Success $false -Overrides @('TargetFramework=net9.0')
 }
+# Expected negative MSBuild invocations leave LASTEXITCODE nonzero. Reset it
+# only after every expected outcome was checked, so a successful gate does not
+# fail its enclosing Actions PowerShell step.
+$global:LASTEXITCODE = 0
 Write-Host 'Strict Native AOT MSBuild release-gate checks passed'
