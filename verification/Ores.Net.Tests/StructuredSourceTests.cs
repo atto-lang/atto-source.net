@@ -119,6 +119,7 @@ internal static class StructuredSourceTests
             "duplicate declaration points to second identifier", "x=2");
 
         // The shipping arithmetic frontend is intentionally unchanged.
+        // Stage-one binding names must remain unambiguous.
         Require(OresParser.Parse("fnc main():int{return 2+3;}") is Binary,
             "legacy verified arithmetic parser still works");
         Reject("fnc main():int{let int x=x; return x;}", "self-reference");
