@@ -72,6 +72,30 @@ Both native fixture tests are **unverified until their respective runners
 actually execute them**. A syntax-only shell test cannot substitute for a
 successful `dotnet` build, generated metadata inspection, and native execution.
 
+## Additional CFG and metadata hardening (2026-10-14)
+
+- Both typed SSA and CFG CIL emitters now **explicitly** request the
+  `InitLocals` method-body attribute, rather than relying on a library
+  default. Mono.Cecil regressions inspect the resulting flag.
+- Added `CfgCilStressTests` to the managed test entrypoint. It compares
+  the independent CFG evaluator with the emitted CIL interpreter on
+  condition-true, condition-false, and reordered-block variants with 640
+  padding instructions, >255 local indexes and branch displacements that
+  cannot be encoded in an 8-bit short form. It asserts actual branch
+  displacement, typed locals and deterministic PE bytes.
+- Added both truth values for the edge case where a conditional branch
+  targets **the same successor block** with distinct arguments. The
+  selected *edge* must determine the destination block-parameter values.
+- A prior successful job in the private `canonical-cloud/canonical-e2e`
+  repository demonstrated that hosted Actions steps worked there earlier
+  that day, but a **new** no-source/no-checkout `dotnet --version` probe
+  ([temporary PR #26](https://github.com/canonical-cloud/canonical-e2e/pull/26),
+  [run 38682345558](https://github.com/canonical-cloud/canonical-e2e/actions/runs/38682345558))
+  failed on Windows and Linux with zero reported steps. The PR was closed
+  unmerged and its temporary workflow file deleted. This does not prove
+  that billing minutes are exhausted; it means no current runner capacity
+  could be verified. **No private Oreslang source was mirrored.**
+
 ## Verification blockers and explicit non-goals
 
 - GitHub Actions has repeatedly failed before returning job steps, including
