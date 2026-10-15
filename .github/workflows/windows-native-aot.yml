@@ -72,6 +72,22 @@ jobs:
       - name: Execute Native AOT checked-arithmetic error cases
         shell: pwsh
         run: ./verification/assert-native-arithmetic.ps1 -Rid win-x64
+      - name: Reject managed sidecar next to an otherwise native executable
+        shell: pwsh
+        run: |
+          ./verification/assert-native-release.ps1 -Binary ./artifacts/apps/win-x64/oreslang-app.exe -Rid win-x64
+          ./verification/assert-native-release.ps1 -Binary ./artifacts/compiler/win-x64/oresnet.exe -Rid win-x64
+          $fake = Join-Path $env:RUNNER_TEMP 'managed-apphost-fixture'
+          New-Item -ItemType Directory -Force $fake | Out-Null
+          Copy-Item ./artifacts/apps/win-x64/oreslang-app.exe (Join-Path $fake 'oreslang-app.exe')
+          [IO.File]::WriteAllBytes((Join-Path $fake 'managed.dll'), [byte[]]@(0x4D, 0x5A))
+          $rejected = $false
+          try {
+            ./verification/assert-native-release.ps1 -Binary (Join-Path $fake 'oreslang-app.exe') -Rid win-x64
+          } catch {
+            $rejected = $true
+          }
+          if (-not $rejected) { throw 'Native release verifier accepted a managed sidecar' }
       - name: Upload native executable
         uses: actions/upload-artifact@v4
         with:
