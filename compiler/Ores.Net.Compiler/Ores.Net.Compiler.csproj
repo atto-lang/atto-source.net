@@ -9,4 +9,5 @@
   <ItemGroup>
     <ProjectReference Include="../Ores.Net.Compiler.Core/Ores.Net.Compiler.Core.csproj" />
   </ItemGroup>
+  <Import Project="../../build/StrictNativeAot.targets" />
 </Project>
