@@ -113,6 +113,29 @@ internal static class CfgVerifierTests
             header, body, finish
         } }, "unknown target rejected");
 
+        Reject(diamond with { Blocks = new[] {
+            branchCondition with { Terminator = new CfgBranch(0,
+                "left", new[] { 0 }, "right", new[] { 2 }) },
+            left, right, join
+        } }, "edge argument must match destination block parameter type");
+
+        Reject(diamond with { Blocks = new[] {
+            branchCondition,
+            left with { Terminator = new CfgJump("join", new[] { 4 }) },
+            right, join
+        } }, "edge argument cannot use a value defined in a sibling branch");
+
+        Reject(loop with { Blocks = new[] {
+            entry,
+            header with { Instructions = new[] {
+                new CfgInstruction(2, CfgOpcode.ConstantI64, IrValueType.I64,
+                    I64Constant: 5),
+                new CfgInstruction(3, CfgOpcode.EqualI64, IrValueType.Bool,
+                    Left: 1, Right: 1, I64Constant: 7)
+            } },
+            body, finish
+        } }, "binary arithmetic rejects extraneous literal payloads");
+
         Reject(loop with { Blocks = new[] {
             entry, header, body, finish with { Name = "header" }
         } }, "duplicate block name rejected");
