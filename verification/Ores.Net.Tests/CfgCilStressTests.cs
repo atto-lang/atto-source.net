@@ -1,0 +1,102 @@
+using Mono.Cecil;
+using Mono.Cecil.Cil;
+using Ores.Net.Compiler;
+
+/// <summary>
+/// Exercises boundaries that the tiny hand-written CFG tests cannot reach:
+/// long branch offsets, 16-bit local indexes, and both sides of a branch.
+/// This interpreter is test-only: it never loads untrusted generated assemblies.
+/// </summary>
+internal static class CfgCilStressTests
+{
+    public static void Run()
+    {
+        CheckLongBranchesAndLocals(condition: true);
+        CheckLongBranchesAndLocals(condition: false);
+        CheckLongBranchesAndLocals(condition: true, reordered: true);
+    }
+
+    private static void CheckLongBranchesAndLocals(bool condition, bool reordered = false)
+    {
+        const int paddingCount = 640;
+        const int finalId = 3 + paddingCount;
+        var paddingOps = Enumerable.Range(0, paddingCount)
+            .Select(i => new CfgInstruction(i + 3, CfgOpcode.ConstantI64,
+                IrValueType.I64, I64Constant: i))
+            .ToArray();
+
+        var entry = new CfgBlock("entry", Array.Empty<CfgParameter>(),
+            new[] {
+                new CfgInstruction(0, CfgOpcode.ConstantBool,
+                    IrValueType.Bool, BoolConstant: condition),
+                new CfgInstruction(1, CfgOpcode.ConstantI64,
+                    IrValueType.I64, I64Constant: 77)
+            },
+            new CfgBranch(0, "finish", new[] { 1 }, "padding", new[] { 1 }));
+        var padding = new CfgBlock("padding",
+            new[] { new CfgParameter(2, IrValueType.I64) },
+            paddingOps,
+            new CfgJump("finish", new[] { 2 }));
+        var finish = new CfgBlock("finish",
+            new[] { new CfgParameter(finalId, IrValueType.I64) },
+            Array.Empty<CfgInstruction>(),
+            new CfgReturn(finalId));
+
+        // The physical position of the entry and join blocks must not affect
+        // dominance or CIL branch-target placement.
+        var blocks = reordered
+            ? new[] { finish, padding, entry }
+            : new[] { entry, padding, finish };
+
+        var graph = OresCfgVerifier.Verify(new CfgFunction(
+            "stress", IrValueType.I64, "entry", blocks));
+        Require(CfgReferenceEvaluator.Evaluate(graph) == 77,
+            "CFG reference interpreter long-branch result");
+
+        string directory = Path.Combine(Path.GetTempPath(),
+            "ores-cfg-stress-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var output = Path.Combine(directory, "OresGenerated.dll");
+            CilEmitter.EmitLibrary(graph, output);
+            using var assembly = AssemblyDefinition.ReadAssembly(output);
+            var method = assembly.MainModule.Types.Single(t =>
+                t.FullName == "Oreslang.Generated.OresProgram")
+                .Methods.Single(m => m.Name == "Run");
+
+            Require(method.Body.Variables.Count == finalId + 3,
+                "CFG local-signature count includes >255 SSA indexes and scratch slots");
+            Require(method.Body.Variables[0].VariableType.MetadataType == MetadataType.Boolean,
+                "CFG branch condition uses an actual bool local");
+            Require(method.Body.Variables[finalId].VariableType.MetadataType == MetadataType.Int64,
+                "CFG late result is an i64 local");
+            Require(method.Body.Instructions.Any(i => i.OpCode.Code == Code.Ldloc),
+                "CFG emits 16-bit local loads");
+            Require(method.Body.Instructions.Any(i => i.OpCode.Code == Code.Stloc),
+                "CFG emits 16-bit local stores");
+            Require(method.Body.Instructions.Any(i => i.OpCode.Code == Code.Brtrue),
+                "CFG uses long branch encoding, not short branch overflow");
+            Require(method.Body.MaxStackSize == 2,
+                "CFG stack is bounded regardless of body length");
+
+            var emitted = CfgCilTestInterpreter.Evaluate(method);
+            Require(emitted == 77, "CFG long-distance CIL branch executes correctly");
+
+            var repeat = Path.Combine(directory, "OresGenerated.repeat.dll");
+            CilEmitter.EmitLibrary(graph, repeat);
+            Require(File.ReadAllBytes(output).AsSpan()
+                .SequenceEqual(File.ReadAllBytes(repeat)),
+                "CFG stress assembly generation is deterministic");
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private static void Require(bool success, string why)
+    {
+        if (!success) throw new Exception("CFG stress regression: " + why);
+    }
+}
