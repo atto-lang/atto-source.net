@@ -326,6 +326,41 @@ internal static class CfgVerifierTests
                 }, new CfgReturn(11))
             });
         CheckCil(OresCfgVerifier.Verify(swap), 2211, "atomic-swap");
+        // A trap in a branch that is not selected must not execute. This
+        // also checks that the CIL emitter has no accidental fallthrough.
+        var conditionalTrap = new CfgFunction("chosen", IrValueType.I64, "entry",
+            new[] {
+                Block("entry", Array.Empty<CfgParameter>(), new[] {
+                    new CfgInstruction(0, CfgOpcode.ConstantBool, IrValueType.Bool,
+                        BoolConstant: true),
+                    new CfgInstruction(1, CfgOpcode.ConstantI64, IrValueType.I64,
+                        I64Constant: 42)
+                }, new CfgBranch(0, "good", new[] { 1 },
+                    "bad", new[] { 1 })),
+                Block("good", new[] { new CfgParameter(2, IrValueType.I64) },
+                    Array.Empty<CfgInstruction>(), new CfgReturn(2)),
+                Block("bad", new[] { new CfgParameter(3, IrValueType.I64) },
+                    new[] {
+                        new CfgInstruction(4, CfgOpcode.ConstantI64, IrValueType.I64,
+                            I64Constant: 0),
+                        new CfgInstruction(5, CfgOpcode.CheckedDivide, IrValueType.I64,
+                            Left: 3, Right: 4)
+                    }, new CfgReturn(5))
+            });
+        CheckCil(OresCfgVerifier.Verify(conditionalTrap), 42,
+            "untaken-trapping-branch");
+
+        var overflow = new CfgFunction("overflow", IrValueType.I64, "entry",
+            new[] { Block("entry", Array.Empty<CfgParameter>(), new[] {
+                new CfgInstruction(0, CfgOpcode.ConstantI64, IrValueType.I64,
+                    I64Constant: long.MaxValue),
+                new CfgInstruction(1, CfgOpcode.ConstantI64, IrValueType.I64,
+                    I64Constant: 1),
+                new CfgInstruction(2, CfgOpcode.CheckedAdd, IrValueType.I64,
+                    Left: 0, Right: 1)
+            }, new CfgReturn(2)) });
+        CheckCilTrap(OresCfgVerifier.Verify(overflow), false, "checked-overflow");
+
 
 
         // Verified collections are deep frozen: modifying source parameters,
