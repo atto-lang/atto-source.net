@@ -1,0 +1,158 @@
+using Ores.Net.Compiler;
+
+internal static class StructuredSourceTests
+{
+    private static void Require(bool value, string reason)
+    {
+        if (!value) throw new Exception("Structured source regression: " + reason);
+    }
+
+    private static void Reject(string source, string reason)
+    {
+        try { _ = OresStructuredParser.Parse(source); }
+        catch (FormatException ex)
+        {
+            Require(ex.Message.Contains("offset", StringComparison.Ordinal) ||
+                    ex.Message.Contains("budget", StringComparison.OrdinalIgnoreCase) ||
+                    ex.Message.Contains("limit", StringComparison.OrdinalIgnoreCase),
+                reason + ": missing useful diagnostic");
+            return;
+        }
+        throw new Exception("Structured source incorrectly accepted: " + reason);
+    }
+
+    public static void Run()
+    {
+        const string sum = """
+            define pub fnc main(): int {
+                let int total = 0;
+                let int i = 0;
+                while i < 10 {
+                    total = total + i;
+                    i = i + 1;
+                }
+                return total;
+            }
+            """;
+        var parsed = OresStructuredParser.Parse(sum);
+        Require(parsed.Name == "main" && parsed.Body.Count == 4,
+            "structured main statement count");
+        Require(parsed.Body[0] is StructuredLet { Name: "total",
+            ValueType: IrValueType.I64, Initializer: StructuredInt { Value: 0 } },
+            "typed initialized integer");
+        Require(parsed.Body[2] is StructuredWhile {
+            Condition: StructuredBinary {
+                Operator: StructuredOperator.LessThanI64,
+                Type: IrValueType.Bool
+            }, Body.Count: 2
+        }, "typed signed comparison and loop body");
+        Require(parsed.Body[3] is StructuredReturn {
+            Value: StructuredRead { Name: "total", Type: IrValueType.I64 }
+        }, "typed return");
+        Require(!parsed.Body.IsReadOnlyButMutable(), "AST must be immutable snapshot");
+
+        var diamond = OresStructuredParser.Parse("""
+            fnc main(): int {
+                let int x = 0;
+                let bool condition = 2 == 2;
+                if condition {
+                    x = 11;
+                } else {
+                    x = 22;
+                }
+                return x;
+            }
+            """);
+        Require(diamond.Body[2] is StructuredIf {
+            Condition: StructuredRead { Type: IrValueType.Bool },
+            Then.Count: 1, Else.Count: 1
+        }, "if/else typed joining assignments");
+
+        var earlyReturn = OresStructuredParser.Parse("""
+            pub define fnc main(): int {
+                if true { return -9223372036854775808; }
+                else { return 7; }
+            }
+            """);
+        Require(earlyReturn.Body.Count == 1 &&
+            earlyReturn.Body[0] is StructuredIf {
+                Then.Count: 1, Else.Count: 1
+            }, "both-branch early return");
+        Require(OresStructuredParser.Parse("fnc main():int{return 2+3*4;}").Body[0]
+            is StructuredReturn { Value: StructuredBinary {
+                Operator: StructuredOperator.Add
+            } }, "arithmetic AST operator precedence");
+
+        // The shipping arithmetic frontend is intentionally unchanged.
+        Require(OresParser.Parse("fnc main():int{return 2+3;}") is Binary,
+            "legacy verified arithmetic parser still works");
+        Reject("fnc main():int{let int x=x; return x;}", "self-reference");
+        Reject("fnc main():int{return missing;}", "undefined read");
+        Reject("fnc main():int{missing=2;return 1;}", "undefined assignment");
+        Reject("fnc main():int{let int x=1;let int x=2;return x;}",
+            "same-scope duplicate binding");
+        Reject("fnc main():int{let int x=true;return 0;}",
+            "type mismatch on declaration");
+        Reject("fnc main():int{let bool ok=false;ok=3;return 0;}",
+            "type mismatch on assignment");
+        Reject("fnc main():int{if 1 {return 0;}else{return 1;}}",
+            "non-boolean if condition");
+        Reject("fnc main():int{while 1 {return 0;}return 1;}",
+            "non-boolean while condition");
+        Reject("fnc main():int{if true {return 0;}}",
+            "missing else return path");
+        Reject("fnc main():int{while true {return 0;}}",
+            "loop is not proof of return");
+        Reject("fnc main():int{return true;}", "wrong return type");
+        Reject("fnc main():int{return 1;let int x=2;}",
+            "unreachable declaration");
+        Reject("fnc main():int{if true {return 1;}else{return 2;} return 3;}",
+            "unreachable after both branches return");
+        Reject("fnc main():int{if true {let int x=1;}return x;}",
+            "block local escaped scope");
+        Reject("fnc main():int{let bool x=true==false;return 0;}",
+            "bool equality unsupported in first CFG slice");
+        Reject("fnc main():int{let bool b=true;return b+1;}",
+            "boolean arithmetic");
+        Reject("fnc main():int{let int x=1/2;return x;}",
+            "int division is not i64 in canonical semantics");
+        Reject("fnc main():int{let int x=9223372036854775808;return x;}",
+            "literal exceeding i64 range");
+        Reject("fnc main():int{let int x=-9223372036854775809;return x;}",
+            "negative literal below i64 range");
+        Reject("fnc main():int{let int x=1@2;return x;}",
+            "invalid character");
+        Reject("fnc main():int{let int x=1;}\u0000", "NUL");
+        Reject("fnc main():int{return 1;}\uD800", "invalid UTF16");
+        Reject("fnc main():int{return 1;}//comment\nextra", "trailing syntax");
+        Reject("fnc main():int{return 1;".PadRight(140, ' '),
+            "unterminated block");
+        Reject(new string(' ', 1_048_577), "source length bound");
+        Reject("fnc main():int{return " +
+            new string('(', 150) + "1" + new string(')', 150) +
+            ";}", "nested expression depth bound");
+
+        // The parser must not publish a block-scoped local after its block.
+        var nested = OresStructuredParser.Parse("""
+            fnc main(): int {
+                let int a = 9;
+                if a < 10 {
+                    let int b = a + 1;
+                    a = b;
+                } else {
+                    let int b = a - 1;
+                    a = b;
+                }
+                return a;
+            }
+            """);
+        Require(nested.Body[1] is StructuredIf {
+            Then.Count: 2, Else.Count: 2
+        }, "parallel branch-local scopes");
+
+        Console.WriteLine("Structured source parser and typed diagnostics passed");
+    }
+
+    private static bool IsReadOnlyButMutable<T>(this IReadOnlyList<T> list) =>
+        list is T[];
+}
