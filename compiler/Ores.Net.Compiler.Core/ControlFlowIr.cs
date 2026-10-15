@@ -97,7 +97,10 @@ public static class OresCfgVerifier
                 totalEdgeArguments + count > MaxEdgeArguments)
                 throw new FormatException("CFG edge argument budget exceeded");
             totalEdgeArguments += count;
-            return Array.AsReadOnly(arguments.ToArray());
+            // IReadOnlyList.Count does not constrain IEnumerable enumeration.
+            // Copy the admitted number of elements by index, never via
+            // LINQ ToArray (which can enumerate unbounded custom inputs).
+            return CopyIndexed(arguments, count);
         }
 
         for (int i = 0; i < blocks.Length; i++)
@@ -126,8 +129,8 @@ public static class OresCfgVerifier
                 _ => throw new FormatException("Unsupported CFG terminator")
             };
             blocks[i] = new CfgBlock(original.Name,
-                Array.AsReadOnly(parameters.ToArray()),
-                Array.AsReadOnly(instructions.ToArray()),
+                CopyIndexed(parameters, parameters.Count),
+                CopyIndexed(instructions, instructions.Count),
                 frozenTerminator);
         }
 
@@ -326,6 +329,17 @@ public static class OresCfgVerifier
             for (int i = 0; i < args.Count; i++)
                 Use(from, at, args[i], blocks[target].Parameters[i].Type);
         }
+    }
+
+    // The caller's IReadOnlyList implementation is untrusted. Explicitly
+    // indexed snapshots enforce the admitted Count bound even if its
+    // IEnumerable enumerator yields infinitely many values. Never enumerate.
+    private static IReadOnlyList<T> CopyIndexed<T>(IReadOnlyList<T> source, int count)
+    {
+        var copy = new T[count];
+        for (int i = 0; i < count; i++)
+            copy[i] = source[i];
+        return Array.AsReadOnly(copy);
     }
 
     private static void RequireType(IrValueType actual, IrValueType expected)
