@@ -77,12 +77,18 @@ internal static class CfgCilStressTests
                 "CFG emits 16-bit local loads");
             Require(method.Body.Instructions.Any(i => i.OpCode.Code == Code.Stloc),
                 "CFG emits 16-bit local stores");
-            Require(method.Body.Instructions.Any(i => i.OpCode.Code == Code.Brtrue),
-                "CFG uses long branch encoding, not short branch overflow");
+            // A conditional branch skips only the short false-edge transfer.
+            // The large displacement is on an unconditional jump across the
+            // padding block (or the synthetic jump to a reordered entry).
+            // ECMA-335 long-form br and brtrue are each five bytes.
             Require(method.Body.Instructions.Any(i =>
                 i.OpCode.Code == Code.Brtrue &&
+                Math.Abs(((Instruction)i.Operand).Offset - (i.Offset + 5)) <= 127),
+                "CFG true-edge selection skips only its short false transfer");
+            Require(method.Body.Instructions.Any(i =>
+                i.OpCode.Code == Code.Br &&
                 Math.Abs(((Instruction)i.Operand).Offset - (i.Offset + 5)) > 127),
-                "CFG includes a verified branch displacement outside sbyte range");
+                "CFG encodes a real >127-byte unconditional branch displacement");
             Require(method.Body.InitLocals,
                 "CFG local initialization flag is set for large methods");
             Require(method.Body.MaxStackSize == 2,
