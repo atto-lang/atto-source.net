@@ -57,6 +57,10 @@ public static class OresStructuredParser
             else if (char.IsLowSurrogate(source[i]))
                 throw new FormatException($"Invalid UTF-16 at offset {i}");
         }
+        // Public parser callers supply UTF-16 strings; the source budget is
+        // UTF-8 bytes, matching the disk/CLI boundary, not code-unit count.
+        if (System.Text.Encoding.UTF8.GetByteCount(source) > 1_048_576)
+            throw new FormatException("Source exceeds 1 MiB UTF-8 parser limit");
         var lexer = new Lexer(source);
         var tokens = new List<Token>();
         while (true)
