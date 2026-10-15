@@ -42,8 +42,12 @@ public sealed class ActorMailbox
 
     public ActorMailbox(ulong id, int maxMessages = 1024, int maxQueuedBytes = 4 * MaxMessageBytes)
     {
-        if (id == 0 || maxMessages <= 0 || maxQueuedBytes <= 0)
-            throw new ArgumentOutOfRangeException(nameof(id), "Actor ID and queue limits must be positive");
+        if (id == 0)
+            throw new ArgumentOutOfRangeException(nameof(id), "Actor ID must be positive");
+        if (maxMessages <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxMessages), "Message capacity must be positive");
+        if (maxQueuedBytes <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxQueuedBytes), "Byte capacity must be positive");
         _id = id;
         _maxMessages = maxMessages;
         _maxQueuedBytes = maxQueuedBytes;
