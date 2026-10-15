@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+
 namespace Ores.Net.Runtime;
 
 /// <summary>
@@ -94,9 +96,19 @@ public sealed class ActorMailbox
         lock (_gate)
         {
             _closed = true;
-            _messages.Clear();
+            DiscardPending();
             _queuedBytes = 0;
         }
+    }
+
+    // Called only while holding _gate. The sender's input was copied on
+    // admission, so zeroing pending envelopes never mutates sender buffers.
+    // Delivered arrays have been transferred to callers and are not ours to erase.
+    private void DiscardPending()
+    {
+        foreach (var envelope in _messages)
+            CryptographicOperations.ZeroMemory(envelope);
+        _messages.Clear();
     }
 
     /// <summary>Invalidate old references; local numeric IDs are not secure distributed capabilities.</summary>
@@ -109,7 +121,7 @@ public sealed class ActorMailbox
             _generation++;
             _nonce = Guid.NewGuid();
             _closed = false;
-            _messages.Clear();
+            DiscardPending();
             _queuedBytes = 0;
             return new ActorRef(_id, _generation, _nonce);
         }
