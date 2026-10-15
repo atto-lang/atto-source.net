@@ -154,8 +154,12 @@ try
         t.FullName == "Oreslang.Generated.OresProgram").Methods.Single(m => m.Name == "Run");
     Require(entry.IsStatic && entry.IsPublic && entry.ReturnType.MetadataType == MetadataType.Int64,
         "static entry signature");
-    Require(entry.ReturnType.Scope is AssemblyNameReference { Name: "System.Runtime" },
-        "primitive i64 CIL type points to System.Runtime");
+    // The i64 return is encoded with the ECMA-335 primitive ELEMENT_TYPE_I8,
+    // not an AssemblyRef token. Test that separately from the TypeRef scope.
+    Require(assembly.MainModule.AssemblyReferences.Any(r => r.Name == "System.Runtime"),
+        "generated CIL references the target framework");
+    Require(entry.DeclaringType.BaseType?.Scope is AssemblyNameReference
+        { Name: "System.Runtime" }, "System.Object TypeRef resolves via System.Runtime");
     Require(entry.DeclaringType.BaseType?.MetadataType == MetadataType.Object,
         "System.Object CIL primitive type");
 
