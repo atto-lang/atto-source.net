@@ -8,7 +8,7 @@ $root = Split-Path -Parent $PSScriptRoot
 $sourcePath = (Resolve-Path $Source).Path
 $generated = Join-Path $root 'artifacts/generated/OresGenerated.dll'
 $compilerOut = Join-Path $root "artifacts/compiler/$Rid"
-$checkNative = Join-Path $root 'verification/assert-native-pe.ps1'
+$checkNative = Join-Path $root 'verification/assert-native-release.ps1'
 $publishOut = Join-Path $root "$Output/$Rid"
 New-Item -ItemType Directory -Force (Split-Path -Parent $generated) | Out-Null
 # Stale artifacts from a previous successful publish must not satisfy the checks
