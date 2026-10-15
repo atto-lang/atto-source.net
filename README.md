@@ -78,3 +78,5 @@ See [architecture](docs/architecture.md), [roadmap](docs/roadmap.md), [CI recove
 
 See [value-boundary audit and admission tests](docs/VALUE_BOUNDARIES.md) for
 aggregate, call, string, conditional and async feature limits.
+
+See [mandatory nonblocking guest I/O](docs/MANDATORY_ASYNC_IO.md) for enforcement, verification and unsupported surfaces.

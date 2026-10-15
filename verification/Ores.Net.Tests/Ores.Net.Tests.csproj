@@ -3,6 +3,7 @@
     <OutputType>Exe</OutputType>
   </PropertyGroup>
   <ItemGroup>
+    <None Include="../mandatory-async-io.json" Link="mandatory-async-io.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../value-boundary-rejections.json" Link="value-boundary-rejections.json"
           CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="../../compiler/Ores.Net.Compiler.Core/Ores.Net.Compiler.Core.csproj" />
