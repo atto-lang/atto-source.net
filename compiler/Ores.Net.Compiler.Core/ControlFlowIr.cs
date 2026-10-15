@@ -299,8 +299,8 @@ public static class OresCfgVerifier
 
         void RegisterEdge(int from, string targetName, IReadOnlyList<int> args)
         {
-            if (!indexes.TryGetValue(targetName, out int target))
-                throw new FormatException("CFG jump target not found");
+            if (!Identifier(targetName) || !indexes.TryGetValue(targetName, out int target))
+                throw new FormatException("Invalid or missing CFG jump target");
             if (args.Count != blocks[target].Parameters.Count)
                 throw new FormatException("CFG block argument arity mismatch");
             successors[from].Add(target);
