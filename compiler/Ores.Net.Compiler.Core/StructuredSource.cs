@@ -112,6 +112,32 @@ public static class OresStructuredParser
     {
         private readonly List<Dictionary<string, IrValueType>> scopes = new();
         private int index, statements;
+        // Track actual AST height, not just grammar recursion depth. A flat
+        // 50,000-term sum must not construct a 50,000-level tree for later passes.
+        // Records have structural equality; identity avoids recursive hashing.
+        private readonly Dictionary<StructuredExpr, int> expressionHeights =
+            new(ReferenceEqualityComparer.Instance);
+        private int Height(StructuredExpr expression) =>
+            expressionHeights.TryGetValue(expression, out int height) ? height : 1;
+        private StructuredExpr CheckedBinary(int at, StructuredOperator op,
+            StructuredExpr left, StructuredExpr right, IrValueType resultType)
+        {
+            int height = Math.Max(Height(left), Height(right)) + 1;
+            if (height > MaxDepth)
+                throw new FormatException($"Structured AST depth exceeds limit at offset {at}");
+            var node = new StructuredBinary(at, op, left, right, resultType);
+            expressionHeights.Add(node, height);
+            return node;
+        }
+        private StructuredExpr CheckedNegate(int at, StructuredExpr value)
+        {
+            int height = Height(value) + 1;
+            if (height > MaxDepth)
+                throw new FormatException($"Structured AST depth exceeds limit at offset {at}");
+            var node = new StructuredNegate(at, value);
+            expressionHeights.Add(node, height);
+            return node;
+        }
         private Token Current => tokens[index];
         private bool Take(string value)
         {
@@ -192,9 +218,10 @@ public static class OresStructuredParser
             if (Take("let"))
             {
                 var type = Type();
+                int nameAt = Current.Offset;
                 string name = Name();
                 if (scopes[^1].ContainsKey(name))
-                    throw Error("Duplicate local binding");
+                    throw new FormatException($"Duplicate local binding at offset {nameAt}");
                 Expect("=");
                 var initializer = Expr(depth + 1);
                 Require(initializer, type, "Local initializer has wrong type");
@@ -222,8 +249,9 @@ public static class OresStructuredParser
                 // Even a constant-true loop is not accepted as a return proof.
                 return (new StructuredWhile(at, condition, body), false);
             }
+            int variableAt = Current.Offset;
             string variable = Name();
-            var typeOfVariable = Lookup(variable);
+            var typeOfVariable = Lookup(variable, variableAt);
             Expect("=");
             var assigned = Expr(depth + 1);
             Require(assigned, typeOfVariable, "Assignment has wrong type");
@@ -250,11 +278,11 @@ public static class OresStructuredParser
             index++;
             return name;
         }
-        private IrValueType Lookup(string name)
+        private IrValueType Lookup(string name, int at)
         {
             for (int i = scopes.Count - 1; i >= 0; i--)
                 if (scopes[i].TryGetValue(name, out var type)) return type;
-            throw Error($"Undefined local '{name}'");
+            throw new FormatException($"Undefined local '{name}' at offset {at}");
         }
         private StructuredExpr Expr(int depth) => Equal(depth + 1);
         private StructuredExpr Equal(int depth)
@@ -267,7 +295,7 @@ public static class OresStructuredParser
                 var right = Compare(depth + 1);
                 Require(left, IrValueType.I64, "Equality requires int operands");
                 Require(right, IrValueType.I64, "Equality requires int operands");
-                left = new StructuredBinary(at, StructuredOperator.EqualI64,
+                left = CheckedBinary(at, StructuredOperator.EqualI64,
                     left, right, IrValueType.Bool);
             }
             return left;
@@ -282,7 +310,7 @@ public static class OresStructuredParser
                 var right = Add(depth + 1);
                 Require(left, IrValueType.I64, "Less-than requires int operands");
                 Require(right, IrValueType.I64, "Less-than requires int operands");
-                left = new StructuredBinary(at, StructuredOperator.LessThanI64,
+                left = CheckedBinary(at, StructuredOperator.LessThanI64,
                     left, right, IrValueType.Bool);
             }
             return left;
@@ -300,7 +328,7 @@ public static class OresStructuredParser
                 var right = Multiply(depth + 1);
                 Require(left, IrValueType.I64, "Arithmetic requires int operands");
                 Require(right, IrValueType.I64, "Arithmetic requires int operands");
-                left = new StructuredBinary(at, op, left, right, IrValueType.I64);
+                left = CheckedBinary(at, op, left, right, IrValueType.I64);
             }
             return left;
         }
@@ -315,7 +343,7 @@ public static class OresStructuredParser
                 var right = Unary(depth + 1);
                 Require(left, IrValueType.I64, "Multiplication requires int operands");
                 Require(right, IrValueType.I64, "Multiplication requires int operands");
-                left = new StructuredBinary(at, StructuredOperator.Multiply,
+                left = CheckedBinary(at, StructuredOperator.Multiply,
                     left, right, IrValueType.I64);
             }
             return left;
@@ -340,7 +368,7 @@ public static class OresStructuredParser
                 }
                 var operand = Unary(depth + 1);
                 Require(operand, IrValueType.I64, "Unary minus requires int");
-                return new StructuredNegate(at, operand);
+                return CheckedNegate(at, operand);
             }
             if (Take("("))
             {
@@ -361,7 +389,7 @@ public static class OresStructuredParser
                 return new StructuredInt(offset, n);
             }
             var name = Name();
-            return new StructuredRead(offset, name, Lookup(name));
+            return new StructuredRead(offset, name, Lookup(name, offset));
         }
         private static void Require(StructuredExpr expression,
             IrValueType expected, string reason)
