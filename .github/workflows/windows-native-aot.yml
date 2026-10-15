@@ -11,7 +11,7 @@ permissions:
 jobs:
   windows-x64:
     runs-on: windows-2022
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -91,6 +91,31 @@ jobs:
             $rejected = $true
           }
           if (-not $rejected) { throw 'Native release verifier accepted a managed sidecar' }
+      - name: Compile verified CFG into a real Windows Native AOT executable
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $folder = Join-Path $env:RUNNER_TEMP 'ores-cfg-native'
+          New-Item -ItemType Directory -Path $folder -Force | Out-Null
+          $generated = Join-Path $folder 'OresGenerated.dll'
+          $hostProject = 'host/Ores.Net.NativeHost/Ores.Net.NativeHost.csproj'
+          $publishOut = 'artifacts/cfg/win-x64'
+          dotnet run --project verification/Ores.Net.CfgFixtures/Ores.Net.CfgFixtures.csproj -c Release -- $generated
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $generated)) {
+            throw 'Verified CFG CIL fixture emission failed'
+          }
+          # The host uses a static compile-time reference. A clean build
+          # prevents its previous arithmetic fixture from being linked again.
+          dotnet clean $hostProject -c Release -r win-x64 "-p:GeneratedAssembly=$generated"
+          if ($LASTEXITCODE -ne 0) { throw 'CFG Native AOT host clean failed' }
+          dotnet publish $hostProject -c Release -r win-x64 -o $publishOut "-p:GeneratedAssembly=$generated" -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'CFG Native AOT host publish failed' }
+          $binary = Join-Path $publishOut 'oreslang-app.exe'
+          ./verification/assert-native-release.ps1 -Binary $binary -Rid win-x64
+          $output = & $binary
+          if ($LASTEXITCODE -ne 0 -or ($output | Out-String).Trim() -ne '2211') {
+            throw "CFG Native AOT atomic swap regression: expected 2211, got '$output'"
+          }
       - name: Upload native executable
         uses: actions/upload-artifact@v4
         with:
