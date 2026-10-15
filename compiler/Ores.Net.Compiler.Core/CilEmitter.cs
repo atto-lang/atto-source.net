@@ -113,9 +113,11 @@ public static class CilEmitter
         var bodyStream = new MethodBodyStreamEncoder(ilStream);
         var metadata = new MetadataBuilder();
         var (bodyOffset, methodCode) = buildBody(metadata, bodyStream);
-        // Derive a reproducible module ID from the verified IL stream. A fixed
-        // MVID for unrelated programs would let assembly caches conflate them.
-        byte[] hash = SHA256.HashData(methodCode.ToArray());
+        // The method-body stream includes completed branch fixups, local
+        // signature tokens, and the method header. Hash the serialized body,
+        // not the pre-fixup instruction builder: different CFG branch targets
+        // must not accidentally share an MVID.
+        byte[] hash = SHA256.HashData(ilStream.ToArray());
         var moduleId = new Guid(hash.AsSpan(0, 16));
         metadata.AddModule(
             generation: 0,
