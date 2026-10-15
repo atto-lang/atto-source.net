@@ -12,8 +12,12 @@
     <ProjectReference Include="../../runtime/Ores.Net.Runtime/Ores.Net.Runtime.csproj" />
     <Reference Include="OresGenerated">
       <HintPath>$(GeneratedAssembly)</HintPath>
-      <!-- Compile-time reference only: never copy managed CIL to native publish output. -->
-      <Private>false</Private>
+      <!-- Native AOT's ILCompiler must resolve the physical assembly at link
+           time. Private=false excludes it from the publish dependency closure,
+           producing a native executable that throws FileNotFoundException.
+           Keep it in the build closure; release validation independently
+           rejects managed DLL sidecars in the final native output. -->
+      <Private>true</Private>
     </Reference>
   </ItemGroup>
   <Target Name="ValidateGeneratedAssembly" BeforeTargets="ResolveReferences">
