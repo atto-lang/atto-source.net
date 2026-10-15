@@ -130,6 +130,25 @@ internal static class StructuredSourceTests
             "fnc main():int{if true {let int x=1;}else{let int x=2;}return 0;}")
             .Body.Count == 2, "same spelling in sibling lexical scopes is legal");
 
+        // Seeded adversarial mutations of a valid typed source program.
+        // All outcomes must be either a typed AST or a FormatException;
+        // indexing failures, recursion faults and other exceptions fail CI.
+        const string baseProgram = "fnc main():int{let int i=0;while i<4 {i=i+1;}return i;}";
+        const string replacements = "abcXYZ01(){};:+-*<=>@/ ";
+        var fuzzRandom = new Random(17303);
+        int rejectedMutations = 0;
+        for (int mutation = 0; mutation < 512; mutation++)
+        {
+            var changed = baseProgram.ToCharArray();
+            int position = fuzzRandom.Next(changed.Length);
+            changed[position] = replacements[fuzzRandom.Next(replacements.Length)];
+            string candidate = new(changed);
+            try { _ = OresStructuredParser.Parse(candidate); }
+            catch (FormatException) { rejectedMutations++; }
+        }
+        Require(rejectedMutations >= 128,
+            "adversarial mutation corpus must exercise substantial parser rejection");
+
         // The shipping arithmetic frontend is intentionally unchanged.
         // Stage-one binding names must remain unambiguous.
         Require(OresParser.Parse("fnc main():int{return 2+3;}") is Binary,
