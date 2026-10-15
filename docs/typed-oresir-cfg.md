@@ -30,8 +30,10 @@ remain unchanged by this draft; they still accept only the arithmetic subset.
 - The verifier snapshots instruction, parameter and edge-argument arrays,
   preventing mutations of untrusted input collections from changing the
   verified CFG.
-- Resource limits: 128 blocks, 16,384 SSA definitions. No recursive traversal,
-  code execution or runtime assembly loading during verification.
+- Resource limits: 128 blocks, 16,384 SSA definitions and at most 32,768
+  aggregate edge arguments. All input collection counts are checked **before**
+  allocating immutable snapshots. No recursive traversal, code execution or
+  runtime assembly loading during verification.
 
 ## Executable test fixtures (managed developer tests only)
 
@@ -46,6 +48,30 @@ raises errors for arithmetic overflow and division by zero.
 a Native AOT artifact. This PR does not include CIL branch encoding or
 CFG-to-native integration. Because GitHub Actions jobs still fail without
 exposing executed steps, all new tests are **committed but unverified**.
+
+## 2026-10-14 security audit addendum
+
+- **Resource admission:** Previous snapshot construction copied arbitrarily
+  long parameter, instruction and branch-argument lists *before* enforcing
+  the SSA value budget. The verifier now rejects per-collection and aggregate
+  limits before enumeration or allocation. Malicious test collections expose
+  oversized `Count` values and deliberately throw if enumerated; rejection
+  must occur without touching their contents.
+- **Dominance oracle:** 80 small graphs with diamonds, shortcuts and backedges
+  compare verifier acceptance against an independent graph-removal model:
+  a definition block dominates the return block precisely when the return
+  becomes unreachable after removing the defining block. This supplements
+  hand-authored test fixtures, but is not a machine-checked mathematical proof.
+- **Malformed edges:** Null/invalid jump targets and missing edge arguments
+  must raise `FormatException` instead of dictionary null-key exceptions.
+- **Trap preservation:** An unused SSA checked division still throws on zero.
+  Future DCE cannot delete potentially trapping instructions without
+  demonstrating that the exception behavior is preserved.
+- **Threat-model boundary:** Snapshots prevent **subsequent** caller mutation
+  of verified collections, but verifying concurrently mutated custom
+  `IReadOnlyList` implementations is unsupported. Callers must hold inputs
+  stable during `Verify`. No claim is made about codegen of CFG branches;
+  CFG lowering into native code is not implemented yet.
 
 ## Further hardening / next milestone
 
