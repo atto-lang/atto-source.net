@@ -137,6 +137,67 @@ internal static class CfgVerifierTests
                     Left: 0, Right: 1)
             }, new CfgReturn(2)) }), "less-than must return bool");
 
+        // Real SSA loop: both i and total cross header/backedge block
+        // parameters. The signed comparison determines the exit at i == 10.
+        var sumEntry = Block("entry", Array.Empty<CfgParameter>(), new[] {
+            new CfgInstruction(0, CfgOpcode.ConstantI64, IrValueType.I64,
+                I64Constant: 0),
+            new CfgInstruction(1, CfgOpcode.ConstantI64, IrValueType.I64,
+                I64Constant: 0)
+        }, new CfgJump("header", new[] { 0, 1 }));
+        var sumHeader = Block("header", new[] {
+            new CfgParameter(2, IrValueType.I64),
+            new CfgParameter(3, IrValueType.I64)
+        }, new[] {
+            new CfgInstruction(4, CfgOpcode.ConstantI64, IrValueType.I64,
+                I64Constant: 10),
+            new CfgInstruction(5, CfgOpcode.LessThanI64, IrValueType.Bool,
+                Left: 2, Right: 4)
+        }, new CfgBranch(5, "body", new[] { 2, 3 },
+            "exit", new[] { 3 }));
+        var sumBody = Block("body", new[] {
+            new CfgParameter(6, IrValueType.I64),
+            new CfgParameter(7, IrValueType.I64)
+        }, new[] {
+            new CfgInstruction(8, CfgOpcode.CheckedAdd, IrValueType.I64,
+                Left: 7, Right: 6),
+            new CfgInstruction(9, CfgOpcode.ConstantI64, IrValueType.I64,
+                I64Constant: 1),
+            new CfgInstruction(10, CfgOpcode.CheckedAdd, IrValueType.I64,
+                Left: 6, Right: 9)
+        }, new CfgJump("header", new[] { 10, 8 }));
+        var sumExit = Block("exit", new[] {
+            new CfgParameter(11, IrValueType.I64)
+        }, Array.Empty<CfgInstruction>(), new CfgReturn(11));
+        var sumGraph = new CfgFunction("sum0to9", IrValueType.I64, "entry",
+            new[] { sumEntry, sumHeader, sumBody, sumExit });
+        CheckCil(OresCfgVerifier.Verify(sumGraph), 45,
+            "signed-while-sum45");
+        CheckCil(OresCfgVerifier.Verify(sumGraph with {
+            Blocks = new[] { sumExit, sumBody, sumEntry, sumHeader }
+        }), 45, "signed-while-sum45-reordered");
+
+        // Type confusion and bogus payloads must fail before any CIL
+        // emission, not silently reinterpret bools as signed integers.
+        Reject(new CfgFunction("bad_lt_operand", IrValueType.I64, "entry",
+            new[] { Block("entry", Array.Empty<CfgParameter>(), new[] {
+                new CfgInstruction(0, CfgOpcode.ConstantBool, IrValueType.Bool,
+                    BoolConstant: true),
+                new CfgInstruction(1, CfgOpcode.ConstantI64, IrValueType.I64,
+                    I64Constant: 3),
+                new CfgInstruction(2, CfgOpcode.LessThanI64, IrValueType.Bool,
+                    Left: 0, Right: 1)
+            }, new CfgReturn(1)) }), "less-than rejects bool operand");
+        Reject(new CfgFunction("bad_lt_payload", IrValueType.I64, "entry",
+            new[] { Block("entry", Array.Empty<CfgParameter>(), new[] {
+                new CfgInstruction(0, CfgOpcode.ConstantI64, IrValueType.I64,
+                    I64Constant: 1),
+                new CfgInstruction(1, CfgOpcode.ConstantI64, IrValueType.I64,
+                    I64Constant: 2),
+                new CfgInstruction(2, CfgOpcode.LessThanI64, IrValueType.Bool,
+                    Left: 0, Right: 1, I64Constant: 0)
+            }, new CfgReturn(1)) }), "less-than rejects extra immediate");
+
         // Loop-carried i64 value. Typed block parameters serve as SSA phi
         // arguments on the entry edge and the backedge.
         var entry = Block("entry", Array.Empty<CfgParameter>(),
@@ -551,6 +612,18 @@ internal static class CfgVerifierTests
             var entry = assembly.MainModule.Types.Single(t =>
                 t.FullName == "Oreslang.Generated.OresProgram")
                 .Methods.Single(m => m.Name == "Run");
+
+            int signedOpCount = graph.Blocks.Sum(b =>
+                b.Instructions.Count(op => op.Opcode == CfgOpcode.LessThanI64));
+            if (signedOpCount != 0)
+            {
+                Expect(entry.Body.Instructions.Count(ins =>
+                    ins.OpCode.Code == Mono.Cecil.Cil.Code.Clt) == signedOpCount,
+                    label + ": signed less-than must emit exactly one clt per CFG op");
+                Expect(!entry.Body.Instructions.Any(ins =>
+                    ins.OpCode.Code == Mono.Cecil.Cil.Code.Clt_Un),
+                    label + ": unsigned clt.un is forbidden for i64 less-than");
+            }
 
             Expect(entry.Body.MaxStackSize == 2,
                 label + ": emitted CFG stack bound");
