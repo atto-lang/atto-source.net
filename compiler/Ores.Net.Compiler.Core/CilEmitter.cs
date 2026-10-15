@@ -112,7 +112,7 @@ public static class CilEmitter
         var ilStream = new BlobBuilder();
         var bodyStream = new MethodBodyStreamEncoder(ilStream);
         var metadata = new MetadataBuilder();
-        var (bodyOffset, methodCode) = buildBody(metadata, bodyStream);
+        var (bodyOffset, _) = buildBody(metadata, bodyStream);
         // The method-body stream includes completed branch fixups, local
         // signature tokens, and the method header. Hash the serialized body,
         // not the pre-fixup instruction builder: different CFG branch targets
