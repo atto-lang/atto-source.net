@@ -155,6 +155,49 @@ try
     Require(ops.Contains(Code.Add_Ovf) && ops.Contains(Code.Mul_Ovf), "checked CIL operations");
     Require(ops[^1] == Code.Ret, "CIL return");
     Require(entry.Body.MaxStackSize is >= 2 and <= 256, "CIL stack bounds");
+    // The original direct AST path remains a separate reference implementation
+    // until real .NET builds confirm the new production OresIR path.
+    Require(CilReferenceEvaluator.Evaluate(entry) ==
+        OresIrReferenceEvaluator.Evaluate(lowered),
+        "legacy AST CIL matches verified OresIR semantics");
+
+    var irGenerated = Path.Combine(folder, "OresGenerated.ir.dll");
+    CilEmitter.EmitLibrary(lowered, irGenerated);
+    using var irAssembly = AssemblyDefinition.ReadAssembly(irGenerated);
+    var irEntry = irAssembly.MainModule.Types.Single(t =>
+        t.FullName == "Oreslang.Generated.OresProgram").Methods.Single(m => m.Name == "Run");
+    Require(irEntry.Body.Variables.Count == lowered.Instructions.Count,
+        "OresIR CIL has one typed local for every SSA definition");
+    Require(irEntry.Body.Variables.All(v => v.VariableType.MetadataType == MetadataType.Int64),
+        "OresIR local variable signatures are all i64");
+    Require(irEntry.Body.MaxStackSize == 2, "SSA lowering uses a measured two-slot stack");
+    Require(CilReferenceEvaluator.Evaluate(irEntry) == 14,
+        "verified SSA CIL retains arithmetic semantics");
+    Require(irEntry.Body.Instructions.Count(i => i.OpCode.Code == Code.Add_Ovf) == 1 &&
+            irEntry.Body.Instructions.Count(i => i.OpCode.Code == Code.Mul_Ovf) == 1,
+        "OresIR emits checked CIL operations");
+
+    var irRepro = Path.Combine(folder, "OresGenerated.ir.repro.dll");
+    CilEmitter.EmitLibrary(lowered, irRepro);
+    Require(File.ReadAllBytes(irGenerated).AsSpan().SequenceEqual(File.ReadAllBytes(irRepro)),
+        "verified IR PE emission is byte-for-byte deterministic");
+
+    var reusedIr = OresIrVerifier.Verify(new IrFunction("reuse", IrValueType.I64,
+        new[] {
+            new IrInstruction(0, IrOpcode.ConstantI64, IrValueType.I64, Constant: 7),
+            new IrInstruction(1, IrOpcode.CheckedAdd, IrValueType.I64, Left: 0, Right: 0),
+            new IrInstruction(2, IrOpcode.CheckedMultiply, IrValueType.I64, Left: 1, Right: 1),
+            new IrInstruction(3, IrOpcode.ConstantI64, IrValueType.I64, Constant: 99)
+        }, 2));
+    var reusedPath = Path.Combine(folder, "OresGenerated.reuse.dll");
+    CilEmitter.EmitLibrary(reusedIr, reusedPath);
+    using var reusedAssembly = AssemblyDefinition.ReadAssembly(reusedPath);
+    var reusedMethod = reusedAssembly.MainModule.Types.Single(t =>
+        t.FullName == "Oreslang.Generated.OresProgram").Methods.Single(m => m.Name == "Run");
+    Require(CilReferenceEvaluator.Evaluate(reusedMethod) == 196 &&
+        OresIrReferenceEvaluator.Evaluate(reusedIr) == 196,
+        "shared SSA operands and unused definitions preserve semantics");
+
 
     // Flat left-associated expressions are valid without recursive emitter
     // stack overflow; 2048 additions should require only a small CIL stack.
@@ -170,6 +213,17 @@ try
         "flat expression lowering");
     Require(flatMethod.Body.Instructions.Last().OpCode.Code == Code.Ret,
         "flat expression must have terminal return");
+    var longIrPath = Path.Combine(folder, "OresGenerated.flat.ir.dll");
+    CilEmitter.EmitLibrary(flatIr, longIrPath);
+    using var longIrAssembly = AssemblyDefinition.ReadAssembly(longIrPath);
+    var longIrMethod = longIrAssembly.MainModule.Types.Single(t =>
+        t.FullName == "Oreslang.Generated.OresProgram").Methods.Single(m => m.Name == "Run");
+    Require(longIrMethod.Body.Variables.Count == 4095 &&
+        longIrMethod.Body.MaxStackSize <= 2,
+        "4,095 SSA values are lowered with bounded CIL stack");
+    Require(CilReferenceEvaluator.Evaluate(longIrMethod) == 2048,
+        "4,095-value CIL agrees with independent reference semantics");
+
 
 
     // Artificially assembled right-deep trees cannot demand arbitrary CIL stack.
