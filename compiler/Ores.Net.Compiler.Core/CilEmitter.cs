@@ -22,15 +22,91 @@ public static class CilEmitter
         ArgumentNullException.ThrowIfNull(program);
         ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
 
+        EmitLibraryCore(outputFile, (metadata, bodies) =>
+        {
+            var methodCode = new BlobBuilder();
+            var instructions = new InstructionEncoder(methodCode);
+            int maxStack = Write(program, instructions);
+            instructions.OpCode(ILOpCode.Ret);
+            int bodyOffset = bodies.AddMethodBody(instructions, maxStack: maxStack);
+            return (bodyOffset, methodCode);
+        });
+    }
+
+    // Production path: only a verified OresIR function may reach the CIL
+    // backend. Each SSA value has a typed i64 local slot, so shared subgraphs
+    // and unused instructions have defined, non-exponential execution.
+    public static void EmitLibrary(VerifiedIrFunction program, string outputFile)
+    {
+        ArgumentNullException.ThrowIfNull(program);
+        ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
+        const int maxLocalSlots = 16_384;
+        if (program.Instructions.Count > maxLocalSlots)
+            throw new FormatException("OresIR CIL local slot budget exceeded");
+
+        EmitLibraryCore(outputFile, (metadata, bodies) =>
+        {
+            int count = program.Instructions.Count;
+            var localsBlob = new BlobBuilder();
+            var locals = new BlobEncoder(localsBlob).LocalVariableSignature(count);
+            for (int i = 0; i < count; i++)
+                locals.AddVariable().Type().Int64();
+            var localSignature = metadata.AddStandaloneSignature(
+                metadata.GetOrAddBlob(localsBlob));
+
+            var methodCode = new BlobBuilder();
+            var il = new InstructionEncoder(methodCode);
+            int maxStack = WriteVerifiedIr(program, il);
+            int bodyOffset = bodies.AddMethodBody(il, maxStack: maxStack,
+                localVariablesSignature: localSignature);
+            return (bodyOffset, methodCode);
+        });
+    }
+
+    private static int WriteVerifiedIr(VerifiedIrFunction program, InstructionEncoder il)
+    {
+        int maxStack = 1;
+        foreach (var operation in program.Instructions)
+        {
+            switch (operation.Opcode)
+            {
+                case IrOpcode.ConstantI64:
+                    il.LoadConstantI8(operation.Constant!.Value);
+                    break;
+                case IrOpcode.CheckedAdd:
+                case IrOpcode.CheckedSubtract:
+                case IrOpcode.CheckedMultiply:
+                case IrOpcode.CheckedDivide:
+                    il.LoadLocal(operation.Left!.Value);
+                    il.LoadLocal(operation.Right!.Value);
+                    il.OpCode(operation.Opcode switch
+                    {
+                        IrOpcode.CheckedAdd => ILOpCode.Add_ovf,
+                        IrOpcode.CheckedSubtract => ILOpCode.Sub_ovf,
+                        IrOpcode.CheckedMultiply => ILOpCode.Mul_ovf,
+                        _ => ILOpCode.Div
+                    });
+                    maxStack = 2;
+                    break;
+                default:
+                    throw new FormatException("Unsupported verified IR opcode");
+            }
+            // Evaluation stack is empty between SSA definitions.
+            il.StoreLocal(operation.ResultId);
+        }
+        il.LoadLocal(program.ReturnId);
+        il.OpCode(ILOpCode.Ret);
+        return maxStack;
+    }
+
+    private static void EmitLibraryCore(string outputFile,
+        Func<MetadataBuilder, MethodBodyStreamEncoder,
+            (int BodyOffset, BlobBuilder Code)> buildBody)
+    {
         var ilStream = new BlobBuilder();
         var bodyStream = new MethodBodyStreamEncoder(ilStream);
-        var methodCode = new BlobBuilder();
-        var instructions = new InstructionEncoder(methodCode);
-        int maxStack = Write(program, instructions);
-        instructions.OpCode(ILOpCode.Ret);
-        int bodyOffset = bodyStream.AddMethodBody(instructions, maxStack: maxStack);
-
         var metadata = new MetadataBuilder();
+        var (bodyOffset, methodCode) = buildBody(metadata, bodyStream);
         // Derive a reproducible module ID from the verified IL stream. A fixed
         // MVID for unrelated programs would let assembly caches conflate them.
         byte[] hash = SHA256.HashData(methodCode.ToArray());
