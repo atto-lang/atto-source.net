@@ -13,8 +13,8 @@ internal static class ElmCompositionAdmissionTests
         var path = Path.Combine(AppContext.BaseDirectory, "elm-composition-rejections.json");
         var cases = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(path))
             ?? throw new Exception("Missing Elm composition admission corpus");
-        if (cases.Count != 6)
-            throw new Exception("Expected six distinct native reactive admission cases");
+        if (cases.Count != 11)
+            throw new Exception("Expected eleven distinct composition and failure admission cases");
 
         foreach (var (name, source) in cases)
         {
