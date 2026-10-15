@@ -326,6 +326,52 @@ internal static class CfgVerifierTests
                 }, new CfgReturn(11))
             });
         CheckCil(OresCfgVerifier.Verify(swap), 2211, "atomic-swap");
+        // Three-way rotation on a self-edge proves that all predecessor
+        // operands are captured before ANY destination parameter is updated.
+        // A sequential transfer changes 3,1,2 into incorrect repeated values.
+        var rotate = new CfgFunction("rotate", IrValueType.I64, "entry",
+            new[] {
+                Block("entry", Array.Empty<CfgParameter>(), new[] {
+                    new CfgInstruction(0, CfgOpcode.ConstantI64, IrValueType.I64,
+                        I64Constant: 1),
+                    new CfgInstruction(1, CfgOpcode.ConstantI64, IrValueType.I64,
+                        I64Constant: 2),
+                    new CfgInstruction(2, CfgOpcode.ConstantI64, IrValueType.I64,
+                        I64Constant: 3),
+                    new CfgInstruction(3, CfgOpcode.ConstantBool, IrValueType.Bool,
+                        BoolConstant: true)
+                }, new CfgJump("loop", new[] { 0, 1, 2, 3 })),
+                Block("loop", new[] {
+                    new CfgParameter(4, IrValueType.I64),
+                    new CfgParameter(5, IrValueType.I64),
+                    new CfgParameter(6, IrValueType.I64),
+                    new CfgParameter(7, IrValueType.Bool)
+                }, new[] {
+                    new CfgInstruction(8, CfgOpcode.ConstantBool, IrValueType.Bool,
+                        BoolConstant: false)
+                }, new CfgBranch(7, "loop", new[] { 6, 4, 5, 8 },
+                    "finish", new[] { 4, 5, 6 })),
+                Block("finish", new[] {
+                    new CfgParameter(9, IrValueType.I64),
+                    new CfgParameter(10, IrValueType.I64),
+                    new CfgParameter(11, IrValueType.I64)
+                }, new[] {
+                    new CfgInstruction(12, CfgOpcode.ConstantI64, IrValueType.I64,
+                        I64Constant: 100),
+                    new CfgInstruction(13, CfgOpcode.CheckedMultiply, IrValueType.I64,
+                        Left: 9, Right: 12),
+                    new CfgInstruction(14, CfgOpcode.ConstantI64, IrValueType.I64,
+                        I64Constant: 10),
+                    new CfgInstruction(15, CfgOpcode.CheckedMultiply, IrValueType.I64,
+                        Left: 10, Right: 14),
+                    new CfgInstruction(16, CfgOpcode.CheckedAdd, IrValueType.I64,
+                        Left: 13, Right: 15),
+                    new CfgInstruction(17, CfgOpcode.CheckedAdd, IrValueType.I64,
+                        Left: 16, Right: 11)
+                }, new CfgReturn(17))
+            });
+        CheckCil(OresCfgVerifier.Verify(rotate), 312, "atomic-three-cycle");
+
         // A trap in a branch that is not selected must not execute. This
         // also checks that the CIL emitter has no accidental fallthrough.
         var conditionalTrap = new CfgFunction("chosen", IrValueType.I64, "entry",
