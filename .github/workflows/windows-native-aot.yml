@@ -69,6 +69,9 @@ jobs:
             $acceptedManaged = $false
           }
           if ($acceptedManaged) { throw 'Native image verifier accepted managed test assembly' }
+      - name: Reject corrupted Native AOT PE headers
+        shell: pwsh
+        run: ./verification/assert-native-pe-regressions.ps1 -Binary ./artifacts/apps/win-x64/oreslang-app.exe -Rid win-x64
       - name: Execute Native AOT checked-arithmetic error cases
         shell: pwsh
         run: ./verification/assert-native-arithmetic.ps1 -Rid win-x64
