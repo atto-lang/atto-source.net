@@ -83,7 +83,43 @@ internal static class StructuredSourceTests
                 Operator: StructuredOperator.Add
             } }, "arithmetic AST operator precedence");
 
+        // AST height must be bounded even when the source is a flat chain.
+        // Grammar recursion depth alone cannot enforce this invariant.
+        var maxHeightExpression = string.Join("+", Enumerable.Repeat("1", 128));
+        Require(OresStructuredParser.Parse("fnc main():int{return " +
+            maxHeightExpression + ";}").Body[0] is StructuredReturn,
+            "128-leaf left-associative sum stays inside AST height budget");
+        Reject("fnc main():int{return " +
+            string.Join("+", Enumerable.Repeat("1", 129)) + ";}",
+            "129-leaf sum exceeds AST height limit");
+        Reject("fnc main():int{return " +
+            string.Join("*", Enumerable.Repeat("1", 129)) + ";}",
+            "129-leaf product exceeds AST height limit");
+        Reject("fnc main():int{return -(" +
+            string.Join("+", Enumerable.Repeat("1", 128)) + ");}",
+            "negation cannot silently exceed AST height limit");
+
+        static void ExpectAt(string source, string message, string identifier)
+        {
+            try { _ = OresStructuredParser.Parse(source); }
+            catch (FormatException ex)
+            {
+                var expected = source.IndexOf(identifier, StringComparison.Ordinal);
+                Require(ex.Message.Contains($"offset {expected}", StringComparison.Ordinal),
+                    message + ": expected offset " + expected + ", got " + ex.Message);
+                return;
+            }
+            throw new Exception("Structured source incorrectly accepted: " + message);
+        }
+        ExpectAt("fnc main():int{return missing;}",
+            "undefined read points to identifier", "missing");
+        ExpectAt("fnc main():int{missing=2;return 1;}",
+            "undefined assignment points to identifier", "missing");
+        ExpectAt("fnc main():int{let int x=1;let int x=2;return x;}",
+            "duplicate declaration points to second identifier", "x=2");
+
         // The shipping arithmetic frontend is intentionally unchanged.
+        // Stage-one binding names must remain unambiguous.
         Require(OresParser.Parse("fnc main():int{return 2+3;}") is Binary,
             "legacy verified arithmetic parser still works");
         Reject("fnc main():int{let int x=x; return x;}", "self-reference");
