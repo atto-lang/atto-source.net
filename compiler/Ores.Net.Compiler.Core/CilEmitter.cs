@@ -29,7 +29,7 @@ public static class CilEmitter
             int maxStack = Write(program, instructions);
             instructions.OpCode(ILOpCode.Ret);
             int bodyOffset = bodies.AddMethodBody(instructions, maxStack: maxStack);
-            return (bodyOffset, methodCode);
+            return (bodyOffset, methodCode, null);
         });
     }
 
@@ -59,7 +59,7 @@ public static class CilEmitter
             int maxStack = WriteVerifiedIr(program, il);
             int bodyOffset = bodies.AddMethodBody(il, maxStack: maxStack,
                 localVariablesSignature: localSignature);
-            return (bodyOffset, methodCode);
+            return (bodyOffset, methodCode, localsBlob);
         });
     }
 
@@ -107,17 +107,21 @@ public static class CilEmitter
 
     internal static void EmitLibraryCore(string outputFile,
         Func<MetadataBuilder, MethodBodyStreamEncoder,
-            (int BodyOffset, BlobBuilder Code)> buildBody)
+            (int BodyOffset, BlobBuilder Code, BlobBuilder? Locals)> buildBody)
     {
         var ilStream = new BlobBuilder();
         var bodyStream = new MethodBodyStreamEncoder(ilStream);
         var metadata = new MetadataBuilder();
-        var (bodyOffset, _) = buildBody(metadata, bodyStream);
-        // The method-body stream includes completed branch fixups, local
-        // signature tokens, and the method header. Hash the serialized body,
-        // not the pre-fixup instruction builder: different CFG branch targets
-        // must not accidentally share an MVID.
-        byte[] hash = SHA256.HashData(ilStream.ToArray());
+        var (bodyOffset, _, localSignatureBlob) = buildBody(metadata, bodyStream);
+        // The finalized method body includes branch fixups and the signature
+        // *token*, but the token number is not a fingerprint of its blob.
+        // Two programs can have identical IL and signature token 0x11000001
+        // while having different typed local signatures. Hash both inputs.
+        using var contentHash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        contentHash.AppendData(ilStream.ToArray());
+        if (localSignatureBlob is not null)
+            contentHash.AppendData(localSignatureBlob.ToArray());
+        byte[] hash = contentHash.GetHashAndReset();
         var moduleId = new Guid(hash.AsSpan(0, 16));
         metadata.AddModule(
             generation: 0,
