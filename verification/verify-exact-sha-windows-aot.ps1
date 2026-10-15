@@ -26,7 +26,7 @@ try {
     Invoke-RequiredNative 'Git checkout identity' {
         $script:ActualHead = (git rev-parse --verify HEAD).Trim()
     }
-    if ($ActualHead -cne $ExpectedCommit) {
+    if ($ActualHead -ine $ExpectedCommit) {
         throw "Wrong source commit: expected $ExpectedCommit, got $ActualHead"
     }
     Invoke-RequiredNative 'Git tracked working-tree status' {
@@ -58,8 +58,8 @@ try {
     # OresGenerated.dll, and links the native host. It refuses stale
     # distributables and managed runtime sidecars.
     & ./scripts/publish-windows.ps1 -Source examples/hello.ores -Rid win-x64
-    $nativeCompiler = 'artifacts/compiler/win-x64/oresnet.exe'
-    $nativeApp = 'artifacts/apps/win-x64/oreslang-app.exe'
+    $nativeCompiler = Join-Path $root 'artifacts/compiler/win-x64/oresnet.exe'
+    $nativeApp = Join-Path $root 'artifacts/apps/win-x64/oreslang-app.exe'
     & ./verification/assert-native-release.ps1 -Binary $nativeCompiler -Rid win-x64
     & ./verification/assert-native-release.ps1 -Binary $nativeApp -Rid win-x64
     $arithmetic = & $nativeApp
