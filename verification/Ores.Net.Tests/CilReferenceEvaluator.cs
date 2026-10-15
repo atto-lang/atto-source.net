@@ -16,6 +16,10 @@ internal static class CilReferenceEvaluator
         {
             switch (ins.OpCode.Code)
             {
+                // Method-body alignment and compiler-inserted no-ops have no
+                // effect on the evaluation stack; reject other unknown IL.
+                case Code.Nop:
+                    break;
                 case Code.Ldc_I8:
                     stack.Push((long)ins.Operand);
                     break;
