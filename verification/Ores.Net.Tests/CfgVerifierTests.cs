@@ -28,6 +28,32 @@ internal static class CfgVerifierTests
             GetEnumerator();
     }
 
+    // Legitimate IReadOnlyList input may support indexing but deliberately
+    // refuse IEnumerable enumeration. Verification must never enumerate it.
+    // A hostile iterator could otherwise yield without bound despite Count.
+    private sealed class IndexedOnlyList<T>(T[] items) : IReadOnlyList<T>
+    {
+        public int Count => items.Length;
+        public T this[int index] => items[index];
+        public IEnumerator<T> GetEnumerator() =>
+            throw new InvalidOperationException("Verifier enumerated untrusted IReadOnlyList");
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() =>
+            GetEnumerator();
+    }
+
+    // Prove the admitted Count is cached before copying. A second read from
+    // this adversarial collection reports a dangerous, unbounded size.
+    private sealed class CountDriftList<T>(T[] items) : IReadOnlyList<T>
+    {
+        private int reads;
+        public int Count => reads++ == 0 ? items.Length : int.MaxValue;
+        public T this[int index] => items[index];
+        public IEnumerator<T> GetEnumerator() =>
+            throw new InvalidOperationException("Verifier enumerated drifting IReadOnlyList");
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() =>
+            GetEnumerator();
+    }
+
     private static CfgBlock Block(
         string name, CfgParameter[] parameters,
         CfgInstruction[] instructions, CfgTerminator terminator) =>
@@ -35,6 +61,35 @@ internal static class CfgVerifierTests
 
     public static void Run()
     {
+        // All four collection positions (blocks, parameters, instructions,
+        // edge arguments) must be copied by *indexed, admitted counts* only.
+        var indexedEntry = new CfgBlock("start",
+            new IndexedOnlyList<CfgParameter>(Array.Empty<CfgParameter>()),
+            new IndexedOnlyList<CfgInstruction>(new[] {
+                new CfgInstruction(0, CfgOpcode.ConstantI64, IrValueType.I64,
+                    I64Constant: 17)
+            }),
+            new CfgJump("finish", new IndexedOnlyList<int>(new[] { 0 })));
+        var indexedFinish = new CfgBlock("finish",
+            new IndexedOnlyList<CfgParameter>(new[] {
+                new CfgParameter(1, IrValueType.I64)
+            }),
+            new IndexedOnlyList<CfgInstruction>(Array.Empty<CfgInstruction>()),
+            new CfgReturn(1));
+        var indexed = new CfgFunction("indexed", IrValueType.I64, "start",
+            new IndexedOnlyList<CfgBlock>(new[] { indexedEntry, indexedFinish }));
+        CheckCil(OresCfgVerifier.Verify(indexed), 17, "indexed-only-untrusted-collections");
+
+        var driftEntry = new CfgBlock("entry",
+            new CountDriftList<CfgParameter>(Array.Empty<CfgParameter>()),
+            new CountDriftList<CfgInstruction>(new[] {
+                new CfgInstruction(0, CfgOpcode.ConstantI64, IrValueType.I64,
+                    I64Constant: 23)
+            }), new CfgReturn(0));
+        var drift = new CfgFunction("drift", IrValueType.I64, "entry",
+            new CountDriftList<CfgBlock>(new[] { driftEntry }));
+        CheckCil(OresCfgVerifier.Verify(drift), 23, "count-drift-safe-snapshot");
+
         // Loop-carried i64 value. Typed block parameters serve as SSA phi
         // arguments on the entry edge and the backedge.
         var entry = Block("entry", Array.Empty<CfgParameter>(),
