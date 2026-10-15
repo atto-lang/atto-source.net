@@ -124,6 +124,9 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or ($output | Out-String).Trim() -ne '2211') {
             throw "CFG Native AOT atomic swap regression: expected 2211, got '$output'"
           }
+      - name: Compile structured source sum45 into strict Windows Native AOT
+        shell: pwsh
+        run: ./verification/assert-windows-structured-cfg-native.ps1
       - name: Upload native executable
         uses: actions/upload-artifact@v4
         with:
@@ -169,3 +172,6 @@ jobs:
       - name: Execute Linux Native AOT CFG branch and simultaneous-assignment fixture
         shell: bash
         run: bash ./verification/assert-linux-cfg-native.sh
+      - name: Execute Linux Native AOT structured source sum45 fixture
+        shell: bash
+        run: bash ./verification/assert-linux-structured-cfg-native.sh
