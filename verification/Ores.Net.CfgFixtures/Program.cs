@@ -11,6 +11,37 @@ if (args.Length != 1 ||
     return 2;
 }
 
+// An explicit verification-only environment selector avoids changing the
+// production CLI/flags parser or trusting arbitrary source/assembly paths.
+// When set, emit a static CIL assembly compiled from real structured source.
+if (Environment.GetEnvironmentVariable("ORESNET_CFG_SOURCE_FIXTURE") == "sum45")
+{
+    const string source = """
+        fnc main():int {
+            let int total=0;
+            let int i=0;
+            while i<10 {
+                total=total+i;
+                i=i+1;
+            }
+            return total;
+        }
+        """;
+    try
+    {
+        var verified = OresStructuredCfgLowering.Lower(source);
+        CilEmitter.EmitLibrary(verified, args[0]);
+        Console.WriteLine("Emitted structured source sum45 CFG CIL fixture");
+        return 0;
+    }
+    catch (Exception ex) when (ex is FormatException or IOException or
+        UnauthorizedAccessException)
+    {
+        Console.Error.WriteLine("structured-cfg-fixture: " + ex.Message);
+        return 1;
+    }
+}
+
 // Entry: a=11, b=22, flag=true. The first trip around the loop swaps a and
 // b by passing them as block arguments, and disables the next iteration.
 // Return (a * 100 + b) = 2211. Sequential edge stores would produce 2222.
