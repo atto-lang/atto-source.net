@@ -16,8 +16,8 @@ if (-not (Test-Path -LiteralPath $compiler)) {
 
 $cases = @(
     @{ Name='overflow'; Expected='overflow'; Source='examples/overflow.ores' },
-    @{ Name='division-by-zero'; Expected='division by zero'; Source='examples/division-by-zero.ores' },
-    @{ Name='division-overflow'; Expected='overflow'; Source='examples/division-overflow.ores' }
+    @{ Name='division-by-zero'; Expected='float result lowering'; Source='examples/division-by-zero.ores' },
+    @{ Name='division-overflow'; Expected='float result lowering'; Source='examples/division-overflow.ores' }
 )
 
 foreach ($case in $cases) {
@@ -31,7 +31,15 @@ foreach ($case in $cases) {
     $binary = Join-Path $outputFolder 'oreslang-app.exe'
     Remove-Item -LiteralPath $binary -Force -ErrorAction SilentlyContinue
 
-    & $compiler compile $source --out $generated
+    $compileText = (& $compiler compile $source --out $generated 2>&1 | Out-String)
+    if ($case.Name -like 'division-*') {
+        if ($LASTEXITCODE -ne 1 -or $compileText -notmatch [regex]::Escape($case.Expected) -or
+            (Test-Path -LiteralPath $generated)) {
+            throw "Source division must be diagnosed before CIL publication: $compileText"
+        }
+        Write-Host "Verified source division admission rejection: $($case.Name)"
+        continue
+    }
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $generated)) {
         throw "Failed to emit CIL for $($case.Name)"
     }

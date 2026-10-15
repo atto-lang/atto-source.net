@@ -17,6 +17,18 @@ public static class OresParser
         ArgumentNullException.ThrowIfNull(source);
         if (source.Length > 1_048_576)
             throw new FormatException("Source is larger than the 1 MiB bootstrap limit");
+        for (int i = 0; i < source.Length; i++)
+        {
+            char c = source[i];
+            if (c == '\0') throw new FormatException("Source contains NUL byte");
+            if (char.IsHighSurrogate(c))
+            {
+                if (++i >= source.Length || !char.IsLowSurrogate(source[i]))
+                    throw new FormatException("Source contains invalid UTF-16");
+            }
+            else if (char.IsLowSurrogate(c))
+                throw new FormatException("Source contains invalid UTF-16");
+        }
         var lexer = new Lexer(source);
         var tokens = new List<Token>();
         for (;;)
@@ -145,6 +157,10 @@ public static class OresParser
             while (Current.Text is "*" or "/")
             {
                 char op = Current.Text[0];
+                // Reference Oreslang int/int has a float result. This i64-only
+                // frontend must not silently truncate it using CIL div.
+                if (op == '/')
+                    throw new FormatException("Division requires float result lowering; unsupported in the i64 source subset");
                 _index++;
                 left = new Binary(op, left, ParseUnary(depth + 1));
             }

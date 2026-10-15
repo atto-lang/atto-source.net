@@ -22,6 +22,28 @@ static void InvalidSend(Action action, string why)
     throw new Exception("Expected mailbox rejection: " + why);
 }
 
+foreach (var invalid in new[] { "\0", "\ud800", "\udc00", "\ud800x" })
+    Reject(() => OresParser.Parse("fnc main():int{return 1;} // " + invalid),
+        "invalid encoding in ignored comment");
+Require(OresParser.Parse("fnc main():int{return 1;} // \ud83d\ude00") is Literal,
+    "valid surrogate pair in comment");
+
+foreach (var division in new[] { "3/2", "4/2", "5/0", "-9223372036854775808/-1" })
+{
+    try { OresParser.Parse("fnc main():int{return " + division + ";}"); }
+    catch (FormatException ex) when (ex.Message.Contains("float result lowering")) { continue; }
+    throw new Exception("Source division must fail closed until float lowering exists");
+}
+// Explicit internal checked-i64 IR remains available; it is not source /.
+foreach (var pair in new[] { (long.MinValue, -1L), (5L, 0L) })
+{
+    var divisionIr = OresIrLowering.Lower(new Binary('/', new Literal(pair.Item1), new Literal(pair.Item2)));
+    try { OresIrReferenceEvaluator.Evaluate(divisionIr); }
+    catch (OverflowException) when (pair.Item2 == -1) { continue; }
+    catch (DivideByZeroException) when (pair.Item2 == 0) { continue; }
+    throw new Exception("Internal checked-i64 division must preserve traps");
+}
+
 var positive = OresParser.Parse("define pub fnc main() : int { return 2 + 3 * 4; }");
 Require(positive is Binary { Operator: '+' }, "top-level expression shape");
 Require(OresParser.Parse("pub define fnc main():int {return -9223372036854775808;}") is Literal
@@ -117,8 +139,8 @@ static void RejectIrOverflow(string source, bool divideByZero)
 }
 RejectIrOverflow("fnc main():int{return 9223372036854775807 + 1;}", false);
 RejectIrOverflow("fnc main():int{return 9223372036854775807 * 2;}", false);
-RejectIrOverflow("fnc main():int{return -9223372036854775808 / -1;}", false);
-RejectIrOverflow("fnc main():int{return 5 / 0;}", true);
+
+
 RejectIrOverflow("fnc main():int{return -(-9223372036854775808);}", false);
 
 // check and compile share exactly the same verifier instruction limit;
@@ -200,11 +222,11 @@ try
         "fnc main():int{return -123;}",
         "fnc main():int{return +1;}",
         "fnc main():int{return (8-3)*5 + 2;}",
-        "fnc main():int{return 100/(3+2) - 19;}",
+        "fnc main():int{return 100-(3+2) - 19;}",
         "fnc main():int{return -(3 * (4-5));}",
         "fnc main():int{return -9223372036854775808;}",
         "fnc main():int{return 9223372036854775807-1;}",
-        "fnc main():int{return 3*4/2*5-7;}"
+        "fnc main():int{return 3*4-2*5-7;}"
     };
     for (int i = 0; i < samples.Length; i++)
     {
@@ -222,9 +244,7 @@ try
 
     var errors = new[] {
         ("fnc main():int{return 9223372036854775807+1;}", false),
-        ("fnc main():int{return -(-9223372036854775808);}", false),
-        ("fnc main():int{return -9223372036854775808/-1;}", false),
-        ("fnc main():int{return 13/0;}", true)
+        ("fnc main():int{return -(-9223372036854775808);}", false)
     };
     for (int i = 0; i < errors.Length; i++)
     {
