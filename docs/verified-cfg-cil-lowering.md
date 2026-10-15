@@ -96,6 +96,34 @@ successful `dotnet` build, generated metadata inspection, and native execution.
   that billing minutes are exhausted; it means no current runner capacity
   could be verified. **No private Oreslang source was mirrored.**
 
+## Long-branch regression correction and CI gating (2026-10-15)
+
+- Corrected a **false-positive test requirement** in
+  `verification/Ores.Net.Tests/CfgCilStressTests.cs`. The CFG emitter uses
+  `brtrue` to skip just the short false-edge transfer sequence, not the
+  entire 640-instruction block. The genuinely long jump is an
+  **unconditional** `br` across the padding (or the synthetic entry jump
+  for reordered blocks). The test now requires the conditional edge-select
+  displacement to be at most 127 bytes and an actual unconditional
+  branch displacement greater than 127 bytes. It still compares CIL
+  interpretation to the independent CFG reference evaluator.
+- The supported .NET metadata method-body API accepts
+  `AddMethodBody(InstructionEncoder, maxStack, localVariablesSignature,
+  attributes)` and resolves long-form branch labels when serializing
+  the method. API signature inspection is **not a build or execution test**.
+- A sixth private CI destination, `scintilla-run/scintilla-e2e`, had older
+  successfully executed Actions, but its fresh **no-source** Windows/Linux
+  `dotnet --info` probe ([temporary PR #18](https://github.com/scintilla-run/scintilla-e2e/pull/18),
+  [run 38688393704](https://github.com/scintilla-run/scintilla-e2e/actions/runs/38688393704))
+  failed with **zero reported executed steps** in both jobs. The probe
+  workflow was deleted and the PR closed unmerged. No private Oreslang
+  source was mirrored.
+- The accountable administrative/release handoff is
+  [Oreslang .NET issue #5](https://github.com/ores-truffle-oreslang/oreslang-source.net/issues/5).
+  It requires source-organization runner diagnosis or authorized isolated
+  Windows x64 .NET 10 execution, exact-head managed tests, strict Native
+  AOT application execution and independent review **before merging**.
+
 ## Verification blockers and explicit non-goals
 
 - GitHub Actions has repeatedly failed before returning job steps, including
