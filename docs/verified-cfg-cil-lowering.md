@@ -35,6 +35,9 @@ OresIR; source-language branches and functions are **not yet supported**.
   the pre-fixup instruction bytes.
 - The verifier caps CFG SSA definitions and scratch-local counts at 16,384
   each; the method has at most 32,768 local slots under this allocation scheme.
+  Emission also rejects methods with more than 4 MiB of CIL before metadata
+  serialization; all destination-parameter layouts are precomputed, avoiding
+  repeated linear block lookups per branch edge.
 
 ## Differential verification fixtures
 
@@ -47,7 +50,8 @@ It compares results and exception types with the separate
 - A diamond conditional and typed join argument.
 - A conditional that bypasses an exception-throwing branch.
 - A backedge that swaps two parameters (correct answer **2211**; naive
-  sequential copying would corrupt the swap).
+  sequential copying would corrupt the swap), plus a separate three-way
+  rotation of loop-carried values (correct answer **312**).
 - An unused checked division by zero and a checked integer overflow.
 - Stable byte-for-byte PE emission across repeated compilations.
 
@@ -60,7 +64,11 @@ test cannot be claimed passing until a runner executes the workflow.
 ## Verification blockers and explicit non-goals
 
 - GitHub Actions has repeatedly failed before returning job steps, including
-  for independent private runner-allocation probes.
+  independent private runner-allocation probes across four organizations
+  (3FA, gha-indie-worker, messaging-intel and akrion-sim). See
+  [CI recovery and no-source probes](ci-recovery.md). **No alternative
+  organization has a confirmed working runner**, so private source code
+  was not mirrored out of the Oreslang organization.
 - The local environment has no .NET SDK; C# compilation, tests and native
   execution on this branch are **unverified**.
 - No source-level CFG parser, function calls, parameters or locals yet;
