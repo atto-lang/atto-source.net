@@ -115,10 +115,15 @@ public static class OresCfgVerifier
                 throw new FormatException("Missing CFG block instructions");
             var terminator = original.Terminator ??
                 throw new FormatException("Missing CFG terminator");
-            if (parameters.Count < 0 || instructions.Count < 0 ||
-                totalDefinitions + parameters.Count + (long)instructions.Count > MaxValues)
+            // Capture each caller-controlled Count exactly once. Re-reading
+            // a mutable/adversarial Count after admission could bypass the
+            // budget when allocating the snapshot.
+            int parameterCount = parameters.Count;
+            int instructionCount = instructions.Count;
+            if (parameterCount < 0 || instructionCount < 0 ||
+                totalDefinitions + parameterCount + (long)instructionCount > MaxValues)
                 throw new FormatException("CFG SSA value budget exceeded");
-            totalDefinitions += parameters.Count + (long)instructions.Count;
+            totalDefinitions += parameterCount + (long)instructionCount;
             CfgTerminator frozenTerminator = terminator switch
             {
                 CfgReturn r => new CfgReturn(r.ValueId),
@@ -129,8 +134,8 @@ public static class OresCfgVerifier
                 _ => throw new FormatException("Unsupported CFG terminator")
             };
             blocks[i] = new CfgBlock(original.Name,
-                CopyIndexed(parameters, parameters.Count),
-                CopyIndexed(instructions, instructions.Count),
+                CopyIndexed(parameters, parameterCount),
+                CopyIndexed(instructions, instructionCount),
                 frozenTerminator);
         }
 
