@@ -123,7 +123,7 @@ public static class CilEmitter
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         foreach (var blob in blobs)
-            hash.AppendData(blob.GetBytes());
+            hash.AppendData(blob.GetBytes().AsSpan());
         return BlobContentId.FromHash(hash.GetHashAndReset());
     }
 
