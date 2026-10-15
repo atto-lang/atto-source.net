@@ -60,7 +60,9 @@ public sealed class VerifiedIrFunction
 
 public static class OresIrVerifier
 {
-    public const int MaxInstructions = 100_000;
+    // .NET CIL backend materializes one i64 local per SSA result.
+    // Match its hard bound so 'check' cannot accept a program 'compile' rejects.
+    public const int MaxInstructions = 16_384;
 
     public static VerifiedIrFunction Verify(IrFunction function)
     {
