@@ -90,6 +90,53 @@ internal static class CfgVerifierTests
             new CountDriftList<CfgBlock>(new[] { driftEntry }));
         CheckCil(OresCfgVerifier.Verify(drift), 23, "count-drift-safe-snapshot");
 
+        // Signed less-than must not be implemented using unsigned clt.un
+        // or checked subtraction (which can overflow at i64 boundaries).
+        foreach (var (a, bValue, expected) in new (long, long, bool)[] {
+            (long.MinValue, long.MaxValue, true),
+            (long.MaxValue, long.MinValue, false),
+            (-1L, 0L, true),
+            (0L, -1L, false),
+            (0L, 0L, false),
+            (long.MinValue, long.MinValue, false),
+            (long.MaxValue, long.MaxValue, false)
+        })
+        {
+            var signedStart = Block("entry", Array.Empty<CfgParameter>(), new[] {
+                new CfgInstruction(0, CfgOpcode.ConstantI64, IrValueType.I64,
+                    I64Constant: a),
+                new CfgInstruction(1, CfgOpcode.ConstantI64, IrValueType.I64,
+                    I64Constant: bValue),
+                new CfgInstruction(2, CfgOpcode.LessThanI64, IrValueType.Bool,
+                    Left: 0, Right: 1),
+                new CfgInstruction(3, CfgOpcode.ConstantI64, IrValueType.I64,
+                    I64Constant: 1),
+                new CfgInstruction(4, CfgOpcode.ConstantI64, IrValueType.I64,
+                    I64Constant: 0)
+            }, new CfgBranch(2, "less", Array.Empty<int>(),
+                "notless", Array.Empty<int>()));
+            var signedGraph = new CfgFunction("signedlt", IrValueType.I64,
+                "entry", new[] {
+                    signedStart,
+                    Block("less", Array.Empty<CfgParameter>(),
+                        Array.Empty<CfgInstruction>(), new CfgReturn(3)),
+                    Block("notless", Array.Empty<CfgParameter>(),
+                        Array.Empty<CfgInstruction>(), new CfgReturn(4))
+                });
+            CheckCil(OresCfgVerifier.Verify(signedGraph), expected ? 1 : 0,
+                "signed-less-than-boundary");
+        }
+
+        Reject(new CfgFunction("bad_lt_type", IrValueType.I64, "entry",
+            new[] { Block("entry", Array.Empty<CfgParameter>(), new[] {
+                new CfgInstruction(0, CfgOpcode.ConstantI64, IrValueType.I64,
+                    I64Constant: 1),
+                new CfgInstruction(1, CfgOpcode.ConstantI64, IrValueType.I64,
+                    I64Constant: 2),
+                new CfgInstruction(2, CfgOpcode.LessThanI64, IrValueType.I64,
+                    Left: 0, Right: 1)
+            }, new CfgReturn(2)) }), "less-than must return bool");
+
         // Loop-carried i64 value. Typed block parameters serve as SSA phi
         // arguments on the entry edge and the backedge.
         var entry = Block("entry", Array.Empty<CfgParameter>(),
