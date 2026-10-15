@@ -3,6 +3,8 @@
     <OutputType>Exe</OutputType>
   </PropertyGroup>
   <ItemGroup>
+    <None Include="../value-boundary-rejections.json" Link="value-boundary-rejections.json"
+          CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="../../compiler/Ores.Net.Compiler.Core/Ores.Net.Compiler.Core.csproj" />
     <ProjectReference Include="../../runtime/Ores.Net.Runtime/Ores.Net.Runtime.csproj" />
     <!-- Independent metadata inspection runs only in the test process. -->

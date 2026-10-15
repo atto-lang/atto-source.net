@@ -75,3 +75,6 @@ Unit tests use a managed development-time test harness; this is **not part of th
 **Runtime limitations:** This is a single-process actor mailbox prototype. .NET Native AOT still includes managed GC; it does **not** intrinsically provide per-actor heaps or a zero-GC runtime. Actor references now carry an internal random nonce in addition to ID/generation, preventing accidental local same-ID spoofing. These are **not authenticated distributed capabilities**, and managed Native AOT still does not provide per-actor private heaps. No in-process hot-code reload can rely on `Assembly.Load`; full code replacement requires process-generation rollout.
 
 See [architecture](docs/architecture.md), [roadmap](docs/roadmap.md), [CI recovery runbook](docs/ci-recovery.md), and [security and verification](verification/README.md). This repository's license remains unspecified and should be chosen by its maintainers.
+
+See [value-boundary audit and admission tests](docs/VALUE_BOUNDARIES.md) for
+aggregate, call, string, conditional and async feature limits.
