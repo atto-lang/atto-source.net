@@ -1,3 +1,4 @@
+using Mono.Cecil;
 using Ores.Net.Compiler;
 
 internal static class CfgVerifierTests
@@ -69,6 +70,13 @@ internal static class CfgVerifierTests
         var verifiedLoop = OresCfgVerifier.Verify(loop);
         Expect(CfgReferenceEvaluator.Evaluate(verifiedLoop) == 5,
             "loop-carried block parameter correctly increments to 5");
+        CheckCil(verifiedLoop, 5, "loop");
+        // Layout cannot be assumed to start with the entry block. The
+        // emitter's explicit entry jump must work for arbitrary block order.
+        CheckCil(OresCfgVerifier.Verify(loop with { Blocks = new[] {
+            finish, body, entry, header
+        } }), 5, "reordered-loop");
+
 
         bool exhausted = false;
         try
@@ -106,6 +114,8 @@ internal static class CfgVerifierTests
             new[] { branchCondition, left, right, join });
         Expect(CfgReferenceEvaluator.Evaluate(OresCfgVerifier.Verify(diamond)) == 10,
             "diamond passes typed values through join parameters");
+        CheckCil(OresCfgVerifier.Verify(diamond), 10, "diamond");
+
 
         Reject(diamond with { Blocks = new[] {
             branchCondition, left, right, join with { Terminator = new CfgReturn(3) }
@@ -280,6 +290,43 @@ internal static class CfgVerifierTests
             trapped = true;
         }
         Expect(trapped, "unused checked division still raises its observable trap");
+        CheckCilTrap(verifiedTrap, true, "unused-divide-by-zero");
+
+        // A backedge may exchange two parameters. The transfer must be
+        // simultaneous, not sequentially overwriting the first source.
+        var swap = new CfgFunction("swap", IrValueType.I64, "start",
+            new[] {
+                Block("start", Array.Empty<CfgParameter>(), new[] {
+                    new CfgInstruction(0, CfgOpcode.ConstantI64, IrValueType.I64,
+                        I64Constant: 11),
+                    new CfgInstruction(1, CfgOpcode.ConstantI64, IrValueType.I64,
+                        I64Constant: 22),
+                    new CfgInstruction(2, CfgOpcode.ConstantBool, IrValueType.Bool,
+                        BoolConstant: true)
+                }, new CfgJump("loop", new[] { 0, 1, 2 })),
+                Block("loop", new[] {
+                    new CfgParameter(3, IrValueType.I64),
+                    new CfgParameter(4, IrValueType.I64),
+                    new CfgParameter(5, IrValueType.Bool)
+                }, new[] {
+                    new CfgInstruction(6, CfgOpcode.ConstantBool, IrValueType.Bool,
+                        BoolConstant: false)
+                }, new CfgBranch(5, "loop", new[] { 4, 3, 6 },
+                    "finish", new[] { 3, 4 })),
+                Block("finish", new[] {
+                    new CfgParameter(7, IrValueType.I64),
+                    new CfgParameter(8, IrValueType.I64)
+                }, new[] {
+                    new CfgInstruction(9, CfgOpcode.ConstantI64, IrValueType.I64,
+                        I64Constant: 100),
+                    new CfgInstruction(10, CfgOpcode.CheckedMultiply, IrValueType.I64,
+                        Left: 7, Right: 9),
+                    new CfgInstruction(11, CfgOpcode.CheckedAdd, IrValueType.I64,
+                        Left: 10, Right: 8)
+                }, new CfgReturn(11))
+            });
+        CheckCil(OresCfgVerifier.Verify(swap), 2211, "atomic-swap");
+
 
         // Verified collections are deep frozen: modifying source parameters,
         // instructions or branch-argument lists does not alter the proof.
@@ -306,6 +353,71 @@ internal static class CfgVerifierTests
             "verified CFG is immune to mutable source aliases");
 
         DominanceOracleTests();
+    }
+
+    private static void CheckCil(VerifiedCfgFunction graph, long expected, string label)
+    {
+        string folder = Path.Combine(Path.GetTempPath(),
+            "ores-cfg-cil-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            var output = Path.Combine(folder, "OresGenerated.dll");
+            CilEmitter.EmitLibrary(graph, output);
+            using var assembly = AssemblyDefinition.ReadAssembly(output);
+            var entry = assembly.MainModule.Types.Single(t =>
+                t.FullName == "Oreslang.Generated.OresProgram")
+                .Methods.Single(m => m.Name == "Run");
+
+            Expect(entry.Body.MaxStackSize == 2,
+                label + ": emitted CFG stack bound");
+            Expect(entry.Body.Variables.Count ==
+                graph.Blocks.Sum(b => b.Instructions.Count + 2 * b.Parameters.Count),
+                label + ": SSA and target-typed scratch locals");
+            Expect(CfgReferenceEvaluator.Evaluate(graph) == expected,
+                label + ": managed CFG reference result");
+            Expect(CfgCilTestInterpreter.Evaluate(entry) == expected,
+                label + ": emitted CIL agrees with reference CFG");
+
+            var second = Path.Combine(folder, "OresGenerated.second.dll");
+            CilEmitter.EmitLibrary(graph, second);
+            Expect(File.ReadAllBytes(output).AsSpan().SequenceEqual(
+                File.ReadAllBytes(second)), label + ": deterministic CIL PE");
+        }
+        finally
+        {
+            Directory.Delete(folder, true);
+        }
+    }
+
+    private static void CheckCilTrap(VerifiedCfgFunction graph,
+        bool divideByZero, string label)
+    {
+        string folder = Path.Combine(Path.GetTempPath(),
+            "ores-cfg-trap-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            var output = Path.Combine(folder, "OresGenerated.dll");
+            CilEmitter.EmitLibrary(graph, output);
+            using var assembly = AssemblyDefinition.ReadAssembly(output);
+            var entry = assembly.MainModule.Types.Single(t =>
+                t.FullName == "Oreslang.Generated.OresProgram")
+                .Methods.Single(m => m.Name == "Run");
+            bool refTrapped = false;
+            bool cilTrapped = false;
+            try { _ = CfgReferenceEvaluator.Evaluate(graph); }
+            catch (DivideByZeroException) when (divideByZero) { refTrapped = true; }
+            catch (OverflowException) when (!divideByZero) { refTrapped = true; }
+            try { _ = CfgCilTestInterpreter.Evaluate(entry); }
+            catch (DivideByZeroException) when (divideByZero) { cilTrapped = true; }
+            catch (OverflowException) when (!divideByZero) { cilTrapped = true; }
+            Expect(refTrapped && cilTrapped, label + ": observable trap parity");
+        }
+        finally
+        {
+            Directory.Delete(folder, true);
+        }
     }
 
     // Independently check the dominance decision against the graph-theoretic
