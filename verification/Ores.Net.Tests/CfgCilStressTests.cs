@@ -79,6 +79,12 @@ internal static class CfgCilStressTests
                 "CFG emits 16-bit local stores");
             Require(method.Body.Instructions.Any(i => i.OpCode.Code == Code.Brtrue),
                 "CFG uses long branch encoding, not short branch overflow");
+            Require(method.Body.Instructions.Any(i =>
+                i.OpCode.Code == Code.Brtrue &&
+                Math.Abs(((Instruction)i.Operand).Offset - (i.Offset + 5)) > 127),
+                "CFG includes a verified branch displacement outside sbyte range");
+            Require(method.Body.InitLocals,
+                "CFG local initialization flag is set for large methods");
             Require(method.Body.MaxStackSize == 2,
                 "CFG stack is bounded regardless of body length");
 
