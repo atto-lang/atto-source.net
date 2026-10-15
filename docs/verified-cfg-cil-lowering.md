@@ -30,9 +30,10 @@ OresIR; source-language branches and functions are **not yet supported**.
 - `add.ovf`, `sub.ovf`, `mul.ovf`, `div`, and `ceq` preserve checked-i64
   operations and equality. Operations execute even if their SSA result is
   unused: potentially trapping instructions are not DCE'd.
-- CIL module IDs are now hashed from the **finalized method-body stream**,
-  including resolved branch offsets and local signature tokens, rather than
-  the pre-fixup instruction bytes.
+- CIL module IDs are derived from the **finalized method-body stream**
+  (including resolved branch offsets) **and the local-variable signature bytes**.
+  A signature token alone is insufficient: two builds could otherwise have
+  the same token number but different `bool`/`i64` local layouts.
 - The verifier caps CFG SSA definitions and scratch-local counts at 16,384
   each; the method has at most 32,768 local slots under this allocation scheme.
   Emission also rejects methods with more than 4 MiB of CIL before metadata
@@ -58,8 +59,18 @@ It compares results and exception types with the separate
 The Windows workflow additionally generates a verified CFG CIL fixture in a
 build-time-only managed project, publishes the *static* Oreslang host with
 `dotnet publish -r win-x64` under the strict Native AOT guard, checks for
-managed sidecars, and executes the native binary expecting **2211**. This
-test cannot be claimed passing until a runner executes the workflow.
+managed sidecars, and executes the native binary expecting **2211**.
+
+The Linux diagnostic job now also invokes `verification/assert-linux-cfg-native.sh`:
+it independently generates CIL in a fresh temporary directory, cleans and
+publishes a **Native AOT** host under `linux-x64`, rejects managed sidecars,
+checks its ELF executable, and executes the loop/atomic-swap fixture expecting
+**2211**. This is additional cross-platform evidence, not permission to
+release Windows binaries without passing the Windows job.
+
+Both native fixture tests are **unverified until their respective runners
+actually execute them**. A syntax-only shell test cannot substitute for a
+successful `dotnet` build, generated metadata inspection, and native execution.
 
 ## Verification blockers and explicit non-goals
 
