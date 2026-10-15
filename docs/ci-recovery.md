@@ -60,6 +60,35 @@ run, consistent with the absence of executed steps but not diagnostic of cause.
 No source mirror was created during this audit because **none** of the
 candidate runner probes passed.
 
+## Exact-commit Windows validation without a cross-org mirror
+
+A source-repository maintainer with a clean, isolated Windows x64 host
+(.NET 10 SDK, native C++ toolchain and Native AOT prerequisites) can run
+the single-command strict release gate on a **reviewed immutable PR #4 SHA**:
+
+```powershell
+# Supply the independently reviewed exact 40-character commit SHA.
+# Do not derive this expected value from a mutable branch in the script.
+$reviewedSha = '<reviewed-40-character-PR4-SHA>'
+git fetch origin refs/pull/4/head
+git checkout --detach $reviewedSha
+./verification/verify-exact-sha-windows-aot.ps1 -ExpectedCommit $reviewedSha
+```
+
+The script rejects a mismatched SHA, modified tracked source, unsupported
+operating system, or non-.NET-10 SDK. It compiles/executes the managed suite,
+publishes and checks the strict native compiler and arithmetic application,
+requires native arithmetic result `14`, verifies the native CLI and checked
+arithmetic negative fixtures, and separately publishes/executes the actual
+Windows Native AOT CFG swap application expecting `2211`. It uses a fresh
+temporary directory for the CFG DLL/native executable and deletes it after
+the run. It does **not** grant a CI bypass or substitute for independent
+review/required originating-repository checks. This is a committed
+verification command, **not evidence that the command has succeeded yet**.
+
+Track administration, runner allocation and exact-head release proof in
+[.NET CI blocker #5](https://github.com/ores-truffle-oreslang/oreslang-source.net/issues/5).
+
 ## Local Windows release verification
 
 From a Windows x64 host with Native AOT prerequisites installed:
