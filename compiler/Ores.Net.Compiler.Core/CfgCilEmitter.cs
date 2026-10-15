@@ -167,7 +167,7 @@ internal static class CfgCilEmitter
             // is two (binary operation); control-flow edges never merge stacks.
             int offset = bodies.AddMethodBody(il, maxStack: 2,
                 localVariablesSignature: signature);
-            return (offset, code);
+            return (offset, code, signatureBlob);
         });
     }
 }
