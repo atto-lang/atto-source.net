@@ -408,4 +408,5 @@ Require(RuntimeHost.Execute(() => throw new DivideByZeroException()) == 70,
     "divide zero error returned");
 
 CfgVerifierTests.Run();
-Console.WriteLine("Oreslang .NET bootstrap and CFG verification tests passed");
+CfgCilStressTests.Run();
+Console.WriteLine("Oreslang .NET bootstrap, CFG verifier and CIL stress tests passed");
