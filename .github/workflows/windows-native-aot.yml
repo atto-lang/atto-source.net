@@ -158,3 +158,6 @@ jobs:
           file artifacts/linux-x64/oreslang-app | grep -q 'ELF 64-bit'
           test ! -f artifacts/linux-x64/oreslang-app.runtimeconfig.json
           test ! -f artifacts/linux-x64/OresGenerated.dll
+      - name: Execute Linux Native AOT CFG branch and simultaneous-assignment fixture
+        shell: bash
+        run: bash ./verification/assert-linux-cfg-native.sh
