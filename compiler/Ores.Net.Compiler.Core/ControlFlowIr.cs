@@ -62,6 +62,9 @@ public static class OresCfgVerifier
 {
     public const int MaxBlocks = 128;
     public const int MaxValues = OresIrVerifier.MaxInstructions;
+    // Edge payloads are not SSA definitions, so they need a separate global
+    // bound before copying any untrusted list into the immutable proof.
+    public const int MaxEdgeArguments = 2 * MaxValues;
 
     private readonly record struct Definition(int Block, int Instruction, IrValueType Type);
 
@@ -74,12 +77,29 @@ public static class OresCfgVerifier
 
         var sourceBlocks = function.Blocks ??
             throw new FormatException("Missing CFG blocks");
-        if (sourceBlocks.Count == 0 || sourceBlocks.Count > MaxBlocks)
+        if (sourceBlocks.Count <= 0 || sourceBlocks.Count > MaxBlocks)
             throw new FormatException("Invalid CFG block count");
 
         // Deep-copy every caller-provided collection BEFORE analyzing it.
         // A verified CFG cannot be changed through an alias to input lists.
         var blocks = new CfgBlock[sourceBlocks.Count];
+        long totalDefinitions = 0;
+        long totalEdgeArguments = 0;
+
+        IReadOnlyList<int> FreezeArguments(IReadOnlyList<int>? arguments)
+        {
+            if (arguments is null)
+                throw new FormatException("Missing CFG edge arguments");
+            // Check before ToArray: a single malicious edge can otherwise
+            // allocate far beyond the i64 SSA/local resource limit.
+            int count = arguments.Count;
+            if (count < 0 || count > MaxValues ||
+                totalEdgeArguments + count > MaxEdgeArguments)
+                throw new FormatException("CFG edge argument budget exceeded");
+            totalEdgeArguments += count;
+            return Array.AsReadOnly(arguments.ToArray());
+        }
+
         for (int i = 0; i < blocks.Length; i++)
         {
             var original = sourceBlocks[i] ??
@@ -92,18 +112,17 @@ public static class OresCfgVerifier
                 throw new FormatException("Missing CFG block instructions");
             var terminator = original.Terminator ??
                 throw new FormatException("Missing CFG terminator");
+            if (parameters.Count < 0 || instructions.Count < 0 ||
+                totalDefinitions + parameters.Count + (long)instructions.Count > MaxValues)
+                throw new FormatException("CFG SSA value budget exceeded");
+            totalDefinitions += parameters.Count + (long)instructions.Count;
             CfgTerminator frozenTerminator = terminator switch
             {
                 CfgReturn r => new CfgReturn(r.ValueId),
-                CfgJump j => new CfgJump(j.Target,
-                    Array.AsReadOnly((j.Arguments ??
-                        throw new FormatException("Missing jump arguments")).ToArray())),
+                CfgJump j => new CfgJump(j.Target, FreezeArguments(j.Arguments)),
                 CfgBranch c => new CfgBranch(c.Condition, c.TrueTarget,
-                    Array.AsReadOnly((c.TrueArguments ??
-                        throw new FormatException("Missing true arguments")).ToArray()),
-                    c.FalseTarget,
-                    Array.AsReadOnly((c.FalseArguments ??
-                        throw new FormatException("Missing false arguments")).ToArray())),
+                    FreezeArguments(c.TrueArguments),
+                    c.FalseTarget, FreezeArguments(c.FalseArguments)),
                 _ => throw new FormatException("Unsupported CFG terminator")
             };
             blocks[i] = new CfgBlock(original.Name,
