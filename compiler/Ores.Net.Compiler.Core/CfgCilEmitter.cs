@@ -166,7 +166,8 @@ internal static class CfgCilEmitter
             // stores its result immediately, and the maximum temporary depth
             // is two (binary operation); control-flow edges never merge stacks.
             int offset = bodies.AddMethodBody(il, maxStack: 2,
-                localVariablesSignature: signature);
+                localVariablesSignature: signature,
+                attributes: MethodBodyAttributes.InitLocals);
             return (offset, code, signatureBlob);
         });
     }
