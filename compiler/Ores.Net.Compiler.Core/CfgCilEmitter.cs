@@ -115,6 +115,7 @@ internal static class CfgCilEmitter
                         case CfgOpcode.CheckedMultiply:
                         case CfgOpcode.CheckedDivide:
                         case CfgOpcode.EqualI64:
+                        case CfgOpcode.LessThanI64:
                             il.LoadLocal(op.Left!.Value);
                             il.LoadLocal(op.Right!.Value);
                             il.OpCode(op.Opcode switch
@@ -123,7 +124,9 @@ internal static class CfgCilEmitter
                                 CfgOpcode.CheckedSubtract => ILOpCode.Sub_ovf,
                                 CfgOpcode.CheckedMultiply => ILOpCode.Mul_ovf,
                                 CfgOpcode.CheckedDivide => ILOpCode.Div,
-                                _ => ILOpCode.Ceq
+                                CfgOpcode.EqualI64 => ILOpCode.Ceq,
+                                CfgOpcode.LessThanI64 => ILOpCode.Clt,
+                                _ => throw new FormatException("Unverified CFG opcode")
                             });
                             break;
                         default:
