@@ -17,7 +17,7 @@ function Assert-Exit {
     $output = (& $binary @Arguments 2>&1 | Out-String)
     $code = $LASTEXITCODE
     if ($code -ne $Expected) {
-        throw "$Case: expected exit $Expected, got $code. Output: $output"
+        throw "${Case}: expected exit $Expected, got $code. Output: $output"
     }
 }
 
