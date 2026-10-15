@@ -63,6 +63,12 @@ public static class CilEmitter
         });
     }
 
+    // Experimental CFG entry point. Only VerifiedCfgFunction is accepted;
+    // the source CLI remains on verified straight-line OresIR until the
+    // CFG differential suite is proven green.
+    public static void EmitLibrary(VerifiedCfgFunction program, string outputFile) =>
+        CfgCilEmitter.EmitLibrary(program, outputFile);
+
     private static int WriteVerifiedIr(VerifiedIrFunction program, InstructionEncoder il)
     {
         int maxStack = 1;
@@ -99,7 +105,7 @@ public static class CilEmitter
         return maxStack;
     }
 
-    private static void EmitLibraryCore(string outputFile,
+    internal static void EmitLibraryCore(string outputFile,
         Func<MetadataBuilder, MethodBodyStreamEncoder,
             (int BodyOffset, BlobBuilder Code)> buildBody)
     {
