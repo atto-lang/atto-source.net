@@ -259,5 +259,93 @@ internal static class CfgVerifierTests
         mutableParams[0] = new CfgParameter(1, IrValueType.Bool);
         Expect(CfgReferenceEvaluator.Evaluate(approved) == 42,
             "verified CFG is immune to mutable source aliases");
+
+        DominanceOracleTests();
+    }
+
+    // Independently check the dominance decision against the graph-theoretic
+    // definition: D dominates exit iff removing D makes exit unreachable
+    // from entry. Enumerate graph shapes including diamonds and backedges,
+    // always retaining a sequential edge to keep every block reachable.
+    private static void DominanceOracleTests()
+    {
+        const int count = 5;
+        for (int mask = 0; mask < 16; mask++)
+        {
+            var links = new (int First, int Second)[count - 1];
+            links[0] = (1, (mask & 1) == 0 ? 2 : 4);
+            links[1] = (2, (mask & 2) == 0 ? 4 : 0);
+            links[2] = (3, (mask & 4) == 0 ? 4 : 0);
+            links[3] = (4, (mask & 8) == 0 ? 4 : 0);
+
+            for (int candidate = 0; candidate < count; candidate++)
+            {
+                var blocks = new CfgBlock[count];
+                for (int i = 0; i < count; i++)
+                {
+                    CfgInstruction[] instructions = i == 0
+                        ? new[] {
+                            new CfgInstruction(0, CfgOpcode.ConstantI64, IrValueType.I64,
+                                I64Constant: 100),
+                            new CfgInstruction(count, CfgOpcode.ConstantBool,
+                                IrValueType.Bool, BoolConstant: true)
+                        }
+                        : new[] {
+                            new CfgInstruction(i, CfgOpcode.ConstantI64, IrValueType.I64,
+                                I64Constant: 100 + i)
+                        };
+                    CfgTerminator terminator = i == count - 1
+                        ? new CfgReturn(candidate)
+                        : new CfgBranch(count, "b" + links[i].First,
+                            Array.Empty<int>(), "b" + links[i].Second,
+                            Array.Empty<int>());
+                    blocks[i] = new CfgBlock("b" + i,
+                        Array.Empty<CfgParameter>(), instructions, terminator);
+                }
+
+                bool accepted;
+                try
+                {
+                    _ = OresCfgVerifier.Verify(new CfgFunction("oracle",
+                        IrValueType.I64, "b0", blocks));
+                    accepted = true;
+                }
+                catch (FormatException)
+                {
+                    accepted = false;
+                }
+
+                // Reachability from entry without passing through candidate.
+                bool reachableWithoutCandidate = false;
+                if (candidate != 0)
+                {
+                    var queue = new Queue<int>();
+                    var visited = new bool[count];
+                    visited[0] = true;
+                    queue.Enqueue(0);
+                    while (queue.Count != 0)
+                    {
+                        int from = queue.Dequeue();
+                        if (from == count - 1)
+                        {
+                            reachableWithoutCandidate = true;
+                            break;
+                        }
+                        foreach (int next in new[] { links[from].First, links[from].Second })
+                        {
+                            if (next != candidate && !visited[next])
+                            {
+                                visited[next] = true;
+                                queue.Enqueue(next);
+                            }
+                        }
+                    }
+                }
+
+                bool expectedAccepted = !reachableWithoutCandidate;
+                Expect(accepted == expectedAccepted,
+                    $"dominance oracle disagrees for graph {mask}, definition {candidate}");
+            }
+        }
     }
 }
