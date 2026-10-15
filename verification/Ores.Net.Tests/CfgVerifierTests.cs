@@ -130,6 +130,26 @@ internal static class CfgVerifierTests
             header, body, finish
         } }, "unknown target rejected");
 
+        Reject(loop with { Blocks = new[] {
+            entry with { Terminator = new CfgJump(null!, new[] { 0 }) },
+            header, body, finish
+        } }, "null jump target yields verifier rejection, not runtime exception");
+        Reject(loop with { Blocks = new[] {
+            entry with { Terminator = new CfgJump("header", null!) },
+            header, body, finish
+        } }, "null edge argument list rejected");
+        Reject(loop with { Blocks = new[] {
+            entry, header with { Terminator = new CfgBranch(3,
+                "exit", new[] { 1 }, null!, new[] { 1 }) },
+            body, finish
+        } }, "null branch target yields verifier rejection");
+        Reject(loop with { Blocks = new[] {
+            entry, header with { Terminator = new CfgBranch(3,
+                "exit", null!, "body", new[] { 1 }) },
+            body, finish
+        } }, "null conditional edge argument list rejected");
+
+
         Reject(diamond with { Blocks = new[] {
             branchCondition with { Terminator = new CfgBranch(0,
                 "left", new[] { 0 }, "right", new[] { 2 }) },
@@ -235,6 +255,31 @@ internal static class CfgVerifierTests
                     Array.Empty<CfgInstruction>(),
                     new CfgJump("entry", new[] { 0 }))
             }), "cumulative edge budget rejects before semantic verification");
+
+        // Arithmetic instructions may trap even when their SSA result is unused.
+        // A future optimizer must not silently delete such instructions.
+        var unusedTrap = new CfgFunction("unusedTrap", IrValueType.I64, "entry",
+            new[] { new CfgBlock("entry", Array.Empty<CfgParameter>(),
+                new[] {
+                    new CfgInstruction(0, CfgOpcode.ConstantI64, IrValueType.I64,
+                        I64Constant: 1),
+                    new CfgInstruction(1, CfgOpcode.ConstantI64, IrValueType.I64,
+                        I64Constant: 0),
+                    new CfgInstruction(2, CfgOpcode.CheckedDivide, IrValueType.I64,
+                        Left: 0, Right: 1)
+                }, new CfgReturn(0))
+            });
+        var verifiedTrap = OresCfgVerifier.Verify(unusedTrap);
+        bool trapped = false;
+        try
+        {
+            _ = CfgReferenceEvaluator.Evaluate(verifiedTrap);
+        }
+        catch (DivideByZeroException)
+        {
+            trapped = true;
+        }
+        Expect(trapped, "unused checked division still raises its observable trap");
 
         // Verified collections are deep frozen: modifying source parameters,
         // instructions or branch-argument lists does not alter the proof.
