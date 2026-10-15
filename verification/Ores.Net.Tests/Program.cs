@@ -49,6 +49,8 @@ Require(lowered.Instructions[3].Opcode == IrOpcode.CheckedMultiply &&
 Require(lowered.Instructions[4].Left == 0 &&
         lowered.Instructions[4].Right == 3,
     "typed IR result operands");
+Require(OresIrReferenceEvaluator.Evaluate(lowered) == 14,
+    "independent reference interpreter computes i64 precedence");
 
 var immutableSource = new List<IrInstruction> {
     new(0, IrOpcode.ConstantI64, IrValueType.I64, Constant: 123)
@@ -86,11 +88,39 @@ var unaryIr = OresIrLowering.Lower(OresParser.Parse(
 Require(unaryIr.Instructions[^1].Opcode == IrOpcode.CheckedSubtract &&
         unaryIr.Instructions[^1].Left.HasValue,
     "unary minus lowers with checked subtraction");
+Require(OresIrReferenceEvaluator.Evaluate(unaryIr) == -7,
+    "typed IR checked unary negation semantics");
 var flatIr = OresIrLowering.Lower(OresParser.Parse(
     "fnc main():int{return " +
     string.Join("+", Enumerable.Repeat("1", 2048)) + ";}"));
 Require(flatIr.Instructions.Count == 4095 && flatIr.ReturnId == 4094,
     "long left-associative arithmetic lowers iteratively to valid SSA");
+Require(OresIrReferenceEvaluator.Evaluate(flatIr) == 2048,
+    "long left-associative IR retains arithmetic semantics");
+
+static void RejectIrOverflow(string source, bool divideByZero)
+{
+    var typed = OresIrLowering.Lower(OresParser.Parse(source));
+    try
+    {
+        OresIrReferenceEvaluator.Evaluate(typed);
+    }
+    catch (DivideByZeroException) when (divideByZero)
+    {
+        return;
+    }
+    catch (OverflowException) when (!divideByZero)
+    {
+        return;
+    }
+    throw new Exception("Expected IR arithmetic exception: " + source);
+}
+RejectIrOverflow("fnc main():int{return 9223372036854775807 + 1;}", false);
+RejectIrOverflow("fnc main():int{return 9223372036854775807 * 2;}", false);
+RejectIrOverflow("fnc main():int{return -9223372036854775808 / -1;}", false);
+RejectIrOverflow("fnc main():int{return 5 / 0;}", true);
+RejectIrOverflow("fnc main():int{return -(-9223372036854775808);}", false);
+
 
 string folder = Path.Combine(Path.GetTempPath(), "oresnet-tests-" + Guid.NewGuid().ToString("N"));
 try
