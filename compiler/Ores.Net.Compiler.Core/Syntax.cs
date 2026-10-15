@@ -81,6 +81,11 @@ public static class OresParser
                     _i++;
                 return new Token(text[start.._i], start);
             }
+            if (ch == '-' && _i + 1 < text.Length && text[_i + 1] == '>')
+            {
+                _i += 2;
+                return new Token("->", start);
+            }
             if ("()+-*/{}:;".IndexOf(ch) >= 0)
             {
                 _i++;
@@ -129,7 +134,7 @@ public static class OresParser
             Expect("main");
             Expect("(");
             Expect(")");
-            Expect(":");
+            if (!Take(":")) Expect("->");
             Expect("int");
             Expect("{");
             Expect("return");
