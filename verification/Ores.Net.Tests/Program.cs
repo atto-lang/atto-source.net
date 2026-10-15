@@ -407,4 +407,5 @@ Require(RuntimeHost.Execute(() => throw new OverflowException()) == 70,
 Require(RuntimeHost.Execute(() => throw new DivideByZeroException()) == 70,
     "divide zero error returned");
 
-Console.WriteLine("Oreslang .NET bootstrap tests passed");
+CfgVerifierTests.Run();
+Console.WriteLine("Oreslang .NET bootstrap and CFG verification tests passed");
