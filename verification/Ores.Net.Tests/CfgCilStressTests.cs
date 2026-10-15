@@ -14,6 +14,8 @@ internal static class CfgCilStressTests
         CheckLongBranchesAndLocals(condition: true);
         CheckLongBranchesAndLocals(condition: false);
         CheckLongBranchesAndLocals(condition: true, reordered: true);
+        CheckSharedSuccessorEdges(condition: true, expected: 11);
+        CheckSharedSuccessorEdges(condition: false, expected: 22);
     }
 
     private static void CheckLongBranchesAndLocals(bool condition, bool reordered = false)
@@ -92,6 +94,48 @@ internal static class CfgCilStressTests
         finally
         {
             Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private static void CheckSharedSuccessorEdges(bool condition, long expected)
+    {
+        // Both conditional destinations name the same block but carry
+        // different values. The chosen *edge* determines the SSA argument.
+        var graph = OresCfgVerifier.Verify(new CfgFunction(
+            "sharedSuccessor", IrValueType.I64, "entry", new[] {
+                new CfgBlock("entry", Array.Empty<CfgParameter>(), new[] {
+                    new CfgInstruction(0, CfgOpcode.ConstantBool, IrValueType.Bool,
+                        BoolConstant: condition),
+                    new CfgInstruction(1, CfgOpcode.ConstantI64, IrValueType.I64,
+                        I64Constant: 11),
+                    new CfgInstruction(2, CfgOpcode.ConstantI64, IrValueType.I64,
+                        I64Constant: 22)
+                }, new CfgBranch(0, "join", new[] { 1 }, "join", new[] { 2 })),
+                new CfgBlock("join",
+                    new[] { new CfgParameter(3, IrValueType.I64) },
+                    Array.Empty<CfgInstruction>(), new CfgReturn(3))
+            }));
+
+        var folder = Path.Combine(Path.GetTempPath(),
+            "ores-cfg-shared-successor-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            var output = Path.Combine(folder, "OresGenerated.dll");
+            CilEmitter.EmitLibrary(graph, output);
+            using var assembly = AssemblyDefinition.ReadAssembly(output);
+            var method = assembly.MainModule.Types.Single(t =>
+                t.FullName == "Oreslang.Generated.OresProgram")
+                .Methods.Single(m => m.Name == "Run");
+            Require(CfgReferenceEvaluator.Evaluate(graph) == expected,
+                "shared successor reference argument");
+            Require(CfgCilTestInterpreter.Evaluate(method) == expected,
+                "shared successor CIL chooses the correct edge argument");
+            Require(method.Body.InitLocals, "CFG locals initialized by method header");
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
         }
     }
 
