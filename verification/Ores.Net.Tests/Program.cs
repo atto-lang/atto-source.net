@@ -36,6 +36,62 @@ Reject(() => OresParser.Parse("fnc main():int{return 9223372036854775808;}"), "i
 Reject(() => OresParser.Parse("fnc main():int{return 1 @ 3;}"), "illegal character");
 Reject(() => OresParser.Parse("fnc main():int{return (1+2;}"), "unmatched parentheses");
 
+// Typed OresIR stage-one verification: no forward SSA references,
+ // arbitrary opcodes, type confusion, or mutable IR after verification.
+var lowered = OresIrLowering.Lower(positive);
+Require(lowered.Name == "main" && lowered.ResultType == IrValueType.I64,
+    "typed IR function signature");
+Require(lowered.Instructions.Count == 5 && lowered.ReturnId == 4,
+    "typed IR SSA arithmetic lowering");
+Require(lowered.Instructions[3].Opcode == IrOpcode.CheckedMultiply &&
+        lowered.Instructions[4].Opcode == IrOpcode.CheckedAdd,
+    "typed IR retains operator precedence");
+Require(lowered.Instructions[4].Left == 0 &&
+        lowered.Instructions[4].Right == 3,
+    "typed IR result operands");
+
+var immutableSource = new List<IrInstruction> {
+    new(0, IrOpcode.ConstantI64, IrValueType.I64, Constant: 123)
+};
+var immutableVerified = OresIrVerifier.Verify(
+    new IrFunction("snapshot", IrValueType.I64, immutableSource, 0));
+immutableSource[0] = new IrInstruction(0, IrOpcode.ConstantI64,
+    IrValueType.I64, Constant: 999);
+Require(immutableVerified.Instructions[0].Constant == 123,
+    "verified IR is immutable after caller mutation");
+
+Reject(() => OresIrVerifier.Verify(new IrFunction("missing", IrValueType.I64,
+    Array.Empty<IrInstruction>(), 0)), "IR rejects empty instruction list");
+Reject(() => OresIrVerifier.Verify(new IrFunction("bad-name!", IrValueType.I64,
+    immutableSource, 0)), "IR rejects invalid function name");
+Reject(() => OresIrVerifier.Verify(new IrFunction("bad-type", IrValueType.Bool,
+    immutableSource, 0)), "IR rejects unsupported result type");
+Reject(() => OresIrVerifier.Verify(new IrFunction("bad-id", IrValueType.I64,
+    new[] { new IrInstruction(1, IrOpcode.ConstantI64, IrValueType.I64, Constant: 1) },
+    0)), "IR rejects noncontiguous SSA IDs");
+Reject(() => OresIrVerifier.Verify(new IrFunction("forward", IrValueType.I64,
+    new[] { new IrInstruction(0, IrOpcode.CheckedAdd, IrValueType.I64,
+        Left: 1, Right: 1) }, 0)), "IR rejects forward SSA references");
+Reject(() => OresIrVerifier.Verify(new IrFunction("opcode", IrValueType.I64,
+    new[] { new IrInstruction(0, (IrOpcode)999, IrValueType.I64) }, 0)),
+    "IR rejects unknown arithmetic opcodes");
+Reject(() => OresIrVerifier.Verify(new IrFunction("wrong-type", IrValueType.I64,
+    new[] { new IrInstruction(0, IrOpcode.ConstantI64, IrValueType.Bool,
+        Constant: 1) }, 0)), "IR rejects type confusion");
+Reject(() => OresIrVerifier.Verify(new IrFunction("bad-return", IrValueType.I64,
+    immutableSource, 1)), "IR rejects nonexistent return IDs");
+
+var unaryIr = OresIrLowering.Lower(OresParser.Parse(
+    "fnc main():int{return -(3 + 4); }"));
+Require(unaryIr.Instructions[^1].Opcode == IrOpcode.CheckedSubtract &&
+        unaryIr.Instructions[^1].Left.HasValue,
+    "unary minus lowers with checked subtraction");
+var flatIr = OresIrLowering.Lower(OresParser.Parse(
+    "fnc main():int{return " +
+    string.Join("+", Enumerable.Repeat("1", 2048)) + ";}"));
+Require(flatIr.Instructions.Count == 4095 && flatIr.ReturnId == 4094,
+    "long left-associative arithmetic lowers iteratively to valid SSA");
+
 string folder = Path.Combine(Path.GetTempPath(), "oresnet-tests-" + Guid.NewGuid().ToString("N"));
 try
 {
