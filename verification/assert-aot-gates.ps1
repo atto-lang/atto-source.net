@@ -32,7 +32,7 @@ function Assert-Gate {
     $null = & dotnet @arguments 2>&1 | Out-String
     $exitCode = $LASTEXITCODE
     if (($exitCode -eq 0) -ne $Success) {
-        throw "$([IO.Path]::GetFileName($Project)) $Label: unexpected exit $exitCode"
+        throw "$([IO.Path]::GetFileName($Project)) ${Label}: unexpected exit $exitCode"
     }
 }
 
