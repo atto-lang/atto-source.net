@@ -165,7 +165,7 @@ public static class OresIrLowering
             return id;
         }
 
-        int Binary(IrOpcode opcode, int left, int right)
+        int EmitBinary(IrOpcode opcode, int left, int right)
         {
             if (instructions.Count >= OresIrVerifier.MaxInstructions)
                 throw new FormatException("IR instruction budget exceeded");
@@ -191,7 +191,7 @@ public static class OresIrLowering
                         if (results.Count < 1)
                             throw new FormatException("IR lowering operand underflow");
                         int operand = results.Pop();
-                        results.Push(Binary(IrOpcode.CheckedSubtract,
+                        results.Push(EmitBinary(IrOpcode.CheckedSubtract,
                             Constant(0), operand));
                         break;
                     }
@@ -209,7 +209,7 @@ public static class OresIrLowering
                             '/' => IrOpcode.CheckedDivide,
                             _ => throw new FormatException("Unsupported arithmetic operator")
                         };
-                        results.Push(Binary(opcode, left, right));
+                        results.Push(EmitBinary(opcode, left, right));
                         break;
                     }
                     default:
