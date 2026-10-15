@@ -57,13 +57,17 @@ internal static class CfgVerifierTests
         Expect(CfgReferenceEvaluator.Evaluate(verifiedLoop) == 5,
             "loop-carried block parameter correctly increments to 5");
 
+        bool exhausted = false;
         try
         {
             _ = CfgReferenceEvaluator.Evaluate(verifiedLoop, maxSteps: 2);
-            throw new Exception("CFG evaluator failed to enforce step budget");
         }
-        catch (InvalidOperationException ex) when (ex.Message.Contains("budget",
-            StringComparison.Ordinal)) { }
+        catch (InvalidOperationException ex) when (
+            ex.Message == "CFG execution exceeded finite step budget")
+        {
+            exhausted = true;
+        }
+        Expect(exhausted, "reference evaluator enforces a finite step budget");
 
         // Diamond control flow: the join must read its own block parameter,
         // not a value from a predecessor which fails SSA dominance.
