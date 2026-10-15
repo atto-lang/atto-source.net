@@ -11,7 +11,7 @@ internal static class ValueBoundaryTests
         var path = Path.Combine(AppContext.BaseDirectory, "value-boundary-rejections.json");
         var cases = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(path))
             ?? throw new Exception("Missing boundary corpus");
-        if (cases.Count != 13) throw new Exception("Incomplete boundary corpus");
+        if (cases.Count != 15) throw new Exception("Incomplete boundary corpus");
         foreach (var (name, source) in cases)
         {
             Reject(() => { _ = OresParser.Parse(source); }, name + "/shipping");
