@@ -99,6 +99,22 @@ finally
     if (Directory.Exists(folder)) Directory.Delete(folder, true);
 }
 
+static void RequireInvalidLimit(Action action, string name)
+{
+    try
+    {
+        action();
+    }
+    catch (ArgumentOutOfRangeException ex) when (ex.ParamName == name)
+    {
+        return;
+    }
+    throw new Exception("Expected invalid mailbox parameter: " + name);
+}
+RequireInvalidLimit(() => new ActorMailbox(0), "id");
+RequireInvalidLimit(() => new ActorMailbox(1, maxMessages: 0), "maxMessages");
+RequireInvalidLimit(() => new ActorMailbox(1, maxQueuedBytes: 0), "maxQueuedBytes");
+
 var mailbox = new ActorMailbox(42, maxMessages: 1, maxQueuedBytes: 4);
 var before = mailbox.CurrentRef;
 var value = new byte[] { 1, 2, 3 };
