@@ -149,6 +149,37 @@ for (int i = 0; i < 200; i++)
 Require(seen.All(x => x) && concurrent.QueuedMessages == 0,
     "concurrent delivery exactly once");
 
+// Reflection is used ONLY by this managed test executable. It is not part of
+// the Native AOT runtime: inspect the queued owned array after eviction.
+static byte[] PendingOwnedBuffer(ActorMailbox actor)
+{
+    var field = typeof(ActorMailbox).GetField("_messages",
+        System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+    Require(field is not null, "mailbox test can inspect private queue");
+    return ((Queue<byte[]>)field!.GetValue(actor)!).Peek();
+}
+
+var originalInput = new byte[] { 9, 8, 7, 6 };
+var stopActor = new ActorMailbox(101);
+stopActor.Send(stopActor.CurrentRef, originalInput);
+var pendingOnStop = PendingOwnedBuffer(stopActor);
+Require(!ReferenceEquals(originalInput, pendingOnStop), "send makes an owned copy");
+stopActor.Stop();
+Require(pendingOnStop.All(b => b == 0), "stop zeroizes undelivered bytes");
+Require(originalInput.SequenceEqual(new byte[] { 9, 8, 7, 6 }),
+    "stop never wipes sender input");
+
+var restartActor = new ActorMailbox(102);
+restartActor.Send(restartActor.CurrentRef, originalInput);
+var pendingOnRestart = PendingOwnedBuffer(restartActor);
+var stale = restartActor.CurrentRef;
+restartActor.Restart();
+Require(pendingOnRestart.All(b => b == 0), "restart zeroizes undelivered bytes");
+InvalidSend(() => restartActor.Send(stale, originalInput),
+    "restart rejects previously valid sender capability");
+Require(restartActor.QueuedMessages == 0, "restart clears pending messages");
+
+
 
 int count = 0;
 Require(RuntimeHost.Execute(() => { count++; return 7; }) == 0 && count == 1,
