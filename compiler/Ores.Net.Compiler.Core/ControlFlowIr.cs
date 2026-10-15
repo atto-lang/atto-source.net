@@ -77,12 +77,13 @@ public static class OresCfgVerifier
 
         var sourceBlocks = function.Blocks ??
             throw new FormatException("Missing CFG blocks");
-        if (sourceBlocks.Count <= 0 || sourceBlocks.Count > MaxBlocks)
+        int blockCount = sourceBlocks.Count;
+        if (blockCount <= 0 || blockCount > MaxBlocks)
             throw new FormatException("Invalid CFG block count");
 
         // Deep-copy every caller-provided collection BEFORE analyzing it.
         // A verified CFG cannot be changed through an alias to input lists.
-        var blocks = new CfgBlock[sourceBlocks.Count];
+        var blocks = new CfgBlock[blockCount];
         long totalDefinitions = 0;
         long totalEdgeArguments = 0;
 
@@ -97,7 +98,10 @@ public static class OresCfgVerifier
                 totalEdgeArguments + count > MaxEdgeArguments)
                 throw new FormatException("CFG edge argument budget exceeded");
             totalEdgeArguments += count;
-            return Array.AsReadOnly(arguments.ToArray());
+            // IReadOnlyList.Count does not constrain IEnumerable enumeration.
+            // Copy the admitted number of elements by index, never via
+            // LINQ ToArray (which can enumerate unbounded custom inputs).
+            return CopyIndexed(arguments, count);
         }
 
         for (int i = 0; i < blocks.Length; i++)
@@ -112,10 +116,15 @@ public static class OresCfgVerifier
                 throw new FormatException("Missing CFG block instructions");
             var terminator = original.Terminator ??
                 throw new FormatException("Missing CFG terminator");
-            if (parameters.Count < 0 || instructions.Count < 0 ||
-                totalDefinitions + parameters.Count + (long)instructions.Count > MaxValues)
+            // Capture each caller-controlled Count exactly once. Re-reading
+            // a mutable/adversarial Count after admission could bypass the
+            // budget when allocating the snapshot.
+            int parameterCount = parameters.Count;
+            int instructionCount = instructions.Count;
+            if (parameterCount < 0 || instructionCount < 0 ||
+                totalDefinitions + parameterCount + (long)instructionCount > MaxValues)
                 throw new FormatException("CFG SSA value budget exceeded");
-            totalDefinitions += parameters.Count + (long)instructions.Count;
+            totalDefinitions += parameterCount + (long)instructionCount;
             CfgTerminator frozenTerminator = terminator switch
             {
                 CfgReturn r => new CfgReturn(r.ValueId),
@@ -126,8 +135,8 @@ public static class OresCfgVerifier
                 _ => throw new FormatException("Unsupported CFG terminator")
             };
             blocks[i] = new CfgBlock(original.Name,
-                Array.AsReadOnly(parameters.ToArray()),
-                Array.AsReadOnly(instructions.ToArray()),
+                CopyIndexed(parameters, parameterCount),
+                CopyIndexed(instructions, instructionCount),
                 frozenTerminator);
         }
 
@@ -326,6 +335,17 @@ public static class OresCfgVerifier
             for (int i = 0; i < args.Count; i++)
                 Use(from, at, args[i], blocks[target].Parameters[i].Type);
         }
+    }
+
+    // The caller's IReadOnlyList implementation is untrusted. Explicitly
+    // indexed snapshots enforce the admitted Count bound even if its
+    // IEnumerable enumerator yields infinitely many values. Never enumerate.
+    private static IReadOnlyList<T> CopyIndexed<T>(IReadOnlyList<T> source, int count)
+    {
+        var copy = new T[count];
+        for (int i = 0; i < count; i++)
+            copy[i] = source[i];
+        return Array.AsReadOnly(copy);
     }
 
     private static void RequireType(IrValueType actual, IrValueType expected)
