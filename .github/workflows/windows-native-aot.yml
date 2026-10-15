@@ -1,0 +1,171 @@
+name: Windows Native AOT
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-x64:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Validate PowerShell verification syntax
+        shell: pwsh
+        run: |
+          Get-ChildItem verification,scripts -Filter *.ps1 -Recurse | ForEach-Object {
+            $tokens = $null; $errors = $null
+            $null = [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors)
+            if ($errors.Count -ne 0) { throw ($errors | Out-String) }
+          }
+      - name: Show Windows .NET toolchain
+        shell: pwsh
+        run: dotnet --info
+      - name: Refuse managed or framework-dependent release settings
+        shell: pwsh
+        run: ./verification/assert-aot-gates.ps1 -Rid win-x64
+      - name: Verify compiler and runtime source
+        shell: pwsh
+        run: dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
+      - name: Reject oversized and invalid UTF-8 compiler input
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $oversize = Join-Path $env:RUNNER_TEMP 'oversize.ores'
+          [IO.File]::WriteAllBytes($oversize, [byte[]]::new(1048577))
+          dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -- check $oversize
+          if ($LASTEXITCODE -eq 0) { throw 'Compiler accepted oversized source file' }
+          $invalid = Join-Path $env:RUNNER_TEMP 'invalid-utf8.ores'
+          [IO.File]::WriteAllBytes($invalid, [byte[]]@(0xFF,0xFE,0xFF))
+          dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -- check $invalid
+          if ($LASTEXITCODE -eq 0) { throw 'Compiler accepted invalid UTF-8' }
+          $global:LASTEXITCODE = 0 # Expected negative test exit codes must not fail the step
+      - name: Publish native compiler and native application
+        shell: pwsh
+        run: ./scripts/publish-windows.ps1 -Source examples/hello.ores -Rid win-x64
+      - name: Exercise the released Native AOT compiler CLI
+        shell: pwsh
+        run: ./verification/assert-native-compiler-cli.ps1 -Compiler ./artifacts/compiler/win-x64/oresnet.exe -ValidSource examples/hello.ores
+      - name: Execute real Windows Native AOT binary
+        shell: pwsh
+        run: |
+          $output = & ./artifacts/apps/win-x64/oreslang-app.exe
+          if ($LASTEXITCODE -ne 0 -or $output.Trim() -ne '14') {
+            throw "Unexpected native binary output: $output"
+          }
+          if (Test-Path ./artifacts/apps/win-x64/oreslang-app.runtimeconfig.json) {
+            throw 'Native AOT output includes runtimeconfig'
+          }
+      - name: Confirm strict Native AOT PE and reject managed assembly
+        shell: pwsh
+        run: |
+          ./verification/assert-native-pe.ps1 -Binary ./artifacts/compiler/win-x64/oresnet.exe -Rid win-x64
+          ./verification/assert-native-pe.ps1 -Binary ./artifacts/apps/win-x64/oreslang-app.exe -Rid win-x64
+          $managed = './verification/Ores.Net.Tests/bin/Release/net10.0/Ores.Net.Tests.dll'
+          if (-not (Test-Path $managed)) { throw 'Managed test assembly not found' }
+          $acceptedManaged = $true
+          try {
+            ./verification/assert-native-pe.ps1 -Binary $managed -Rid win-x64
+          } catch {
+            $acceptedManaged = $false
+          }
+          if ($acceptedManaged) { throw 'Native image verifier accepted managed test assembly' }
+      - name: Reject corrupted Native AOT PE headers
+        shell: pwsh
+        run: ./verification/assert-native-pe-regressions.ps1 -Binary ./artifacts/apps/win-x64/oreslang-app.exe -Rid win-x64
+      - name: Execute Native AOT checked-arithmetic error cases
+        shell: pwsh
+        run: ./verification/assert-native-arithmetic.ps1 -Rid win-x64
+      - name: Reject managed sidecar next to an otherwise native executable
+        shell: pwsh
+        run: |
+          ./verification/assert-native-release.ps1 -Binary ./artifacts/apps/win-x64/oreslang-app.exe -Rid win-x64
+          ./verification/assert-native-release.ps1 -Binary ./artifacts/compiler/win-x64/oresnet.exe -Rid win-x64
+          $fake = Join-Path $env:RUNNER_TEMP 'managed-apphost-fixture'
+          New-Item -ItemType Directory -Force $fake | Out-Null
+          Copy-Item ./artifacts/apps/win-x64/oreslang-app.exe (Join-Path $fake 'oreslang-app.exe')
+          [IO.File]::WriteAllBytes((Join-Path $fake 'managed.dll'), [byte[]]@(0x4D, 0x5A))
+          $rejected = $false
+          try {
+            ./verification/assert-native-release.ps1 -Binary (Join-Path $fake 'oreslang-app.exe') -Rid win-x64
+          } catch {
+            $rejected = $true
+          }
+          if (-not $rejected) { throw 'Native release verifier accepted a managed sidecar' }
+      - name: Compile verified CFG into a real Windows Native AOT executable
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $folder = Join-Path $env:RUNNER_TEMP 'ores-cfg-native'
+          New-Item -ItemType Directory -Path $folder -Force | Out-Null
+          $generated = Join-Path $folder 'OresGenerated.dll'
+          $hostProject = 'host/Ores.Net.NativeHost/Ores.Net.NativeHost.csproj'
+          $publishOut = 'artifacts/cfg/win-x64'
+          dotnet run --project verification/Ores.Net.CfgFixtures/Ores.Net.CfgFixtures.csproj -c Release -- $generated
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $generated)) {
+            throw 'Verified CFG CIL fixture emission failed'
+          }
+          # The host uses a static compile-time reference. A clean build
+          # prevents its previous arithmetic fixture from being linked again.
+          dotnet clean $hostProject -c Release -r win-x64 "-p:GeneratedAssembly=$generated"
+          if ($LASTEXITCODE -ne 0) { throw 'CFG Native AOT host clean failed' }
+          dotnet publish $hostProject -c Release -r win-x64 -o $publishOut "-p:GeneratedAssembly=$generated" -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'CFG Native AOT host publish failed' }
+          $binary = Join-Path $publishOut 'oreslang-app.exe'
+          ./verification/assert-native-release.ps1 -Binary $binary -Rid win-x64
+          $output = & $binary
+          if ($LASTEXITCODE -ne 0 -or ($output | Out-String).Trim() -ne '2211') {
+            throw "CFG Native AOT atomic swap regression: expected 2211, got '$output'"
+          }
+      - name: Upload native executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: oreslang-net-win-x64
+          path: artifacts/apps/win-x64/
+          if-no-files-found: error
+
+  # The Windows release remains mandatory. Linux is an independent diagnostic
+  # for compiler/CIL correctness when Windows hosted runners fail before steps.
+  linux-aot-diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install Linux Native AOT prerequisites
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
+      - name: Show Linux .NET toolchain
+        run: dotnet --info
+      - name: Verify fail-closed AOT release settings
+        shell: pwsh
+        run: ./verification/assert-aot-gates.ps1 -Rid linux-x64
+      - name: Run frontend, metadata and mailbox regressions
+        run: dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
+      - name: Emit generated CIL using the compiler
+        run: |
+          mkdir -p artifacts/generated
+          dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -- compile examples/hello.ores --out artifacts/generated/OresGenerated.dll
+      - name: Native AOT publish generated application (diagnostic only)
+        run: |
+          dotnet publish host/Ores.Net.NativeHost/Ores.Net.NativeHost.csproj -c Release -r linux-x64 \
+            -o artifacts/linux-x64 "-p:GeneratedAssembly=$GITHUB_WORKSPACE/artifacts/generated/OresGenerated.dll" -warnaserror
+      - name: Execute Linux Native AOT generated application
+        run: |
+          set -euo pipefail
+          test -x artifacts/linux-x64/oreslang-app
+          test "$(artifacts/linux-x64/oreslang-app)" = 14
+          file artifacts/linux-x64/oreslang-app | grep -q 'ELF 64-bit'
+          test ! -f artifacts/linux-x64/oreslang-app.runtimeconfig.json
+          test ! -f artifacts/linux-x64/OresGenerated.dll
+      - name: Execute Linux Native AOT CFG branch and simultaneous-assignment fixture
+        shell: bash
+        run: bash ./verification/assert-linux-cfg-native.sh
