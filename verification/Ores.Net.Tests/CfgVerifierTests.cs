@@ -14,6 +14,19 @@ internal static class CfgVerifierTests
         throw new Exception("Expected CFG verification failure: " + why);
     }
 
+    // Used to prove that oversized untrusted collections are rejected from
+    // Count alone, before any potentially unbounded copy/enumeration begins.
+    private sealed class PoisonCountList<T>(int count) : IReadOnlyList<T>
+    {
+        public int Count => count;
+        public T this[int index] => throw new InvalidOperationException(
+            "Unbounded CFG list was indexed before admission");
+        public IEnumerator<T> GetEnumerator() => throw new InvalidOperationException(
+            "Unbounded CFG list was enumerated before admission");
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() =>
+            GetEnumerator();
+    }
+
     private static CfgBlock Block(
         string name, CfgParameter[] parameters,
         CfgInstruction[] instructions, CfgTerminator terminator) =>
@@ -177,6 +190,51 @@ internal static class CfgVerifierTests
                     new CfgInstruction(0, (CfgOpcode)999, IrValueType.I64)
                 }, new CfgReturn(0))
             }), "unknown opcodes fail closed");
+
+        var huge = OresCfgVerifier.MaxValues + 1;
+        Reject(new CfgFunction("oversizedBlocks", IrValueType.I64, "entry",
+            new PoisonCountList<CfgBlock>(-1)),
+            "negative declared CFG block counts reject before allocation");
+        Reject(new CfgFunction("oversizedParams", IrValueType.I64, "entry",
+            new[] {
+                new CfgBlock("entry", new PoisonCountList<CfgParameter>(huge),
+                    Array.Empty<CfgInstruction>(), new CfgReturn(0))
+            }), "oversized parameters reject before ToArray");
+        Reject(new CfgFunction("oversizedInstructions", IrValueType.I64, "entry",
+            new[] {
+                new CfgBlock("entry", Array.Empty<CfgParameter>(),
+                    new PoisonCountList<CfgInstruction>(huge), new CfgReturn(0))
+            }), "oversized instructions reject before ToArray");
+        Reject(new CfgFunction("oversizedEdge", IrValueType.I64, "entry",
+            new[] {
+                new CfgBlock("entry", Array.Empty<CfgParameter>(),
+                    Array.Empty<CfgInstruction>(),
+                    new CfgJump("entry", new PoisonCountList<int>(huge)))
+            }), "oversized edge rejects before ToArray");
+
+        // The sum of individual *valid* collection sizes is separately bounded.
+        // No SSA graph with this many requested definitions should be snapshotted.
+        var nineThousand = Enumerable.Repeat(
+            new CfgParameter(0, IrValueType.I64), 9_000).ToArray();
+        Reject(new CfgFunction("totalValues", IrValueType.I64, "entry",
+            new[] {
+                new CfgBlock("entry", Array.Empty<CfgParameter>(),
+                    Enumerable.Repeat(new CfgInstruction(0, CfgOpcode.ConstantI64,
+                        IrValueType.I64, I64Constant: 0), 9_000).ToArray(),
+                    new CfgReturn(0)),
+                new CfgBlock("second", nineThousand, Array.Empty<CfgInstruction>(),
+                    new CfgReturn(0))
+            }), "sum of SSA definitions rejects before snapshot");
+        var maxArguments = new int[OresCfgVerifier.MaxValues];
+        Reject(new CfgFunction("totalEdges", IrValueType.I64, "entry",
+            new[] {
+                new CfgBlock("entry", Array.Empty<CfgParameter>(),
+                    Array.Empty<CfgInstruction>(),
+                    new CfgBranch(0, "next", maxArguments, "next", maxArguments)),
+                new CfgBlock("next", Array.Empty<CfgParameter>(),
+                    Array.Empty<CfgInstruction>(),
+                    new CfgJump("entry", new[] { 0 }))
+            }), "cumulative edge budget rejects before semantic verification");
 
         // Verified collections are deep frozen: modifying source parameters,
         // instructions or branch-argument lists does not alter the proof.
