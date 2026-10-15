@@ -121,6 +121,14 @@ RejectIrOverflow("fnc main():int{return -9223372036854775808 / -1;}", false);
 RejectIrOverflow("fnc main():int{return 5 / 0;}", true);
 RejectIrOverflow("fnc main():int{return -(-9223372036854775808);}", false);
 
+// check and compile share exactly the same verifier instruction limit;
+// oversized typed SSA cannot pass check and fail only during CIL emission.
+Reject(() => OresIrLowering.Lower(OresParser.Parse(
+    "fnc main():int{return " +
+    string.Join("+", Enumerable.Repeat("1", 8193)) + ";}")),
+    "OresIR rejects a source requiring more than 16384 CIL locals");
+
+
 
 string folder = Path.Combine(Path.GetTempPath(), "oresnet-tests-" + Guid.NewGuid().ToString("N"));
 try
@@ -181,6 +189,56 @@ try
     CilEmitter.EmitLibrary(lowered, irRepro);
     Require(File.ReadAllBytes(irGenerated).AsSpan().SequenceEqual(File.ReadAllBytes(irRepro)),
         "verified IR PE emission is byte-for-byte deterministic");
+
+    // Compare the independent IR reference interpreter with the emitted CIL
+    // for normal arithmetic, divide-by-zero and signed overflow.
+    var samples = new[] {
+        "fnc main():int{return -123;}",
+        "fnc main():int{return +1;}",
+        "fnc main():int{return (8-3)*5 + 2;}",
+        "fnc main():int{return 100/(3+2) - 19;}",
+        "fnc main():int{return -(3 * (4-5));}",
+        "fnc main():int{return -9223372036854775808;}",
+        "fnc main():int{return 9223372036854775807-1;}",
+        "fnc main():int{return 3*4/2*5-7;}"
+    };
+    for (int i = 0; i < samples.Length; i++)
+    {
+        var fixtureAst = OresParser.Parse(samples[i]);
+        var typedFixture = OresIrLowering.Lower(fixtureAst);
+        var fixturePath = Path.Combine(folder, $"OresGenerated.fixture.{i}.dll");
+        CilEmitter.EmitLibrary(typedFixture, fixturePath);
+        using var fixtureAssembly = AssemblyDefinition.ReadAssembly(fixturePath);
+        var fixtureEntry = fixtureAssembly.MainModule.Types.Single(t =>
+            t.FullName == "Oreslang.Generated.OresProgram").Methods.Single(m => m.Name == "Run");
+        Require(CilReferenceEvaluator.Evaluate(fixtureEntry) ==
+            OresIrReferenceEvaluator.Evaluate(typedFixture),
+            $"differential i64 fixture {i}");
+    }
+
+    var errors = new[] {
+        ("fnc main():int{return 9223372036854775807+1;}", false),
+        ("fnc main():int{return -(-9223372036854775808);}", false),
+        ("fnc main():int{return -9223372036854775808/-1;}", false),
+        ("fnc main():int{return 13/0;}", true)
+    };
+    for (int i = 0; i < errors.Length; i++)
+    {
+        var (source, divideZero) = errors[i];
+        var irError = OresIrLowering.Lower(OresParser.Parse(source));
+        var errorPath = Path.Combine(folder, $"OresGenerated.error.{i}.dll");
+        CilEmitter.EmitLibrary(irError, errorPath);
+        using var errorAssembly = AssemblyDefinition.ReadAssembly(errorPath);
+        var errorEntry = errorAssembly.MainModule.Types.Single(t =>
+            t.FullName == "Oreslang.Generated.OresProgram").Methods.Single(m => m.Name == "Run");
+        try
+        {
+            _ = CilReferenceEvaluator.Evaluate(errorEntry);
+            throw new Exception($"Expected checked arithmetic error fixture {i}");
+        }
+        catch (DivideByZeroException) when (divideZero) { }
+        catch (OverflowException) when (!divideZero) { }
+    }
 
     var reusedIr = OresIrVerifier.Verify(new IrFunction("reuse", IrValueType.I64,
         new[] {
