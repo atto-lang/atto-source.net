@@ -220,7 +220,7 @@ public static class OresStructuredParser
                 var type = Type();
                 int nameAt = Current.Offset;
                 string name = Name();
-                if (scopes[^1].ContainsKey(name))
+                if (scopes.Any(scope => scope.ContainsKey(name)))
                     throw new FormatException($"Duplicate local binding at offset {nameAt}");
                 Expect("=");
                 var initializer = Expr(depth + 1);
