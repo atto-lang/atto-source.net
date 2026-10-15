@@ -58,7 +58,8 @@ public static class CilEmitter
             var il = new InstructionEncoder(methodCode);
             int maxStack = WriteVerifiedIr(program, il);
             int bodyOffset = bodies.AddMethodBody(il, maxStack: maxStack,
-                localVariablesSignature: localSignature);
+                localVariablesSignature: localSignature,
+                attributes: MethodBodyAttributes.InitLocals);
             return (bodyOffset, methodCode, localsBlob);
         });
     }
