@@ -14,6 +14,52 @@ A temporary private diagnostic PR in `3FA-app/3fa-app-e2e` ran a workflow that o
 
 This is consistent with a runner allocation, Actions billing, or organization/platform policy problem affecting more than one repository, **not proof of a particular cause**. Do not repeatedly consume workflow attempts without investigating Actions settings. Check spending and available minutes in each organization and GitHub-hosted runner allocation/status; review the Actions UI for scheduling notices, then retry a simple no-source `dotnet --info` job before full Native AOT compilation.
 
+## Additional private-org probes (2026-10-14)
+
+Three further private GitHub repositories were probed with a dedicated
+`pull_request` workflow that runs only `dotnet --info` on Windows 2022
+and Ubuntu. Neither code nor credentials from Oreslang were copied.
+
+| Probe repository | PR (closed unmerged) | Probe Actions run | Outcome |
+|---|---|---|---|
+| `gha-indie-worker/gha-indie-worker-docs` | [#34](https://github.com/gha-indie-worker/gha-indie-worker-docs/pull/34) | [38677489247](https://github.com/gha-indie-worker/gha-indie-worker-docs/actions/runs/38677489247) | Windows and Linux jobs failed, zero reported steps |
+| `messaging-intel/msgint-e2e` | [#60](https://github.com/messaging-intel/msgint-e2e/pull/60) | [38677493653](https://github.com/messaging-intel/msgint-e2e/actions/runs/38677493653) | Windows and Linux jobs failed, zero reported steps |
+| `akrion-sim/akrion-monorepo` | [#49](https://github.com/akrion-sim/akrion-monorepo/pull/49) | [38677497705](https://github.com/akrion-sim/akrion-monorepo/actions/runs/38677497705) | Windows and Linux jobs failed, zero reported steps |
+
+The temporary workflows were deleted from their probe branches, and the
+three draft PRs were closed **without merge**. Temporary branches may
+still exist; do not reuse them for production work.
+
+**Important:** The connector's commit-based workflow-run listing returns
+PR-triggered runs only. Push-only probe runs are not visible through that
+lookup. The outcomes above are based on the actual PR-triggered runs and job
+step inspections, not on missing push-run results.
+
+The available GitHub tools do **not** expose organization Actions spending,
+minutes remaining, or billing settings. Therefore no org can be declared out
+of budget from these results, and no alternative org is known to have available
+working runners. The job-log redirects returned `BlobNotFound` for the source
+run, consistent with the absence of executed steps but not diagnostic of cause.
+
+### Safe cross-organization retry gate
+
+1. An owner or billing admin first checks Actions spending, billing,
+   organization policy and runner allocation for the candidate org.
+2. The candidate **private** repository must pass a minimal Windows
+   and Linux no-source, no-secret PR workflow on its own runners.
+3. Only after a successful probe may a short-lived **private** source
+   mirror be considered; use an isolated repo, minimal GitHub workflow
+   permissions, no secrets or credentials, and an exact source-commit
+   manifest. Mirror the complete Git tree, not text files only (binary
+   assets, executable modes and symlinks must be retained).
+4. Never mirror to a public destination, leak repo tokens to workflows,
+   or run a source branch from a different org through a normal
+   `GITHUB_TOKEN` checkout. Revalidate the staged tree's commit/content
+   hashes before executing, and delete temporary branches afterward.
+
+No source mirror was created during this audit because **none** of the
+candidate runner probes passed.
+
 ## Local Windows release verification
 
 From a Windows x64 host with Native AOT prerequisites installed:
