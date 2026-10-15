@@ -429,4 +429,5 @@ Require(RuntimeHost.Execute(() => throw new DivideByZeroException()) == 70,
 
 CfgVerifierTests.Run();
 CfgCilStressTests.Run();
-Console.WriteLine("Oreslang .NET bootstrap, CFG verifier and CIL stress tests passed");
+StructuredSourceTests.Run();
+Console.WriteLine("Oreslang .NET bootstrap, CFG verifier, CIL stress and structured source tests passed");
