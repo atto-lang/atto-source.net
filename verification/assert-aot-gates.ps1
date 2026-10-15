@@ -12,10 +12,23 @@ $projects = @(
 
 function Assert-Gate {
     param([string]$Project, [string]$Label, [bool]$Success, [string[]]$Overrides)
-    $arguments = @('msbuild', $Project, '-target:VerifyStrictNativeAotPublish',
-        '-property:PublishAot=true', '-property:SelfContained=true',
-        ('-property:RuntimeIdentifier=' + $Rid), '-property:TargetFramework=net10.0')
-    $arguments += $Overrides
+    $properties = [ordered]@{
+        PublishAot = 'true'
+        SelfContained = 'true'
+        RuntimeIdentifier = $Rid
+        TargetFramework = 'net10.0'
+    }
+    foreach ($override in $Overrides) {
+        $parts = $override.Split('=', 2)
+        if ($parts.Count -ne 2 -or -not $properties.Contains($parts[0])) {
+            throw "Unexpected test override: $override"
+        }
+        $properties[$parts[0]] = $parts[1]
+    }
+    $arguments = @('msbuild', $Project, '-target:VerifyStrictNativeAotPublish')
+    foreach ($name in $properties.Keys) {
+        $arguments += ('-property:{0}={1}' -f $name, $properties[$name])
+    }
     $null = & dotnet @arguments 2>&1 | Out-String
     $exitCode = $LASTEXITCODE
     if (($exitCode -eq 0) -ne $Success) {
@@ -25,9 +38,9 @@ function Assert-Gate {
 
 foreach ($project in $projects) {
     Assert-Gate -Project $project -Label 'valid Native AOT' -Success $true -Overrides @()
-    Assert-Gate -Project $project -Label 'managed/JIT publish' -Success $false -Overrides @('-property:PublishAot=false')
-    Assert-Gate -Project $project -Label 'framework-dependent publish' -Success $false -Overrides @('-property:SelfContained=false')
-    Assert-Gate -Project $project -Label 'unsupported target RID' -Success $false -Overrides @('-property:RuntimeIdentifier=osx-arm64')
-    Assert-Gate -Project $project -Label 'wrong framework' -Success $false -Overrides @('-property:TargetFramework=net9.0')
+    Assert-Gate -Project $project -Label 'managed/JIT publish' -Success $false -Overrides @('PublishAot=false')
+    Assert-Gate -Project $project -Label 'framework-dependent publish' -Success $false -Overrides @('SelfContained=false')
+    Assert-Gate -Project $project -Label 'unsupported target RID' -Success $false -Overrides @('RuntimeIdentifier=osx-arm64')
+    Assert-Gate -Project $project -Label 'wrong framework' -Success $false -Overrides @('TargetFramework=net9.0')
 }
 Write-Host 'Strict Native AOT MSBuild release-gate checks passed'
