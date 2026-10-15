@@ -14,6 +14,8 @@ $stream = [System.IO.File]::Open($resolved, [System.IO.FileMode]::Open,
 $reader = [System.IO.BinaryReader]::new($stream)
 try {
     if ($stream.Length -lt 512) { throw 'Truncated PE image' }
+    $stream.Position = 0
+    if ($reader.ReadUInt16() -ne 0x5A4D) { throw 'Missing DOS MZ signature' }
     $stream.Position = 0x3C
     $pe = [long]$reader.ReadUInt32()
     if ($pe -lt 0x40 -or $pe -gt ($stream.Length - 256)) {
@@ -27,8 +29,18 @@ try {
     if ($machine -ne $expected) {
         throw ("Unexpected PE machine 0x{0:X4}; expected 0x{1:X4}" -f $machine, $expected)
     }
+    $stream.Position = $coffStart + 2
+    $sectionCount = $reader.ReadUInt16()
+    if ($sectionCount -lt 1 -or $sectionCount -gt 96) {
+        throw 'Invalid PE section count'
+    }
     $stream.Position = $coffStart + 16
     $optionalSize = $reader.ReadUInt16()
+    $characteristics = $reader.ReadUInt16()
+    if (($characteristics -band 0x0002) -eq 0 -or
+        ($characteristics -band 0x2000) -ne 0) {
+        throw 'Expected an executable image, not a DLL or non-executable'
+    }
     $optionalStart = $coffStart + 20
     if ($optionalSize -lt 232 -or ($optionalStart + $optionalSize) -gt $stream.Length) {
         throw 'Invalid PE32+ optional header'
@@ -36,6 +48,13 @@ try {
     $stream.Position = $optionalStart
     if ($reader.ReadUInt16() -ne 0x20B) {
         throw 'Expected 64-bit PE32+ executable'
+    }
+    # NumberOfRvaAndSizes is at offset 108 for PE32+. Requiring
+    # directory 14 to exist prevents a crafted truncated image from
+    # appearing to have no CLR descriptor just because the field is absent.
+    $stream.Position = $optionalStart + 108
+    if ($reader.ReadUInt32() -lt 15) {
+        throw 'PE has no CLR data-directory entry'
     }
     # PE32+ data directories start 112 bytes into the optional header.
     # Directory index 14 is IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR.
