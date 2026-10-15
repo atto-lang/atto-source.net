@@ -29,6 +29,8 @@ internal static class CfgCilEmitter
             // makes edge assignments simultaneous, including swaps.
             var types = new IrValueType[valueCount + scratchCount];
             var targetScratch = new Dictionary<string, int[]>(StringComparer.Ordinal);
+            var targetParameters = new Dictionary<string, IReadOnlyList<CfgParameter>>(
+                StringComparer.Ordinal);
             int nextScratch = valueCount;
             foreach (var block in blocks)
             {
@@ -44,7 +46,10 @@ internal static class CfgCilEmitter
                     types[nextScratch++] = block.Parameters[i].Type;
                 }
                 targetScratch.Add(block.Name, slots);
+                targetParameters.Add(block.Name, block.Parameters);
             }
+            if (nextScratch != types.Length)
+                throw new FormatException("CFG local layout is inconsistent");
 
             var signatureBlob = new BlobBuilder();
             var locals = new BlobEncoder(signatureBlob).LocalVariableSignature(types.Length);
@@ -74,9 +79,7 @@ internal static class CfgCilEmitter
             void Transfer(string destination, IReadOnlyList<int> arguments)
             {
                 var scratch = targetScratch[destination];
-                var destinationParameters = blocks
-                    .First(b => string.Equals(b.Name, destination, StringComparison.Ordinal))
-                    .Parameters;
+                var destinationParameters = targetParameters[destination];
                 if (scratch.Length != arguments.Count)
                     throw new FormatException("Unverified CFG edge arity");
 
@@ -152,6 +155,12 @@ internal static class CfgCilEmitter
                         throw new FormatException("Unverified CFG terminator");
                 }
             }
+
+            // An explicit byte budget keeps CIL assembly serialization
+            // bounded even when the verifier allows many large edge payloads.
+            const int maxMethodCodeBytes = 4 * 1024 * 1024;
+            if (code.Count > maxMethodCodeBytes)
+                throw new FormatException("CFG CIL bytecode budget exceeded");
 
             // Every block is entered with an empty stack, each instruction
             // stores its result immediately, and the maximum temporary depth
