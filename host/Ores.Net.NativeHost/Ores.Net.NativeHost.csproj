@@ -20,4 +20,5 @@
     <Error Condition="'$(GeneratedAssembly)' == ''" Text="Pass -p:GeneratedAssembly=&lt;absolute path to OresGenerated.dll&gt;." />
     <Error Condition="'$(GeneratedAssembly)' != '' and !Exists('$(GeneratedAssembly)')" Text="Generated CIL assembly is missing: $(GeneratedAssembly)" />
   </Target>
+  <Import Project="../../build/StrictNativeAot.targets" />
 </Project>
