@@ -77,12 +77,13 @@ public static class OresCfgVerifier
 
         var sourceBlocks = function.Blocks ??
             throw new FormatException("Missing CFG blocks");
-        if (sourceBlocks.Count <= 0 || sourceBlocks.Count > MaxBlocks)
+        int blockCount = sourceBlocks.Count;
+        if (blockCount <= 0 || blockCount > MaxBlocks)
             throw new FormatException("Invalid CFG block count");
 
         // Deep-copy every caller-provided collection BEFORE analyzing it.
         // A verified CFG cannot be changed through an alias to input lists.
-        var blocks = new CfgBlock[sourceBlocks.Count];
+        var blocks = new CfgBlock[blockCount];
         long totalDefinitions = 0;
         long totalEdgeArguments = 0;
 
