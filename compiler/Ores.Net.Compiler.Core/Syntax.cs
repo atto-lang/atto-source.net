@@ -85,6 +85,9 @@ public static class OresParser
                 // a verified source graph / native AOT linker exists.
                 if (word == "import")
                     throw new FormatException("source imports require verified module graph lowering");
+                if (word == "enum")
+                    throw new FormatException(
+                        $"nominal enum overloads require compiler-bound dispatch (unsupported .NET bootstrap) at offset {start}");
                 return new Token(word, start);
             }
             // Recognize the contiguous operator as one token, but never
