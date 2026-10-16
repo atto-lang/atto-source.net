@@ -142,8 +142,9 @@ public sealed class ActorMailbox
         {
             if (_generation == ulong.MaxValue)
                 throw new OverflowException("Actor generation exhausted");
+            var nextNonce = Guid.NewGuid();
             _generation++;
-            _nonce = Guid.NewGuid();
+            _nonce = nextNonce;
             _closed = false;
             DiscardPending();
             _queuedBytes = 0;
