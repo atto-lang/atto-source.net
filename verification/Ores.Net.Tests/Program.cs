@@ -46,6 +46,35 @@ foreach (var pair in new[] { (long.MinValue, -1L), (5L, 0L) })
     throw new Exception("Internal checked-i64 division must preserve traps");
 }
 
+// Cross-backend positive numeric source contract, compiled by the actual
+// shipping parser and evaluated through the verified typed-i64 OresIR path.
+// The Python oracle and manifest gate cannot substitute for these checks.
+foreach (var pair in new (string Expression, long Expected)[] {
+    ("2+3*4", 14L),
+    ("(2+3)*4", 20L),
+    ("(8-3)*5+2", 27L),
+    ("100-(3+2)-19", 76L),
+    ("3*4-2*5-7", -5L),
+    ("9223372036854775807-1", long.MaxValue-1),
+    ("-9223372036854775808", long.MinValue)
+}) {
+    var sourceText = "fnc main():int{return " + pair.Expression + ";}";
+    var program = OresIrLowering.Lower(OresParser.Parse(sourceText));
+    Require(OresIrReferenceEvaluator.Evaluate(program) == pair.Expected,
+            "numeric parity i64 source " + pair.Expression);
+}
+// Advanced numeric types are not implemented in this bootstrap. A parser
+// accepting them and falling through to checked i64 would be unsound.
+foreach (var unimplemented in new[] {
+    "fnc main():int{return 1.25;}",
+    "fnc main():int{return 2.0i;}",
+    "fnc main():bigint{return 1;}",
+    "fnc main():decimal{return 1;}"
+}) {
+    Reject(() => OresParser.Parse(unimplemented),
+           "unsupported numeric domain must be rejected");
+}
+
 var positive = OresParser.Parse("define pub fnc main() : int { return 2 + 3 * 4; }");
 Require(positive is Binary { Operator: '+' }, "top-level expression shape");
 Require(OresParser.Parse("pub define fnc main():int {return -9223372036854775808;}") is Literal
