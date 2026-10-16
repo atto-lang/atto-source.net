@@ -118,6 +118,15 @@ internal static class StructuredSourceTests
         ExpectAt("fnc main():int{let int x=1;let int x=2;return x;}",
             "duplicate declaration points to second identifier", "x=2");
 
+        // Until typed aggregate/callable lowering lands, structural source must
+        // fail closed rather than silently compiling as scalar-only CIL.
+        Reject("structural fnc main():int{return 1;}",
+            "structural declaration unsupported in bootstrap");
+        Reject("fnc main(structural Shape value):int{return 1;}",
+            "structural parameters unsupported in bootstrap");
+        Reject("fnc main():int{match 1 over on _ -> {return 1;} end}",
+            "match-over unsupported in bootstrap");
+
         // The shipping arithmetic frontend is intentionally unchanged.
         // Stage-one binding names must remain unambiguous.
         Require(OresParser.Parse("fnc main():int{return 2+3;}") is Binary,
