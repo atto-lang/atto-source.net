@@ -63,13 +63,19 @@ public sealed unsafe class ActorArena : IDisposable
 
     public Turn BeginTurn(ulong actor, ulong incarnation)
     {
-        lock (_gate)
+        if (!System.Threading.Monitor.TryEnter(_gate))
+            throw new InvalidOperationException("actor arena busy");
+        try
         {
             if (_retired || _turn is not null || actor != _actor || incarnation != _incarnation)
                 throw new InvalidOperationException("actor arena admission denied");
             _carrier = Environment.CurrentManagedThreadId;
             _turn = new Turn();
             return _turn;
+        }
+        finally
+        {
+            System.Threading.Monitor.Exit(_gate);
         }
     }
 
@@ -82,7 +88,9 @@ public sealed unsafe class ActorArena : IDisposable
 
     public void EndTurn(Turn turn)
     {
-        lock (_gate)
+        if (!System.Threading.Monitor.TryEnter(_gate))
+            throw new InvalidOperationException("actor arena busy");
+        try
         {
             RequireTurn(turn);
             CryptographicOperations.ZeroMemory(new Span<byte>(_memory + SlotCount * SlotBytes, _scratchTop));
@@ -90,11 +98,17 @@ public sealed unsafe class ActorArena : IDisposable
             _turn = null;
             _carrier = 0;
         }
+        finally
+        {
+            System.Threading.Monitor.Exit(_gate);
+        }
     }
 
     public Handle Allocate(Turn turn, int length)
     {
-        lock (_gate)
+        if (!System.Threading.Monitor.TryEnter(_gate))
+            throw new InvalidOperationException("actor arena busy");
+        try
         {
             RequireTurn(turn);
             if (length <= 0 || length > SlotBytes) throw new ArgumentOutOfRangeException(nameof(length));
@@ -107,6 +121,10 @@ public sealed unsafe class ActorArena : IDisposable
                 return new Handle(_domain, i, _slots[i].Generation);
             }
             throw new InvalidOperationException("actor arena slot quota exhausted");
+        }
+        finally
+        {
+            System.Threading.Monitor.Exit(_gate);
         }
     }
 
@@ -123,26 +141,40 @@ public sealed unsafe class ActorArena : IDisposable
 
     public byte[] Read(Turn turn, Handle handle)
     {
-        lock (_gate)
+        if (!System.Threading.Monitor.TryEnter(_gate))
+            throw new InvalidOperationException("actor arena busy");
+        try
         {
             var length = ValidSlot(turn, handle);
             return new ReadOnlySpan<byte>(_memory + handle.Slot * SlotBytes, length).ToArray();
+        }
+        finally
+        {
+            System.Threading.Monitor.Exit(_gate);
         }
     }
 
     public void Write(Turn turn, Handle handle, ReadOnlySpan<byte> value)
     {
-        lock (_gate)
+        if (!System.Threading.Monitor.TryEnter(_gate))
+            throw new InvalidOperationException("actor arena busy");
+        try
         {
             var length = ValidSlot(turn, handle);
             if (value.Length != length) throw new ArgumentException("actor arena write length");
             value.CopyTo(new Span<byte>(_memory + handle.Slot * SlotBytes, length));
         }
+        finally
+        {
+            System.Threading.Monitor.Exit(_gate);
+        }
     }
 
     public void Drop(Turn turn, Handle handle)
     {
-        lock (_gate)
+        if (!System.Threading.Monitor.TryEnter(_gate))
+            throw new InvalidOperationException("actor arena busy");
+        try
         {
             ValidSlot(turn, handle);
             ref var slot = ref _slots[handle.Slot];
@@ -151,11 +183,17 @@ public sealed unsafe class ActorArena : IDisposable
             slot.Length = 0;
             slot.Generation = slot.Generation == ulong.MaxValue ? 0 : slot.Generation + 1;
         }
+        finally
+        {
+            System.Threading.Monitor.Exit(_gate);
+        }
     }
 
     public Scratch AllocateScratch(Turn turn, int length)
     {
-        lock (_gate)
+        if (!System.Threading.Monitor.TryEnter(_gate))
+            throw new InvalidOperationException("actor arena busy");
+        try
         {
             RequireTurn(turn);
             if (length <= 0 || length > ScratchBytes - _scratchTop)
@@ -163,6 +201,10 @@ public sealed unsafe class ActorArena : IDisposable
             var handle = new Scratch(_domain, turn, _scratchTop, length);
             _scratchTop += length;
             return handle;
+        }
+        finally
+        {
+            System.Threading.Monitor.Exit(_gate);
         }
     }
 
@@ -177,28 +219,42 @@ public sealed unsafe class ActorArena : IDisposable
 
     public byte[] ReadScratch(Turn turn, Scratch handle)
     {
-        lock (_gate)
+        if (!System.Threading.Monitor.TryEnter(_gate))
+            throw new InvalidOperationException("actor arena busy");
+        try
         {
             RequireScratch(turn, handle);
             return new ReadOnlySpan<byte>(
                 _memory + SlotCount * SlotBytes + handle.Offset, handle.Length).ToArray();
         }
+        finally
+        {
+            System.Threading.Monitor.Exit(_gate);
+        }
     }
 
     public void WriteScratch(Turn turn, Scratch handle, ReadOnlySpan<byte> value)
     {
-        lock (_gate)
+        if (!System.Threading.Monitor.TryEnter(_gate))
+            throw new InvalidOperationException("actor arena busy");
+        try
         {
             RequireScratch(turn, handle);
             if (value.Length != handle.Length) throw new ArgumentException("scratch write length");
             value.CopyTo(new Span<byte>(
                 _memory + SlotCount * SlotBytes + handle.Offset, handle.Length));
         }
+        finally
+        {
+            System.Threading.Monitor.Exit(_gate);
+        }
     }
 
     public void Dispose()
     {
-        lock (_gate)
+        if (!System.Threading.Monitor.TryEnter(_gate))
+            throw new InvalidOperationException("actor arena busy");
+        try
         {
             if (_retired) return;
             if (_turn is not null) throw new InvalidOperationException("active turn blocks retirement");
@@ -206,6 +262,10 @@ public sealed unsafe class ActorArena : IDisposable
             NativeMemory.Free(_memory);
             _memory = null;
             _retired = true;
+        }
+        finally
+        {
+            System.Threading.Monitor.Exit(_gate);
         }
     }
 }
