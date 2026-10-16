@@ -169,12 +169,26 @@ using (var overflowDoc = System.Text.Json.JsonDocument.Parse(overflowBytes))
                 parsed = OresParser.Parse(
                     "fnc main():int{return " + expression + ";}");
             }
-            catch (FormatException) { continue; }
+            catch (FormatException error) when (
+                error.Message.Contains("overflow", StringComparison.OrdinalIgnoreCase) ||
+                error.Message.Contains("out of range", StringComparison.OrdinalIgnoreCase))
+            {
+                // An unrelated source syntax/IR/CIL error is NOT a passed
+                // checked-overflow test. The full source is valid Oreslang.
+                continue;
+            }
             catch (OverflowException) { continue; }
 
             VerifiedIrFunction ir;
             try { ir = OresIrLowering.Lower(parsed); }
-            catch (FormatException) { continue; }
+            catch (FormatException error) when (
+                error.Message.Contains("overflow", StringComparison.OrdinalIgnoreCase) ||
+                error.Message.Contains("out of range", StringComparison.OrdinalIgnoreCase))
+            {
+                // An unrelated source syntax/IR/CIL error is NOT a passed
+                // checked-overflow test. The full source is valid Oreslang.
+                continue;
+            }
             catch (OverflowException) { continue; }
 
             var threw = false;
@@ -185,7 +199,14 @@ using (var overflowDoc = System.Text.Json.JsonDocument.Parse(overflowBytes))
             var dll = Path.Combine(temp, "overflow-" + (index++).ToString(
                 System.Globalization.CultureInfo.InvariantCulture) + ".dll");
             try { CilEmitter.EmitLibrary(ir, dll); }
-            catch (FormatException) { continue; }
+            catch (FormatException error) when (
+                error.Message.Contains("overflow", StringComparison.OrdinalIgnoreCase) ||
+                error.Message.Contains("out of range", StringComparison.OrdinalIgnoreCase))
+            {
+                // An unrelated source syntax/IR/CIL error is NOT a passed
+                // checked-overflow test. The full source is valid Oreslang.
+                continue;
+            }
             catch (OverflowException) { continue; }
 
             using var assembly = AssemblyDefinition.ReadAssembly(dll);
