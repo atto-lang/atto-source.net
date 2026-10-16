@@ -160,35 +160,42 @@ using (var overflowDoc = System.Text.Json.JsonDocument.Parse(overflowBytes))
                 "numeric overflow expectation");
             var expression = item.GetProperty("source").GetString() ??
                 throw new Exception("numeric overflow case missing source");
+            // Rejecting malformed/overflowing source is allowed, but an
+            // unrelated CIL verification failure must never count as a
+            // successful overflow rejection.
+            Expression parsed;
             try
             {
-                var ir = OresIrLowering.Lower(OresParser.Parse(
-                    "fnc main():int{return " + expression + ";}"));
-                var threw = false;
-                try { _ = OresIrReferenceEvaluator.Evaluate(ir); }
-                catch (OverflowException) { threw = true; }
-                Require(threw, "typed IR wrapped overflowing guest source " + id);
-                var dll = Path.Combine(temp, "overflow-" + (index++).ToString(
-                    System.Globalization.CultureInfo.InvariantCulture) + ".dll");
-                CilEmitter.EmitLibrary(ir, dll);
-                using var assembly = AssemblyDefinition.ReadAssembly(dll);
-                var method = assembly.MainModule.Types.Single(t =>
-                    t.FullName == "Oreslang.Generated.OresProgram")
-                    .Methods.Single(m => m.Name == "Run");
-                threw = false;
-                try { _ = CilReferenceEvaluator.Evaluate(method); }
-                catch (OverflowException) { threw = true; }
-                Require(threw, "emitted CIL wrapped overflowing guest source " + id);
+                parsed = OresParser.Parse(
+                    "fnc main():int{return " + expression + ";}");
             }
-            catch (FormatException)
-            {
-                // Compile-time refusal is allowed by the shared contract.
-            }
-            catch (OverflowException)
-            {
-                // A compiler-time checked numeric constant is also a valid
-                // refusal; wrapped emission/evaluation is never allowed.
-            }
+            catch (FormatException) { continue; }
+            catch (OverflowException) { continue; }
+
+            VerifiedIrFunction ir;
+            try { ir = OresIrLowering.Lower(parsed); }
+            catch (FormatException) { continue; }
+            catch (OverflowException) { continue; }
+
+            var threw = false;
+            try { _ = OresIrReferenceEvaluator.Evaluate(ir); }
+            catch (OverflowException) { threw = true; }
+            Require(threw, "typed IR wrapped overflowing guest source " + id);
+
+            var dll = Path.Combine(temp, "overflow-" + (index++).ToString(
+                System.Globalization.CultureInfo.InvariantCulture) + ".dll");
+            try { CilEmitter.EmitLibrary(ir, dll); }
+            catch (FormatException) { continue; }
+            catch (OverflowException) { continue; }
+
+            using var assembly = AssemblyDefinition.ReadAssembly(dll);
+            var method = assembly.MainModule.Types.Single(t =>
+                t.FullName == "Oreslang.Generated.OresProgram")
+                .Methods.Single(m => m.Name == "Run");
+            threw = false;
+            try { _ = CilReferenceEvaluator.Evaluate(method); }
+            catch (OverflowException) { threw = true; }
+            Require(threw, "emitted CIL wrapped overflowing guest source " + id);
         }
     }
     finally { Directory.Delete(temp, recursive: true); }
