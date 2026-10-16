@@ -135,6 +135,28 @@ internal static class ActorPipelineSelectorTests
         Check(concurrent.ForwardRoundRobin("source").Target=="worker-a",
             "generation barrier did not reset concurrent RR cursor");
 
+        // STOP is an irreversible authority barrier. Every selection and
+        // future generation transition fails after retirement.
+        var retiring = new ActorPipelineSelector(stages,edges,11);
+        retiring.Retire();
+        static void DenyRetired(Action action)
+        {
+            try { action(); }
+            catch (InvalidOperationException error) when (
+                error.Message.Contains("retired", StringComparison.Ordinal)) { return; }
+            throw new Exception("Retired actor selector retained routing authority");
+        }
+        DenyRetired(()=>retiring.Forward("source"));
+        DenyRetired(()=>retiring.ForwardAll("source"));
+        DenyRetired(()=>retiring.ForwardRoundRobin("source"));
+        DenyRetired(()=>retiring.ForwardTo("source","worker-a"));
+        DenyRetired(()=>retiring.ForwardByKey("source","alpha"));
+        DenyRetired(()=>retiring.RequireIngressRoot("source"));
+        DenyRetired(()=>retiring.AdvanceGeneration(12,true,false));
+        DenyRetired(()=>retiring.AdvanceGeneration(12,false,true));
+        Check(retiring.Generation==11,"STOP mutated routing generation");
+        retiring.Retire(); // idempotent terminal transition
+
         // Original caller collections cannot mutate the snapshotted routes.
         edges[0] = edges[0] with {Target="imposter"};
         Check(selectors.ForwardAll("source")[0].Target=="worker-a",
