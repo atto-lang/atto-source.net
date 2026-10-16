@@ -23,6 +23,7 @@ static void InvalidSend(Action action, string why)
 }
 
 SourceByteBudgetTests.Run();
+ProjectRootSourceTests.Run(); // host-only resolver, not linked .NET source imports
 
 // Import parity is deliberately not claimed for the .NET scalar compiler.
 // Each form must fail at lexical admission with a specific import diagnostic,
