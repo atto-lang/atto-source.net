@@ -149,6 +149,15 @@ internal static class StructuredSourceTests
         Require(rejectedMutations >= 128,
             "adversarial mutation corpus must exercise substantial parser rejection");
 
+        // V2 structural tuples are target semantics, not a CIL bootstrap feature.
+        // Reject before artifact publication: any input admitted here would be a false green.
+        Reject("fnc take(tuple (int, int, string?) v):int{return 1;}",
+            "optional positional tuple must remain unsupported");
+        Reject("fnc take((int, int, string?) v):int{return 1;}",
+            "parenthesized tuple syntax must remain unsupported");
+        Reject("fnc take(structural (int, int, string?) v):int{return 1;}",
+            "structural width typing must remain unsupported");
+
         // The shipping arithmetic frontend is intentionally unchanged.
         // Stage-one binding names must remain unambiguous.
         Require(OresParser.Parse("fnc main():int{return 2+3;}") is Binary,
