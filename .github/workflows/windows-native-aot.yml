@@ -36,6 +36,9 @@ jobs:
       - name: Verify compiler and runtime source
         shell: pwsh
         run: dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
+      - name: Real .NET guest-admission compiler matrix (Windows)
+        shell: pwsh
+        run: python scripts/check_guest_capability_admission.py --backend net
       - name: Reject oversized and invalid UTF-8 compiler input
         shell: pwsh
         run: |
