@@ -39,6 +39,18 @@ internal static class ValueBoundaryTests
         Console.WriteLine($"{cases.Count} value boundary cases and {domains.Length} execution-region cases rejected by both frontends");
     }
 
+    private static void RejectDomain(Action parse, string name, string keyword)
+    {
+        try { parse(); }
+        catch (FormatException error)
+        {
+            if (error.Message.Contains($"execution region keyword '{keyword}' requires verified typed lowering", StringComparison.Ordinal))
+                return;
+            throw new Exception(name + ": wrong failure: " + error.Message);
+        }
+        throw new Exception(name + ": unsupported execution domain admitted");
+    }
+
     private static void Reject(Action parse, string name)
     {
         try { parse(); }
