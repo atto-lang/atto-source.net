@@ -54,7 +54,7 @@ internal static class ProjectRootSourceTests
             Check(ProjectRootSourceResolver.ResolveRelative(importer, "../answer", app) ==
                   Path.GetFullPath(source), "../ did not resolve relative to importer");
             foreach (var bad in new[] { "local", ".hidden/local", "./", "../",
-                                        "./missing", "./local.java",
+                                        "./missing", "./local.java", "./main",
                                         "../../../../outside", "./local//alias",
                                         "./local\\\\alias" })
                 Reject(() => ProjectRootSourceResolver.ResolveRelative(importer, bad, app),
