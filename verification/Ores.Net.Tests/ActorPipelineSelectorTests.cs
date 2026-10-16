@@ -156,6 +156,64 @@ internal static class ActorPipelineSelectorTests
         DenyRetired(()=>retiring.AdvanceGeneration(12,false,true));
         Check(retiring.Generation==11,"STOP mutated routing generation");
         retiring.Retire(); // idempotent terminal transition
+        // Race host selection with STOP. An operation that began before
+        // retirement may linearize either way; each of the 8,000 operations
+        // deliberately begun AFTER Retire() returns must fail without
+        // entering a new generation or consuming an RR turn.
+        var racing = new ActorPipelineSelector(stages,edges,21);
+        int ready = 0, attempts = 0, stopPublished = 0;
+        int acceptedAfter = 0, deniedAfter = 0;
+        using (var startGate = new ManualResetEventSlim(false))
+        {
+            var racers = Enumerable.Range(0,8).Select(t => Task.Run(() => {
+                Interlocked.Increment(ref ready);
+                startGate.Wait();
+                while (Volatile.Read(ref stopPublished) == 0)
+                {
+                    try {
+                        if ((t & 1) == 0) racing.ForwardRoundRobin("source");
+                        else racing.ForwardTo("source","worker-a");
+                    }
+                    catch (InvalidOperationException) { /* STOP raced */ }
+                    Interlocked.Increment(ref attempts);
+                }
+                for (int i=0;i<1000;i++)
+                {
+                    try
+                    {
+                        switch (i % 4)
+                        {
+                            case 0: racing.ForwardAll("source"); break;
+                            case 1: racing.ForwardRoundRobin("source"); break;
+                            case 2: racing.ForwardTo("source","worker-b"); break;
+                            default: racing.ForwardByKey("source","alpha"); break;
+                        }
+                        Interlocked.Increment(ref acceptedAfter);
+                    }
+                    catch (InvalidOperationException error) when (
+                        error.Message.Contains("retired",StringComparison.Ordinal))
+                    {
+                        Interlocked.Increment(ref deniedAfter);
+                    }
+                }
+            })).ToArray();
+            Check(SpinWait.SpinUntil(
+                () => Volatile.Read(ref ready)==8,TimeSpan.FromSeconds(10)),
+                "concurrent STOP workers did not start");
+            startGate.Set();
+            Check(SpinWait.SpinUntil(
+                () => Volatile.Read(ref attempts)>=800,TimeSpan.FromSeconds(10)),
+                "STOP race did not execute initial selections");
+            racing.Retire();
+            Volatile.Write(ref stopPublished,1);
+            Task.WaitAll(racers);
+        }
+        Check(acceptedAfter==0 && deniedAfter==8000,
+            "retired .NET selector admitted a post-STOP route");
+        DenyRetired(()=>racing.AdvanceGeneration(22,true,false));
+        Check(racing.Generation==21,
+            "retired .NET selector reopened a stale generation");
+
 
         // Original caller collections cannot mutate the snapshotted routes.
         edges[0] = edges[0] with {Target="imposter"};
