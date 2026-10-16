@@ -120,6 +120,8 @@ public sealed class ActorPipelinePolicy
         if (visited != stages.Count) throw new ArgumentException("Cyclic actor pipeline");
         _outgoing = routes.ToDictionary(kv => kv.Key, kv => kv.Value.ToArray(),
             StringComparer.Ordinal);
+        // Allocate all RR selector state before any actor route is admitted.
+        foreach (string source in _outgoing.Keys) _cursor.Add(source, 0);
     }
 
     private Edge[] Connected(string source)
@@ -147,7 +149,8 @@ public sealed class ActorPipelinePolicy
         lock (_gate)
         {
             var choices = Connected(source);
-            int cursor = _cursor.GetValueOrDefault(source);
+            // Connected() implies construction already installed this cursor.
+            int cursor = _cursor[source];
             _cursor[source] = (cursor + 1) % choices.Length;
             return choices[cursor];
         }
