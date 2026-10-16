@@ -23,6 +23,8 @@ static void InvalidSend(Action action, string why)
 }
 
 SourceByteBudgetTests.Run();
+ScopedPermissionPolicyTests.Run();
+AuthorizedTcpConnectorTests.Run();
 ActorRefNoWireSelfTest.Run();
 ActorMailboxBoundsSelfTest.Run();
 ActorMailboxRestartAtomicitySelfTest.Run();
