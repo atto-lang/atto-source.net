@@ -41,6 +41,34 @@ internal static class ProjectRootSourceTests
             File.WriteAllText(manifest, "schema_version = \"1\"\n");
             Check(ProjectRootSourceResolver.Resolve(app, "+/src/answer") == Path.GetFullPath(source),
                   "inferred extension");
+            // Host-only explicit relative resolution, never bare .hidden lookup
+            // and never authority across a nested legacy package manifest.
+            string routes = Path.Combine(app, "src", "routes");
+            Directory.CreateDirectory(routes);
+            string importer = Path.Combine(routes, "main.ores");
+            File.WriteAllText(importer, "fnc main():int{return 42;}\n");
+            string local = Path.Combine(routes, "local.ores");
+            File.WriteAllText(local, "fnc local():int{return 42;}\n");
+            Check(ProjectRootSourceResolver.ResolveRelative(importer, "./local", app) ==
+                  Path.GetFullPath(local), "./ did not resolve relative to importer");
+            Check(ProjectRootSourceResolver.ResolveRelative(importer, "../answer", app) ==
+                  Path.GetFullPath(source), "../ did not resolve relative to importer");
+            foreach (var bad in new[] { "local", ".hidden/local", "./", "../",
+                                        "./missing", "./local.java",
+                                        "../../../../outside", "./local//alias",
+                                        "./local\\\\alias" })
+                Reject(() => ProjectRootSourceResolver.ResolveRelative(importer, bad, app),
+                       "bad relative import admitted: " + bad);
+            var legacyChild = Path.Combine(routes, "child");
+            Directory.CreateDirectory(legacyChild);
+            File.WriteAllText(Path.Combine(legacyChild, "hidden.ores"),
+                              "fnc hidden():int{return 1;}\n");
+            File.WriteAllText(Path.Combine(legacyChild, ".oreslangc.cfg.toml"),
+                              "legacy marker\n");
+            Reject(() => ProjectRootSourceResolver.ResolveRelative(importer, "./child/hidden", app),
+                   "relative import crossed nested legacy package");
+            Reject(() => ProjectRootSourceResolver.Resolve(app, "+/src/routes/child/hidden"),
+                   "rooted import crossed nested legacy package");
             string selectedFile = Path.Combine(app, "appdata", "lib", "answer.ores");
             Directory.CreateDirectory(Path.GetDirectoryName(selectedFile)!);
             File.WriteAllText(selectedFile, "pub fnc answer():int{return 42;}\n");
