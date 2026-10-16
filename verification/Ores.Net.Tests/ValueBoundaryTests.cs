@@ -17,7 +17,18 @@ internal static class ValueBoundaryTests
             Reject(() => { _ = OresParser.Parse(source); }, name + "/shipping");
             Reject(() => { _ = OresStructuredParser.Parse(source); }, name + "/structured");
         }
-        Console.WriteLine($"{cases.Count} value boundary cases rejected by both frontends");
+        // Separate, identical v1 domain corpus is shared with all five backends.
+        // These are REJECTION tests only until typed region lowering is implemented.
+        var domainPath = Path.Combine(AppContext.BaseDirectory, "cpu-gpu-nb-unsupported-v1.json");
+        var domainCases = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(domainPath))
+            ?? throw new Exception("Missing execution-domain corpus");
+        if (domainCases.Count != 10) throw new Exception("Incomplete execution-domain corpus");
+        foreach (var (name, source) in domainCases)
+        {
+            Reject(() => { _ = OresParser.Parse(source); }, name + "/shipping");
+            Reject(() => { _ = OresStructuredParser.Parse(source); }, name + "/structured");
+        }
+        Console.WriteLine($"{cases.Count} value boundary cases and {domainCases.Count} CPU/GPU/nb domain cases rejected by both frontends");
     }
 
     private static void Reject(Action parse, string name)
