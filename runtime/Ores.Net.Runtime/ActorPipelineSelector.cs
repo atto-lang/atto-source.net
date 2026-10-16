@@ -142,7 +142,7 @@ public sealed class ActorPipelineSelector
             foreach (var edge in draft[id])
                 if (--incoming[edge.Target] == 0) ready.Enqueue(edge.Target);
         }
-        if (visited != stages.Count) throw new ArgumentException("Cyclic pipeline graph");
+        if (visited != stageCount) throw new ArgumentException("Cyclic pipeline graph");
         foreach (var (id, selected) in draft)
             _outgoing.Add(id, selected.ToArray());
     }
