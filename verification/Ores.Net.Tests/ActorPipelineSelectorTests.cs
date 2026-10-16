@@ -40,6 +40,28 @@ internal static class ActorPipelineSelectorTests
         IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
+    // A hostile IReadOnlyList may change its Count between reads. The
+    // validator must use the captured bound for all later DAG checks.
+    private sealed class OneShotCountTopology<T> : IReadOnlyList<T>
+    {
+        private readonly T[] _items;
+        private int _countReads;
+        public OneShotCountTopology(IEnumerable<T> items) => _items = items.ToArray();
+        public int Count
+        {
+            get
+            {
+                if (Interlocked.Increment(ref _countReads) != 1)
+                    throw new InvalidOperationException("Count was read after snapshot");
+                return _items.Length;
+            }
+        }
+        public T this[int index] => _items[index];
+        public IEnumerator<T> GetEnumerator() =>
+            throw new InvalidOperationException("Untrusted enumeration");
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
     internal static void Run()
     {
         // Fail-closed guest compiler contract: these source constructs
@@ -70,6 +92,11 @@ internal static class ActorPipelineSelectorTests
             new("source","worker-c","Event")
         };
         var selectors = new ActorPipelineSelector(stages,edges,7);
+        var oneShot = new ActorPipelineSelector(
+            new OneShotCountTopology<PipelineStage>(stages),
+            new OneShotCountTopology<PipelineEdge>(edges), 7);
+        Check(oneShot.ForwardAll("source").Count == 3,
+            "cycle validation re-read caller-owned Count after topology snapshot");
         // Guard against a topology IReadOnlyList whose enumeration does
         // not terminate, invokes untrusted callbacks, or changes elements.
         var stageOnce = new IndexOnlyTopology<PipelineStage>(stages);
