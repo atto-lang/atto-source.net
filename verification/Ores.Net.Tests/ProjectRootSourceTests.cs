@@ -52,6 +52,7 @@ internal static class ProjectRootSourceTests
             }
             catch (UnauthorizedAccessException) { /* Windows without symlink privilege */ }
             catch (PlatformNotSupportedException) { /* symlink-unavailable host */ }
+            catch (IOException) { /* filesystem does not permit symlink creation */ }
             // A sibling file cannot be smuggled via a rooted source prefix.
             var sibling = Path.Combine(root, "other", "answer.ores");
             Directory.CreateDirectory(Path.GetDirectoryName(sibling)!);
