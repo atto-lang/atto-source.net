@@ -17,22 +17,26 @@ internal static class ActorPipelineSelectorTests
         throw new Exception("Actor routing should reject: " + why);
     }
 
-    // This deliberately mutable IReadOnlyList refuses a second traversal:
-    // its interface does NOT make topology membership immutable.
-    private sealed class OnePassTopology<T> : IReadOnlyList<T>
+    // IReadOnlyList can supply an infinite or side-effectful enumerator
+    // even when Count is small. Topology capture must use bounded indices,
+    // without invoking GetEnumerator at all.
+    private sealed class IndexOnlyTopology<T> : IReadOnlyList<T>
     {
         private readonly T[] _items;
-        private int _enumerations;
-        public OnePassTopology(IEnumerable<T> source) => _items = source.ToArray();
+        private int _reads;
+        public IndexOnlyTopology(IEnumerable<T> source) => _items = source.ToArray();
         public int Count => _items.Length;
-        public T this[int index] => _items[index];
-        public int Enumerations => Volatile.Read(ref _enumerations);
-        public IEnumerator<T> GetEnumerator()
+        public T this[int index]
         {
-            if (Interlocked.Increment(ref _enumerations) != 1)
-                throw new InvalidOperationException("Topology re-enumerated after snapshot");
-            return ((IEnumerable<T>)_items).GetEnumerator();
+            get
+            {
+                Interlocked.Increment(ref _reads);
+                return _items[index];
+            }
         }
+        public int Reads => Volatile.Read(ref _reads);
+        public IEnumerator<T> GetEnumerator() =>
+            throw new InvalidOperationException("Untrusted topology enumerator executed");
         IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
@@ -66,14 +70,13 @@ internal static class ActorPipelineSelectorTests
             new("source","worker-c","Event")
         };
         var selectors = new ActorPipelineSelector(stages,edges,7);
-        // This catches the previous second pass through caller-owned
-        // stage metadata after validation, which could replace graph roles
-        // or root authorization behind the selector's back.
-        var stageOnce = new OnePassTopology<PipelineStage>(stages);
-        var edgeOnce = new OnePassTopology<PipelineEdge>(edges);
+        // Guard against a topology IReadOnlyList whose enumeration does
+        // not terminate, invokes untrusted callbacks, or changes elements.
+        var stageOnce = new IndexOnlyTopology<PipelineStage>(stages);
+        var edgeOnce = new IndexOnlyTopology<PipelineEdge>(edges);
         var once = new ActorPipelineSelector(stageOnce, edgeOnce, 7);
-        Check(stageOnce.Enumerations == 1 && edgeOnce.Enumerations == 1,
-            "constructor accessed caller topology more than once");
+        Check(stageOnce.Reads == stages.Count && edgeOnce.Reads == edges.Count,
+            "constructor did not copy exactly its bounded index range");
         Check(once.ForwardAll("source").Select(e => e.Target)
                   .SequenceEqual(new[] { "worker-a", "worker-b", "worker-c" }),
             "snapshotted graph order was not stable");
