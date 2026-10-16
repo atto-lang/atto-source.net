@@ -362,8 +362,7 @@ static void RejectActorRefWire(Action action, string why)
     throw new Exception("Local ActorRef became JSON serializable: " + why);
 }
 RejectActorRefWire(() => _ = System.Text.Json.JsonSerializer.Serialize(before), "encode");
-RejectActorRefWire(() => _ = System.Text.Json.JsonSerializer.Deserialize<ActorRef>(
-    "{\\\"Id\\\":42,\\\"Generation\\\":1}"), "decode");
+RejectActorRefWire(() => _ = System.Text.Json.JsonSerializer.Deserialize<ActorRef>("{}"), "decode");
 Require(!before.ToString().Contains("Nonce", StringComparison.OrdinalIgnoreCase),
     "actor reference string must not disclose nonce");
 mailbox.Stop();
