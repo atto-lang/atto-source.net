@@ -244,5 +244,13 @@ class BackendPrivateCIContractTests(unittest.TestCase):
                 policy.verify("java")
 
 
+    def test_numeric_values_cannot_impersonate_boolean_policy(self):
+        original = self.manifest.read_text(encoding="utf-8")
+        self.manifest.write_text(original.replace(
+            '"default_deny": true,', '"default_deny": 1,', 1), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "invariants changed"):
+            policy.verify("java")
+
+
 if __name__ == "__main__":
     unittest.main()
