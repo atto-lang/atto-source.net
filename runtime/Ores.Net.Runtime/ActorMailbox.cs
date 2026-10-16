@@ -56,6 +56,7 @@ public sealed class ActorMailbox
     private readonly int _maxQueuedBytes;
     private ulong _generation = 1;
     private Guid _nonce = Guid.NewGuid();
+    private Func<Guid> _nextNonce = Guid.NewGuid;
     private int _queuedBytes;
     private bool _closed;
 
@@ -142,7 +143,7 @@ public sealed class ActorMailbox
         {
             if (_generation == ulong.MaxValue)
                 throw new OverflowException("Actor generation exhausted");
-            var nextNonce = Guid.NewGuid();
+            var nextNonce = _nextNonce();
             _generation++;
             _nonce = nextNonce;
             _closed = false;
