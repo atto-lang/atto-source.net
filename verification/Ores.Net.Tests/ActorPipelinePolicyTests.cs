@@ -86,6 +86,65 @@ public static class ActorPipelinePolicyTests
                     expectedTarget, "canonical fixture keyed target");
             }
         }
+        // Boundary/ownership regressions: stage identifiers are bounded,
+        // strict UTF-8, but routing keys may contain NUL and be 4096 bytes.
+        Check(ActorPipelinePolicy.HashKey("\0") == 0xaf63bd4c8601b7dfUL,
+            "NUL must be hashed as a byte, not treated as terminator");
+        _ = ActorPipelinePolicy.HashKey("🌍".Repeat(1024));
+        Reject(() => ActorPipelinePolicy.HashKey("🌍".Repeat(1025)));
+        Reject(() => ActorPipelinePolicy.HashKey("\udc00"));
+        var unicodeStages = stages.Select((stage, i) =>
+            i == 0 ? stage with { Id = new string('é', 128) } : stage).ToArray();
+        var unicodeEdges = edges.Select(edge =>
+            edge with { Source = new string('é', 128) }).ToArray();
+        _ = new ActorPipelinePolicy(unicodeStages, unicodeEdges);
+        Reject(() => new ActorPipelinePolicy(
+            unicodeStages.Select((stage, i) =>
+                i == 0 ? stage with { Id = new string('é', 129) } : stage).ToArray(),
+            unicodeEdges));
+        Reject(() => new ActorPipelinePolicy(
+            stages.Select((stage, i) =>
+                i == 0 ? stage with { Id = "src\\0spoof" } : stage).ToArray(),
+            edges));
+        // Two classes of mutable input are copied on publication.
+        var mutableEdges = edges.ToList();
+        var frozenPlan = new ActorPipelinePolicy(stages, mutableEdges);
+        mutableEdges[0] = mutableEdges[0] with { Target = "evil" };
+        mutableEdges.Add(edges[0]);
+        Check(frozenPlan.ForwardAll("src")[0].Target == "worker-a",
+            "publisher mutation changed accepted route");
+        Check(frozenPlan.ForwardAll("src") is not IList<ActorPipelinePolicy.Edge> published
+              || published.IsReadOnly, "publisher can mutate route receipts");
+        var counts = new int[3];
+        for (int i = 0; i < 12000; i++)
+        {
+            var target = frozenPlan.ForwardRoundRobin("src").Target;
+            counts[target[^1] - 'a']++;
+        }
+        Check(counts.All(x => x == 4000), "12k round robin selections not fair");
+        var diamondStages = new[] {
+            new ActorPipelinePolicy.Stage("root", "P", "readable", "", "Event"),
+            new ActorPipelinePolicy.Stage("a", "W", "transform", "Event", "Event"),
+            new ActorPipelinePolicy.Stage("b", "W", "transform", "Event", "Event"),
+            new ActorPipelinePolicy.Stage("sink", "S", "writable", "Event", "")
+        };
+        var diamondEdges = new[] {
+            new ActorPipelinePolicy.Edge("root", "a", "Event"),
+            new ActorPipelinePolicy.Edge("root", "b", "Event"),
+            new ActorPipelinePolicy.Edge("a", "sink", "Event"),
+            new ActorPipelinePolicy.Edge("b", "sink", "Event")
+        };
+        Check(new ActorPipelinePolicy(diamondStages, diamondEdges)
+            .ForwardAll("root").Count == 2, "valid diamond DAG rejected");
+        Reject(() => new ActorPipelinePolicy(diamondStages,
+            diamondEdges.Concat(new[] {
+                new ActorPipelinePolicy.Edge("a", "b", "Event"),
+                new ActorPipelinePolicy.Edge("b", "a", "Event") }).ToArray()));
+        Reject(() => new ActorPipelinePolicy(diamondStages,
+            diamondEdges.Concat(new[] {
+                new ActorPipelinePolicy.Edge("a", "a", "Event") }).ToArray()));
+        frozenPlan.Close();
+        Reject(() => frozenPlan.ForwardRoundRobin("src"));
         Console.WriteLine("ORES_NET_HOST_ACTOR_PIPELINE_POLICY_PASS");
 
         ActorPipelinePolicy.Stage[] withDuplicateId() =>
