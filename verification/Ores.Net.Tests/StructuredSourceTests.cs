@@ -126,6 +126,12 @@ internal static class StructuredSourceTests
             "structural parameters unsupported in bootstrap");
         Reject("fnc main():int{match 1 over on _ -> {return 1;} end}",
             "match-over unsupported in bootstrap");
+        Reject("fnc take(tuple (int, int, string?) v):int{return 1;}",
+            "omittable positional tuple is not lowered by CIL bootstrap");
+        Reject("fnc take((int, int, string?) v):int{return 1;}",
+            "tuple shorthand is not lowered by CIL bootstrap");
+        Reject("fnc take(structural (int, int, string?) v):int{return 1;}",
+            "structural positional width view is not lowered by CIL bootstrap");
 
         // The shipping arithmetic frontend is intentionally unchanged.
         // Stage-one binding names must remain unambiguous.
