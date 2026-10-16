@@ -277,6 +277,12 @@ public sealed class ScopedPermissionPolicy
             !byte.TryParse(label, NumberStyles.None, CultureInfo.InvariantCulture, out _)))
             return false;
 
+        // Unspecified IPv4 is a bind address, not a remote connection
+        // identity. On Linux, connecting to 0.0.0.0 can reach 127.0.0.1,
+        // defeating an otherwise effective loopback-deny scope.
+        if (selected.Host == "0.0.0.0" || target.Host == "0.0.0.0")
+            return false;
+
         // A numeric requested endpoint already identifies the destination;
         // a trusted adapter must not use a different selected IP to satisfy
         // an authorization that was granted only to that literal.
