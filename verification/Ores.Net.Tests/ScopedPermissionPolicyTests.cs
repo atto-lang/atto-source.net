@@ -84,9 +84,88 @@ internal static class ScopedPermissionPolicyTests
         }
     }
 
+    // Actual host-envelope deserialization against the seven canonical
+    // serializer cases, independent of the 37 policy authorization decisions.
+    // The corpus digest is enforced in RunCanonicalAuthorizationVectors().
+    private sealed record GoldenEnvelope(string Id, string[] Argv, bool Accept);
+
+    private static void RunCanonicalSerializedPolicyVectors()
+    {
+        GoldenEnvelope[] vectors =
+        {
+            new("serialized-empty-policy",
+                new[] { "--ores-capabilities=", "--ores-permission-explicit=true" }, true),
+            new("serialized-duplicate-capabilities",
+                new[] { "--ores-capabilities=NETWORK", "--ores-capabilities=NETWORK",
+                        "--ores-permission-explicit=true" }, false),
+            new("serialized-missing-capability-header",
+                new[] { "--ores-permission-explicit=true" }, false),
+            new("serialized-missing-marker",
+                new[] { "--ores-capabilities=NETWORK", "--ores-permission-net-allow=*" }, false),
+            new("serialized-duplicate-marker",
+                new[] { "--ores-capabilities=NETWORK", "--ores-permission-explicit=true",
+                        "--ores-permission-explicit=true" }, false),
+            new("serialized-no-escalation",
+                new[] { "--ores-capabilities=", "--ores-permission-explicit=true",
+                        "--ores-permission-net-allow=*" }, false),
+            new("serialized-malformed-net",
+                new[] { "--ores-capabilities=NETWORK", "--ores-permission-explicit=true",
+                        "--ores-permission-net-allow=127.1:443" }, false)
+        };
+        if (vectors.Length != 7)
+            throw new Exception("missing canonical serialized policy cases");
+        foreach (var vector in vectors)
+        {
+            bool accepted;
+            try
+            {
+                var parsed = ScopedPermissionEnvelope.FromSerializedArguments(vector.Argv);
+                // An accepted empty policy must not inherit ambient authority.
+                accepted = vector.Id != "serialized-empty-policy" ||
+                    !parsed.Allows(ScopedPermissionPolicy.Kind.Net, "api.example.com:443");
+            }
+            catch (ArgumentException) { accepted = false; }
+            Assert(accepted, vector.Accept, vector.Id);
+        }
+
+        static void DeniedEnvelope(string name, params string[] args)
+        {
+            bool denied = false;
+            try { _ = ScopedPermissionEnvelope.FromSerializedArguments(args); }
+            catch (ArgumentException) { denied = true; }
+            if (!denied) throw new Exception("unsafe serialized envelope admitted: " + name);
+        }
+        DeniedEnvelope("missing whole envelope");
+        DeniedEnvelope("duplicate scoped rule", "--ores-capabilities=NETWORK",
+            "--ores-permission-explicit=true", "--ores-permission-net-allow=*",
+            "--ores-permission-net-allow=*");
+        DeniedEnvelope("partial marker", "--ores-capabilities=NETWORK",
+            "--ores-permission-explicit=false");
+        DeniedEnvelope("unknown capability", "--ores-capabilities=STDOUT",
+            "--ores-permission-explicit=true");
+        DeniedEnvelope("coarse capability whitespace", "--ores-capabilities= NETWORK",
+            "--ores-permission-explicit=true");
+        DeniedEnvelope("unknown permission", "--ores-capabilities=NETWORK",
+            "--ores-permission-explicit=true", "--ores-permission-shell-allow=*");
+        DeniedEnvelope("oversized argument", "--ores-capabilities=" + new string('A', 9000),
+            "--ores-permission-explicit=true");
+        var valid = ScopedPermissionEnvelope.FromSerializedArguments(new[]
+        {
+            "--ores-capabilities=NETWORK",
+            "--ores-permission-explicit=true",
+            "--ores-permission-net-allow=*",
+            "--ores-permission-net-deny=127.0.0.1:443"
+        });
+        Assert(valid.Allows(ScopedPermissionPolicy.Kind.Net, "api.example.com:443"),
+            true, "properly marked coarse-scoped net grant");
+        Assert(valid.Allows(ScopedPermissionPolicy.Kind.Net, "127.0.0.1:443"),
+            false, "deserialized net deny overrides wildcard grant");
+    }
+
     public static void Run()
     {
         RunCanonicalAuthorizationVectors();
+        RunCanonicalSerializedPolicyVectors();
         var empty = ScopedPermissionPolicy.DefaultDeny();
         foreach (var p in Enum.GetValues<ScopedPermissionPolicy.Kind>())
             Assert(empty.Allows(p, "/workspace/input.txt"), false, "default deny " + p);
