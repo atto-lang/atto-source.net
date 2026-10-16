@@ -51,8 +51,20 @@ foreach (var pair in new[] { (long.MinValue, -1L), (5L, 0L) })
 // The Python oracle and manifest gate cannot substitute for these checks.
 // Load the same pinned portable corpus consumed by Java, LLVM, Wasm and
 // Forge: source expectations cannot silently drift apart in a future PR.
-using (var corpus = System.Text.Json.JsonDocument.Parse(File.ReadAllText(
-    "contracts/v1/numeric-parity/source-i64-cases.json")))
+var numericSourceFile = "contracts/v1/numeric-parity/source-i64-cases.json";
+var numericSourceBytes = File.ReadAllBytes(numericSourceFile);
+using (var digest = System.Security.Cryptography.SHA1.Create())
+{
+    var header = System.Text.Encoding.ASCII.GetBytes(
+        "blob " + numericSourceBytes.Length + "\0");
+    var input = new byte[header.Length + numericSourceBytes.Length];
+    Buffer.BlockCopy(header, 0, input, 0, header.Length);
+    Buffer.BlockCopy(numericSourceBytes, 0, input, header.Length, numericSourceBytes.Length);
+    var actual = Convert.ToHexString(digest.ComputeHash(input)).ToLowerInvariant();
+    Require(actual == "bbc319c19ecd007109d33592e210091eb267e5a2",
+        "numeric guest fixture SHA differs from reviewed source corpus");
+}
+using (var corpus = System.Text.Json.JsonDocument.Parse(numericSourceBytes))
 {
     var root = corpus.RootElement;
     Require(root.GetProperty("schema_version").GetString() == "1.0.0",
