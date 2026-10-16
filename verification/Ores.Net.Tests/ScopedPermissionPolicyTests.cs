@@ -9,8 +9,75 @@ internal static class ScopedPermissionPolicyTests
         if (got != expected) throw new Exception("Scoped permission policy: " + name);
     }
 
+
+    // Actual .NET policy-evaluator checks against the 37 canonical v1
+    // authorization vectors, not guest OS or host-syscall enforcement proof.
+    private sealed record GoldenAuthorization(string Id, ScopedPermissionPolicy.Kind Permission,
+        string Resource, bool Coarse, string[] Grants, string[] Denials, bool Expected);
+
+    private static void RunCanonicalAuthorizationVectors()
+    {
+        GoldenAuthorization[] vectors =
+        {
+            new("default-read-denied", ScopedPermissionPolicy.Kind.Read, "/workspace/input.txt", false, new string[] {}, new string[] {}, false),
+            new("default-write-denied", ScopedPermissionPolicy.Kind.Write, "/workspace/out.txt", false, new string[] {}, new string[] {}, false),
+            new("default-net-denied", ScopedPermissionPolicy.Kind.Net, "api.example.com:443", false, new string[] {}, new string[] {}, false),
+            new("default-env-denied", ScopedPermissionPolicy.Kind.Env, "API_KEY", false, new string[] {}, new string[] {}, false),
+            new("default-run-denied", ScopedPermissionPolicy.Kind.Run, "git", false, new string[] {}, new string[] {}, false),
+            new("default-sys-denied", ScopedPermissionPolicy.Kind.Sys, "os", false, new string[] {}, new string[] {}, false),
+            new("default-ffi-denied", ScopedPermissionPolicy.Kind.Ffi, "/workspace/libplugin.so", false, new string[] {}, new string[] {}, false),
+            new("default-import-denied", ScopedPermissionPolicy.Kind.Import, "/workspace/import.ores", false, new string[] {}, new string[] {}, false),
+            new("coarse-ceiling-net", ScopedPermissionPolicy.Kind.Net, "api.example.com:443", false, new string[] {"*"}, new string[] {}, false),
+            new("coarse-ceiling-env", ScopedPermissionPolicy.Kind.Env, "API_KEY", false, new string[] {"*"}, new string[] {}, false),
+            new("explicit-net-grant", ScopedPermissionPolicy.Kind.Net, "api.example.com:443", true, new string[] {"api.example.com:443"}, new string[] {}, true),
+            new("explicit-env-grant", ScopedPermissionPolicy.Kind.Env, "API_KEY", true, new string[] {"API_KEY"}, new string[] {}, true),
+            new("explicit-run-grant", ScopedPermissionPolicy.Kind.Run, "git", true, new string[] {"git"}, new string[] {}, true),
+            new("deny-wins-net", ScopedPermissionPolicy.Kind.Net, "api.example.com:443", true, new string[] {"*"}, new string[] {"api.example.com:443"}, false),
+            new("deny-wins-env", ScopedPermissionPolicy.Kind.Env, "API_KEY", true, new string[] {"*"}, new string[] {"API_KEY"}, false),
+            new("deny-all-wins", ScopedPermissionPolicy.Kind.Net, "other.example.org:443", true, new string[] {"*"}, new string[] {"*"}, false),
+            new("endpoint-port-separation", ScopedPermissionPolicy.Kind.Net, "api.example.com:444", true, new string[] {"api.example.com:443"}, new string[] {}, false),
+            new("endpoint-upper-normalized", ScopedPermissionPolicy.Kind.Net, "API.EXAMPLE.COM.:0443", true, new string[] {"api.example.com:443"}, new string[] {}, true),
+            new("endpoint-deny-fqdn", ScopedPermissionPolicy.Kind.Net, "API.EXAMPLE.COM.:443", true, new string[] {"*"}, new string[] {"api.example.com:443"}, false),
+            new("endpoint-subdomain-yes", ScopedPermissionPolicy.Kind.Net, "a.example.com:443", true, new string[] {"*.example.com:443"}, new string[] {}, true),
+            new("endpoint-subdomain-no-apex", ScopedPermissionPolicy.Kind.Net, "example.com:443", true, new string[] {"*.example.com:443"}, new string[] {}, false),
+            new("endpoint-subdomain-no-suffix", ScopedPermissionPolicy.Kind.Net, "badexample.com:443", true, new string[] {"*.example.com:443"}, new string[] {}, false),
+            new("endpoint-deny-portless", ScopedPermissionPolicy.Kind.Net, "api.example.com", true, new string[] {"*"}, new string[] {"api.example.com:443"}, false),
+            new("endpoint-deny-wildcard-port", ScopedPermissionPolicy.Kind.Net, "a.example.com:443", true, new string[] {"*"}, new string[] {"*.example.com:443"}, false),
+            new("endpoint-ipv6-short", ScopedPermissionPolicy.Kind.Net, "[::1]:443", true, new string[] {"[0:0:0:0:0:0:0:1]:443"}, new string[] {}, true),
+            new("endpoint-ipv6-deny", ScopedPermissionPolicy.Kind.Net, "[0:0:0:0:0:0:0:1]:443", true, new string[] {"*"}, new string[] {"[::1]:443"}, false),
+            new("endpoint-ipv4-alias", ScopedPermissionPolicy.Kind.Net, "127.1:443", true, new string[] {"*"}, new string[] {"127.0.0.1"}, false),
+            new("endpoint-ipv4-hex-alias", ScopedPermissionPolicy.Kind.Net, "0x7f.0.0.1:443", true, new string[] {"*"}, new string[] {"127.0.0.1"}, false),
+            new("endpoint-invalid-port", ScopedPermissionPolicy.Kind.Net, "api.example.com:0", true, new string[] {"*"}, new string[] {}, false),
+            new("endpoint-invalid-credentials", ScopedPermissionPolicy.Kind.Net, "alice@api.example.com:443", true, new string[] {"*"}, new string[] {}, false),
+            new("env-whitespace-exact", ScopedPermissionPolicy.Kind.Env, "API_KEY ", true, new string[] {"API_KEY"}, new string[] {}, false),
+            new("env-case-exact", ScopedPermissionPolicy.Kind.Env, "api_key", true, new string[] {"API_KEY"}, new string[] {}, false),
+            new("run-prefix", ScopedPermissionPolicy.Kind.Run, "git-status", true, new string[] {"git*"}, new string[] {}, true),
+            new("run-prefix-no-match", ScopedPermissionPolicy.Kind.Run, "curl", true, new string[] {"git*"}, new string[] {}, false),
+            new("path-child-allowed", ScopedPermissionPolicy.Kind.Read, "/workspace/data/file.txt", true, new string[] {"/workspace/data"}, new string[] {}, true),
+            new("path-prefix-no-match", ScopedPermissionPolicy.Kind.Read, "/workspace/database/file.txt", true, new string[] {"/workspace/data"}, new string[] {}, false),
+            new("path-whitespace-exact", ScopedPermissionPolicy.Kind.Read, "/workspace/data ", true, new string[] {"/workspace/data"}, new string[] {}, false)
+        };
+        if (vectors.Length != 37)
+            throw new Exception("reviewed scoped authorization corpus is incomplete");
+        foreach (var vector in vectors)
+        {
+            var rules = new List<ScopedPermissionPolicy.Rule>();
+            foreach (var grant in vector.Grants)
+                rules.Add(new ScopedPermissionPolicy.Rule(vector.Permission, grant));
+            foreach (var denial in vector.Denials)
+                rules.Add(new ScopedPermissionPolicy.Rule(vector.Permission, denial, true));
+            var ceiling = vector.Coarse
+                ? new[] { vector.Permission }
+                : Array.Empty<ScopedPermissionPolicy.Kind>();
+            var policy = ScopedPermissionPolicy.FromHost(ceiling, rules);
+            Assert(policy.Allows(vector.Permission, vector.Resource),
+                vector.Expected, vector.Id);
+        }
+    }
+
     public static void Run()
     {
+        RunCanonicalAuthorizationVectors();
         var empty = ScopedPermissionPolicy.DefaultDeny();
         foreach (var p in Enum.GetValues<ScopedPermissionPolicy.Kind>())
             Assert(empty.Allows(p, "/workspace/input.txt"), false, "default deny " + p);
