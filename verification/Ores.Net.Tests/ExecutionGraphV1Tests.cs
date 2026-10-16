@@ -116,6 +116,17 @@ internal static class ExecutionGraphV1Tests
         var rejected = plan.SubmitCpu(_ => throw new InvalidOperationException("executor full"));
         Need(rejected.Task.IsFaulted, "scheduler admission fails Future");
 
+        Action? queuedBeforeFailure = null;
+        var lateRejected = plan.SubmitCpu(action =>
+        {
+            queuedBeforeFailure = action;
+            throw new InvalidOperationException("rejected after enqueue");
+        });
+        Need(queuedBeforeFailure is not null && lateRejected.Task.IsFaulted,
+            "late executor rejection must fail the Future");
+        queuedBeforeFailure!();
+        Need(lateRejected.Task.IsFaulted, "late queued dispatch published after rejection");
+
         var limited = new ExecutionGraphV1.Builder();
         for (int i = 0; i < 4096; i++) limited.CpuUnit();
         try { limited.CpuUnit(); throw new Exception("node limit bypassed"); }
