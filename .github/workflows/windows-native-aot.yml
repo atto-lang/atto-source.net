@@ -138,6 +138,18 @@ jobs:
             throw "Shared native.add actual guest execution expected 42, got '$actual'"
           }
           Write-Host 'native.add shared source executed in Windows Native AOT: 42'
+          # Distinct generated-source builds must stay distinct. Re-publishing
+          # native.add must not overwrite, delete, or contaminate the earlier
+          # released hello.ores executable produced from this same host project.
+          $previous = 'artifacts/apps/win-x64/oreslang-app.exe'
+          if (-not (Test-Path -LiteralPath $previous)) {
+            throw 'Earlier hello.ores Native AOT executable disappeared'
+          }
+          $previousOutput = & $previous
+          if ($LASTEXITCODE -ne 0 -or ($previousOutput | Out-String).Trim() -ne '14') {
+            throw "Earlier hello.ores Native AOT output changed after native.add: '$previousOutput'"
+          }
+          Write-Host 'Native AOT source isolation proven: hello=14 and native.add=42'
       - name: Upload native executable
         uses: actions/upload-artifact@v4
         with:
