@@ -108,7 +108,11 @@ public static class OresStructuredParser
                      source[index + 1] == '=') index += 2;
             else if ("()+-*{}:;=<".IndexOf(ch) >= 0) index++;
             else throw new FormatException($"Invalid character at offset {offset}");
-            return new Token(source[offset..index], offset);
+            var word = source[offset..index];
+            if (word == "enum")
+                throw new FormatException(
+                    $"nominal enum overloads require compiler-bound dispatch (unsupported .NET bootstrap) at offset {offset}");
+            return new Token(word, offset);
         }
     }
 
