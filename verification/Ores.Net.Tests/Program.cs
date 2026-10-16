@@ -49,19 +49,35 @@ foreach (var pair in new[] { (long.MinValue, -1L), (5L, 0L) })
 // Cross-backend positive numeric source contract, compiled by the actual
 // shipping parser and evaluated through the verified typed-i64 OresIR path.
 // The Python oracle and manifest gate cannot substitute for these checks.
-foreach (var pair in new (string Expression, long Expected)[] {
-    ("2+3*4", 14L),
-    ("(2+3)*4", 20L),
-    ("(8-3)*5+2", 27L),
-    ("100-(3+2)-19", 76L),
-    ("3*4-2*5-7", -5L),
-    ("9223372036854775807-1", long.MaxValue-1),
-    ("-9223372036854775808", long.MinValue)
-}) {
-    var sourceText = "fnc main():int{return " + pair.Expression + ";}";
-    var program = OresIrLowering.Lower(OresParser.Parse(sourceText));
-    Require(OresIrReferenceEvaluator.Evaluate(program) == pair.Expected,
-            "numeric parity i64 source " + pair.Expression);
+// Load the same pinned portable corpus consumed by Java, LLVM, Wasm and
+// Forge: source expectations cannot silently drift apart in a future PR.
+using (var corpus = System.Text.Json.JsonDocument.Parse(File.ReadAllText(
+    "contracts/v1/numeric-parity/source-i64-cases.json")))
+{
+    var root = corpus.RootElement;
+    Require(root.GetProperty("schema_version").GetString() == "1.0.0",
+        "numeric source corpus schema");
+    Require(root.GetProperty("status").GetString() == "reference-only-not-compiled-execution",
+        "numeric source corpus reference-only status");
+    var cases = root.GetProperty("cases");
+    Require(cases.GetArrayLength() == 7, "numeric portable source case count");
+    var ids = new HashSet<string>(StringComparer.Ordinal);
+    foreach (var item in cases.EnumerateArray())
+    {
+        var id = item.GetProperty("id").GetString()
+            ?? throw new Exception("numeric fixture missing ID");
+        Require(ids.Add(id), "numeric fixture duplicate ID");
+        string expression = item.GetProperty("expression").GetString()
+            ?? throw new Exception("numeric fixture missing expression");
+        long expected = long.Parse(
+            item.GetProperty("expected").GetString()
+                ?? throw new Exception("numeric fixture missing result"),
+            System.Globalization.CultureInfo.InvariantCulture);
+        var sourceText = "fnc main():int{return " + expression + ";}";
+        var program = OresIrLowering.Lower(OresParser.Parse(sourceText));
+        Require(OresIrReferenceEvaluator.Evaluate(program) == expected,
+            "numeric parity i64 source " + id);
+    }
 }
 // Advanced numeric types are not implemented in this bootstrap. A parser
 // accepting them and falling through to checked i64 would be unsound.
