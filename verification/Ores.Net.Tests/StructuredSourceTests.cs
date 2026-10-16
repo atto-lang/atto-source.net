@@ -21,6 +21,20 @@ internal static class StructuredSourceTests
         throw new Exception("Structured source incorrectly accepted: " + reason);
     }
 
+    private static void RejectFeature(string source, string expectedDiagnostic)
+    {
+        try { _ = OresStructuredParser.Parse(source); }
+        catch (FormatException error)
+        {
+            Require(error.Message.Contains(expectedDiagnostic, StringComparison.OrdinalIgnoreCase),
+                "unsupported feature rejected for wrong reason: " + error.Message);
+            Require(error.Message.Contains("offset", StringComparison.Ordinal),
+                "unsupported feature missing source position");
+            return;
+        }
+        throw new Exception("Unsupported receiver/capture syntax was admitted");
+    }
+
     public static void Run()
     {
         const string sum = """
@@ -217,6 +231,14 @@ internal static class StructuredSourceTests
             Then.Count: 2, Else.Count: 2
         }, "parallel branch-local scopes");
 
+        // Contextual capture keywords remain valid ordinary scalar local names.
+        var plainLex = OresStructuredParser.Parse(
+            "fnc main():int{let int lex=42;return lex;}");
+        Require(plainLex.Body.Count == 2 &&
+                plainLex.Body[1] is StructuredReturn {
+                    Value: StructuredRead { Name: "lex", Type: IrValueType.I64 }
+                }, "lex remains an ordinary scalar identifier");
+
         // Until this backend has a class-aware method table, capture and
         // borrow analysis, it must reject these canonical constructs rather
         // than interpreting them as scalar code or ignoring a receiver marker.
@@ -224,6 +246,8 @@ internal static class StructuredSourceTests
         {
             "define class Foo as fnc read(self, int x): int { return x; } end",
             "define actor Foo as receive(self, int x): void { return; } end",
+            "define pub class Foo as fnc read(self, int x): int { return x; } end",
+            "pub define class Foo as fnc read(self, int x): int { return x; } end",
             "fnc main():int{let int x=1;return lex[x] || -> x;}",
             "fnc main():int{let int x=1;return nlex[x] || -> x;}",
             "fnc main():int{let int x=1;return nlex || -> x;}",
@@ -241,7 +265,13 @@ internal static class StructuredSourceTests
             "fnc main():int{let int x=1;return nlex[self] critical |state| -> 1;}",
         })
         {
-            Reject(unsupported, "unsupported class, actor or lexical capture lowering");
+            RejectFeature(unsupported,
+                unsupported.StartsWith("define class", StringComparison.Ordinal) ||
+                unsupported.StartsWith("define actor", StringComparison.Ordinal) ||
+                unsupported.StartsWith("define pub class", StringComparison.Ordinal) ||
+                unsupported.StartsWith("pub define class", StringComparison.Ordinal)
+                    ? "Class/actor declarations require typed method and ownership lowering"
+                    : "Lexical captures require checked closure lowering");
         }
 
         Console.WriteLine("Structured source parser and typed diagnostics passed");
