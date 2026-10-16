@@ -28,7 +28,7 @@ SourceByteBudgetTests.Run();
 // Each form must fail at lexical admission with a specific import diagnostic,
 // before either typed IR verification or Native AOT CIL emission.
 foreach (var path in new[] {
-    "@/src/helper", "pkg:math/src/helper", "./helper",
+    "+/src/helper", "+src/helper", "@/src/helper", "pkg:math/src/helper", "./helper",
     "../helper", "common/helper", ".hidden/helper"
 })
 {
