@@ -20,6 +20,18 @@ internal static class ScopedPermissionPolicyTests
         Assert(file.Allows(ScopedPermissionPolicy.Kind.Read, "/workspace/data "), false, "path whitespace");
         Assert(file.Allows(ScopedPermissionPolicy.Kind.Read, "/workspace/data/../secret"), false, "traversal");
         Assert(file.Allows(ScopedPermissionPolicy.Kind.Write, "/workspace/data/file"), false, "no write ceiling");
+        Assert(file.Allows(ScopedPermissionPolicy.Kind.Read,
+            "/workspace/" + new string('x', 5000)), false, "oversized path denied");
+        bool oversizedRejected = false;
+        try
+        {
+            _ = ScopedPermissionPolicy.FromHost(
+                new[] { ScopedPermissionPolicy.Kind.Env },
+                Enumerable.Repeat(new ScopedPermissionPolicy.Rule(
+                    ScopedPermissionPolicy.Kind.Env, "KEY"), 513));
+        }
+        catch (ArgumentException) { oversizedRejected = true; }
+        if (!oversizedRejected) throw new Exception("oversized permission rule count admitted");
         var rootScope = ScopedPermissionPolicy.FromHost(
             new[] { ScopedPermissionPolicy.Kind.Read },
             new[] { new ScopedPermissionPolicy.Rule(ScopedPermissionPolicy.Kind.Read, "/") });
