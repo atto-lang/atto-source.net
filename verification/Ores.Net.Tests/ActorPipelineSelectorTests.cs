@@ -63,7 +63,7 @@ internal static class ActorPipelineSelectorTests
             }
         }
         foreach (var (key, slot) in new[] {
-            ("customer-7",0),("alpha",0),("beta",2),("🌍",0),("",2)
+            ("customer-7",0),("alpha",0),("beta",2),("🌍",0),("",2),("\0",0)
         })
         {
             Check(ActorPipelineKey.Slot(key,3)==slot,"unsigned FNV-1a vector");
