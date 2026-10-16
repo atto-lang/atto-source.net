@@ -79,7 +79,13 @@ public static class OresParser
                 while (_i < text.Length &&
                     (text[_i] is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_'))
                     _i++;
-                return new Token(text[start.._i], start);
+                var word = text[start.._i];
+                // This bootstrap compiler is single-file. Do not accept Java
+                // project-root, zed package or bare import declarations until
+                // a verified source graph / native AOT linker exists.
+                if (word == "import")
+                    throw new FormatException("source imports require verified module graph lowering");
+                return new Token(word, start);
             }
             if ("()+-*/{}:;".IndexOf(ch) >= 0)
             {

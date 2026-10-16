@@ -39,6 +39,27 @@ foreach (string method in new[] {
         "structured guest actor routing must fail closed: " + method);
 }
 
+// Import parity is deliberately not claimed for the .NET scalar compiler.
+// Each form must fail at lexical admission with a specific import diagnostic,
+// before either typed IR verification or Native AOT CIL emission.
+foreach (var path in new[] {
+    "+/src/helper", "+src/helper", "@/src/helper", "pkg:math/src/helper", "./helper",
+    "../helper", "common/helper", ".hidden/helper"
+})
+{
+    try
+    {
+        _ = OresParser.Parse("import fnc helper from " + (char)34 + path +
+            (char)34 + "; fnc main():int{return 42;}");
+    }
+    catch (FormatException ex) when
+        (ex.Message.Contains("source imports require verified module graph lowering",
+            StringComparison.Ordinal)) { continue; }
+    throw new Exception("Unsupported import was not rejected for the right reason: " + path);
+}
+Require(OresParser.Parse("fnc main():int{return 42;} // import not code") is Literal,
+    "import in a comment must not be treated as an import declaration");
+
 
 foreach (var invalid in new[] { "\0", "\ud800", "\udc00", "\ud800x" })
     Reject(() => OresParser.Parse("fnc main():int{return 1;} // " + invalid),
