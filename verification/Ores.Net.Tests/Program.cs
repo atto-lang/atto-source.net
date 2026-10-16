@@ -26,9 +26,10 @@ static void InvalidSend(Action action, string why)
 // executable selected-slot ABI. The scalar .NET frontend must not accept
 // their source syntax before those paths exist (including case payloads).
 foreach (var source in new[] {
-    "define enum Color as Red Blue end fnc main():int{return 1;}",
-    "define enum Color as Red end fnc pick(Color x):int{return 1;} " +
-        "fnc pick(Mode x):int{return 2;} fnc main():int{return 0;}"
+    "define enum Color as\n  Red\n  Blue\nend\nfnc main():int{return 1;}",
+    "define enum Color as\n  Red\nend\ndefine enum Mode as\n  Fast\nend\n" +
+        "fnc pick(Color x):int{return 1;} fnc pick(Mode x):int{return 2;} " +
+        "fnc main():int{return 0;}"
 })
 {
     try { _ = OresParser.Parse(source); }
