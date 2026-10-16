@@ -216,4 +216,34 @@ public sealed class ScopedPermissionPolicy
         if (deny[index].Any(scope => Matches(permission, resource, scope))) return false;
         return allow[index].Any(scope => Matches(permission, resource, scope));
     }
+
+    /// <summary>
+    /// The trusted socket adapter supplies the actual selected numeric IPv4
+    /// endpoint, including port, immediately before connecting. Hostname
+    /// permission cannot override a resolved-IP deny. Policy-only: this method
+    /// does not perform DNS, pin socket addresses, or intercept guest calls.
+    /// IPv6 and ambiguous numeric forms remain denied until supported safely.
+    /// </summary>
+    public bool AllowsNetworkConnection(string? requested, string? selectedIpv4)
+    {
+        if (!Allows(Kind.Net, requested) ||
+            !TryEndpoint(requested, false, out var target) ||
+            !TryEndpoint(selectedIpv4, false, out var selected) ||
+            target.Port is null || selected.Port is null ||
+            target.Port != selected.Port)
+            return false;
+
+        // TryEndpoint already canonicalizes and validates all-numeric hosts;
+        // disallow resolved DNS spellings, hex/abbreviated IPs, and IPv6.
+        var octets = selected.Host.Split('.');
+        if (octets.Length != 4 || octets.Any(label =>
+            label.Length is < 1 or > 3 ||
+            label.Any(c => c is < '0' or > '9') ||
+            (label.Length > 1 && label[0] == '0') ||
+            !byte.TryParse(label, NumberStyles.None, CultureInfo.InvariantCulture, out _)))
+            return false;
+
+        return !deny[Index(Kind.Net)].Any(scope =>
+            Matches(Kind.Net, selectedIpv4!, scope));
+    }
 }
