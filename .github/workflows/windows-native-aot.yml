@@ -124,6 +124,20 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or ($output | Out-String).Trim() -ne '2211') {
             throw "CFG Native AOT atomic swap regression: expected 2211, got '$output'"
           }
+      - name: Execute shared five-backend native.add source in real Windows Native AOT
+        shell: pwsh
+        run: |
+          # Source bytes are identical to the shared Java/LLVM native.add fixture.
+          # A compiler "check" or a managed CIL emit is NOT the executed proof.
+          ./scripts/publish-windows.ps1 -Source contracts/v1/semantics/fixtures/add.ores -Rid win-x64 -Output artifacts/parity
+          $exe = 'artifacts/parity/win-x64/oreslang-app.exe'
+          if (-not (Test-Path -LiteralPath $exe)) { throw 'Shared conformance Native AOT binary missing' }
+          ./verification/assert-native-release.ps1 -Binary $exe -Rid win-x64
+          $actual = & $exe
+          if ($LASTEXITCODE -ne 0 -or ($actual | Out-String).Trim() -ne '42') {
+            throw "Shared native.add actual guest execution expected 42, got '$actual'"
+          }
+          Write-Host 'native.add shared source executed in Windows Native AOT: 42'
       - name: Upload native executable
         uses: actions/upload-artifact@v4
         with:
