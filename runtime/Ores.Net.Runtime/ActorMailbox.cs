@@ -144,6 +144,8 @@ public sealed class ActorMailbox
             if (_generation == ulong.MaxValue)
                 throw new OverflowException("Actor generation exhausted");
             var nextNonce = _nextNonce();
+            if (nextNonce == Guid.Empty || nextNonce == _nonce)
+                throw new InvalidOperationException("Restart requires fresh actor authority");
             _generation++;
             _nonce = nextNonce;
             _closed = false;
