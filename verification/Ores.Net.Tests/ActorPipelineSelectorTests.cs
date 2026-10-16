@@ -1,5 +1,6 @@
 using Ores.Net.Runtime;
 using Ores.Net.Compiler;
+using System.Text.Json;
 
 internal static class ActorPipelineSelectorTests
 {
@@ -45,6 +46,22 @@ internal static class ActorPipelineSelectorTests
             new("source","worker-c","Event")
         };
         var selectors = new ActorPipelineSelector(stages,edges,7);
+        // Exercise the exact machine-readable contract, not only copied
+        // inline vectors. Each backend pins the same Git blob SHA.
+        using (var shared = JsonDocument.Parse(File.ReadAllText(Path.Combine(
+            AppContext.BaseDirectory, "actor-pipeline-routing-v1.json"))))
+        {
+            Check(shared.RootElement.GetProperty("schema").GetString() ==
+                "oreslang.actor-pipeline-routing.v1", "contract schema drift");
+            foreach (var item in shared.RootElement.GetProperty("operations")
+                         .GetProperty("by_key").EnumerateArray())
+            {
+                string key = item.GetProperty("key").GetString()!;
+                string expected = item.GetProperty("target").GetString()!;
+                Check(selectors.ForwardByKey("source",key).Target == expected,
+                    "shared JSON key-affinity fixture mismatch");
+            }
+        }
         foreach (var (key, slot) in new[] {
             ("customer-7",0),("alpha",0),("beta",2),("🌍",0),("",2)
         })
