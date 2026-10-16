@@ -108,7 +108,11 @@ public static class OresStructuredParser
                      source[index + 1] == '=') index += 2;
             else if ("()+-*{}:;=<".IndexOf(ch) >= 0) index++;
             else throw new FormatException($"Invalid character at offset {offset}");
-            return new Token(source[offset..index], offset);
+            string word = source[offset..index];
+            if (word is "cpu" or "gpu" or "nb")
+                throw new FormatException(
+                    "unsupported execution domain: typed effect graph required; no implicit CPU fallback");
+            return new Token(word, offset);
         }
     }
 
