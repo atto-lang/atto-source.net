@@ -192,6 +192,12 @@ internal static class ScopedPermissionPolicyTests
             false, "wildcard grant cannot bypass numeric identity");
         Assert(wildcardLiteral.AllowsNetworkConnection("[::1]:443", "203.0.113.7:443"),
             false, "IPv6 request must not use IPv4-only pre-connect policy");
+        Assert(wildcardLiteral.AllowsNetworkConnection("api.example.com:443", "0.0.0.0:443"),
+            false, "unspecified selected IPv4 must not alias to loopback");
+        Assert(wildcardLiteral.AllowsNetworkConnection("0.0.0.0:443", "0.0.0.0:443"),
+            false, "unspecified numeric request is not a remote destination");
+        Assert(wildcardLiteral.AllowsNetworkConnection("203.0.113.7:443", "203.0.113.7:443"),
+            true, "valid pinned numeric IPv4 remains allowed");
 
         foreach (var invalid in new[] { "/workspace/../secret", "/workspace//secret", "relative/file" })
         {
