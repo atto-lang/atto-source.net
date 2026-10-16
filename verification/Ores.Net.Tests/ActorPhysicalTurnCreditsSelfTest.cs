@@ -13,8 +13,8 @@ internal static class ActorPhysicalTurnCreditsSelfTest
         var a = serial.TryAcquire();
         Check(a is not null && serial.Active == 1, "first credit");
         Check(serial.TryAcquire() is null, "serial actor rejects overlap");
-        a.Dispose();
-        a.Dispose();
+        a!.Dispose();
+        a!.Dispose();
         Check(serial.Active == 0, "idempotent release");
 
         var parallel = new ActorPhysicalTurnCredits(3);
@@ -25,14 +25,14 @@ internal static class ActorPhysicalTurnCreditsSelfTest
             "three independent physical credits");
         Check(parallel.Active == 3 && parallel.TryAcquire() is null,
             "fourth turn denied");
-        second.Dispose();
-        second.Dispose();
+        second!.Dispose();
+        second!.Dispose();
         Check(parallel.Active == 2, "duplicate release denied");
         var replacement = parallel.TryAcquire();
         Check(replacement is not null && parallel.Active == 3, "recovered credit");
         parallel.Close();
         Check(parallel.IsClosed && parallel.TryAcquire() is null, "retirement fences admission");
-        first.Dispose(); third.Dispose(); replacement.Dispose();
+        first!.Dispose(); third!.Dispose(); replacement!.Dispose();
         Check(parallel.Active == 0 && parallel.IsClosed, "quiesced closed actor");
         foreach (int invalid in new[] {-1, 0, 4, int.MaxValue})
         {
