@@ -79,7 +79,68 @@ public static class ProjectRootSourceResolver
         if (!File.Exists(candidate))
             throw new FormatException("project-root source not found");
         CheckNotReparsePoint(candidate);
+        ValidateSourcePath(selectedRoot, candidate);
         return candidate;
+    }
+
+    // Host-only explicit ./ and ../ resolution. The caller must supply an
+    // already-authorized package source root; no CWD or ambient search roots.
+    // This does NOT link imported .NET functions into CIL.
+    public static string ResolveRelative(string importer, string specifier, string sourceRoot)
+    {
+        ArgumentNullException.ThrowIfNull(importer);
+        ArgumentNullException.ThrowIfNull(specifier);
+        ArgumentNullException.ThrowIfNull(sourceRoot);
+        if (!(specifier.StartsWith("./", StringComparison.Ordinal) ||
+              specifier.StartsWith("../", StringComparison.Ordinal)) ||
+            Encoding.UTF8.GetByteCount(specifier) > 4096)
+            throw new FormatException("expected explicit ./ or ../ source import");
+        if (specifier.Length == 0 || specifier.EndsWith("/", StringComparison.Ordinal) ||
+            specifier.Contains("//", StringComparison.Ordinal) ||
+            specifier.Any(c => char.IsControl(c) || c is '\\' or ':'))
+            throw new FormatException("invalid relative source path");
+        string root = Path.GetFullPath(sourceRoot);
+        string owner = Path.GetFullPath(importer);
+        if (!Directory.Exists(root) || !File.Exists(owner) ||
+            Path.GetExtension(owner) != ".ores")
+            throw new FormatException("relative importer must exist inside source root");
+        CheckNotReparsePoint(root);
+        ValidateSourcePath(root, owner);
+        string candidate = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(owner)!, specifier));
+        if (Path.GetExtension(candidate).Length == 0) candidate += ".ores";
+        if (Path.GetExtension(candidate) != ".ores" || !File.Exists(candidate))
+            throw new FormatException("relative source file not found or unsupported extension");
+        ValidateSourcePath(root, candidate);
+        return candidate;
+    }
+
+    // Detect both modern and legacy nested-package markers, not just the
+    // configured project's root. Deny symlink/reparse components in either
+    // the importer or import target, including intermediate directories.
+    private static void ValidateSourcePath(string root, string path)
+    {
+        string relative = Path.GetRelativePath(root, path);
+        if (relative == ".." ||
+            relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) ||
+            Path.IsPathRooted(relative) || relative == ".")
+            throw new FormatException("relative source escapes owning package");
+        var components = relative.Split(Path.DirectorySeparatorChar);
+        string current = root;
+        for (int i = 0; i < components.Length; i++)
+        {
+            current = Path.Combine(current, components[i]);
+            if (i < components.Length - 1)
+            {
+                foreach (var marker in new[] { ".ores.pkg.toml", ".oreslangc.cfg.toml" })
+                {
+                    string candidateMarker = Path.Combine(current, marker);
+                    if (File.Exists(candidateMarker) || Directory.Exists(candidateMarker))
+                        throw new FormatException("source import crosses nested package boundary");
+                }
+            }
+            if (File.Exists(current) || Directory.Exists(current))
+                CheckNotReparsePoint(current);
+        }
     }
 
     // Restricted bootstrap marker check, not a full TOML parser.
