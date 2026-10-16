@@ -32,6 +32,7 @@ public static class ProjectRootSourceResolver
         if (!File.Exists(manifest))
             throw new FormatException("verified project manifest required");
         CheckNotReparsePoint(manifest);
+        RequireV1Manifest(manifest);
 
         // Reject every symlink/reparse component inside the chosen package.
         // This is deliberately stricter than the Java resolver until a
@@ -55,6 +56,55 @@ public static class ProjectRootSourceResolver
             throw new FormatException("project-root source not found");
         CheckNotReparsePoint(candidate);
         return candidate;
+    }
+
+    // Restricted bootstrap marker check, not a full TOML parser.
+    // Read through one opened descriptor with a strict byte budget. This does
+    // not make path lookup or reparse-point checks race-free.
+    private static void RequireV1Manifest(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        var bytes = new byte[65_537];
+        int length = 0;
+        while (length < bytes.Length)
+        {
+            int read = stream.Read(bytes, length, bytes.Length - length);
+            if (read == 0) break;
+            length += read;
+        }
+        if (length > 65_536)
+            throw new FormatException("project manifest exceeds 64 KiB");
+        string contents;
+        try { contents = new UTF8Encoding(false, true).GetString(bytes, 0, length); }
+        catch (DecoderFallbackException ex)
+        {
+            throw new FormatException("project manifest must be valid UTF-8", ex);
+        }
+        if (contents.Contains('\0') || contents.Contains("\"\"\"", StringComparison.Ordinal) ||
+            contents.Contains("'''", StringComparison.Ordinal))
+            throw new FormatException("unsupported project manifest literal");
+        bool inRoot = true;
+        int versionCount = 0;
+        foreach (var rawLine in contents.Split('\n'))
+        {
+            var line = rawLine.TrimEnd('\r').TrimStart(' ', '\t');
+            if (line.StartsWith("[", StringComparison.Ordinal))
+                inRoot = false;
+            if (!inRoot) continue;
+            int equals = line.IndexOf('=');
+            if (equals < 0) continue;
+            var key = line[..equals].TrimEnd(' ', '\t');
+            if (key is not ("schema_version" or "\"schema_version\"" or "'schema_version'"))
+                continue;
+            var value = line[(equals + 1)..].TrimStart(' ', '\t');
+            if (!value.StartsWith("\"1\"", StringComparison.Ordinal) ||
+                (value.Length > 3 && !string.IsNullOrEmpty(value[3..].Trim()) &&
+                 !value[3..].TrimStart().StartsWith("#", StringComparison.Ordinal)))
+                throw new FormatException("project manifest requires schema_version = 1");
+            versionCount++;
+        }
+        if (versionCount != 1)
+            throw new FormatException("project manifest requires exactly one schema_version = 1");
     }
 
     private static void CheckNotReparsePoint(string path)
