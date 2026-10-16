@@ -29,9 +29,9 @@ internal static class ActorRefNoWireSelfTest
         ExpectDenied(() => _ = JsonSerializer.Serialize(
             new List<ActorRef> { reference }), "list");
         ExpectDenied(() => _ = JsonSerializer.Deserialize<List<ActorRef>>(
-            "[{\\"Id\\":65001,\\"Generation\\":1}]"), "list reconstruction");
+            "[{\"Id\":65001,\"Generation\":1}]"), "list reconstruction");
         ExpectDenied(() => _ = JsonSerializer.Deserialize<Dictionary<string, ActorRef>>(
-            "{\\"child\\":{\\"Id\\":65001,\\"Generation\\":1}}"),
+            "{\"child\":{\"Id\":65001,\"Generation\":1}}"),
             "map reconstruction");
         // Closing/restarting does not turn a previously private handle into a
         // network value: the converter rejects stale and current refs equally.
