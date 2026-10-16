@@ -108,7 +108,12 @@ public static class OresStructuredParser
                      source[index + 1] == '=') index += 2;
             else if ("()+-*{}:;=<".IndexOf(ch) >= 0) index++;
             else throw new FormatException($"Invalid character at offset {offset}");
-            return new Token(source[offset..index], offset);
+            var word = source[offset..index];
+            // These tokens must remain fail-closed until effects, futures, buffer
+            // ownership, and execution-domain graph lowering are implemented.
+            if (word is "cpu" or "gpu" or "nb")
+                throw new FormatException($"execution region keyword '{word}' requires verified typed lowering at offset {offset}");
+            return new Token(word, offset);
         }
     }
 
