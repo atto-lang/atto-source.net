@@ -37,6 +37,15 @@ internal static class AuthorizedTcpConnectorTests
             Denied(() => AuthorizedTcpConnector.Connect(broad, alias, 443),
                 "ambiguous IPv4 alias: " + alias);
 
+        // A malformed timeout must fail synchronously before DNS or socket I/O.
+        try
+        {
+            _ = AuthorizedTcpConnector.Connect(broad, "unresolvable.invalid", 443,
+                TimeSpan.Zero);
+            throw new Exception("invalid timeout admitted to host resolver");
+        }
+        catch (ArgumentOutOfRangeException) { }
+
         var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
         try
