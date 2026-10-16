@@ -57,7 +57,8 @@ public sealed class ScopedPermissionPolicy
         if (string.IsNullOrEmpty(path) || path[0] != '/' || HasControl(path) ||
             (path.Length > 1 && path.EndsWith('/')))
             return false;
-        if (path == "/") return true; // Explicit root scope, matching native C++ policy.\n        return path.Split('/').Skip(1).All(part =>
+        if (path == "/") return true; // Explicit root scope, matching native C++ policy.
+        return path.Split('/').Skip(1).All(part =>
             part.Length > 0 && part is not ("." or ".."));
     }
 
