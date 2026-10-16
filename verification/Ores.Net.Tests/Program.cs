@@ -22,6 +22,7 @@ static void InvalidSend(Action action, string why)
     throw new Exception("Expected mailbox rejection: " + why);
 }
 
+await WrapperFlattenHostSelfTest.RunAsync();
 SourceByteBudgetTests.Run();
 ActorRefNoWireSelfTest.Run();
 ActorMailboxBoundsSelfTest.Run();
