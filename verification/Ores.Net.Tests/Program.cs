@@ -58,6 +58,9 @@ Reject(() => OresParser.Parse("fnc main():int{return 3; } extra"), "trailing syn
 Reject(() => OresParser.Parse("pub pub fnc main():int{return 3;}"), "duplicate pub");
 Reject(() => OresParser.Parse("fnc main():int{return 9223372036854775808;}"), "i64 range");
 Reject(() => OresParser.Parse("fnc main():int{return 1 @ 3;}"), "illegal character");
+foreach (string real in new[] { "0.125", "1e10", "1E-10", "123.456d", "123d" })
+    Reject(() => OresParser.Parse("fnc main():int{return " + real + ";}"),
+        "real/decimal literal must fail closed: " + real);
 Reject(() => OresParser.Parse("fnc main():int{return (1+2;}"), "unmatched parentheses");
 
 // Typed OresIR stage-one verification: no forward SSA references,
