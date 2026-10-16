@@ -85,6 +85,11 @@ public static class OresParser
                 // a verified source graph / native AOT linker exists.
                 if (word == "import")
                     throw new FormatException("source imports require verified module graph lowering");
+                // CPU/GPU placement and nb have a typed graph/ownership ABI, not
+                // scalar i64 semantics. Never compile them as host arithmetic.
+                if (word is "gpu" or "cpu" or "nb")
+                    throw new FormatException(
+                        "CPU/GPU execution domain and nb graph lowering unsupported; no implicit CPU fallback");
                 return new Token(word, start);
             }
             // Recognize the contiguous operator as one token, but never
