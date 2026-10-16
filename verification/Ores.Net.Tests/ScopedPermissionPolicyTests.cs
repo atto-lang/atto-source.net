@@ -20,6 +20,13 @@ internal static class ScopedPermissionPolicyTests
         Assert(file.Allows(ScopedPermissionPolicy.Kind.Read, "/workspace/data "), false, "path whitespace");
         Assert(file.Allows(ScopedPermissionPolicy.Kind.Read, "/workspace/data/../secret"), false, "traversal");
         Assert(file.Allows(ScopedPermissionPolicy.Kind.Write, "/workspace/data/file"), false, "no write ceiling");
+        var rootScope = ScopedPermissionPolicy.FromHost(
+            new[] { ScopedPermissionPolicy.Kind.Read },
+            new[] { new ScopedPermissionPolicy.Rule(ScopedPermissionPolicy.Kind.Read, "/") });
+        Assert(rootScope.Allows(ScopedPermissionPolicy.Kind.Read, "/workspace/data"),
+            true, "explicit root path scope");
+        Assert(rootScope.Allows(ScopedPermissionPolicy.Kind.Read, "relative/path"),
+            false, "root scope cannot admit relative paths");
 
         var env = ScopedPermissionPolicy.FromHost(
             new[] { ScopedPermissionPolicy.Kind.Env },
