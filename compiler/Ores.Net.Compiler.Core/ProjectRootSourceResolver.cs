@@ -46,6 +46,10 @@ public static class ProjectRootSourceResolver
             }
         }
         selectedRoot = Path.GetFullPath(selectedRoot);
+        if (!string.Equals(selectedRoot, root, StringComparison.Ordinal) &&
+            (File.Exists(Path.Combine(selectedRoot, ".ores.pkg.toml")) ||
+             Directory.Exists(Path.Combine(selectedRoot, ".ores.pkg.toml"))))
+            throw new FormatException("project.root crosses nested project manifest");
         var selectedRelative = Path.GetRelativePath(root, selectedRoot);
         if (selectedRelative is ".." ||
             selectedRelative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) ||
