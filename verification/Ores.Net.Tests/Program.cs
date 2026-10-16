@@ -25,6 +25,7 @@ static void InvalidSend(Action action, string why)
 SourceByteBudgetTests.Run();
 ActorRefNoWireSelfTest.Run();
 ActorMailboxBoundsSelfTest.Run();
+ActorMailboxRestartAtomicitySelfTest.Run();
 
 foreach (var invalid in new[] { "\0", "\ud800", "\udc00", "\ud800x" })
     Reject(() => OresParser.Parse("fnc main():int{return 1;} // " + invalid),
