@@ -118,7 +118,8 @@ public sealed class ScopedPermissionPolicy
                 ipv6Port = parsed;
             }
             var literal = text[1..close];
-            if (literal.Contains('%') || !IPAddress.TryParse(literal, out var ip) ||
+            if (literal.Contains('%') || literal.Contains('.') ||
+                !IPAddress.TryParse(literal, out var ip) ||
                 ip.AddressFamily != AddressFamily.InterNetworkV6 ||
                 ip.IsIPv4MappedToIPv6)
                 return false;
