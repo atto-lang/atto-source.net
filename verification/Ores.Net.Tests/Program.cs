@@ -23,29 +23,33 @@ static void InvalidSend(Action action, string why)
 }
 
 SourceByteBudgetTests.Run();
+ActorRefNoWireSelfTest.Run();
+ActorMailboxBoundsSelfTest.Run();
+ActorMailboxRestartAtomicitySelfTest.Run();
+ActorMailboxAuthorizationPrioritySelfTest.Run();
 
-// The scalar bootstrap must not interpret a source import as a stand-alone
-// guest even when the path looks valid to the Java/Graal backend. Admission
-// is intentionally deny-all until verified module graph lowering exists.
+// Import parity is deliberately not claimed for the .NET scalar compiler.
+// Each form must fail at lexical admission with a specific import diagnostic,
+// before either typed IR verification or Native AOT CIL emission.
 foreach (var path in new[] {
-    "+/src/helper", "+src/helper", "@/src/helper", "pkg:math/src/helper",
-    "./helper", "../helper", "common/helper", ".hidden/helper",
+    "+/src/helper", "+src/helper", "@/src/helper", "pkg:math/src/helper", "./helper",
+    "../helper", "common/helper", ".hidden/helper",
     "+/src//helper", "+/src/./helper", "+/src/../helper",
     "pkg:math/src/../helper", @"pkg:math\src\helper"
 })
 {
     try
     {
-        _ = OresParser.Parse("import fnc helper from \"" + path +
-            "\";\nfnc main():int{return 42;}");
+        _ = OresParser.Parse("import fnc helper from " + (char)34 + path +
+            (char)34 + "; fnc main():int{return 42;}");
     }
     catch (FormatException ex) when
         (ex.Message.Contains("source imports require verified module graph lowering",
             StringComparison.Ordinal)) { continue; }
-    throw new Exception("Unsupported source import was not denied: " + path);
+    throw new Exception("Unsupported import was not rejected for the right reason: " + path);
 }
-Require(OresParser.Parse("fnc main():int{return 42;} // import is a comment") is Literal,
-    "import inside a line comment must remain non-executable");
+Require(OresParser.Parse("fnc main():int{return 42;} // import not code") is Literal,
+    "import in a comment must not be treated as an import declaration");
 
 
 foreach (var invalid in new[] { "\0", "\ud800", "\udc00", "\ud800x" })
@@ -70,8 +74,25 @@ foreach (var pair in new[] { (long.MinValue, -1L), (5L, 0L) })
     throw new Exception("Internal checked-i64 division must preserve traps");
 }
 
+// The i64-only source frontend cannot invoke named functions. Recognize |>
+ // as one token and reject every pipeline (including nested expressions)
+ // before CIL emission. Never reinterpret it as bitwise-or or comparison.
+foreach (var expr in new[] { "1 |> twice", "(1 |> twice)", "1 + 2 |> plus(3)" })
+{
+    try { OresParser.Parse("fnc main():int{return " + expr + ";}"); }
+    catch (FormatException ex) when (ex.Message.Contains("pipeline requires named callable lowering",
+            StringComparison.OrdinalIgnoreCase)) { continue; }
+    throw new Exception("Unsupported value pipeline must fail closed: " + expr);
+}
+Require(OresParser.Parse("fnc main():int{return 1;} // 1 |> unsupported") is Literal,
+    "pipe tokens in comments are not executable operators");
+
 var positive = OresParser.Parse("define pub fnc main() : int { return 2 + 3 * 4; }");
 Require(positive is Binary { Operator: '+' }, "top-level expression shape");
+Require(OresParser.Parse("define pub fnc main() -> int { return 2 + 3 * 4; }")
+    is Binary { Operator: '+' }, "canonical formatter arrow");
+Reject(() => OresParser.Parse("fnc main() - > int { return 1; }"), "split return arrow");
+Reject(() => OresParser.Parse("fnc main() ->> int { return 1; }"), "malformed return arrow");
 Require(OresParser.Parse("pub define fnc main():int {return -9223372036854775808;}") is Literal
     { Value: long.MinValue }, "signed minimum");
 Require(OresParser.Parse("fnc main():int {return -(3 + 4);}") is Unary

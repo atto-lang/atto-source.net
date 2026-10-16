@@ -80,12 +80,24 @@ public static class OresParser
                     (text[_i] is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_'))
                     _i++;
                 var word = text[start.._i];
-                // Scalar-only bootstrap has no verified source import graph.
-                // Enforce this during lexing for check AND Native AOT compile.
+                // This bootstrap compiler is single-file. Do not accept Java
+                // project-root, zed package or bare import declarations until
+                // a verified source graph / native AOT linker exists.
                 if (word == "import")
-                    throw new FormatException(
-                        "source imports require verified module graph lowering");
+                    throw new FormatException("source imports require verified module graph lowering");
                 return new Token(word, start);
+            }
+            // Recognize the contiguous operator as one token, but never
+            // attempt a scalar-only approximation of named-call lowering.
+            if (ch == '|' && _i + 1 < text.Length && text[_i + 1] == '>')
+            {
+                _i += 2;
+                return new Token("|>", start);
+            }
+            if (ch == '-' && _i + 1 < text.Length && text[_i + 1] == '>')
+            {
+                _i += 2;
+                return new Token("->", start);
             }
             if ("()+-*/{}:;".IndexOf(ch) >= 0)
             {
@@ -135,7 +147,7 @@ public static class OresParser
             Expect("main");
             Expect("(");
             Expect(")");
-            Expect(":");
+            if (!Take(":")) Expect("->");
             Expect("int");
             Expect("{");
             Expect("return");
@@ -157,6 +169,9 @@ public static class OresParser
                 _index++;
                 left = new Binary(op, left, ParseMul(depth + 1));
             }
+            if (Current.Text == "|>")
+                throw new FormatException(
+                    $"Value pipeline requires named callable lowering; unsupported in .NET i64 bootstrap at offset {Current.Offset}");
             return left;
         }
 
