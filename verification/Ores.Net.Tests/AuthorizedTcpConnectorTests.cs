@@ -82,6 +82,14 @@ internal static class AuthorizedTcpConnectorTests
             Denied(() => ScopedTcpConnector.ConnectAsync(
                     broad, "127.1", port)
                     .GetAwaiter().GetResult(), "async numeric alias reject");
+            // An unspecified IPv4 peer can alias to the loopback listener
+            // on Linux; neither sync nor async host adapter may connect it.
+            Denied(() => AuthorizedTcpConnector.Connect(
+                broad, "0.0.0.0", port, TimeSpan.FromSeconds(2)),
+                "sync unspecified IPv4 alias");
+            Denied(() => ScopedTcpConnector.ConnectAsync(
+                broad, "0.0.0.0", port).GetAwaiter().GetResult(),
+                "async unspecified IPv4 alias");
 
             var deniedPort = Policy(new(ScopedPermissionPolicy.Kind.Net, "*"),
                 new(ScopedPermissionPolicy.Kind.Net, "127.0.0.1:" + port, true));
