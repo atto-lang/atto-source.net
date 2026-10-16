@@ -78,6 +78,17 @@ internal static class ActorPipelineSelectorTests
             "named destination");
         Deny(()=>selectors.ForwardTo("source","worker-z"),"unknown connected target");
         Deny(()=>selectors.ForwardTo("worker-a","source"),"reverse edge");
+        try
+        {
+            selectors.ForwardByKey("worker-a", "\ud800");
+            throw new Exception("invalid actor source unexpectedly routed");
+        }
+        catch (ArgumentException error) when (
+            error.Message.Contains("no connected downstream", StringComparison.Ordinal))
+        {
+            // Authorized edge lookup must fail BEFORE decoding malformed key.
+        }
+
         for (int i=0;i<999;i++)
             Check(selectors.ForwardRoundRobin("source").Target==edges[i%3].Target,
                 "round-robin stable connection order");
@@ -151,6 +162,7 @@ internal static class ActorPipelineSelectorTests
         DenyRetired(()=>retiring.ForwardRoundRobin("source"));
         DenyRetired(()=>retiring.ForwardTo("source","worker-a"));
         DenyRetired(()=>retiring.ForwardByKey("source","alpha"));
+        DenyRetired(()=>retiring.ForwardByKey("source","\ud800"));
         DenyRetired(()=>retiring.RequireIngressRoot("source"));
         DenyRetired(()=>retiring.AdvanceGeneration(12,true,false));
         DenyRetired(()=>retiring.AdvanceGeneration(12,false,true));
