@@ -164,9 +164,28 @@ public static class ExecutionGraphV1
             ArgumentNullException.ThrowIfNull(nodes);
             if (nodes.Length == 0 || nodes.Length > 4096 || output < 0 || output >= nodes.Length)
                 throw new ArgumentException("invalid typed graph size or output");
+            // Freeze all caller-owned operand lists before admission. A shallow
+            // Node[] copy still permits a mutable IReadOnlyList<int> to be
+            // changed after signature validation, turning a safe graph into
+            // an out-of-bounds or type-confused execution plan.
+            var frozen = new Node[nodes.Length];
             for (int i = 0; i < nodes.Length; i++)
             {
-                Node node = nodes[i] ?? throw new ArgumentException("null typed graph node");
+                Node original = nodes[i] ?? throw new ArgumentException("null typed graph node");
+                var sourceInputs = original.Inputs ??
+                    throw new ArgumentException("null typed graph input list");
+                if (sourceInputs.Count > 2)
+                    throw new ArgumentException("invalid typed graph arity");
+                var copiedInputs = new int[sourceInputs.Count];
+                for (int j = 0; j < copiedInputs.Length; j++)
+                    copiedInputs[j] = sourceInputs[j];
+                frozen[i] = new Node(original.Id, original.Domain, original.Operation,
+                    original.Result, Array.AsReadOnly(copiedInputs), original.Constant);
+            }
+            nodes = frozen;
+            for (int i = 0; i < nodes.Length; i++)
+            {
+                Node node = nodes[i];
                 if (node.Id != i) throw new ArgumentException("invalid typed graph node ID");
                 foreach (int dependency in node.Inputs)
                     if (dependency < 0 || dependency >= i)
@@ -197,7 +216,7 @@ public static class ExecutionGraphV1
                 }
             }
             if (nodes[output].Result != kind) throw new ArgumentException("invalid typed graph output kind");
-            _nodes = Array.AsReadOnly((Node[])nodes.Clone());
+            _nodes = Array.AsReadOnly(nodes);
             _output = output;
             ResultKind = kind;
         }
