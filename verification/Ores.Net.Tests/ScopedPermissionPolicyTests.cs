@@ -240,9 +240,10 @@ internal static class ScopedPermissionPolicyTests
 
         // A real local TCP loopback proves ConnectAsync uses the checked
         // numeric endpoint. No external networking or live DNS is required.
-        using (var listener = new TcpListener(IPAddress.Loopback, 0))
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
         {
-            listener.Start();
             int port = ((IPEndPoint)listener.LocalEndpoint).Port;
             var localPolicy = ScopedPermissionPolicy.FromHost(
                 new[] { ScopedPermissionPolicy.Kind.Net },
@@ -265,6 +266,7 @@ internal static class ScopedPermissionPolicyTests
             catch (UnauthorizedAccessException) { deniedConnect = true; }
             if (!deniedConnect) throw new Exception("default deny allowed real TCP connection");
         }
+        finally { listener.Stop(); }
 
         // Full v1 parity is NOT proven: no production guest host-I/O boundary
         // and no verified resolved-IPv6 connect adapter in this bootstrap.
