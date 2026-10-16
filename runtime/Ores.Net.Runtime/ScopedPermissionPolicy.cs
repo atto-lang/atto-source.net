@@ -29,10 +29,18 @@ public sealed class ScopedPermissionPolicy
         ArgumentNullException.ThrowIfNull(capabilities);
         ArgumentNullException.ThrowIfNull(scopes);
         var policy = new ScopedPermissionPolicy();
+        var capabilityCount = 0;
         foreach (var capability in capabilities)
+        {
+            if (++capabilityCount > 8)
+                throw new ArgumentException("oversized capability list", nameof(capabilities));
             policy.ceiling[Index(capability)] = true;
+        }
+        var ruleCount = 0;
         foreach (var rule in scopes)
         {
+            if (++ruleCount > 512)
+                throw new ArgumentException("oversized permission policy", nameof(scopes));
             if (rule is null || !ValidScope(rule.Permission, rule.Scope))
                 throw new ArgumentException("invalid permission scope", nameof(scopes));
             var i = Index(rule.Permission);
@@ -54,7 +62,7 @@ public sealed class ScopedPermissionPolicy
 
     private static bool PathValid(string? path)
     {
-        if (string.IsNullOrEmpty(path) || path[0] != '/' || HasControl(path) ||
+        if (string.IsNullOrEmpty(path) || path.Length > 4096 || path[0] != '/' || HasControl(path) ||
             (path.Length > 1 && path.EndsWith('/')))
             return false;
         if (path == "/") return true; // Explicit root scope, matching native C++ policy.
@@ -64,7 +72,7 @@ public sealed class ScopedPermissionPolicy
 
     private static bool TokenValid(string? token, bool rule)
     {
-        if (string.IsNullOrEmpty(token) || HasControl(token)) return false;
+        if (string.IsNullOrEmpty(token) || token.Length > 1024 || HasControl(token)) return false;
         var star = token.IndexOf('*');
         return star < 0 || (rule && (token == "*" ||
             (star == token.Length - 1 && token.LastIndexOf('*') == star)));
@@ -77,7 +85,7 @@ public sealed class ScopedPermissionPolicy
     private static bool TryEndpoint(string? raw, bool rule, out Endpoint value)
     {
         value = default;
-        if (string.IsNullOrEmpty(raw) || HasControl(raw) ||
+        if (string.IsNullOrEmpty(raw) || raw.Length > 320 || HasControl(raw) ||
             raw.Any(ch => char.IsWhiteSpace(ch) || ch is '/' or '@' or '\\'))
             return false;
         var text = raw.ToLowerInvariant();
