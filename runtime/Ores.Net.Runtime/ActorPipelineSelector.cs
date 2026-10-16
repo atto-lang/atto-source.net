@@ -64,11 +64,20 @@ public sealed class ActorPipelineSelector
         if (stages.Count is < 2 or > 1024 || edges.Count is < 1 or > 4096 ||
             generation == 0)
             throw new ArgumentException("Invalid pipeline graph budget");
+        // Host callbacks must never re-read caller-controlled collections
+        // between graph validation, edge-order publication and root/cycle
+        // admission. Stage/edge records are immutable, but IReadOnlyList
+        // does not promise immutable membership or enumeration.
+        var stageSnapshot = stages.ToArray();
+        var edgeSnapshot = edges.ToArray();
+        if (stageSnapshot.Length is < 2 or > 1024 ||
+            edgeSnapshot.Length is < 1 or > 4096)
+            throw new ArgumentException("Pipeline graph changed during snapshot");
         _generation = generation;
         var ids = new Dictionary<string, PipelineStage>(StringComparer.Ordinal);
         var incoming = new Dictionary<string, int>(StringComparer.Ordinal);
         var draft = new Dictionary<string, List<PipelineEdge>>(StringComparer.Ordinal);
-        foreach (var stage in stages)
+        foreach (var stage in stageSnapshot)
         {
             ArgumentNullException.ThrowIfNull(stage);
             ActorPipelineKey.Encode(stage.Id, 256);
@@ -90,7 +99,7 @@ public sealed class ActorPipelineSelector
             draft.Add(stage.Id, new List<PipelineEdge>());
         }
         var pairs = new HashSet<(string, string)>();
-        foreach (var edge in edges)
+        foreach (var edge in edgeSnapshot)
         {
             ArgumentNullException.ThrowIfNull(edge);
             ActorPipelineKey.Encode(edge.Source, 256);
@@ -109,7 +118,7 @@ public sealed class ActorPipelineSelector
             incoming[edge.Target]++;
         }
         var ready = new Queue<string>();
-        foreach (var stage in stages)
+        foreach (var stage in stageSnapshot)
         {
             int reads = incoming[stage.Id], writes = draft[stage.Id].Count;
             if (reads == 0 && writes == 0 ||
