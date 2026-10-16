@@ -184,6 +184,25 @@ internal static class ScopedPermissionPolicyTests
         var numericWildcard = ScopedPermissionPolicy.FromHost(
             new[] { ScopedPermissionPolicy.Kind.Net },
             new[] { new ScopedPermissionPolicy.Rule(ScopedPermissionPolicy.Kind.Net, "*") });
+        foreach (var padded in new[] {
+            " api.example.com:443", "api.example.com:443 ",
+            " 127.0.0.1:443", "127.0.0.1:443 "
+        })
+        {
+            Assert(numericWildcard.Allows(ScopedPermissionPolicy.Kind.Net, padded),
+                false, "padded network resource must not acquire wildcard authority");
+            bool rejected = false;
+            try
+            {
+                _ = ScopedPermissionPolicy.FromHost(
+                    new[] { ScopedPermissionPolicy.Kind.Net },
+                    new[] { new ScopedPermissionPolicy.Rule(
+                        ScopedPermissionPolicy.Kind.Net, padded) });
+            }
+            catch (ArgumentException) { rejected = true; }
+            if (!rejected)
+                throw new Exception("padded network rule was silently normalized: " + padded);
+        }
         var numericParts = new[] {
             "0", "00", "01", "1", "127", "0x0", "0x1", "0x7f",
             "0X7F", "0xFF", "077", "255", "256"
