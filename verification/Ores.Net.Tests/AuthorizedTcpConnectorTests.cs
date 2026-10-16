@@ -17,6 +17,10 @@ internal static class AuthorizedTcpConnectorTests
 
     public static void Run()
     {
+        // Raw sockets must not be exposed as a public guest-callable API.
+        if (typeof(ScopedTcpConnector).IsPublic)
+            throw new Exception("raw socket connector escaped trusted assembly boundary");
+
         Denied(() => AuthorizedTcpConnector.Connect(
             ScopedPermissionPolicy.DefaultDeny(), "127.0.0.1", 443),
             "default deny before DNS");
@@ -46,6 +50,29 @@ internal static class AuthorizedTcpConnectorTests
             if (!socket.Connected || !accepted.Connected ||
                 !Equals(socket.RemoteEndPoint, new IPEndPoint(IPAddress.Loopback, port)))
                 throw new Exception("TCP did not connect to the checked numeric IPv4 endpoint");
+
+            // Exercise the asynchronous host adapter against a real loopback
+            // socket, not just the address-authorizer predicate.
+            using (var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(3)))
+            using (var asyncSocket = ScopedTcpConnector.ConnectAsync(
+                       granted, "127.0.0.1", port, deadline.Token)
+                       .GetAwaiter().GetResult())
+            using (var asyncAccepted = listener.AcceptSocket())
+            {
+                if (!asyncSocket.Connected || !asyncAccepted.Connected ||
+                    !Equals(asyncSocket.RemoteEndPoint,
+                        new IPEndPoint(IPAddress.Loopback, port)))
+                    throw new Exception("async TCP connected to an unchecked endpoint");
+            }
+            Denied(() => ScopedTcpConnector.ConnectAsync(
+                    ScopedPermissionPolicy.DefaultDeny(), "127.0.0.1", port)
+                    .GetAwaiter().GetResult(), "async default deny");
+            Denied(() => ScopedTcpConnector.ConnectAsync(
+                    blocked, "127.0.0.1", port)
+                    .GetAwaiter().GetResult(), "async selected IPv4 deny");
+            Denied(() => ScopedTcpConnector.ConnectAsync(
+                    broad, "127.1", port)
+                    .GetAwaiter().GetResult(), "async numeric alias reject");
 
             var deniedPort = Policy(new(ScopedPermissionPolicy.Kind.Net, "*"),
                 new(ScopedPermissionPolicy.Kind.Net, "127.0.0.1:" + port, true));
