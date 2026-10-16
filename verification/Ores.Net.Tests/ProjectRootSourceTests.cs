@@ -53,6 +53,19 @@ internal static class ProjectRootSourceTests
             Reject(() => ProjectRootSourceResolver.Resolve(app, "+/lib/answer"),
                    "nested package manifest must not inherit parent authority");
             File.Delete(nestedManifest);
+            string intermediate = Path.Combine(app, "parent", "appdata");
+            Directory.CreateDirectory(Path.Combine(intermediate, "lib"));
+            File.WriteAllText(Path.Combine(intermediate, "lib", "answer.ores"),
+                "pub fnc answer():int{return 42;}\n");
+            string intermediateManifest = Path.Combine(app, "parent", ".ores.pkg.toml");
+            File.WriteAllText(intermediateManifest, "schema_version = \"1\"\n");
+            File.WriteAllText(manifest,
+                "schema_version = \"1\"\n[project]\nroot = \"parent/appdata\"\n");
+            Reject(() => ProjectRootSourceResolver.Resolve(app, "+/lib/answer"),
+                   "intermediate nested package manifest ignored");
+            File.Delete(intermediateManifest);
+            File.WriteAllText(manifest,
+                "schema_version = \"1\"\n[project]\nroot = \"appdata\"\n");
             Reject(() => ProjectRootSourceResolver.Resolve(app, "+/src/answer"),
                    "manifest directory escaped selected project.root");
             foreach (var invalidRoot in new[] { "../other", "/tmp", "appdata/../src",
