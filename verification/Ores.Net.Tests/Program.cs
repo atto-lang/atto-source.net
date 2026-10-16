@@ -74,6 +74,12 @@ using (var corpus = System.Text.Json.JsonDocument.Parse(numericSourceBytes))
     var cases = root.GetProperty("cases");
     Require(cases.GetArrayLength() == 7, "numeric portable source case count");
     var ids = new HashSet<string>(StringComparer.Ordinal);
+    var numericArtifacts = Path.Combine(Path.GetTempPath(),
+        "ores-numeric-source-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(numericArtifacts);
+    try
+    {
+    int numericIndex = 0;
     foreach (var item in cases.EnumerateArray())
     {
         var id = item.GetProperty("id").GetString()
@@ -89,6 +95,28 @@ using (var corpus = System.Text.Json.JsonDocument.Parse(numericSourceBytes))
         var program = OresIrLowering.Lower(OresParser.Parse(sourceText));
         Require(OresIrReferenceEvaluator.Evaluate(program) == expected,
             "numeric parity i64 source " + id);
+        // Also execute the actual compiler's emitted CIL through an
+        // independent instruction evaluator, not only the typed-IR oracle.
+        // Native AOT execution remains a separate exact-head CI requirement.
+        var output = Path.Combine(numericArtifacts,
+            "numeric-" + (numericIndex++).ToString(
+                System.Globalization.CultureInfo.InvariantCulture) + ".dll");
+        CilEmitter.EmitLibrary(program, output);
+        using (var built = AssemblyDefinition.ReadAssembly(output))
+        {
+            var method = built.MainModule.Types.Single(t =>
+                t.FullName == "Oreslang.Generated.OresProgram")
+                .Methods.Single(m => m.Name == "Run");
+            Require(method.ReturnType.MetadataType == MetadataType.Int64,
+                "numeric compiled CIL must preserve full-width signed i64 " + id);
+            Require(CilReferenceEvaluator.Evaluate(method) == expected,
+                "numeric compiled CIL result differs from typed IR " + id);
+        }
+    }
+    }
+    finally
+    {
+        Directory.Delete(numericArtifacts, recursive: true);
     }
 }
 // Advanced numeric types are not implemented in this bootstrap. A parser
