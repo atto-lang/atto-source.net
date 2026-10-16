@@ -35,6 +35,19 @@ internal static class ActorMailboxBoundsSelfTest
         lookalike.Send(ownLookalikeRef, new byte[] { 13 });
         if (!lookalike.TryReceive(out var ownData) || ownData is null || ownData[0] != 13)
             throw new Exception("forged send poisoned the legitimate destination");
+
+        // An oversized forged payload must fail for lack of authority, not
+        // disclose the size/budget policy before the receiver is authenticated.
+        var oversized = new byte[ActorMailbox.MaxMessageBytes + 1];
+        DenySend(() => lookalike.Send(reference, oversized));
+        DenySend(() => box.Send(ownLookalikeRef, oversized));
+        if (lookalike.QueuedMessages != 0 || box.QueuedMessages != 0)
+            throw new Exception("oversized forged send mutated mailbox state");
+        try { box.Send(reference, oversized); }
+        catch (ArgumentOutOfRangeException) { goto ValidOversizeRejected; }
+        throw new Exception("valid authority bypassed 1 MiB payload limit");
+        ValidOversizeRejected:;
+
         var input = new byte[ActorMailbox.MaxMessageBytes];
         input[0] = 7;
         for (var i = 0; i < 16; ++i) box.Send(reference, input);
