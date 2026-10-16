@@ -217,6 +217,22 @@ internal static class StructuredSourceTests
             Then.Count: 2, Else.Count: 2
         }, "parallel branch-local scopes");
 
+        // Until this backend has a class-aware method table, capture and
+        // borrow analysis, it must reject these canonical constructs rather
+        // than interpreting them as scalar code or ignoring a receiver marker.
+        foreach (string unsupported in new[]
+        {
+            "define class Foo as fnc read(self, int x): int { return x; } end",
+            "define actor Foo as receive(self, int x): void { return; } end",
+            "fnc main():int{let int x=1;return lex[x] || -> x;}",
+            "fnc main():int{let int x=1;return nlex[x] || -> x;}",
+            "fnc main():int{let int x=1;return nlex || -> x;}",
+            "fnc main():int{let int x=1;return lex[self] || -> x;}",
+        })
+        {
+            Reject(unsupported, "unsupported class, actor or lexical capture lowering");
+        }
+
         Console.WriteLine("Structured source parser and typed diagnostics passed");
     }
 
