@@ -70,6 +70,27 @@ internal static class ScopedPermissionPolicyTests
         Assert(numericAlias.Allows(ScopedPermissionPolicy.Kind.Net,
             "api.example.com:443"), true, "ordinary hostname still permitted");
 
+        // Repeatable numeric/hex address matrix with broad network allow.
+        // The host I/O connector must independently check resolved IPs.
+        var numericWildcard = ScopedPermissionPolicy.FromHost(
+            new[] { ScopedPermissionPolicy.Kind.Net },
+            new[] { new ScopedPermissionPolicy.Rule(ScopedPermissionPolicy.Kind.Net, "*") });
+        var numericParts = new[] {
+            "0", "00", "01", "1", "127", "0x0", "0x1", "0x7f",
+            "0X7F", "0xFF", "077", "255", "256"
+        };
+        static bool CanonicalOctet(string s) =>
+            s is "0" or "1" or "127" or "255";
+        foreach (var first in numericParts)
+        foreach (var second in numericParts)
+        foreach (var third in numericParts)
+        {
+            var endpoint = first + "." + second + "." + third + ".1:443";
+            Assert(numericWildcard.Allows(ScopedPermissionPolicy.Kind.Net, endpoint),
+                CanonicalOctet(first) && CanonicalOctet(second) && CanonicalOctet(third),
+                "noncanonical numeric IPv4 matrix");
+        }
+
         var suffix = ScopedPermissionPolicy.FromHost(
             new[] { ScopedPermissionPolicy.Kind.Net },
             new[] { new ScopedPermissionPolicy.Rule(ScopedPermissionPolicy.Kind.Net, "*.example.com:443") });
