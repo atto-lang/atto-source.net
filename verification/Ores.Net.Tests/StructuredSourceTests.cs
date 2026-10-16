@@ -91,7 +91,15 @@ internal static class StructuredSourceTests
         Require(arithmetic76.Body[0] is StructuredReturn {
             Value: StructuredBinary {
                 Operator: StructuredOperator.Subtract,
-                Left: StructuredBinary { Operator: StructuredOperator.Subtract },
+                Left: StructuredBinary {
+                    Operator: StructuredOperator.Subtract,
+                    Left: StructuredInt { Value: 100 },
+                    Right: StructuredBinary {
+                        Operator: StructuredOperator.Add,
+                        Left: StructuredInt { Value: 3 },
+                        Right: StructuredInt { Value: 2 }
+                    }
+                },
                 Right: StructuredInt { Value: 19 }
             }
         }, "shared arithmetic-76 typed AST");
