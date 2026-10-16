@@ -43,13 +43,15 @@ public static class ProjectRootSourceResolver
                 if (!Directory.Exists(selectedRoot))
                     throw new FormatException("project.root directory not found");
                 CheckNotReparsePoint(selectedRoot);
+                // Independently nested packages along an intermediate root
+                // component must not inherit the parent package's +/ identity.
+                foreach (var name in new[] { ".ores.pkg.toml", ".oreslangc.cfg.toml" })
+                    if (File.Exists(Path.Combine(selectedRoot, name)) ||
+                        Directory.Exists(Path.Combine(selectedRoot, name)))
+                        throw new FormatException("project.root crosses nested project manifest");
             }
         }
         selectedRoot = Path.GetFullPath(selectedRoot);
-        if (!string.Equals(selectedRoot, root, StringComparison.Ordinal) &&
-            (File.Exists(Path.Combine(selectedRoot, ".ores.pkg.toml")) ||
-             Directory.Exists(Path.Combine(selectedRoot, ".ores.pkg.toml"))))
-            throw new FormatException("project.root crosses nested project manifest");
         var selectedRelative = Path.GetRelativePath(root, selectedRoot);
         if (selectedRelative is ".." ||
             selectedRelative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) ||
