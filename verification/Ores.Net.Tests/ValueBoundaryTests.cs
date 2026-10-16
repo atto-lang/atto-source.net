@@ -8,6 +8,7 @@ internal static class ValueBoundaryTests
         const string control = "pub fnc main():int{return (5+3)*7-14;}";
         _ = OresParser.Parse(control);
         _ = OresStructuredParser.Parse(control);
+        _ = OresStructuredParser.Parse("pub fnc main():int{return 42;} // gpu cpu nb are only comments");
         var path = Path.Combine(AppContext.BaseDirectory, "value-boundary-rejections.json");
         var cases = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(path))
             ?? throw new Exception("Missing boundary corpus");
@@ -26,7 +27,7 @@ internal static class ValueBoundaryTests
         foreach (var (name, source) in domainCases)
         {
             RejectDomain(() => { _ = OresParser.Parse(source); }, name + "/shipping");
-            Reject(() => { _ = OresStructuredParser.Parse(source); }, name + "/structured");
+            RejectDomain(() => { _ = OresStructuredParser.Parse(source); }, name + "/structured");
         }
         Console.WriteLine($"{cases.Count} value boundary cases and {domainCases.Count} CPU/GPU/nb domain cases rejected by both frontends");
     }
