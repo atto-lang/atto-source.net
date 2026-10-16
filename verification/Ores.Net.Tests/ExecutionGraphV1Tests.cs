@@ -105,8 +105,8 @@ internal static class ExecutionGraphV1Tests
         Action? scheduled = null;
         var once = plan.SubmitCpu(action => scheduled = action);
         Need(scheduled is not null, "executor did not receive task");
-        var first = new Thread(scheduled);
-        var second = new Thread(scheduled);
+        var first = new Thread(() => scheduled!());
+        var second = new Thread(() => scheduled!());
         first.Start();
         second.Start();
         first.Join();
