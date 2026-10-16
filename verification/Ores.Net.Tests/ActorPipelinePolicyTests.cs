@@ -48,7 +48,7 @@ public static class ActorPipelinePolicyTests
         Reject(() => new ActorPipelinePolicy(stages, duplicate));
         Reject(() => new ActorPipelinePolicy(stages, new[] {
             new ActorPipelinePolicy.Edge("src", "worker-a", "Wrong") }));
-        Reject(() => new ActorPipelinePolicy(stages withDuplicateId(), edges));
+        Reject(() => new ActorPipelinePolicy(withDuplicateId(), edges));
         Reject(() => ActorPipelinePolicy.HashKey("\ud800"));
         Reject(() => ActorPipelinePolicy.HashKey(new string('x', 4097)));
         var cycles = new[] {
