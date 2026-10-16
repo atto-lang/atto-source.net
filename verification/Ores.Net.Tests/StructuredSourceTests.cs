@@ -228,6 +228,17 @@ internal static class StructuredSourceTests
             "fnc main():int{let int x=1;return nlex[x] || -> x;}",
             "fnc main():int{let int x=1;return nlex || -> x;}",
             "fnc main():int{let int x=1;return lex[self] || -> x;}",
+            "define class Foo as fnc read(mut self, int x): int { return x; } end",
+            "define class Foo as fnc read(self Foo)(int x): int { return x; } end",
+            "fnc main():int{let int x=1;return lex[x,x] || -> x;}",
+            "fnc main():int{let int x=1;return lex[missing] || -> x;}",
+            "fnc main():int{let int x=1;return lex[] || -> x;}",
+            "fnc main():int{let int x=1;return nlex[self] || -> x;}",
+            "fnc main():int{let int x=1;return nlex[] || -> x;}",
+            "fnc main():int{let int x=1;return lex[x] |x| -> x;}",
+            "fnc main():int{let int x=1;return |y| -> x;}",
+            "fnc main():int{let int x=1;return lex[x] || -> nlex || -> x;}",
+            "fnc main():int{let int x=1;return nlex[self] critical |state| -> 1;}",
         })
         {
             Reject(unsupported, "unsupported class, actor or lexical capture lowering");
