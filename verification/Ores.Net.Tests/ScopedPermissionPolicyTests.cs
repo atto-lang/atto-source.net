@@ -125,7 +125,8 @@ internal static class ScopedPermissionPolicyTests
         foreach (var unsafeEndpoint in new[] {
             "::1:443", "[::1", "[::1]:", "[::1]:0", "[::1]:65536",
             "[::1]x:443", "[::1]:-1", "[fe80::1%eth0]:443",
-            "[::ffff:127.0.0.1]:443"
+            "[::ffff:127.0.0.1]:443", "[::192.0.2.1]:443",
+            "[::ffff:c000:201]:443"
         })
             Assert(ipv6Deny.Allows(ScopedPermissionPolicy.Kind.Net, unsafeEndpoint),
                 false, "unsafe IPv6 endpoint spelling");
