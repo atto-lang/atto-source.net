@@ -104,7 +104,7 @@ public static class ActorPipelinePolicyTests
             unicodeEdges));
         Reject(() => new ActorPipelinePolicy(
             stages.Select((stage, i) =>
-                i == 0 ? stage with { Id = "src\\0spoof" } : stage).ToArray(),
+                i == 0 ? stage with { Id = "src\0spoof" } : stage).ToArray(),
             edges));
         // Two classes of mutable input are copied on publication.
         var mutableEdges = edges.ToList();
