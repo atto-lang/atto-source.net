@@ -149,6 +149,15 @@ internal static class StructuredSourceTests
         Require(rejectedMutations >= 128,
             "adversarial mutation corpus must exercise substantial parser rejection");
 
+        // Existing structural declarations and match arms also remain
+        // unsupported by the scalar-only bootstrap. Verify all three explicitly.
+        Reject("structural fnc main():int{return 1;}",
+            "structural declaration unsupported in bootstrap");
+        Reject("fnc main(structural Shape value):int{return 1;}",
+            "structural parameter unsupported in bootstrap");
+        Reject("fnc main():int{match 1 over on _ -> {return 1;} end}",
+            "match-over unsupported in bootstrap");
+
         // V2 structural tuples are target semantics, not a CIL bootstrap feature.
         // Reject before artifact publication: any input admitted here would be a false green.
         Reject("fnc take(tuple (int, int, string?) v):int{return 1;}",
