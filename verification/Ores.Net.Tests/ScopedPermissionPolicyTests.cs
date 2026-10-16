@@ -17,6 +17,15 @@ internal static class ScopedPermissionPolicyTests
 
     private static void RunCanonicalAuthorizationVectors()
     {
+        // The test data is generated from the canonical JSON. Do not silently
+        // weaken this oracle by changing only a generated row.
+        var corpus = System.IO.File.ReadAllBytes(
+            "contracts/v1/scoped-permissions-v1.json");
+        var digest = Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(corpus))
+            .ToLowerInvariant();
+        if (digest != "b481b72d9e5fdb2c1a4d4de7745a02f7ec3af8a937b0f067885d184efc3cb308")
+            throw new Exception("canonical scoped-permission corpus changed; review regenerated vectors");
         GoldenAuthorization[] vectors =
         {
             new("default-read-denied", ScopedPermissionPolicy.Kind.Read, "/workspace/input.txt", false, new string[] {}, new string[] {}, false),
