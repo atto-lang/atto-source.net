@@ -208,6 +208,13 @@ public static class ActorPipelinePolicyTests
             .Forward(max256).Target == "c", "valid 256-byte identity");
         boundaryStages[0] = boundaryStages[0] with { Id = max256 + "🌍" };
         Reject(() => new ActorPipelinePolicy(boundaryStages, boundaryEdges));
+        // Declared output port is not an actual connected outbound edge.
+        Reject(() => new ActorPipelinePolicy(
+            new[] {
+                new ActorPipelinePolicy.Stage("src", "P", "readable", "", "Event"),
+                new ActorPipelinePolicy.Stage("terminal", "T", "transform", "Event", "Event")
+            },
+            new[] { new ActorPipelinePolicy.Edge("src", "terminal", "Event") }));
         Console.WriteLine("ORES_NET_HOST_ACTOR_PIPELINE_POLICY_PASS");
 
         ActorPipelinePolicy.Stage[] withDuplicateId() =>
