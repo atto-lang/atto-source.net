@@ -46,6 +46,19 @@ foreach (var pair in new[] { (long.MinValue, -1L), (5L, 0L) })
     throw new Exception("Internal checked-i64 division must preserve traps");
 }
 
+// The i64-only source frontend cannot invoke named functions. Recognize |>
+ // as one token and reject every pipeline (including nested expressions)
+ // before CIL emission. Never reinterpret it as bitwise-or or comparison.
+foreach (var expr in new[] { "1 |> twice", "(1 |> twice)", "1 + 2 |> plus(3)" })
+{
+    try { OresParser.Parse("fnc main():int{return " + expr + ";}"); }
+    catch (FormatException ex) when (ex.Message.Contains("pipeline requires named callable lowering",
+            StringComparison.OrdinalIgnoreCase)) { continue; }
+    throw new Exception("Unsupported value pipeline must fail closed: " + expr);
+}
+Require(OresParser.Parse("fnc main():int{return 1;} // 1 |> unsupported") is Literal,
+    "pipe tokens in comments are not executable operators");
+
 var positive = OresParser.Parse("define pub fnc main() : int { return 2 + 3 * 4; }");
 Require(positive is Binary { Operator: '+' }, "top-level expression shape");
 Require(OresParser.Parse("pub define fnc main():int {return -9223372036854775808;}") is Literal
