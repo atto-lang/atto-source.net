@@ -119,6 +119,75 @@ using (var corpus = System.Text.Json.JsonDocument.Parse(numericSourceBytes))
         Directory.Delete(numericArtifacts, recursive: true);
     }
 }
+// Shared pinned negative source corpus. A checked i64 backend must either
+// reject the expression at compilation, or raise an overflow while executing
+// BOTH its verified typed IR and its emitted CIL. No wrapped normal result.
+var overflowFile = "contracts/v1/numeric-parity/source-i64-overflow-cases.json";
+var overflowBytes = File.ReadAllBytes(overflowFile);
+{
+    var header = System.Text.Encoding.ASCII.GetBytes(
+        "blob " + overflowBytes.Length + "\0");
+    var payload = new byte[header.Length + overflowBytes.Length];
+    Buffer.BlockCopy(header, 0, payload, 0, header.Length);
+    Buffer.BlockCopy(overflowBytes, 0, payload, header.Length, overflowBytes.Length);
+    var actual = Convert.ToHexString(
+        System.Security.Cryptography.SHA1.HashData(payload)).ToLowerInvariant();
+    Require(actual == "2ce0b0ff5c52e54a788280fd64d67fa8dc32614a",
+        "numeric overflow fixture changed from reviewed Git blob");
+}
+using (var overflowDoc = System.Text.Json.JsonDocument.Parse(overflowBytes))
+{
+    var root = overflowDoc.RootElement;
+    Require(root.GetProperty("schema_version").GetString() == "1.0.0",
+        "numeric overflow schema");
+    Require(root.GetProperty("policy").GetString() == "no-wrapping-i64",
+        "numeric overflow policy");
+    var cases = root.GetProperty("cases");
+    Require(cases.GetArrayLength() == 4, "numeric overflow case count");
+    var ids = new HashSet<string>(StringComparer.Ordinal);
+    var temp = Path.Combine(Path.GetTempPath(),
+        "ores-overflow-source-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(temp);
+    try
+    {
+        var index = 0;
+        foreach (var item in cases.EnumerateArray())
+        {
+            var id = item.GetProperty("id").GetString() ??
+                throw new Exception("numeric overflow case missing id");
+            Require(ids.Add(id), "numeric overflow duplicate case ID");
+            Require(item.GetProperty("expected").GetString() == "reject-or-runtime-error",
+                "numeric overflow expectation");
+            var expression = item.GetProperty("source").GetString() ??
+                throw new Exception("numeric overflow case missing source");
+            try
+            {
+                var ir = OresIrLowering.Lower(OresParser.Parse(
+                    "fnc main():int{return " + expression + ";}"));
+                var threw = false;
+                try { _ = OresIrReferenceEvaluator.Evaluate(ir); }
+                catch (OverflowException) { threw = true; }
+                Require(threw, "typed IR wrapped overflowing guest source " + id);
+                var dll = Path.Combine(temp, "overflow-" + (index++).ToString(
+                    System.Globalization.CultureInfo.InvariantCulture) + ".dll");
+                CilEmitter.EmitLibrary(ir, dll);
+                using var assembly = AssemblyDefinition.ReadAssembly(dll);
+                var method = assembly.MainModule.Types.Single(t =>
+                    t.FullName == "Oreslang.Generated.OresProgram")
+                    .Methods.Single(m => m.Name == "Run");
+                threw = false;
+                try { _ = CilReferenceEvaluator.Evaluate(method); }
+                catch (OverflowException) { threw = true; }
+                Require(threw, "emitted CIL wrapped overflowing guest source " + id);
+            }
+            catch (FormatException)
+            {
+                // Compile-time refusal is allowed by the shared contract.
+            }
+        }
+    }
+    finally { Directory.Delete(temp, recursive: true); }
+}
 // Advanced numeric types are not implemented in this bootstrap. A parser
 // accepting them and falling through to checked i64 would be unsound.
 foreach (var unimplemented in new[] {
