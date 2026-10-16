@@ -1,4 +1,6 @@
 using Ores.Net.Runtime;
+using System.Net;
+using System.Net.Sockets;
 
 internal static class ScopedPermissionPolicyTests
 {
@@ -211,6 +213,59 @@ internal static class ScopedPermissionPolicyTests
         }
         catch (ArgumentException) { badEnum = true; }
         if (!badEnum) throw new Exception("unknown capability admitted");
+        // Exercise the actual trusted .NET socket adapter, not only the
+        // substrate's AllowsNetworkConnection predicate.
+        var selectedV4 = IPAddress.Parse("203.0.113.7");
+        var selectedPolicy = ScopedPermissionPolicy.FromHost(
+            new[] { ScopedPermissionPolicy.Kind.Net },
+            new[] {
+                new ScopedPermissionPolicy.Rule(ScopedPermissionPolicy.Kind.Net, "api.example.com:443"),
+                new ScopedPermissionPolicy.Rule(ScopedPermissionPolicy.Kind.Net, "127.0.0.1", true)
+            });
+        var pinned = ScopedTcpConnector.AuthorizeSelectedAddress(
+            selectedPolicy, "api.example.com:443", selectedV4, 443);
+        if (!pinned.Address.Equals(selectedV4) || pinned.Port != 443)
+            throw new Exception("selected .NET socket IP/port was not pinned");
+        void MustDenySocket(string requested, IPAddress ip, int port, string name)
+        {
+            bool denied = false;
+            try { _ = ScopedTcpConnector.AuthorizeSelectedAddress(selectedPolicy, requested, ip, port); }
+            catch (UnauthorizedAccessException) { denied = true; }
+            if (!denied) throw new Exception("unsafe selected IP admitted: " + name);
+        }
+        MustDenySocket("api.example.com:443", IPAddress.Loopback, 443, "resolved loopback deny");
+        MustDenySocket("api.example.com:443", selectedV4, 444, "port mismatch");
+        MustDenySocket("other.example.com:443", selectedV4, 443, "unauthorized requested host");
+        MustDenySocket("api.example.com:443", IPAddress.IPv6Loopback, 443, "IPv6 fail closed");
+
+        // A real local TCP loopback proves ConnectAsync uses the checked
+        // numeric endpoint. No external networking or live DNS is required.
+        using (var listener = new TcpListener(IPAddress.Loopback, 0))
+        {
+            listener.Start();
+            int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            var localPolicy = ScopedPermissionPolicy.FromHost(
+                new[] { ScopedPermissionPolicy.Kind.Net },
+                new[] { new ScopedPermissionPolicy.Rule(
+                    ScopedPermissionPolicy.Kind.Net, "127.0.0.1:" + port) });
+            using (Socket client = ScopedTcpConnector.ConnectAsync(
+                localPolicy, "127.0.0.1", port).GetAwaiter().GetResult())
+            {
+                if (!client.Connected ||
+                    !client.RemoteEndPoint!.Equals(new IPEndPoint(IPAddress.Loopback, port)))
+                    throw new Exception("socket did not connect to approved pinned loopback");
+            }
+            bool deniedConnect = false;
+            try
+            {
+                _ = ScopedTcpConnector.ConnectAsync(
+                    ScopedPermissionPolicy.DefaultDeny(), "127.0.0.1", port)
+                    .GetAwaiter().GetResult();
+            }
+            catch (UnauthorizedAccessException) { deniedConnect = true; }
+            if (!deniedConnect) throw new Exception("default deny allowed real TCP connection");
+        }
+
         // Full v1 parity is NOT proven: no production guest host-I/O boundary
         // and no verified resolved-IPv6 connect adapter in this bootstrap.
         Console.WriteLine("NET_SCOPED_PERMISSION_POLICY_SUBSTRATE_PASS");
