@@ -117,6 +117,8 @@ public static class ExecutionGraphV1
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private volatile bool _cancelled;
         private bool _settled;
+        private int _started;
+        internal bool ClaimExecution() => System.Threading.Interlocked.Exchange(ref _started, 1) == 0;
         public Task<T> Task => _result.Task;
         internal bool Cancelled => _cancelled;
 
@@ -286,7 +288,7 @@ public static class ExecutionGraphV1
                 AdmitCpu();
                 schedule(() =>
                 {
-                    if (ticket.Cancelled) return;
+                    if (!ticket.ClaimExecution() || ticket.Cancelled) return;
                     try { ticket.Complete(Evaluate(() => ticket.Cancelled)); }
                     catch (OperationCanceledException) { ticket.Cancel(); }
                     catch (Exception ex) { ticket.Fail(ex); }
