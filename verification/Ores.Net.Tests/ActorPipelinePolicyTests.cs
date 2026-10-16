@@ -162,6 +162,52 @@ public static class ActorPipelinePolicyTests
         catch (InvalidOperationException denied) when (denied.Message.Contains("retired"))
         {
         }
+        // Tuple endpoint identity, not delimiter-concatenated labels.
+        var trickyStages = new[] {
+            new ActorPipelinePolicy.Stage("a:b", "Producer", "readable", "", "E"),
+            new ActorPipelinePolicy.Stage("a", "Producer", "readable", "", "E"),
+            new ActorPipelinePolicy.Stage("c", "Sink", "writable", "E", ""),
+            new ActorPipelinePolicy.Stage("b:c", "Sink", "writable", "E", "")
+        };
+        var trickyEdges = new[] {
+            new ActorPipelinePolicy.Edge("a:b", "c", "E"),
+            new ActorPipelinePolicy.Edge("a", "b:c", "E")
+        };
+        var trickyPlan = new ActorPipelinePolicy(trickyStages, trickyEdges);
+        Check(trickyPlan.Forward("a:b").Target == "c", "colon-tuple collision source one");
+        Check(trickyPlan.Forward("a").Target == "b:c", "colon-tuple collision source two");
+        Reject(() => new ActorPipelinePolicy(trickyStages,
+            trickyEdges.Concat(new[] { trickyEdges[0] }).ToArray()));
+
+        // UTF-8 identity is byte-exact: composed and decomposed labels differ.
+        var unicodeIdentity = new[] {
+            trickyStages[0] with { Id = "é" },
+            trickyStages[1] with { Id = "e\u0301" },
+            trickyStages[2], trickyStages[3]
+        };
+        var unicodeIdentityEdges = new[] {
+            trickyEdges[0] with { Source = "é" },
+            trickyEdges[1] with { Source = "e\u0301" }
+        };
+        var unicodeIdentityPlan =
+            new ActorPipelinePolicy(unicodeIdentity, unicodeIdentityEdges);
+        Check(unicodeIdentityPlan.Forward("é").Target == "c",
+            "composed instance identity");
+        Check(unicodeIdentityPlan.Forward("e\u0301").Target == "b:c",
+            "decomposed instance identity");
+        Reject(() => new ActorPipelinePolicy(
+            Enumerable.Repeat(trickyStages[0], 1025).ToArray(), trickyEdges));
+        Reject(() => new ActorPipelinePolicy(trickyStages,
+            Enumerable.Repeat(trickyEdges[0], 4097).ToArray()));
+        var max256 = string.Concat(Enumerable.Repeat("🌍", 64));
+        var boundaryStages = trickyStages.ToArray();
+        boundaryStages[0] = boundaryStages[0] with { Id = max256 };
+        var boundaryEdges = trickyEdges.ToArray();
+        boundaryEdges[0] = boundaryEdges[0] with { Source = max256 };
+        Check(new ActorPipelinePolicy(boundaryStages, boundaryEdges)
+            .Forward(max256).Target == "c", "valid 256-byte identity");
+        boundaryStages[0] = boundaryStages[0] with { Id = max256 + "🌍" };
+        Reject(() => new ActorPipelinePolicy(boundaryStages, boundaryEdges));
         Console.WriteLine("ORES_NET_HOST_ACTOR_PIPELINE_POLICY_PASS");
 
         ActorPipelinePolicy.Stage[] withDuplicateId() =>
