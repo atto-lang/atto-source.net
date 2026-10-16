@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Net;
+using System.Net.Sockets;
 
 namespace Ores.Net.Runtime;
 
@@ -94,7 +96,37 @@ public sealed class ScopedPermissionPolicy
             value = new Endpoint("*", null, false);
             return true;
         }
-        if (text.StartsWith('[')) return false;
+        if (text.StartsWith('['))
+        {
+            // Bracketed numeric IPv6 only. Never resolve a hostname here.
+            // Reject zone identifiers and IPv4-mapped identities until their
+            // authority is separately specified by the host.
+            var close = text.IndexOf(']');
+            if (close <= 1) return false;
+            int? ipv6Port = null;
+            if (close + 1 < text.Length)
+            {
+                if (text[close + 1] != ':' || close + 2 == text.Length)
+                    return false;
+                var digits = text[(close + 2)..];
+                if (digits.Length is < 1 or > 5 ||
+                    digits.Any(ch => ch is < '0' or > '9') ||
+                    !int.TryParse(digits, NumberStyles.None,
+                        CultureInfo.InvariantCulture, out var parsed) ||
+                    parsed is < 1 or > 65535)
+                    return false;
+                ipv6Port = parsed;
+            }
+            var literal = text[1..close];
+            if (literal.Contains('%') || !IPAddress.TryParse(literal, out var ip) ||
+                ip.AddressFamily != AddressFamily.InterNetworkV6 ||
+                ip.IsIPv4MappedToIPv6)
+                return false;
+            var normalized = "[" +
+                Convert.ToHexString(ip.GetAddressBytes()).ToLowerInvariant() + "]";
+            value = new Endpoint(normalized, ipv6Port, false);
+            return true;
+        }
         int? port = null;
         var colon = text.IndexOf(':');
         if (colon >= 0)
