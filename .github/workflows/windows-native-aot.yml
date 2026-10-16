@@ -157,6 +157,8 @@ jobs:
         run: ./verification/assert-aot-gates.ps1 -Rid linux-x64
       - name: Run frontend, metadata and mailbox regressions
         run: dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
+      - name: Real .NET guest-admission compiler matrix (Linux diagnostic)
+        run: python3 scripts/check_guest_capability_admission.py --backend net
       - name: Emit generated CIL using the compiler
         run: |
           mkdir -p artifacts/generated
