@@ -143,8 +143,25 @@ public static class ActorPipelinePolicyTests
         Reject(() => new ActorPipelinePolicy(diamondStages,
             diamondEdges.Concat(new[] {
                 new ActorPipelinePolicy.Edge("a", "a", "Event") }).ToArray()));
+        // The connected source and generation are checked before key parsing.
+        try
+        {
+            frozenPlan.ForwardByKey("unconnected-source", "\ud800");
+            throw new Exception("unknown source accepted");
+        }
+        catch (ArgumentException denied) when (denied.Message.Contains("Source has no downstream"))
+        {
+        }
         frozenPlan.Close();
         Reject(() => frozenPlan.ForwardRoundRobin("src"));
+        try
+        {
+            frozenPlan.ForwardByKey("src", "\ud800");
+            throw new Exception("retired source accepted");
+        }
+        catch (InvalidOperationException denied) when (denied.Message.Contains("retired"))
+        {
+        }
         Console.WriteLine("ORES_NET_HOST_ACTOR_PIPELINE_POLICY_PASS");
 
         ActorPipelinePolicy.Stage[] withDuplicateId() =>
