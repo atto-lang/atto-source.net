@@ -22,6 +22,24 @@ static void InvalidSend(Action action, string why)
     throw new Exception("Expected mailbox rejection: " + why);
 }
 
+// Nominal enum overloads require compiler-owned type identities and an
+// executable selected-slot ABI. The scalar .NET frontend must not accept
+// their source syntax before those paths exist (including case payloads).
+foreach (var source in new[] {
+    "define enum Color as Red Blue end fnc main():int{return 1;}",
+    "define enum Color as Red end fnc pick(Color x):int{return 1;} " +
+        "fnc pick(Mode x):int{return 2;} fnc main():int{return 0;}"
+})
+{
+    try { _ = OresParser.Parse(source); }
+    catch (FormatException ex) when (
+        ex.Message.Contains("nominal enum overloads require compiler-bound dispatch",
+            StringComparison.Ordinal)) { continue; }
+    throw new Exception("Unsupported nominal enum source must fail with an explicit diagnostic");
+}
+Require(OresParser.Parse("fnc main():int{return 1;} // enum is comment") is Literal,
+    "enum inside a source comment must not trigger overload admission");
+
 SourceByteBudgetTests.Run();
 ActorRefNoWireSelfTest.Run();
 ActorMailboxBoundsSelfTest.Run();
