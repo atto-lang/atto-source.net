@@ -17,9 +17,10 @@ public sealed class ActorPipelinePolicy
     private readonly object _gate = new();
     private bool _closed;
 
-    private static byte[] Utf8Bytes(string? value, int limit = 256, bool optional = false)
+    private static byte[] Utf8Bytes(string? value, int limit = 256,
+        bool optional = false, bool allowNul = false)
     {
-        if (value is null || (!optional && value.Length == 0) || value.Contains('\0'))
+        if (value is null || (!optional && value.Length == 0) || (!allowNul && value.Contains('\0')))
             throw new ArgumentException("Invalid pipeline component");
         if (value.Length > limit) throw new ArgumentException("Pipeline component too large");
         try
@@ -36,7 +37,7 @@ public sealed class ActorPipelinePolicy
 
     public static ulong HashKey(string key)
     {
-        byte[] bytes = Utf8Bytes(key, 4096, optional: true);
+        byte[] bytes = Utf8Bytes(key, 4096, optional: true, allowNul: true);
         ulong hash = 0xcbf29ce484222325UL;
         foreach (byte b in bytes)
             hash = unchecked((hash ^ b) * 0x100000001b3UL);
