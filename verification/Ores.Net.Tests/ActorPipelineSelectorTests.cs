@@ -1,4 +1,5 @@
 using Ores.Net.Runtime;
+using Ores.Net.Compiler;
 
 internal static class ActorPipelineSelectorTests
 {
@@ -16,6 +17,22 @@ internal static class ActorPipelineSelectorTests
 
     internal static void Run()
     {
+        // Fail-closed guest compiler contract: these source constructs
+        // must not become accepted no-op routing calls before guest lowering.
+        static void RejectSource(string text)
+        {
+            try { OresParser.Parse(text); }
+            catch (FormatException) { return; }
+            throw new Exception("unsupported actor source was accepted by the .NET compiler");
+        }
+        RejectSource("define readable pipe actor Source {}");
+        RejectSource("fnc main():int{return self.forward(1);}");
+        try
+        {
+            OresStructuredParser.Parse("fnc main():int{return self.reply(1);}");
+            throw new Exception("structured compiler accepted unsupported actor reply");
+        }
+        catch (FormatException) { }
         var stages = new List<PipelineStage> {
             new("source","Producer",PipelineRole.Readable,"","Event"),
             new("worker-a","Worker",PipelineRole.Writable,"Event",""),
