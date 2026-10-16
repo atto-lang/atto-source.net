@@ -36,7 +36,27 @@ internal static class ValueBoundaryTests
             RejectDomain(() => { _ = OresParser.Parse(source); }, name + "/shipping", keyword);
             RejectDomain(() => { _ = OresStructuredParser.Parse(source); }, name + "/structured", keyword);
         }
-        Console.WriteLine($"{cases.Count} value boundary cases and {domains.Length} execution-region cases rejected by both frontends");
+        // Exact shared corpus: source snippets are identical in the five
+        // repositories, but only real backend runs can establish runtime parity.
+        var sharedPath = Path.Combine(AppContext.BaseDirectory,
+            "cpu-gpu-nb-unsupported-v1.json");
+        var shared = JsonSerializer.Deserialize<Dictionary<string, string>>(
+            File.ReadAllText(sharedPath)) ?? throw new Exception("Missing region corpus");
+        if (shared.Count != 10) throw new Exception("Incomplete shared region corpus");
+        foreach (var (name, source) in shared)
+        {
+            const string prefix = "return ";
+            int start = source.IndexOf(prefix, StringComparison.Ordinal);
+            if (start < 0) throw new Exception(name + ": invalid fixture");
+            string first = source[(start + prefix.Length)..].Split(' ', '{', ';')[0];
+            if (first is not ("cpu" or "gpu" or "nb"))
+                throw new Exception(name + ": missing region prefix");
+            RejectDomain(() => { _ = OresParser.Parse(source); },
+                name + "/shipping", first);
+            RejectDomain(() => { _ = OresStructuredParser.Parse(source); },
+                name + "/structured", first);
+        }
+        Console.WriteLine($"{cases.Count} value boundary cases, {domains.Length} local region cases, and {shared.Count} shared cases rejected by both frontends");
     }
 
     private static void RejectDomain(Action parse, string name, string keyword)
