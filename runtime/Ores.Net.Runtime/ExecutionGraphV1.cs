@@ -153,6 +153,20 @@ public static class ExecutionGraphV1
                 _result.TrySetException(failure);
             }
         }
+
+        internal void RejectExecutor(Exception failure)
+        {
+            lock (_gate)
+            {
+                // A misbehaving executor can enqueue the task and then throw.
+                // Even after terminal rejection, the queued closure must not
+                // evaluate CPU work if it is dispatched subsequently.
+                _cancelled = true;
+                if (_settled) return;
+                _settled = true;
+                _result.TrySetException(failure);
+            }
+        }
     }
 
     public sealed class Plan<T>
@@ -294,7 +308,7 @@ public static class ExecutionGraphV1
                     catch (Exception ex) { ticket.Fail(ex); }
                 });
             }
-            catch (Exception ex) { ticket.Fail(ex); }
+            catch (Exception ex) { ticket.RejectExecutor(ex); }
             return ticket;
         }
     }
