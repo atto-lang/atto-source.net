@@ -38,6 +38,20 @@ internal static class ActorArenaTests
         if (a.Read(next, h)[0] != 7) throw new Exception("persistent bytes lost");
         a.Drop(next, h);
         ExpectFailure(() => a.Read(next, h));
+        // A recycled native slot may never revive the retired generation,
+        // and its new owner must observe zeroed rather than old bytes.
+        var replacement = a.Allocate(next, 2);
+        if (!a.Read(next, replacement).SequenceEqual(new byte[] { 0, 0 }))
+            throw new Exception("recycled native slot was not zeroized");
+        ExpectFailure(() => a.Read(next, h));
+        a.Drop(next, replacement);
+        for (var i = 0; i < 4096; ++i)
+        {
+            var transient = a.Allocate(next, 2);
+            a.Write(next, transient, new byte[] { 7, 9 });
+            a.Drop(next, transient);
+            ExpectFailure(() => a.Read(next, transient));
+        }
         a.EndTurn(next);
         a.Dispose(); a.Dispose();
         ExpectFailure(() => a.BeginTurn(101, 1));
