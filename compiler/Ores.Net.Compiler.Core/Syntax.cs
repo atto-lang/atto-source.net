@@ -85,6 +85,12 @@ public static class OresParser
                 // a verified source graph / native AOT linker exists.
                 if (word == "import")
                     throw new FormatException("source imports require verified module graph lowering");
+                // Reserve execution regions as complete source tokens. Do not
+                // mistake the bootstrap's generic syntax failure for a typed
+                // ownership/device admission check.
+                if (word is "cpu" or "gpu" or "nb")
+                    throw new FormatException(
+                        "unsupported execution domain: typed effect graph required; no implicit CPU fallback");
                 return new Token(word, start);
             }
             // Recognize the contiguous operator as one token, but never
