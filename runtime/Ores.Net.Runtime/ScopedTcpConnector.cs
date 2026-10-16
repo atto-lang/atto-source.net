@@ -7,9 +7,10 @@ namespace Ores.Net.Runtime;
 /// Trusted host socket adapter. DNS is performed once; each attempted address
 /// is independently authorized and the same numeric IPEndPoint is connected.
 /// Guests must never supply or replace the host-owned policy instance.
+/// Internal visibility restricts raw Socket access to trusted host/test assemblies.
 /// This is not yet linked into the bootstrap scalar-only guest compiler.
 /// </summary>
-public static class ScopedTcpConnector
+internal static class ScopedTcpConnector
 {
     public static IPEndPoint AuthorizeSelectedAddress(
         ScopedPermissionPolicy policy, string requested, IPAddress selected, int port)
