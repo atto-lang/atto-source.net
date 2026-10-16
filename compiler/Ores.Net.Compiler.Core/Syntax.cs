@@ -85,6 +85,10 @@ public static class OresParser
                 // a verified source graph / native AOT linker exists.
                 if (word == "import")
                     throw new FormatException("source imports require verified module graph lowering");
+                // Lexically reserve CPU/GPU execution regions and nonblocking scheduling.
+                // Never parse these as ordinary identifiers in the scalar-only bootstrap.
+                if (word is "cpu" or "gpu" or "nb")
+                    throw new FormatException($"execution region keyword '{word}' requires verified typed lowering at offset {start}");
                 return new Token(word, start);
             }
             // Recognize the contiguous operator as one token, but never
