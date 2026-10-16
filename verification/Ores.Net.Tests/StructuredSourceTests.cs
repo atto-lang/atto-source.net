@@ -23,6 +23,21 @@ internal static class StructuredSourceTests
 
     public static void Run()
     {
+        foreach (var source in new[] {
+            "define enum Color as Red end fnc main():int{return 1;}",
+            "fnc main():int{return 1;} define enum Color as Red end"
+        })
+        {
+            try { _ = OresStructuredParser.Parse(source); }
+            catch (FormatException ex) when (
+                ex.Message.Contains("nominal enum overloads require compiler-bound dispatch",
+                    StringComparison.Ordinal)) { continue; }
+            throw new Exception("Structured .NET source accepted unsupported nominal enum syntax");
+        }
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{return 1;} // enum stays in comment").Body.Count == 1,
+            "enum word in a comment is not a declaration");
+
         const string sum = """
             define pub fnc main(): int {
                 let int total = 0;
