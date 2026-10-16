@@ -24,6 +24,23 @@ static void InvalidSend(Action action, string why)
 
 SourceByteBudgetTests.Run();
 
+// The scalar bootstrap must reserve each execution-domain/nb form and
+// reject it before emitting a misleading CIL host fallback.
+foreach (var forbidden in new[] {
+    "gpu {}", "cpu {}", "nb gpu {}", "nb cpu {}",
+    "gpu { cpu { gpu {} } }", "nb gpu { nb cpu {} }",
+    "gpu", "cpu", "nb"
+})
+{
+    try { _ = OresParser.Parse("fnc main():int{return " + forbidden + ";}"); }
+    catch (FormatException ex) when (ex.Message.Contains(
+        "CPU/GPU execution domain and nb graph lowering unsupported; no implicit CPU fallback",
+        StringComparison.Ordinal)) { continue; }
+    throw new Exception("Unsupported execution domain was not specifically rejected: " + forbidden);
+}
+Require(OresParser.Parse("fnc main():int{return 42;} // nb gpu { cpu {} }") is Literal,
+    "commented execution keywords must not be admitted as code");
+
 // Import parity is deliberately not claimed for the .NET scalar compiler.
 // Each form must fail at lexical admission with a specific import diagnostic,
 // before either typed IR verification or Native AOT CIL emission.
