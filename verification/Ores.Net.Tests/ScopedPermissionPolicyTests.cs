@@ -197,7 +197,7 @@ internal static class ScopedPermissionPolicyTests
         catch (ArgumentException) { badEnum = true; }
         if (!badEnum) throw new Exception("unknown capability admitted");
         // Full v1 parity is NOT proven: no production guest host-I/O boundary
-        // and no binary IPv6 address matcher in this bootstrap.
+        // and no verified resolved-IPv6 connect adapter in this bootstrap.
         Console.WriteLine("NET_SCOPED_PERMISSION_POLICY_SUBSTRATE_PASS");
     }
 }
