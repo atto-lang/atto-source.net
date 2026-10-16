@@ -103,6 +103,33 @@ internal static class ScopedPermissionPolicyTests
                 "noncanonical numeric IPv4 matrix");
         }
 
+        var ipv6 = ScopedPermissionPolicy.FromHost(
+            new[] { ScopedPermissionPolicy.Kind.Net },
+            new[] { new ScopedPermissionPolicy.Rule(ScopedPermissionPolicy.Kind.Net,
+                "[0:0:0:0:0:0:0:1]:443") });
+        Assert(ipv6.Allows(ScopedPermissionPolicy.Kind.Net, "[::1]:443"),
+            true, "compressed IPv6 numeric identity");
+        Assert(ipv6.Allows(ScopedPermissionPolicy.Kind.Net, "[::1]:444"),
+            false, "IPv6 port separation");
+        var ipv6Deny = ScopedPermissionPolicy.FromHost(
+            new[] { ScopedPermissionPolicy.Kind.Net },
+            new[] {
+                new ScopedPermissionPolicy.Rule(ScopedPermissionPolicy.Kind.Net, "*"),
+                new ScopedPermissionPolicy.Rule(ScopedPermissionPolicy.Kind.Net,
+                    "[::1]:443", true)
+            });
+        Assert(ipv6Deny.Allows(ScopedPermissionPolicy.Kind.Net,
+            "[0:0:0:0:0:0:0:1]:443"), false, "expanded IPv6 cannot bypass deny");
+        Assert(ipv6Deny.Allows(ScopedPermissionPolicy.Kind.Net, "[::1]"),
+            false, "portless IPv6 cannot bypass deny");
+        foreach (var unsafeEndpoint in new[] {
+            "::1:443", "[::1", "[::1]:", "[::1]:0", "[::1]:65536",
+            "[::1]x:443", "[::1]:-1", "[fe80::1%eth0]:443",
+            "[::ffff:127.0.0.1]:443"
+        })
+            Assert(ipv6Deny.Allows(ScopedPermissionPolicy.Kind.Net, unsafeEndpoint),
+                false, "unsafe IPv6 endpoint spelling");
+        
         var suffix = ScopedPermissionPolicy.FromHost(
             new[] { ScopedPermissionPolicy.Kind.Net },
             new[] { new ScopedPermissionPolicy.Rule(ScopedPermissionPolicy.Kind.Net, "*.example.com:443") });
