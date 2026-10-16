@@ -14,7 +14,7 @@ internal static class ValueBoundaryTests
         if (cases.Count != 15) throw new Exception("Incomplete boundary corpus");
         foreach (var (name, source) in cases)
         {
-            RejectDomain(() => { _ = OresParser.Parse(source); }, name + "/shipping");
+            Reject(() => { _ = OresParser.Parse(source); }, name + "/shipping");
             Reject(() => { _ = OresStructuredParser.Parse(source); }, name + "/structured");
         }
         // Separate, identical v1 domain corpus is shared with all five backends.
@@ -25,7 +25,7 @@ internal static class ValueBoundaryTests
         if (domainCases.Count != 10) throw new Exception("Incomplete execution-domain corpus");
         foreach (var (name, source) in domainCases)
         {
-            Reject(() => { _ = OresParser.Parse(source); }, name + "/shipping");
+            RejectDomain(() => { _ = OresParser.Parse(source); }, name + "/shipping");
             Reject(() => { _ = OresStructuredParser.Parse(source); }, name + "/structured");
         }
         Console.WriteLine($"{cases.Count} value boundary cases and {domainCases.Count} CPU/GPU/nb domain cases rejected by both frontends");
