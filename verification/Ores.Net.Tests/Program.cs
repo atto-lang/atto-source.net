@@ -34,8 +34,8 @@ foreach (var path in new[] {
 {
     try
     {
-        _ = OresParser.Parse("import fnc helper from \\"" + path +
-            "\\";\\nfnc main():int{return 42;}");
+        _ = OresParser.Parse("import fnc helper from " + (char)34 + path +
+            (char)34 + "; fnc main():int{return 42;}");
     }
     catch (FormatException ex) when
         (ex.Message.Contains("source imports require verified module graph lowering",
