@@ -110,7 +110,17 @@ public sealed class ScopedPermissionPolicy
             label.StartsWith('-') || label.EndsWith('-') ||
             label.Any(c => !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-'))))
             return false;
-        if (text.StartsWith("0x", StringComparison.Ordinal)) return false;
+        // Mixed hex/decimal labels can be interpreted as numeric IPv4 by
+        // libc-style resolvers; deny aliases such as 127.0x0.0.1 and
+        // 1.2.3.0x01, not only 0x-prefixed first labels.
+        var numericAddressAlias = labels.All(label =>
+            label.All(c => c is >= '0' and <= '9') ||
+            (label.Length > 2 && label.StartsWith("0x", StringComparison.Ordinal)
+                && label[2..].All(c =>
+                    (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))));
+        if (numericAddressAlias &&
+            !labels.All(label => label.All(c => c is >= '0' and <= '9')))
+            return false;
         if (labels.All(label => label.All(c => c is >= '0' and <= '9')))
         {
             // Numeric address aliases must not become alternative DNS names.
