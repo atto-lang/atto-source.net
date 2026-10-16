@@ -1,4 +1,6 @@
 using System.Security.Cryptography;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Ores.Net.Runtime;
 
@@ -9,6 +11,7 @@ namespace Ores.Net.Runtime;
 // This is a LOCAL mailbox capability, not a transferable wire-format token.
 // The private random value prevents another mailbox with the same numeric ID
 // and generation from accidentally satisfying capability checks.
+[JsonConverter(typeof(ActorRefNoWireConverter))]
 public readonly record struct ActorRef
 {
     public ulong Id { get; }
@@ -24,6 +27,20 @@ public readonly record struct ActorRef
 
     // Never log the bearer nonce in generated record ToString output.
     public override string ToString() => $"ActorRef(Id={Id}, Generation={Generation})";
+}
+
+/// <summary>Explicitly deny using a local actor authority as JSON user data.
+/// A wire address must be represented by a separate data-only schema and authenticated bridge.
+/// </summary>
+public sealed class ActorRefNoWireConverter : JsonConverter<ActorRef>
+{
+    public override ActorRef Read(ref Utf8JsonReader reader, Type typeToConvert,
+        JsonSerializerOptions options) => throw new NotSupportedException(
+        "ActorRef is local runtime authority and cannot be deserialized from JSON");
+
+    public override void Write(Utf8JsonWriter writer, ActorRef value,
+        JsonSerializerOptions options) => throw new NotSupportedException(
+        "ActorRef is local runtime authority and cannot be serialized as JSON data");
 }
 
 public sealed class ActorMailbox

@@ -354,6 +354,16 @@ InvalidSend(() => mailbox.Send(wrongActor.CurrentRef, value), "wrong actor");
 var duplicateActor = new ActorMailbox(42, maxMessages: 1, maxQueuedBytes: 4);
 InvalidSend(() => mailbox.Send(duplicateActor.CurrentRef, value),
     "same numeric ID and generation must not forge mailbox capability");
+// No implicit JSON wire authority: exporting or reconstructing ActorRef is prohibited.
+static void RejectActorRefWire(Action action, string why)
+{
+    try { action(); }
+    catch (NotSupportedException) { return; }
+    throw new Exception("Local ActorRef became JSON serializable: " + why);
+}
+RejectActorRefWire(() => _ = System.Text.Json.JsonSerializer.Serialize(before), "encode");
+RejectActorRefWire(() => _ = System.Text.Json.JsonSerializer.Deserialize<ActorRef>(
+    "{\\\"Id\\\":42,\\\"Generation\\\":1}"), "decode");
 Require(!before.ToString().Contains("Nonce", StringComparison.OrdinalIgnoreCase),
     "actor reference string must not disclose nonce");
 mailbox.Stop();
