@@ -111,6 +111,30 @@ internal static class ActorPipelineSelectorTests
             new("root","a","X"),new("a","b","X"),new("b","a","X")
         };
         Deny(()=>new ActorPipelineSelector(cycles,cycleEdges),"cyclic graph");
+        // Source+generation RR is one serialized cursor even when multiple
+        // host threads attempt selection concurrently. This is NOT proof
+        // of parallel guest actor execution.
+        var concurrent = new ActorPipelineSelector(stages,edges,101);
+        var counts = new int[3];
+        var runners = Enumerable.Range(0,8).Select(_ => Task.Run(() => {
+            for (int i=0;i<1000;i++)
+            {
+                var target = concurrent.ForwardRoundRobin("source").Target;
+                int index = target switch {
+                    "worker-a" => 0, "worker-b" => 1, "worker-c" => 2,
+                    _ => throw new Exception("unexpected RR target")
+                };
+                Interlocked.Increment(ref counts[index]);
+            }
+        })).ToArray();
+        Task.WaitAll(runners);
+        Check(counts.Sum()==8000 && counts.Max()-counts.Min() <= 1,
+            "concurrent RR lost or duplicated selection turns");
+        Check(concurrent.Generation==101, "concurrent RR changed generation");
+        concurrent.AdvanceGeneration(102,true,false);
+        Check(concurrent.ForwardRoundRobin("source").Target=="worker-a",
+            "generation barrier did not reset concurrent RR cursor");
+
         // Original caller collections cannot mutate the snapshotted routes.
         edges[0] = edges[0] with {Target="imposter"};
         Check(selectors.ForwardAll("source")[0].Target=="worker-a",
