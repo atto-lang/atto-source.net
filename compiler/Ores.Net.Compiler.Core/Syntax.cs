@@ -87,6 +87,13 @@ public static class OresParser
                     throw new FormatException("source imports require verified module graph lowering");
                 return new Token(word, start);
             }
+            // Recognize the contiguous operator as one token, but never
+            // attempt a scalar-only approximation of named-call lowering.
+            if (ch == '|' && _i + 1 < text.Length && text[_i + 1] == '>')
+            {
+                _i += 2;
+                return new Token("|>", start);
+            }
             if ("()+-*/{}:;".IndexOf(ch) >= 0)
             {
                 _i++;
@@ -157,6 +164,9 @@ public static class OresParser
                 _index++;
                 left = new Binary(op, left, ParseMul(depth + 1));
             }
+            if (Current.Text == "|>")
+                throw new FormatException(
+                    $"Value pipeline requires named callable lowering; unsupported in .NET i64 bootstrap at offset {Current.Offset}");
             return left;
         }
 
