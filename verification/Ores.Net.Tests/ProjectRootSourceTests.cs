@@ -62,6 +62,12 @@ internal static class ProjectRootSourceTests
                 "schema_version = \"1\"\n[project]\nroot = \"appdata\"\nroot = \"appdata\"\n");
             Reject(() => ProjectRootSourceResolver.Resolve(app, "+/lib/answer"),
                    "duplicate project.root accepted");
+            File.WriteAllText(manifest, "schema_version = \"1\"\n[ project ]\nroot = \"appdata\"\n");
+            Reject(() => ProjectRootSourceResolver.Resolve(app, "+/lib/answer"),
+                   "unrecognized project table silently ignored");
+            File.WriteAllText(manifest, "schema_version = \"1\"\n[project]\n[project]\nroot = \"appdata\"\n");
+            Reject(() => ProjectRootSourceResolver.Resolve(app, "+/lib/answer"),
+                   "duplicate project table admitted");
             File.WriteAllText(manifest, "schema_version = \"1\"\nproject.root = \"appdata\"\n");
             Reject(() => ProjectRootSourceResolver.Resolve(app, "+/lib/answer"),
                    "unsupported dotted root accepted");
