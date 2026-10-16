@@ -54,6 +54,7 @@ public sealed class ActorPipelineSelector
     private readonly Dictionary<string, int> _cursors = new(StringComparer.Ordinal);
     private readonly object _gate = new();
     private ulong _generation;
+    private bool _retired;
 
     public ActorPipelineSelector(IReadOnlyList<PipelineStage> stages,
         IReadOnlyList<PipelineEdge> edges, ulong generation = 1)
@@ -142,14 +143,34 @@ public sealed class ActorPipelineSelector
         get { lock (_gate) return _generation; }
     }
 
-    public void RequireIngressRoot(string source)
+    // Retiring the selector is terminal. Restart requires an independently
+    // verified new graph/selector, not a generation bump on stale authority.
+    public void Retire()
     {
-        if (!_roots.Contains(source))
-            throw new ArgumentException("Not an authorized graph ingress root");
+        lock (_gate) _retired = true;
     }
 
+    private void EnsureActive()
+    {
+        if (_retired) throw new InvalidOperationException(
+            "Actor routing selector is retired");
+    }
+
+    public void RequireIngressRoot(string source)
+    {
+        lock (_gate)
+        {
+            EnsureActive();
+            if (!_roots.Contains(source))
+                throw new ArgumentException("Not an authorized graph ingress root");
+        }
+    }
+
+    // Connected is accessed only while _gate is held, so Retire() cannot
+    // publish STOP in the middle of an in-flight selector decision.
     private PipelineEdge[] Connected(string source)
     {
+        EnsureActive();
         ArgumentNullException.ThrowIfNull(source);
         if (!_outgoing.TryGetValue(source, out var edges) || edges.Length == 0)
             throw new ArgumentException("Source has no connected downstream");
@@ -158,14 +179,20 @@ public sealed class ActorPipelineSelector
 
     public PipelineEdge Forward(string source)
     {
-        var edges = Connected(source);
-        if (edges.Length != 1) throw new ArgumentException("Ambiguous forward");
-        return edges[0];
+        lock (_gate)
+        {
+            var edges = Connected(source);
+            if (edges.Length != 1) throw new ArgumentException("Ambiguous forward");
+            return edges[0];
+        }
     }
 
     // Defensive copy: a caller must never rewrite the trusted supervisor plan.
-    public IReadOnlyList<PipelineEdge> ForwardAll(string source) =>
-        Array.AsReadOnly((PipelineEdge[])Connected(source).Clone());
+    public IReadOnlyList<PipelineEdge> ForwardAll(string source)
+    {
+        lock (_gate)
+            return Array.AsReadOnly((PipelineEdge[])Connected(source).Clone());
+    }
 
     public PipelineEdge ForwardRoundRobin(string source)
     {
@@ -181,22 +208,29 @@ public sealed class ActorPipelineSelector
 
     public PipelineEdge ForwardTo(string source, string target)
     {
-        ArgumentNullException.ThrowIfNull(target);
-        foreach (var edge in Connected(source))
-            if (edge.Target == target) return edge;
-        throw new ArgumentException("Target is not connected to source");
+        lock (_gate)
+        {
+            ArgumentNullException.ThrowIfNull(target);
+            foreach (var edge in Connected(source))
+                if (edge.Target == target) return edge;
+            throw new ArgumentException("Target is not connected to source");
+        }
     }
 
     public PipelineEdge ForwardByKey(string source, string key)
     {
-        var edges = Connected(source);
-        return edges[ActorPipelineKey.Slot(key, edges.Length)];
+        lock (_gate)
+        {
+            var edges = Connected(source);
+            return edges[ActorPipelineKey.Slot(key, edges.Length)];
+        }
     }
 
     public void AdvanceGeneration(ulong successor, bool quiescent, bool aborted)
     {
         lock (_gate)
         {
+            EnsureActive();
             if (successor <= _generation || (!quiescent && !aborted))
                 throw new ArgumentException("Pipeline generation barrier required");
             _generation = successor;
