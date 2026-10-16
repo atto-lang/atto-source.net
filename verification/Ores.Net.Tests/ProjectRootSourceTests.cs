@@ -69,7 +69,7 @@ internal static class ProjectRootSourceTests
             Reject(() => ProjectRootSourceResolver.Resolve(app, "+/src/answer"),
                    "manifest directory escaped selected project.root");
             foreach (var invalidRoot in new[] { "../other", "/tmp", "appdata/../src",
-                                                 "", "appdata\\other" })
+                                                 "", "appdata\\other", "appdata//lib", "appdata/", "appdata/." })
             {
                 File.WriteAllText(manifest,
                     "schema_version = \"1\"\n[project]\nroot = \"" + invalidRoot + "\"\n");
