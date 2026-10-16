@@ -90,8 +90,8 @@ public static class ActorPipelinePolicyTests
         // strict UTF-8, but routing keys may contain NUL and be 4096 bytes.
         Check(ActorPipelinePolicy.HashKey("\0") == 0xaf63bd4c8601b7dfUL,
             "NUL must be hashed as a byte, not treated as terminator");
-        _ = ActorPipelinePolicy.HashKey("🌍".Repeat(1024));
-        Reject(() => ActorPipelinePolicy.HashKey("🌍".Repeat(1025)));
+        _ = ActorPipelinePolicy.HashKey(string.Concat(Enumerable.Repeat("🌍", 1024)));
+        Reject(() => ActorPipelinePolicy.HashKey(string.Concat(Enumerable.Repeat("🌍", 1025))));
         Reject(() => ActorPipelinePolicy.HashKey("\udc00"));
         var unicodeStages = stages.Select((stage, i) =>
             i == 0 ? stage with { Id = new string('é', 128) } : stage).ToArray();
