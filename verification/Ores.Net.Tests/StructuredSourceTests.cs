@@ -24,8 +24,8 @@ internal static class StructuredSourceTests
     public static void Run()
     {
         foreach (var source in new[] {
-            "define enum Color as Red end fnc main():int{return 1;}",
-            "fnc main():int{return 1;} define enum Color as Red end"
+            "define enum Color as\n  Red\nend\nfnc main():int{return 1;}",
+            "fnc main():int{return 1;}\ndefine enum Color as\n  Red\nend"
         })
         {
             try { _ = OresStructuredParser.Parse(source); }
