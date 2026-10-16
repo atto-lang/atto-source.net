@@ -191,6 +191,21 @@ def strict_json_document(path, *, limit=2 * 1024 * 1024):
         raise ValueError("invalid security JSON encoding") from error
 
 
+
+def strict_contract_equal(actual, expected):
+    """Compare security policy values without bool/int equivalence."""
+    if type(actual) is not type(expected):
+        return False
+    if isinstance(expected, dict):
+        return (actual.keys() == expected.keys() and
+                all(strict_contract_equal(actual[k], value)
+                    for k, value in expected.items()))
+    if isinstance(expected, list):
+        return (len(actual) == len(expected) and
+                all(strict_contract_equal(a, b) for a, b in zip(actual, expected)))
+    return actual == expected
+
+
 def verify(backend):
     if backend not in IDS:
         raise ValueError("unknown Oreslang backend")
@@ -199,7 +214,7 @@ def verify(backend):
             or doc.get("schema_version") != 1
             or doc.get("contract") != CONTRACT
             or doc.get("organization") != "ores-truffle-oreslang"
-            or doc.get("repository_ids") != IDS):
+            or not strict_contract_equal(doc.get("repository_ids"), IDS)):
         raise ValueError("security contract identity or schema drift")
     expected = {
         "source_transfer": {
@@ -226,7 +241,8 @@ def verify(backend):
             "cross_backend_feature_parity_not_assumed": True,
         },
     }
-    if any(doc.get(section) != content for section, content in expected.items()):
+    if any(not strict_contract_equal(doc.get(section), content)
+           for section, content in expected.items()):
         raise ValueError("critical deny-by-default/evidence invariants changed")
     if set(doc) != {"schema_version", "contract", "organization",
                     "repository_ids", *expected}:
