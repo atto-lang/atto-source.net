@@ -85,13 +85,16 @@ public sealed class ActorMailbox
 
     public void Send(ActorRef destination, ReadOnlySpan<byte> data)
     {
-        if (data.Length > MaxMessageBytes)
-            throw new ArgumentOutOfRangeException(nameof(data), "Message exceeds 1 MiB");
         lock (_gate)
         {
+            // A forged, stale, foreign or stopped ActorRef must fail
+            // authorization before any payload-dependent quota diagnostic.
+            // This also matches the native Forge authority-first boundary.
             if (_closed || destination.Id != _id || destination.Generation != _generation ||
                 destination.Nonce != _nonce)
                 throw new InvalidOperationException("Actor reference is stale or mailbox is closed");
+            if (data.Length > MaxMessageBytes)
+                throw new ArgumentOutOfRangeException(nameof(data), "Message exceeds 1 MiB");
             if (_messages.Count >= _maxMessages || _queuedBytes > _maxQueuedBytes ||
                 data.Length > _maxQueuedBytes - _queuedBytes)
                 throw new InvalidOperationException("Mailbox capacity exceeded");
