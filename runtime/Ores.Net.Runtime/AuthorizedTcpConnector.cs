@@ -4,12 +4,14 @@ using System.Net.Sockets;
 namespace Ores.Net.Runtime;
 
 /// <summary>
-/// Trusted host-only outbound TCP boundary, compiled into Native AOT. No guest
+/// Trusted host-only outbound TCP boundary, compiled into Native AOT.
+/// Internal visibility prevents guest/generated assemblies from directly
+/// obtaining raw Socket objects through this helper. No guest
 /// language socket API is exposed by the current scalar backend. Enforces the
 /// requested endpoint and selected DNS IPv4 address on the EXACT socket used
 /// for connect, never a second hostname resolution. Unsupported IPv6 denies.
 /// </summary>
-public static class AuthorizedTcpConnector
+internal static class AuthorizedTcpConnector
 {
     public static Socket Connect(ScopedPermissionPolicy policy, string host, int port,
         TimeSpan? connectTimeout = null)
