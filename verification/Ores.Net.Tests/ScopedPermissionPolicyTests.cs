@@ -176,6 +176,21 @@ internal static class ScopedPermissionPolicyTests
         Assert(named.AllowsNetworkConnection("other.example.com:443", "203.0.113.7:443"),
             false, "unpermitted hostname not rescued by safe resolved IP");
 
+        var exactLiteral = ScopedPermissionPolicy.FromHost(
+            new[] { ScopedPermissionPolicy.Kind.Net },
+            new[] { new ScopedPermissionPolicy.Rule(ScopedPermissionPolicy.Kind.Net, "203.0.113.7:443") });
+        Assert(exactLiteral.AllowsNetworkConnection("203.0.113.7:443", "203.0.113.7:443"),
+            true, "numeric literal bound to selected address");
+        Assert(exactLiteral.AllowsNetworkConnection("203.0.113.7:443", "198.51.100.8:443"),
+            false, "numeric literal may not authorize another address");
+        var wildcardLiteral = ScopedPermissionPolicy.FromHost(
+            new[] { ScopedPermissionPolicy.Kind.Net },
+            new[] { new ScopedPermissionPolicy.Rule(ScopedPermissionPolicy.Kind.Net, "*") });
+        Assert(wildcardLiteral.AllowsNetworkConnection("203.0.113.7:443", "198.51.100.8:443"),
+            false, "wildcard grant cannot bypass numeric identity");
+        Assert(wildcardLiteral.AllowsNetworkConnection("[::1]:443", "203.0.113.7:443"),
+            false, "IPv6 request must not use IPv4-only pre-connect policy");
+
         foreach (var invalid in new[] { "/workspace/../secret", "/workspace//secret", "relative/file" })
         {
             bool caught = false;
