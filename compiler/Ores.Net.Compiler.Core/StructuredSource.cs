@@ -87,7 +87,7 @@ public static class OresStructuredParser
                     source[index + 1] == '/')
                 {
                     index += 2;
-                    while (index < source.Length && source[index] != '\n') index++;
+                    while (index < source.Length && source[index] is not ('\n' or '\r' or '\u0085' or '\u2028' or '\u2029')) index++;
                     continue;
                 }
                 break;
@@ -108,7 +108,10 @@ public static class OresStructuredParser
                      source[index + 1] == '=') index += 2;
             else if ("()+-*{}:;=<".IndexOf(ch) >= 0) index++;
             else throw new FormatException($"Invalid character at offset {offset}");
-            return new Token(source[offset..index], offset);
+            var token = new Token(source[offset..index], offset);
+            if (token.Text == "import")
+                throw new FormatException("source imports require verified module graph lowering");
+            return token;
         }
     }
 
