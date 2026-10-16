@@ -23,6 +23,18 @@ internal static class ActorMailboxBoundsSelfTest
         var box = new ActorMailbox(2, ActorMailbox.MaxMailboxMessages,
             ActorMailbox.MaxMailboxBytes);
         var reference = box.CurrentRef;
+        // Numeric actor ID and generation are not credentials. Another
+        // mailbox with identical visible identifiers must still reject
+        // this actor reference before reserving bytes or a queue slot.
+        var lookalike = new ActorMailbox(2, maxMessages: 1, maxQueuedBytes: 8);
+        var ownLookalikeRef = lookalike.CurrentRef;
+        DenySend(() => lookalike.Send(reference, new byte[] { 11 }));
+        DenySend(() => box.Send(ownLookalikeRef, new byte[] { 12 }));
+        if (lookalike.QueuedMessages != 0 || box.QueuedMessages != 0)
+            throw new Exception("forged same-ID actor authority consumed mailbox capacity");
+        lookalike.Send(ownLookalikeRef, new byte[] { 13 });
+        if (!lookalike.TryReceive(out var ownData) || ownData is null || ownData[0] != 13)
+            throw new Exception("forged send poisoned the legitimate destination");
         var input = new byte[ActorMailbox.MaxMessageBytes];
         input[0] = 7;
         for (var i = 0; i < 16; ++i) box.Send(reference, input);
