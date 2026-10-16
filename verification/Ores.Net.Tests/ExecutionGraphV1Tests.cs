@@ -68,6 +68,51 @@ internal static class ExecutionGraphV1Tests
         }
         catch (OverflowException) { }
 
+        // Trusted imported IR must be an immutable snapshot, not a shallow
+        // copy of caller-owned IReadOnlyList<int> operands.
+        var originalEdges = new List<int> { 0, 1 };
+        var imported = new[] {
+            new ExecutionGraphV1.Node(0, ExecutionGraphV1.Domain.Cpu,
+                ExecutionGraphV1.Operation.ConstantI64, ExecutionGraphV1.Kind.HostI64,
+                Array.Empty<int>(), 20),
+            new ExecutionGraphV1.Node(1, ExecutionGraphV1.Domain.Cpu,
+                ExecutionGraphV1.Operation.ConstantI64, ExecutionGraphV1.Kind.HostI64,
+                Array.Empty<int>(), 22),
+            new ExecutionGraphV1.Node(2, ExecutionGraphV1.Domain.Cpu,
+                ExecutionGraphV1.Operation.AddI64, ExecutionGraphV1.Kind.HostI64,
+                originalEdges, 0)
+        };
+        // Verification-only reflection reaches the internal import
+        // constructor without making arbitrary graph construction public.
+        var importConstructor = typeof(ExecutionGraphV1.Plan<long>).GetConstructor(
+            System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic,
+            binder: null,
+            types: new[] { typeof(ExecutionGraphV1.Node[]), typeof(int),
+                typeof(ExecutionGraphV1.Kind) },
+            modifiers: null) ?? throw new Exception("trusted plan constructor not found");
+        var frozen = (ExecutionGraphV1.Plan<long>)importConstructor.Invoke(
+            new object[] { imported, 2, ExecutionGraphV1.Kind.HostI64 });
+        originalEdges[0] = 999999;
+        imported[0] = imported[0] with { Constant = -100 };
+        Need(frozen.ExecuteCpu() == 42, "caller mutation changed admitted graph");
+        Need(frozen.Nodes[2].Inputs[0] == 0, "operand snapshot retained alias");
+        Need(frozen.Nodes[2].Inputs is System.Collections.Generic.IList<int> readOnly &&
+             readOnly.IsReadOnly, "plan edges must be immutable");
+
+        // An executor may incorrectly dispatch its one-shot task twice;
+        // only the first claimant is permitted to evaluate it.
+        Action? scheduled = null;
+        var once = plan.SubmitCpu(action => scheduled = action);
+        Need(scheduled is not null, "executor did not receive task");
+        var first = new Thread(scheduled);
+        var second = new Thread(scheduled);
+        first.Start();
+        second.Start();
+        first.Join();
+        second.Join();
+        Need(once.Task.GetAwaiter().GetResult() == 42, "duplicate dispatch result");
+
         var rejected = plan.SubmitCpu(_ => throw new InvalidOperationException("executor full"));
         Need(rejected.Task.IsFaulted, "scheduler admission fails Future");
 
