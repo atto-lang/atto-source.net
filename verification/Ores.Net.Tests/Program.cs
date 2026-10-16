@@ -30,7 +30,8 @@ SourceByteBudgetTests.Run();
 foreach (var path in new[] {
     "+/src/helper", "+/../outside", "+/src/../helper", "+//src/helper",
     "+/src\\\\helper", "+src/helper", "@/src/helper", "pkg:math/src/helper",
-    "pkg:missing/helper", "./helper", "../helper", "common/helper", ".hidden/helper"
+    "pkg:missing/helper", "+/nested/lib/child", "+/nested/parent-alias",
+    "+/dangling/lib/child", "./helper", "../helper", "common/helper", ".hidden/helper"
 })
 {
     try
