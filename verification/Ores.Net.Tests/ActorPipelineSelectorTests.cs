@@ -1,6 +1,7 @@
 using Ores.Net.Runtime;
 using Ores.Net.Compiler;
 using System.Text.Json;
+using System.Collections;
 
 internal static class ActorPipelineSelectorTests
 {
@@ -14,6 +15,25 @@ internal static class ActorPipelineSelectorTests
         try { action(); }
         catch (ArgumentException) { return; }
         throw new Exception("Actor routing should reject: " + why);
+    }
+
+    // This deliberately mutable IReadOnlyList refuses a second traversal:
+    // its interface does NOT make topology membership immutable.
+    private sealed class OnePassTopology<T> : IReadOnlyList<T>
+    {
+        private readonly T[] _items;
+        private int _enumerations;
+        public OnePassTopology(IEnumerable<T> source) => _items = source.ToArray();
+        public int Count => _items.Length;
+        public T this[int index] => _items[index];
+        public int Enumerations => Volatile.Read(ref _enumerations);
+        public IEnumerator<T> GetEnumerator()
+        {
+            if (Interlocked.Increment(ref _enumerations) != 1)
+                throw new InvalidOperationException("Topology re-enumerated after snapshot");
+            return ((IEnumerable<T>)_items).GetEnumerator();
+        }
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
     internal static void Run()
@@ -46,6 +66,18 @@ internal static class ActorPipelineSelectorTests
             new("source","worker-c","Event")
         };
         var selectors = new ActorPipelineSelector(stages,edges,7);
+        // This catches the previous second pass through caller-owned
+        // stage metadata after validation, which could replace graph roles
+        // or root authorization behind the selector's back.
+        var stageOnce = new OnePassTopology<PipelineStage>(stages);
+        var edgeOnce = new OnePassTopology<PipelineEdge>(edges);
+        var once = new ActorPipelineSelector(stageOnce, edgeOnce, 7);
+        Check(stageOnce.Enumerations == 1 && edgeOnce.Enumerations == 1,
+            "constructor accessed caller topology more than once");
+        Check(once.ForwardAll("source").Select(e => e.Target)
+                  .SequenceEqual(new[] { "worker-a", "worker-b", "worker-c" }),
+            "snapshotted graph order was not stable");
+
         // Exercise the exact machine-readable contract, not only copied
         // inline vectors. Each backend pins the same Git blob SHA.
         using (var shared = JsonDocument.Parse(File.ReadAllText(Path.Combine(
