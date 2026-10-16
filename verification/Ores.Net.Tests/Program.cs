@@ -184,6 +184,11 @@ using (var overflowDoc = System.Text.Json.JsonDocument.Parse(overflowBytes))
             {
                 // Compile-time refusal is allowed by the shared contract.
             }
+            catch (OverflowException)
+            {
+                // A compiler-time checked numeric constant is also a valid
+                // refusal; wrapped emission/evaluation is never allowed.
+            }
         }
     }
     finally { Directory.Delete(temp, recursive: true); }
