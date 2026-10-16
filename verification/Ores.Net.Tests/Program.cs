@@ -45,6 +45,28 @@ foreach (var path in new[] {
             StringComparison.Ordinal)) { continue; }
     throw new Exception("Unsupported import was not rejected for the right reason: " + path);
 }
+// Every supported line separator ends a comment. Otherwise a single-file
+// parser can emit an unrelated successful artifact while silently ignoring
+// an import that begins on the next logical line.
+foreach (var separator in new[] { "\r", "\r\n", "\n", "\u0085", "\u2028", "\u2029" })
+{
+    var withImport = "fnc main():int{return 42;} // comment" + separator +
+        "import fnc helper from \"./other\";";
+    foreach (var parse in new Action<string>[] {
+        source => { _ = OresParser.Parse(source); },
+        source => { _ = OresStructuredParser.Parse(source); }
+    })
+    {
+        try { parse(withImport); }
+        catch (FormatException ex) when
+            (ex.Message.Contains("source imports require verified module graph lowering",
+                StringComparison.Ordinal)) { continue; }
+        throw new Exception("A line separator hid an import from a .NET parser");
+    }
+}
+Require(OresParser.Parse("fnc main():int{return 42;} // import\r") is Literal,
+    "CR-only trailing comment must not be interpreted as an import");
+
 Require(OresParser.Parse("fnc main():int{return 42;} // import not code") is Literal,
     "import in a comment must not be treated as an import declaration");
 
