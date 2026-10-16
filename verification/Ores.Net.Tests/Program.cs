@@ -23,6 +23,7 @@ static void InvalidSend(Action action, string why)
 }
 
 SourceByteBudgetTests.Run();
+ActorPipelineSelectorTests.Run(); // v1 host routing selector contract (not guest lowering)
 
 foreach (var invalid in new[] { "\0", "\ud800", "\udc00", "\ud800x" })
     Reject(() => OresParser.Parse("fnc main():int{return 1;} // " + invalid),
