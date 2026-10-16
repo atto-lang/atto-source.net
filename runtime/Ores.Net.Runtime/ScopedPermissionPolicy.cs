@@ -277,6 +277,16 @@ public sealed class ScopedPermissionPolicy
             !byte.TryParse(label, NumberStyles.None, CultureInfo.InvariantCulture, out _)))
             return false;
 
+        // A numeric requested endpoint already identifies the destination;
+        // a trusted adapter must not use a different selected IP to satisfy
+        // an authorization that was granted only to that literal.
+        // This helper is IPv4-only; IPv6 requested literals fail closed.
+        if (target.Host.StartsWith("[", StringComparison.Ordinal))
+            return false;
+        if (target.Host.All(c => c == '.' || (c >= '0' && c <= '9')) &&
+            !string.Equals(target.Host, selected.Host, StringComparison.Ordinal))
+            return false;
+
         return !deny[Index(Kind.Net)].Any(scope =>
             Matches(Kind.Net, selectedIpv4!, scope));
     }
