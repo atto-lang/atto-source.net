@@ -55,6 +55,41 @@ internal static class ActorArenaTests
         a.EndTurn(next);
         a.Dispose(); a.Dispose();
         ExpectFailure(() => a.BeginTurn(101, 1));
+        // Host CONTROL and actor carriers must not park on a held arena
+        // monitor. Hold it on another thread and require fail-fast rejection.
+        using (var contended = new ActorArena(510, 3))
+        {
+            var field = typeof(ActorArena).GetField("_gate",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            if (field is null) throw new Exception("arena monitor fixture unavailable");
+            var gate = field.GetValue(contended)!;
+            using var entered = new System.Threading.ManualResetEventSlim(false);
+            using var release = new System.Threading.ManualResetEventSlim(false);
+            var holder = new System.Threading.Thread(() =>
+            {
+                lock (gate)
+                {
+                    entered.Set();
+                    release.Wait();
+                }
+            });
+            holder.Start();
+            try
+            {
+                if (!entered.Wait(TimeSpan.FromSeconds(5)))
+                    throw new Exception("arena contention fixture stalled");
+                ExpectFailure(() => contended.BeginTurn(510, 3));
+                ExpectFailure(contended.Dispose);
+            }
+            finally
+            {
+                release.Set();
+                holder.Join();
+            }
+            var admitted = contended.BeginTurn(510, 3);
+            contended.EndTurn(admitted);
+            contended.Dispose();
+        }
         using var restarted = new ActorArena(101, 2);
         var tr = restarted.BeginTurn(101, 2);
         ExpectFailure(() => restarted.Read(tr, h));
