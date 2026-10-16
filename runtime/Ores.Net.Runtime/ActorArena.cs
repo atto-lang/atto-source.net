@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 
 namespace Ores.Net.Runtime;
 
@@ -84,7 +85,7 @@ public sealed unsafe class ActorArena : IDisposable
         lock (_gate)
         {
             RequireTurn(turn);
-            new Span<byte>(_memory + SlotCount * SlotBytes, _scratchTop).Clear();
+            CryptographicOperations.ZeroMemory(new Span<byte>(_memory + SlotCount * SlotBytes, _scratchTop));
             _scratchTop = 0;
             _turn = null;
             _carrier = 0;
@@ -102,7 +103,7 @@ public sealed unsafe class ActorArena : IDisposable
                 if (_slots[i].Live || _slots[i].Generation == 0) continue;
                 _slots[i].Live = true;
                 _slots[i].Length = length;
-                new Span<byte>(_memory + i * SlotBytes, SlotBytes).Clear();
+                CryptographicOperations.ZeroMemory(new Span<byte>(_memory + i * SlotBytes, SlotBytes));
                 return new Handle(_domain, i, _slots[i].Generation);
             }
             throw new InvalidOperationException("actor arena slot quota exhausted");
@@ -145,7 +146,7 @@ public sealed unsafe class ActorArena : IDisposable
         {
             ValidSlot(turn, handle);
             ref var slot = ref _slots[handle.Slot];
-            new Span<byte>(_memory + handle.Slot * SlotBytes, SlotBytes).Clear();
+            CryptographicOperations.ZeroMemory(new Span<byte>(_memory + handle.Slot * SlotBytes, SlotBytes));
             slot.Live = false;
             slot.Length = 0;
             slot.Generation = slot.Generation == ulong.MaxValue ? 0 : slot.Generation + 1;
@@ -201,7 +202,7 @@ public sealed unsafe class ActorArena : IDisposable
         {
             if (_retired) return;
             if (_turn is not null) throw new InvalidOperationException("active turn blocks retirement");
-            new Span<byte>(_memory, TotalBytes).Clear();
+            CryptographicOperations.ZeroMemory(new Span<byte>(_memory, TotalBytes));
             NativeMemory.Free(_memory);
             _memory = null;
             _retired = true;
