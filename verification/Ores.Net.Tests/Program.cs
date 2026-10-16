@@ -25,6 +25,21 @@ static void InvalidSend(Action action, string why)
 SourceByteBudgetTests.Run();
 ActorPipelinePolicyTests.Run();
 
+// Actor host selectors are not guest source intrinsics on this backend yet.
+// Neither parser may accept unlowered self.* calls as no-op code.
+foreach (string method in new[] {
+    "forward", "forward_all", "forward_round_robin", "forward_to",
+    "forward_by_key", "backward", "reply"
+})
+{
+    string source = "fnc main():int{return self." + method + "(42);}";
+    Reject(() => OresParser.Parse(source),
+        "guest actor routing must fail closed: " + method);
+    Reject(() => OresStructuredParser.Parse(source),
+        "structured guest actor routing must fail closed: " + method);
+}
+
+
 foreach (var invalid in new[] { "\0", "\ud800", "\udc00", "\ud800x" })
     Reject(() => OresParser.Parse("fnc main():int{return 1;} // " + invalid),
         "invalid encoding in ignored comment");
