@@ -160,10 +160,11 @@ public sealed class ActorPipelinePolicy
     }
     public Edge ForwardByKey(string source, string key)
     {
-        ulong hash = HashKey(key);
         lock (_gate)
         {
+            // Reject unknown/retired routes before parsing untrusted key bytes.
             var choices = Connected(source);
+            ulong hash = HashKey(key);
             return choices[(int)(hash % (ulong)choices.Length)];
         }
     }
