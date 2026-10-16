@@ -98,6 +98,17 @@ public static class OresStructuredParser
             if (Digit(ch))
             {
                 do { index++; } while (index < source.Length && Digit(source[index]));
+                // Keep the structured i64-only parser aligned with the CIL
+                // expression parser: no float/decimal token splitting.
+                if (index < source.Length &&
+                    ((source[index] == '.' && index + 1 < source.Length && Digit(source[index + 1])) ||
+                     ((source[index] == 'e' || source[index] == 'E') && index + 1 < source.Length &&
+                       (Digit(source[index + 1]) ||
+                        ((source[index + 1] == '+' || source[index + 1] == '-') &&
+                          index + 2 < source.Length && Digit(source[index + 2])))) ||
+                     (source[index] == 'd' && (index + 1 == source.Length ||
+                         !(char.IsLetterOrDigit(source[index + 1]) || source[index + 1] == '_')))))
+                    throw new FormatException($"Floating-point/decimal literal requires typed numeric lowering at offset {offset}");
             }
             else if (Alpha(ch) || ch == '_')
             {
