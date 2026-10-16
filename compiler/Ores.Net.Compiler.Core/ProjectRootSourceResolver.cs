@@ -110,6 +110,9 @@ public static class ProjectRootSourceResolver
         if (Path.GetExtension(candidate).Length == 0) candidate += ".ores";
         if (Path.GetExtension(candidate) != ".ores" || !File.Exists(candidate))
             throw new FormatException("relative source file not found or unsupported extension");
+        if (string.Equals(owner, candidate, OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+            throw new FormatException("relative source cannot import itself");
         ValidateSourcePath(root, candidate);
         return candidate;
     }
