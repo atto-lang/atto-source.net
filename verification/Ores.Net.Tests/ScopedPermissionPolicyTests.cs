@@ -64,6 +64,25 @@ internal static class ScopedPermissionPolicyTests
         Assert(net.Allows(ScopedPermissionPolicy.Kind.Net, "API.EXAMPLE.COM.:0443"), true, "canonical hostname/port");
         Assert(net.Allows(ScopedPermissionPolicy.Kind.Net, "api.example.com:444"), false, "port mismatch");
         Assert(net.Allows(ScopedPermissionPolicy.Kind.Net, "api.example.com:0"), false, "zero port");
+        // The native C++ reference previously wrapped 2^32+443 to 443.
+        // Preserve the same fail-closed long-port rule in the .NET backend.
+        foreach (var badPort in new[] { "4294967739", "4294967297", "000443", "9999999999" })
+        {
+            Assert(net.Allows(ScopedPermissionPolicy.Kind.Net,
+                "api.example.com:" + badPort), false, "oversized DNS port rejected");
+            bool invalidScope = false;
+            try
+            {
+                _ = ScopedPermissionPolicy.FromHost(
+                    new[] { ScopedPermissionPolicy.Kind.Net },
+                    new[] { new ScopedPermissionPolicy.Rule(
+                        ScopedPermissionPolicy.Kind.Net, "api.example.com:" + badPort) });
+            }
+            catch (ArgumentException) { invalidScope = true; }
+            if (!invalidScope) throw new Exception("overlong DNS permission scope admitted");
+        }
+        Assert(net.Allows(ScopedPermissionPolicy.Kind.Net, "api.example.com:0443"),
+            true, "zero-padded port of valid length remains accepted");
         Assert(net.Allows(ScopedPermissionPolicy.Kind.Net, "127.1:443"), false, "IPv4 alias");
         Assert(net.Allows(ScopedPermissionPolicy.Kind.Net, "alice@api.example.com:443"), false, "credentials");
         var numericAlias = ScopedPermissionPolicy.FromHost(
@@ -113,6 +132,23 @@ internal static class ScopedPermissionPolicyTests
             true, "compressed IPv6 numeric identity");
         Assert(ipv6.Allows(ScopedPermissionPolicy.Kind.Net, "[::1]:444"),
             false, "IPv6 port separation");
+        foreach (var badPort in new[] { "4294967739", "4294967297", "000443", "9999999999" })
+        {
+            Assert(ipv6.Allows(ScopedPermissionPolicy.Kind.Net,
+                "[::1]:" + badPort), false, "oversized IPv6 port rejected");
+            bool invalidScope = false;
+            try
+            {
+                _ = ScopedPermissionPolicy.FromHost(
+                    new[] { ScopedPermissionPolicy.Kind.Net },
+                    new[] { new ScopedPermissionPolicy.Rule(
+                        ScopedPermissionPolicy.Kind.Net, "[::1]:" + badPort) });
+            }
+            catch (ArgumentException) { invalidScope = true; }
+            if (!invalidScope) throw new Exception("overlong IPv6 permission scope admitted");
+        }
+        Assert(ipv6.Allows(ScopedPermissionPolicy.Kind.Net, "[::1]:0443"),
+            true, "valid zero-padded IPv6 port remains accepted");
         var ipv6Deny = ScopedPermissionPolicy.FromHost(
             new[] { ScopedPermissionPolicy.Kind.Net },
             new[] {
