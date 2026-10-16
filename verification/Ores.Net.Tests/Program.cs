@@ -121,6 +121,20 @@ Reject(() => OresParser.Parse("pub pub fnc main():int{return 3;}"), "duplicate p
 Reject(() => OresParser.Parse("fnc main():int{return 9223372036854775808;}"), "i64 range");
 Reject(() => OresParser.Parse("fnc main():int{return 1 @ 3;}"), "illegal character");
 Reject(() => OresParser.Parse("fnc main():int{return (1+2;}"), "unmatched parentheses");
+ 
+// Java defines these as distinct structural contracts. Until .NET has typed
+// shapes/loan checking and ordered match lowering, reject every source form.
+foreach (var (name, source) in new (string Name, string Source)[] {
+    ("callable modifier", "structural fnc main():int {return 1;}"),
+    ("routine modifier", "structural routine main():int {return 1;}"),
+    ("callable annotation", "@structural\nfnc main():int {return 1;}"),
+    ("structural parameter", "fnc main(structural Shape value):int {return 1;}"),
+    ("routine structural parameter", "routine main(structural Shape value):int {return 1;}"),
+    ("canonical pattern arm", "fnc main():int {match 1 over on _ -> {return 1;} end}"),
+    ("shape guard pattern", "fnc main():int {match 1 over on structural {x:int} v when true -> {return 1;} on _ -> {return 0;} end}"),
+    ("value match", "fnc main():int {return match 1 over on _ -> {return 1;} end;}")
+}) Reject(() => OresParser.Parse(source), "structural / match must fail closed: " + name);
+
 
 // Typed OresIR stage-one verification: no forward SSA references,
  // arbitrary opcodes, type confusion, or mutable IR after verification.

@@ -149,6 +149,21 @@ internal static class StructuredSourceTests
         Require(rejectedMutations >= 128,
             "adversarial mutation corpus must exercise substantial parser rejection");
 
+        // Until typed aggregate/callable lowering lands, structural source must
+        // fail closed rather than silently compiling as scalar-only CIL.
+        Reject("structural fnc main():int{return 1;}",
+            "structural declaration unsupported in bootstrap");
+        Reject("fnc main(structural Shape value):int{return 1;}",
+            "structural parameters unsupported in bootstrap");
+        Reject("fnc main():int{match 1 over on _ -> {return 1;} end}",
+            "match-over unsupported in bootstrap");
+        Reject("fnc take(tuple (int, int, string?) v):int{return 1;}",
+            "omittable positional tuple is not lowered by CIL bootstrap");
+        Reject("fnc take((int, int, string?) v):int{return 1;}",
+            "tuple shorthand is not lowered by CIL bootstrap");
+        Reject("fnc take(structural (int, int, string?) v):int{return 1;}",
+            "structural positional width view is not lowered by CIL bootstrap");
+
         // The shipping arithmetic frontend is intentionally unchanged.
         // Stage-one binding names must remain unambiguous.
         Require(OresParser.Parse("fnc main():int{return 2+3;}") is Binary,
