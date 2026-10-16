@@ -79,7 +79,13 @@ public static class OresParser
                 while (_i < text.Length &&
                     (text[_i] is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_'))
                     _i++;
-                return new Token(text[start.._i], start);
+                var word = text[start.._i];
+                // Scalar-only bootstrap has no verified source import graph.
+                // Enforce this during lexing for check AND Native AOT compile.
+                if (word == "import")
+                    throw new FormatException(
+                        "source imports require verified module graph lowering");
+                return new Token(word, start);
             }
             if ("()+-*/{}:;".IndexOf(ch) >= 0)
             {
