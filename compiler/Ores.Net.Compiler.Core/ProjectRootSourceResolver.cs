@@ -28,24 +28,42 @@ public static class ProjectRootSourceResolver
                 throw new FormatException("noncanonical project-root import component");
 
         var root = Path.GetFullPath(packageDirectory);
+        CheckNotReparsePoint(root);
         var manifest = Path.Combine(root, ".ores.pkg.toml");
         if (!File.Exists(manifest))
             throw new FormatException("verified project manifest required");
         CheckNotReparsePoint(manifest);
-        RequireV1Manifest(manifest);
+        var rootSetting = RequireV1Manifest(manifest);
+        string selectedRoot = root;
+        if (rootSetting != ".")
+        {
+            foreach (var component in rootSetting.Split('/'))
+            {
+                selectedRoot = Path.Combine(selectedRoot, component);
+                if (!Directory.Exists(selectedRoot))
+                    throw new FormatException("project.root directory not found");
+                CheckNotReparsePoint(selectedRoot);
+            }
+        }
+        selectedRoot = Path.GetFullPath(selectedRoot);
+        var selectedRelative = Path.GetRelativePath(root, selectedRoot);
+        if (selectedRelative is ".." ||
+            selectedRelative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) ||
+            Path.IsPathRooted(selectedRelative))
+            throw new FormatException("project.root escapes physical package directory");
 
         // Reject every symlink/reparse component inside the chosen package.
         // This is deliberately stricter than the Java resolver until a
         // descriptor-relative, race-safe identity mechanism exists.
-        var current = root;
+        var current = selectedRoot;
         foreach (var segment in segments)
         {
             current = Path.Combine(current, segment);
             if (File.Exists(current) || Directory.Exists(current))
                 CheckNotReparsePoint(current);
         }
-        var candidate = Path.GetFullPath(Path.Combine(root, Path.Combine(segments)));
-        var relative = Path.GetRelativePath(root, candidate);
+        var candidate = Path.GetFullPath(Path.Combine(selectedRoot, Path.Combine(segments)));
+        var relative = Path.GetRelativePath(selectedRoot, candidate);
         if (relative is ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar,
                 StringComparison.Ordinal) || Path.IsPathRooted(relative))
             throw new FormatException("project-root source escapes package");
@@ -61,7 +79,7 @@ public static class ProjectRootSourceResolver
     // Restricted bootstrap marker check, not a full TOML parser.
     // Read through one opened descriptor with a strict byte budget. This does
     // not make path lookup or reparse-point checks race-free.
-    private static void RequireV1Manifest(string path)
+    private static string RequireV1Manifest(string path)
     {
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
         var bytes = new byte[65_537];
@@ -84,27 +102,61 @@ public static class ProjectRootSourceResolver
             contents.Contains("'''", StringComparison.Ordinal))
             throw new FormatException("unsupported project manifest literal");
         bool inRoot = true;
+        bool inProject = false;
+        bool sawProjectRoot = false;
+        string projectRoot = ".";
         int versionCount = 0;
         foreach (var rawLine in contents.Split('\n'))
         {
             var line = rawLine.TrimEnd('\r').TrimStart(' ', '\t');
             if (line.StartsWith("[", StringComparison.Ordinal))
+            {
                 inRoot = false;
-            if (!inRoot) continue;
-            int equals = line.IndexOf('=');
-            if (equals < 0) continue;
-            var key = line[..equals].TrimEnd(' ', '\t');
-            if (key is not ("schema_version" or "\"schema_version\"" or "'schema_version'"))
+                inProject = line == "[project]" ||
+                    line.StartsWith("[project]#", StringComparison.Ordinal) ||
+                    line.StartsWith("[project] #", StringComparison.Ordinal);
                 continue;
-            var value = line[(equals + 1)..].TrimStart(' ', '\t');
-            if (!value.StartsWith("\"1\"", StringComparison.Ordinal) ||
-                (value.Length > 3 && !string.IsNullOrEmpty(value[3..].Trim()) &&
-                 !value[3..].TrimStart().StartsWith("#", StringComparison.Ordinal)))
-                throw new FormatException("project manifest requires schema_version = 1");
-            versionCount++;
+            }
+            int equals = line.IndexOf('=');
+            if (equals < 0 || line.StartsWith("#", StringComparison.Ordinal)) continue;
+            var key = line[..equals].TrimEnd(' ', '\t');
+            var value = line[(equals + 1)..].Trim();
+            if (inRoot && key is ("schema_version" or "\"schema_version\"" or "'schema_version'"))
+            {
+                if (!value.StartsWith("\"1\"", StringComparison.Ordinal) ||
+                    (value.Length > 3 && !string.IsNullOrEmpty(value[3..].Trim()) &&
+                     !value[3..].TrimStart().StartsWith("#", StringComparison.Ordinal)))
+                    throw new FormatException("project manifest requires schema_version = 1");
+                versionCount++;
+            }
+            if (inRoot && key == "project.root")
+                throw new FormatException("unsupported dotted project.root declaration");
+            if (inProject && key is ("root" or "\"root\"" or "'root'"))
+            {
+                if (sawProjectRoot) throw new FormatException("duplicate project.root");
+                // Intentionally restricted to simple quoted forward-slash paths;
+                // complex TOML strings require a real manifest parser.
+                if (key != "root" || value.Length < 3 || value[0] != '"' ||
+                    value.LastIndexOf('"') <= 1)
+                    throw new FormatException("unsupported project.root value");
+                int end = value.IndexOf('"', 1);
+                var rest = value[(end + 1)..].Trim();
+                if (rest.Length != 0 && !rest.StartsWith("#", StringComparison.Ordinal))
+                    throw new FormatException("unsupported project.root trailing content");
+                projectRoot = value[1..end];
+                sawProjectRoot = true;
+            }
         }
         if (versionCount != 1)
             throw new FormatException("project manifest requires exactly one schema_version = 1");
+        if (projectRoot.Length > 1024 || projectRoot.Length == 0 ||
+            Path.IsPathRooted(projectRoot) || projectRoot.Contains('\\') ||
+            projectRoot.Contains(':') || projectRoot.Any(char.IsControl))
+            throw new FormatException("invalid project.root");
+        if (projectRoot != "." && projectRoot.Split('/')
+            .Any(segment => segment.Length == 0 || segment is "." or ".."))
+            throw new FormatException("project.root escapes manifest directory");
+        return projectRoot;
     }
 
     private static void CheckNotReparsePoint(string path)
