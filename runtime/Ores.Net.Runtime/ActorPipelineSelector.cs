@@ -61,18 +61,18 @@ public sealed class ActorPipelineSelector
     {
         ArgumentNullException.ThrowIfNull(stages);
         ArgumentNullException.ThrowIfNull(edges);
-        if (stages.Count is < 2 or > 1024 || edges.Count is < 1 or > 4096 ||
+        int stageCount = stages.Count, edgeCount = edges.Count;
+        if (stageCount is < 2 or > 1024 || edgeCount is < 1 or > 4096 ||
             generation == 0)
             throw new ArgumentException("Invalid pipeline graph budget");
-        // Host callbacks must never re-read caller-controlled collections
-        // between graph validation, edge-order publication and root/cycle
-        // admission. Stage/edge records are immutable, but IReadOnlyList
-        // does not promise immutable membership or enumeration.
-        var stageSnapshot = stages.ToArray();
-        var edgeSnapshot = edges.ToArray();
-        if (stageSnapshot.Length is < 2 or > 1024 ||
-            edgeSnapshot.Length is < 1 or > 4096)
-            throw new ArgumentException("Pipeline graph changed during snapshot");
+        // IReadOnlyList<T> can implement an unbounded or side-effectful
+        // enumerator regardless of Count. Never call ToArray/foreach on a
+        // caller-owned topology; read at most the prevalidated index range
+        // exactly once, then operate exclusively on these local snapshots.
+        var stageSnapshot = new PipelineStage[stageCount];
+        for (int i = 0; i < stageCount; i++) stageSnapshot[i] = stages[i];
+        var edgeSnapshot = new PipelineEdge[edgeCount];
+        for (int i = 0; i < edgeCount; i++) edgeSnapshot[i] = edges[i];
         _generation = generation;
         var ids = new Dictionary<string, PipelineStage>(StringComparer.Ordinal);
         var incoming = new Dictionary<string, int>(StringComparer.Ordinal);
