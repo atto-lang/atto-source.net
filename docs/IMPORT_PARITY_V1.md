@@ -68,3 +68,19 @@ graphs in Wasm, implement corresponding .NET and Forge graphs, then run a shared
 per-backend conformance fixture corpus. Do not promote parity on documentation
 alone. Java/Graal's source-export security policy must be honored for private
 cross-organization CI mirroring.
+
+## Stacked .NET configured-root resolver hardening
+
+The independent host-only `ProjectRootSourceResolver` now respects a
+restricted, validated `[project] root = "subdir"` instead of always
+assuming `+/` is anchored to the manifest directory. It rejects
+duplicate, dotted, absolute, traversal, malformed and missing root
+values, and checks for filesystem reparse points at every selected-root
+component and every resolved import component. This restricted subset
+is not a complete TOML parser or a descriptor-relative filesystem
+sandbox; concurrent hostile renames remain outside this contract.
+
+The .NET scalar compiler still **rejects** source imports before CIL
+emission and has no source-unit linking. A positive resolver test is
+not executable import parity. Tests are authored; they need an
+actual .NET runner pass on the exact branch before promotion.
