@@ -181,6 +181,54 @@ internal static class ActorPipelineSelectorTests
         Check(concurrent.ForwardRoundRobin("source").Target=="worker-a",
             "generation barrier did not reset concurrent RR cursor");
 
+        // Structural endpoints must not collide when names contain ':'.
+        // NFC and NFD are intentionally different byte-exact actor IDs.
+        var trickyStages = new List<PipelineStage> {
+            new("a:b","Producer",PipelineRole.Readable,"","E"),
+            new("a","Producer",PipelineRole.Readable,"","E"),
+            new("c","Sink",PipelineRole.Writable,"E",""),
+            new("b:c","Sink",PipelineRole.Writable,"E","")
+        };
+        var trickyEdges = new List<PipelineEdge> {
+            new("a:b","c","E"),new("a","b:c","E")
+        };
+        var tricky = new ActorPipelineSelector(trickyStages,trickyEdges);
+        Check(tricky.Forward("a:b").Target=="c" &&
+              tricky.Forward("a").Target=="b:c",
+              "delimited actor identities collided in edge lookup");
+        var normalizedStages = trickyStages.ToList();
+        normalizedStages[0] = normalizedStages[0] with {Id="\u00e9"};
+        normalizedStages[1] = normalizedStages[1] with {Id="e\u0301"};
+        var normalizedEdges = new List<PipelineEdge> {
+            new("\u00e9","c","E"),new("e\u0301","b:c","E")
+        };
+        var unicodePlan = new ActorPipelineSelector(normalizedStages,normalizedEdges);
+        Check(unicodePlan.Forward("\u00e9").Target=="c" &&
+              unicodePlan.Forward("e\u0301").Target=="b:c",
+              "composed/decomposed UTF-8 actor IDs were normalized unexpectedly");
+
+        // Exercise the actual maximum DAG budgets without duplicate edges.
+        const int maxActors=1024, maxEdges=4096;
+        var maxStages=new List<PipelineStage>(maxActors);
+        for(int i=0;i<maxActors;i++)
+            maxStages.Add(new("node-"+i,"Actor",
+                i==0 ? PipelineRole.Readable :
+                i==maxActors-1 ? PipelineRole.Writable : PipelineRole.Transform,
+                i==0 ? "" : "E",i==maxActors-1 ? "" : "E"));
+        var maxLinks=new List<PipelineEdge>(maxEdges);
+        for(int i=0;i<maxActors-1;i++)
+            maxLinks.Add(new("node-"+i,"node-"+(i+1),"E"));
+        for(int i=0;i<maxActors && maxLinks.Count<maxEdges;i++)
+            for(int j=i+2;j<maxActors && maxLinks.Count<maxEdges;j++)
+                maxLinks.Add(new("node-"+i,"node-"+j,"E"));
+        Check(maxLinks.Count==maxEdges,"max DAG fixture generation failed");
+        var maxPlan=new ActorPipelineSelector(maxStages,maxLinks);
+        Check(maxPlan.ForwardAll("node-0").Count==maxActors-1,
+            "maximal DAG source lost a connected target");
+        Deny(()=>new ActorPipelineSelector(maxStages,
+            maxLinks.Concat(new[]{new PipelineEdge("node-1","node-1023","E")})
+                    .ToArray()),"over-limit graph edge count");
+
         // STOP is an irreversible authority barrier. Every selection and
         // future generation transition fails after retirement.
         var retiring = new ActorPipelineSelector(stages,edges,11);
