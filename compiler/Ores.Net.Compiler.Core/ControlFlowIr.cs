@@ -10,7 +10,8 @@ public enum CfgOpcode
     CheckedSubtract,
     CheckedMultiply,
     CheckedDivide,
-    EqualI64
+    EqualI64,
+    LessThanI64
 }
 
 public readonly record struct CfgParameter(int Id, IrValueType Type);
@@ -264,8 +265,10 @@ public static class OresCfgVerifier
                     case CfgOpcode.CheckedMultiply:
                     case CfgOpcode.CheckedDivide:
                     case CfgOpcode.EqualI64:
-                        RequireType(op.Type, op.Opcode == CfgOpcode.EqualI64 ?
-                            IrValueType.Bool : IrValueType.I64);
+                    case CfgOpcode.LessThanI64:
+                        RequireType(op.Type,
+                            op.Opcode is CfgOpcode.EqualI64 or CfgOpcode.LessThanI64
+                                ? IrValueType.Bool : IrValueType.I64);
                         if (op.Left is null || op.Right is null ||
                             op.I64Constant is not null || op.BoolConstant is not null)
                             throw new FormatException("Malformed CFG binary operation");
