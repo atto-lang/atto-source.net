@@ -28,7 +28,13 @@ if (-not (Test-Path -LiteralPath $exe)) { throw 'Native compiler executable was 
 & $exe compile $sourcePath --out $generated
 if ($LASTEXITCODE -ne 0) { throw 'Oreslang-to-CIL compilation failed' }
 
-dotnet publish (Join-Path $root 'host/Ores.Net.NativeHost/Ores.Net.NativeHost.csproj') -c Release -r $Rid -o $publishOut "-p:GeneratedAssembly=$generated" -warnaserror
+# A previous publish of this same host project may have used another
+# generated assembly (for example hello.ores versus native.add). Clean its
+# intermediate artifacts so the AOT linker cannot reuse stale compiled IL.
+$hostProject = Join-Path $root 'host/Ores.Net.NativeHost/Ores.Net.NativeHost.csproj'
+dotnet clean $hostProject -c Release -r $Rid "-p:GeneratedAssembly=$generated"
+if ($LASTEXITCODE -ne 0) { throw 'Native AOT host clean failed' }
+dotnet publish $hostProject -c Release -r $Rid -o $publishOut "-p:GeneratedAssembly=$generated" -warnaserror
 if ($LASTEXITCODE -ne 0) { throw 'Native AOT publish failed' }
 
 if (-not (Test-Path -LiteralPath $binary)) { throw "Expected native executable is missing: $binary" }
