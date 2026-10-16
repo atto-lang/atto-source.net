@@ -82,8 +82,9 @@ public sealed class ScopedPermissionPolicy
 
     private readonly record struct Endpoint(string Host, int? Port, bool Subdomain);
 
-    // Safe subset: explicit ASCII DNS / canonical IPv4 and numeric TCP port.
-    // IPv6 is intentionally denied until an address-identity parser exists.
+    // Numeric IPv4 and bracketed IPv6 addresses use canonical identity.
+    // IPv4-mapped/embedded and zone-scoped IPv6 forms fail closed.
+    // DNS resolution and selected-IP checks belong to a trusted socket adapter.
     private static bool TryEndpoint(string? raw, bool rule, out Endpoint value)
     {
         value = default;
