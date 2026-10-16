@@ -161,9 +161,58 @@ public static class ExecutionGraphV1
 
         internal Plan(Node[] nodes, int output, Kind kind)
         {
-            _nodes = Array.AsReadOnly(nodes);
+            ArgumentNullException.ThrowIfNull(nodes);
+            if (nodes.Length == 0 || nodes.Length > 4096 || output < 0 || output >= nodes.Length)
+                throw new ArgumentException("invalid typed graph size or output");
+            for (int i = 0; i < nodes.Length; i++)
+            {
+                Node node = nodes[i] ?? throw new ArgumentException("null typed graph node");
+                if (node.Id != i) throw new ArgumentException("invalid typed graph node ID");
+                foreach (int dependency in node.Inputs)
+                    if (dependency < 0 || dependency >= i)
+                        throw new ArgumentException("invalid typed graph dependency");
+
+                switch (node.Operation)
+                {
+                    case Operation.Unit:
+                        Signature(nodes, node, Domain.Cpu, Kind.Unit);
+                        break;
+                    case Operation.ConstantI64:
+                        Signature(nodes, node, Domain.Cpu, Kind.HostI64);
+                        break;
+                    case Operation.AddI64:
+                        Signature(nodes, node, Domain.Cpu, Kind.HostI64, Kind.HostI64, Kind.HostI64);
+                        break;
+                    case Operation.UploadI64:
+                        Signature(nodes, node, Domain.Gpu, Kind.DeviceI64, Kind.HostI64);
+                        break;
+                    case Operation.GpuAddI64:
+                        Signature(nodes, node, Domain.Gpu, Kind.DeviceI64, Kind.DeviceI64, Kind.DeviceI64);
+                        break;
+                    case Operation.DownloadI64:
+                        Signature(nodes, node, Domain.Cpu, Kind.HostI64, Kind.DeviceI64);
+                        break;
+                    default:
+                        throw new ArgumentException("invalid typed graph opcode");
+                }
+            }
+            if (nodes[output].Result != kind) throw new ArgumentException("invalid typed graph output kind");
+            _nodes = Array.AsReadOnly((Node[])nodes.Clone());
             _output = output;
             ResultKind = kind;
+        }
+
+        private static void Signature(Node[] nodes, Node node, Domain domain, Kind kind,
+                                      params Kind[] inputs)
+        {
+            if (node.Domain != domain || node.Result != kind || node.Inputs.Count != inputs.Length)
+                throw new ArgumentException("invalid typed graph operation signature");
+            for (int i = 0; i < inputs.Length; i++)
+            {
+                int dependency = node.Inputs[i];
+                if (dependency < 0 || dependency >= node.Id || nodes[dependency].Result != inputs[i])
+                    throw new ArgumentException("invalid typed graph operand kind");
+            }
         }
 
         public IReadOnlyList<Node> Nodes => _nodes;
