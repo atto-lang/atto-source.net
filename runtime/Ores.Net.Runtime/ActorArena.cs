@@ -1,0 +1,210 @@
+using System.Runtime.InteropServices;
+
+namespace Ores.Net.Runtime;
+
+/// <summary>
+/// Host-only deterministic unmanaged bytes per actor incarnation (including SHARED).
+/// NOT source .ores allocation lowering and NOT an inter-actor shared-memory region.
+/// A turn authorizes access only on its admitted physical carrier.
+/// </summary>
+public sealed unsafe class ActorArena : IDisposable
+{
+    public const int SlotCount = 64;
+    public const int SlotBytes = 256;
+    public const int ScratchBytes = 16 * 1024;
+    private const int TotalBytes = SlotCount * SlotBytes + ScratchBytes;
+
+    public sealed class Turn
+    {
+        internal Turn() { }
+    }
+    public sealed class Handle
+    {
+        internal readonly Guid Domain;
+        internal readonly int Slot;
+        internal readonly ulong Generation;
+        internal Handle(Guid domain, int slot, ulong generation) =>
+            (Domain, Slot, Generation) = (domain, slot, generation);
+    }
+    public sealed class Scratch
+    {
+        internal readonly Guid Domain;
+        internal readonly Turn Turn;
+        internal readonly int Offset, Length;
+        internal Scratch(Guid domain, Turn turn, int offset, int length) =>
+            (Domain, Turn, Offset, Length) = (domain, turn, offset, length);
+    }
+    private struct Slot
+    {
+        public ulong Generation;
+        public int Length;
+        public bool Live;
+    }
+
+    private readonly ulong _actor, _incarnation;
+    private readonly Guid _domain = Guid.NewGuid();
+    private readonly object _gate = new();
+    private readonly Slot[] _slots = new Slot[SlotCount];
+    private byte* _memory;
+    private Turn? _turn;
+    private int _carrier, _scratchTop;
+    private bool _retired;
+
+    public ActorArena(ulong actor, ulong incarnation)
+    {
+        if (actor == 0 || incarnation == 0) throw new ArgumentOutOfRangeException(nameof(actor));
+        _actor = actor;
+        _incarnation = incarnation;
+        _memory = (byte*)NativeMemory.AllocZeroed((nuint)TotalBytes);
+        if (_memory == null) throw new OutOfMemoryException("actor arena allocation failed");
+        for (var i = 0; i < _slots.Length; ++i) _slots[i].Generation = 1;
+    }
+
+    public Turn BeginTurn(ulong actor, ulong incarnation)
+    {
+        lock (_gate)
+        {
+            if (_retired || _turn is not null || actor != _actor || incarnation != _incarnation)
+                throw new InvalidOperationException("actor arena admission denied");
+            _carrier = Environment.CurrentManagedThreadId;
+            _turn = new Turn();
+            return _turn;
+        }
+    }
+
+    private void RequireTurn(Turn turn)
+    {
+        if (_retired || _turn is null || !ReferenceEquals(_turn, turn) ||
+            _carrier != Environment.CurrentManagedThreadId)
+            throw new InvalidOperationException("wrong or stale actor turn");
+    }
+
+    public void EndTurn(Turn turn)
+    {
+        lock (_gate)
+        {
+            RequireTurn(turn);
+            new Span<byte>(_memory + SlotCount * SlotBytes, _scratchTop).Clear();
+            _scratchTop = 0;
+            _turn = null;
+            _carrier = 0;
+        }
+    }
+
+    public Handle Allocate(Turn turn, int length)
+    {
+        lock (_gate)
+        {
+            RequireTurn(turn);
+            if (length <= 0 || length > SlotBytes) throw new ArgumentOutOfRangeException(nameof(length));
+            for (var i = 0; i < SlotCount; ++i)
+            {
+                if (_slots[i].Live || _slots[i].Generation == 0) continue;
+                _slots[i].Live = true;
+                _slots[i].Length = length;
+                new Span<byte>(_memory + i * SlotBytes, SlotBytes).Clear();
+                return new Handle(_domain, i, _slots[i].Generation);
+            }
+            throw new InvalidOperationException("actor arena slot quota exhausted");
+        }
+    }
+
+    private int ValidSlot(Turn turn, Handle handle)
+    {
+        RequireTurn(turn);
+        if (handle.Domain != _domain || handle.Slot < 0 || handle.Slot >= SlotCount)
+            throw new InvalidOperationException("foreign actor arena handle");
+        ref var slot = ref _slots[handle.Slot];
+        if (!slot.Live || slot.Generation != handle.Generation)
+            throw new InvalidOperationException("stale actor arena handle");
+        return slot.Length;
+    }
+
+    public byte[] Read(Turn turn, Handle handle)
+    {
+        lock (_gate)
+        {
+            var length = ValidSlot(turn, handle);
+            return new ReadOnlySpan<byte>(_memory + handle.Slot * SlotBytes, length).ToArray();
+        }
+    }
+
+    public void Write(Turn turn, Handle handle, ReadOnlySpan<byte> value)
+    {
+        lock (_gate)
+        {
+            var length = ValidSlot(turn, handle);
+            if (value.Length != length) throw new ArgumentException("actor arena write length");
+            value.CopyTo(new Span<byte>(_memory + handle.Slot * SlotBytes, length));
+        }
+    }
+
+    public void Drop(Turn turn, Handle handle)
+    {
+        lock (_gate)
+        {
+            ValidSlot(turn, handle);
+            ref var slot = ref _slots[handle.Slot];
+            new Span<byte>(_memory + handle.Slot * SlotBytes, SlotBytes).Clear();
+            slot.Live = false;
+            slot.Length = 0;
+            slot.Generation = slot.Generation == ulong.MaxValue ? 0 : slot.Generation + 1;
+        }
+    }
+
+    public Scratch AllocateScratch(Turn turn, int length)
+    {
+        lock (_gate)
+        {
+            RequireTurn(turn);
+            if (length <= 0 || length > ScratchBytes - _scratchTop)
+                throw new ArgumentOutOfRangeException(nameof(length), "scratch quota");
+            var handle = new Scratch(_domain, turn, _scratchTop, length);
+            _scratchTop += length;
+            return handle;
+        }
+    }
+
+    private void RequireScratch(Turn turn, Scratch handle)
+    {
+        RequireTurn(turn);
+        if (handle.Domain != _domain || !ReferenceEquals(handle.Turn, turn) ||
+            handle.Offset < 0 || handle.Offset > _scratchTop ||
+            handle.Length < 0 || handle.Length > _scratchTop - handle.Offset)
+            throw new InvalidOperationException("foreign or stale scratch handle");
+    }
+
+    public byte[] ReadScratch(Turn turn, Scratch handle)
+    {
+        lock (_gate)
+        {
+            RequireScratch(turn, handle);
+            return new ReadOnlySpan<byte>(
+                _memory + SlotCount * SlotBytes + handle.Offset, handle.Length).ToArray();
+        }
+    }
+
+    public void WriteScratch(Turn turn, Scratch handle, ReadOnlySpan<byte> value)
+    {
+        lock (_gate)
+        {
+            RequireScratch(turn, handle);
+            if (value.Length != handle.Length) throw new ArgumentException("scratch write length");
+            value.CopyTo(new Span<byte>(
+                _memory + SlotCount * SlotBytes + handle.Offset, handle.Length));
+        }
+    }
+
+    public void Dispose()
+    {
+        lock (_gate)
+        {
+            if (_retired) return;
+            if (_turn is not null) throw new InvalidOperationException("active turn blocks retirement");
+            new Span<byte>(_memory, TotalBytes).Clear();
+            NativeMemory.Free(_memory);
+            _memory = null;
+            _retired = true;
+        }
+    }
+}
