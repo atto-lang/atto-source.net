@@ -6,7 +6,7 @@ checked scalar/control-flow subsets, not generic `Option<T>`, `Result<T,E>`,
 `Future<T>`, `Stream<T>`, `Observable<T>`, `Channel<T>`,
 closures or typed Oreslang actor supervision.
 
-`ElmCompositionAdmissionTests` loads six source cases from a copied JSON
+`ElmCompositionAdmissionTests` loads sixteen source cases from a copied JSON
 corpus, validates an executable-grammar scalar control, and demands
 `FormatException` with a diagnostic from both source parser paths. The
 tests execute in the existing `Ores.Net.Tests` verification application.
@@ -30,8 +30,8 @@ tests cannot substitute for it.
 
 ## Postfix question mark and typed exceptional control (2026-10-15 hardening)
 
-The source admission corpus now covers eleven cases including postfix
-`Result?`, postfix `Option?`, proposed `throws E` conversion inside
+The source admission corpus now covers sixteen cases including postfix
+`Result?`, postfix `Option?`, disallowed implicit `Result?`-to-throw conversion inside
 `try/catch`, `raise` bypassing local catch, and `panic` escalation.
 They remain **negative acceptance gates**: a diagnostic/no output is not
 executable evidence of return, throw, recover or supervisor correctness.
@@ -39,9 +39,10 @@ executable evidence of return, throw, recover or supervisor correctness.
 See common-source PR #36 (postfix `?` routing contract) together with
 common-source #35 (callable `throws`/`raises`/`panics` proposal).
 `Result<T,E>?` in a `Result<U,E>` callable returns `Err`, even when
-`throws E` is also declared. Only a compatible non-Result callable
-explicitly declaring `throws E` may convert an `Err` to an ordinary
-`throw`. `Option<T>?` can return `None` only from an
+`throws E` is also declared. In a non-Result-returning callable, `Result<T,E>?` is rejected even
+when `throws E` is declared: postfix `?` never converts `Err` to `throw`.
+Any such conversion must use a separate, explicitly checked operation
+(e.g. proposed `or_throw()`), not `?`. `Option<T>?` can return `None` only from an
 `Option<U>` callable; it cannot fabricate an exception. Ordinary
 `try/catch` handles real `throw` only, not `Err` returns.
 `raise`, `panic`, cancellation, and fatal controls are not caught by
