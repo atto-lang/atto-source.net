@@ -1,4 +1,5 @@
 using Ores.Net.Runtime;
+using System.Text.Json;
 
 public static class ActorPipelinePolicyTests
 {
@@ -62,6 +63,29 @@ public static class ActorPipelinePolicyTests
         Reject(() => p.ForwardAll("src"));
         Check(new ActorPipelinePolicy(stages, edges).ForwardRoundRobin("src").Target ==
               "worker-a", "new generation resets cursor");
+        var pEdges = new[] { "worker-a", "worker-b", "worker-c" };
+        using (var golden = JsonDocument.Parse(File.ReadAllText(
+            Path.Combine(AppContext.BaseDirectory, "actor-pipeline-routing-v1.json"))))
+        {
+            var operations = golden.RootElement.GetProperty("operations");
+            var selected = operations.GetProperty("forward_all").EnumerateArray()
+                .Select(x => x.GetString()).ToArray();
+            Check(selected.SequenceEqual(pEdges), "canonical fixture fan-out order");
+            var rr = operations.GetProperty("forward_round_robin").EnumerateArray()
+                .Select(x => x.GetString()).ToArray();
+            Check(rr.SequenceEqual(Enumerable.Range(0, 6)
+                .Select(i => "worker-" + "abc"[i % 3])), "canonical fixture RR");
+            foreach (var item in operations.GetProperty("by_key").EnumerateArray())
+            {
+                string key = item.GetProperty("key").GetString()!;
+                string expectedHash = item.GetProperty("fnv1a64_hex").GetString()!;
+                string expectedTarget = item.GetProperty("target").GetString()!;
+                Check(ActorPipelinePolicy.HashKey(key).ToString("x16") == expectedHash,
+                    "canonical fixture key hash");
+                Check(new ActorPipelinePolicy(stages, edges).ForwardByKey("src", key).Target ==
+                    expectedTarget, "canonical fixture keyed target");
+            }
+        }
         Console.WriteLine("ORES_NET_HOST_ACTOR_PIPELINE_POLICY_PASS");
 
         ActorPipelinePolicy.Stage[] withDuplicateId() =>
