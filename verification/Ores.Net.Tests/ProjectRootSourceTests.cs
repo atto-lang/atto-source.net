@@ -41,6 +41,32 @@ internal static class ProjectRootSourceTests
             File.WriteAllText(manifest, "schema_version = \"1\"\n");
             Check(ProjectRootSourceResolver.Resolve(app, "+/src/answer") == Path.GetFullPath(source),
                   "inferred extension");
+            string selectedFile = Path.Combine(app, "appdata", "lib", "answer.ores");
+            Directory.CreateDirectory(Path.GetDirectoryName(selectedFile)!);
+            File.WriteAllText(selectedFile, "pub fnc answer():int{return 42;}\n");
+            File.WriteAllText(manifest,
+                "schema_version = \"1\"\n[project]\nroot = \"appdata\"\n");
+            Check(ProjectRootSourceResolver.Resolve(app, "+/lib/answer") ==
+                  Path.GetFullPath(selectedFile), "explicit project.root ignored");
+            Reject(() => ProjectRootSourceResolver.Resolve(app, "+/src/answer"),
+                   "manifest directory escaped selected project.root");
+            foreach (var invalidRoot in new[] { "../other", "/tmp", "appdata/../src",
+                                                 "", "appdata\\other" })
+            {
+                File.WriteAllText(manifest,
+                    "schema_version = \"1\"\n[project]\nroot = \"" + invalidRoot + "\"\n");
+                Reject(() => ProjectRootSourceResolver.Resolve(app, "+/lib/answer"),
+                       "unsafe project.root accepted: " + invalidRoot);
+            }
+            File.WriteAllText(manifest,
+                "schema_version = \"1\"\n[project]\nroot = \"appdata\"\nroot = \"appdata\"\n");
+            Reject(() => ProjectRootSourceResolver.Resolve(app, "+/lib/answer"),
+                   "duplicate project.root accepted");
+            File.WriteAllText(manifest, "schema_version = \"1\"\nproject.root = \"appdata\"\n");
+            Reject(() => ProjectRootSourceResolver.Resolve(app, "+/lib/answer"),
+                   "unsupported dotted root accepted");
+            File.WriteAllText(manifest, "schema_version = \"1\"\n");
+
             Check(ProjectRootSourceResolver.Resolve(app, "+/src/answer.ores") ==
                   Path.GetFullPath(source), "exact extension");
             foreach (var bad in new[] {
