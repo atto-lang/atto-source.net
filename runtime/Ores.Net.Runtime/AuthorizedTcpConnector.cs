@@ -23,15 +23,20 @@ internal static class AuthorizedTcpConnector
         if (!policy.Allows(ScopedPermissionPolicy.Kind.Net, requested))
             throw new UnauthorizedAccessException("requested TCP endpoint denied");
 
-        // Resolver is called only after the requested hostname passes admission.
-        // The only address used for connect is the same numeric IP authorized
-        // by AllowsNetworkConnection; never connect by hostname or re-resolve.
-        var resolved = Dns.GetHostAddresses(host);
-        if (resolved.Length > 64)
-            throw new UnauthorizedAccessException("too many DNS endpoints");
+        // Validate the deadline before any DNS activity. Share one absolute
+        // cancellation budget across resolution and the pinned socket connect:
+        // slow DNS must not reset the allowed wall-clock time for this request.
         var limit = connectTimeout ?? TimeSpan.FromSeconds(15);
         if (limit <= TimeSpan.Zero || limit > TimeSpan.FromSeconds(60))
             throw new ArgumentOutOfRangeException(nameof(connectTimeout));
+        using var deadline = new CancellationTokenSource(limit);
+        // Resolver is called only after the requested hostname passes admission.
+        // The only address used for connect is the same numeric IP authorized
+        // by AllowsNetworkConnection; never connect by hostname or re-resolve.
+        var resolved = Dns.GetHostAddressesAsync(host, deadline.Token)
+            .GetAwaiter().GetResult();
+        if (resolved.Length > 64)
+            throw new UnauthorizedAccessException("too many DNS endpoints");
         foreach (var address in resolved)
         {
             if (address.AddressFamily != AddressFamily.InterNetwork)
@@ -42,7 +47,6 @@ internal static class AuthorizedTcpConnector
             var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
             try
             {
-                using var deadline = new CancellationTokenSource(limit);
                 socket.ConnectAsync(new IPEndPoint(address, port), deadline.Token)
                     .AsTask().GetAwaiter().GetResult();
                 return socket;
