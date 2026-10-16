@@ -24,6 +24,30 @@ static void InvalidSend(Action action, string why)
 
 SourceByteBudgetTests.Run();
 
+// The scalar bootstrap must not interpret a source import as a stand-alone
+// guest even when the path looks valid to the Java/Graal backend. Admission
+// is intentionally deny-all until verified module graph lowering exists.
+foreach (var path in new[] {
+    "+/src/helper", "+src/helper", "@/src/helper", "pkg:math/src/helper",
+    "./helper", "../helper", "common/helper", ".hidden/helper",
+    "+/src//helper", "+/src/./helper", "+/src/../helper",
+    "pkg:math/src/../helper", @"pkg:math\src\helper"
+})
+{
+    try
+    {
+        _ = OresParser.Parse("import fnc helper from \"" + path +
+            "\";\nfnc main():int{return 42;}");
+    }
+    catch (FormatException ex) when
+        (ex.Message.Contains("source imports require verified module graph lowering",
+            StringComparison.Ordinal)) { continue; }
+    throw new Exception("Unsupported source import was not denied: " + path);
+}
+Require(OresParser.Parse("fnc main():int{return 42;} // import is a comment") is Literal,
+    "import inside a line comment must remain non-executable");
+
+
 foreach (var invalid in new[] { "\0", "\ud800", "\udc00", "\ud800x" })
     Reject(() => OresParser.Parse("fnc main():int{return 1;} // " + invalid),
         "invalid encoding in ignored comment");
