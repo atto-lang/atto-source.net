@@ -60,7 +60,7 @@ public static class OresParser
                 if (text[_i] == '/' && _i + 1 < text.Length && text[_i + 1] == '/')
                 {
                     _i += 2;
-                    while (_i < text.Length && text[_i] != '\n') _i++;
+                    while (_i < text.Length && text[_i] is not ('\n' or '\r' or '\u0085' or '\u2028' or '\u2029')) _i++;
                     continue;
                 }
                 break;
