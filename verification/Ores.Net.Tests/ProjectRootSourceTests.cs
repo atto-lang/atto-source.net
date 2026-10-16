@@ -25,7 +25,20 @@ internal static class ProjectRootSourceTests
             File.WriteAllText(source, "pub fnc answer():int{return 42;}\n");
             Reject(() => ProjectRootSourceResolver.Resolve(app, "+/src/answer"),
                    "package root without manifest");
-            File.WriteAllText(Path.Combine(app, ".ores.pkg.toml"), "schema_version = \"1\"\n");
+            var manifest = Path.Combine(app, ".ores.pkg.toml");
+            File.WriteAllText(manifest, "schema_version = \"2\"\n");
+            Reject(() => ProjectRootSourceResolver.Resolve(app, "+/src/answer"),
+                   "unsupported manifest version");
+            File.WriteAllText(manifest, "schema_version = \"1\"\nschema_version = \"1\"\n");
+            Reject(() => ProjectRootSourceResolver.Resolve(app, "+/src/answer"),
+                   "duplicate manifest version");
+            File.WriteAllText(manifest, "name = \"demo\"\n");
+            Reject(() => ProjectRootSourceResolver.Resolve(app, "+/src/answer"),
+                   "missing manifest version");
+            File.WriteAllText(manifest, "schema_version = \"1\"\n" + new string('\n', 65_536));
+            Reject(() => ProjectRootSourceResolver.Resolve(app, "+/src/answer"),
+                   "oversized newline-only manifest");
+            File.WriteAllText(manifest, "schema_version = \"1\"\n");
             Check(ProjectRootSourceResolver.Resolve(app, "+/src/answer") == Path.GetFullPath(source),
                   "inferred extension");
             Check(ProjectRootSourceResolver.Resolve(app, "+/src/answer.ores") ==
