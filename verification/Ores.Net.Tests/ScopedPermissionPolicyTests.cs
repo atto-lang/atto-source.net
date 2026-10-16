@@ -52,6 +52,24 @@ internal static class ScopedPermissionPolicyTests
         Assert(net.Allows(ScopedPermissionPolicy.Kind.Net, "api.example.com:0"), false, "zero port");
         Assert(net.Allows(ScopedPermissionPolicy.Kind.Net, "127.1:443"), false, "IPv4 alias");
         Assert(net.Allows(ScopedPermissionPolicy.Kind.Net, "alice@api.example.com:443"), false, "credentials");
+        var numericAlias = ScopedPermissionPolicy.FromHost(
+            new[] { ScopedPermissionPolicy.Kind.Net },
+            new[] {
+                new ScopedPermissionPolicy.Rule(ScopedPermissionPolicy.Kind.Net, "*"),
+                new ScopedPermissionPolicy.Rule(ScopedPermissionPolicy.Kind.Net,
+                    "127.0.0.1", true)
+            });
+        foreach (var alias in new[] {
+            "127.0x0.0.1:443", "1.2.3.0x01:443", "0x7f.0.0.1:443",
+            "127.0.0.01:443", "127.1:443"
+        })
+            Assert(numericAlias.Allows(ScopedPermissionPolicy.Kind.Net, alias), false,
+                "numeric IPv4 alias under broad network allow");
+        Assert(numericAlias.Allows(ScopedPermissionPolicy.Kind.Net,
+            "127.0.0.1:443"), false, "canonical IPv4 explicit deny");
+        Assert(numericAlias.Allows(ScopedPermissionPolicy.Kind.Net,
+            "api.example.com:443"), true, "ordinary hostname still permitted");
+
         var suffix = ScopedPermissionPolicy.FromHost(
             new[] { ScopedPermissionPolicy.Kind.Net },
             new[] { new ScopedPermissionPolicy.Rule(ScopedPermissionPolicy.Kind.Net, "*.example.com:443") });
