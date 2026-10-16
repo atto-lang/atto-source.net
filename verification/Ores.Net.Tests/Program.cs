@@ -198,16 +198,12 @@ using (var overflowDoc = System.Text.Json.JsonDocument.Parse(overflowBytes))
 
             var dll = Path.Combine(temp, "overflow-" + (index++).ToString(
                 System.Globalization.CultureInfo.InvariantCulture) + ".dll");
-            try { CilEmitter.EmitLibrary(ir, dll); }
-            catch (FormatException error) when (
-                error.Message.Contains("overflow", StringComparison.OrdinalIgnoreCase) ||
-                error.Message.Contains("out of range", StringComparison.OrdinalIgnoreCase))
-            {
-                // An unrelated source syntax/IR/CIL error is NOT a passed
-                // checked-overflow test. The full source is valid Oreslang.
-                continue;
-            }
-            catch (OverflowException) { continue; }
+            // Once parsing and lowering have admitted the source, the
+            // emitter must produce executable checked CIL. A host-side
+            // emitter exception (even OverflowException) is NOT proof that
+            // the emitted guest operation would trap. Require actual CIL
+            // and check its behavior below.
+            CilEmitter.EmitLibrary(ir, dll);
 
             using var assembly = AssemblyDefinition.ReadAssembly(dll);
             var method = assembly.MainModule.Types.Single(t =>
