@@ -103,6 +103,7 @@ public static class ProjectRootSourceResolver
             throw new FormatException("unsupported project manifest literal");
         bool inRoot = true;
         bool inProject = false;
+        bool sawProjectTable = false;
         bool sawProjectRoot = false;
         string projectRoot = ".";
         int versionCount = 0;
@@ -115,6 +116,11 @@ public static class ProjectRootSourceResolver
                 inProject = line == "[project]" ||
                     line.StartsWith("[project]#", StringComparison.Ordinal) ||
                     line.StartsWith("[project] #", StringComparison.Ordinal);
+                if (!inProject && line.Contains("project", StringComparison.Ordinal))
+                    throw new FormatException("unsupported project manifest table form");
+                if (inProject && sawProjectTable)
+                    throw new FormatException("duplicate [project] table");
+                if (inProject) sawProjectTable = true;
                 continue;
             }
             int equals = line.IndexOf('=');
