@@ -46,6 +46,8 @@ public sealed class ActorRefNoWireConverter : JsonConverter<ActorRef>
 public sealed class ActorMailbox
 {
     public const int MaxMessageBytes = 1024 * 1024;
+    public const int MaxMailboxMessages = 4096;
+    public const int MaxMailboxBytes = 16 * MaxMessageBytes;
 
     private readonly object _gate = new();
     private readonly Queue<byte[]> _messages = new();
@@ -61,9 +63,9 @@ public sealed class ActorMailbox
     {
         if (id == 0)
             throw new ArgumentOutOfRangeException(nameof(id), "Actor ID must be positive");
-        if (maxMessages <= 0)
+        if (maxMessages <= 0 || maxMessages > MaxMailboxMessages)
             throw new ArgumentOutOfRangeException(nameof(maxMessages), "Message capacity must be positive");
-        if (maxQueuedBytes <= 0)
+        if (maxQueuedBytes <= 0 || maxQueuedBytes > MaxMailboxBytes)
             throw new ArgumentOutOfRangeException(nameof(maxQueuedBytes), "Byte capacity must be positive");
         _id = id;
         _maxMessages = maxMessages;
@@ -89,7 +91,8 @@ public sealed class ActorMailbox
             if (_closed || destination.Id != _id || destination.Generation != _generation ||
                 destination.Nonce != _nonce)
                 throw new InvalidOperationException("Actor reference is stale or mailbox is closed");
-            if (_messages.Count >= _maxMessages || data.Length > _maxQueuedBytes - _queuedBytes)
+            if (_messages.Count >= _maxMessages || _queuedBytes > _maxQueuedBytes ||
+                data.Length > _maxQueuedBytes - _queuedBytes)
                 throw new InvalidOperationException("Mailbox capacity exceeded");
             var ownedCopy = data.ToArray();
             _messages.Enqueue(ownedCopy);
