@@ -123,6 +123,31 @@ internal static class ScopedPermissionPolicyTests
         Assert(denied.Allows(ScopedPermissionPolicy.Kind.Net, "api.example.com:443"), false, "network deny");
         Assert(denied.Allows(ScopedPermissionPolicy.Kind.Net, "api.example.com"), false, "portless denial");
 
+        var named = ScopedPermissionPolicy.FromHost(
+            new[] { ScopedPermissionPolicy.Kind.Net },
+            new[] {
+                new ScopedPermissionPolicy.Rule(ScopedPermissionPolicy.Kind.Net, "api.example.com:443"),
+                new ScopedPermissionPolicy.Rule(ScopedPermissionPolicy.Kind.Net, "127.0.0.1", true)
+            });
+        Assert(named.Allows(ScopedPermissionPolicy.Kind.Net, "api.example.com:443"),
+            true, "hostname alone authorized before DNS");
+        Assert(named.AllowsNetworkConnection("api.example.com:443", "127.0.0.1:443"),
+            false, "resolved loopback denied");
+        Assert(named.AllowsNetworkConnection("api.example.com:443", "203.0.113.7:443"),
+            true, "unblocked canonical resolved IPv4");
+        Assert(named.AllowsNetworkConnection("api.example.com:443", "203.0.113.7:444"),
+            false, "selected port mismatch");
+        Assert(named.AllowsNetworkConnection("api.example.com:443", "evil.example:443"),
+            false, "selected result must be numeric");
+        Assert(named.AllowsNetworkConnection("api.example.com:443", "127.1:443"),
+            false, "numeric IP alias rejected");
+        Assert(named.AllowsNetworkConnection("api.example.com:443", "[::1]:443"),
+            false, "unsupported IPv6 fails closed");
+        Assert(named.AllowsNetworkConnection("api.example.com", "203.0.113.7:443"),
+            false, "pre-connect checks require requested port");
+        Assert(named.AllowsNetworkConnection("other.example.com:443", "203.0.113.7:443"),
+            false, "unpermitted hostname not rescued by safe resolved IP");
+
         foreach (var invalid in new[] { "/workspace/../secret", "/workspace//secret", "relative/file" })
         {
             bool caught = false;
