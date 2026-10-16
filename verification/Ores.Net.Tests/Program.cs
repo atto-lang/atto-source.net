@@ -83,6 +83,10 @@ Require(OresParser.Parse("fnc main():int{return 1;} // 1 |> unsupported") is Lit
 
 var positive = OresParser.Parse("define pub fnc main() : int { return 2 + 3 * 4; }");
 Require(positive is Binary { Operator: '+' }, "top-level expression shape");
+Require(OresParser.Parse("define pub fnc main() -> int { return 2 + 3 * 4; }")
+    is Binary { Operator: '+' }, "canonical formatter arrow");
+Reject(() => OresParser.Parse("fnc main() - > int { return 1; }"), "split return arrow");
+Reject(() => OresParser.Parse("fnc main() ->> int { return 1; }"), "malformed return arrow");
 Require(OresParser.Parse("pub define fnc main():int {return -9223372036854775808;}") is Literal
     { Value: long.MinValue }, "signed minimum");
 Require(OresParser.Parse("fnc main():int {return -(3 + 4);}") is Unary
