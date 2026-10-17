@@ -76,8 +76,12 @@ trusted local environment or a **reviewed** source-scoped CI workflow with a
 read-only token. The GitHub Actions token must have adequate `actions: read`
 and `contents: read` access; no cross-organization checkout is needed.
 Success produces a machine-readable statement
-`GITHUB_RUN_EXECUTION_VERIFIED_NOT_GUEST_PARITY_CERTIFIED`. Failure returns
-nonzero and a `CI_RUN_EVIDENCE_REJECTED` explanation without printing tokens.
+`GITHUB_RUN_EXECUTION_VERIFIED_NOT_GUEST_PARITY_CERTIFIED`. A completed run
+whose authenticated job metadata shows **no allocated runner and no executed
+step records** returns exit status 2 with
+`CI_RUN_EVIDENCE_NOT_EXECUTED`; this is an infrastructure/execution-state
+classification, never a passing test claim. Other failures return exit status 1
+with a `CI_RUN_EVIDENCE_REJECTED` explanation without printing tokens.
 
 ## Security and release boundaries
 
@@ -110,7 +114,7 @@ workflow YAML Git blob (as this verifier requires), source HEAD and tree.
 The verifier denies duplicate step names within a job, because two steps
 with the same display name cannot unambiguously satisfy a named proof step.
 All required jobs and steps must be explicit sequences; malformed caller
-inputs deny verification. These guards are checked by all 73 independently defined source-free
+inputs deny verification. These guards are checked by all 94 independently defined source-free
 regression cases, three times in the CI workflow. The
 regressions are not native Oreslang compiler or runtime conformance tests.
 
@@ -183,8 +187,8 @@ private test-carrier execution and exact guest snapshot evidence must
 be attested separately under the source-export policy; a successful
 carrier run cannot certify a different source repository's commit.
 
-The source-free regression suite defines 73 unittest methods, and the workflow
-requires at least 73 per round in three rounds when Actions runners are available. Passing
+The source-free regression suite defines 94 unittest methods, and the workflow
+requires at least 94 per round in three rounds when Actions runners are available. Passing
 these tests alone does not establish that any backend-native tests ran.
 
 ## Short-lived Actions evidence artifact
@@ -221,7 +225,7 @@ https://github.com/scintilla-run-test/gleam-runner-conformance/actions/runs/3898
 This does not authorize private compiler/actor source export and does not
 attest native guest-language compilation or execution.
 
-## Independently pinned run attempt (73-case regression gate)
+## Independently pinned run attempt (94-case regression gate)
 
 The verifier requires `--run-attempt N` from independently approved release
 evidence, and compares it with GitHub's run attempt and every job's attempt.
