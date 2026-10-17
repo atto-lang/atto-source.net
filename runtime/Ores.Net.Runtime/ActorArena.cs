@@ -46,6 +46,9 @@ public sealed unsafe class ActorArena : IDisposable
     private readonly Guid _domain = Guid.NewGuid();
     private readonly object _gate = new();
     private readonly Slot[] _slots = new Slot[SlotCount];
+    // Exact issuance metadata: in-bounds offsets are not themselves authority.
+    // Fixed-size ushort entries avoid unbounded per-allocation bookkeeping.
+    private readonly ushort[] _scratchLengths = new ushort[ScratchBytes];
     private byte* _memory;
     private Turn? _turn;
     private int _carrier, _scratchTop;
@@ -94,6 +97,7 @@ public sealed unsafe class ActorArena : IDisposable
         {
             RequireTurn(turn);
             CryptographicOperations.ZeroMemory(new Span<byte>(_memory + SlotCount * SlotBytes, _scratchTop));
+            Array.Clear(_scratchLengths);
             _scratchTop = 0;
             _turn = null;
             _carrier = 0;
@@ -199,6 +203,7 @@ public sealed unsafe class ActorArena : IDisposable
             if (length <= 0 || length > ScratchBytes - _scratchTop)
                 throw new ArgumentOutOfRangeException(nameof(length), "scratch quota");
             var handle = new Scratch(_domain, turn, _scratchTop, length);
+            _scratchLengths[_scratchTop] = checked((ushort)length);
             _scratchTop += length;
             return handle;
         }
@@ -212,8 +217,10 @@ public sealed unsafe class ActorArena : IDisposable
     {
         RequireTurn(turn);
         if (handle.Domain != _domain || !ReferenceEquals(handle.Turn, turn) ||
-            handle.Offset < 0 || handle.Offset > _scratchTop ||
-            handle.Length < 0 || handle.Length > _scratchTop - handle.Offset)
+            handle.Offset < 0 || handle.Offset >= ScratchBytes ||
+            handle.Offset >= _scratchTop || handle.Length <= 0 ||
+            handle.Length > _scratchTop - handle.Offset ||
+            _scratchLengths[handle.Offset] != handle.Length)
             throw new InvalidOperationException("foreign or stale scratch handle");
     }
 
