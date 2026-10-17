@@ -10,7 +10,7 @@ internal static class ScopedPermissionPolicyTests
     }
 
 
-    // Actual .NET policy-evaluator checks against the 37 canonical v1
+    // Actual .NET policy-evaluator checks against the 45 canonical v1
     // authorization vectors, not guest OS or host-syscall enforcement proof.
     private sealed record GoldenAuthorization(string Id, ScopedPermissionPolicy.Kind Permission,
         string Resource, bool Coarse, string[] Grants, string[] Denials, bool Expected);
@@ -24,7 +24,7 @@ internal static class ScopedPermissionPolicyTests
         var digest = Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(corpus))
             .ToLowerInvariant();
-        if (digest != "b481b72d9e5fdb2c1a4d4de7745a02f7ec3af8a937b0f067885d184efc3cb308")
+        if (digest != "de3594482d10623241a94cf531fd9e4fe71c49769dd68b2098f4ed5363870ac5")
             throw new Exception("canonical scoped-permission corpus changed; review regenerated vectors");
         GoldenAuthorization[] vectors =
         {
@@ -64,9 +64,17 @@ internal static class ScopedPermissionPolicyTests
             new("run-prefix-no-match", ScopedPermissionPolicy.Kind.Run, "curl", true, new string[] {"git*"}, new string[] {}, false),
             new("path-child-allowed", ScopedPermissionPolicy.Kind.Read, "/workspace/data/file.txt", true, new string[] {"/workspace/data"}, new string[] {}, true),
             new("path-prefix-no-match", ScopedPermissionPolicy.Kind.Read, "/workspace/database/file.txt", true, new string[] {"/workspace/data"}, new string[] {}, false),
-            new("path-whitespace-exact", ScopedPermissionPolicy.Kind.Read, "/workspace/data ", true, new string[] {"/workspace/data"}, new string[] {}, false)
+            new("path-whitespace-exact", ScopedPermissionPolicy.Kind.Read, "/workspace/data ", true, new string[] {"/workspace/data"}, new string[] {}, false),
+            new("env-padded-grant-literal", ScopedPermissionPolicy.Kind.Env, "API_KEY ", true, new string[] {"API_KEY "}, new string[] {}, true),
+            new("env-padded-grant-not-trimmed", ScopedPermissionPolicy.Kind.Env, "API_KEY", true, new string[] {"API_KEY "}, new string[] {}, false),
+            new("env-padded-deny-literal", ScopedPermissionPolicy.Kind.Env, "API_KEY ", true, new string[] {"*"}, new string[] {"API_KEY "}, false),
+            new("env-padded-deny-not-trimmed", ScopedPermissionPolicy.Kind.Env, "API_KEY", true, new string[] {"*"}, new string[] {"API_KEY "}, true),
+            new("run-padded-grant-not-trimmed", ScopedPermissionPolicy.Kind.Run, "git", true, new string[] {"git "}, new string[] {}, false),
+            new("run-padded-deny-not-trimmed", ScopedPermissionPolicy.Kind.Run, "git", true, new string[] {"*"}, new string[] {"git "}, true),
+            new("sys-padded-grant-not-trimmed", ScopedPermissionPolicy.Kind.Sys, "os", true, new string[] {"os "}, new string[] {}, false),
+            new("sys-padded-deny-not-trimmed", ScopedPermissionPolicy.Kind.Sys, "os", true, new string[] {"*"}, new string[] {"os "}, true)
         };
-        if (vectors.Length != 37)
+        if (vectors.Length != 45)
             throw new Exception("reviewed scoped authorization corpus is incomplete");
         foreach (var vector in vectors)
         {
