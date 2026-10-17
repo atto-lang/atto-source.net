@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 
 namespace Ores.Net.Runtime;
 
@@ -24,9 +25,66 @@ public static class WorkerRuntime
         WorkerRuntimeSettings? settings = null)
     {
         ArgumentNullException.ThrowIfNull(entry);
+        return RunCore(
+            input,
+            output,
+            error,
+            unixMilliseconds,
+            settings,
+            (frame, now, admittedSettings) => HandleInvoke(
+                entry,
+                output,
+                error,
+                frame,
+                now,
+                admittedSettings.MaxInvocationMilliseconds,
+                admittedSettings.MaxGuestOutputBytes));
+    }
+
+    /// <summary>
+    /// Candidate provider-neutral text ABI for the runtime layer.
+    ///
+    /// This overload does not imply compiler support. The NativeAOT host remains
+    /// wired to the scalar Run(Func&lt;long&gt;, ...) entry until generated CIL
+    /// exposes a statically linked String -> String method.
+    /// </summary>
+    public static int RunText(
+        Func<string, string> entry,
+        Stream input,
+        Stream output,
+        TextWriter error,
+        Func<long>? unixMilliseconds = null,
+        WorkerRuntimeSettings? settings = null)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        return RunCore(
+            input,
+            output,
+            error,
+            unixMilliseconds,
+            settings,
+            (frame, now, admittedSettings) => HandleTextInvoke(
+                entry,
+                output,
+                error,
+                frame,
+                now,
+                admittedSettings.MaxInvocationMilliseconds,
+                admittedSettings.MaxGuestOutputBytes));
+    }
+
+    private static int RunCore(
+        Stream input,
+        Stream output,
+        TextWriter error,
+        Func<long>? unixMilliseconds,
+        WorkerRuntimeSettings? settings,
+        Func<WorkerFrame, long, WorkerRuntimeSettings, bool> handleInvoke)
+    {
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(output);
         ArgumentNullException.ThrowIfNull(error);
+        ArgumentNullException.ThrowIfNull(handleInvoke);
         unixMilliseconds ??= () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         settings ??= WorkerRuntimeSettings.StrictFaas;
         settings.Validate();
@@ -46,9 +104,6 @@ public static class WorkerRuntime
                         return 0;
 
                     case WorkerFrameKind.Cancel:
-                        // The bootstrap entry is synchronous and has no
-                        // cooperation points yet. Never claim in-process
-                        // cancellation that cannot actually interrupt it.
                         WorkerProtocol.WriteFrame(
                             output,
                             WorkerFrame.Error(
@@ -67,19 +122,16 @@ public static class WorkerRuntime
                             break;
                         }
                         lastInvokeRequestId = frame.RequestId;
-                        if (!HandleInvoke(
-                                entry,
-                                output,
-                                error,
+                        if (!handleInvoke(
                                 frame,
                                 unixMilliseconds(),
-                                settings.MaxInvocationMilliseconds,
-                                settings.MaxGuestOutputBytes))
+                                settings))
                             return 70;
                         break;
 
                     default:
-                        error.WriteLine("oreslang worker: host sent invalid frame kind");
+                        error.WriteLine(
+                            "oreslang worker: host sent invalid frame kind");
                         return ProtocolFailureExitCode;
                 }
             }
@@ -168,8 +220,92 @@ public static class WorkerRuntime
             return false;
         }
     }
-    private static long ExecuteGuestBounded(
-        Func<long> entry,
+    private static bool HandleTextInvoke(
+        Func<string, string> entry,
+        Stream output,
+        TextWriter guestLog,
+        WorkerFrame frame,
+        long nowUnixMilliseconds,
+        int maxInvocationMilliseconds,
+        int maxGuestOutputBytes)
+    {
+        var deadlineError = WorkerProtocol.ValidateDeadline(
+            frame.DeadlineUnixMilliseconds,
+            nowUnixMilliseconds,
+            maxInvocationMilliseconds);
+        if (deadlineError is not null)
+        {
+            WorkerProtocol.WriteFrame(
+                output,
+                WorkerFrame.Error(frame.RequestId, deadlineError));
+            return true;
+        }
+
+        try
+        {
+            var value = ExecuteGuestBounded(
+                () => entry(frame.Payload),
+                guestLog,
+                maxGuestOutputBytes);
+            if (!TryValidateTextResponse(value, out var responseError))
+            {
+                WorkerProtocol.WriteFrame(
+                    output,
+                    WorkerFrame.Error(frame.RequestId, responseError));
+                return false;
+            }
+            WorkerProtocol.WriteFrame(
+                output,
+                WorkerFrame.Response(frame.RequestId, value));
+            return true;
+        }
+        catch (GuestOutputLimitException)
+        {
+            WorkerProtocol.WriteFrame(
+                output,
+                WorkerFrame.Error(frame.RequestId, "guest-output-limit"));
+            return false;
+        }
+        catch (Exception)
+        {
+            WorkerProtocol.WriteFrame(
+                output,
+                WorkerFrame.Error(frame.RequestId, "guest-failure"));
+            return false;
+        }
+    }
+
+    private static bool TryValidateTextResponse(
+        string? value,
+        out string errorCode)
+    {
+        if (value is null)
+        {
+            errorCode = "guest-null-response";
+            return false;
+        }
+
+        try
+        {
+            if (new UTF8Encoding(false, true).GetByteCount(value) >
+                WorkerProtocol.MaxPayloadBytes)
+            {
+                errorCode = "response-too-large";
+                return false;
+            }
+        }
+        catch (EncoderFallbackException)
+        {
+            errorCode = "response-invalid-utf8";
+            return false;
+        }
+
+        errorCode = "";
+        return true;
+    }
+
+    private static T ExecuteGuestBounded<T>(
+        Func<T> entry,
         TextWriter guestLog,
         int maxGuestOutputBytes)
     {
