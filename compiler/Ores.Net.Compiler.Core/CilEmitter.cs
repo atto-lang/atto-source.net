@@ -17,7 +17,7 @@ public static class CilEmitter
     // Keep this far below the ECMA-335 maximum to bound compiler work.
     private const int MaxEvaluationStack = 256;
 
-    public static void EmitLibrary(Expression program, string outputFile)
+    internal static void EmitLibrary(Expression program, string outputFile)
     {
         ArgumentNullException.ThrowIfNull(program);
         ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
