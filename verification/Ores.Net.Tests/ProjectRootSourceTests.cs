@@ -89,6 +89,34 @@ internal static class ProjectRootSourceTests
                               "legacy marker\n");
             Reject(() => ProjectRootSourceResolver.ResolveRelative(importer, "./child/hidden", app),
                    "relative import crossed nested legacy package");
+            // A dangling legacy marker is still authoritative: never treat
+            // it as absent and permit a parent's relative import.
+            string danglingMarker = Path.Combine(legacyChild, ".oreslangc.cfg.toml");
+            File.Delete(danglingMarker);
+            bool danglingCreated = false;
+            try
+            {
+                File.CreateSymbolicLink(danglingMarker,
+                    Path.Combine(legacyChild, "nonexistent-legacy-config.toml"));
+                danglingCreated = true;
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or
+                     PlatformNotSupportedException or IOException)
+            {
+                // Some runner environments prohibit symlink fixtures.
+            }
+            try
+            {
+                if (danglingCreated)
+                    Reject(() => ProjectRootSourceResolver.ResolveRelative(
+                            importer, "./child/hidden", app),
+                           "dangling nested legacy marker lost package authority");
+            }
+            finally
+            {
+                if (danglingCreated) File.Delete(danglingMarker);
+                File.WriteAllText(danglingMarker, "legacy marker\n");
+            }
             Reject(() => ProjectRootSourceResolver.Resolve(app, "+/src/routes/child/hidden"),
                    "rooted import crossed nested legacy package");
             // A parent-owned importer must not launder child package
