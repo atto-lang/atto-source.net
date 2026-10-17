@@ -177,6 +177,16 @@ public static class ExecutionGraphV1
 
         internal Plan(Node[] nodes, int output, Kind kind)
         {
+            // A trusted/imported graph may provide a separately declared kind.
+            // Tie it to Plan<T> before admitting the node array: otherwise a
+            // forged Plan<long> over a Unit result passes IR validation and
+            // fails later as InvalidCastException during execution.
+            Kind expected = typeof(T) == typeof(Unit) ? Kind.Unit
+                : typeof(T) == typeof(long) ? Kind.HostI64
+                : typeof(T) == typeof(DeviceI64) ? Kind.DeviceI64
+                : throw new ArgumentException("unsupported execution graph CLR result type");
+            if (kind != expected)
+                throw new ArgumentException("execution graph result kind does not match Plan<T>");
             ArgumentNullException.ThrowIfNull(nodes);
             if (nodes.Length == 0 || nodes.Length > 4096 || output < 0 || output >= nodes.Length)
                 throw new ArgumentException("invalid typed graph size or output");
