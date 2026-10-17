@@ -392,8 +392,8 @@ be changed when adding host-graph integration cases.
 | --- | --- | --- | --- | --- |
 | Java/Graal | Draft #1066/#1086, reconciled on #1122 | Draft #1096, CPU-only graph | Draft #1125; one `OresFuture<Long>` | Fail closed; typed source lowering unimplemented |
 | LLVM | Draft #445, whole-batch read/write loans | Draft #481 host-only graph | **Draft #507:** native owned F32 CPU slice followed by one-shot host I64 graph; full production integration tests pending | Fail closed; no general device compiler |
-| .NET | **Not implemented** | Draft #44, bounded-executor `Task<T>` host graph | **Not implemented** | Scalar bootstrap, unsupported domain |
-| Forge | **Draft #66:** trusted host-only F32 AoS/SoA/AoSoA CPU regions, layout/loan/ownership checks; no graph attachment | Draft #41, bounded-executor one-shot CPU graph | **Not implemented**; must compose independently verified region and graph | Scalar bootstrap, unsupported domain |
+| .NET | **Draft #67:** managed AoS/SoA/AoSoA owned-F32 buffers with weak area authority, physical read/write loans, close safety and 450 seeded region fixtures | Draft #44, bounded-executor `Task<T>` host graph | **Draft #67:** cancellable one-shot owned-F32 → separate host-I64 graph with queued scheduler-admission barrier; exact-head managed/Native AOT compilation pending | Scalar bootstrap, unsupported domain |
+| Forge | Draft #66, trusted host-only F32 AoS/SoA/AoSoA CPU regions and whole-buffer loans | Draft #41, bounded-executor I64 graph | **Draft #66:** one-shot cancellable F32 region -> separate host-I64 graph with queued scheduler-admission barrier and strong buffer ownership; new combined code not independently compiled yet | Scalar bootstrap, unsupported domain |
 | Wasm | No independent region runtime; must inherit *verified* pinned LLVM source semantics | No independent host-graph runtime in zero-import guest | **Not implemented** | Delegate only; no implicit WebGPU/host capability |
 
 **Relative parity now means verified boundaries, not fabricated equivalence.**
@@ -456,14 +456,14 @@ or sanitizers passed at the integrated branch head. Source-org
 was attempted but all four jobs had **zero executed steps**.
 Keep #507 draft pending actual compiled-header/full-compiler exact-head tests.
 
-**Remaining differences:** Java #1125 and LLVM #507 now each have a *draft*
-host-only owned-F32-to-host-I64 bridge. .NET #44 has a typed host graph but
-no owned-F32 region substrate. Forge #41 has a typed host graph, and stacked
-[Forge draft #66](https://github.com/ores-truffle-oreslang/oreslang-source.forge/pull/66)
-adds a **synchronous** trusted owned-F32 CPU primitive (AoS/SoA/AoSoA,
-allocation identities, physical whole-buffer read/write loans, checked
-field/half-open row slices). Forge's asynchronous F32-to-I64 graph bridge
-remains **not implemented**. No source-level `cpu`/`gpu`/`nb` admission is enabled.
+**Remaining differences:** Java #1125, LLVM #507, Forge #66 and .NET #67 now each
+have a *draft* host-only owned-F32-to-host-I64 composition path or adapter.
+Forge #66 and .NET #67 are stacked on their host-graph bases (#41/#44) and
+remain unqualified on exact-head source-repository CI. Their region areas are
+allocation-bound capabilities and physical mutation uses whole-buffer loans.
+WASM still has no independent native owned-F32 runtime/bridge and inherits
+only explicitly pinned, verified LLVM behavior. No source-level
+`cpu`/`gpu`/`nb` admission is enabled.
 WASM #43 has no native owned-region runtime and must use an explicitly
 pinned, verified LLVM-to-WASM path; absence of a compiler or checksum is
 SKIPPED, never a passing guest test. None of these contracts admit positive
@@ -485,10 +485,48 @@ geometry/slice combinations and a conflicting native writer thread.
 
 This focused local verification is **not** a passing full Forge compiler/
 CMake/CTest matrix nor a source-level Oreslang positive CPU-region test.
-Next Forge implementation milestone: build a cancellable one-shot
-owned-F32-to-host-I64 graph adapter on this base and independently test its
-post-enqueue executor rejection, cancel/claim races, and owner retention.
-.NET has yet to land a corresponding owned-F32 substrate. WASM remains
-LLVM-delegated with fail-closed evidence when the actual pinned backend is
-unavailable. Do not conflate this contract ledger with approved source
+Forge #66 now also carries the cancellable one-shot adapter described below;
+its next gate is compiling the real F32 header + real graph header + bridge
+together under full CMake/CTest, GCC/Clang sanitizers and TSan. .NET #67 now
+carries the corresponding managed F32 substrate and bridge, but has not yet
+received an executable .NET 10/Native AOT run. WASM remains LLVM-delegated
+with fail-closed evidence when the actual pinned backend is unavailable. Do not conflate this contract ledger with approved source
 exports; incidents #22/#962 remain open.
+
+## Forge and .NET host-region parity follow-on (2026-10-17)
+
+[Forge #66](https://github.com/ores-truffle-oreslang/oreslang-source.forge/pull/66)
+now additionally contains `compiler/dop_owned_graph_v1.hpp` and a native
+regression target for the **draft** one-shot F32-to-I64 graph adapter.
+It checks typed host graph result and CPU-only admission, exact owned area
+provenance and physical layout, rejected scheduler/inline paths, lifetime of
+queued native buffers, cancellation, and duplicate delivery. The previously
+executed 26,009 GCC and 26,009 Clang sanitized assertions cover the
+synchronous *foundation*, **not** this newly added bridge. Exact-head hosted
+Forge GCC/Clang run
+[#39040347223](https://github.com/ores-truffle-oreslang/oreslang-source.forge/actions/runs/39040347223)
+had four **zero-step** jobs and no artifacts. The new bridge therefore
+remains unverified at compiled production-header level.
+
+[.NET #67](https://github.com/ores-truffle-oreslang/oreslang-source.net/pull/67)
+(stacked on #44) introduces `OwnedF32RegionV1.cs` with little-endian
+F32 storage, AoS/SoA/AoSoA byte offsets, allocation-bound areas, checked
+memory budget, physical whole-buffer loans, close and lifetime protection,
+and synchronous host-only ScaleBias field/row slices. It registers 450
+deterministic randomized layout/slice trials and negative borrow/ownership
+checks in the full managed verifier. **The .NET SDK is unavailable in the
+local test environment**, and the source-org
+[run #39040566042](https://github.com/ores-truffle-oreslang/oreslang-source.net/actions/runs/39040566042)
+also failed before executing any steps: no managed compiler pass or
+Native AOT qualification is claimed. The branch now also contains
+`OwnedF32GraphV1.cs`: a queued-executor, one-shot cancellable F32-to-host-I64
+adapter with GPU/transfer refusal, weak Area authority, throw-after-enqueue
+protection, inline-dispatch rejection, duplicate-delivery suppression,
+64 duplicate-delivery races, 64 cancel/claim races and close-after-preflight
+coverage. These new bridge tests are committed but remain **uncompiled**.
+
+Java #1125 and LLVM #507 remain earlier draft host CPU graph adapters, not
+positive guest source `cpu`/`gpu`/`nb` lowering. WASM still delegates
+only to a verified LLVM artifact and must fail closed if absent. The common
+`void`/source-`Unit` decision #1098 and private source-export security
+issues #22/#962 remain open. No private source was exported to another org.
