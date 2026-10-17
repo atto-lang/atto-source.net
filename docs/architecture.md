@@ -21,6 +21,24 @@ The current `ActorMailbox` copies untyped bytes, caps queue depth and byte usage
 
 Production integration requires a versioned wire protocol with serializer contracts, immutable envelope metadata, actor-group permits, and a runtime scheduler. Plan for CLR GC interactions honestly: managed Native AOT retains GC; private actor arenas may require native allocations and a carefully validated lifetime protocol.
 
+## Isolation boundaries
+
+Security isolation is deliberately host-level.
+
+- `AssemblyLoadContext` is not a security boundary and is never used to run
+  semi-trusted or untrusted Oreslang code.
+- Trusted actors may share one NativeAOT process subject to Oreslang ownership,
+  mailbox and arena invariants.
+- Semi-trusted CIL/NativeAOT workloads run in a separate worker process.
+- Untrusted NativeAOT workloads require both the process boundary and an
+  OS-level sandbox/resource policy.
+- A WASM sandbox is a separate artifact path. The host may supervise it, but
+  arbitrary CIL does not become sandboxed merely because the host embeds a WASM
+  engine.
+
+The runtime `IsolationPolicy` fails closed on combinations that would blur
+these boundaries. See `docs/DOTNET_ISOLATION.md`.
+
 ## Hot code replacement under strict AOT
 
 Do **not** attempt JIT fallback or `Assembly.LoadFile` to maintain Oreslang hot reload semantics. Instead compile and stage a new native generation, start a new process, validate contracts and health, hand off routing through an explicit proxy, and drain the old process. Inter-generation messages must carry versioned serialization formats and authenticated generations.
