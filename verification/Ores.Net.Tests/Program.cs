@@ -472,4 +472,5 @@ CfgVerifierTests.Run();
 CfgCilStressTests.Run();
 StructuredSourceTests.Run();
 ValueBoundaryTests.Run();
+CpuGpuExecutionGraphTests.Run();
 Console.WriteLine("Oreslang .NET bootstrap, CFG verifier, CIL stress and structured source tests passed");
