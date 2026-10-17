@@ -38,7 +38,13 @@
   "resource_profile": {
     "memory_bytes": 134217728,
     "max_processes": 1,
-    "max_output_bytes": 1048576
+    "max_output_bytes": 1048576,
+    "generic_launcher_enforcement": {
+      "wall_time": "supervisor",
+      "output": "worker-and-supervisor",
+      "memory": "pending-os-sandbox-adapter",
+      "max_processes": "pending-os-sandbox-adapter"
+    }
   },
   "status": "candidate",
   "runtime_receipt": null,
@@ -52,5 +58,27 @@
     "max_chars": 96,
     "arbitrary_guest_exception_text": false,
     "unexpected_guest_failure_retires_worker": true
+  },
+  "channels": {
+    "stdout": "orw1-protocol-only",
+    "stderr": "bounded-guest-log",
+    "guest_console_redirected_from_stdout": true,
+    "output_limit_violation": "opaque-error-and-retire"
+  },
+  "runtime_limits": {
+    "source": "sanitized-launch-environment",
+    "may_tighten_protocol_ceilings": true,
+    "may_widen_protocol_ceilings": false,
+    "max_wall_ms_enforced_before_entry": true,
+    "max_guest_output_bytes_enforced": true
+  },
+  "supervisor": {
+    "startup_handshake_timeout_ms": 5000,
+    "single_flight_invocations": true,
+    "deadline_or_caller_cancel": "kill-entire-process-tree",
+    "shutdown_grace_ms": 1000,
+    "stderr_drain_bounded": true,
+    "protocol_failure_retires_generation": true,
+    "untrusted_still_requires_os_sandbox": true
   }
 }
