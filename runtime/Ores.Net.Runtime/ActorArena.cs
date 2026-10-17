@@ -38,15 +38,15 @@ public sealed unsafe class ActorArena : IDisposable
 
     // Arena domains are capability provenance, not random correlation IDs.
     // Long.MaxValue is a permanent exhaustion sentinel and is never issued.
-    internal sealed class DomainCounter
+    private sealed class DomainCounter
     {
-        internal long Next;
-        internal DomainCounter(long next = 1) => Next = next;
+        private long Next;
+        private DomainCounter(long next = 1) => Next = next;
     }
 
     private static readonly DomainCounter s_domainCounter = new();
 
-    internal static long ClaimDomain(DomainCounter counter, ulong actor, ulong incarnation)
+    private static long ClaimDomain(DomainCounter counter, ulong actor, ulong incarnation)
     {
         ArgumentNullException.ThrowIfNull(counter);
         // Invalid owner authority must never consume a non-recyclable domain.
