@@ -90,6 +90,26 @@ switch routing, drain the previous generation, then terminate it.
 
 See [the .NET isolation model](docs/DOTNET_ISOLATION.md).
 
+## NativeAOT worker mode
+
+The statically linked application now has a candidate process-worker mode:
+
+~~~text
+oreslang-app --worker
+~~~
+
+It speaks the versioned `ORW1` bounded stdio protocol from
+[`contracts/v1/dotnet-worker-v1.json`](contracts/v1/dotnet-worker-v1.json).
+Frames are strict UTF-8, capped at 1 MiB, and invocation deadlines are capped at
+30 seconds. The current scalar compiler still exposes only `main() -> i64`, so
+request payloads are intentionally rejected until real function-parameter
+lowering exists.
+
+The generic launcher clears inherited environment state and refuses untrusted
+workers or scoped capabilities. Those require a verified OS-sandbox host
+adapter; no process/container security claim is inferred from the framing
+protocol itself.
+
 ## Verification
 
 ~~~powershell
