@@ -25,6 +25,7 @@ static void InvalidSend(Action action, string why)
 SourceByteBudgetTests.Run();
 ActorRefNoWireSelfTest.Run();
 ActorPhysicalTurnCreditsSelfTest.Run();
+ActorMaxThreadsSourceAdmissionSelfTest.Run();
 ActorMailboxBoundsSelfTest.Run();
 ActorMailboxRestartAtomicitySelfTest.Run();
 ActorMailboxAuthorizationPrioritySelfTest.Run();
