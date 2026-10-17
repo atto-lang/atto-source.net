@@ -2,7 +2,7 @@
 
 Independent **CIL compiler + .NET Native AOT runtime** for Oreslang. No LLVM, GraalVM, JIT, runtime CIL generation, or dynamic assembly loading is used by released binaries.
 
-> **Status: bootstrap prototype, NOT the full Oreslang implementation.** Only a one-function checked signed-i64 arithmetic subset is implemented today. Native AOT compilation is required for distributed compiler and application artifacts.
+> **Status: bootstrap prototype, NOT the full Oreslang implementation.** Two narrow source surfaces are implemented as candidates: checked signed-i64 `main() -> i64`, and an explicit provider-neutral `String -> String` Lambda subset. Native AOT compilation is required for distributed compiler and application artifacts, and the current exact-head Actions jobs still fail before runner allocation.
 
 ## Native AOT pipeline
 
@@ -21,6 +21,7 @@ Unlike managed .NET publishing, the final executable is compiled ahead of time b
 
 ~~~powershell
 ./scripts/publish-windows.ps1 -Source examples/hello.ores -Rid win-x64
+./scripts/publish-lambda-windows.ps1 -Source examples/lambda-ping.ores -Rid win-x64
 ./artifacts/apps/win-x64/oreslang-app.exe
 # 14
 ~~~
@@ -37,7 +38,20 @@ dotnet publish host/Ores.Net.NativeHost/Ores.Net.NativeHost.csproj -c Release -r
 ./artifacts/apps/win-x64/oreslang-app.exe
 ~~~
 
-Windows ARM64 is a planned target: script accepts `-Rid win-arm64`, but CI coverage and compatible Windows ARM64 build infrastructure remain to be established.
+A separate strict Lambda pipeline uses `compile-lambda` plus the statically
+linked `Ores.Net.LambdaNativeHost`:
+
+~~~powershell
+./scripts/publish-lambda-windows.ps1 -Source examples/lambda-ping.ores -Rid win-x64
+./artifacts/lambda-apps/win-x64/oreslang-lambda-app.exe --invoke ping
+# pong
+~~~
+
+The Lambda candidate emits `Oreslang.Generated.OresProgram.Invoke(String) -> String`
+and never dynamically loads generated CIL. CI is wired to exercise both direct
+`ping -> pong` and the real ORW1 worker protocol when a runner is allocated.
+
+Windows ARM64 is a planned target: scripts accept `-Rid win-arm64`, but CI coverage and compatible Windows ARM64 build infrastructure remain to be established.
 
 ## Current language support
 
@@ -49,7 +63,23 @@ define pub fnc main() : int {
 }
 ~~~
 
-Features: decimal signed 64-bit literals (including `-9223372036854775808`), parentheses, unary plus/minus, signed addition/subtraction/multiplication and checked overflow. Source division is rejected until float result lowering exists: reference Oreslang `int / int` returns `float`, so emitting integer CIL division would silently change semantics. Explicit internal checked-i64 IR division remains a separate tested primitive. The supported syntax is a deliberate **subset** and not the definitive shared Oreslang grammar. No variables, actor syntax, imports, general functions, typechecker, borrow checker or async/await yet.
+Features: decimal signed 64-bit literals (including `-9223372036854775808`), parentheses, unary plus/minus, signed addition/subtraction/multiplication and checked overflow. Source division is rejected until float result lowering exists: reference Oreslang `int / int` returns `float`, so emitting integer CIL division would silently change semantics. Explicit internal checked-i64 IR division remains a separate tested primitive.
+
+The explicit Lambda compiler mode additionally admits the existing provider-neutral
+handler shape:
+
+~~~ores
+define module handler as
+  pub fnc invoke(String event): String {
+    if event == "ping"; then return "pong"; fi
+    return "unsupported";
+  }
+end
+~~~
+
+It currently supports string input, bounded literal equality guards, and string
+returns only. This is a deliberately narrow source subset, not general function,
+JSON, class, actor, closure or collection parity. Unsupported syntax fails closed.
 
 ### Component map
 
@@ -57,7 +87,8 @@ Features: decimal signed 64-bit literals (including `-9223372036854775808`), par
 | --- | --- |
 | `compiler/Ores.Net.Compiler.Core` | Lexer/parser/AST and direct System.Reflection.Metadata CIL emission |
 | `compiler/Ores.Net.Compiler` | Native AOT-compiled CLI (`oresnet`) |
-| `host/Ores.Net.NativeHost` | Statically references generated CIL and Native AOT publishes it |
+| `host/Ores.Net.NativeHost` | Statically references scalar generated CIL and Native AOT publishes it |
+| `host/Ores.Net.LambdaNativeHost` | Statically references generated `Invoke(String)` Lambda CIL and publishes the ORW1 worker |
 | `runtime/Ores.Net.Runtime` | AOT-compatible runtime API, bounded byte mailbox prototype |
 | `verification/Ores.Net.Tests` | Parser/CIL metadata/mailbox tests (Mono.Cecil is test-only) |
 | `scripts/` | Windows-only Native AOT publish pipeline |
@@ -101,9 +132,10 @@ oreslang-app --worker
 It speaks the versioned `ORW1` bounded stdio protocol from
 [`contracts/v1/dotnet-worker-v1.json`](contracts/v1/dotnet-worker-v1.json).
 Frames are strict UTF-8, capped at 1 MiB, and invocation deadlines are capped at
-30 seconds. The current scalar compiler still exposes only `main() -> i64`, so
-request payloads are intentionally rejected until real function-parameter
-lowering exists.
+30 seconds. The original scalar host still accepts only empty payloads for
+`main() -> i64`. The separate Lambda candidate accepts normalized raw UTF-8
+request payloads through `WorkerRuntime.RunText` and returns strict UTF-8
+responses, with null/invalid/oversized responses failing opaque-and-retire.
 
 The generic launcher clears inherited environment state and refuses untrusted
 workers or scoped capabilities. Those require a verified OS-sandbox host
