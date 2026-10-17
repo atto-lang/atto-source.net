@@ -91,6 +91,24 @@ internal static class ProjectRootSourceTests
                    "relative import crossed nested legacy package");
             Reject(() => ProjectRootSourceResolver.Resolve(app, "+/src/routes/child/hidden"),
                    "rooted import crossed nested legacy package");
+            // A parent-owned importer must not launder child package
+            // ownership through a symlinked *target* in its own directory.
+            string targetAlias = Path.Combine(routes, "child-alias.ores");
+            bool aliasCreated = false;
+            try
+            {
+                File.CreateSymbolicLink(targetAlias, Path.Combine(legacyChild, "hidden.ores"));
+                aliasCreated = true;
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or
+                     PlatformNotSupportedException or IOException)
+            {
+                // Nonprivileged Windows test runners may deny symlink creation.
+            }
+            if (aliasCreated)
+                Reject(() => ProjectRootSourceResolver.ResolveRelative(
+                        importer, "./child-alias", app),
+                       "relative target symlink bypassed nested legacy package");
             string selectedFile = Path.Combine(app, "appdata", "lib", "answer.ores");
             Directory.CreateDirectory(Path.GetDirectoryName(selectedFile)!);
             File.WriteAllText(selectedFile, "pub fnc answer():int{return 42;}\n");
