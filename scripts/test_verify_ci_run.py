@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Source-free GitHub run proof regressions for five backends and three Rx variants."""
 import copy
+import io
 import json
 import os
 import subprocess
@@ -517,7 +518,44 @@ class RunContract(unittest.TestCase):
 
     def test_failed_run(self):
         self.values[self.prefix+"/actions/runs/17"]["conclusion"] = "failure"
-        self.rejected()
+        page = self.prefix + "/actions/runs/17/jobs?filter=latest&per_page=100&page=1"
+        self.values[page]["jobs"][0]["conclusion"] = "failure"
+        with self.assertRaises(module.Denied) as caught:
+            self.validate()
+        self.assertNotIsInstance(caught.exception, module.NotExecuted)
+
+    def test_failed_before_runner_is_classified_not_executed(self):
+        self.values[self.prefix+"/actions/runs/17"]["conclusion"] = "failure"
+        page = self.prefix + "/actions/runs/17/jobs?filter=latest&per_page=100&page=1"
+        job = self.values[page]["jobs"][0]
+        job["conclusion"] = "failure"
+        job["runner_id"] = 0
+        job["runner_name"] = ""
+        job["steps"] = []
+        with self.assertRaisesRegex(module.NotExecuted, "without any allocated runner"):
+            self.validate()
+
+    def test_success_zero_step_job_is_rejected_not_classified_not_executed(self):
+        page = self.prefix + "/actions/runs/17/jobs?filter=latest&per_page=100&page=1"
+        self.values[page]["jobs"][0]["steps"] = []
+        with self.assertRaises(module.Denied) as caught:
+            self.validate()
+        self.assertNotIsInstance(caught.exception, module.NotExecuted)
+
+    def test_main_returns_distinct_exit_two_for_not_executed(self):
+        argv = [
+            "--backend", "java", "--commit", "a"*40, "--tree", "b"*40,
+            "--run-id", "17", "--run-attempt", "2", "--event", "push",
+            "--workflow-run-path", ".github/workflows/ci.yml",
+            "--workflow-path", ".github/workflows/ci.yml",
+            "--workflow-id", "991", "--workflow-blob-sha", "c"*40,
+            "--require-job", "unit", "--require-step", "Execute test suite",
+        ]
+        with patch.object(module, "verify",
+                          side_effect=module.NotExecuted("no runner allocation")):
+            with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                self.assertEqual(module.main(argv), 2)
+        self.assertIn("CI_RUN_EVIDENCE_NOT_EXECUTED:", stderr.getvalue())
 
     def test_missing_runner_identity(self):
         page = self.prefix + "/actions/runs/17/jobs?filter=latest&per_page=100&page=1"
