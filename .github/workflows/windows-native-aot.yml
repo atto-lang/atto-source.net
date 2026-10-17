@@ -13,7 +13,18 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact source head
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse --verify HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain --untracked-files=all)"
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -129,6 +140,9 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or ($output | Out-String).Trim() -ne '2211') {
             throw "CFG Native AOT atomic swap regression: expected 2211, got '$output'"
           }
+      - name: Compile structured source sum45 into strict Windows Native AOT
+        shell: pwsh
+        run: ./verification/assert-windows-structured-cfg-native.ps1
       - name: Upload native executable
         uses: actions/upload-artifact@v4
         with:
@@ -139,10 +153,21 @@ jobs:
   # The Windows release remains mandatory. Linux is an independent diagnostic
   # for compiler/CIL correctness when Windows hosted runners fail before steps.
   linux-aot-diagnostic:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact source head
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse --verify HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain --untracked-files=all)"
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
@@ -174,3 +199,6 @@ jobs:
       - name: Execute Linux Native AOT CFG branch and simultaneous-assignment fixture
         shell: bash
         run: bash ./verification/assert-linux-cfg-native.sh
+      - name: Execute Linux Native AOT structured source sum45 fixture
+        shell: bash
+        run: bash ./verification/assert-linux-structured-cfg-native.sh
