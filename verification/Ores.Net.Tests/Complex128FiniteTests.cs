@@ -35,6 +35,27 @@ internal static class Complex128FiniteTests
             -1.0357625560708896e-142,
             "balanced one-ULP division");
 
+        AssertBits(
+            Complex128Math.Divide(
+                new Complex128(0.9999999947592926, 1.0000000008845844),
+                new Complex128(0.9999999973991033, 1.0000000035243972)),
+            0.9999999973601883, -1.0466270614337854e-15,
+            "nonzero near-cancellation division");
+
+        AssertBits(
+            Complex128Math.Divide(
+                new Complex128(1e300, 1e-20),
+                new Complex128(0.0, 1.0)),
+            1e-20, -1e300,
+            "small component survives extreme scale separation");
+
+        AssertBits(
+            Complex128Math.Divide(
+                new Complex128(0.0, 0.0),
+                new Complex128(0.0, 5e-324)),
+            0.0, 0.0,
+            "zero numerator over minimum subnormal divisor");
+
         ExpectArithmetic(
             () => Complex128Math.Multiply(
                 new Complex128(double.PositiveInfinity, 0.0),
