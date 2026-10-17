@@ -39,6 +39,8 @@ jobs:
       - name: Verify compiler and runtime source
         shell: pwsh
         run: dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
+      - name: Self-test fail-closed Option-pattern evidence harness (synthetic only)
+        run: python3 -m unittest discover -s scripts -p test_option_pattern_contract.py -v
       - name: Reject unsupported Option pattern syntax with real .NET compiler
         shell: pwsh
         run: |
