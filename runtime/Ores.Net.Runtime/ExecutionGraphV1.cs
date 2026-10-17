@@ -307,18 +307,50 @@ public static class ExecutionGraphV1
         {
             ArgumentNullException.ThrowIfNull(schedule);
             var ticket = new Ticket<T>();
+            // A scheduler can start its callback before returning, then
+            // throw. Until admission resolves, not even a pure host graph
+            // may evaluate or publish a result. This matches Java/LLVM/Forge.
+            using var admission = new System.Threading.ManualResetEventSlim(false);
+            int admitted = 0;
+            int inlineAttempted = 0;
+            int submittingThread = Environment.CurrentManagedThreadId;
             try
             {
                 AdmitCpu();
                 schedule(() =>
                 {
                     if (!ticket.ClaimExecution() || ticket.Cancelled) return;
-                    try { ticket.Complete(Evaluate(() => ticket.Cancelled)); }
+                    try
+                    {
+                        if (!admission.IsSet &&
+                                Environment.CurrentManagedThreadId == submittingThread)
+                        {
+                            // Defer terminal error so an inline-then-throw
+                            // executor preserves its own rejection exception.
+                            System.Threading.Interlocked.Exchange(ref inlineAttempted, 1);
+                            return;
+                        }
+                        if (!admission.Wait(TimeSpan.FromSeconds(30)))
+                        {
+                            ticket.RejectExecutor(new TimeoutException(
+                                "host CPU graph executor admission timed out"));
+                            return;
+                        }
+                        if (System.Threading.Volatile.Read(ref admitted) != 1 ||
+                                ticket.Cancelled) return;
+                        ticket.Complete(Evaluate(() => ticket.Cancelled));
+                    }
                     catch (OperationCanceledException) { ticket.Cancel(); }
                     catch (Exception ex) { ticket.Fail(ex); }
                 });
+                if (System.Threading.Volatile.Read(ref inlineAttempted) != 0)
+                    ticket.RejectExecutor(new InvalidOperationException(
+                        "host CPU graph requires queued executor; inline dispatch rejected"));
+                else
+                    System.Threading.Volatile.Write(ref admitted, 1);
             }
             catch (Exception ex) { ticket.RejectExecutor(ex); }
+            finally { admission.Set(); }
             return ticket;
         }
     }
