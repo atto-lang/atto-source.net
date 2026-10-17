@@ -103,7 +103,8 @@ public static class WorkerProtocol
             throw new FormatException("worker frame flags must be zero");
 
         var kindByte = header[5];
-        if (!Enum.IsDefined(typeof(WorkerFrameKind), kindByte))
+        if (kindByte < (byte)WorkerFrameKind.Ready ||
+            kindByte > (byte)WorkerFrameKind.Shutdown)
             throw new FormatException("unknown worker frame kind");
         var kind = (WorkerFrameKind)kindByte;
         var requestId = BinaryPrimitives.ReadUInt64BigEndian(header.Slice(8, 8));
