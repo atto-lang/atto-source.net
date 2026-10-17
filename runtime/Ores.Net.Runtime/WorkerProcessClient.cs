@@ -257,7 +257,7 @@ public sealed class WorkerProcessClient : IAsyncDisposable
         var totalBytes = 0;
         while (true)
         {
-            var read = await reader.ReadAsync(buffer).ConfigureAwait(false);
+            var read = await reader.ReadAsync(buffer.AsMemory()).ConfigureAwait(false);
             if (read == 0) return;
 
             var bytes = Encoding.UTF8.GetByteCount(
@@ -305,6 +305,13 @@ public sealed class WorkerProcessClient : IAsyncDisposable
         // Kill(true) is therefore the generic supervisor's minimum teardown
         // primitive. Untrusted execution still requires the stronger platform
         // sandbox/job/cgroup adapter admitted elsewhere.
-        _process.Kill(entireProcessTree: true);
+        try
+        {
+            _process.Kill(entireProcessTree: true);
+        }
+        catch (InvalidOperationException) when (_process.HasExited)
+        {
+            // Exit raced with teardown; the required boundary is already gone.
+        }
     }
 }
