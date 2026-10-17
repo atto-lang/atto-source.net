@@ -20,13 +20,16 @@ public static class WorkerRuntime
         Stream input,
         Stream output,
         TextWriter error,
-        Func<long>? unixMilliseconds = null)
+        Func<long>? unixMilliseconds = null,
+        WorkerRuntimeSettings? settings = null)
     {
         ArgumentNullException.ThrowIfNull(entry);
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(output);
         ArgumentNullException.ThrowIfNull(error);
         unixMilliseconds ??= () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        settings ??= WorkerRuntimeSettings.StrictFaas;
+        settings.Validate();
 
         try
         {
@@ -64,7 +67,14 @@ public static class WorkerRuntime
                             break;
                         }
                         lastInvokeRequestId = frame.RequestId;
-                        if (!HandleInvoke(entry, output, frame, unixMilliseconds()))
+                        if (!HandleInvoke(
+                                entry,
+                                output,
+                                error,
+                                frame,
+                                unixMilliseconds(),
+                                settings.MaxInvocationMilliseconds,
+                                settings.MaxGuestOutputBytes))
                             return 70;
                         break;
 
@@ -85,11 +95,16 @@ public static class WorkerRuntime
     private static bool HandleInvoke(
         Func<long> entry,
         Stream output,
+        TextWriter guestLog,
         WorkerFrame frame,
-        long nowUnixMilliseconds)
+        long nowUnixMilliseconds,
+        int maxInvocationMilliseconds,
+        int maxGuestOutputBytes)
     {
         var deadlineError = WorkerProtocol.ValidateDeadline(
-            frame.DeadlineUnixMilliseconds, nowUnixMilliseconds);
+            frame.DeadlineUnixMilliseconds,
+            nowUnixMilliseconds,
+            maxInvocationMilliseconds);
         if (deadlineError is not null)
         {
             WorkerProtocol.WriteFrame(
@@ -111,13 +126,24 @@ public static class WorkerRuntime
 
         try
         {
-            var value = entry();
+            var value = ExecuteGuestBounded(
+                entry,
+                guestLog,
+                maxGuestOutputBytes);
             WorkerProtocol.WriteFrame(
                 output,
                 WorkerFrame.Response(
                     frame.RequestId,
                     value.ToString(CultureInfo.InvariantCulture)));
             return true;
+        }
+        catch (GuestOutputLimitException)
+        {
+            WorkerProtocol.WriteFrame(
+                output, WorkerFrame.Error(frame.RequestId, "guest-output-limit"));
+            // A guest that exceeded its log budget is retired so no state from
+            // a potentially runaway invocation is reused.
+            return false;
         }
         catch (OverflowException)
         {
@@ -142,4 +168,30 @@ public static class WorkerRuntime
             return false;
         }
     }
+    private static long ExecuteGuestBounded(
+        Func<long> entry,
+        TextWriter guestLog,
+        int maxGuestOutputBytes)
+    {
+        var previousOut = Console.Out;
+        var previousError = Console.Error;
+        var bounded = new BoundedGuestTextWriter(
+            guestLog,
+            maxGuestOutputBytes);
+        try
+        {
+            // ORW1 owns stdout exclusively. Guest Console.Out and Console.Error
+            // are redirected to the bounded log channel for the duration of
+            // guest execution and restored before any protocol frame is written.
+            Console.SetOut(bounded);
+            Console.SetError(bounded);
+            return entry();
+        }
+        finally
+        {
+            Console.SetOut(previousOut);
+            Console.SetError(previousError);
+        }
+    }
+
 }
