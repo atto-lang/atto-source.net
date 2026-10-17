@@ -5,24 +5,47 @@ using System.Text;
 // passed validation then crashed with IndexOutOfRangeException instead of usage.
 bool validCheck = args.Length == 2 && args[0] == "check";
 bool validCompile = args.Length == 4 && args[0] == "compile" && args[2] == "--out";
-if (!validCheck && !validCompile)
+bool validLambdaCheck = args.Length == 2 && args[0] == "check-lambda";
+bool validLambdaCompile =
+    args.Length == 4 && args[0] == "compile-lambda" && args[2] == "--out";
+if (!validCheck && !validCompile && !validLambdaCheck && !validLambdaCompile)
 {
-    Console.Error.WriteLine("usage: oresnet check input.ores | oresnet compile input.ores --out path/OresGenerated.dll");
+    Console.Error.WriteLine(
+        "usage: oresnet check input.ores | " +
+        "oresnet compile input.ores --out path/OresGenerated.dll | " +
+        "oresnet check-lambda input.ores | " +
+        "oresnet compile-lambda input.ores --out path/OresGenerated.dll");
     return 2;
 }
 
 try
 {
     var source = ReadBoundedSource(args[1]);
+
+    if (validLambdaCheck || validLambdaCompile)
+    {
+        var lambda = OresLambdaTextParser.Parse(source);
+        if (validLambdaCompile)
+        {
+            RequireGeneratedAssemblyName(args[3]);
+            LambdaTextCilEmitter.EmitLibrary(lambda, args[3]);
+            Console.WriteLine(
+                $"Emitted Lambda CIL: {Path.GetFullPath(args[3])}");
+        }
+        else
+        {
+            Console.WriteLine("Oreslang String Lambda subset syntax: OK");
+        }
+        return 0;
+    }
+
     var expression = OresParser.Parse(source);
-    // Both check and compile require successfully verified typed IR.
+    // Both scalar check and compile require successfully verified typed IR.
     // Production CIL must not bypass SSA/type validation.
     var verified = OresIrLowering.Lower(expression);
-    if (args[0] == "compile")
+    if (validCompile)
     {
-        if (!string.Equals(Path.GetFileName(args[3]), "OresGenerated.dll",
-            StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("Generated assembly must be named OresGenerated.dll");
+        RequireGeneratedAssemblyName(args[3]);
         CilEmitter.EmitLibrary(verified, args[3]);
         Console.WriteLine($"Emitted CIL: {Path.GetFullPath(args[3])}");
     }
@@ -33,6 +56,17 @@ catch (Exception ex) when (ex is FormatException or IOException or UnauthorizedA
 {
     Console.Error.WriteLine($"oresnet: {ex.Message}");
     return 1;
+}
+
+
+static void RequireGeneratedAssemblyName(string path)
+{
+    if (!string.Equals(
+            Path.GetFileName(path),
+            "OresGenerated.dll",
+            StringComparison.OrdinalIgnoreCase))
+        throw new ArgumentException(
+            "Generated assembly must be named OresGenerated.dll");
 }
 
 
