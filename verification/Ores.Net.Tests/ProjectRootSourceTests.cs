@@ -41,6 +41,19 @@ internal static class ProjectRootSourceTests
             File.WriteAllText(manifest, "schema_version = \"1\"\n");
             Check(ProjectRootSourceResolver.Resolve(app, "+/src/answer") == Path.GetFullPath(source),
                   "inferred extension");
+            // TOML line endings are LF or CRLF. A bare CR can otherwise
+            // conceal [project] or a second root after a # comment.
+            File.WriteAllText(manifest,
+                "schema_version = \"1\" # comment\r[project]\rroot = \"../other\"\n");
+            Reject(() => ProjectRootSourceResolver.Resolve(app, "+/src/answer"),
+                   "bare CR concealed project root after comment");
+            File.WriteAllText(manifest, "schema_version = \"1\"\r");
+            Reject(() => ProjectRootSourceResolver.Resolve(app, "+/src/answer"),
+                   "bare CR at EOF admitted");
+            File.WriteAllText(manifest, "schema_version = \"1\"\r\n");
+            Check(ProjectRootSourceResolver.Resolve(app, "+/src/answer") == Path.GetFullPath(source),
+                  "legal CRLF manifest was incorrectly rejected");
+
             string legacyManifest = Path.Combine(app, ".oreslangc.cfg.toml");
             File.WriteAllText(legacyManifest, "schema_version = \"1\"\n");
             File.Delete(manifest);
