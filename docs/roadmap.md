@@ -15,8 +15,8 @@ General functions, calls, locals, loops, structs, records, exhaustive generic sp
 ### N4 — Actor runtime contract
 Four scheduler domains, CONTROL coordinator, bounded mailboxes, typed ActorRef, supervision, send acknowledgements, actor-owned arenas where safe, stable Result serialization and generation-aware transport.
 
-### N5 — Async and cross-generation upgrades
-`await`, `select`, `*_blocking` cooperative suspension without blocking scheduler threads; process-level staged native-generation replacement and rollback (no runtime code loading).
+### N5 — Async, isolation and cross-generation upgrades
+`await`, `select`, `*_blocking` cooperative suspension without blocking scheduler threads; process-level staged native-generation replacement and rollback (no runtime code loading); bounded worker IPC; explicit capability/resource manifests; Windows Job Object and Linux process/container sandbox adapters; cancellation/deadline propagation and process-tree teardown. Collectible `AssemblyLoadContext` remains development-only and never counts as a security boundary.
 
 ### N6 — Parity, proofs and release
 Differential conformance with Java/LLVM/Forge, fuzzing and formal models of ownership and mailbox linearizability, release signing/SBOM, win-x64+win-arm64 production matrix, constrained resource tests.
