@@ -237,7 +237,9 @@ public static class CpuGpuExecutionGraph
             {
                 if (step.Left < 0 || step.Right < 0 || step.Left >= at ||
                     step.Right >= at || !step.Dependencies.Contains(step.Left) ||
-                    !step.Dependencies.Contains(step.Right))
+                    !step.Dependencies.Contains(step.Right) ||
+                    graph.Steps[step.Left].ResultType != Type.I64 ||
+                    graph.Steps[step.Right].ResultType != Type.I64)
                     throw new FormatException("Malformed i64 SSA operands");
                 values[at] = checked(values[step.Left] + values[step.Right]);
             }
