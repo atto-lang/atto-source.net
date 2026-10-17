@@ -24,6 +24,11 @@ jobs:
         run: |
           $actual = (& git rev-parse HEAD).Trim()
           if ($actual -ne $env:EXPECTED_SHA) { throw "NativeAOT source head mismatch: $actual" }
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify pinned Sendable Serializable DATA CONTROL contract
+        run: python scripts/verify_serde_contract.py
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: '10.0.x'
