@@ -25,6 +25,7 @@ static void InvalidSend(Action action, string why)
 SourceByteBudgetTests.Run();
 ActorArenaTests.Run();
 ActorPipelinePolicyTests.Run();
+Complex128FiniteTests.Run();
 
 // Actor host selectors are not guest source intrinsics on this backend yet.
 // Neither parser may accept unlowered self.* calls as no-op code.

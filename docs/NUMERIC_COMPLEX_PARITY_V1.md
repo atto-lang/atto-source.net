@@ -231,3 +231,24 @@ uploaded short-lived [artifact #12110614229](https://github.com/cliptown/cliptow
 Its checks were not copied from the private Oreslang source tree;
 **the actual source finite/IEEE oracle files and Oreslang native guest
 compilers have not been tested successfully by that host**.
+
+
+## .NET finite complex128 runtime kernel (2026-10-17)
+
+The .NET backend now has a Native-AOT-compatible `Complex128` value and
+finite arithmetic reference kernel in `Ores.Net.Runtime`. Multiplication and
+division decode binary64 operands to exact dyadics, evaluate with
+`System.Numerics.BigInteger`, and round each component once with
+round-to-nearest, ties-to-even. Direct managed self-tests pin the Java #1042
+tiny cross-component quotient, a minimum-subnormal multiplication, the
+separated-cross-term once-rounding regression, and a balanced one-ULP
+division case by raw binary64 bits.
+
+This is deliberately **not** source-language parity yet: the current .NET
+bootstrap parser/typed IR/CIL path is still i64-only, so no source program can
+silently route around typed lowering. NaN/Infinity and zero-divisor complex
+semantics also remain fail-closed in the .NET kernel until the shared
+IEEE-special contract is implemented. The source-free reference workflow is
+still non-certifying; exact-head `dotnet test/publish` or the repository's
+self-test/native-AOT gate must actually run before this backend is marked
+verified.
