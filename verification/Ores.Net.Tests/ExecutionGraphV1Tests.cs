@@ -7,6 +7,30 @@ internal static class ExecutionGraphV1Tests
         if (!condition) throw new Exception("typed execution graph: " + why);
     }
 
+    private static void MustRejectImportedResult<T>(
+        ExecutionGraphV1.Node[] nodes, ExecutionGraphV1.Kind kind)
+    {
+        // The trusted IR import constructor must fail before evaluation,
+        // never admit a graph that would fail as an InvalidCastException.
+        var constructor = typeof(ExecutionGraphV1.Plan<T>).GetConstructor(
+            System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic,
+            binder: null,
+            types: new[] { typeof(ExecutionGraphV1.Node[]), typeof(int),
+                typeof(ExecutionGraphV1.Kind) },
+            modifiers: null) ?? throw new Exception("missing trusted plan constructor");
+        try
+        {
+            _ = constructor.Invoke(new object[] { nodes, nodes.Length - 1, kind });
+        }
+        catch (System.Reflection.TargetInvocationException error)
+            when (error.InnerException is ArgumentException)
+        {
+            return;
+        }
+        throw new Exception("forged Plan<T> result kind was admitted");
+    }
+
     public static void Run()
     {
         var unitBuilder = new ExecutionGraphV1.Builder();
@@ -99,6 +123,33 @@ internal static class ExecutionGraphV1Tests
         Need(frozen.Nodes[2].Inputs[0] == 0, "operand snapshot retained alias");
         Need(frozen.Nodes[2].Inputs is System.Collections.Generic.IList<int> readOnly &&
              readOnly.IsReadOnly, "plan edges must be immutable");
+
+        // Trusted IR imports must bind the static CLR type to the declared
+        // graph kind; previously Plan<long> over Unit passed construction and
+        // failed only at ExecuteCpu() as an unchecked InvalidCastException.
+        var importedUnit = new[] {
+            new ExecutionGraphV1.Node(0, ExecutionGraphV1.Domain.Cpu,
+                ExecutionGraphV1.Operation.Unit, ExecutionGraphV1.Kind.Unit,
+                Array.Empty<int>(), 0)
+        };
+        MustRejectImportedResult<long>(importedUnit, ExecutionGraphV1.Kind.Unit);
+        MustRejectImportedResult<ExecutionGraphV1.Unit>(imported,
+            ExecutionGraphV1.Kind.HostI64);
+        MustRejectImportedResult<ExecutionGraphV1.DeviceI64>(imported,
+            ExecutionGraphV1.Kind.HostI64);
+        MustRejectImportedResult<object>(imported, ExecutionGraphV1.Kind.HostI64);
+        // Positive typed IR remains admissible for the actual Unit singleton.
+        var unitImport = typeof(ExecutionGraphV1.Plan<ExecutionGraphV1.Unit>)
+            .GetConstructor(System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic,
+                binder: null,
+                types: new[] { typeof(ExecutionGraphV1.Node[]), typeof(int),
+                    typeof(ExecutionGraphV1.Kind) }, modifiers: null)
+            ?? throw new Exception("unit import constructor missing");
+        var checkedUnit = (ExecutionGraphV1.Plan<ExecutionGraphV1.Unit>)
+            unitImport.Invoke(new object[] { importedUnit, 0, ExecutionGraphV1.Kind.Unit });
+        Need(ReferenceEquals(checkedUnit.ExecuteCpu(), ExecutionGraphV1.Unit.Instance),
+            "valid imported Unit result rejected");
 
         // An executor may incorrectly dispatch its one-shot task twice;
         // only the first claimant is permitted to evaluate it.
