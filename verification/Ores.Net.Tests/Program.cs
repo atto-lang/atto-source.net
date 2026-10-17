@@ -114,6 +114,12 @@ foreach (var refinement in new[] {
     "type NonEmpty = string with length gt 0; fnc main():int{return 42;}",
     "type NonBlank = string where it.trim().length > 0; fnc main():int{return 42;}",
     "define newtype Username(string) with length gte 1; fnc main():int{return 42;}",
+    "type Port = int with value gte 1 and value lte 65535; fnc main():int{return 42;}",
+    "type Port = int with value >= 1 and value <= 65535; fnc main():int{return 42;}",
+    "type Percentage = int with value gte 0 and value lte 100; fnc main():int{return 42;}",
+    "type Percentage = int with value >= 0 and value <= 100; fnc main():int{return 42;}",
+    "type Legacy = int with value ge 1; fnc main():int{return 42;}",
+    "type Legacy = int with value le 10; fnc main():int{return 42;}",
     "type T = string with length gt 0 or length eq 10; fnc main():int{return 42;}"
 })
 {
