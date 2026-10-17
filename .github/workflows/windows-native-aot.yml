@@ -58,6 +58,12 @@ jobs:
       - name: Exercise the released Native AOT compiler CLI
         shell: pwsh
         run: ./verification/assert-native-compiler-cli.ps1 -Compiler ./artifacts/compiler/win-x64/oresnet.exe -ValidSource examples/hello.ores
+      - name: Publish strict Native AOT Lambda fixture
+        shell: pwsh
+        run: ./scripts/publish-lambda-windows.ps1 -Source examples/lambda-ping.ores -Rid win-x64
+      - name: Execute real ORW1 Lambda worker
+        shell: pwsh
+        run: python verification/assert-lambda-worker.py ./artifacts/lambda-apps/win-x64/oreslang-lambda-app.exe
       - name: Execute real Windows Native AOT binary
         shell: pwsh
         run: |
@@ -73,6 +79,7 @@ jobs:
         run: |
           ./verification/assert-native-pe.ps1 -Binary ./artifacts/compiler/win-x64/oresnet.exe -Rid win-x64
           ./verification/assert-native-pe.ps1 -Binary ./artifacts/apps/win-x64/oreslang-app.exe -Rid win-x64
+          ./verification/assert-native-pe.ps1 -Binary ./artifacts/lambda-apps/win-x64/oreslang-lambda-app.exe -Rid win-x64
           $managed = './verification/Ores.Net.Tests/bin/Release/net10.0/Ores.Net.Tests.dll'
           if (-not (Test-Path $managed)) { throw 'Managed test assembly not found' }
           $acceptedManaged = $true
@@ -135,6 +142,12 @@ jobs:
           name: oreslang-net-win-x64
           path: artifacts/apps/win-x64/
           if-no-files-found: error
+      - name: Upload native Lambda executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: oreslang-net-lambda-win-x64
+          path: artifacts/lambda-apps/win-x64/
+          if-no-files-found: error
 
   # The Windows release remains mandatory. Linux is an independent diagnostic
   # for compiler/CIL correctness when Windows hosted runners fail before steps.
@@ -171,6 +184,22 @@ jobs:
           file artifacts/linux-x64/oreslang-app | grep -q 'ELF 64-bit'
           test ! -f artifacts/linux-x64/oreslang-app.runtimeconfig.json
           test ! -f artifacts/linux-x64/OresGenerated.dll
+      - name: Compile and publish Linux Native AOT Lambda fixture
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/lambda-generated
+          dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -- \
+            compile-lambda examples/lambda-ping.ores --out artifacts/lambda-generated/OresGenerated.dll
+          dotnet publish host/Ores.Net.LambdaNativeHost/Ores.Net.LambdaNativeHost.csproj \
+            -c Release -r linux-x64 -o artifacts/lambda-linux-x64 \
+            "-p:GeneratedAssembly=$GITHUB_WORKSPACE/artifacts/lambda-generated/OresGenerated.dll" -warnaserror
+          test -x artifacts/lambda-linux-x64/oreslang-lambda-app
+          test "$(artifacts/lambda-linux-x64/oreslang-lambda-app --invoke ping)" = pong
+          file artifacts/lambda-linux-x64/oreslang-lambda-app | grep -q 'ELF 64-bit'
+          test ! -f artifacts/lambda-linux-x64/oreslang-lambda-app.runtimeconfig.json
+          test ! -f artifacts/lambda-linux-x64/OresGenerated.dll
+      - name: Execute Linux ORW1 Lambda worker
+        run: python3 verification/assert-lambda-worker.py ./artifacts/lambda-linux-x64/oreslang-lambda-app
       - name: Execute Linux Native AOT CFG branch and simultaneous-assignment fixture
         shell: bash
         run: bash ./verification/assert-linux-cfg-native.sh
