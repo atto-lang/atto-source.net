@@ -51,7 +51,9 @@ public sealed unsafe class ActorArena : IDisposable
     private readonly ushort[] _scratchLengths = new ushort[ScratchBytes];
     private byte* _memory;
     private Turn? _turn;
-    private int _carrier, _scratchTop;
+    [ThreadStatic] private static ActorArena? s_carrierArena;
+    [ThreadStatic] private static Turn? s_carrierTurn;
+    private int _scratchTop;
     private bool _retired;
 
     public ActorArena(ulong actor, ulong incarnation)
@@ -70,10 +72,12 @@ public sealed unsafe class ActorArena : IDisposable
             throw new InvalidOperationException("actor arena busy");
         try
         {
-            if (_retired || _turn is not null || actor != _actor || incarnation != _incarnation)
+            if (_retired || _turn is not null || actor != _actor || incarnation != _incarnation ||
+                s_carrierArena is not null)
                 throw new InvalidOperationException("actor arena admission denied");
-            _carrier = Environment.CurrentManagedThreadId;
             _turn = new Turn();
+            s_carrierArena = this;
+            s_carrierTurn = _turn;
             return _turn;
         }
         finally
@@ -85,7 +89,7 @@ public sealed unsafe class ActorArena : IDisposable
     private void RequireTurn(Turn turn)
     {
         if (_retired || _turn is null || !ReferenceEquals(_turn, turn) ||
-            _carrier != Environment.CurrentManagedThreadId)
+            !ReferenceEquals(s_carrierArena, this) || !ReferenceEquals(s_carrierTurn, turn))
             throw new InvalidOperationException("wrong or stale actor turn");
     }
 
@@ -100,7 +104,8 @@ public sealed unsafe class ActorArena : IDisposable
             Array.Clear(_scratchLengths);
             _scratchTop = 0;
             _turn = null;
-            _carrier = 0;
+            s_carrierTurn = null;
+            s_carrierArena = null;
         }
         finally
         {
