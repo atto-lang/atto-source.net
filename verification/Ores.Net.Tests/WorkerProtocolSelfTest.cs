@@ -165,7 +165,7 @@ static class WorkerProtocolSelfTest
             "worker maps arithmetic overflow without stack disclosure");
 
         var divide = RunOne(
-            WorkerFrame.Invoke(10, 2_000),
+            WorkerFrame.Invoke(8, 2_000),
             () => throw new DivideByZeroException(),
             now: 1_000);
         Require(divide == WorkerFrame.Error(8, "division-by-zero"),
