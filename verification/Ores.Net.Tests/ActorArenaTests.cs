@@ -174,6 +174,41 @@ internal static class ActorArenaTests
                 throw new Exception("actor migration test stalled");
             if (failure is not null) throw new Exception("carrier migration", failure);
         }
+        // Lifetime-only external leases model continuations, FFI and I/O
+        // callbacks. Retirement must revoke arena operations immediately but
+        // keep native storage pinned until the last lease is released.
+        var quiescing = new ActorArena(1201, 9);
+        var qt = quiescing.BeginTurn(1201, 9);
+        var qh = quiescing.Allocate(qt, 4);
+        quiescing.Write(qt, qh, new byte[] { 1, 4, 9, 16 });
+        var external = quiescing.AcquireExternalLease(qt);
+        if (quiescing.OutstandingExternalLeases != 1)
+            throw new Exception("external arena lease was not charged");
+        quiescing.EndTurn(qt);
+        quiescing.Dispose();
+        if (!quiescing.Retired || quiescing.PhysicallyDisposed)
+            throw new Exception("external lease did not pin physical actor memory");
+        ExpectFailure(() => quiescing.BeginTurn(1201, 9));
+
+        Exception? leaseReleaseFailure = null;
+        var callbackCarrier = new System.Threading.Thread(() =>
+        {
+            try
+            {
+                external.Dispose();
+                external.Dispose(); // idempotent even on callback cleanup retry
+            }
+            catch (Exception failure) { leaseReleaseFailure = failure; }
+        });
+        callbackCarrier.Start();
+        if (!callbackCarrier.Join(TimeSpan.FromSeconds(5)))
+            throw new Exception("external lease release stalled");
+        if (leaseReleaseFailure is not null)
+            throw new Exception("external lease release failed", leaseReleaseFailure);
+        if (!quiescing.PhysicallyDisposed || quiescing.OutstandingExternalLeases != 0)
+            throw new Exception("last external lease did not trigger physical reclaim");
+        quiescing.Dispose();
+
         using var restarted = new ActorArena(101, 2);
         var tr = restarted.BeginTurn(101, 2);
         ExpectFailure(() => restarted.Read(tr, h));
