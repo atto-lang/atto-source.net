@@ -27,6 +27,20 @@ internal static class ActorArenaTests
         if (a.Read(ta, h)[0] != 7) throw new Exception("read returned mutable alias");
         var scratch = a.AllocateScratch(ta, 2);
         a.WriteScratch(ta, scratch, new byte[] { 5, 6 });
+        // Even an in-bounds range must refer to an issued scratch allocation,
+        // not a fabricated subrange of the actor's scratch memory.
+        var scratchType = typeof(ActorArena.Scratch);
+        var flags = System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.NonPublic;
+        var domainField = scratchType.GetField("Domain", flags)
+            ?? throw new Exception("scratch domain fixture unavailable");
+        var scratchCtor = scratchType.GetConstructors(flags).Single();
+        var forged = (ActorArena.Scratch)scratchCtor.Invoke(new object[] {
+            (Guid)domainField.GetValue(scratch)!, ta, 1, 1
+        });
+        ExpectFailure(() => a.ReadScratch(ta, forged));
+        if (!a.ReadScratch(ta, scratch).SequenceEqual(new byte[] { 5, 6 }))
+            throw new Exception("valid issued scratch handle rejected");
         ExpectFailure(() => a.Dispose());
         a.EndTurn(ta);
         b.EndTurn(tb);
