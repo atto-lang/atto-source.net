@@ -135,10 +135,13 @@ public static class WorkerProtocol
         long deadlineUnixMilliseconds,
         long nowUnixMilliseconds)
     {
+        if (nowUnixMilliseconds < 0 ||
+            nowUnixMilliseconds > long.MaxValue - MaxInvocationMilliseconds)
+            return "host-clock-invalid";
         if (deadlineUnixMilliseconds <= nowUnixMilliseconds)
             return "deadline-expired";
-        if (deadlineUnixMilliseconds - nowUnixMilliseconds >
-            MaxInvocationMilliseconds)
+        if (deadlineUnixMilliseconds >
+            nowUnixMilliseconds + MaxInvocationMilliseconds)
             return "deadline-exceeds-worker-limit";
         return null;
     }
@@ -179,10 +182,17 @@ public static class WorkerProtocol
                 return;
 
             case WorkerFrameKind.Response:
-            case WorkerFrameKind.Error:
                 Require(frame.RequestId != 0, "response request id must be nonzero");
                 Require(frame.DeadlineUnixMilliseconds == 0,
                     "response frame cannot carry deadline");
+                return;
+
+            case WorkerFrameKind.Error:
+                Require(frame.RequestId != 0, "error request id must be nonzero");
+                Require(frame.DeadlineUnixMilliseconds == 0,
+                    "error frame cannot carry deadline");
+                Require(IsErrorCode(frame.Payload),
+                    "error payload must be a bounded lowercase code");
                 return;
 
             case WorkerFrameKind.Shutdown:
@@ -194,6 +204,20 @@ public static class WorkerProtocol
             default:
                 throw new FormatException("unknown worker frame kind");
         }
+    }
+
+    private static bool IsErrorCode(string value)
+    {
+        if (value.Length is < 1 or > 96) return false;
+        foreach (var ch in value)
+        {
+            if ((ch >= 'a' && ch <= 'z') ||
+                (ch >= '0' && ch <= '9') ||
+                ch == '-')
+                continue;
+            return false;
+        }
+        return true;
     }
 
     private static void Require(bool condition, string message)
