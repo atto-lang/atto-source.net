@@ -41,5 +41,16 @@
     "max_output_bytes": 1048576
   },
   "status": "candidate",
-  "runtime_receipt": null
+  "runtime_receipt": null,
+  "request_ids": {
+    "scope": "worker-generation",
+    "admission": "strictly-increasing",
+    "replay": "rejected-before-guest-entry"
+  },
+  "error_envelope": {
+    "encoding": "lowercase-code",
+    "max_chars": 96,
+    "arbitrary_guest_exception_text": false,
+    "unexpected_guest_failure_retires_worker": true
+  }
 }
