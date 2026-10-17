@@ -20,8 +20,25 @@ public sealed class ScopedPermissionPolicy
         .Select(_ => new List<string>()).ToArray();
     private readonly List<string>[] deny = Enumerable.Range(0, 8)
         .Select(_ => new List<string>()).ToArray();
+    private readonly ScopedPermissionPolicy? runtimeGrant;
+    private readonly ScopedPermissionPolicy? buildCeiling;
 
     private ScopedPermissionPolicy() { }
+
+    private ScopedPermissionPolicy(
+        ScopedPermissionPolicy runtimeGrant,
+        ScopedPermissionPolicy buildCeiling)
+    {
+        this.runtimeGrant = runtimeGrant ?? throw new ArgumentNullException(nameof(runtimeGrant));
+        this.buildCeiling = buildCeiling ?? throw new ArgumentNullException(nameof(buildCeiling));
+    }
+
+    /// <summary>
+    /// Return a policy whose effective authority is the intersection of this
+    /// runtime grant and an immutable build/host ceiling. Chaining only narrows.
+    /// </summary>
+    public ScopedPermissionPolicy BoundedBy(ScopedPermissionPolicy ceilingPolicy) =>
+        new(this, ceilingPolicy);
 
     public static ScopedPermissionPolicy DefaultDeny() => new();
 
@@ -223,6 +240,9 @@ public sealed class ScopedPermissionPolicy
 
     public bool Allows(Kind permission, string? resource)
     {
+        if (runtimeGrant is not null || buildCeiling is not null)
+            return runtimeGrant!.Allows(permission, resource) &&
+                buildCeiling!.Allows(permission, resource);
         var index = Index(permission);
         if (!ceiling[index] || string.IsNullOrEmpty(resource) || HasControl(resource))
             return false;
@@ -260,6 +280,9 @@ public sealed class ScopedPermissionPolicy
     /// </summary>
     public bool AllowsNetworkConnection(string? requested, string? selectedIpv4)
     {
+        if (runtimeGrant is not null || buildCeiling is not null)
+            return runtimeGrant!.AllowsNetworkConnection(requested, selectedIpv4) &&
+                buildCeiling!.AllowsNetworkConnection(requested, selectedIpv4);
         if (!Allows(Kind.Net, requested) ||
             !TryEndpoint(requested, false, out var target) ||
             !TryEndpoint(selectedIpv4, false, out var selected) ||
