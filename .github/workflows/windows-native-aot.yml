@@ -176,6 +176,19 @@ jobs:
         run: ./verification/assert-aot-gates.ps1 -Rid linux-x64
       - name: Run frontend, metadata and mailbox regressions
         run: dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
+      - name: Verify unsupported Option syntax with Linux .NET compiler (diagnostic only)
+        run: |
+          python3 -m unittest discover -s scripts -p test_option_pattern_contract.py -v
+          python3 scripts/check_option_pattern_contract.py --backend net \
+            --revision "${{ github.event.pull_request.head.sha || github.sha }}" --report option-pattern-net-linux.json \
+            -- dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -- check '{source}'
+      - name: Preserve Linux Option-pattern admission report (not native AOT parity)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: option-pattern-net-linux-admission
+          path: option-pattern-net-linux.json
+          if-no-files-found: ignore
       - name: Emit generated CIL using the compiler
         run: |
           mkdir -p artifacts/generated
