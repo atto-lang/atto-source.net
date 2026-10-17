@@ -239,6 +239,41 @@ public sealed unsafe class ActorArena : IDisposable
         }
     }
 
+    /// <summary>
+    /// Acquire the lifetime pin synchronously while the actor turn is valid,
+    /// then keep it until the registered asynchronous operation settles.
+    /// The returned task never grants arena memory authority.
+    /// </summary>
+    public System.Threading.Tasks.Task TrackExternalCompletion(
+        Turn turn, System.Threading.Tasks.Task task)
+    {
+        ArgumentNullException.ThrowIfNull(task);
+        var lease = AcquireExternalLease(turn);
+        return AwaitExternalCompletion(task, lease);
+
+        static async System.Threading.Tasks.Task AwaitExternalCompletion(
+            System.Threading.Tasks.Task pending, ExternalLease lifetime)
+        {
+            using (lifetime)
+                await pending.ConfigureAwait(false);
+        }
+    }
+
+    public System.Threading.Tasks.Task<T> TrackExternalCompletion<T>(
+        Turn turn, System.Threading.Tasks.Task<T> task)
+    {
+        ArgumentNullException.ThrowIfNull(task);
+        var lease = AcquireExternalLease(turn);
+        return AwaitExternalCompletion(task, lease);
+
+        static async System.Threading.Tasks.Task<T> AwaitExternalCompletion(
+            System.Threading.Tasks.Task<T> pending, ExternalLease lifetime)
+        {
+            using (lifetime)
+                return await pending.ConfigureAwait(false);
+        }
+    }
+
     private void ReleaseExternalLease()
     {
         lock (_gate)
