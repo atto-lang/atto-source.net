@@ -121,10 +121,52 @@ internal static class ScopedPermissionPolicyTests
         }
     }
 
+    private static void RunBuildCeilingRegressions()
+    {
+        var build = ScopedPermissionPolicy.FromHost(
+            new[] { ScopedPermissionPolicy.Kind.Env, ScopedPermissionPolicy.Kind.Net },
+            new[] {
+                new ScopedPermissionPolicy.Rule(ScopedPermissionPolicy.Kind.Env, "SAFE"),
+                new ScopedPermissionPolicy.Rule(ScopedPermissionPolicy.Kind.Net, "api.example.com:443"),
+                new ScopedPermissionPolicy.Rule(ScopedPermissionPolicy.Kind.Net, "127.0.0.1:443", true)
+            });
+        var runtime = ScopedPermissionPolicy.FromHost(
+            new[] { ScopedPermissionPolicy.Kind.Env, ScopedPermissionPolicy.Kind.Net },
+            new[] {
+                new ScopedPermissionPolicy.Rule(ScopedPermissionPolicy.Kind.Env, "*"),
+                new ScopedPermissionPolicy.Rule(ScopedPermissionPolicy.Kind.Net, "*")
+            });
+        var effective = runtime.BoundedBy(build);
+
+        Assert(effective.Allows(ScopedPermissionPolicy.Kind.Env, "SAFE"), true,
+            "build ceiling preserves in-scope runtime grant");
+        Assert(effective.Allows(ScopedPermissionPolicy.Kind.Env, "SECRET"), false,
+            "runtime wildcard cannot widen build ENV ceiling");
+        Assert(effective.Allows(ScopedPermissionPolicy.Kind.Net, "api.example.com:443"), true,
+            "build and runtime network grant intersect");
+        Assert(effective.Allows(ScopedPermissionPolicy.Kind.Net, "other.example.com:443"), false,
+            "runtime network wildcard cannot widen build host ceiling");
+        Assert(effective.AllowsNetworkConnection(
+            "api.example.com:443", "203.0.113.7:443"), true,
+            "selected IP allowed only when both layers permit");
+        Assert(effective.AllowsNetworkConnection(
+            "api.example.com:443", "127.0.0.1:443"), false,
+            "runtime wildcard cannot bypass build selected-IP deny");
+
+        var narrower = effective.BoundedBy(ScopedPermissionPolicy.FromHost(
+            new[] { ScopedPermissionPolicy.Kind.Env },
+            new[] { new ScopedPermissionPolicy.Rule(ScopedPermissionPolicy.Kind.Env, "SAFE") }));
+        Assert(narrower.Allows(ScopedPermissionPolicy.Kind.Env, "SAFE"), true,
+            "chained ceiling keeps common authority");
+        Assert(narrower.Allows(ScopedPermissionPolicy.Kind.Net, "api.example.com:443"), false,
+            "chained ceiling can only attenuate");
+    }
+
     public static void Run()
     {
         RunCanonicalAuthorizationVectors();
         RunPaddedTokenRegressions();
+        RunBuildCeilingRegressions();
         var empty = ScopedPermissionPolicy.DefaultDeny();
         foreach (var p in Enum.GetValues<ScopedPermissionPolicy.Kind>())
             Assert(empty.Allows(p, "/workspace/input.txt"), false, "default deny " + p);
