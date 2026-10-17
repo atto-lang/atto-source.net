@@ -83,7 +83,7 @@ internal static class StructuredSourceTests
                 Operator: StructuredOperator.Add
             } }, "arithmetic AST operator precedence");
 
-        foreach (var operation in new[] { "ref", "unref", "deref", "raw" })
+        foreach (var operation in new[] { "ref", "unref", "deref", "deref mut", "raw" })
         {
             try { _ = OresStructuredParser.Parse(
                 $"fnc main():int{{return rt {operation} value;}}"); }
