@@ -310,7 +310,9 @@ public static class ExecutionGraphV1
             // A scheduler can start its callback before returning, then
             // throw. Until admission resolves, not even a pure host graph
             // may evaluate or publish a result. This matches Java/LLVM/Forge.
-            using var admission = new System.Threading.ManualResetEventSlim(false);
+            // Queued callbacks retain this gate after SubmitCpu returns.
+            // Do not dispose it at the end of submission.
+            var admission = new System.Threading.ManualResetEventSlim(false);
             int admitted = 0;
             int inlineAttempted = 0;
             int submittingThread = Environment.CurrentManagedThreadId;
