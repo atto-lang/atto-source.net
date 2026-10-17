@@ -29,6 +29,7 @@ ActorMailboxRestartAtomicitySelfTest.Run();
 ActorMailboxAuthorizationPrioritySelfTest.Run();
 IsolationPolicySelfTest.Run();
 WorkerProtocolSelfTest.Run();
+WorkerOutputIsolationSelfTest.Run();
 
 // Import parity is deliberately not claimed for the .NET scalar compiler.
 // Each form must fail at lexical admission with a specific import diagnostic,
