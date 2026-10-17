@@ -17,7 +17,7 @@ internal static class ActorArenaTests
         ExpectFailure(() => a.BeginTurn(101, 2)); // a recycled actor ID is not an incarnation grant
         ExpectFailure(() => b.BeginTurn(101, 1)); // a different actor cannot enter another arena
         var ta = a.BeginTurn(101, 1);
-        var tb = b.BeginTurn(102, 1);
+        ExpectFailure(() => b.BeginTurn(102, 1)); // one physical carrier may own only one actor turn
         var h = a.Allocate(ta, 2);
         a.Write(ta, h, new byte[] { 7, 9 });
         // The token alone cannot authorize a concurrent physical carrier.
@@ -35,8 +35,6 @@ internal static class ActorArenaTests
             throw new Exception("actor arena accepted a foreign physical carrier");
         if (!a.Read(ta, h).SequenceEqual(new byte[] { 7, 9 }))
             throw new Exception("persistent arena read/write");
-        ExpectFailure(() => b.Read(tb, h));
-        ExpectFailure(() => a.Read(tb, h));
         var copy = a.Read(ta, h);
         copy[0] = 99;
         if (a.Read(ta, h)[0] != 7) throw new Exception("read returned mutable alias");
@@ -58,6 +56,9 @@ internal static class ActorArenaTests
             throw new Exception("valid issued scratch handle rejected");
         ExpectFailure(() => a.Dispose());
         a.EndTurn(ta);
+        var tb = b.BeginTurn(102, 1);
+        ExpectFailure(() => b.Read(tb, h));
+        ExpectFailure(() => a.Read(tb, h));
         b.EndTurn(tb);
         var next = a.BeginTurn(101, 1);
         ExpectFailure(() => a.ReadScratch(next, scratch));
