@@ -63,6 +63,33 @@ Features: decimal signed 64-bit literals (including `-9223372036854775808`), par
 | `scripts/` | Windows-only Native AOT publish pipeline |
 | `docs/` | Backend contracts and implementation roadmap |
 
+## Isolation model
+
+The .NET backend can support strong isolation, but **not through
+`AssemblyLoadContext` as a security sandbox**.
+
+Production profiles are now admitted explicitly:
+
+- trusted code may execute in the same statically linked NativeAOT process;
+- semi-trusted code uses a separate NativeAOT worker process and bounded IPC;
+- untrusted NativeAOT code additionally requires OS-level capability/resource
+  sandboxing;
+- hostile portable code should use a separately produced `wasm32-wasi`
+  artifact in a WASM host;
+- collectible `AssemblyLoadContext` is development-only code/version
+  isolation and is rejected by strict NativeAOT release admission.
+
+The machine contract is
+[`contracts/v1/dotnet-isolation-v1.json`](contracts/v1/dotnet-isolation-v1.json)
+and the runtime admission API is
+[`IsolationPolicy`](runtime/Ores.Net.Runtime/IsolationPolicy.cs).
+
+This keeps hot code loading consistent with the strict AOT architecture:
+compile a new generation, launch a new worker process, health/admission check it,
+switch routing, drain the previous generation, then terminate it.
+
+See [the .NET isolation model](docs/DOTNET_ISOLATION.md).
+
 ## Verification
 
 ~~~powershell
