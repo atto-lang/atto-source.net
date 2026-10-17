@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>oreslang-lambda-app</AssemblyName>
+    <PublishAot>true</PublishAot>
+    <SelfContained>true</SelfContained>
+    <PublishTrimmed>true</PublishTrimmed>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../runtime/Ores.Net.Runtime/Ores.Net.Runtime.csproj" />
+    <Reference Include="OresGenerated">
+      <HintPath>$(GeneratedAssembly)</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+  <Target Name="ValidateGeneratedAssembly" BeforeTargets="ResolveReferences">
+    <Error Condition="'$(GeneratedAssembly)' == ''" Text="Pass -p:GeneratedAssembly=&lt;absolute path to OresGenerated.dll&gt;." />
+    <Error Condition="'$(GeneratedAssembly)' != '' and !Exists('$(GeneratedAssembly)')" Text="Generated Lambda CIL assembly is missing: $(GeneratedAssembly)" />
+  </Target>
+  <Import Project="../../build/StrictNativeAot.targets" />
+</Project>
