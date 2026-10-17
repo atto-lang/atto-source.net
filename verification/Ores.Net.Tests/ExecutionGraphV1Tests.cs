@@ -113,6 +113,43 @@ internal static class ExecutionGraphV1Tests
         second.Join();
         Need(once.Task.GetAwaiter().GetResult() == 42, "duplicate dispatch result");
 
+        // Match the native Forge/LLVM host-graph stress admission contract:
+        // duplicate executor delivery must be one-shot under 128 real races.
+        for (int trial = 0; trial < 128; trial++)
+        {
+            Action? duplicate = null;
+            var single = plan.SubmitCpu(action => duplicate = action);
+            Need(duplicate is not null, "missing duplicate-dispatch task");
+            var left = new Thread(() => duplicate!());
+            var right = new Thread(() => duplicate!());
+            left.Start();
+            right.Start();
+            left.Join();
+            right.Join();
+            Need(single.Task.IsCompletedSuccessfully &&
+                 single.Task.GetAwaiter().GetResult() == 42,
+                "duplicate task scheduled twice or lost completion");
+        }
+
+        // Competing cancellation/claim races must resolve to exactly one
+        // terminal outcome: successful one-shot i64 or cancellation.
+        for (int trial = 0; trial < 64; trial++)
+        {
+            Action? action = null;
+            var racing = plan.SubmitCpu(submitted => action = submitted);
+            Need(action is not null, "missing cancellation-race task");
+            var worker = new Thread(() => action!());
+            worker.Start();
+            _ = racing.Cancel();
+            worker.Join();
+            Need(racing.Task.IsCompleted, "racing Future left pending");
+            Need(racing.Task.IsCanceled || racing.Task.IsCompletedSuccessfully,
+                "racing Future had unexpected terminal state");
+            if (racing.Task.IsCompletedSuccessfully)
+                Need(racing.Task.GetAwaiter().GetResult() == 42,
+                    "racing Future had incorrect result");
+        }
+
         var rejected = plan.SubmitCpu(_ => throw new InvalidOperationException("executor full"));
         Need(rejected.Task.IsFaulted, "scheduler admission fails Future");
 
