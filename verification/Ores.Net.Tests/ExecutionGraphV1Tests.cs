@@ -43,7 +43,11 @@ internal static class ExecutionGraphV1Tests
         var plan = cpu.Build(cpu.CpuAdd(a, b));
         Need(plan.ResultKind == ExecutionGraphV1.Kind.HostI64, "result kind");
         Need(plan.ExecuteCpu() == 42, "checked CPU arithmetic");
-        var submitted = plan.SubmitCpu(action => action());
+        var readyQueue = new Queue<Action>();
+        var submitted = plan.SubmitCpu(readyQueue.Enqueue);
+        Need(!submitted.Task.IsCompleted && readyQueue.Count == 1,
+            "successful CPU submission must remain queued until executor dispatch");
+        readyQueue.Dequeue()();
         Need(submitted.Task.GetAwaiter().GetResult() == 42, "nonblocking future");
         Need(!submitted.Cancel(), "cannot cancel completed result");
 
