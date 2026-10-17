@@ -46,8 +46,7 @@ public static class ProjectRootSourceResolver
                 // Independently nested packages along an intermediate root
                 // component must not inherit the parent package's +/ identity.
                 foreach (var name in new[] { ".ores.pkg.toml", ".oreslangc.cfg.toml" })
-                    if (File.Exists(Path.Combine(selectedRoot, name)) ||
-                        Directory.Exists(Path.Combine(selectedRoot, name)))
+                    if (MarkerExistsNoFollow(Path.Combine(selectedRoot, name)))
                         throw new FormatException("project.root crosses nested project manifest");
             }
         }
@@ -137,7 +136,7 @@ public static class ProjectRootSourceResolver
                 foreach (var marker in new[] { ".ores.pkg.toml", ".oreslangc.cfg.toml" })
                 {
                     string candidateMarker = Path.Combine(current, marker);
-                    if (File.Exists(candidateMarker) || Directory.Exists(candidateMarker))
+                    if (MarkerExistsNoFollow(candidateMarker))
                         throw new FormatException("source import crosses nested package boundary");
                 }
             }
@@ -233,6 +232,34 @@ public static class ProjectRootSourceResolver
             .Any(segment => segment.Length == 0 || segment is "." or ".."))
             throw new FormatException("project.root escapes manifest directory");
         return projectRoot;
+    }
+
+    // File.Exists and Directory.Exists both return false for some dangling
+    // symlinks and inaccessible marker nodes. Nested package ownership is
+    // decided by marker presence, not by successful target traversal.
+    private static bool MarkerExistsNoFollow(string path)
+    {
+        try
+        {
+            _ = File.GetAttributes(path);
+            return true;
+        }
+        catch (FileNotFoundException)
+        {
+            return false;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return false;
+        }
+        catch (IOException error)
+        {
+            throw new FormatException("cannot verify nested project manifest marker", error);
+        }
+        catch (UnauthorizedAccessException error)
+        {
+            throw new FormatException("cannot verify nested project manifest marker", error);
+        }
     }
 
     private static void CheckNotReparsePoint(string path)
