@@ -43,6 +43,34 @@ public static class OresParser
                 throw new FormatException("Token count exceeds bootstrap limit");
             if (token.Text.Length == 0) break;
         }
+        // This backend compiles only scalar functions; it must recognize the
+        // new actor-thread policy vocabulary and reject it explicitly. A
+        // host-only turn-credit gate is not a source actor scheduler.
+        for (int i = 0; i < tokens.Count; ++i)
+        {
+            if (tokens[i].Text == "@" &&
+                i + 1 < tokens.Count && tokens[i + 1].Text == "ActorMaxThreads")
+            {
+                bool wellFormed = i + 6 < tokens.Count
+                    && tokens[i + 2].Text == "("
+                    && tokens[i + 3].Text == "MaxActorThreads"
+                    && tokens[i + 4].Text == "."
+                    && (tokens[i + 5].Text is "LOW" or "MEDIUM" or "HIGH")
+                    && tokens[i + 6].Text == ")";
+                if (!wellFormed)
+                    throw new FormatException("malformed @ActorMaxThreads; expected MaxActorThreads.LOW/MEDIUM/HIGH");
+                throw new FormatException(
+                    "source actor @ActorMaxThreads is unsupported in .NET scalar lowering; no parallel actor execution");
+            }
+            if (tokens[i].Text == "define" && i + 1 < tokens.Count &&
+                tokens[i + 1].Text == "enum")
+                throw new FormatException(
+                    "MaxActorThreads enum and general enum definitions require typed actor/enum lowering in .NET");
+            if (tokens[i].Text == "define" && i + 1 < tokens.Count &&
+                tokens[i + 1].Text == "actor")
+                throw new FormatException(
+                    "source actors require typed actor scheduler lowering in .NET");
+        }
         return new Reader(tokens).ParseProgram();
     }
 
@@ -125,7 +153,7 @@ public static class OresParser
                 _i += 2;
                 return new Token("->", start);
             }
-            if ("()+-*/{}:;.".IndexOf(ch) >= 0)
+            if ("@()+-*/{}:;.=".IndexOf(ch) >= 0)
             {
                 _i++;
                 return new Token(text[start.._i], start);
