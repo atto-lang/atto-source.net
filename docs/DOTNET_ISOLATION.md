@@ -67,11 +67,57 @@ Use either:
 A .NET host may supervise those WASM workers, but the sandboxed payload is the
 WASM artifact, not the CIL assembly.
 
+## NativeAOT worker candidate
+
+The backend now contains a concrete candidate worker protocol and statically
+linked worker entrypoint:
+
+```text
+oreslang-app --worker
+      |
+      +-- ORW1 / v1 binary frame header
+      +-- strict UTF-8 payloads, <= 1 MiB
+      +-- nonzero request IDs
+      +-- absolute invocation deadlines, <= 30 s
+      +-- ready / invoke / cancel / response / error / shutdown
+```
+
+The current compiler still exposes only `main() -> i64`. Therefore v1 worker
+invocation deliberately requires an **empty request payload** and returns the
+i64 result as invariant UTF-8. A non-empty payload is rejected instead of
+pretending the .NET backend has reached the provider-neutral
+`String -> String` Lambda ABI.
+
+Deadline admission happens before guest entry. The scalar bootstrap is not yet
+cooperatively cancellable once guest code is running, so `cancel` returns a
+specific unsupported/cooperation error and the supervising host remains
+responsible for deadline-triggered **process-tree termination**. Unexpected
+guest exceptions produce one opaque `guest-failure` response and retire the
+worker instead of reusing possibly corrupted state.
+
+The generic .NET process-start factory clears the ambient environment, uses an
+absolute executable path, redirects all stdio, rejects shell execution, and
+admits only deny-all capabilities. It **refuses untrusted workers**: those must
+be launched by a race-free OS-sandbox adapter.
+
+The machine contract is `contracts/v1/dotnet-worker-v1.json`.
+
+## Scintilla integration boundary
+
+Scintilla already has a reviewed typed native-host launcher/policy boundary for
+non-containerized runtimes. Its current reusable child worker protocol is
+line-oriented JSON, however, while Oreslang .NET now uses ORW1 framed binary
+stdio. Do not add `oreslang-dotnet` to Scintilla's supported-runtime list until
+an explicit adapter or native ORW1 port driver exists and is tested. Protocol
+mismatch must fail closed rather than falling back to a generic polyglot runner.
+
 ## Next implementation steps
 
-- add a NativeAOT worker protocol with bounded MessagePack/string envelopes;
-- bind worker launch to explicit Deno-style Oreslang capabilities;
-- add Windows Job Object and Linux process/container resource adapters;
-- add cancellation/deadline propagation and process-tree teardown;
-- produce exact-head NativeAOT execution receipts;
+- implement a Scintilla ORW1 adapter/port driver with exact frame bounds;
+- add Windows Job Object and Linux namespace/cgroup/seccomp launch adapters;
+- bind the existing Deno-style Oreslang permission contract to those host
+  adapters instead of merely recording capability tokens;
+- teach the .NET frontend/codegen a public `String -> String` invocation ABI;
+- add cooperative cancellation once `await` / suspension lowering exists;
+- produce exact-head NativeAOT worker execution receipts;
 - later add a WASM-host adapter without weakening the CIL policy.
