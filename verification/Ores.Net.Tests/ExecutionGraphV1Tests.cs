@@ -215,6 +215,46 @@ internal static class ExecutionGraphV1Tests
         queuedBeforeFailure!();
         Need(lateRejected.Task.IsFaulted, "late queued dispatch published after rejection");
 
+        // Even the host-only graph needs a committed scheduling boundary:
+        // a hostile executor may run a worker concurrently, then throw.
+        var inline = plan.SubmitCpu(job => job());
+        Need(inline.Task.IsFaulted &&
+             inline.Task.Exception?.InnerException?.Message.Contains("inline dispatch rejected") == true,
+             "inline executor was not rejected before CPU evaluation");
+
+        var inlineThenThrow = plan.SubmitCpu(job =>
+        {
+            job();
+            throw new InvalidOperationException("actual inline-then-throw rejection");
+        });
+        Need(inlineThenThrow.Task.IsFaulted &&
+             inlineThenThrow.Task.Exception?.InnerException?.Message ==
+                 "actual inline-then-throw rejection",
+             "inline-then-throw did not preserve scheduler failure");
+
+        for (int trial = 0; trial < 128; trial++)
+        {
+            using var workerLaunched = new System.Threading.ManualResetEventSlim(false);
+            Thread? earlyWorker = null;
+            var raceRejected = plan.SubmitCpu(job =>
+            {
+                earlyWorker = new Thread(() =>
+                {
+                    workerLaunched.Set();
+                    job();
+                });
+                earlyWorker.Start();
+                Need(workerLaunched.Wait(TimeSpan.FromSeconds(5)),
+                     "early worker never launched");
+                throw new InvalidOperationException("worker-start-then-reject");
+            });
+            Need(earlyWorker is not null && earlyWorker.Join(TimeSpan.FromSeconds(5)),
+                 "early worker stranded at scheduler admission");
+            Need(raceRejected.Task.IsFaulted &&
+                 raceRejected.Task.Exception?.InnerException?.Message == "worker-start-then-reject",
+                 "started worker published a result before scheduler rejection");
+        }
+
         var limited = new ExecutionGraphV1.Builder();
         for (int i = 0; i < 4096; i++) limited.CpuUnit();
         try { limited.CpuUnit(); throw new Exception("node limit bypassed"); }
