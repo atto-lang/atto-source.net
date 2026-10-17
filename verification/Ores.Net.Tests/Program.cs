@@ -23,7 +23,33 @@ static void InvalidSend(Action action, string why)
 }
 
 SourceByteBudgetTests.Run();
-ActorPipelineSelectorTests.Run(); // v1 host routing selector contract (not guest lowering)
+ActorPipelineSelectorTests.Run(); // v1 selector-only contract
+ActorRefNoWireSelfTest.Run();
+ActorMailboxBoundsSelfTest.Run();
+ActorMailboxRestartAtomicitySelfTest.Run();
+ActorMailboxAuthorizationPrioritySelfTest.Run();
+
+// Import parity is deliberately not claimed for the .NET scalar compiler.
+// Each form must fail at lexical admission with a specific import diagnostic,
+// before either typed IR verification or Native AOT CIL emission.
+foreach (var path in new[] {
+    "+/src/helper", "+src/helper", "@/src/helper", "pkg:math/src/helper", "./helper",
+    "../helper", "common/helper", ".hidden/helper"
+})
+{
+    try
+    {
+        _ = OresParser.Parse("import fnc helper from " + (char)34 + path +
+            (char)34 + "; fnc main():int{return 42;}");
+    }
+    catch (FormatException ex) when
+        (ex.Message.Contains("source imports require verified module graph lowering",
+            StringComparison.Ordinal)) { continue; }
+    throw new Exception("Unsupported import was not rejected for the right reason: " + path);
+}
+Require(OresParser.Parse("fnc main():int{return 42;} // import not code") is Literal,
+    "import in a comment must not be treated as an import declaration");
+
 
 foreach (var invalid in new[] { "\0", "\ud800", "\udc00", "\ud800x" })
     Reject(() => OresParser.Parse("fnc main():int{return 1;} // " + invalid),
@@ -47,8 +73,44 @@ foreach (var pair in new[] { (long.MinValue, -1L), (5L, 0L) })
     throw new Exception("Internal checked-i64 division must preserve traps");
 }
 
+// The i64-only source frontend cannot invoke named functions. Recognize |>
+ // as one token and reject every pipeline (including nested expressions)
+ // before CIL emission. Never reinterpret it as bitwise-or or comparison.
+foreach (var expr in new[] {
+    "1 |> twice", "(1 |> twice)", "1 + 2 |> plus(3)",
+    "1 |> Option.map(inc)", "1 |> Result.map_err(annotate)",
+    "1 |> Option /*gap*/ . map(inc)",
+    "1 |> Result /*one /*nested*/ end*/ . map_err(annotate)",
+    "1 |> plus(2 |> Option.map(inc))"
+})
+{
+    try { OresParser.Parse("fnc main():int{return " + expr + ";}"); }
+    catch (FormatException ex) when (ex.Message.Contains("pipeline requires named callable lowering",
+            StringComparison.OrdinalIgnoreCase)) { continue; }
+    throw new Exception("Unsupported value pipeline must fail closed: " + expr);
+}
+Require(OresParser.Parse("fnc main():int{return 1;} // 1 |> unsupported") is Literal,
+    "pipe tokens in comments are not executable operators");
+Require(OresParser.Parse("fnc main():int{return 1/*outer /*inner*/ end*/;}") is Literal,
+    "nested block comments must not change a scalar literal");
+Reject(() => OresParser.Parse("fnc main():int{return 1.foo;}"),
+    "qualified member syntax without a pipeline is not admitted");
+try
+{
+    OresParser.Parse("fnc main():int{return 1; /*unterminated");
+    throw new Exception("Expected unterminated block comment diagnostic");
+}
+catch (FormatException ex) when (ex.Message.Contains("Unterminated block comment",
+        StringComparison.Ordinal)) { }
+Reject(() => OresParser.Parse("fnc main():int{return 1; /*".PadRight(150, '/') + "/*x*/;}"),
+    "malformed unclosed nested comments");
+
 var positive = OresParser.Parse("define pub fnc main() : int { return 2 + 3 * 4; }");
 Require(positive is Binary { Operator: '+' }, "top-level expression shape");
+Require(OresParser.Parse("define pub fnc main() -> int { return 2 + 3 * 4; }")
+    is Binary { Operator: '+' }, "canonical formatter arrow");
+Reject(() => OresParser.Parse("fnc main() - > int { return 1; }"), "split return arrow");
+Reject(() => OresParser.Parse("fnc main() ->> int { return 1; }"), "malformed return arrow");
 Require(OresParser.Parse("pub define fnc main():int {return -9223372036854775808;}") is Literal
     { Value: long.MinValue }, "signed minimum");
 Require(OresParser.Parse("fnc main():int {return -(3 + 4);}") is Unary
