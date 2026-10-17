@@ -43,7 +43,11 @@ internal static class ExecutionGraphV1Tests
         var plan = cpu.Build(cpu.CpuAdd(a, b));
         Need(plan.ResultKind == ExecutionGraphV1.Kind.HostI64, "result kind");
         Need(plan.ExecuteCpu() == 42, "checked CPU arithmetic");
-        var submitted = plan.SubmitCpu(action => action());
+        var readyQueue = new Queue<Action>();
+        var submitted = plan.SubmitCpu(readyQueue.Enqueue);
+        Need(!submitted.Task.IsCompleted && readyQueue.Count == 1,
+            "successful CPU submission must remain queued until executor dispatch");
+        readyQueue.Dequeue()();
         Need(submitted.Task.GetAwaiter().GetResult() == 42, "nonblocking future");
         Need(!submitted.Cancel(), "cannot cancel completed result");
 
@@ -244,6 +248,29 @@ internal static class ExecutionGraphV1Tests
              inlineThenThrow.Task.Exception?.InnerException?.Message ==
                  "actual inline-then-throw rejection",
              "inline-then-throw did not preserve scheduler failure");
+
+        for (int trial = 0; trial < 128; trial++)
+        {
+            using var acceptedWorkerLaunched = new System.Threading.ManualResetEventSlim(false);
+            Thread? acceptedEarlyWorker = null;
+            var acceptedEarly = plan.SubmitCpu(job =>
+            {
+                acceptedEarlyWorker = new Thread(() =>
+                {
+                    acceptedWorkerLaunched.Set();
+                    job();
+                });
+                acceptedEarlyWorker.Start();
+                Need(acceptedWorkerLaunched.Wait(TimeSpan.FromSeconds(5)),
+                    "accepted early worker never launched");
+                // Normal return commits scheduler admission.
+            });
+            Need(acceptedEarlyWorker is not null &&
+                 acceptedEarlyWorker.Join(TimeSpan.FromSeconds(5)),
+                 "accepted early worker stranded at admission gate");
+            Need(acceptedEarly.Task.GetAwaiter().GetResult() == 42,
+                 "accepted early worker did not execute after admission");
+        }
 
         for (int trial = 0; trial < 128; trial++)
         {
