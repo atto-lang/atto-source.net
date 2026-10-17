@@ -41,6 +41,28 @@ internal static class ProjectRootSourceTests
             File.WriteAllText(manifest, "schema_version = \"1\"\n");
             Check(ProjectRootSourceResolver.Resolve(app, "+/src/answer") == Path.GetFullPath(source),
                   "inferred extension");
+            string legacyManifest = Path.Combine(app, ".oreslangc.cfg.toml");
+            File.WriteAllText(legacyManifest, "schema_version = \"1\"\n");
+            File.Delete(manifest);
+            Directory.CreateDirectory(manifest);
+            Reject(() => ProjectRootSourceResolver.Resolve(app, "+/src/answer"),
+                   "modern directory marker fell back to valid legacy manifest");
+            Directory.Delete(manifest);
+            try
+            {
+                File.CreateSymbolicLink(manifest, legacyManifest);
+                Reject(() => ProjectRootSourceResolver.Resolve(app, "+/src/answer"),
+                       "symlinked modern marker inherited legacy authority");
+                File.Delete(manifest);
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or
+                     PlatformNotSupportedException or IOException)
+            {
+                // Some Windows runners deny test symlink creation; the
+                // deterministic directory-marker regression still executes.
+                if (File.Exists(manifest)) File.Delete(manifest);
+            }
+            File.WriteAllText(manifest, "schema_version = \"1\"\n");
             // Host-only explicit relative resolution, never bare .hidden lookup
             // and never authority across a nested legacy package manifest.
             string routes = Path.Combine(app, "src", "routes");
