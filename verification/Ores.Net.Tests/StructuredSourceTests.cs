@@ -37,6 +37,27 @@ internal static class StructuredSourceTests
         Require(OresStructuredParser.Parse(
             "fnc main():int{return 1;} // enum stays in comment").Body.Count == 1,
             "enum word in a comment is not a declaration");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{/* enum Color /* enum Mode */ nested */return 1;}").Body.Count == 1,
+            "nested block-comment enum tokens are non-executable");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{return 1;} /* enum Color */").Body.Count == 1,
+            "trailing block-comment enum tokens are non-executable");
+        static void BlockCommentReject(string source, string reason)
+        {
+            try { _ = OresStructuredParser.Parse(source); }
+            catch (FormatException ex) when (
+                ex.Message.Contains(reason, StringComparison.Ordinal) &&
+                ex.Message.Contains("offset", StringComparison.Ordinal)) { return; }
+            throw new Exception("Structured block-comment diagnostic failed: " + reason);
+        }
+        BlockCommentReject("fnc main():int{return 1;} /* enum Color",
+            "Unterminated block comment");
+        BlockCommentReject("fnc main():int{return 1;} " +
+            string.Concat(Enumerable.Repeat("/*", 129)) +
+            string.Concat(Enumerable.Repeat("*/", 129)),
+            "Block comment nesting exceeds 128");
+
 
         const string sum = """
             define pub fnc main(): int {
