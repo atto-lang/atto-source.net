@@ -55,6 +55,10 @@ class Denied(ValueError):
     """Fail-closed verification: this run cannot support a CI execution claim."""
 
 
+class NotExecuted(Denied):
+    """Authenticated metadata shows that no workflow job body executed."""
+
+
 def _sha(value):
     if not isinstance(value, str) or not SHA.fullmatch(value):
         raise Denied("expected a lowercase 40-digit commit/tree SHA")
@@ -179,6 +183,78 @@ def _api_get(path):
     return _strict_api_json(raw)
 
 
+def _fetch_jobs(fetch, prefix, run_id):
+    """Fetch a complete latest-attempt job set without trusting pagination gaps."""
+    jobs = []
+    total = None
+    for page in range(1, MAX_PAGES + 1):
+        payload = _object(fetch(prefix + "/actions/runs/" + str(run_id)
+                                + "/jobs?filter=latest&per_page=100&page=" + str(page)),
+                          "workflow jobs")
+        reported_total = payload.get("total_count")
+        if type(reported_total) is not int or reported_total < 1 or reported_total > 1000:
+            raise Denied("workflow jobs total is invalid or excessive")
+        if total is None:
+            total = reported_total
+        elif total != reported_total:
+            raise Denied("workflow job pages disagree on count")
+        found = payload.get("jobs")
+        if not isinstance(found, list) or len(found) > 100:
+            raise Denied("workflow jobs page malformed")
+        jobs.extend(found)
+        if len(jobs) >= total:
+            break
+        if len(found) != 100:
+            raise Denied("incomplete GitHub Actions job pagination")
+    if not jobs or len(jobs) != total:
+        raise Denied("not all GitHub Actions jobs were retrieved")
+    return jobs
+
+
+def _reject_non_success_run(jobs, run_id, commit, attempt):
+    """Classify a completed non-success run without mistaking no-runner for tests.
+
+    NOT_EXECUTED is intentionally narrow: every job must be bound to the exact
+    run/attempt/HEAD, completed with a non-success conclusion, have no allocated
+    runner identity, and expose no step records. Any evidence of runner or step
+    execution falls back to ordinary rejection rather than infrastructure
+    classification.
+    """
+    no_job_body_executed = True
+    allowed_conclusions = {
+        "failure", "cancelled", "skipped", "timed_out", "action_required", "stale"
+    }
+    for item in jobs:
+        job = _object(item, "workflow job")
+        _int(job.get("id"), "job id")
+        if (type(job.get("run_id")) is not int or job["run_id"] != run_id
+                or job.get("head_sha") != commit
+                or type(job.get("run_attempt")) is not int
+                or job["run_attempt"] != attempt
+                or job.get("status") != "completed"
+                or job.get("conclusion") not in allowed_conclusions):
+            raise Denied("failed workflow job identity/status mismatch")
+        runner_id = job.get("runner_id")
+        if runner_id not in (None, 0):
+            if type(runner_id) is not int or runner_id <= 0:
+                raise Denied("failed workflow job runner id is malformed")
+            no_job_body_executed = False
+        runner_name = job.get("runner_name")
+        if runner_name not in (None, ""):
+            if not _evidence_label(runner_name):
+                raise Denied("failed workflow job runner name is malformed")
+            no_job_body_executed = False
+        steps = job.get("steps")
+        if steps is not None and not isinstance(steps, list):
+            raise Denied("failed workflow job steps are malformed")
+        if steps:
+            no_job_body_executed = False
+    if no_job_body_executed:
+        raise NotExecuted(
+            "workflow completed without any allocated runner or executed step records")
+    raise Denied("workflow run did not conclude successfully")
+
+
 def verify(fetch, backend, commit, tree, run_id, required_jobs, required_steps,
            job_step_pairs=None, workflow_path=None, workflow_id=None,
            workflow_blob_sha=None, expected_event=None,
@@ -263,32 +339,11 @@ def verify(fetch, backend, commit, tree, run_id, required_jobs, required_steps,
             or run.get("event") != expected_event
             or type(run.get("workflow_id")) is not int or run["workflow_id"] != workflow_id
             or run.get("path") != expected_run_path
-            or run.get("status") != "completed"
-            or run.get("conclusion") != "success"):
-        raise Denied("workflow run is not a successful exact-repository HEAD execution")
-    jobs = []
-    total = None
-    for page in range(1, MAX_PAGES + 1):
-        payload = _object(fetch(prefix + "/actions/runs/" + str(run_id)
-                                + "/jobs?filter=latest&per_page=100&page=" + str(page)),
-                          "workflow jobs")
-        reported_total = payload.get("total_count")
-        if type(reported_total) is not int or reported_total < 1 or reported_total > 1000:
-            raise Denied("workflow jobs total is invalid or excessive")
-        if total is None:
-            total = reported_total
-        elif total != reported_total:
-            raise Denied("workflow job pages disagree on count")
-        found = payload.get("jobs")
-        if not isinstance(found, list) or len(found) > 100:
-            raise Denied("workflow jobs page malformed")
-        jobs.extend(found)
-        if len(jobs) >= total:
-            break
-        if len(found) != 100:
-            raise Denied("incomplete GitHub Actions job pagination")
-    if not jobs or len(jobs) != total:
-        raise Denied("not all GitHub Actions jobs were retrieved")
+            or run.get("status") != "completed"):
+        raise Denied("workflow run is not a completed exact-repository HEAD execution")
+    jobs = _fetch_jobs(fetch, prefix, run_id)
+    if run.get("conclusion") != "success":
+        _reject_non_success_run(jobs, run_id, commit, attempt)
     seen_ids, job_names, required_job_steps = set(), set(), set()
     steps_by_job = {}
     count = 0
@@ -445,6 +500,9 @@ def main(argv=None):
                         expected_event=args.event,
                         expected_run_path=args.workflow_run_path,
                         expected_run_attempt=args.run_attempt)
+    except NotExecuted as exc:
+        print("CI_RUN_EVIDENCE_NOT_EXECUTED: " + str(exc), file=sys.stderr)
+        return 2
     except Denied as exc:
         print("CI_RUN_EVIDENCE_REJECTED: " + str(exc), file=sys.stderr)
         return 1
