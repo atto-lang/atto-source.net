@@ -51,7 +51,8 @@ public sealed unsafe class ActorArena : IDisposable
     private readonly ushort[] _scratchLengths = new ushort[ScratchBytes];
     private byte* _memory;
     private Turn? _turn;
-    private int _carrier, _scratchTop;
+    private System.Threading.Thread? _carrier;
+    private int _scratchTop;
     private bool _retired;
 
     public ActorArena(ulong actor, ulong incarnation)
@@ -72,7 +73,10 @@ public sealed unsafe class ActorArena : IDisposable
         {
             if (_retired || _turn is not null || actor != _actor || incarnation != _incarnation)
                 throw new InvalidOperationException("actor arena admission denied");
-            _carrier = Environment.CurrentManagedThreadId;
+            // Managed thread IDs are process-scoped integers and may be reused
+            // after a thread lifetime. Hold the actual Thread object while a
+            // turn is active so a later carrier cannot inherit old authority.
+            _carrier = System.Threading.Thread.CurrentThread;
             _turn = new Turn();
             return _turn;
         }
@@ -85,7 +89,7 @@ public sealed unsafe class ActorArena : IDisposable
     private void RequireTurn(Turn turn)
     {
         if (_retired || _turn is null || !ReferenceEquals(_turn, turn) ||
-            _carrier != Environment.CurrentManagedThreadId)
+            !ReferenceEquals(_carrier, System.Threading.Thread.CurrentThread))
             throw new InvalidOperationException("wrong or stale actor turn");
     }
 
@@ -100,7 +104,7 @@ public sealed unsafe class ActorArena : IDisposable
             Array.Clear(_scratchLengths);
             _scratchTop = 0;
             _turn = null;
-            _carrier = 0;
+            _carrier = null;
         }
         finally
         {
