@@ -49,7 +49,7 @@ foreach (var path in new[] {
 Require(OresParser.Parse("fnc main():int{return 42;} // import not code") is Literal,
     "import in a comment must not be treated as an import declaration");
 
-foreach (var operation in new[] { "ref", "unref", "deref", "raw" })
+foreach (var operation in new[] { "ref", "unref", "deref", "deref mut", "raw" })
 {
     try { _ = OresParser.Parse($"fnc main():int{{return rt {operation} value;}}"); }
     catch (FormatException ex) when
