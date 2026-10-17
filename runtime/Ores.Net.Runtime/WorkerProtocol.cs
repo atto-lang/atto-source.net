@@ -133,15 +133,18 @@ public static class WorkerProtocol
 
     public static string? ValidateDeadline(
         long deadlineUnixMilliseconds,
-        long nowUnixMilliseconds)
+        long nowUnixMilliseconds,
+        int maxInvocationMilliseconds = MaxInvocationMilliseconds)
     {
+        if (maxInvocationMilliseconds is < 1 or > MaxInvocationMilliseconds)
+            throw new ArgumentOutOfRangeException(nameof(maxInvocationMilliseconds));
         if (nowUnixMilliseconds < 0 ||
-            nowUnixMilliseconds > long.MaxValue - MaxInvocationMilliseconds)
+            nowUnixMilliseconds > long.MaxValue - maxInvocationMilliseconds)
             return "host-clock-invalid";
         if (deadlineUnixMilliseconds <= nowUnixMilliseconds)
             return "deadline-expired";
         if (deadlineUnixMilliseconds >
-            nowUnixMilliseconds + MaxInvocationMilliseconds)
+            nowUnixMilliseconds + maxInvocationMilliseconds)
             return "deadline-exceeds-worker-limit";
         return null;
     }
