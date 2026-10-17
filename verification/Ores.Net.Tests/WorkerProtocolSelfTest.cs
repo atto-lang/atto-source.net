@@ -160,12 +160,36 @@ static class WorkerProtocolSelfTest
         Require(divide == WorkerFrame.Error(7, "division-by-zero"),
             "worker maps division error without stack disclosure");
 
-        var guest = RunOne(
-            WorkerFrame.Invoke(8, 2_000),
-            () => throw new InvalidOperationException("secret detail"),
-            now: 1_000);
-        Require(guest == WorkerFrame.Error(8, "guest-failure"),
-            "worker does not reflect arbitrary guest exception text");
+        using (var guestInput = new MemoryStream())
+        {
+            WorkerProtocol.WriteFrame(
+                guestInput, WorkerFrame.Invoke(8, 2_000));
+            WorkerProtocol.WriteFrame(
+                guestInput, WorkerFrame.Invoke(9, 2_000));
+            guestInput.Position = 0;
+            using var guestOutput = new MemoryStream();
+            using var guestError = new StringWriter();
+            var guestCalls = 0;
+            var guestExit = WorkerRuntime.Run(
+                () => {
+                    guestCalls++;
+                    throw new InvalidOperationException("secret detail");
+                },
+                guestInput,
+                guestOutput,
+                guestError,
+                () => 1_000);
+            Require(guestExit == 70 && guestCalls == 1,
+                "unexpected guest failure retires worker before reuse");
+            guestOutput.Position = 0;
+            Require(WorkerProtocol.ReadFrame(guestOutput) == WorkerFrame.Ready(),
+                "guest failure test ready");
+            Require(WorkerProtocol.ReadFrame(guestOutput) ==
+                WorkerFrame.Error(8, "guest-failure"),
+                "worker does not reflect arbitrary guest exception text");
+            Require(WorkerProtocol.ReadFrame(guestOutput) is null,
+                "retired worker does not serve queued invocation");
+        }
 
         using var invalidInput = new MemoryStream(new byte[] { 1, 2, 3 });
         using var invalidOutput = new MemoryStream();
