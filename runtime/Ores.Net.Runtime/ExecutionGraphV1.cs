@@ -310,11 +310,15 @@ public static class ExecutionGraphV1
             // A scheduler can start its callback before returning, then
             // throw. Until admission resolves, not even a pure host graph
             // may evaluate or publish a result. This matches Java/LLVM/Forge.
-            // Queued callbacks retain this gate after SubmitCpu returns.
-            // Do not dispose it at the end of submission.
-            var admission = new System.Threading.ManualResetEventSlim(false);
-            int admitted = 0;
+            // A TaskCompletionSource<bool> is a permanent one-shot admission
+            // outcome for late callbacks: true only after schedule returns
+            // normally, false on any scheduler/inline rejection. Unlike a
+            // method-scoped disposable wait handle, queued callbacks may
+            // retain this safely after SubmitCpu returns.
+            var admission = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
             int inlineAttempted = 0;
+            bool accepted = false;
             int submittingThread = Environment.CurrentManagedThreadId;
             try
             {
@@ -324,7 +328,7 @@ public static class ExecutionGraphV1
                     if (!ticket.ClaimExecution() || ticket.Cancelled) return;
                     try
                     {
-                        if (!admission.IsSet &&
+                        if (!admission.Task.IsCompleted &&
                                 Environment.CurrentManagedThreadId == submittingThread)
                         {
                             // Defer terminal error so an inline-then-throw
@@ -332,14 +336,13 @@ public static class ExecutionGraphV1
                             System.Threading.Interlocked.Exchange(ref inlineAttempted, 1);
                             return;
                         }
-                        if (!admission.Wait(TimeSpan.FromSeconds(30)))
+                        if (!admission.Task.Wait(TimeSpan.FromSeconds(30)))
                         {
                             ticket.RejectExecutor(new TimeoutException(
                                 "host CPU graph executor admission timed out"));
                             return;
                         }
-                        if (System.Threading.Volatile.Read(ref admitted) != 1 ||
-                                ticket.Cancelled) return;
+                        if (!admission.Task.Result || ticket.Cancelled) return;
                         ticket.Complete(Evaluate(() => ticket.Cancelled));
                     }
                     catch (OperationCanceledException) { ticket.Cancel(); }
@@ -349,10 +352,10 @@ public static class ExecutionGraphV1
                     ticket.RejectExecutor(new InvalidOperationException(
                         "host CPU graph requires queued executor; inline dispatch rejected"));
                 else
-                    System.Threading.Volatile.Write(ref admitted, 1);
+                    accepted = true;
             }
             catch (Exception ex) { ticket.RejectExecutor(ex); }
-            finally { admission.Set(); }
+            finally { admission.TrySetResult(accepted); }
             return ticket;
         }
     }
