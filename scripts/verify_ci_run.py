@@ -156,6 +156,7 @@ def _api_get(path):
         raise Denied("authenticated GitHub API query failed") from exc
     return _strict_api_json(raw)
 
+
 def verify(fetch, backend, commit, tree, run_id, required_jobs, required_steps,
            job_step_pairs=None, workflow_path=None, workflow_id=None,
            workflow_blob_sha=None, expected_event=None,
