@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "context": "linux-aot-diagnostic",
+      "appId": 15368
+    }
+  ]
+}
