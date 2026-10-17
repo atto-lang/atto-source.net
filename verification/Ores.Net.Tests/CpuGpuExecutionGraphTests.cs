@@ -28,6 +28,9 @@ internal static class CpuGpuExecutionGraphTests
                 future.Steps.Last().Opcode == Op.Submit,
             "nb cpu must return one Future<i64>, never a Stream");
         Reject(() => ExecuteCpuI64(future), "no CPU async fallback");
+        Reject(() => Lower(new CpuRegion(new CpuRegion(
+            new I64Literal(42), true), true), new Dictionary<string, RegionType>()),
+            "nested Future requires explicit composition");
         var awaited = Lower(new CpuRegion(
             new Await(new CpuRegion(new I64Literal(11), true)), false),
             new Dictionary<string, RegionType>());
