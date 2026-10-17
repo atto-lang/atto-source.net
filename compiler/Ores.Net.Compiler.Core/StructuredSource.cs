@@ -90,6 +90,36 @@ public static class OresStructuredParser
                     while (index < source.Length && source[index] != '\n') index++;
                     continue;
                 }
+                // Match the shipping scalar lexer: comments are not source
+                // tokens, including nested enum-looking text. Bound nesting
+                // before any CFG/IR admission to avoid pathological input.
+                if (source[index] == '/' && index + 1 < source.Length &&
+                    source[index + 1] == '*')
+                {
+                    int start = index;
+                    index += 2;
+                    int depth = 1;
+                    while (depth > 0)
+                    {
+                        if (index == source.Length)
+                            throw new FormatException($"Unterminated block comment at offset {start}");
+                        if (index + 1 < source.Length &&
+                            source[index] == '/' && source[index + 1] == '*')
+                        {
+                            if (++depth > 128)
+                                throw new FormatException($"Block comment nesting exceeds 128 at offset {start}");
+                            index += 2;
+                        }
+                        else if (index + 1 < source.Length &&
+                                 source[index] == '*' && source[index + 1] == '/')
+                        {
+                            depth--;
+                            index += 2;
+                        }
+                        else index++;
+                    }
+                    continue;
+                }
                 break;
             }
             int offset = index;
