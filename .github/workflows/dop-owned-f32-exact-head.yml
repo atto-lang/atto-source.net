@@ -41,7 +41,7 @@ jobs:
           dotnet run --no-build --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release | tee dop-evidence/managed-verification.log
           printf 'SOURCE_SHA=%s\n' "$(git rev-parse HEAD)"
           printf 'SOURCE_TREE=%s\n' "$(git rev-parse HEAD^{tree})"
-          printf '%s\n' 'SCOPE=managed owned F32 CPU region; no native AOT, device GPU, async F32-I64 graph bridge or guest source lowering'
+          printf '%s\n' 'SCOPE=managed owned F32 CPU region plus cancellable one-shot host-I64 graph; no Native AOT certification, device GPU or guest source lowering'
 
       - name: Create exact-head .NET evidence
         shell: bash
