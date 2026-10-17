@@ -131,6 +131,95 @@ public static class WorkerProtocol
         return frame;
     }
 
+    public static async ValueTask WriteFrameAsync(
+        Stream output,
+        WorkerFrame frame,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        ArgumentNullException.ThrowIfNull(frame);
+        Validate(frame);
+
+        var payloadBytes = StrictUtf8.GetBytes(frame.Payload);
+        var header = new byte[HeaderBytes];
+        BinaryPrimitives.WriteUInt32BigEndian(header.AsSpan(0, 4), Magic);
+        header[4] = Version;
+        header[5] = (byte)frame.Kind;
+        BinaryPrimitives.WriteUInt16BigEndian(header.AsSpan(6, 2), 0);
+        BinaryPrimitives.WriteUInt64BigEndian(header.AsSpan(8, 8), frame.RequestId);
+        BinaryPrimitives.WriteInt64BigEndian(
+            header.AsSpan(16, 8), frame.DeadlineUnixMilliseconds);
+        BinaryPrimitives.WriteInt32BigEndian(
+            header.AsSpan(24, 4), payloadBytes.Length);
+
+        await output.WriteAsync(header, cancellationToken).ConfigureAwait(false);
+        if (payloadBytes.Length != 0)
+            await output.WriteAsync(payloadBytes, cancellationToken).ConfigureAwait(false);
+        await output.FlushAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Async counterpart used by supervisors so cancellation/deadline expiry can
+    /// interrupt pipe reads without dedicating an unbounded blocked thread.
+    /// </summary>
+    public static async ValueTask<WorkerFrame?> ReadFrameAsync(
+        Stream input,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+
+        var header = new byte[HeaderBytes];
+        var first = await input.ReadAsync(
+            header.AsMemory(0, 1),
+            cancellationToken).ConfigureAwait(false);
+        if (first == 0) return null;
+        await ReadExactlyAsync(
+            input,
+            header.AsMemory(1),
+            cancellationToken).ConfigureAwait(false);
+
+        if (BinaryPrimitives.ReadUInt32BigEndian(header.AsSpan(0, 4)) != Magic)
+            throw new FormatException("worker frame magic mismatch");
+        if (header[4] != Version)
+            throw new FormatException("unsupported worker protocol version");
+        if (BinaryPrimitives.ReadUInt16BigEndian(header.AsSpan(6, 2)) != 0)
+            throw new FormatException("worker frame flags must be zero");
+
+        var kindByte = header[5];
+        if (kindByte < (byte)WorkerFrameKind.Ready ||
+            kindByte > (byte)WorkerFrameKind.Shutdown)
+            throw new FormatException("unknown worker frame kind");
+        var kind = (WorkerFrameKind)kindByte;
+        var requestId = BinaryPrimitives.ReadUInt64BigEndian(header.AsSpan(8, 8));
+        var deadline = BinaryPrimitives.ReadInt64BigEndian(header.AsSpan(16, 8));
+        var payloadLength = BinaryPrimitives.ReadInt32BigEndian(header.AsSpan(24, 4));
+        if (payloadLength < 0 || payloadLength > MaxPayloadBytes)
+            throw new FormatException("worker frame payload exceeds 1 MiB");
+
+        var payloadBytes = new byte[payloadLength];
+        if (payloadLength != 0)
+            await ReadExactlyAsync(
+                input,
+                payloadBytes,
+                cancellationToken).ConfigureAwait(false);
+
+        string payload;
+        try
+        {
+            payload = StrictUtf8.GetString(payloadBytes);
+        }
+        catch (DecoderFallbackException ex)
+        {
+            throw new FormatException(
+                "worker frame payload is not strict UTF-8",
+                ex);
+        }
+
+        var frame = new WorkerFrame(kind, requestId, deadline, payload);
+        Validate(frame);
+        return frame;
+    }
+
     public static string? ValidateDeadline(
         long deadlineUnixMilliseconds,
         long nowUnixMilliseconds,
@@ -234,6 +323,23 @@ public static class WorkerProtocol
         while (read < destination.Length)
         {
             var n = input.Read(destination[read..]);
+            if (n == 0)
+                throw new EndOfStreamException("truncated worker frame");
+            read += n;
+        }
+    }
+
+    private static async ValueTask ReadExactlyAsync(
+        Stream input,
+        Memory<byte> destination,
+        CancellationToken cancellationToken)
+    {
+        var read = 0;
+        while (read < destination.Length)
+        {
+            var n = await input.ReadAsync(
+                destination[read..],
+                cancellationToken).ConfigureAwait(false);
             if (n == 0)
                 throw new EndOfStreamException("truncated worker frame");
             read += n;
