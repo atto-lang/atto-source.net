@@ -1,0 +1,6 @@
+define module handler as
+  pub fnc invoke(String event): String {
+    if event == "ping"; then return "pong"; fi
+    return "unsupported";
+  }
+end
