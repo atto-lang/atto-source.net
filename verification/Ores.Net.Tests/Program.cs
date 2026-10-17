@@ -40,6 +40,9 @@ foreach (var source in new[] {
 }
 Require(OresParser.Parse("fnc main():int{return 1;} // enum is comment") is Literal,
     "enum inside a source comment must not trigger overload admission");
+Require(OresParser.Parse(
+    "fnc main():int{return 1;} /* enum Color /* enum Mode */ end */") is Literal,
+    "nested block-comment enum words must not trigger overload admission");
 
 SourceByteBudgetTests.Run();
 ActorRefNoWireSelfTest.Run();
