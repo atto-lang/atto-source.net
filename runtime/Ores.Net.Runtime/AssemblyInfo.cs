@@ -1,0 +1,1 @@
+using System.Runtime.CompilerServices;\n\n[assembly: InternalsVisibleTo("Ores.Net.Tests")]\n
