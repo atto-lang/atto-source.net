@@ -45,12 +45,20 @@ public sealed unsafe class ActorArena : IDisposable
     public sealed class ExternalLease : IDisposable
     {
         private ActorArena? _owner;
+        private readonly object _releaseGate = new();
         internal ExternalLease(ActorArena owner) => _owner = owner;
 
         public void Dispose()
         {
-            var owner = System.Threading.Interlocked.Exchange(ref _owner, null);
-            owner?.ReleaseExternalLease();
+            // Do not consume the final lifetime authority until native
+            // reclaim succeeds. A failed close must be retryable by the
+            // same callback without underflow or premature unmapping.
+            lock (_releaseGate)
+            {
+                if (_owner is null) return;
+                _owner.ReleaseExternalLease();
+                _owner = null;
+            }
         }
     }
 
@@ -95,9 +103,10 @@ public sealed unsafe class ActorArena : IDisposable
             // Managed thread IDs are process-scoped integers and may be reused
             // after a thread lifetime. Hold the actual Thread object while a
             // turn is active so a later carrier cannot inherit old authority.
+            var fresh = new Turn();
             _carrier = System.Threading.Thread.CurrentThread;
-            _turn = new Turn();
-            return _turn;
+            _turn = fresh;
+            return fresh;
         }
         finally
         {
@@ -142,10 +151,13 @@ public sealed unsafe class ActorArena : IDisposable
             for (var i = 0; i < SlotCount; ++i)
             {
                 if (_slots[i].Live || _slots[i].Generation == 0) continue;
-                _slots[i].Live = true;
-                _slots[i].Length = length;
+                // Allocate the capability first. Handle allocation failure
+                // cannot strand an otherwise-live unmanaged slot.
+                var handle = new Handle(_domain, i, _slots[i].Generation);
                 CryptographicOperations.ZeroMemory(new Span<byte>(_memory + i * SlotBytes, SlotBytes));
-                return new Handle(_domain, i, _slots[i].Generation);
+                _slots[i].Length = length;
+                _slots[i].Live = true;
+                return handle;
             }
             throw new InvalidOperationException("actor arena slot quota exhausted");
         }
@@ -230,8 +242,9 @@ public sealed unsafe class ActorArena : IDisposable
             RequireTurn(turn);
             if (_externalLeases == int.MaxValue)
                 throw new InvalidOperationException("actor arena external lease quota exhausted");
+            var lease = new ExternalLease(this);
             ++_externalLeases;
-            return new ExternalLease(this);
+            return lease;
         }
         finally
         {
@@ -280,9 +293,12 @@ public sealed unsafe class ActorArena : IDisposable
         {
             if (_externalLeases <= 0)
                 throw new InvalidOperationException("actor arena external lease accounting underflow");
-            --_externalLeases;
-            if (_retired && _externalLeases == 0)
+            // Complete the physical release before consuming the final
+            // lease. A failed scrub/release must leave this callback's
+            // lifetime authority retryable, not leak retired capacity.
+            if (_retired && _externalLeases == 1)
                 FreeNativeMemory();
+            --_externalLeases;
         }
     }
 
