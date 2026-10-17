@@ -1,3 +1,5 @@
+using System.Security;
+
 namespace Ores.Net.Runtime;
 
 /// <summary>
@@ -113,7 +115,7 @@ public static class IsolationPolicy
         return new IsolationAdmission(
             IsolationKind.WasmSandbox,
             SecurityBoundary: true,
-            NativeAotCompatible: true,
+            NativeAotCompatible: false,
             RequiresIpc: true,
             RequiresOsSandbox: false,
             ArtifactKind: "wasm32-wasi");
