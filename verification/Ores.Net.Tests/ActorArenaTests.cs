@@ -22,6 +22,26 @@ internal static class ActorArenaTests
             throw new Exception("persistent arena read/write");
         ExpectFailure(() => b.Read(tb, h));
         ExpectFailure(() => a.Read(tb, h));
+        // A Guid + slot + generation can be copied or forged through host
+        // reflection. Identity of the actual issued token must be checked
+        // independently of those numeric fields.
+        var handleFlags = System.Reflection.BindingFlags.Instance |
+                          System.Reflection.BindingFlags.NonPublic;
+        var handleType = typeof(ActorArena.Handle);
+        var domain = (Guid)(handleType.GetField("Domain", handleFlags)
+            ?? throw new Exception("handle domain fixture unavailable")).GetValue(h)!;
+        var slotIndex = (int)(handleType.GetField("Slot", handleFlags)
+            ?? throw new Exception("handle slot fixture unavailable")).GetValue(h)!;
+        var slotGeneration = (ulong)(handleType.GetField("Generation", handleFlags)
+            ?? throw new Exception("handle generation fixture unavailable")).GetValue(h)!;
+        var matchingMetadata = (ActorArena.Handle)
+            handleType.GetConstructors(handleFlags).Single().Invoke(
+                new object[] { domain, slotIndex, slotGeneration });
+        ExpectFailure(() => a.Read(ta, matchingMetadata));
+        ExpectFailure(() => a.Write(ta, matchingMetadata, new byte[] { 7, 9 }));
+        ExpectFailure(() => a.Drop(ta, matchingMetadata));
+        if (!a.Read(ta, h).SequenceEqual(new byte[] { 7, 9 }))
+            throw new Exception("forged token affected live slot");
         var copy = a.Read(ta, h);
         copy[0] = 99;
         if (a.Read(ta, h)[0] != 7) throw new Exception("read returned mutable alias");
