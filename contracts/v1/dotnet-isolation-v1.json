@@ -1,0 +1,43 @@
+{
+  "schema": "oreslang.dotnet-isolation/v1",
+  "backend": "dotnet",
+  "runtime": "net10-nativeaot",
+  "profiles": [
+    {
+      "id": "same-process",
+      "trust": ["trusted"],
+      "artifact": "native-aot",
+      "security_boundary": false,
+      "native_aot": true
+    },
+    {
+      "id": "assembly-load-context-development-only",
+      "trust": ["trusted"],
+      "artifact": "managed-cil-development",
+      "security_boundary": false,
+      "native_aot": false
+    },
+    {
+      "id": "worker-process",
+      "trust": ["trusted", "semi-trusted", "untrusted"],
+      "artifact": "native-aot",
+      "security_boundary": true,
+      "native_aot": true,
+      "untrusted_requires_os_sandbox": true
+    },
+    {
+      "id": "wasm-sandbox",
+      "trust": ["trusted", "semi-trusted", "untrusted"],
+      "artifact": "wasm32-wasi",
+      "security_boundary": true,
+      "native_aot": true,
+      "note": "Requires a separately produced WASM artifact; arbitrary CIL is not sandboxed by WASM."
+    }
+  ],
+  "forbidden_claims": [
+    "AssemblyLoadContext is a security boundary",
+    "AppDomain provides modern .NET Core/.NET 10 sandboxing",
+    "NativeAOT alone removes process ambient authority",
+    "CIL can be treated as WASM without a separate WASM compilation path"
+  ]
+}
