@@ -146,6 +146,56 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or ($output | Out-String).Trim() -ne '2211') {
             throw "CFG Native AOT atomic swap regression: expected 2211, got '$output'"
           }
+      - name: Record exact Windows Native AOT execution evidence
+        shell: pwsh
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actual = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $actual -ne $env:EXPECTED_HEAD) { throw 'Wrong tested Git commit' }
+          $tree = (git rev-parse 'HEAD^{tree}').Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Could not resolve Git tree' }
+          $folder = Join-Path $env:RUNNER_TEMP 'net-routing-evidence'
+          New-Item -ItemType Directory -Force -Path $folder | Out-Null
+          $entries = @(
+            "repository=$env:GITHUB_REPOSITORY"
+            "commit=$actual"
+            "tree=$tree"
+            "run_id=$env:GITHUB_RUN_ID"
+            "run_attempt=$env:GITHUB_RUN_ATTEMPT"
+            "event=$env:GITHUB_EVENT_NAME"
+            "runner=windows-2022"
+          )
+          foreach ($item in @(
+            'contracts/v1/verify_actor_pipeline_v1.py',
+            'contracts/v1/test_actor_pipeline_v1.py',
+            'contracts/v1/actor-pipeline-routing-v1.json'
+          )) {
+            $blob = (git hash-object -- $item).Trim()
+            if ($LASTEXITCODE -ne 0) { throw "Missing contract blob: $item" }
+            $entries += "blob:$item=$blob"
+          }
+          foreach ($item in @(
+            'artifacts/apps/win-x64/oreslang-app.exe',
+            'artifacts/compiler/win-x64/oresnet.exe',
+            'artifacts/cfg/win-x64/oreslang-app.exe'
+          )) {
+            if (-not (Test-Path -LiteralPath $item -PathType Leaf)) { throw "Missing native binary: $item" }
+            $digest = (Get-FileHash -LiteralPath $item -Algorithm SHA256).Hash.ToLowerInvariant()
+            $entries += "sha256:$item=$digest"
+          }
+          [IO.File]::WriteAllLines(
+            (Join-Path $folder 'identity.txt'), [string[]]$entries,
+            [Text.UTF8Encoding]::new($false))
+      - name: Upload exact-source Windows Native AOT evidence
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: net-aot-windows-${{ github.event.pull_request.head.sha || github.sha }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/net-routing-evidence/
+          retention-days: 3
+          if-no-files-found: error
       - name: Upload native executable
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -211,3 +261,36 @@ jobs:
       - name: Execute Linux Native AOT CFG branch and simultaneous-assignment fixture
         shell: bash
         run: bash ./verification/assert-linux-cfg-native.sh
+      - name: Record diagnostic Linux AOT exact-tree evidence
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -x artifacts/linux-x64/oreslang-app
+          evidence="$RUNNER_TEMP/net-linux-evidence"
+          mkdir -p "$evidence"
+          {
+            printf 'scope=linux-diagnostic-not-windows-release\n'
+            printf 'repository=%s\n' "$GITHUB_REPOSITORY"
+            printf 'commit=%s\n' "$(git rev-parse HEAD)"
+            printf 'tree=%s\n' "$(git rev-parse 'HEAD^{tree}')"
+            printf 'run_id=%s\n' "$GITHUB_RUN_ID"
+            printf 'run_attempt=%s\n' "$GITHUB_RUN_ATTEMPT"
+            printf 'event=%s\n' "$GITHUB_EVENT_NAME"
+            for file in contracts/v1/verify_actor_pipeline_v1.py \
+                contracts/v1/test_actor_pipeline_v1.py \
+                contracts/v1/actor-pipeline-routing-v1.json; do
+              printf 'blob:%s=%s\n' "$file" "$(git hash-object "$file")"
+            done
+            printf 'sha256:linux-aot-app=%s\n' "$(sha256sum artifacts/linux-x64/oreslang-app | cut -d ' ' -f1)"
+          } > "$evidence/identity.txt"
+      - name: Upload Linux AOT diagnostic evidence
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: net-aot-linux-diagnostic-${{ github.event.pull_request.head.sha || github.sha }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/net-linux-evidence/
+          retention-days: 3
+          if-no-files-found: error

@@ -48,8 +48,28 @@ public sealed class ActorPipelinePolicy
     {
         ArgumentNullException.ThrowIfNull(stages);
         ArgumentNullException.ThrowIfNull(edges);
-        if (stages.Count is < 2 or > 1024 || edges.Count is < 1 or > 4096)
+        // Caller-owned IReadOnlyLists may expose hostile Count/indexer/iterator behavior.
+        // Capture each checked count exactly once and snapshot exactly that many entries.
+        int stageCount = stages.Count, edgeCount = edges.Count;
+        if (stageCount is < 2 or > 1024 || edgeCount is < 1 or > 4096)
             throw new ArgumentException("Invalid pipeline graph budget");
+        var stageSnapshot = new Stage[stageCount];
+        var edgeSnapshot = new Edge[edgeCount];
+        try
+        {
+            for (int i = 0; i < stageCount; ++i)
+                stageSnapshot[i] = stages[i]
+                    ?? throw new ArgumentException("Null pipeline stage");
+            for (int i = 0; i < edgeCount; ++i)
+                edgeSnapshot[i] = edges[i]
+                    ?? throw new ArgumentException("Null pipeline edge");
+        }
+        catch (IndexOutOfRangeException changed)
+        {
+            throw new ArgumentException("Pipeline graph changed during snapshot", changed);
+        }
+        stages = stageSnapshot;
+        edges = edgeSnapshot;
 
         var byId = new Dictionary<string, Stage>(StringComparer.Ordinal);
         var incoming = new Dictionary<string, int>(StringComparer.Ordinal);
