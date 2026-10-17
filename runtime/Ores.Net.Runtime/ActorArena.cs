@@ -35,6 +35,25 @@ public sealed unsafe class ActorArena : IDisposable
         internal Scratch(Guid domain, Turn turn, int offset, int length) =>
             (Domain, Turn, Offset, Length) = (domain, turn, offset, length);
     }
+
+    /// <summary>
+    /// Opaque lifetime-only authority for a registered continuation/FFI/I/O
+    /// callback. It grants no arena read/write access and may be released from
+    /// any carrier. Logical retirement revokes all arena operations
+    /// immediately, while physical native release waits for the last lease.
+    /// </summary>
+    public sealed class ExternalLease : IDisposable
+    {
+        private ActorArena? _owner;
+        internal ExternalLease(ActorArena owner) => _owner = owner;
+
+        public void Dispose()
+        {
+            var owner = System.Threading.Interlocked.Exchange(ref _owner, null);
+            owner?.ReleaseExternalLease();
+        }
+    }
+
     private struct Slot
     {
         public ulong Generation;
@@ -52,7 +71,7 @@ public sealed unsafe class ActorArena : IDisposable
     private byte* _memory;
     private Turn? _turn;
     private System.Threading.Thread? _carrier;
-    private int _scratchTop;
+    private int _scratchTop, _externalLeases;
     private bool _retired;
 
     public ActorArena(ulong actor, ulong incarnation)
@@ -197,6 +216,56 @@ public sealed unsafe class ActorArena : IDisposable
         }
     }
 
+    /// <summary>
+    /// Register a lifetime pin for an external continuation, FFI operation or
+    /// I/O callback before the actor turn exits. The lease carries lifetime
+    /// authority only; it cannot dereference actor memory.
+    /// </summary>
+    public ExternalLease AcquireExternalLease(Turn turn)
+    {
+        if (!System.Threading.Monitor.TryEnter(_gate))
+            throw new InvalidOperationException("actor arena busy");
+        try
+        {
+            RequireTurn(turn);
+            if (_externalLeases == int.MaxValue)
+                throw new InvalidOperationException("actor arena external lease quota exhausted");
+            ++_externalLeases;
+            return new ExternalLease(this);
+        }
+        finally
+        {
+            System.Threading.Monitor.Exit(_gate);
+        }
+    }
+
+    private void ReleaseExternalLease()
+    {
+        lock (_gate)
+        {
+            if (_externalLeases <= 0)
+                throw new InvalidOperationException("actor arena external lease accounting underflow");
+            --_externalLeases;
+            if (_retired && _externalLeases == 0)
+                FreeNativeMemory();
+        }
+    }
+
+    public int OutstandingExternalLeases
+    {
+        get { lock (_gate) return _externalLeases; }
+    }
+
+    public bool Retired
+    {
+        get { lock (_gate) return _retired; }
+    }
+
+    public bool PhysicallyDisposed
+    {
+        get { lock (_gate) return _memory == null; }
+    }
+
     public Scratch AllocateScratch(Turn turn, int length)
     {
         if (!System.Threading.Monitor.TryEnter(_gate))
@@ -261,6 +330,14 @@ public sealed unsafe class ActorArena : IDisposable
         }
     }
 
+    private void FreeNativeMemory()
+    {
+        if (_memory == null) return;
+        CryptographicOperations.ZeroMemory(new Span<byte>(_memory, TotalBytes));
+        NativeMemory.Free(_memory);
+        _memory = null;
+    }
+
     public void Dispose()
     {
         if (!System.Threading.Monitor.TryEnter(_gate))
@@ -269,10 +346,13 @@ public sealed unsafe class ActorArena : IDisposable
         {
             if (_retired) return;
             if (_turn is not null) throw new InvalidOperationException("active turn blocks retirement");
-            CryptographicOperations.ZeroMemory(new Span<byte>(_memory, TotalBytes));
-            NativeMemory.Free(_memory);
-            _memory = null;
+
+            // Retirement is two-phase: revoke new actor operations now, then
+            // reclaim only after all continuation/FFI/I/O lifetime pins quiesce.
             _retired = true;
+            _carrier = null;
+            if (_externalLeases == 0)
+                FreeNativeMemory();
         }
         finally
         {
