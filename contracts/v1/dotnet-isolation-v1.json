@@ -30,8 +30,8 @@
       "trust": ["trusted", "semi-trusted", "untrusted"],
       "artifact": "wasm32-wasi",
       "security_boundary": true,
-      "native_aot": true,
-      "note": "Requires a separately produced WASM artifact; arbitrary CIL is not sandboxed by WASM."
+      "native_aot": false,
+      "note": "Separate artifact path supervised by a host; requires a separately produced WASM artifact and does not sandbox arbitrary CIL."
     }
   ],
   "forbidden_claims": [
