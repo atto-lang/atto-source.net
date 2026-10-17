@@ -9,38 +9,76 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: dop-net-host-graph-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   net10-host-graph:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - name: Checkout pinned source repository commit
+      - name: Checkout exact private source head
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
           fetch-depth: 1
-      - name: Verify exact source commit and origin
+      - name: Assert source repository, commit and clean input tree
+        id: provenance
         shell: bash
         env:
           EXPECTED_SHA: ${{ github.sha }}
+          EXPECTED_REPO_ID: '1419704375'
+          ACTUAL_REPO_ID: ${{ github.repository_id }}
+          SOURCE_PRIVATE: ${{ github.event.repository.private }}
         run: |
           set -euo pipefail
+          test "$ACTUAL_REPO_ID" = "$EXPECTED_REPO_ID"
+          test "$SOURCE_PRIVATE" = true
+          test "$GITHUB_REPOSITORY" = 'ores-truffle-oreslang/oreslang-source.net'
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           test "$(git remote get-url origin | sed -E 's#^https://github.com/##; s#\.git$##')" = 'ores-truffle-oreslang/oreslang-source.net'
+          git diff --quiet
+          install -d -m 700 "$RUNNER_TEMP/dop-net-evidence"
+          {
+            printf 'SOURCE_HEAD=%s\n' "$(git rev-parse HEAD)"
+            printf 'SOURCE_TREE=%s\n' "$(git rev-parse HEAD^{tree})"
+            printf 'REPOSITORY=%s\n' "$GITHUB_REPOSITORY"
+            printf 'RUNTIME_BLOB=%s\n' "$(git hash-object runtime/Ores.Net.Runtime/ExecutionGraphV1.cs)"
+            printf 'TEST_BLOB=%s\n' "$(git hash-object verification/Ores.Net.Tests/ExecutionGraphV1Tests.cs)"
+            printf '%s\n' 'SCOPE=.NET host-I64 typed graph and executor-admission contract; no owned-F32 bridge or GPU'
+          } > "$RUNNER_TEMP/dop-net-evidence/provenance.txt"
+      - name: Require scheduler-admission regressions in exact source
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq 'actual inline-then-throw rejection' verification/Ores.Net.Tests/ExecutionGraphV1Tests.cs
+          grep -Fq 'worker-start-then-reject' verification/Ores.Net.Tests/ExecutionGraphV1Tests.cs
+          grep -Fq 'accepted early worker did not execute after admission' verification/Ores.Net.Tests/ExecutionGraphV1Tests.cs
+          grep -Fq 'executor admission timed out' runtime/Ores.Net.Runtime/ExecutionGraphV1.cs
       - name: Install reviewed .NET 10 toolchain
         uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
         with:
           dotnet-version: '10.0.x'
-      - name: Check compiler and managed graph regressions
+      - name: Execute exact managed graph regressions
         shell: bash
         run: |
           set -euo pipefail
-          dotnet --info
-          dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
-      - name: Report exact-source scope
-        shell: bash
-        run: |
-          set -euo pipefail
-          printf 'SOURCE_COMMIT=%s\n' "$(git rev-parse HEAD)"
-          printf 'SOURCE_TREE=%s\n' "$(git rev-parse HEAD^{tree})"
-          printf '%s\n' 'SCOPE=managed graph importer + bootstrap frontend; no owned-F32 region parity, no device GPU, no Native AOT certification'
+          dotnet --info > "$RUNNER_TEMP/dop-net-evidence/dotnet-info.txt"
+          dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release \
+            | tee "$RUNNER_TEMP/dop-net-evidence/test-output.txt"
+          grep -Fq 'typed .NET CPU/GPU graph host contract: PASS' \
+            "$RUNNER_TEMP/dop-net-evidence/test-output.txt"
+          printf 'DOP_NET_GRAPH_TESTS=PASS\n' > "$RUNNER_TEMP/dop-net-evidence/test-outcome.txt"
+      - name: Retain bounded exact-head evidence
+        if: ${{ always() && steps.provenance.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: dop-net-host-graph-evidence
+          path: |
+            ${{ runner.temp }}/dop-net-evidence/provenance.txt
+            ${{ runner.temp }}/dop-net-evidence/dotnet-info.txt
+            ${{ runner.temp }}/dop-net-evidence/test-output.txt
+            ${{ runner.temp }}/dop-net-evidence/test-outcome.txt
+          if-no-files-found: error
+          retention-days: 7
