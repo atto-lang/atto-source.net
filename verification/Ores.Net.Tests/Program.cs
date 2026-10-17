@@ -25,6 +25,7 @@ static void InvalidSend(Action action, string why)
 SourceByteBudgetTests.Run();
 ExecutionGraphV1Tests.Run();
 OwnedF32RegionV1Tests.Run();
+OwnedF32GraphV1Tests.Run();
 
 // The scalar bootstrap must reserve each execution-domain/nb form and
 // reject it before emitting a misleading CIL host fallback.
