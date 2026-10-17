@@ -31,6 +31,7 @@ public static class WorkerRuntime
         try
         {
             WorkerProtocol.WriteFrame(output, WorkerFrame.Ready());
+            ulong lastInvokeRequestId = 0;
             while (true)
             {
                 var frame = WorkerProtocol.ReadFrame(input);
@@ -53,6 +54,16 @@ public static class WorkerRuntime
                         break;
 
                     case WorkerFrameKind.Invoke:
+                        if (frame.RequestId <= lastInvokeRequestId)
+                        {
+                            WorkerProtocol.WriteFrame(
+                                output,
+                                WorkerFrame.Error(
+                                    frame.RequestId,
+                                    "request-id-replay"));
+                            break;
+                        }
+                        lastInvokeRequestId = frame.RequestId;
                         if (!HandleInvoke(entry, output, frame, unixMilliseconds()))
                             return 70;
                         break;
