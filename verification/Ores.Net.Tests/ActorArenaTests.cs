@@ -12,6 +12,32 @@ internal static class ActorArenaTests
 
     public static void Run()
     {
+        // Domain allocation is deterministic capability authority: malformed
+        // owners consume nothing, values never recycle, and exhaustion is
+        // permanent rather than wrapping into a previously issued domain.
+        var invalidCounter = new ActorArena.DomainCounter(7);
+        ExpectFailure(() => ActorArena.ClaimDomain(invalidCounter, 0, 1));
+        ExpectFailure(() => ActorArena.ClaimDomain(invalidCounter, 1, 0));
+        if (invalidCounter.Next != 7)
+            throw new Exception("invalid arena identity consumed a domain");
+
+        var exhaustedCounter = new ActorArena.DomainCounter(long.MaxValue - 1);
+        if (ActorArena.ClaimDomain(exhaustedCounter, 1, 1) != long.MaxValue - 1)
+            throw new Exception("arena domain saturation issued wrong value");
+        if (exhaustedCounter.Next != long.MaxValue)
+            throw new Exception("arena domain counter did not saturate");
+        ExpectFailure(() => ActorArena.ClaimDomain(exhaustedCounter, 2, 1));
+        if (exhaustedCounter.Next != long.MaxValue)
+            throw new Exception("arena domain exhaustion was not permanent");
+
+        var concurrentCounter = new ActorArena.DomainCounter(1);
+        var domains = new System.Collections.Concurrent.ConcurrentBag<long>();
+        System.Threading.Tasks.Parallel.For(0, 2048, i =>
+            domains.Add(ActorArena.ClaimDomain(concurrentCounter, checked((ulong)i + 1), 1)));
+        if (domains.Count != 2048 || domains.Distinct().Count() != 2048 ||
+            domains.Min() != 1 || domains.Max() != 2048 || concurrentCounter.Next != 2049)
+            throw new Exception("concurrent arena domains were not unique and contiguous");
+
         using var a = new ActorArena(101, 1);
         using var b = new ActorArena(102, 1);
         ExpectFailure(() => a.BeginTurn(101, 2)); // a recycled actor ID is not an incarnation grant
@@ -51,7 +77,7 @@ internal static class ActorArenaTests
             ?? throw new Exception("scratch domain fixture unavailable");
         var scratchCtor = scratchType.GetConstructors(flags).Single();
         var forged = (ActorArena.Scratch)scratchCtor.Invoke(new object[] {
-            (Guid)domainField.GetValue(scratch)!, ta, 1, 1
+            (long)domainField.GetValue(scratch)!, ta, 1, 1
         });
         ExpectFailure(() => a.ReadScratch(ta, forged));
         if (!a.ReadScratch(ta, scratch).SequenceEqual(new byte[] { 5, 6 }))
