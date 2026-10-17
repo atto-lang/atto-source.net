@@ -84,6 +84,24 @@ internal static class ActorArenaTests
         var tb = b.BeginTurn(102, 1);
         var h = a.Allocate(ta, 2);
         a.Write(ta, h, new byte[] { 7, 9 });
+        // Raw coordinates are not a capability: an exact reflected clone of
+        // a live handle must still fail reference-identity admission.
+        var handleType = typeof(ActorArena.Handle);
+        var handleFlags = System.Reflection.BindingFlags.Instance |
+                          System.Reflection.BindingFlags.NonPublic;
+        var handleDomain = handleType.GetField("Domain", handleFlags)
+            ?? throw new Exception("handle domain fixture unavailable");
+        var handleSlot = handleType.GetField("Slot", handleFlags)
+            ?? throw new Exception("handle slot fixture unavailable");
+        var handleGeneration = handleType.GetField("Generation", handleFlags)
+            ?? throw new Exception("handle generation fixture unavailable");
+        var handleCtor = handleType.GetConstructors(handleFlags).Single();
+        var forgedHandle = (ActorArena.Handle)handleCtor.Invoke(new object[] {
+            (long)handleDomain.GetValue(h)!,
+            (int)handleSlot.GetValue(h)!,
+            (ulong)handleGeneration.GetValue(h)!
+        });
+        ExpectFailure(() => a.Read(ta, forgedHandle));
         // The token alone cannot authorize a concurrent physical carrier.
         var wrongCarrierReadDenied = false;
         var wrongCarrierEndDenied = false;
@@ -113,11 +131,26 @@ internal static class ActorArenaTests
                     System.Reflection.BindingFlags.NonPublic;
         var domainField = scratchType.GetField("Domain", flags)
             ?? throw new Exception("scratch domain fixture unavailable");
+        var offsetField = scratchType.GetField("Offset", flags)
+            ?? throw new Exception("scratch offset fixture unavailable");
+        var lengthField = scratchType.GetField("Length", flags)
+            ?? throw new Exception("scratch length fixture unavailable");
+        var issuanceField = scratchType.GetField("Issuance", flags)
+            ?? throw new Exception("scratch issuance fixture unavailable");
         var scratchCtor = scratchType.GetConstructors(flags).Single();
+        var issuance = (int)issuanceField.GetValue(scratch)!;
         var forged = (ActorArena.Scratch)scratchCtor.Invoke(new object[] {
-            (long)domainField.GetValue(scratch)!, ta, 1, 1
+            (long)domainField.GetValue(scratch)!, ta, 1, 1, issuance
         });
         ExpectFailure(() => a.ReadScratch(ta, forged));
+        var exactForged = (ActorArena.Scratch)scratchCtor.Invoke(new object[] {
+            (long)domainField.GetValue(scratch)!,
+            ta,
+            (int)offsetField.GetValue(scratch)!,
+            (int)lengthField.GetValue(scratch)!,
+            issuance
+        });
+        ExpectFailure(() => a.ReadScratch(ta, exactForged));
         if (!a.ReadScratch(ta, scratch).SequenceEqual(new byte[] { 5, 6 }))
             throw new Exception("valid issued scratch handle rejected");
         ExpectFailure(() => a.Dispose());
