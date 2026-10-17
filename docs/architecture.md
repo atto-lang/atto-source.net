@@ -4,14 +4,22 @@
 
 - **Runtime JIT: forbidden.** No interpreter-based language execution or managed JIT fallback in shipping applications.
 - **Runtime dynamic loading: forbidden.** No `Assembly.Load*`, `Reflection.Emit`, `DynamicMethod`, runtime-generated CIL, runtime C# compilation or new code via plugins.
-- **Static linking surface:** compiler emits `OresGenerated.dll` at build time; host references `Oreslang.Generated.OresProgram.Run` statically so trimming retains the method.
+- **Static linking surface:** compiler emits `OresGenerated.dll` at build time. The scalar host references `Oreslang.Generated.OresProgram.Run` statically; the separate Lambda host references `Oreslang.Generated.OresProgram.Invoke(String)` statically. Trimming therefore retains only the reviewed entry for that artifact.
 - **Distribution:** both compiler CLI and application must be Native AOT-produced Windows executables. `dotnet build` produces intermediate managed assemblies but **is not a release**.
 - **Compile target:** Windows x64 first, Windows ARM64 after target-specific validation. Native AOT builds require platform-appropriate toolchains.
 - **Transitive AOT:** every runtime dependency must survive Native AOT analysis and functional testing. No suppressing warnings without a documented proof.
 
 ## Language to CIL lowering
 
-Current parser supports a fixed i64 arithmetic main function. CIL emitter walks its bounded AST to produce `ldc.i8`, `add.ovf`, `sub.ovf`, `mul.ovf`, `div`, and `ret` instructions. The runtime host converts checked overflow and division exceptions to exit code 70. No runtime compiler or reflection invocation occurs.
+The scalar parser supports a fixed i64 arithmetic main function. Its CIL emitter produces checked arithmetic and `ret` from verified OresIR.
+
+A separate narrow Lambda parser accepts a public `invoke(String event): String`
+handler with bounded literal-equality guards and string returns. Its metadata-only
+emitter produces a typed static `Invoke(String) -> String` method using
+`System.String.op_Equality`, explicit branches and `ldstr` constants. It is
+compiled only via explicit `check-lambda` / `compile-lambda` modes and linked
+by the separate Lambda NativeAOT host. No runtime compiler, reflection invocation,
+or dynamic assembly loading occurs in either path.
 
 Upcoming typed OresIR should represent actor send/await, ownership moves, borrows, error handling, and cooperation points explicitly before mapping to CIL. Generated signatures must remain statically discoverable at link/publish time.
 
