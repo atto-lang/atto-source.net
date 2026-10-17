@@ -129,6 +129,63 @@ internal static class OwnedF32GraphV1Tests
 
             for (int trial = 0; trial < 64; ++trial)
             {
+                using var launched = new System.Threading.ManualResetEventSlim(false);
+                Thread? early = null;
+                Bridge.Ticket acceptedEarly = Bridge.Submit(
+                    input, output, source, destination, 1, 0, Answer(),
+                    action =>
+                    {
+                        early = new Thread(() =>
+                        {
+                            launched.Set();
+                            action();
+                        });
+                        early.Start();
+                        Need(launched.Wait(TimeSpan.FromSeconds(5)),
+                            "accepted early worker never launched");
+                        // Normal return commits admission.
+                    });
+                Need(early is not null && early.Join(TimeSpan.FromSeconds(5)),
+                    "accepted early worker stranded at admission gate");
+                Need(acceptedEarly.Task.GetAwaiter().GetResult() == 42,
+                    "accepted early worker did not execute after admission");
+            }
+
+            for (int trial = 0; trial < 64; ++trial)
+            {
+                using var launched = new System.Threading.ManualResetEventSlim(false);
+                Thread? early = null;
+                Bridge.Ticket rejectedEarly = Bridge.Submit(
+                    input, output, source, destination, 1, 0, Answer(),
+                    action =>
+                    {
+                        early = new Thread(() =>
+                        {
+                            launched.Set();
+                            action();
+                        });
+                        early.Start();
+                        Need(launched.Wait(TimeSpan.FromSeconds(5)),
+                            "rejected early worker never launched");
+                        throw new InvalidOperationException(
+                            "owned worker began before rejection");
+                    });
+                Need(early is not null && early.Join(TimeSpan.FromSeconds(5)),
+                    "rejected early worker stranded at admission gate");
+                try
+                {
+                    _ = rejectedEarly.Task.GetAwaiter().GetResult();
+                    throw new Exception("rejected early worker unexpectedly succeeded");
+                }
+                catch (InvalidOperationException error)
+                {
+                    Need(error.Message == "owned worker began before rejection",
+                        "started-worker scheduler rejection was masked");
+                }
+            }
+
+            for (int trial = 0; trial < 64; ++trial)
+            {
                 Bridge.Ticket once = Bridge.Submit(
                     input, output, source, destination, 1, 0, Answer(), schedule);
                 callback = queued ?? throw new Exception("missing duplicate-race callback");
