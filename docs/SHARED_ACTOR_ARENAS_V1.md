@@ -1,0 +1,5 @@
+# .NET host actor arena prototype
+
+The experimental `ActorArena` uses an unmanaged, fixed-capacity allocation via `NativeMemory.AllocZeroed`, with explicit synchronous `Dispose` and byte scrubbing. SHARED actors receive **their own private arena**, not permission to inspect any neighboring actor's arena. Persistent generation-checked slots survive mailbox turns; scratch handles are turn-identity scoped and zeroed on turn exit. Copy-only safe reads/writes do not expose raw pointers. Single carrier per admitted turn; migration occurs only after a completed turn.
+
+**Not integrated:** the current .NET source compiler/runtime has byte-copy mailboxes, not source actor allocation lowering, shared-domain leases, actor async/suspend cleanup or deterministic guest destructors. `ActorArena` is a host prototype; the managed handle wrappers and metadata still contribute to .NET GC. Do not use unmanaged regions for reference-containing objects or claim zero-GC. Stop must prove quiescence before `Dispose`. See common-source shared-actor-arenas v1 draft contract.
