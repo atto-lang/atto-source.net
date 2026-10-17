@@ -44,10 +44,14 @@ jobs:
           } > "$RUNNER_TEMP/serde-policy-evidence/provenance.txt"
           sha256sum contracts/v1/serde_boundary_v1.json \
             scripts/verify_serde_contract.py scripts/test_serde_contract.py \
+            contracts/v1/design/messagepack_collection_vectors.json \
+            scripts/verify_messagepack_vectors.py scripts/test_messagepack_vectors.py \
             .github/workflows/serde-boundary-contract.yml \
             > "$RUNNER_TEMP/serde-policy-evidence/source-sha256.txt"
           for path in contracts/v1/serde_boundary_v1.json \
                       scripts/verify_serde_contract.py scripts/test_serde_contract.py \
+                      contracts/v1/design/messagepack_collection_vectors.json \
+                      scripts/verify_messagepack_vectors.py scripts/test_messagepack_vectors.py \
                       .github/workflows/serde-boundary-contract.yml; do
             printf '%s git_blob=%s\n' "$path" "$(git rev-parse "HEAD:$path")"
           done > "$RUNNER_TEMP/serde-policy-evidence/git-blobs.txt"
@@ -76,6 +80,26 @@ jobs:
             code=1
           fi
           exit "$code"
+      - name: Execute exactly ten independently computed portable vectors and 15 mutation tests
+        shell: bash
+        run: |
+          set -uo pipefail
+          python3 scripts/verify_messagepack_vectors.py > "$RUNNER_TEMP/wire-vectors.log" 2>&1
+          code=$?
+          cat "$RUNNER_TEMP/wire-vectors.log"
+          printf 'wire_vector_validator_exit=%s\n' "$code" >> "$RUNNER_TEMP/serde-policy-evidence/results.txt"
+          if [ "$code" -ne 0 ] || ! grep -Fxq 'PASS 10/10 independent stdlib MessagePack v2 reference bytes (NOT backend runtime parity)' "$RUNNER_TEMP/wire-vectors.log"; then
+            exit 1
+          fi
+          python3 scripts/test_messagepack_vectors.py > "$RUNNER_TEMP/wire-mutations.log" 2>&1
+          code=$?
+          cat "$RUNNER_TEMP/wire-mutations.log"
+          printf 'wire_mutation_suite_exit=%s\n' "$code" >> "$RUNNER_TEMP/serde-policy-evidence/results.txt"
+          if [ "$code" -ne 0 ] || ! grep -Eq '^Ran 15 tests in [0-9.]+s' "$RUNNER_TEMP/wire-mutations.log"; then
+            printf 'portable_mutation_count=unverified\n' >> "$RUNNER_TEMP/serde-policy-evidence/results.txt"
+            exit 1
+          fi
+          printf 'portable_reference_vectors=10\nportable_mutation_count=15\n' >> "$RUNNER_TEMP/serde-policy-evidence/results.txt"
       - name: Upload source-free policy evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
