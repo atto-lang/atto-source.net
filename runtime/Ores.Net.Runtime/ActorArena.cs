@@ -21,19 +21,45 @@ public sealed unsafe class ActorArena : IDisposable
     }
     public sealed class Handle
     {
-        internal readonly Guid Domain;
+        internal readonly long Domain;
         internal readonly int Slot;
         internal readonly ulong Generation;
-        internal Handle(Guid domain, int slot, ulong generation) =>
+        internal Handle(long domain, int slot, ulong generation) =>
             (Domain, Slot, Generation) = (domain, slot, generation);
     }
     public sealed class Scratch
     {
-        internal readonly Guid Domain;
+        internal readonly long Domain;
         internal readonly Turn Turn;
         internal readonly int Offset, Length;
-        internal Scratch(Guid domain, Turn turn, int offset, int length) =>
+        internal Scratch(long domain, Turn turn, int offset, int length) =>
             (Domain, Turn, Offset, Length) = (domain, turn, offset, length);
+    }
+
+    // Arena domains are capability provenance, not random correlation IDs.
+    // Long.MaxValue is a permanent exhaustion sentinel and is never issued.
+    internal sealed class DomainCounter
+    {
+        internal long Next;
+        internal DomainCounter(long next = 1) => Next = next;
+    }
+
+    private static readonly DomainCounter s_domainCounter = new();
+
+    internal static long ClaimDomain(DomainCounter counter, ulong actor, ulong incarnation)
+    {
+        ArgumentNullException.ThrowIfNull(counter);
+        // Invalid owner authority must never consume a non-recyclable domain.
+        if (actor == 0 || incarnation == 0)
+            throw new ArgumentOutOfRangeException(nameof(actor), "invalid actor arena identity");
+        var candidate = Volatile.Read(ref counter.Next);
+        while (candidate > 0 && candidate < long.MaxValue)
+        {
+            if (Interlocked.CompareExchange(ref counter.Next, candidate + 1, candidate) == candidate)
+                return candidate;
+            candidate = Volatile.Read(ref counter.Next);
+        }
+        throw new InvalidOperationException("actor arena domain exhausted");
     }
     private struct Slot
     {
@@ -43,7 +69,7 @@ public sealed unsafe class ActorArena : IDisposable
     }
 
     private readonly ulong _actor, _incarnation;
-    private readonly Guid _domain = Guid.NewGuid();
+    private readonly long _domain;
     private readonly object _gate = new();
     private readonly Slot[] _slots = new Slot[SlotCount];
     // Exact issuance metadata: in-bounds offsets are not themselves authority.
@@ -59,6 +85,7 @@ public sealed unsafe class ActorArena : IDisposable
         if (actor == 0 || incarnation == 0) throw new ArgumentOutOfRangeException(nameof(actor));
         _actor = actor;
         _incarnation = incarnation;
+        _domain = ClaimDomain(s_domainCounter, actor, incarnation);
         _memory = (byte*)NativeMemory.AllocZeroed((nuint)TotalBytes);
         if (_memory == null) throw new OutOfMemoryException("actor arena allocation failed");
         for (var i = 0; i < _slots.Length; ++i) _slots[i].Generation = 1;
