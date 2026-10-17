@@ -104,6 +104,34 @@ internal static class ActorArenaTests
             contended.EndTurn(admitted);
             contended.Dispose();
         }
+        // Carrier authority must retain the live Thread object itself, not a
+        // recyclable ManagedThreadId integer. Keep the active turn valid, then
+        // replace only the recorded carrier with a terminated Thread object:
+        // access must fail until the real owning Thread reference is restored.
+        using (var identityBound = new ActorArena(610, 4))
+        {
+            var turn = identityBound.BeginTurn(610, 4);
+            var handle = identityBound.Allocate(turn, 2);
+            identityBound.Write(turn, handle, new byte[] { 8, 6 });
+            var carrierField = typeof(ActorArena).GetField("_carrier",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                ?? throw new Exception("carrier field fixture unavailable");
+            if (carrierField.FieldType != typeof(System.Threading.Thread))
+                throw new Exception("carrier field must retain Thread object identity");
+
+            var finished = new System.Threading.Thread(() => { });
+            finished.Start();
+            if (!finished.Join(TimeSpan.FromSeconds(5)))
+                throw new Exception("terminated-carrier fixture stalled");
+            carrierField.SetValue(identityBound, finished);
+            ExpectFailure(() => identityBound.Read(turn, handle));
+
+            carrierField.SetValue(identityBound, System.Threading.Thread.CurrentThread);
+            if (!identityBound.Read(turn, handle).SequenceEqual(new byte[] { 8, 6 }))
+                throw new Exception("restored live carrier identity rejected");
+            identityBound.EndTurn(turn);
+        }
+
         // A suspended actor may resume on another carrier only after ending
         // the previous admitted turn. Persistent bytes survive the handoff.
         using (var migrating = new ActorArena(711, 2))
