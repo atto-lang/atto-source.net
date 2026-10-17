@@ -251,6 +251,29 @@ internal static class ExecutionGraphV1Tests
 
         for (int trial = 0; trial < 128; trial++)
         {
+            using var acceptedWorkerLaunched = new System.Threading.ManualResetEventSlim(false);
+            Thread? acceptedEarlyWorker = null;
+            var acceptedEarly = plan.SubmitCpu(job =>
+            {
+                acceptedEarlyWorker = new Thread(() =>
+                {
+                    acceptedWorkerLaunched.Set();
+                    job();
+                });
+                acceptedEarlyWorker.Start();
+                Need(acceptedWorkerLaunched.Wait(TimeSpan.FromSeconds(5)),
+                    "accepted early worker never launched");
+                // Normal return commits scheduler admission.
+            });
+            Need(acceptedEarlyWorker is not null &&
+                 acceptedEarlyWorker.Join(TimeSpan.FromSeconds(5)),
+                 "accepted early worker stranded at admission gate");
+            Need(acceptedEarly.Task.GetAwaiter().GetResult() == 42,
+                 "accepted early worker did not execute after admission");
+        }
+
+        for (int trial = 0; trial < 128; trial++)
+        {
             using var workerLaunched = new System.Threading.ManualResetEventSlim(false);
             Thread? earlyWorker = null;
             var raceRejected = plan.SubmitCpu(job =>
