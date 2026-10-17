@@ -39,6 +39,19 @@ jobs:
       - name: Verify compiler and runtime source
         shell: pwsh
         run: dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
+      - name: Reject unsupported Option pattern syntax with real .NET compiler
+        shell: pwsh
+        run: |
+          python scripts/check_option_pattern_contract.py --backend net `
+            --revision "${{ github.sha }}" --report option-pattern-net.json `
+            -- dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -- check '{source}'
+      - name: Preserve Option-pattern admission report (not parity)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: option-pattern-net-admission
+          path: option-pattern-net.json
+          if-no-files-found: ignore
       - name: Reject oversized and invalid UTF-8 compiler input
         shell: pwsh
         run: |
