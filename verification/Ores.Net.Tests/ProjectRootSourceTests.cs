@@ -76,6 +76,16 @@ internal static class ProjectRootSourceTests
                 "schema_version = \"1\"\n[project]\nroot = \"appdata\"\n");
             Check(ProjectRootSourceResolver.Resolve(app, "+/lib/answer") ==
                   Path.GetFullPath(selectedFile), "explicit project.root ignored");
+            string selectedEntry = Path.Combine(app, "appdata", "src", "entry.ores");
+            Directory.CreateDirectory(Path.GetDirectoryName(selectedEntry)!);
+            File.WriteAllText(selectedEntry, "fnc main():int{return 42;}\n");
+            Check(ProjectRootSourceResolver.ResolveRelative(
+                    selectedEntry, "../lib/answer", Path.Combine(app, "appdata")) ==
+                  Path.GetFullPath(selectedFile),
+                  "relative import escaped the configured project root namespace");
+            Reject(() => ProjectRootSourceResolver.ResolveRelative(
+                    selectedEntry, "../../src/answer", Path.Combine(app, "appdata")),
+                   "relative source crossed configured project root boundary");
             string nestedManifest = Path.Combine(app, "appdata", ".ores.pkg.toml");
             File.WriteAllText(nestedManifest, "schema_version = \"1\"\n");
             Reject(() => ProjectRootSourceResolver.Resolve(app, "+/lib/answer"),
