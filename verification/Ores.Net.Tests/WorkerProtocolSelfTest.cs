@@ -77,6 +77,9 @@ static class WorkerProtocolSelfTest
         RejectWrite(
             new WorkerFrame(WorkerFrameKind.Shutdown, 1, 0, ""),
             "shutdown authority");
+        RejectWrite(
+            new WorkerFrame(WorkerFrameKind.Error, 1, 0, "Bad Error"),
+            "noncanonical error code");
 
         var huge = new string('x', WorkerProtocol.MaxPayloadBytes + 1);
         RejectWrite(WorkerFrame.Response(1, huge), "oversized write");
@@ -128,44 +131,52 @@ static class WorkerProtocolSelfTest
             farFuture == WorkerFrame.Error(3, "deadline-exceeds-worker-limit"),
             "worker rejects deadline above 30 seconds");
 
+        var badClock = RunOne(
+            WorkerFrame.Invoke(4, 2_000),
+            () => { calls++; return 1; },
+            now: -1);
+        Require(calls == 0 &&
+            badClock == WorkerFrame.Error(4, "host-clock-invalid"),
+            "invalid host clock never reaches guest");
+
         var payload = RunOne(
-            WorkerFrame.Invoke(4, 2_000, "not-admitted"),
+            WorkerFrame.Invoke(5, 2_000, "not-admitted"),
             () => { calls++; return 1; },
             now: 1_000);
         Require(calls == 0 &&
             payload == WorkerFrame.Error(
-                4, "payload-unsupported-by-scalar-bootstrap"),
+                5, "payload-unsupported-by-scalar-bootstrap"),
             "scalar bootstrap refuses false String ABI");
 
         var cancelled = RunOne(
-            WorkerFrame.Cancel(5),
+            WorkerFrame.Cancel(6),
             () => { calls++; return 1; },
             now: 1_000);
         Require(calls == 0 &&
             cancelled == WorkerFrame.Error(
-                5, "cancel-requires-cooperative-guest"),
+                6, "cancel-requires-cooperative-guest"),
             "synchronous bootstrap does not claim cooperative cancellation");
 
         var overflow = RunOne(
-            WorkerFrame.Invoke(6, 2_000),
+            WorkerFrame.Invoke(7, 2_000),
             () => throw new OverflowException(),
             now: 1_000);
-        Require(overflow == WorkerFrame.Error(6, "arithmetic-overflow"),
+        Require(overflow == WorkerFrame.Error(7, "arithmetic-overflow"),
             "worker maps arithmetic overflow without stack disclosure");
 
         var divide = RunOne(
-            WorkerFrame.Invoke(7, 2_000),
+            WorkerFrame.Invoke(10, 2_000),
             () => throw new DivideByZeroException(),
             now: 1_000);
-        Require(divide == WorkerFrame.Error(7, "division-by-zero"),
+        Require(divide == WorkerFrame.Error(8, "division-by-zero"),
             "worker maps division error without stack disclosure");
 
         using (var guestInput = new MemoryStream())
         {
             WorkerProtocol.WriteFrame(
-                guestInput, WorkerFrame.Invoke(8, 2_000));
-            WorkerProtocol.WriteFrame(
                 guestInput, WorkerFrame.Invoke(9, 2_000));
+            WorkerProtocol.WriteFrame(
+                guestInput, WorkerFrame.Invoke(10, 2_000));
             guestInput.Position = 0;
             using var guestOutput = new MemoryStream();
             using var guestError = new StringWriter();
@@ -185,10 +196,41 @@ static class WorkerProtocolSelfTest
             Require(WorkerProtocol.ReadFrame(guestOutput) == WorkerFrame.Ready(),
                 "guest failure test ready");
             Require(WorkerProtocol.ReadFrame(guestOutput) ==
-                WorkerFrame.Error(8, "guest-failure"),
+                WorkerFrame.Error(9, "guest-failure"),
                 "worker does not reflect arbitrary guest exception text");
             Require(WorkerProtocol.ReadFrame(guestOutput) is null,
                 "retired worker does not serve queued invocation");
+        }
+
+        using (var replayInput = new MemoryStream())
+        {
+            WorkerProtocol.WriteFrame(
+                replayInput, WorkerFrame.Invoke(11, 2_000));
+            WorkerProtocol.WriteFrame(
+                replayInput, WorkerFrame.Invoke(11, 2_000));
+            WorkerProtocol.WriteFrame(replayInput, WorkerFrame.Shutdown());
+            replayInput.Position = 0;
+            using var replayOutput = new MemoryStream();
+            using var replayError = new StringWriter();
+            var replayCalls = 0;
+            Require(WorkerRuntime.Run(
+                () => { replayCalls++; return 11; },
+                replayInput,
+                replayOutput,
+                replayError,
+                () => 1_000) == 0,
+                "replay rejection keeps healthy worker available");
+            Require(replayCalls == 1,
+                "replayed request id cannot execute guest twice");
+            replayOutput.Position = 0;
+            Require(WorkerProtocol.ReadFrame(replayOutput) == WorkerFrame.Ready(),
+                "replay test ready");
+            Require(WorkerProtocol.ReadFrame(replayOutput) ==
+                WorkerFrame.Response(11, "11"),
+                "first request id executes exactly once");
+            Require(WorkerProtocol.ReadFrame(replayOutput) ==
+                WorkerFrame.Error(11, "request-id-replay"),
+                "duplicate request id is rejected");
         }
 
         using var invalidInput = new MemoryStream(new byte[] { 1, 2, 3 });
@@ -239,6 +281,17 @@ static class WorkerProtocolSelfTest
                 .ValidateForGenericLauncher(),
             "scoped capability must wait for verified enforcement adapter");
 
+        var immutableCapabilities =
+            WorkerCapabilities.Create("read:/tmp", "env:HOME");
+        Require(immutableCapabilities.Grants is not string[],
+            "capability grants do not expose mutable backing array");
+        try
+        {
+            ((IList<string>)immutableCapabilities.Grants)[0] = "run:/bin/sh";
+            throw new Exception("FAILED: immutable capability collection mutated");
+        }
+        catch (NotSupportedException) { }
+
         RejectFormat(
             () => WorkerCapabilities.Create("unknown:value"),
             "unknown capability kind");
@@ -248,6 +301,9 @@ static class WorkerProtocolSelfTest
         RejectFormat(
             () => WorkerCapabilities.Create("net:"),
             "empty capability value");
+        RejectFormat(
+            () => WorkerCapabilities.Create("read:\ud800"),
+            "invalid Unicode capability");
 
         RejectRange(
             () => new WorkerResourceLimits(
