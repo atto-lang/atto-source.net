@@ -17,11 +17,11 @@ public static class OwnedF32RegionV1
         internal int ByteCount()
         {
             if (Rows < 0 || Fields <= 0 || Lanes <= 0 || Lanes > 1024 ||
-                !Enum.IsDefined(Layout) ||
-                (Layout != Layout.AoSoA && Lanes != 1) ||
-                (Layout == Layout.AoSoA && (Lanes & (Lanes - 1)) != 0))
+                !Enum.IsDefined<Layout>(Layout) ||
+                (Layout != OwnedF32RegionV1.Layout.AoSoA && Lanes != 1) ||
+                (Layout == OwnedF32RegionV1.Layout.AoSoA && (Lanes & (Lanes - 1)) != 0))
                 throw new ArgumentException("invalid owned F32 layout");
-            long padded = Layout == Layout.AoSoA
+            long padded = Layout == OwnedF32RegionV1.Layout.AoSoA
                 ? checked((Rows / Lanes + (Rows % Lanes == 0 ? 0 : 1)) * Lanes)
                 : Rows;
             long bytes = checked(checked(padded * Fields) * sizeof(float));
@@ -36,9 +36,9 @@ public static class OwnedF32RegionV1
                 throw new ArgumentOutOfRangeException(nameof(row), "F32 coordinate outside layout");
             long element = Layout switch
             {
-                Layout.AoS => checked(row * Fields + field),
-                Layout.SoA => checked((long)field * Rows + row),
-                Layout.AoSoA => checked((row / Lanes) * (long)Fields * Lanes +
+                OwnedF32RegionV1.Layout.AoS => checked(row * Fields + field),
+                OwnedF32RegionV1.Layout.SoA => checked((long)field * Rows + row),
+                OwnedF32RegionV1.Layout.AoSoA => checked((row / Lanes) * (long)Fields * Lanes +
                                         (long)field * Lanes + row % Lanes),
                 _ => throw new ArgumentException("invalid F32 layout")
             };
@@ -131,7 +131,7 @@ public static class OwnedF32RegionV1
         {
             lock (_state.Gate)
             {
-                if (_state.Closed || !Enum.IsDefined(mode) ||
+                if (_state.Closed || !Enum.IsDefined<Mode>(mode) ||
                     field < 0 || field >= Shape.Fields ||
                     begin < 0 || begin > end || end > Shape.Rows)
                     throw new ArgumentException("invalid/closed F32 region");
