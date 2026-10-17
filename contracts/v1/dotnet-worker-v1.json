@@ -80,5 +80,18 @@
     "stderr_drain_bounded": true,
     "protocol_failure_retires_generation": true,
     "untrusted_still_requires_os_sandbox": true
+  },
+  "runtime_text_abi_scaffold": {
+    "status": "runtime-only-candidate",
+    "entry_shape": "String -> String",
+    "orw1_payload": "strict-utf8-string",
+    "response": "strict-utf8-string",
+    "max_response_bytes": 1048576,
+    "null_response": "opaque-error-and-retire",
+    "invalid_utf8_response": "opaque-error-and-retire",
+    "oversized_response": "opaque-error-and-retire",
+    "compiler_emits_entry": false,
+    "native_host_wired": false,
+    "execution_receipt": null
   }
 }
