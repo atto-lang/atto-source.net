@@ -255,6 +255,25 @@ internal static class ActorArenaTests
             ExpectFailure(() => migrating.BeginTurn(901, 8));
             migrating.Dispose();
         }
+        // Scratch authority is bounded independently of byte capacity,
+        // matching the 4096-handle ceiling used by the LLVM/WASM paths.
+        // Ending the turn must revoke every issuance and reset the quota.
+        using (var boundedScratch = new ActorArena(902, 1))
+        {
+            var boundedTurn = boundedScratch.BeginTurn(902, 1);
+            for (var i = 0; i < ActorArena.MaxScratchHandles; ++i)
+                _ = boundedScratch.AllocateScratch(boundedTurn, 1);
+            ExpectFailure(() => boundedScratch.AllocateScratch(boundedTurn, 1));
+            boundedScratch.EndTurn(boundedTurn);
+            var resetTurn = boundedScratch.BeginTurn(902, 1);
+            var resetScratch = boundedScratch.AllocateScratch(resetTurn, 1);
+            if (!boundedScratch.ReadScratch(resetTurn, resetScratch)
+                    .SequenceEqual(new byte[] { 0 }))
+                throw new Exception("scratch handle quota reset leaked bytes");
+            boundedScratch.EndTurn(resetTurn);
+            boundedScratch.Dispose();
+        }
+
         using var restarted = new ActorArena(101, 2);
         var tr = restarted.BeginTurn(101, 2);
         ExpectFailure(() => restarted.Read(tr, h));
