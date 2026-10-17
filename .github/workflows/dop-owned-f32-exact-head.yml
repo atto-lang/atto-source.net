@@ -36,7 +36,24 @@ jobs:
         run: |
           set -euo pipefail
           dotnet --info
-          dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
+          dotnet build verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
+          mkdir -p dop-evidence
+          dotnet run --no-build --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release | tee dop-evidence/managed-verification.log
           printf 'SOURCE_SHA=%s\n' "$(git rev-parse HEAD)"
           printf 'SOURCE_TREE=%s\n' "$(git rev-parse HEAD^{tree})"
           printf '%s\n' 'SCOPE=managed owned F32 CPU region; no native AOT, device GPU, async F32-I64 graph bridge or guest source lowering'
+
+      - name: Create exact-head .NET evidence
+        shell: bash
+        env:
+          TEST_RUN: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          printf 'SOURCE_SHA=%s\nSOURCE_TREE=%s\nRUN=%s\nDOTNET_VERIFIER=PASS\n' \
+            "$(git rev-parse HEAD)" "$(git rev-parse HEAD^{tree})" "$TEST_RUN" > dop-evidence/exact-source.txt
+      - name: Upload SHA-bound managed verifier evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: net-owned-f32-${{ github.sha }}
+          path: dop-evidence/
+          if-no-files-found: error
