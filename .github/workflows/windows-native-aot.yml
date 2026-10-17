@@ -14,6 +14,9 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -45,7 +48,7 @@ jobs:
         shell: pwsh
         run: |
           python scripts/check_option_pattern_contract.py --backend net `
-            --revision "${{ github.sha }}" --report option-pattern-net.json `
+            --revision "${{ github.event.pull_request.head.sha || github.sha }}" --report option-pattern-net.json `
             -- dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -- check '{source}'
       - name: Preserve Option-pattern admission report (not parity)
         if: always()
@@ -158,6 +161,9 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
