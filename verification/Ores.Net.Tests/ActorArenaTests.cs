@@ -104,6 +104,48 @@ internal static class ActorArenaTests
             contended.EndTurn(admitted);
             contended.Dispose();
         }
+        // A suspended actor may resume on another carrier only after ending
+        // the previous admitted turn. Persistent bytes survive the handoff.
+        using (var migrating = new ActorArena(711, 2))
+        {
+            var firstTurn = migrating.BeginTurn(711, 2);
+            var persistent = migrating.Allocate(firstTurn, 3);
+            migrating.Write(firstTurn, persistent, new byte[] { 4, 2, 1 });
+            Exception? failure = null;
+            var wrongCarrier = new System.Threading.Thread(() =>
+            {
+                try
+                {
+                    ExpectFailure(() => migrating.Read(firstTurn, persistent));
+                    ExpectFailure(() => migrating.BeginTurn(711, 2));
+                }
+                catch (Exception ex) { failure = ex; }
+            });
+            wrongCarrier.Start();
+            if (!wrongCarrier.Join(TimeSpan.FromSeconds(5)))
+                throw new Exception("actor wrong-carrier test stalled");
+            if (failure is not null) throw new Exception("wrong carrier admission", failure);
+            migrating.EndTurn(firstTurn);
+
+            failure = null;
+            var nextCarrier = new System.Threading.Thread(() =>
+            {
+                try
+                {
+                    var secondTurn = migrating.BeginTurn(711, 2);
+                    if (!migrating.Read(secondTurn, persistent)
+                                  .SequenceEqual(new byte[] { 4, 2, 1 }))
+                        throw new Exception("persistent data lost on carrier migration");
+                    ExpectFailure(() => migrating.Read(firstTurn, persistent));
+                    migrating.EndTurn(secondTurn);
+                }
+                catch (Exception ex) { failure = ex; }
+            });
+            nextCarrier.Start();
+            if (!nextCarrier.Join(TimeSpan.FromSeconds(5)))
+                throw new Exception("actor migration test stalled");
+            if (failure is not null) throw new Exception("carrier migration", failure);
+        }
         using var restarted = new ActorArena(101, 2);
         var tr = restarted.BeginTurn(101, 2);
         ExpectFailure(() => restarted.Read(tr, h));
