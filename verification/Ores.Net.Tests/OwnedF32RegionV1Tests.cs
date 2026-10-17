@@ -17,7 +17,6 @@ internal static class OwnedF32RegionV1Tests
         try { action(); }
         catch (ArgumentException) { return; }
         catch (InvalidOperationException) { return; }
-        catch (ObjectDisposedException) { return; }
         catch (OverflowException) { return; }
         throw new Exception("owned F32 operation admitted: " + why);
     }
