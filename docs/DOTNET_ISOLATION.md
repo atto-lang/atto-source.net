@@ -82,11 +82,15 @@ oreslang-app --worker
       +-- ready / invoke / cancel / response / error / shutdown
 ```
 
-The current compiler still exposes only `main() -> i64`. Therefore v1 worker
-invocation deliberately requires an **empty request payload** and returns the
-i64 result as invariant UTF-8. A non-empty payload is rejected instead of
-pretending the .NET backend has reached the provider-neutral
-`String -> String` Lambda ABI.
+The original scalar host still exposes `main() -> i64` and deliberately
+requires an empty request payload. A separate Lambda source/compiler candidate
+now emits `Oreslang.Generated.OresProgram.Invoke(String) -> String` and is
+statically linked by `Ores.Net.LambdaNativeHost`. Its ORW1 runtime takes the
+normalized raw UTF-8 request payload and produces a strict UTF-8 response.
+
+This is source-connected but **not runtime-certified**: exact-head .NET Actions
+still fail before allocating a runner, so neither the generated CIL nor the
+NativeAOT Lambda worker has an execution receipt yet.
 
 Deadline admission happens before guest entry. The scalar bootstrap is not yet
 cooperatively cancellable once guest code is running, so `cancel` returns a
@@ -104,20 +108,43 @@ The machine contract is `contracts/v1/dotnet-worker-v1.json`.
 
 ## Scintilla integration boundary
 
-Scintilla already has a reviewed typed native-host launcher/policy boundary for
-non-containerized runtimes. Its current reusable child worker protocol is
-line-oriented JSON, however, while Oreslang .NET now uses ORW1 framed binary
-stdio. Do not add `oreslang-dotnet` to Scintilla's supported-runtime list until
-an explicit adapter or native ORW1 port driver exists and is tested. Protocol
-mismatch must fail closed rather than falling back to a generic polyglot runner.
+Scintilla draft PR `gleam-lambda-runner#56` now contains a dedicated
+ready-gated ORW1 port driver for canonical runtime `oreslang-dotnet`. The
+adapter is argv-only through the existing isolation launcher and rejects
+shell/provider/container and NATS pool fallback.
+
+For this runtime only, Scintilla passes the normalized request payload directly
+through ORW1. It does not inject the ordinary
+`{slug, definition, request}` child-runtime envelope; definition and routing
+metadata remain host authority.
+
+The Scintilla source repository is private and its source-org Actions currently
+also fail before runner allocation. A cross-org test carrier was attempted but
+failed before source checkout and was closed; no private source was transferred.
+Therefore the adapter remains source-only evidence.
+
+## ORW1 supervisor enforcement
+
+The worker reserves stdout exclusively for ORW1 frames. Guest stdout/stderr are
+redirected during entry execution to a bounded log sink. Host-provided wall/output
+limits may tighten but never widen protocol ceilings. The generic
+`WorkerProcessClient` requires an exact ready handshake, serializes invocation,
+uses monotonic request IDs, bounds/discards stderr, and retires/kills the process
+tree on deadline expiry, caller cancellation, or protocol failure.
+
+These controls are lifecycle enforcement, not the untrusted OS sandbox. Generic
+launch continues to reject untrusted manifests.
 
 ## Next implementation steps
 
-- implement a Scintilla ORW1 adapter/port driver with exact frame bounds;
-- add Windows Job Object and Linux namespace/cgroup/seccomp launch adapters;
-- bind the existing Deno-style Oreslang permission contract to those host
-  adapters instead of merely recording capability tokens;
-- teach the .NET frontend/codegen a public `String -> String` invocation ABI;
+- obtain exact-head .NET 10 + NativeAOT execution for the new Lambda compiler,
+  host, and `verification/assert-lambda-worker.py`;
+- obtain source-org execution for Scintilla ORW1 adapter PR #56;
+- bind `oreslang-dotnet` to an explicitly reviewed
+  `ores-proc-isolation-cli` policy and produce an OS-isolation receipt;
+- add Windows Job Object and Linux namespace/cgroup/seccomp qualification where
+  not already supplied by the isolation CLI;
+- expand the narrow Lambda parser from literal equality guards into shared typed
+  OresIR without weakening fail-closed admission;
 - add cooperative cancellation once `await` / suspension lowering exists;
-- produce exact-head NativeAOT worker execution receipts;
 - later add a WASM-host adapter without weakening the CIL policy.
