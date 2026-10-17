@@ -70,7 +70,7 @@ immutable source commit/tree checks, and actual runner-executed host I/O tests.
 
 ## Canonical vectors and evidence
 
-`scoped-permissions-v1.json` contains **52** authorization/serialization outcomes. `verify_scoped_permissions.py` checks the corpus and requires complete, non-skipped, exact-head results for the selected backend.
+`scoped-permissions-v1.json` contains **52** authorization/serialization outcomes (45 authorization, 7 deserialization). `verify_scoped_permissions.py` checks the corpus and requires complete, non-skipped, exact-head results for the selected backend.
 
 Backend adapter output must use:
 ```json
