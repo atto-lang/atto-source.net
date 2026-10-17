@@ -1,3 +1,4 @@
+using System.Security;
 using Ores.Net.Runtime;
 
 static class IsolationPolicySelfTest
@@ -58,8 +59,9 @@ static class IsolationPolicySelfTest
         var wasm = IsolationPolicy.Admit(
             WorkloadTrust.Untrusted,
             IsolationKind.WasmSandbox);
-        Require(wasm.SecurityBoundary && wasm.ArtifactKind == "wasm32-wasi",
-            "untrusted portable path uses a WASM artifact, not CIL-in-ALC");
+        Require(wasm.SecurityBoundary && !wasm.NativeAotCompatible &&
+                wasm.ArtifactKind == "wasm32-wasi",
+            "untrusted portable path is a separate WASM artifact, not CIL-in-ALC");
     }
 
     private static void Require(bool value, string why)
