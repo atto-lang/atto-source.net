@@ -94,7 +94,7 @@ public static class CpuGpuExecutionGraph
         internal Builder(IReadOnlyDictionary<string, Type> parameters)
         {
             this.parameters = new ReadOnlyDictionary<string, Type>(
-                new Dictionary<string, Type>(parameters, StringComparer.Ordinal));
+                parameters.ToDictionary(p => p.Key, p => p.Value, StringComparer.Ordinal));
         }
 
         private Value Emit(Op op, Domain domain, Type type,
