@@ -15,27 +15,65 @@ internal static class ActorArenaTests
         // Domain allocation is deterministic capability authority: malformed
         // owners consume nothing, values never recycle, and exhaustion is
         // permanent rather than wrapping into a previously issued domain.
-        var invalidCounter = new ActorArena.DomainCounter(7);
-        ExpectFailure(() => ActorArena.ClaimDomain(invalidCounter, 0, 1));
-        ExpectFailure(() => ActorArena.ClaimDomain(invalidCounter, 1, 0));
-        if (invalidCounter.Next != 7)
+        // Keep the production helper private; tests use reflection, matching
+        // the suite's existing forged-capability and contention checks.
+        var counterType = typeof(ActorArena).GetNestedType("DomainCounter",
+            System.Reflection.BindingFlags.NonPublic)
+            ?? throw new Exception("arena domain counter fixture unavailable");
+        var counterCtor = counterType.GetConstructors(
+            System.Reflection.BindingFlags.Instance |
+            System.Reflection.BindingFlags.NonPublic).Single();
+        var nextField = counterType.GetField("Next",
+            System.Reflection.BindingFlags.Instance |
+            System.Reflection.BindingFlags.NonPublic)
+            ?? throw new Exception("arena domain counter state unavailable");
+        var claimDomain = typeof(ActorArena).GetMethod("ClaimDomain",
+            System.Reflection.BindingFlags.Static |
+            System.Reflection.BindingFlags.NonPublic)
+            ?? throw new Exception("arena domain claim fixture unavailable");
+
+        object NewCounter(long next) => counterCtor.Invoke(new object[] { next });
+        long CounterValue(object counter) => (long)(nextField.GetValue(counter)
+            ?? throw new Exception("arena domain counter value unavailable"));
+        long Claim(object counter, ulong actor, ulong incarnation)
+        {
+            try
+            {
+                return (long)(claimDomain.Invoke(null,
+                    new object[] { counter, actor, incarnation })
+                    ?? throw new Exception("arena domain claim returned no value"));
+            }
+            catch (System.Reflection.TargetInvocationException failure)
+                when (failure.InnerException is not null)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo
+                    .Capture(failure.InnerException).Throw();
+                throw;
+            }
+        }
+
+        var invalidCounter = NewCounter(7);
+        ExpectFailure(() => Claim(invalidCounter, 0, 1));
+        ExpectFailure(() => Claim(invalidCounter, 1, 0));
+        if (CounterValue(invalidCounter) != 7)
             throw new Exception("invalid arena identity consumed a domain");
 
-        var exhaustedCounter = new ActorArena.DomainCounter(long.MaxValue - 1);
-        if (ActorArena.ClaimDomain(exhaustedCounter, 1, 1) != long.MaxValue - 1)
+        var exhaustedCounter = NewCounter(long.MaxValue - 1);
+        if (Claim(exhaustedCounter, 1, 1) != long.MaxValue - 1)
             throw new Exception("arena domain saturation issued wrong value");
-        if (exhaustedCounter.Next != long.MaxValue)
+        if (CounterValue(exhaustedCounter) != long.MaxValue)
             throw new Exception("arena domain counter did not saturate");
-        ExpectFailure(() => ActorArena.ClaimDomain(exhaustedCounter, 2, 1));
-        if (exhaustedCounter.Next != long.MaxValue)
+        ExpectFailure(() => Claim(exhaustedCounter, 2, 1));
+        if (CounterValue(exhaustedCounter) != long.MaxValue)
             throw new Exception("arena domain exhaustion was not permanent");
 
-        var concurrentCounter = new ActorArena.DomainCounter(1);
+        var concurrentCounter = NewCounter(1);
         var domains = new System.Collections.Concurrent.ConcurrentBag<long>();
         System.Threading.Tasks.Parallel.For(0, 2048, i =>
-            domains.Add(ActorArena.ClaimDomain(concurrentCounter, checked((ulong)i + 1), 1)));
+            domains.Add(Claim(concurrentCounter, checked((ulong)i + 1), 1)));
         if (domains.Count != 2048 || domains.Distinct().Count() != 2048 ||
-            domains.Min() != 1 || domains.Max() != 2048 || concurrentCounter.Next != 2049)
+            domains.Min() != 1 || domains.Max() != 2048 ||
+            CounterValue(concurrentCounter) != 2049)
             throw new Exception("concurrent arena domains were not unique and contiguous");
 
         using var a = new ActorArena(101, 1);
