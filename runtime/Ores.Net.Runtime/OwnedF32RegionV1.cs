@@ -59,14 +59,14 @@ public static class OwnedF32RegionV1
 
     public sealed class Area
     {
-        internal readonly State Owner;
+        internal readonly WeakReference<State> Owner;
         public Mode Mode { get; }
         public int Field { get; }
         public long Begin { get; }
         public long End { get; }
         internal Area(State owner, Mode mode, int field, long begin, long end)
         {
-            Owner = owner;
+            Owner = new WeakReference<State>(owner);
             Mode = mode;
             Field = field;
             Begin = begin;
@@ -144,7 +144,9 @@ public static class OwnedF32RegionV1
             if (area is null) return false;
             lock (_state.Gate)
             {
-                return !_state.Closed && ReferenceEquals(area.Owner, _state) &&
+                return !_state.Closed &&
+                    area.Owner.TryGetTarget(out State? owner) &&
+                    ReferenceEquals(owner, _state) &&
                     area.Mode == mode && area.Field >= 0 && area.Field < Shape.Fields &&
                     area.Begin >= 0 && area.Begin <= area.End && area.End <= Shape.Rows;
             }
