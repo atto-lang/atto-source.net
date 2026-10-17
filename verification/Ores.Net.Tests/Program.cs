@@ -91,7 +91,13 @@ foreach (var pair in new[] { (long.MinValue, -1L), (5L, 0L) })
 // The i64-only source frontend cannot invoke named functions. Recognize |>
  // as one token and reject every pipeline (including nested expressions)
  // before CIL emission. Never reinterpret it as bitwise-or or comparison.
-foreach (var expr in new[] { "1 |> twice", "(1 |> twice)", "1 + 2 |> plus(3)" })
+foreach (var expr in new[] {
+    "1 |> twice", "(1 |> twice)", "1 + 2 |> plus(3)",
+    "1 |> Option.map(inc)", "1 |> Result.map_err(annotate)",
+    "1 |> Option /*gap*/ . map(inc)",
+    "1 |> Result /*one /*nested*/ end*/ . map_err(annotate)",
+    "1 |> plus(2 |> Option.map(inc))"
+})
 {
     try { OresParser.Parse("fnc main():int{return " + expr + ";}"); }
     catch (FormatException ex) when (ex.Message.Contains("pipeline requires named callable lowering",
@@ -100,6 +106,19 @@ foreach (var expr in new[] { "1 |> twice", "(1 |> twice)", "1 + 2 |> plus(3)" })
 }
 Require(OresParser.Parse("fnc main():int{return 1;} // 1 |> unsupported") is Literal,
     "pipe tokens in comments are not executable operators");
+Require(OresParser.Parse("fnc main():int{return 1/*outer /*inner*/ end*/;}") is Literal,
+    "nested block comments must not change a scalar literal");
+Reject(() => OresParser.Parse("fnc main():int{return 1.foo;}"),
+    "qualified member syntax without a pipeline is not admitted");
+try
+{
+    OresParser.Parse("fnc main():int{return 1; /*unterminated");
+    throw new Exception("Expected unterminated block comment diagnostic");
+}
+catch (FormatException ex) when (ex.Message.Contains("Unterminated block comment",
+        StringComparison.Ordinal)) { }
+Reject(() => OresParser.Parse("fnc main():int{return 1; /*".PadRight(150, '/') + "/*x*/;}"),
+    "malformed unclosed nested comments");
 
 var positive = OresParser.Parse("define pub fnc main() : int { return 2 + 3 * 4; }");
 Require(positive is Binary { Operator: '+' }, "top-level expression shape");
