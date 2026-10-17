@@ -166,6 +166,12 @@ internal static class StructuredSourceTests
             "parenthesized tuple syntax must remain unsupported");
         Reject("fnc take(structural (int, int, string?) v):int{return 1;}",
             "structural width typing must remain unsupported");
+        Reject("fnc take((int?, string, int) v):int{return 1;}",
+            "middle optional tuple slot cannot be admitted before tuple support");
+        Reject("fnc take((int, Option<string>) v):int{return 1;}",
+            "Option-valued tuple slot must not bypass the bootstrap compiler");
+        Reject("fnc take(structural (&mut int, int) v):int{return 1;}",
+            "mutable borrowed tuple slot must not bypass ownership checking");
 
         // The shipping arithmetic frontend is intentionally unchanged.
         // Stage-one binding names must remain unambiguous.
