@@ -53,6 +53,11 @@ internal static class StructuredSourceTests
         }
         BlockCommentReject("fnc main():int{return 1;} /* enum Color",
             "Unterminated block comment");
+        // The pre-lexing Unicode validator must also inspect ignored text.
+        BlockCommentReject("fnc main():int{return 1;} /* " + ((char)0xD800) + " */",
+            "Invalid UTF-16");
+        BlockCommentReject("fnc main():int{return 1;} /* " + ((char)0) + " */",
+            "Source contains NUL");
         BlockCommentReject("fnc main():int{return 1;} " +
             string.Concat(Enumerable.Repeat("/*", 129)) +
             string.Concat(Enumerable.Repeat("*/", 129)),
