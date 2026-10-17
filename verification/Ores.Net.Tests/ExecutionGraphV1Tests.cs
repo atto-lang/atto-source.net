@@ -85,12 +85,25 @@ internal static class ExecutionGraphV1Tests
         var overflow = new ExecutionGraphV1.Builder();
         var max = overflow.CpuI64(long.MaxValue);
         var one = overflow.CpuI64(1);
+        var overflowPlan = overflow.Build(overflow.CpuAdd(max, one));
         try
         {
-            overflow.Build(overflow.CpuAdd(max, one)).ExecuteCpu();
+            overflowPlan.ExecuteCpu();
             throw new Exception("unchecked arithmetic overflow");
         }
         catch (OverflowException) { }
+
+        // Successful executor admission must not disguise a later CPU
+        // evaluation exception, nor permit duplicate terminal publication.
+        Action? overflowTask = null;
+        var asyncOverflow = overflowPlan.SubmitCpu(job => overflowTask = job);
+        Need(overflowTask is not null && !asyncOverflow.Task.IsCompleted,
+            "overflow graph evaluated before asynchronous admission");
+        overflowTask!();
+        overflowTask();
+        Need(asyncOverflow.Task.IsFaulted &&
+             asyncOverflow.Task.Exception?.InnerException is OverflowException,
+             "one-shot graph Future did not preserve CPU overflow");
 
         // Trusted imported IR must be an immutable snapshot, not a shallow
         // copy of caller-owned IReadOnlyList<int> operands.
