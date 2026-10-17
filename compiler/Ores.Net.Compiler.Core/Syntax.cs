@@ -106,6 +106,9 @@ public static class OresParser
                     (text[_i] is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_'))
                     _i++;
                 var word = text[start.._i];
+                if (word is "any" or "unknown" or "Any" or "Unknown")
+                    throw new FormatException(
+                        "any/unknown requires tagged opaque-value ABI and Native AOT runtime descriptors");
                 // This bootstrap compiler is single-file. Do not accept Java
                 // project-root, zed package or bare import declarations until
                 // a verified source graph / native AOT linker exists.
@@ -125,7 +128,7 @@ public static class OresParser
                 _i += 2;
                 return new Token("->", start);
             }
-            if ("()+-*/{}:;.".IndexOf(ch) >= 0)
+            if ("()+-*/{}:;.?".IndexOf(ch) >= 0)
             {
                 _i++;
                 return new Token(text[start.._i], start);
@@ -198,6 +201,9 @@ public static class OresParser
             if (Current.Text == "|>")
                 throw new FormatException(
                     $"Value pipeline requires named callable lowering; unsupported in .NET i64 bootstrap at offset {Current.Offset}");
+            if (Current.Text == "?")
+                throw new FormatException(
+                    $"Ternary expression requires bool typing and CFG branch-merge lowering in .NET Native AOT backend at offset {Current.Offset}");
             return left;
         }
 
