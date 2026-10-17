@@ -17,22 +17,22 @@ public sealed unsafe class ActorArena : IDisposable
 
     public sealed class Turn
     {
-        internal Turn() { }
+        private Turn() { }
     }
     public sealed class Handle
     {
-        internal readonly long Domain;
-        internal readonly int Slot;
-        internal readonly ulong Generation;
-        internal Handle(long domain, int slot, ulong generation) =>
+        private readonly long Domain;
+        private readonly int Slot;
+        private readonly ulong Generation;
+        private Handle(long domain, int slot, ulong generation) =>
             (Domain, Slot, Generation) = (domain, slot, generation);
     }
     public sealed class Scratch
     {
-        internal readonly long Domain;
-        internal readonly Turn Turn;
-        internal readonly int Offset, Length;
-        internal Scratch(long domain, Turn turn, int offset, int length) =>
+        private readonly long Domain;
+        private readonly Turn Turn;
+        private readonly int Offset, Length;
+        private Scratch(long domain, Turn turn, int offset, int length) =>
             (Domain, Turn, Offset, Length) = (domain, turn, offset, length);
     }
 
