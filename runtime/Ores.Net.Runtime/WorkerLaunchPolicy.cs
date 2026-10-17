@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Security;
 using System.Text;
@@ -37,14 +38,15 @@ public sealed record WorkerResourceLimits(
 public sealed class WorkerCapabilities
 {
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
-    private readonly string[] _grants;
+    private readonly ReadOnlyCollection<string> _grants;
 
-    private WorkerCapabilities(string[] grants) => _grants = grants;
+    private WorkerCapabilities(string[] grants) =>
+        _grants = Array.AsReadOnly((string[])grants.Clone());
 
     public static WorkerCapabilities DenyAll { get; } = new(Array.Empty<string>());
 
     public IReadOnlyList<string> Grants => _grants;
-    public bool IsDenyAll => _grants.Length == 0;
+    public bool IsDenyAll => _grants.Count == 0;
 
     public static WorkerCapabilities Create(params string[] grants)
     {
@@ -54,7 +56,17 @@ public sealed class WorkerCapabilities
         {
             if (string.IsNullOrEmpty(grant))
                 throw new FormatException("worker capability cannot be empty");
-            if (StrictUtf8.GetByteCount(grant) > 512)
+            int byteCount;
+            try
+            {
+                byteCount = StrictUtf8.GetByteCount(grant);
+            }
+            catch (EncoderFallbackException ex)
+            {
+                throw new FormatException(
+                    "worker capability is not valid Unicode", ex);
+            }
+            if (byteCount > 512)
                 throw new FormatException("worker capability exceeds 512 UTF-8 bytes");
             if (grant.Any(char.IsControl))
                 throw new FormatException("worker capability contains control characters");
