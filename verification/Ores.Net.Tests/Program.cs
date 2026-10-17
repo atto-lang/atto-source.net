@@ -225,17 +225,17 @@ string folder = Path.Combine(Path.GetTempPath(), "oresnet-tests-" + Guid.NewGuid
 try
 {
     string generated = Path.Combine(folder, "OresGenerated.dll");
-    CilEmitter.EmitLibrary(positive, generated);
+    CilEmitter.EmitLibrary(lowered, generated);
     Require(File.Exists(generated), "assembly emission");
     var reproducible = Path.Combine(folder, "OresGenerated.repro.dll");
-    CilEmitter.EmitLibrary(positive, reproducible);
+    CilEmitter.EmitLibrary(lowered, reproducible);
     Require(File.ReadAllBytes(generated).AsSpan().SequenceEqual(File.ReadAllBytes(reproducible)),
         "generated CIL must be byte-for-byte deterministic");
 
     var illegalOutput = Path.Combine(folder, "OresGenerated.invalid.dll");
-    Reject(() => CilEmitter.EmitLibrary(
-        new Binary('%', new Literal(2), new Literal(3)), illegalOutput),
-        "unknown AST opcode is rejected");
+    Reject(() => OresIrLowering.Lower(
+        new Binary('%', new Literal(2), new Literal(3))),
+        "unknown AST opcode is rejected before CIL emission");
     Require(!File.Exists(illegalOutput), "failed lowering must not publish a partial DLL");
 
 
@@ -258,11 +258,9 @@ try
     Require(ops.Contains(Code.Add_Ovf) && ops.Contains(Code.Mul_Ovf), "checked CIL operations");
     Require(ops[^1] == Code.Ret, "CIL return");
     Require(entry.Body.MaxStackSize is >= 2 and <= 256, "CIL stack bounds");
-    // The original direct AST path remains a separate reference implementation
-    // until real .NET builds confirm the new production OresIR path.
     Require(CilReferenceEvaluator.Evaluate(entry) ==
         OresIrReferenceEvaluator.Evaluate(lowered),
-        "legacy AST CIL matches verified OresIR semantics");
+        "production CIL matches verified OresIR semantics");
 
     var irGenerated = Path.Combine(folder, "OresGenerated.ir.dll");
     CilEmitter.EmitLibrary(lowered, irGenerated);
@@ -355,7 +353,7 @@ try
     var longSource = "fnc main():int{return " +
         string.Join("+", Enumerable.Repeat("1", 2048)) + ";}";
     var deepFlat = Path.Combine(folder, "OresGenerated.flat.dll");
-    CilEmitter.EmitLibrary(OresParser.Parse(longSource), deepFlat);
+    CilEmitter.EmitLibrary(flatIr, deepFlat);
     using var flatAssembly = AssemblyDefinition.ReadAssembly(deepFlat);
     var flatMethod = flatAssembly.MainModule.Types.Single(t =>
         t.FullName == "Oreslang.Generated.OresProgram").Methods.Single(m => m.Name == "Run");
@@ -381,8 +379,8 @@ try
     Expression pathological = new Literal(1);
     for (var i = 0; i < 258; i++)
         pathological = new Binary('+', new Literal(1), pathological);
-    Reject(() => CilEmitter.EmitLibrary(pathological,
-        Path.Combine(folder, "OresGenerated.pathological.dll")), "CIL stack budget");
+    Reject(() => OresIrLowering.Lower(pathological),
+        "OresIR pending-value stack budget");
 
 }
 finally
