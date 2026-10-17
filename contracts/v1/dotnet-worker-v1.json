@@ -1,0 +1,45 @@
+{
+  "schema": "oreslang.dotnet-worker/v1",
+  "backend": "dotnet-nativeaot",
+  "transport": "stdio-binary-framed",
+  "magic": "ORW1",
+  "version": 1,
+  "header_bytes": 28,
+  "payload_encoding": "strict-utf8",
+  "max_payload_bytes": 1048576,
+  "max_invocation_ms": 30000,
+  "ready_payload": "oreslang-dotnet-worker/1",
+  "frame_kinds": [
+    "ready",
+    "invoke",
+    "cancel",
+    "response",
+    "error",
+    "shutdown"
+  ],
+  "current_guest_abi": {
+    "entry": "main() -> i64",
+    "invoke_payload": "must-be-empty",
+    "response": "invariant-i64-utf8",
+    "payload_lambda_abi": false
+  },
+  "cancellation": {
+    "deadline_checked_before_entry": true,
+    "cooperative_mid_call_cancel": false,
+    "supervisor_process_tree_termination_required": true
+  },
+  "launch": {
+    "ambient_environment_inherited": false,
+    "capabilities_default": "deny-all",
+    "scoped_capability_enforcement": "pending-host-adapter",
+    "untrusted_generic_launcher": "denied",
+    "untrusted_requires_os_sandbox": true
+  },
+  "resource_profile": {
+    "memory_bytes": 134217728,
+    "max_processes": 1,
+    "max_output_bytes": 1048576
+  },
+  "status": "candidate",
+  "runtime_receipt": null
+}
