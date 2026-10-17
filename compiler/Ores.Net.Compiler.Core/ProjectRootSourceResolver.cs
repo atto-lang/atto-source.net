@@ -167,6 +167,13 @@ public static class ProjectRootSourceResolver
         {
             throw new FormatException("project manifest must be valid UTF-8", ex);
         }
+        // TOML accepts LF or CRLF, not a standalone CR. In particular a
+        // CR following a '#' comment must never hide a [project] table
+        // or a second root declaration from this intentionally small parser.
+        for (int i = 0; i < contents.Length; i++)
+            if (contents[i] == '\r' &&
+                (i + 1 == contents.Length || contents[i + 1] != '\n'))
+                throw new FormatException("bare carriage return in project manifest");
         if (contents.Contains('\0') || contents.Contains("\"\"\"", StringComparison.Ordinal) ||
             contents.Contains("'''", StringComparison.Ordinal))
             throw new FormatException("unsupported project manifest literal");
