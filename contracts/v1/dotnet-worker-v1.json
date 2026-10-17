@@ -21,7 +21,8 @@
     "entry": "main() -> i64",
     "invoke_payload": "must-be-empty",
     "response": "invariant-i64-utf8",
-    "payload_lambda_abi": false
+    "payload_lambda_abi": false,
+    "note": "Original scalar host remains main() -> i64; separate Lambda NativeAOT candidate is tracked in runtime_text_abi_scaffold."
   },
   "cancellation": {
     "deadline_checked_before_entry": true,
@@ -82,16 +83,27 @@
     "untrusted_still_requires_os_sandbox": true
   },
   "runtime_text_abi_scaffold": {
-    "status": "runtime-only-candidate",
+    "status": "source-connected-candidate",
     "entry_shape": "String -> String",
-    "orw1_payload": "strict-utf8-string",
+    "source_shape": "define module <name> as pub fnc invoke(String event): String { if event == <literal>; then return <literal>; fi return <literal>; } end",
+    "compiler_commands": [
+      "check-lambda",
+      "compile-lambda"
+    ],
+    "generated_method": "Oreslang.Generated.OresProgram.Invoke(System.String) -> System.String",
+    "orw1_payload": "normalized-raw-request-strict-utf8",
     "response": "strict-utf8-string",
     "max_response_bytes": 1048576,
     "null_response": "opaque-error-and-retire",
     "invalid_utf8_response": "opaque-error-and-retire",
     "oversized_response": "opaque-error-and-retire",
-    "compiler_emits_entry": false,
-    "native_host_wired": false,
+    "compiler_emits_entry": true,
+    "native_host_project": "host/Ores.Net.LambdaNativeHost/Ores.Net.LambdaNativeHost.csproj",
+    "native_host_wired": true,
+    "fixture": "examples/lambda-ping.ores",
+    "direct_smoke": "--invoke ping -> pong",
+    "orw1_verifier": "verification/assert-lambda-worker.py",
+    "exact_head_nativeaot_executed": false,
     "execution_receipt": null
   }
 }
