@@ -264,6 +264,7 @@ def verify(fetch, backend, commit, tree, run_id, required_jobs, required_steps,
         ran_useful_step = False
         seen_step_names = set()
         last_number = 0
+        previous_step_end = job_start
         for item_step in steps:
             step = _object(item_step, "workflow step")
             if step.get("status") != "completed" or step.get("conclusion") != "success":
@@ -276,6 +277,9 @@ def verify(fetch, backend, commit, tree, run_id, required_jobs, required_steps,
             step_end = _timestamp(step.get("completed_at"), "step completion")
             if not (job_start <= step_start <= step_end <= job_end):
                 raise Denied("workflow step timing falls outside completed job")
+            if step_start < previous_step_end:
+                raise Denied("workflow step timestamps overlap or contradict execution order")
+            previous_step_end = step_end
             step_name = step.get("name")
             if not isinstance(step_name, str) or not step_name:
                 raise Denied("workflow step has no name")
@@ -300,6 +304,8 @@ def verify(fetch, backend, commit, tree, run_id, required_jobs, required_steps,
     # Detect a re-run or changed conclusion during multi-page evidence collection.
     # Never combine a successful run snapshot with jobs from another attempt.
     final_run = _object(fetch(prefix + "/actions/runs/" + str(run_id)), "final workflow run")
+    final_run_repo = _object(final_run.get("repository"), "final run repository")
+    final_head_repo = _object(final_run.get("head_repository"), "final head repository")
     if (type(final_run.get("id")) is not int or final_run["id"] != run_id
             or type(final_run.get("run_attempt")) is not int
             or final_run["run_attempt"] != attempt
@@ -310,8 +316,10 @@ def verify(fetch, backend, commit, tree, run_id, required_jobs, required_steps,
             or final_run.get("status") != "completed"
             or final_run.get("conclusion") != "success"
             or final_run.get("path") != expected_run_path
-            or _object(final_run.get("repository"), "final run repository").get("id") != repo_id
-            or _object(final_run.get("head_repository"), "final head repository").get("id") != repo_id):
+            or type(final_run_repo.get("id")) is not int
+            or final_run_repo["id"] != repo_id
+            or type(final_head_repo.get("id")) is not int
+            or final_head_repo["id"] != repo_id):
         raise Denied("workflow run changed during evidence collection")
     # Recheck source repository identity/visibility after collecting all jobs:
     # a rename, replacement, or public visibility transition must not pass
