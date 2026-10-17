@@ -84,9 +84,39 @@ internal static class ScopedPermissionPolicyTests
         }
     }
 
+    // Independent regression coverage for token identity semantics in the
+    // newer cross-backend parity suite. The pinned .NET JSON corpus itself is
+    // still 44 cases and needs separate reviewed harmonization to 52.
+    private static void RunPaddedTokenRegressions()
+    {
+        foreach (var (kind, name, padded) in new[] {
+            (ScopedPermissionPolicy.Kind.Env, "API_KEY", "API_KEY "),
+            (ScopedPermissionPolicy.Kind.Run, "git", "git "),
+            (ScopedPermissionPolicy.Kind.Sys, "os", "os ")
+        })
+        {
+            var allowPadded = ScopedPermissionPolicy.FromHost(
+                new[] { kind }, new[] { new ScopedPermissionPolicy.Rule(kind, padded) });
+            Assert(allowPadded.Allows(kind, padded), true,
+                "padded literal grant remains distinct: " + kind);
+            Assert(allowPadded.Allows(kind, name), false,
+                "padded grant cannot match unpadded token: " + kind);
+            var denyPadded = ScopedPermissionPolicy.FromHost(
+                new[] { kind }, new[] {
+                    new ScopedPermissionPolicy.Rule(kind, "*"),
+                    new ScopedPermissionPolicy.Rule(kind, padded, true)
+                });
+            Assert(denyPadded.Allows(kind, padded), false,
+                "padded literal denial must win: " + kind);
+            Assert(denyPadded.Allows(kind, name), true,
+                "padded denial cannot deny another token: " + kind);
+        }
+    }
+
     public static void Run()
     {
         RunCanonicalAuthorizationVectors();
+        RunPaddedTokenRegressions();
         var empty = ScopedPermissionPolicy.DefaultDeny();
         foreach (var p in Enum.GetValues<ScopedPermissionPolicy.Kind>())
             Assert(empty.Allows(p, "/workspace/input.txt"), false, "default deny " + p);
