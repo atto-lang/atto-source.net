@@ -17,6 +17,13 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Verify exact PR head and Git tree on Windows
+        shell: pwsh
+        run: |
+          if ((git rev-parse HEAD).Trim() -ne "${{ github.event.pull_request.head.sha || github.sha }}") {
+            throw "Wrong checkout SHA for Windows Native AOT"
+          }
+          git rev-parse 'HEAD^{tree}'
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -164,6 +171,14 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Verify exact PR head and Git tree on Linux
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git rev-parse 'HEAD^{tree}'
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
