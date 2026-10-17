@@ -53,7 +53,8 @@ public static class WorkerRuntime
                         break;
 
                     case WorkerFrameKind.Invoke:
-                        HandleInvoke(entry, output, frame, unixMilliseconds());
+                        if (!HandleInvoke(entry, output, frame, unixMilliseconds()))
+                            return 70;
                         break;
 
                     default:
@@ -70,7 +71,7 @@ public static class WorkerRuntime
         }
     }
 
-    private static void HandleInvoke(
+    private static bool HandleInvoke(
         Func<long> entry,
         Stream output,
         WorkerFrame frame,
@@ -82,7 +83,7 @@ public static class WorkerRuntime
         {
             WorkerProtocol.WriteFrame(
                 output, WorkerFrame.Error(frame.RequestId, deadlineError));
-            return;
+            return true;
         }
 
         // Current .NET bootstrap supports main() -> i64 only. A payload-bearing
@@ -94,7 +95,7 @@ public static class WorkerRuntime
                 WorkerFrame.Error(
                     frame.RequestId,
                     "payload-unsupported-by-scalar-bootstrap"));
-            return;
+            return true;
         }
 
         try
@@ -105,16 +106,19 @@ public static class WorkerRuntime
                 WorkerFrame.Response(
                     frame.RequestId,
                     value.ToString(CultureInfo.InvariantCulture)));
+            return true;
         }
         catch (OverflowException)
         {
             WorkerProtocol.WriteFrame(
                 output, WorkerFrame.Error(frame.RequestId, "arithmetic-overflow"));
+            return true;
         }
         catch (DivideByZeroException)
         {
             WorkerProtocol.WriteFrame(
                 output, WorkerFrame.Error(frame.RequestId, "division-by-zero"));
+            return true;
         }
         catch (Exception)
         {
@@ -122,6 +126,9 @@ public static class WorkerRuntime
             // the invocation channel.
             WorkerProtocol.WriteFrame(
                 output, WorkerFrame.Error(frame.RequestId, "guest-failure"));
+            // Unknown failures may have left guest/runtime state inconsistent.
+            // Retire this process generation after emitting the opaque result.
+            return false;
         }
     }
 }
