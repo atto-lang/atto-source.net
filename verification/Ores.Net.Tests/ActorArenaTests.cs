@@ -208,6 +208,25 @@ internal static class ActorArenaTests
         if (!quiescing.PhysicallyDisposed || quiescing.OutstandingExternalLeases != 0)
             throw new Exception("last external lease did not trigger physical reclaim");
         quiescing.Dispose();
+        // Runtime bridge: register the Task while the turn is valid, then
+        // prove completion may release its lifetime pin from a different carrier.
+        using var taskPinned = new ActorArena(405, 1);
+        var taskTurn = taskPinned.BeginTurn(405, 1);
+        var completion = new System.Threading.Tasks.TaskCompletionSource<int>(
+            System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously);
+        var trackedCompletion = taskPinned.TrackExternalCompletion(taskTurn, completion.Task);
+        if (taskPinned.OutstandingExternalLeases != 1)
+            throw new Exception("Task bridge did not acquire external lifetime pin");
+        taskPinned.EndTurn(taskTurn);
+        taskPinned.Dispose();
+        if (!taskPinned.Retired || taskPinned.PhysicallyDisposed)
+            throw new Exception("pending Task must pin physical actor arena lifetime");
+        completion.SetResult(17);
+        if (trackedCompletion.GetAwaiter().GetResult() != 17)
+            throw new Exception("tracked Task result changed");
+        if (!taskPinned.PhysicallyDisposed || taskPinned.OutstandingExternalLeases != 0)
+            throw new Exception("Task completion did not release actor arena lifetime");
+
 
         using var restarted = new ActorArena(101, 2);
         var tr = restarted.BeginTurn(101, 2);
