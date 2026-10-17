@@ -14,10 +14,25 @@ internal static class ActorArenaTests
     {
         using var a = new ActorArena(101, 1);
         using var b = new ActorArena(102, 1);
+        ExpectFailure(() => a.BeginTurn(101, 2)); // a recycled actor ID is not an incarnation grant
+        ExpectFailure(() => b.BeginTurn(101, 1)); // a different actor cannot enter another arena
         var ta = a.BeginTurn(101, 1);
         var tb = b.BeginTurn(102, 1);
         var h = a.Allocate(ta, 2);
         a.Write(ta, h, new byte[] { 7, 9 });
+        // The token alone cannot authorize a concurrent physical carrier.
+        var wrongCarrierReadDenied = false;
+        var wrongCarrierEndDenied = false;
+        var intruder = new System.Threading.Thread(() => {
+            try { _ = a.Read(ta, h); }
+            catch (InvalidOperationException) { wrongCarrierReadDenied = true; }
+            try { a.EndTurn(ta); }
+            catch (InvalidOperationException) { wrongCarrierEndDenied = true; }
+        });
+        intruder.Start();
+        intruder.Join();
+        if (!wrongCarrierReadDenied || !wrongCarrierEndDenied)
+            throw new Exception("actor arena accepted a foreign physical carrier");
         if (!a.Read(ta, h).SequenceEqual(new byte[] { 7, 9 }))
             throw new Exception("persistent arena read/write");
         ExpectFailure(() => b.Read(tb, h));
@@ -104,9 +119,52 @@ internal static class ActorArenaTests
             contended.EndTurn(admitted);
             contended.Dispose();
         }
+        // A new carrier may resume the actor only after the old turn ends.
+        // Persistent bytes survive; scratch authority and contents do not.
+        using (var migrating = new ActorArena(901, 7))
+        {
+            var first = migrating.BeginTurn(901, 7);
+            var persistent = migrating.Allocate(first, 4);
+            migrating.Write(first, persistent, new byte[] { 1, 2, 3, 4 });
+            var staleScratch = migrating.AllocateScratch(first, 4);
+            migrating.WriteScratch(first, staleScratch, new byte[] { 9, 8, 7, 6 });
+            migrating.EndTurn(first);
+            Exception? carrierFailure = null;
+            var migrated = false;
+            var nextCarrier = new System.Threading.Thread(() =>
+            {
+                try
+                {
+                    var second = migrating.BeginTurn(901, 7);
+                    ExpectFailure(() => migrating.Read(first, persistent));
+                    ExpectFailure(() => migrating.ReadScratch(second, staleScratch));
+                    if (!migrating.Read(second, persistent).SequenceEqual(new byte[] { 1, 2, 3, 4 }))
+                        throw new Exception("persistent bytes lost during carrier migration");
+                    var freshScratch = migrating.AllocateScratch(second, 4);
+                    if (!migrating.ReadScratch(second, freshScratch).SequenceEqual(new byte[4]))
+                        throw new Exception("scratch not zeroized across carrier migration");
+                    migrating.EndTurn(second);
+                    migrated = true;
+                }
+                catch (Exception failure) { carrierFailure = failure; }
+            });
+            nextCarrier.Start();
+            if (!nextCarrier.Join(TimeSpan.FromSeconds(5)))
+                throw new Exception("next carrier stalled");
+            if (carrierFailure is not null)
+                throw new Exception("actor carrier migration failed", carrierFailure);
+            if (!migrated) throw new Exception("actor carrier did not resume");
+            ExpectFailure(() => migrating.Read(first, persistent));
+            ExpectFailure(() => migrating.BeginTurn(901, 8));
+            migrating.Dispose();
+        }
         using var restarted = new ActorArena(101, 2);
         var tr = restarted.BeginTurn(101, 2);
         ExpectFailure(() => restarted.Read(tr, h));
         restarted.EndTurn(tr);
+        using var twin = new ActorArena(101, 1);
+        var twinTurn = twin.BeginTurn(101, 1);
+        ExpectFailure(() => twin.Read(twinTurn, h)); // same numeric owner/incarnation, separate domain
+        twin.EndTurn(twinTurn);
     }
 }
