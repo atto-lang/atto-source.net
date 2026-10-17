@@ -283,6 +283,55 @@ internal static class ActorArenaTests
             settledPinned.EndTurn(turn);
         }
 
+        // Concurrent duplicate completion callbacks must release the last
+        // lifetime lease once, never underflow, and never free bytes while
+        // another carrier is still holding its own lease.
+        var concurrent = new ActorArena(409, 1);
+        var concurrentTurn = concurrent.BeginTurn(409, 1);
+        var sharedLease = concurrent.AcquireExternalLease(concurrentTurn);
+        var heldLease = concurrent.AcquireExternalLease(concurrentTurn);
+        concurrent.EndTurn(concurrentTurn);
+        concurrent.Dispose();
+        Exception? concurrentFailure = null;
+        var callers = Enumerable.Range(0, 8).Select(_ =>
+            new System.Threading.Thread(() =>
+            {
+                try { sharedLease.Dispose(); }
+                catch (Exception e)
+                {
+                    System.Threading.Interlocked.CompareExchange(ref concurrentFailure, e, null);
+                }
+            })).ToArray();
+        foreach (var thread in callers) thread.Start();
+        foreach (var thread in callers)
+            if (!thread.Join(TimeSpan.FromSeconds(5)))
+                throw new Exception("concurrent lease release stalled");
+        if (concurrentFailure is not null)
+            throw new Exception("duplicate release failed", concurrentFailure);
+        if (concurrent.PhysicallyDisposed || concurrent.OutstandingExternalLeases != 1)
+            throw new Exception("premature native reclaim under duplicate completion");
+        heldLease.Dispose();
+        if (!concurrent.PhysicallyDisposed || concurrent.OutstandingExternalLeases != 0)
+            throw new Exception("final lease failed to reclaim native actor bytes");
+
+        // Native allocation quota rejection must not consume a generation or
+        // compromise any existing slot's capability.
+        using (var capped = new ActorArena(410, 1))
+        {
+            var turn = capped.BeginTurn(410, 1);
+            var handles = Enumerable.Range(0, ActorArena.SlotCount)
+                .Select(_ => capped.Allocate(turn, 1)).ToArray();
+            ExpectFailure(() => capped.Allocate(turn, 1));
+            if (handles.Any(h => capped.Read(turn, h).Length != 1))
+                throw new Exception("quota failure corrupted live native slots");
+            capped.Drop(turn, handles[0]);
+            var recycled = capped.Allocate(turn, 1);
+            if (capped.Read(turn, recycled)[0] != 0)
+                throw new Exception("quota recovery did not zero recycled slot");
+            ExpectFailure(() => capped.Read(turn, handles[0]));
+            capped.EndTurn(turn);
+        }
+
         using var restarted = new ActorArena(101, 2);
         var tr = restarted.BeginTurn(101, 2);
         ExpectFailure(() => restarted.Read(tr, h));
