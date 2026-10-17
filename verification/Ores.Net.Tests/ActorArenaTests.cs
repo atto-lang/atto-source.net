@@ -228,6 +228,61 @@ internal static class ActorArenaTests
             throw new Exception("Task completion did not release actor arena lifetime");
 
 
+        // Every external Task terminal path must release its lifetime-only pin.
+        // This bridge covers the external operation itself; a future guest
+        // continuation that needs actor state still requires its own lifetime pin.
+        using (var faultPinned = new ActorArena(406, 1))
+        {
+            var turn = faultPinned.BeginTurn(406, 1);
+            var source = new System.Threading.Tasks.TaskCompletionSource<int>(
+                System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously);
+            var tracked = faultPinned.TrackExternalCompletion(turn, source.Task);
+            faultPinned.EndTurn(turn);
+            faultPinned.Dispose();
+            var expected = new InvalidOperationException("synthetic external failure");
+            source.SetException(expected);
+            try
+            {
+                _ = tracked.GetAwaiter().GetResult();
+                throw new Exception("faulted external Task unexpectedly succeeded");
+            }
+            catch (InvalidOperationException actual) when (ReferenceEquals(actual, expected)) { }
+            if (!faultPinned.PhysicallyDisposed || faultPinned.OutstandingExternalLeases != 0)
+                throw new Exception("faulted Task did not release actor arena lifetime");
+        }
+
+        using (var cancelledPinned = new ActorArena(407, 1))
+        {
+            var turn = cancelledPinned.BeginTurn(407, 1);
+            var source = new System.Threading.Tasks.TaskCompletionSource<int>(
+                System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously);
+            var tracked = cancelledPinned.TrackExternalCompletion(turn, source.Task);
+            cancelledPinned.EndTurn(turn);
+            cancelledPinned.Dispose();
+            source.SetCanceled();
+            try
+            {
+                _ = tracked.GetAwaiter().GetResult();
+                throw new Exception("cancelled external Task unexpectedly succeeded");
+            }
+            catch (System.Threading.Tasks.TaskCanceledException) { }
+            if (!cancelledPinned.PhysicallyDisposed ||
+                cancelledPinned.OutstandingExternalLeases != 0)
+                throw new Exception("cancelled Task did not release actor arena lifetime");
+        }
+
+        using (var settledPinned = new ActorArena(408, 1))
+        {
+            var turn = settledPinned.BeginTurn(408, 1);
+            var tracked = settledPinned.TrackExternalCompletion(
+                turn, System.Threading.Tasks.Task.FromResult(31));
+            if (tracked.GetAwaiter().GetResult() != 31)
+                throw new Exception("already-settled Task result changed");
+            if (settledPinned.OutstandingExternalLeases != 0)
+                throw new Exception("already-settled Task retained a phantom lifetime pin");
+            settledPinned.EndTurn(turn);
+        }
+
         using var restarted = new ActorArena(101, 2);
         var tr = restarted.BeginTurn(101, 2);
         ExpectFailure(() => restarted.Read(tr, h));
