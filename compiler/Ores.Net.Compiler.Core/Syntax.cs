@@ -63,6 +63,32 @@ public static class OresParser
                     while (_i < text.Length && text[_i] != '\n') _i++;
                     continue;
                 }
+                // Keep comments lexically invisible even when they occur
+                // between a tagged namespace and '.' in a rejected pipeline.
+                if (text[_i] == '/' && _i + 1 < text.Length && text[_i + 1] == '*')
+                {
+                    var offset = _i;
+                    _i += 2;
+                    var depth = 1;
+                    while (depth > 0)
+                    {
+                        if (_i == text.Length)
+                            throw new FormatException($"Unterminated block comment at offset {offset}");
+                        if (_i + 1 < text.Length && text[_i] == '/' && text[_i + 1] == '*')
+                        {
+                            if (++depth > 128)
+                                throw new FormatException($"Block comment nesting exceeds 128 at offset {offset}");
+                            _i += 2;
+                        }
+                        else if (_i + 1 < text.Length && text[_i] == '*' && text[_i + 1] == '/')
+                        {
+                            depth--;
+                            _i += 2;
+                        }
+                        else _i++;
+                    }
+                    continue;
+                }
                 break;
             }
             var start = _i;
@@ -99,7 +125,7 @@ public static class OresParser
                 _i += 2;
                 return new Token("->", start);
             }
-            if ("()+-*/{}:;".IndexOf(ch) >= 0)
+            if ("()+-*/{}:;.".IndexOf(ch) >= 0)
             {
                 _i++;
                 return new Token(text[start.._i], start);
