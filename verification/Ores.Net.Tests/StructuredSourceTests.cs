@@ -173,6 +173,27 @@ internal static class StructuredSourceTests
         Reject("fnc take(structural (&mut int, int) v):int{return 1;}",
             "mutable borrowed tuple slot must not bypass ownership checking");
 
+        // V3 structural collections remain target semantics only. The scalar
+        // CIL bootstrap must reject them before producing typed IR or PE artifacts.
+        foreach (var (source, reason) in new (string, string)[]
+        {
+            ("fnc take(structural Array<int> v):int{return v[0];}",
+                "structural Array must remain unsupported"),
+            ("fnc take(structural List<int> v):int{return v[0];}",
+                "structural List must remain unsupported"),
+            ("fnc take(structural FixedArray[2 of int] v):int{return v[0];}",
+                "structural FixedArray must remain unsupported"),
+            ("fnc take(structural FixedList[0 of int] v):int{return v.length;}",
+                "structural FixedList must remain unsupported"),
+            ("fnc take(structural Map<string,int> v):int{return 1;}",
+                "structural Map must remain unsupported"),
+            ("fnc main():int{val Map<string,int> v=new Map<string,int>();return 1;}",
+                "owned Map runtime must remain unsupported")
+        })
+        {
+            Reject(source, reason);
+        }
+
         // The shipping arithmetic frontend is intentionally unchanged.
         // Stage-one binding names must remain unambiguous.
         Require(OresParser.Parse("fnc main():int{return 2+3;}") is Binary,
