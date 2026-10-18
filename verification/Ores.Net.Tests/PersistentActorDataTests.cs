@@ -47,12 +47,12 @@ static class PersistentActorDataTests
         }
         catch (ArgumentException) { }
 
-        var port = new PersistentActorMapPort(1, 64);
+        var port = new PersistentActorMapPort(ActorDataIsolation.Shared, 1, 64);
         Require(port.Offer(parent, 32), "first port offer");
         Require(!port.Offer(replaced, 32), "quota did not reject second offer");
         Require(port.Used == (1, 32L), "receive credit accounting");
         var delivery = port.TryReceive() ?? throw new Exception("missing delivery");
-        Require(ReferenceEquals(parent, delivery.State), "immutable root identity copied");
+        Require(ReferenceEquals(parent, delivery.State), "SHARED immutable root identity copied");
         Require(port.Used == (1, 32L), "receive prematurely refunded credit");
         try
         {
@@ -65,5 +65,24 @@ static class PersistentActorDataTests
         Require(port.Used == (0, 0L), "credit not returned exactly once");
         // Close is idempotently safe only after every checked-out frame settles.
         port.Close();
+
+        var privatePort = new PersistentActorMapPort(
+            ActorDataIsolation.Private, 1, 64);
+        Require(privatePort.Offer(parent, 32), "PRIVATE offer");
+        var privateDelivery = privatePort.TryReceive() ??
+            throw new Exception("missing PRIVATE delivery");
+        Require(!ReferenceEquals(parent, privateDelivery.State),
+            "PRIVATE root identity was shared");
+        Require(privateDelivery.State.Get("nested") is PersistentActorMap privateNested,
+            "PRIVATE nested root missing");
+        Require(!ReferenceEquals(nested, privateNested),
+            "PRIVATE nested immutable root identity was shared");
+        Require((BigInteger?)privateNested.Get("v") == new BigInteger(12),
+            "PRIVATE nested value changed");
+        Require(privateDelivery.Acknowledge(), "PRIVATE acknowledgement");
+        privatePort.Close();
+
+        var untrusted = parent.SnapshotForActor(ActorDataIsolation.Untrusted);
+        Require(!ReferenceEquals(parent, untrusted), "UNTRUSTED root identity shared");
     }
 }

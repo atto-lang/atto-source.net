@@ -59,6 +59,34 @@ public sealed class PersistentActorMap
 
     public object? Get(string key) => TryGetValue(key, out var value) ? value : null;
 
+    public PersistentActorMap SnapshotForActor(ActorDataIsolation isolation) =>
+        isolation switch
+        {
+            ActorDataIsolation.Shared => this,
+            ActorDataIsolation.Private or ActorDataIsolation.Untrusted =>
+                CloneIsolated(0),
+            _ => throw new ArgumentOutOfRangeException(nameof(isolation))
+        };
+
+    private PersistentActorMap CloneIsolated(int depth)
+    {
+        if (depth > 256) throw new InvalidOperationException("persistent actor clone depth");
+        int count = 0;
+        Node? root = CloneNode(_root, depth, ref count);
+        return root is null ? Empty : new PersistentActorMap(root, count);
+    }
+
+    private static Node? CloneNode(Node? node, int depth, ref int count)
+    {
+        if (node is null) return null;
+        object value = node.Value is PersistentActorMap nested
+            ? nested.CloneIsolated(depth + 1) : node.Value;
+        Node? left = CloneNode(node.Left, depth, ref count);
+        Node? right = CloneNode(node.Right, depth, ref count);
+        count++;
+        return new Node(node.Key, value, left, right);
+    }
+
     public PersistentActorMap With(string key, object value)
     {
         ArgumentNullException.ThrowIfNull(key);
@@ -207,6 +235,13 @@ public sealed class PersistentActorMap
     }
 }
 
+public enum ActorDataIsolation
+{
+    Shared,
+    Private,
+    Untrusted
+}
+
 /// <summary>
 /// Bounded port specialized to immutable persistent actor roots. Receiving does
 /// not refund credits; only explicit receiver acknowledgement does.
@@ -216,6 +251,7 @@ public sealed class PersistentActorMapPort
     private sealed record Envelope(long Id, long Bytes, PersistentActorMap State);
     private readonly object _gate = new();
     private readonly Queue<Envelope> _queue = new();
+    private readonly ActorDataIsolation _isolation;
     private readonly int _maxFrames;
     private readonly long _maxBytes;
     private int _usedFrames;
@@ -223,12 +259,16 @@ public sealed class PersistentActorMapPort
     private long _nextId = 1;
     private bool _closed;
 
-    public PersistentActorMapPort(int maxFrames, long maxBytes)
+    public PersistentActorMapPort(
+        ActorDataIsolation isolation, int maxFrames, long maxBytes)
     {
+        if (!Enum.IsDefined(typeof(ActorDataIsolation), isolation))
+            throw new ArgumentOutOfRangeException(nameof(isolation));
         if (maxFrames <= 0)
             throw new ArgumentOutOfRangeException(nameof(maxFrames));
         if (maxBytes <= 0)
             throw new ArgumentOutOfRangeException(nameof(maxBytes));
+        _isolation = isolation;
         _maxFrames = maxFrames;
         _maxBytes = maxBytes;
     }
@@ -244,7 +284,10 @@ public sealed class PersistentActorMapPort
                 throw new OverflowException("persistent actor delivery identity exhausted");
             if (_usedFrames >= _maxFrames || chargeBytes > _maxBytes - _usedBytes)
                 return false; // sender retains immutable root and ownership
-            _queue.Enqueue(new Envelope(_nextId++, chargeBytes, state));
+            // Snapshot after quota admission but before publishing any credit.
+            // A failed isolated copy leaves queue/counters untouched.
+            PersistentActorMap admitted = state.SnapshotForActor(_isolation);
+            _queue.Enqueue(new Envelope(_nextId++, chargeBytes, admitted));
             _usedFrames++;
             _usedBytes += chargeBytes;
             return true;
