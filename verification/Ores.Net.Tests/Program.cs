@@ -492,6 +492,7 @@ Require(RuntimeHost.Execute(() => throw new OverflowException()) == 70,
 Require(RuntimeHost.Execute(() => throw new DivideByZeroException()) == 70,
     "divide zero error returned");
 
+SourceI64Conformance.Run();
 CfgVerifierTests.Run();
 CfgCilStressTests.Run();
 StructuredSourceTests.Run();
