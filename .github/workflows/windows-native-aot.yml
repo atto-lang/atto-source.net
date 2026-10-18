@@ -64,6 +64,15 @@ jobs:
       - name: Exercise the released Native AOT compiler CLI
         shell: pwsh
         run: ./verification/assert-native-compiler-cli.ps1 -Compiler ./artifacts/compiler/win-x64/oresnet.exe -ValidSource examples/hello.ores
+      - name: Adversarial scalar runner self-tests (Windows)
+        shell: pwsh
+        run: python contracts/scalar/v1/selftest.py
+      - name: Shared scalar source admission on the released Native AOT compiler
+        shell: pwsh
+        run: >
+          python contracts/scalar/v1/run.py --backend net --mode admission
+          --command './artifacts/compiler/win-x64/oresnet.exe check {source}'
+          --revision '${{ github.sha }}' --report artifacts/scalar-parity-net-win-x64.json
       - name: Execute real Windows Native AOT binary
         shell: pwsh
         run: |
@@ -161,6 +170,13 @@ jobs:
         run: ./verification/assert-aot-gates.ps1 -Rid linux-x64
       - name: Run frontend, metadata and mailbox regressions
         run: dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
+      - name: Adversarial scalar runner self-tests (Linux)
+        run: python3 contracts/scalar/v1/selftest.py
+      - name: Shared scalar source admission diagnostic (managed compiler only)
+        run: >
+          python3 contracts/scalar/v1/run.py --backend net --mode admission
+          --command 'dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -- check {source}'
+          --revision '${{ github.sha }}' --report artifacts/scalar-parity-net-linux-diagnostic.json
       - name: Emit generated CIL using the compiler
         run: |
           mkdir -p artifacts/generated
