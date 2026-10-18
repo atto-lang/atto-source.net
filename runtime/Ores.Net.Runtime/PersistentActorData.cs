@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using System.Numerics;
 
 namespace Ores.Net.Runtime;
@@ -223,8 +225,10 @@ public sealed class PersistentActorMapPort
 
     public PersistentActorMapPort(int maxFrames, long maxBytes)
     {
-        if (maxFrames <= 0 || maxBytes <= 0)
+        if (maxFrames <= 0)
             throw new ArgumentOutOfRangeException(nameof(maxFrames));
+        if (maxBytes <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxBytes));
         _maxFrames = maxFrames;
         _maxBytes = maxBytes;
     }
