@@ -249,6 +249,34 @@ internal static class ExecutionGraphV1Tests
                  "actual inline-then-throw rejection",
              "inline-then-throw did not preserve scheduler failure");
 
+        // A worker interrupted while blocked behind scheduler admission
+        // must be authority-revoked before the scheduler later returns success.
+        // Overflow is used as an evaluation sentinel: if the worker revived
+        // after the gate opened, the terminal exception would be OverflowException.
+        using (var interruptedLaunched = new System.Threading.ManualResetEventSlim(false))
+        {
+            Thread? interruptedWorker = null;
+            var interrupted = overflowPlan.SubmitCpu(job =>
+            {
+                interruptedWorker = new Thread(() =>
+                {
+                    interruptedLaunched.Set();
+                    job();
+                });
+                interruptedWorker.Start();
+                Need(interruptedLaunched.Wait(TimeSpan.FromSeconds(5)),
+                    "interrupted worker never launched");
+                interruptedWorker.Interrupt();
+                Need(interruptedWorker.Join(TimeSpan.FromSeconds(5)),
+                    "interrupted worker stranded behind admission gate");
+                // Normal return would otherwise commit admission.
+            });
+            Need(interruptedWorker is not null, "interrupted worker missing");
+            Need(interrupted.Task.IsFaulted &&
+                 interrupted.Task.Exception?.InnerException is ThreadInterruptedException,
+                 "pre-admission interruption did not remain terminal");
+        }
+
         for (int trial = 0; trial < 128; trial++)
         {
             using var acceptedWorkerLaunched = new System.Threading.ManualResetEventSlim(false);
