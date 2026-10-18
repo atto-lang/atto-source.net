@@ -115,6 +115,28 @@ static class PersistentActorDataTests
         Require(privateDelivery.Acknowledge(), "PRIVATE acknowledgement");
         privatePort.Close();
 
+        // Acknowledgement is a single linearization point, even when many
+        // foreign completion carriers race on the same delivery token.
+        var concurrentPort = new PersistentActorMapPort(ActorDataIsolation.Shared, 64, 64);
+        Require(concurrentPort.Offer(parent, 1), "race admission");
+        var contested = concurrentPort.TryReceive() ??
+            throw new Exception("missing contested delivery");
+        int winners = 0;
+        System.Threading.Tasks.Parallel.For(0, 128, _ =>
+        {
+            if (contested.Acknowledge())
+                System.Threading.Interlocked.Increment(ref winners);
+        });
+        Require(winners == 1, "racing acknowledgement settled more than once");
+        Require(concurrentPort.Used == (0, 0L), "racing ACK double-refunded credits");
+        concurrentPort.Close();
+        try
+        {
+            _ = concurrentPort.Offer(parent, 1);
+            throw new Exception("closed port accepted new delivery");
+        }
+        catch (InvalidOperationException) { }
+
         var untrusted = parent.SnapshotForActor(ActorDataIsolation.Untrusted);
         Require(!ReferenceEquals(parent, untrusted), "UNTRUSTED root identity shared");
     }
