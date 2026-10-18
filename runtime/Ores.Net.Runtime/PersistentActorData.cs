@@ -42,6 +42,11 @@ public sealed class PersistentActorMap
     public bool TryGetValue(string key, out object? value)
     {
         ArgumentNullException.ThrowIfNull(key);
+        if (key.Length == 0 || key.Length > 4096)
+        {
+            value = null;
+            return false;
+        }
         Node? node = _root;
         while (node is not null)
         {
@@ -127,7 +132,8 @@ public sealed class PersistentActorMap
     public PersistentActorMap Without(string key)
     {
         ArgumentNullException.ThrowIfNull(key);
-        if (key.Length == 0) throw new ArgumentOutOfRangeException(nameof(key));
+        if (key.Length == 0 || key.Length > 4096)
+            throw new ArgumentOutOfRangeException(nameof(key), "persistent actor key limit");
         bool removed = false;
         Node? next = Delete(_root, key, ref removed);
         if (!removed) return this;
