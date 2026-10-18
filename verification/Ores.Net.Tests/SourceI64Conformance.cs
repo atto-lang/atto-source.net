@@ -10,6 +10,7 @@ using Ores.Net.Compiler;
 internal static class SourceI64Conformance
 {
     private const string ReviewedBlob = "bbc319c19ecd007109d33592e210091eb267e5a2";
+    private const string ReviewedSha256 = "39bddbe558ad1c336271f91e6403c4555f2f16a7ed33a3355ee897721b6ab02a";
     private static readonly string[] ExpectedIds =
     {
         "precedence", "grouping", "signed-multiplication", "subtraction",
@@ -42,6 +43,8 @@ internal static class SourceI64Conformance
         Buffer.BlockCopy(bytes, 0, blobBytes, prefix.Length, bytes.Length);
         var actualBlob = Convert.ToHexString(SHA1.HashData(blobBytes)).ToLowerInvariant();
         Require(actualBlob == ReviewedBlob, "unreviewed Git blob");
+        Require(Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant() == ReviewedSha256,
+            "unreviewed source-i64 SHA-256");
 
         using var document = JsonDocument.Parse(bytes);
         var root = document.RootElement;
