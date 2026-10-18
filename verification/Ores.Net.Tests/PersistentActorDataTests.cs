@@ -47,6 +47,16 @@ static class PersistentActorDataTests
         }
         catch (ArgumentException) { }
 
+        var hugeKey = new string('x', 4097);
+        Require(!root.TryGetValue(hugeKey, out _), "oversized lookup accepted");
+        Require(root.Get(hugeKey) is null, "oversized key returned an actor value");
+        foreach (var badKey in new[] { "", hugeKey })
+        {
+            try { _ = root.Without(badKey); throw new Exception("bad removal admitted"); }
+            catch (ArgumentOutOfRangeException) { }
+        }
+        Require(root.Count == 4096, "denied keys modified immutable map");
+
         var port = new PersistentActorMapPort(ActorDataIsolation.Shared, 1, 64);
         Require(port.Offer(parent, 32), "first port offer");
         Require(!port.Offer(replaced, 32), "quota did not reject second offer");
