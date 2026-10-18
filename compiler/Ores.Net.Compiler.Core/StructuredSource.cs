@@ -61,6 +61,7 @@ public static class OresStructuredParser
         // UTF-8 bytes, matching the disk/CLI boundary, not code-unit count.
         if (System.Text.Encoding.UTF8.GetByteCount(source) > 1_048_576)
             throw new FormatException("Source exceeds 1 MiB UTF-8 parser limit");
+        RejectUnsupportedTupleV2(source);
         var lexer = new Lexer(source);
         var tokens = new List<Token>();
         while (true)
@@ -72,6 +73,95 @@ public static class OresStructuredParser
             if (token.Text.Length == 0) break;
         }
         return new Reader(tokens).ReadProgram();
+    }
+
+    // The CIL bootstrap currently has no aggregate ABI. Detect tuple-v2
+    // parameter surfaces before the deliberately tiny lexer sees ','/'?' and
+    // turns a semantic capability boundary into an incidental character error.
+    // Trivia and quoted text are skipped so decoys do not trip this gate.
+    private static void RejectUnsupportedTupleV2(string source)
+    {
+        static int SkipTrivia(string text, int at)
+        {
+            while (at < text.Length)
+            {
+                if (char.IsWhiteSpace(text[at])) { at++; continue; }
+                if (text[at] == '/' && at + 1 < text.Length && text[at + 1] == '/')
+                {
+                    at += 2;
+                    while (at < text.Length && text[at] != '\n') at++;
+                    continue;
+                }
+                break;
+            }
+            return at;
+        }
+
+        static int SkipQuoted(string text, int at)
+        {
+            char quote = text[at++];
+            bool escaped = false;
+            while (at < text.Length)
+            {
+                char c = text[at++];
+                if (escaped) { escaped = false; continue; }
+                if (c == '\\') { escaped = true; continue; }
+                if (c == quote) break;
+            }
+            return at;
+        }
+
+        static bool IdentifierStart(char c) => Alpha(c) || c == '_';
+        static bool IdentifierPart(char c) => IdentifierStart(c) || Digit(c);
+        static (string Text, int End) ReadIdentifier(string text, int at)
+        {
+            int start = at++;
+            while (at < text.Length && IdentifierPart(text[at])) at++;
+            return (text[start..at], at);
+        }
+
+        for (int at = 0; at < source.Length;)
+        {
+            at = SkipTrivia(source, at);
+            if (at >= source.Length) break;
+            if (source[at] is '"' or '\'')
+            {
+                at = SkipQuoted(source, at);
+                continue;
+            }
+            if (!IdentifierStart(source[at])) { at++; continue; }
+
+            var word = ReadIdentifier(source, at);
+            at = word.End;
+            if (word.Text != "fnc") continue;
+
+            int cursor = SkipTrivia(source, at);
+            if (cursor >= source.Length || !IdentifierStart(source[cursor])) continue;
+            cursor = ReadIdentifier(source, cursor).End;
+            cursor = SkipTrivia(source, cursor);
+            if (cursor >= source.Length || source[cursor] != '(') continue;
+            cursor = SkipTrivia(source, cursor + 1);
+            if (cursor >= source.Length || source[cursor] == ')') continue;
+
+            if (source[cursor] == '(')
+                throw new FormatException(
+                    $"Structural tuple v2 parameter ABI is not supported at offset {cursor}");
+
+            if (IdentifierStart(source[cursor]))
+            {
+                var first = ReadIdentifier(source, cursor);
+                if (first.Text == "structural")
+                    throw new FormatException(
+                        $"Structural tuple v2 readonly-view ABI is not supported at offset {cursor}");
+                if (first.Text == "tuple")
+                {
+                    int after = SkipTrivia(source, first.End);
+                    if (after < source.Length && source[after] == '(')
+                        throw new FormatException(
+                            $"Structural tuple v2 parameter ABI is not supported at offset {cursor}");
+                }
+            }
+        }
     }
 
     private readonly record struct Token(string Text, int Offset);

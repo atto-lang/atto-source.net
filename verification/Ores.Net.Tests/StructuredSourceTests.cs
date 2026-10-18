@@ -149,6 +149,37 @@ internal static class StructuredSourceTests
         Require(rejectedMutations >= 128,
             "adversarial mutation corpus must exercise substantial parser rejection");
 
+        static void RejectTupleV2(string source, string label)
+        {
+            try { _ = OresStructuredParser.Parse(source); }
+            catch (FormatException ex)
+            {
+                Require(ex.Message.Contains("tuple v2", StringComparison.OrdinalIgnoreCase),
+                    label + ": rejection was incidental instead of tuple-v2 semantic gate: " + ex.Message);
+                Require(ex.Message.Contains("offset", StringComparison.OrdinalIgnoreCase),
+                    label + ": tuple-v2 diagnostic missing offset");
+                return;
+            }
+            throw new Exception("Structured tuple-v2 source incorrectly accepted: " + label);
+        }
+
+        RejectTupleV2(
+            "fnc main(tuple (int, int, string?) value):int{return 1;}",
+            "explicit tuple parameter");
+        RejectTupleV2(
+            "fnc main((int, int, string?) value):int{return 1;}",
+            "tuple shorthand parameter");
+        RejectTupleV2(
+            "fnc main(structural (int, int, string?) value):int{return 1;}",
+            "structural tuple readonly view");
+
+        // Comment decoys must not make a supported scalar source look like a
+        // tuple-v2 use.
+        Require(OresStructuredParser.Parse(
+            "// fnc fake((int, int, string?) value):int{return 0;}\n" +
+            "fnc main():int{return 42;}").Body.Count == 1,
+            "tuple-v2 scanner ignores line-comment decoys");
+
         // The shipping arithmetic frontend is intentionally unchanged.
         // Stage-one binding names must remain unambiguous.
         Require(OresParser.Parse("fnc main():int{return 2+3;}") is Binary,
