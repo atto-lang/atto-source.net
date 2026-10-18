@@ -84,6 +84,7 @@ internal static class SourceI64Conformance
             Require(actualCil == expected, "emitted CIL result mismatch for " + id);
         }
 
+        int negativeIndex = 0;
         foreach (var expression in new[]
         {
             "9223372036854775807+1", "-9223372036854775808-1",
@@ -92,14 +93,22 @@ internal static class SourceI64Conformance
         {
             var typed = OresIrLowering.Lower(
                 OresParser.Parse("pub fnc main():int{return " + expression + ";}"));
-            try
-            {
-                _ = OresIrReferenceEvaluator.Evaluate(typed);
-            }
-            catch (OverflowException) { continue; }
-            throw new InvalidOperationException("source-i64 overflow was not rejected: " + expression);
+            bool irTrapped = false;
+            try { _ = OresIrReferenceEvaluator.Evaluate(typed); }
+            catch (OverflowException) { irTrapped = true; }
+            Require(irTrapped, "typed IR failed to trap overflow: " + expression);
+
+            var negativePath = Path.Combine(directory.Path, "overflow-" + negativeIndex++ + ".dll");
+            CilEmitter.EmitLibrary(typed, negativePath);
+            using var overflowAssembly = AssemblyDefinition.ReadAssembly(negativePath);
+            var overflowMethod = overflowAssembly.MainModule.Types.Single(t =>
+                t.FullName == "Oreslang.Generated.OresProgram").Methods.Single(m => m.Name == "Run");
+            bool cilTrapped = false;
+            try { _ = CilReferenceEvaluator.Evaluate(overflowMethod); }
+            catch (OverflowException) { cilTrapped = true; }
+            Require(cilTrapped, "emitted CIL failed to trap overflow: " + expression);
         }
-        Console.WriteLine("source-i64: seven verified typed-IR and CIL reference cases; four overflow denials; no Native AOT assertion");
+        Console.WriteLine("source-i64: seven verified typed-IR and CIL reference cases; four paired overflow denials; no Native AOT assertion");
     }
 
     private sealed class TemporaryDirectory : IDisposable
