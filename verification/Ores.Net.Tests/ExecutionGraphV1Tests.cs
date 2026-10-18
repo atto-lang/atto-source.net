@@ -295,6 +295,32 @@ internal static class ExecutionGraphV1Tests
                  "started worker published a result before scheduler rejection");
         }
 
+        // CPU overflow is a deterministic failure sentinel: a worker
+        // started before executor rejection must not publish its error.
+        for (int trial = 0; trial < 64; trial++)
+        {
+            using var launched = new System.Threading.ManualResetEventSlim(false);
+            Thread? early = null;
+            var rejectedOverflow = overflowPlan.SubmitCpu(job =>
+            {
+                early = new Thread(() =>
+                {
+                    launched.Set();
+                    job();
+                });
+                early.Start();
+                Need(launched.Wait(TimeSpan.FromSeconds(5)),
+                     "overflow sentinel worker did not start");
+                throw new InvalidOperationException("scheduler rejected before CPU overflow");
+            });
+            Need(early is not null && early.Join(TimeSpan.FromSeconds(5)),
+                 "rejected overflow worker remained blocked");
+            Need(rejectedOverflow.Task.IsFaulted &&
+                 rejectedOverflow.Task.Exception?.InnerException?.Message ==
+                     "scheduler rejected before CPU overflow",
+                 "overflow evaluation preempted scheduler rejection");
+        }
+
         var limited = new ExecutionGraphV1.Builder();
         for (int i = 0; i < 4096; i++) limited.CpuUnit();
         try { limited.CpuUnit(); throw new Exception("node limit bypassed"); }
