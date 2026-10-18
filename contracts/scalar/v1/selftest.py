@@ -289,7 +289,7 @@ class ScalarHarnessTest(unittest.TestCase):
         for backend, cases in diagnostics.items():
             for case_id, message in cases.items():
                 for ending in ("", "\n", "\r\n"):
-                    code = "import sys;sys.stderr.write(" + repr(message + ending) + ");sys.exit(1)"
+                    code = "import sys;sys.stderr.buffer.write(" + repr((message + ending).encode()) + ");sys.exit(1)"
                     with self.subTest(backend=backend, case_id=case_id, ending=repr(ending)):
                         good, _ = runner.run_case(
                             [sys.executable, "-c", code], source, "reject", None,
@@ -315,7 +315,7 @@ class ScalarHarnessTest(unittest.TestCase):
             ("42\n\n", False), ("\t42\n", False),
         )
         for output, expected in outputs:
-            command = "import sys;sys.stdout.write(" + repr(output) + ")"
+            command = "import sys;sys.stdout.buffer.write(" + repr(output.encode()) + ")"
             with self.subTest(output=repr(output)):
                 passed, _ = runner.run_case(
                     [sys.executable, "-c", command], source, "accept", "42",

@@ -71,7 +71,7 @@ def read_bounded_regular_fixture(source):
             raise ValueError("fixture changed before read")
         data = stream.read(MAX_FIXTURE_BYTES + 1)
         after = os.fstat(stream.fileno())
-        if not same_fixture_identity(opened, after):
+        if not same_fixture_identity(opened, after, descriptor_pair=True):
             raise ValueError("fixture changed during read")
     final = source.lstat()
     if not same_fixture_identity(after, final):
@@ -81,11 +81,15 @@ def read_bounded_regular_fixture(source):
     return data
 
 
-def same_fixture_identity(before, after):
-    return all(getattr(before, attr) == getattr(after, attr) for attr in (
-        "st_dev", "st_ino", "st_mode", "st_size", "st_nlink",
-        "st_mtime_ns", "st_ctime_ns"
-    ))
+def same_fixture_identity(before, after, descriptor_pair=False):
+    fields = ["st_dev", "st_ino", "st_mode", "st_size", "st_nlink", "st_mtime_ns"]
+    # Windows Python can expose creation time through path stat and modification
+    # time through descriptor stat as st_ctime_ns. Compare it only within the
+    # same descriptor API; retain full ctime checks on POSIX.
+    # https://docs.python.org/3/library/os.html#os.stat_result.st_ctime_ns
+    if os.name != "nt" or descriptor_pair:
+        fields.append("st_ctime_ns")
+    return all(getattr(before, attr) == getattr(after, attr) for attr in fields)
 
 
 def load_suite():
