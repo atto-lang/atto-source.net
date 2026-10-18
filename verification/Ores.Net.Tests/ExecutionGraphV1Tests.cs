@@ -276,6 +276,7 @@ internal static class ExecutionGraphV1Tests
                  interrupted.Task.Exception?.InnerException is ThreadInterruptedException,
                  "pre-admission interruption did not remain terminal");
         }
+        Console.WriteLine("typed .NET pre-admission interruption: PASS");
 
         for (int trial = 0; trial < 128; trial++)
         {
