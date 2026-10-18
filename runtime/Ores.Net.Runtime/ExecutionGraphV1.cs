@@ -346,6 +346,13 @@ public static class ExecutionGraphV1
                         ticket.Complete(Evaluate(() => ticket.Cancelled));
                     }
                     catch (OperationCanceledException) { ticket.Cancel(); }
+                    catch (ThreadInterruptedException ex)
+                    {
+                        // Interruption while blocked behind scheduler admission
+                        // is an admission failure, not a CPU evaluation failure.
+                        // Revoke worker authority before publishing terminal fault.
+                        ticket.RejectExecutor(ex);
+                    }
                     catch (Exception ex) { ticket.Fail(ex); }
                 });
                 if (System.Threading.Volatile.Read(ref inlineAttempted) != 0)
