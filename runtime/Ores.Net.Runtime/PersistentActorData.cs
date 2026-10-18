@@ -70,19 +70,43 @@ public sealed class PersistentActorMap
 
     private PersistentActorMap CloneIsolated(int depth)
     {
-        if (depth > 256) throw new InvalidOperationException("persistent actor clone depth");
-        int count = 0;
-        Node? root = CloneNode(_root, depth, ref count);
-        return root is null ? Empty : new PersistentActorMap(root, count);
+        var memo = new Dictionary<PersistentActorMap, PersistentActorMap>(
+            ReferenceEqualityComparer.Instance);
+        int graphNodes = 0;
+        return CloneIsolated(depth, memo, ref graphNodes);
     }
 
-    private static Node? CloneNode(Node? node, int depth, ref int count)
+    private PersistentActorMap CloneIsolated(
+        int depth,
+        Dictionary<PersistentActorMap, PersistentActorMap> memo,
+        ref int graphNodes)
+    {
+        if (depth > 256)
+            throw new InvalidOperationException("persistent actor clone depth");
+        if (memo.TryGetValue(this, out var prior))
+            return prior;
+        int count = 0;
+        Node? root = CloneNode(_root, depth, memo, ref graphNodes, ref count);
+        PersistentActorMap copy = root is null ? Empty : new PersistentActorMap(root, count);
+        memo[this] = copy;
+        return copy;
+    }
+
+    private static Node? CloneNode(
+        Node? node,
+        int depth,
+        Dictionary<PersistentActorMap, PersistentActorMap> memo,
+        ref int graphNodes,
+        ref int count)
     {
         if (node is null) return null;
+        if (++graphNodes > 100000)
+            throw new InvalidOperationException("persistent actor clone node budget");
         object value = node.Value is PersistentActorMap nested
-            ? nested.CloneIsolated(depth + 1) : node.Value;
-        Node? left = CloneNode(node.Left, depth, ref count);
-        Node? right = CloneNode(node.Right, depth, ref count);
+            ? nested.CloneIsolated(depth + 1, memo, ref graphNodes)
+            : node.Value;
+        Node? left = CloneNode(node.Left, depth, memo, ref graphNodes, ref count);
+        Node? right = CloneNode(node.Right, depth, memo, ref graphNodes, ref count);
         count++;
         return new Node(node.Key, value, left, right);
     }
@@ -115,11 +139,20 @@ public sealed class PersistentActorMap
         if (value is null)
             throw new ArgumentException("persistent actor values cannot be null");
         Type type = value.GetType();
+        if (type == typeof(float))
+        {
+            if (float.IsFinite((float)value)) return;
+            throw new ArgumentException("persistent actor float must be finite");
+        }
+        if (type == typeof(double))
+        {
+            if (double.IsFinite((double)value)) return;
+            throw new ArgumentException("persistent actor double must be finite");
+        }
         if (type == typeof(string) || type == typeof(bool) || type == typeof(char) ||
             type == typeof(byte) || type == typeof(short) || type == typeof(int) ||
-            type == typeof(long) || type == typeof(float) || type == typeof(double) ||
-            type == typeof(decimal) || type == typeof(BigInteger) ||
-            type == typeof(PersistentActorMap))
+            type == typeof(long) || type == typeof(decimal) ||
+            type == typeof(BigInteger) || type == typeof(PersistentActorMap))
             return;
         throw new ArgumentException(
             "persistent actor value must be a closed immutable scalar or PersistentActorMap");

@@ -66,6 +66,29 @@ static class PersistentActorDataTests
         // Close is idempotently safe only after every checked-out frame settles.
         port.Close();
 
+        foreach (object badNumber in new object[] {
+            float.NaN, float.PositiveInfinity, double.NaN, double.NegativeInfinity })
+        {
+            try
+            {
+                _ = parent.With("bad-number", badNumber);
+                throw new Exception("nonfinite persistent number admitted");
+            }
+            catch (ArgumentException) { }
+        }
+
+        var sharedChild = PersistentActorMap.Empty.With("leaf", 7);
+        var dag = PersistentActorMap.Empty
+            .With("left", sharedChild)
+            .With("right", sharedChild);
+        var dagCopy = dag.SnapshotForActor(ActorDataIsolation.Private);
+        var leftCopy = (PersistentActorMap?)dagCopy.Get("left");
+        var rightCopy = (PersistentActorMap?)dagCopy.Get("right");
+        Require(leftCopy is not null && ReferenceEquals(leftCopy, rightCopy),
+            "PRIVATE clone failed to preserve internal immutable DAG sharing");
+        Require(!ReferenceEquals(leftCopy, sharedChild),
+            "PRIVATE clone shared sender nested root");
+
         var privatePort = new PersistentActorMapPort(
             ActorDataIsolation.Private, 1, 64);
         Require(privatePort.Offer(parent, 32), "PRIVATE offer");
