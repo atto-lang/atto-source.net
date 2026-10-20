@@ -294,6 +294,107 @@ additional source-free regressions reject overlapping intervals and accept
 adjacent intervals. This is an API evidence consistency check, not an
 independent proof of the commands' effects or any guest runtime semantics.
 
+## Strict authenticated GitHub JSON decoding
+
+All identity-bearing GitHub REST responses are now parsed with duplicate-key
+rejection at every object depth, strict JSON numeric handling (no NaN,
+Infinity, exponential overflow or oversized integer/float tokens), bounded
+response bytes, and root-object validation. Previously Python's default
+`json.loads` used last-key-wins on duplicate JSON keys and accepted
+non-standard floating-point constants. Ambiguous metadata must fail closed,
+including when the transport returns HTTP 200.
+
+Five new source-free regression methods cover normal REST object parsing,
+duplicate metadata, malformed/nonfinite numbers, invalid encodings and
+oversized bodies, plus the actual authenticated fetch-to-parser call path.
+Matching Git blobs in Java, LLVM, .NET, WASM and Forge are a **CI evidence
+contract parity** property; they do not establish native compiler execution,
+guest actor semantics, or authorization to mirror private source.
+
+## Five-backend source-free runner-allocation canary (2026-10-16 ET)
+
+All five `oreslang-source.*` integration branches carry byte-identical
+`.github/workflows/source-free-runner-allocation-canary.yml`
+(Git blob `32f204e2b0f4a03abf3b18691cc2475cff76479d`).
+It triggers only when the canary workflow file changes on
+`integration/serde-routing-actor-arena-20261016`, uses
+`permissions: {}`, **does not checkout or read private source**, and does
+not use a user-supplied PAT/secret. On an allocated runner only, it checks
+the exact GitHub event, ref, workflow ref, pinned numeric source repository
+identity, provided commit context, run/attempt IDs and runner environment,
+then writes a three-day metadata-only diagnostic artifact. No output of
+this canary is a compiler, native guest, actor or release proof. The reported
+commit is `GITHUB_SHA` context **not** independently authenticated Git
+source tree content, and the actual allocated numeric `runner_id` must
+be verified separately via read-only GitHub job API.
+
+Exact-source canary runs (each recorded `runner_id=0`,
+**0 completed job steps**, **0 artifacts**, `failure`):
+
+| Backend | Run | Job ID |
+| --- | --- | --- |
+| Java | [38996778405](https://github.com/ores-truffle-oreslang/oreslang-source.java/actions/runs/38996778405) | 117290968841 |
+| LLVM | [38996785587](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/38996785587) | 117290988640 |
+| .NET | [38996790571](https://github.com/ores-truffle-oreslang/oreslang-source.net/actions/runs/38996790571) | 117291003529 |
+| Wasm | [38996797790](https://github.com/ores-truffle-oreslang/oreslang-source.wasm/actions/runs/38996797790) | 117291025788 |
+| Forge | [38996802494](https://github.com/ores-truffle-oreslang/oreslang-source.forge/actions/runs/38996802494) | 117291040605 |
+
+These minimal no-checkout workflows corroborate an **organization-level
+runner scheduling/authorization blocker** but do not determine whether
+billing, quota, Actions policy or other GitHub restrictions caused it.
+
+A separately authored **source-free model**, with no private compiler
+Git tree, passed **9/9 Python adversarial test methods** on funded private
+[ClipTown run 38996995244](https://github.com/cliptown/cliptown-e2e/actions/runs/38996995244),
+exact carrier SHA `30882925903818420c98b0a047e3a3e53bc827f1`,
+job `117291630420`, and uploaded the three-day
+[metadata artifact 12087671913](https://github.com/cliptown/cliptown-e2e/actions/runs/38996995244/artifacts/12087671913).
+It covers the five numeric source IDs, forged run/workflow refs,
+zero/invalid run identities and missing/unsafe runner labels, not
+real Oreslang compiler or actor execution.
+
+**Next gate:** an authorized source admin must contain the outstanding
+cross-org public-source exposure, establish protected source policy and
+diagnose Actions runner allocation. An alternative private organization's
+available minutes alone does not approve transferring source. After that,
+an independently reviewed exact-head backend-native CI run must execute
+tests and upload verified compiler/guest JUnit or equivalent results before
+a release claim or draft merge.
+
+## CI execution-name Unicode spoofing hardening
+
+The shared `scripts/verify_ci_run.py` denies unsafe GitHub REST display
+labels for runner, job, required test-step, and reported executed steps:
+empty/whitespace-only names, excessively long values, control characters,
+Unicode bidirectional/zero-width format characters, and Unicode line or
+paragraph separators (categories `Cc`, `Cf`, `Cs`, `Zl`, `Zp`).
+Normal visible international characters remain accepted. The change
+prevents visually forged or multiline metadata from masquerading as a
+reviewed CI proof step; it does **not** certify guest semantics or make
+self-reported step names independently trustworthy.
+
+Each backend's CI-evidence suite has **82 declared tests**, including four
+additional adversarial tests covering runner, job and step-name spoofing,
+untrusted proof names and readable non-ASCII labels. The existing
+`ci-run-evidence-contract.yml` enforces at least 82 tests in each of
+three no-skip test rounds, preserving its backend-specific checkout,
+report-generation and artifact policies. Identical verifier blob
+`495ecce19762e8f93d465b5554c8c0b2fab4bf40` is committed
+across Java, LLVM, .NET, Wasm and Forge. The existing test fixture's
+workflow-isolation section differs intentionally between Java and the
+other four sources, so do not overwrite it merely to force a test-file
+SHA match.
+
+Independently authored **source-free** Unicode-model checks passed
+**8/8** tests on allocated private
+[ClipTown run 38999163974](https://github.com/cliptown/cliptown-e2e/actions/runs/38999163974),
+exact carrier SHA `4048c33ec61a342f471d9a8fa792eaed8f9f0b81`;
+the hosted run uploaded
+[artifact 12088571324](https://github.com/cliptown/cliptown-e2e/actions/runs/38999163974/artifacts/12088571324).
+This was an independent model; **the checked-in Oreslang Python suites and
+native compilers did not execute on ClipTown**. No private Git tree was
+copied across organizations. Existing source-org Actions failed before
+runner allocation, and export/incident security gates remain unresolved.
 
 ## 91-case source-free provenance gate — October 17, 2026 UTC
 
@@ -324,3 +425,21 @@ repository Git tree. Never treat the carrier result as approval to export
 private compiler/runtime source. Native CI and independent security review
 remain required before releasing or merging a backend.
 
+
+## Certification/security conflict reconciliation (2026-10-20)
+
+The integration preserves the certification branch's 91 provenance test methods
+and precise denial diagnostics, along with the security branch's 47 persistent
+policy tests, 29 lifecycle policy tests, deterministic arena domains, issued
+handle identity and scratch quotas. Both policy and native .NET jobs check out
+the exact PR head, with credentials disabled and source identity checked before
+tests. Isolated Python execution remains required.
+
+Arena metadata constructors are internal to the runtime assembly so the owning
+arena can access them under C# accessibility rules. Public consumers still
+cannot construct them. Exact issued-object identity, actor incarnation and
+physical carrier checks remain authoritative. Handle construction occurs before
+publishing a slot live, preventing allocation failure from consuming a slot.
+
+Historical run/blob records above refer to earlier snapshots. This integrated
+tree has no new executed validation and does not certify backend parity.
