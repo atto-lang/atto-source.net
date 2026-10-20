@@ -63,6 +63,23 @@ Features: decimal signed 64-bit literals (including `-9223372036854775808`), par
 | `scripts/` | Windows-only Native AOT publish pipeline |
 | `docs/` | Backend contracts and implementation roadmap |
 
+## Advisory static analysis facts (v0)
+
+Two **non-executing** CLI modes now export `ores-static-facts/v0` JSON with
+SHA-256 identity of admitted UTF-8 source, a canonical `__root__.main/0`
+procedure, and no unproved security or actor claims:
+
+- `oresnet static-facts file.ores` uses the **shipping** scalar parser,
+  frozen typed/verified OresIR, and the same accepted subset as `check`.
+- `oresnet static-facts-structured file.ores` uses the **experimental,
+  non-production** typed structured parser. Its `while` statements are
+  marked `exit=unknown` and `safepoint=false`. This mode does **not**
+  establish executable CIL or full Native AOT parity.
+
+Both reject unsupported effects and malformed source instead of inventing
+proofs. See [`.NET static facts v0`](docs/STATIC_FACTS_V0_NET.md) for
+limits, trust boundaries, format and CI verification.
+
 ## Verification
 
 ~~~powershell
