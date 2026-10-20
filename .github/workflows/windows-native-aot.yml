@@ -273,6 +273,16 @@ jobs:
           ./verification/assert-native-release.ps1 -Binary ./artifacts/compiler/win-x64/oresnet.exe -Rid win-x64
           ./verification/assert-native-release.ps1 -Binary ./artifacts/apps/win-x64/oreslang-app.exe -Rid win-x64
           ./verification/assert-native-compiler-cli.ps1 -Compiler ./artifacts/compiler/win-x64/oresnet.exe -ValidSource examples/hello.ores
+      - name: Execute real published Windows Native AOT application
+        shell: pwsh
+        run: |
+          ./verification/assert-native-pe.ps1 -Binary ./artifacts/compiler/win-x64/oresnet.exe -Rid win-x64
+          ./verification/assert-native-pe.ps1 -Binary ./artifacts/apps/win-x64/oreslang-app.exe -Rid win-x64
+          $output = & ./artifacts/apps/win-x64/oreslang-app.exe
+          if ($LASTEXITCODE -ne 0 -or ($output | Out-String).Trim() -ne '14') {
+            throw "Native AOT app output mismatch: expected 14, received '$output'"
+          }
+          ./verification/assert-native-arithmetic.ps1 -Rid win-x64
       - name: Match Native AOT static facts against managed facts at exact head
         shell: pwsh
         run: |
