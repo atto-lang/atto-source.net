@@ -78,8 +78,8 @@ try {
         throw 'Static facts accepted a source file without the .ores extension'
     }
 
-        $global:LASTEXITCODE = 0  # expected failed negative executions
-        Write-Host 'Oreslang .NET static-facts/v0 CLI, byte identity and fail-closed tests passed'
+    $global:LASTEXITCODE = 0  # expected failed negative executions
+    Write-Host 'Oreslang .NET static-facts/v0 CLI, byte identity and fail-closed tests passed'
 }
 finally {
     foreach ($fixture in @($structured, $withBom, $wrongExt)) {
