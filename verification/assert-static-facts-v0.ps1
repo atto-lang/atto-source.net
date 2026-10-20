@@ -53,8 +53,13 @@ if ($LASTEXITCODE -ne 2) {
 }
 
 $withBom = Join-Path $env:RUNNER_TEMP 'net-static-facts-bom.ores'
-[IO.File]::WriteAllBytes($withBom, [byte[]]@(0xef, 0xbb, 0xbf) +
-    [Text.Encoding]::UTF8.GetBytes('fnc main():int{return 42;}'))
+$payload = [Text.Encoding]::UTF8.GetBytes('fnc main():int{return 42;}')
+$withBomBytes = [byte[]]::new(3 + $payload.Length)
+$withBomBytes[0] = 0xef
+$withBomBytes[1] = 0xbb
+$withBomBytes[2] = 0xbf
+[Array]::Copy($payload, 0, $withBomBytes, 3, $payload.Length)
+[IO.File]::WriteAllBytes($withBom, $withBomBytes)
 & dotnet run --no-build -c Release --project $compiler -- static-facts $withBom *> $null
 if ($LASTEXITCODE -eq 0) { throw 'BOM source was silently signed after stripping bytes' }
 
