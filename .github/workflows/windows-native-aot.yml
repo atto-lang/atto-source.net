@@ -69,6 +69,21 @@ jobs:
       - name: Exercise the released Native AOT compiler CLI
         shell: pwsh
         run: ./verification/assert-native-compiler-cli.ps1 -Compiler ./artifacts/compiler/win-x64/oresnet.exe -ValidSource examples/hello.ores
+      - name: Verify signed-i64 static facts on the published Native AOT compiler
+        shell: pwsh
+        run: |
+          $source = 'contracts/scalar/v1/fixtures/literal-42.ores'
+          $raw = & ./artifacts/compiler/win-x64/oresnet.exe static-facts $source
+          if ($LASTEXITCODE -ne 0) { throw 'Native AOT static-facts command failed' }
+          $doc = (($raw -join "`n") | ConvertFrom-Json)
+          $sha = (Get-FileHash $source -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($doc.version -ne 'ores-static-facts/v0' -or
+              $doc.unit -cne "sha256:$sha" -or
+              @($doc.procedures).Count -ne 1 -or
+              $doc.procedures[0].id -ne '__root__.main/0' -or
+              @($doc.procedures[0].loops).Count -ne 0) {
+            throw 'Native AOT static-facts source identity/schema mismatch'
+          }
       - name: Adversarial scalar runner self-tests (Windows)
         shell: pwsh
         run: python contracts/scalar/v1/selftest.py
