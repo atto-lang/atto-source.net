@@ -15,6 +15,9 @@ if (!validCheck && !validCompile && !validStaticFacts)
 
 try
 {
+    if (validStaticFacts &&
+        !string.Equals(Path.GetExtension(args[1]), ".ores", StringComparison.OrdinalIgnoreCase))
+        throw new FormatException("Static-facts export requires a .ores source file");
     var source = ReadBoundedSource(args[1], rejectBom: validStaticFacts);
     if (validStaticFacts)
     {
@@ -55,6 +58,9 @@ static string ReadBoundedSource(string path, bool rejectBom = false)
     const int maxBytes = 1024 * 1024;
     var buffer = new byte[maxBytes + 1];
     using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+    // The advisory digest must describe the bytes actually admitted to
+    // parsing, not a concurrent writer's mix of two file generations.
+    var beforeWrite = rejectBom ? File.GetLastWriteTimeUtc(path) : DateTime.MinValue;
     int read = 0;
     while (read < buffer.Length)
     {
@@ -64,6 +70,23 @@ static string ReadBoundedSource(string path, bool rejectBom = false)
     }
     if (read > maxBytes)
         throw new FormatException("Source exceeds 1 MiB bootstrap limit");
+    if (rejectBom)
+    {
+        if (!stream.CanSeek || stream.Length != read)
+            throw new FormatException("Static-facts source length changed during snapshot");
+        var second = new byte[read];
+        stream.Seek(0, SeekOrigin.Begin);
+        var again = 0;
+        while (again < second.Length)
+        {
+            var n = stream.Read(second, again, second.Length - again);
+            if (n == 0) break;
+            again += n;
+        }
+        if (again != read || !buffer.AsSpan(0, read).SequenceEqual(second) ||
+            stream.Length != read || File.GetLastWriteTimeUtc(path) != beforeWrite)
+            throw new FormatException("Static-facts source changed during snapshot");
+    }
     var start = read >= 3 && buffer[0] == 0xef && buffer[1] == 0xbb && buffer[2] == 0xbf ? 3 : 0;
     // Never sign source *after* silently discarding bytes from an input.
     if (rejectBom && start != 0)
