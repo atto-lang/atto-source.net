@@ -83,6 +83,27 @@ internal static class StructuredSourceTests
                 Operator: StructuredOperator.Add
             } }, "arithmetic AST operator precedence");
 
+        var arithmetic76 = OresStructuredParser.Parse("""
+            pub fnc main(): int {
+              return 100 - (3 + 2) - 19;
+            }
+            """);
+        Require(arithmetic76.Body[0] is StructuredReturn {
+            Value: StructuredBinary {
+                Operator: StructuredOperator.Subtract,
+                Left: StructuredBinary {
+                    Operator: StructuredOperator.Subtract,
+                    Left: StructuredInt { Value: 100 },
+                    Right: StructuredBinary {
+                        Operator: StructuredOperator.Add,
+                        Left: StructuredInt { Value: 3 },
+                        Right: StructuredInt { Value: 2 }
+                    }
+                },
+                Right: StructuredInt { Value: 19 }
+            }
+        }, "shared arithmetic-76 typed AST");
+
         foreach (var operation in new[] { "ref", "unref", "deref", "deref mut", "raw" })
         {
             try { _ = OresStructuredParser.Parse(
