@@ -83,7 +83,7 @@ internal static class StaticFactsV0Tests
             "downstream 256-loop budget");
 
         Reject(() => StaticFactsV0Exporter.FromStructuredSource(
-            "fnc main():int{let bool go=true;while go { go = false; } return 0;}"),
+            "fnc main():int{let bool go=true;while go { go = 1; } return 0;}"),
             "wrong-type assignment");
         Reject(() => StaticFactsV0Exporter.FromStructuredSource(
             "fnc main():int{return side_effect();}"),
