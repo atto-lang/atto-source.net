@@ -15,12 +15,35 @@ static void Reject(Action action, string why)
     throw new Exception("Expected parser rejection: " + why);
 }
 
+static void RejectDiagnostic(Action action, string diagnostic, string why)
+{
+    try { action(); }
+    catch (FormatException ex) when
+        (ex.Message.Contains(diagnostic, StringComparison.OrdinalIgnoreCase)) { return; }
+    throw new Exception("Expected parser rejection with diagnostic '" + diagnostic + "': " + why);
+}
+
 static void InvalidSend(Action action, string why)
 {
     try { action(); }
     catch (InvalidOperationException) { return; }
     throw new Exception("Expected mailbox rejection: " + why);
 }
+
+// Opaque top types and value-producing conditionals are language-reserved,
+ // but this i64-only bootstrap has no tagged dynamic-value ABI or typed CFG
+ // lowering for them yet. Reject before OresIR/CIL emission.
+foreach (var opaque in new[] { "any", "unknown", "Any", "Unknown" })
+    RejectDiagnostic(
+        () => OresParser.Parse("fnc main():" + opaque + "{return 1;}"),
+        "tagged opaque-value ABI",
+        "opaque top type " + opaque);
+RejectDiagnostic(
+    () => OresParser.Parse("fnc main():int{return 1 ? 2 : 3;}"),
+    "ternary expression requires bool typing and CFG branch-merge lowering",
+    "ternary must not fall through to i64 CIL lowering");
+Require(OresParser.Parse("fnc main():int{return 1;} // any unknown ?") is Literal,
+    "opaque-top and ternary tokens in comments remain lexically invisible");
 
 SourceByteBudgetTests.Run();
 
