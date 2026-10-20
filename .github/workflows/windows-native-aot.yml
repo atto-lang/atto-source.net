@@ -75,8 +75,8 @@ jobs:
           $source = 'contracts/scalar/v1/fixtures/literal-42.ores'
           $raw = & ./artifacts/compiler/win-x64/oresnet.exe static-facts $source
           if ($LASTEXITCODE -ne 0) { throw 'Native AOT static-facts command failed' }
-          # Match the *entire* JSON byte-for-byte against the same commit's
-          # managed compiler: CI must not silently drift between the two.
+          # Compare the *entire* JSON text line-for-line against the same
+          # commit's managed compiler; PowerShell captures strings, not raw bytes.
           $managed = & dotnet run --no-build -c Release --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -- static-facts $source
           if ($LASTEXITCODE -ne 0) { throw 'Managed static-facts command failed' }
           if (($raw -join "`n") -cne ($managed -join "`n")) {
