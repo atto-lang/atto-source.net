@@ -45,6 +45,11 @@ jobs:
       - name: Verify compiler and runtime source
         shell: pwsh
         run: dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
+      - name: Verify shared advisory static facts from .NET compiler and typed structured parser
+        shell: pwsh
+        run: |
+          dotnet build compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release
+          ./verification/assert-static-facts-v0.ps1
       - name: Reject oversized and invalid UTF-8 compiler input
         shell: pwsh
         run: |
