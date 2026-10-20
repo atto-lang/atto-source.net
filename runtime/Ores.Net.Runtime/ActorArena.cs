@@ -18,22 +18,22 @@ public sealed unsafe class ActorArena : IDisposable
 
     public sealed class Turn
     {
-        private Turn() { }
+        internal Turn() { }
     }
     public sealed class Handle
     {
-        private readonly long Domain;
-        private readonly int Slot;
-        private readonly ulong Generation;
-        private Handle(long domain, int slot, ulong generation) =>
+        internal readonly long Domain;
+        internal readonly int Slot;
+        internal readonly ulong Generation;
+        internal Handle(long domain, int slot, ulong generation) =>
             (Domain, Slot, Generation) = (domain, slot, generation);
     }
     public sealed class Scratch
     {
-        private readonly long Domain;
-        private readonly Turn Turn;
-        private readonly int Offset, Length, Issuance;
-        private Scratch(long domain, Turn turn, int offset, int length, int issuance) =>
+        internal readonly long Domain;
+        internal readonly Turn Turn;
+        internal readonly int Offset, Length, Issuance;
+        internal Scratch(long domain, Turn turn, int offset, int length, int issuance) =>
             (Domain, Turn, Offset, Length, Issuance) =
             (domain, turn, offset, length, issuance);
     }
@@ -42,8 +42,8 @@ public sealed unsafe class ActorArena : IDisposable
     // Long.MaxValue is a permanent exhaustion sentinel and is never issued.
     private sealed class DomainCounter
     {
-        private long Next;
-        private DomainCounter(long next = 1) => Next = next;
+        internal long Next;
+        internal DomainCounter(long next = 1) => Next = next;
     }
 
     private static readonly DomainCounter s_domainCounter = new();
@@ -153,10 +153,11 @@ public sealed unsafe class ActorArena : IDisposable
             for (var i = 0; i < SlotCount; ++i)
             {
                 if (_slots[i].Live || _slots[i].Generation == 0) continue;
+                // Allocate the capability before publishing a live slot.
+                var handle = new Handle(_domain, i, _slots[i].Generation);
+                CryptographicOperations.ZeroMemory(new Span<byte>(_memory + i * SlotBytes, SlotBytes));
                 _slots[i].Live = true;
                 _slots[i].Length = length;
-                CryptographicOperations.ZeroMemory(new Span<byte>(_memory + i * SlotBytes, SlotBytes));
-                var handle = new Handle(_domain, i, _slots[i].Generation);
                 _issuedHandles[i] = handle;
                 return handle;
             }
