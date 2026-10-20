@@ -70,6 +70,9 @@ jobs:
             | tee "$RUNNER_TEMP/dop-net-evidence/test-output.txt"
           grep -Fq 'typed .NET CPU/GPU graph host contract: PASS' \
             "$RUNNER_TEMP/dop-net-evidence/test-output.txt"
+          # Preserve the distinct early-worker interruption admission proof.
+          grep -Fq 'typed .NET pre-admission interruption: PASS' \
+            "$RUNNER_TEMP/dop-net-evidence/test-output.txt"
           printf 'DOP_NET_GRAPH_TESTS=PASS\n' > "$RUNNER_TEMP/dop-net-evidence/test-outcome.txt"
       - name: Retain bounded exact-head evidence
         if: ${{ always() && steps.provenance.outcome == 'success' }}
