@@ -63,5 +63,13 @@ $withBomBytes[2] = 0xbf
 & dotnet run --no-build -c Release --project $compiler -- static-facts $withBom *> $null
 if ($LASTEXITCODE -eq 0) { throw 'BOM source was silently signed after stripping bytes' }
 
+# A source file in another format cannot be quietly relabelled and signed.
+$wrongExt = Join-Path $env:RUNNER_TEMP 'net-static-facts-other.txt'
+Copy-Item -LiteralPath $scalar -Destination $wrongExt -Force
+& dotnet run --no-build -c Release --project $compiler -- static-facts $wrongExt *> $null
+if ($LASTEXITCODE -eq 0) {
+    throw 'Static facts accepted a source file without the .ores extension'
+}
+
 $global:LASTEXITCODE = 0  # expected failed negative executions
 Write-Host 'Oreslang .NET static-facts/v0 CLI, byte identity and fail-closed tests passed'
