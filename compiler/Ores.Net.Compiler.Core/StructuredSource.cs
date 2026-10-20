@@ -355,6 +355,17 @@ public static class OresStructuredParser
         private StructuredExpr Unary(int depth)
         {
             Budget(depth);
+            if (Current.Text == "rt")
+            {
+                int at = Current.Offset;
+                index++;
+                string operation = Current.Text;
+                if (operation is "ref" or "unref" or "deref" or "raw")
+                    throw new FormatException(
+                        $"Pointer operation 'rt {operation}' requires provenance-checked pointer lowering; unsupported in the .NET structured backend at offset {at}");
+                throw new FormatException(
+                    $"Runtime ownership operation requires typed lowering; unsupported in the .NET structured backend at offset {at}");
+            }
             if (Take("+"))
             {
                 var operand = Unary(depth + 1);

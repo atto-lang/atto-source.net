@@ -230,6 +230,17 @@ public static class OresParser
         private Expression ParseUnary(int depth)
         {
             CheckDepth(depth);
+            if (Current.Text == "rt")
+            {
+                int at = Current.Offset;
+                _index++;
+                string operation = Current.Text;
+                if (operation is "ref" or "unref" or "deref" or "raw")
+                    throw new FormatException(
+                        $"Pointer operation 'rt {operation}' requires provenance-checked pointer lowering; unsupported in the .NET scalar backend at offset {at}");
+                throw new FormatException(
+                    $"Runtime ownership operation requires typed lowering; unsupported in the .NET scalar backend at offset {at}");
+            }
             if (Take("+")) return new Unary('+', ParseUnary(depth + 1));
             if (Take("-"))
             {
