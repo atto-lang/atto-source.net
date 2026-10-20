@@ -38,9 +38,10 @@ There are no verified source spans in this v0 JSON. The structured parser contai
 dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
 dotnet build compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release
 ./verification/assert-static-facts-v0.ps1
+python3 scripts/verify_net_static_facts_v0.py
 ```
 
-Both the .NET verifier harness and the `Windows Native AOT` GitHub Actions workflow include static-facts tests. These test signed-i64 admission and rejection, JSON determinism and SHA-256 identity, structured-loop unproved semantics, unsupported calls/characters, budget failures, CLI strict-profile rejection, and an exact-byte BOM negative case.
+Both the .NET verifier harness and the `Windows Native AOT` GitHub Actions workflow include static-facts tests. The `linux-aot-diagnostic` job also runs `verify_net_static_facts_v0.py` against the *actual* managed .NET CLI (not a fixture-only model), checking exact source-byte identity, v0 wire shape, unknown loops, unsupported source syntax and strict-profile rejection. These test signed-i64 admission and rejection, JSON determinism and SHA-256 identity, structured-loop unproved semantics, unsupported calls/characters, budget failures, CLI strict-profile rejection, and an exact-byte BOM negative case.
 
 **Do not claim green CI or actual Native AOT parity until the exact PR head's hosted Windows workflow executes its steps successfully.** At the time of authoring, historical Actions runs on this private organization have often failed without executing test steps; source code and tests checked into GitHub are not runtime evidence. Private source cannot be sent to an alternate GitHub organization by bypassing a connector-level security restriction.
 
