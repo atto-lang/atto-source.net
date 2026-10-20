@@ -104,6 +104,21 @@ internal static class StructuredSourceTests
             }
         }, "shared arithmetic-76 typed AST");
 
+        foreach (var operation in new[] { "ref", "unref", "deref", "deref mut", "raw" })
+        {
+            try { _ = OresStructuredParser.Parse(
+                $"fnc main():int{{return rt {operation} value;}}"); }
+            catch (FormatException ex)
+            {
+                Require(ex.Message.Contains("requires provenance-checked pointer lowering",
+                    StringComparison.Ordinal),
+                    "structured pointer rejection must name provenance lowering");
+                continue;
+            }
+            throw new Exception("Structured source incorrectly accepted pointer operation: rt " +
+                operation);
+        }
+
         // AST height must be bounded even when the source is a flat chain.
         // Grammar recursion depth alone cannot enforce this invariant.
         var maxHeightExpression = string.Join("+", Enumerable.Repeat("1", 128));
