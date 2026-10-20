@@ -30,53 +30,62 @@ if (@($scalarFacts.procedures[0].loops).Count -ne 0) {
 }
 
 $tempRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [IO.Path]::GetTempPath() }
-$structured = Join-Path $tempRoot ('net-static-facts-structured-' + [Guid]::NewGuid().ToString('N') + '.ores')
-$source = "fnc main():int{let int x=0;while x<2{x=x+1;}return x;}"
-[IO.File]::WriteAllText($structured, $source, [Text.UTF8Encoding]::new($false))
-$structuredFacts = Invoke-Facts 'static-facts-structured' $structured
-$loops = @($structuredFacts.procedures[0].loops)
-if ($loops.Count -ne 1 -or $loops[0].id -ne 'L1' -or
-    $loops[0].exit -ne 'unknown' -or $loops[0].safepoint -ne $false) {
-    throw 'Structured while loop lost unknown exit/safepoint status'
+# A persistent self-hosted runner must not retain source-derived fixtures
+# if any assertion fails halfway through the negative-test sequence.
+$structured = $null
+$withBom = $null
+$wrongExt = $null
+try {
+    $structured = Join-Path $tempRoot ('net-static-facts-structured-' + [Guid]::NewGuid().ToString('N') + '.ores')
+    $source = "fnc main():int{let int x=0;while x<2{x=x+1;}return x;}"
+    [IO.File]::WriteAllText($structured, $source, [Text.UTF8Encoding]::new($false))
+    $structuredFacts = Invoke-Facts 'static-facts-structured' $structured
+    $loops = @($structuredFacts.procedures[0].loops)
+    if ($loops.Count -ne 1 -or $loops[0].id -ne 'L1' -or
+        $loops[0].exit -ne 'unknown' -or $loops[0].safepoint -ne $false) {
+        throw 'Structured while loop lost unknown exit/safepoint status'
+    }
+
+    # The shipping executable subset does not allow loops, even if the
+    # experimental structured checker understands them.
+    & dotnet run --no-build -c Release --project $compiler -- static-facts $structured *> $null
+    if ($LASTEXITCODE -eq 0) {
+        throw 'Shipping scalar verifier accidentally accepted structured while'
+    }
+
+    # No strict admission profile exists for unsigned advisory facts.
+    & dotnet run --no-build -c Release --project $compiler -- static-facts $scalar hard *> $null
+    if ($LASTEXITCODE -ne 2) {
+        throw "Unexpected strict-profile CLI result: $LASTEXITCODE"
+    }
+
+    $withBom = Join-Path $tempRoot ('net-static-facts-bom-' + [Guid]::NewGuid().ToString('N') + '.ores')
+    $payload = [Text.Encoding]::UTF8.GetBytes('fnc main():int{return 42;}')
+    $withBomBytes = [byte[]]::new(3 + $payload.Length)
+    $withBomBytes[0] = 0xef
+    $withBomBytes[1] = 0xbb
+    $withBomBytes[2] = 0xbf
+    [Array]::Copy($payload, 0, $withBomBytes, 3, $payload.Length)
+    [IO.File]::WriteAllBytes($withBom, $withBomBytes)
+    & dotnet run --no-build -c Release --project $compiler -- static-facts $withBom *> $null
+    if ($LASTEXITCODE -eq 0) { throw 'BOM source was silently signed after stripping bytes' }
+
+    # A source file in another format cannot be quietly relabelled and signed.
+    $wrongExt = Join-Path $tempRoot ('net-static-facts-other-' + [Guid]::NewGuid().ToString('N') + '.txt')
+    Copy-Item -LiteralPath $scalar -Destination $wrongExt -Force
+    & dotnet run --no-build -c Release --project $compiler -- static-facts $wrongExt *> $null
+    if ($LASTEXITCODE -eq 0) {
+        throw 'Static facts accepted a source file without the .ores extension'
+    }
+
+        $global:LASTEXITCODE = 0  # expected failed negative executions
+        Write-Host 'Oreslang .NET static-facts/v0 CLI, byte identity and fail-closed tests passed'
 }
-
-# The shipping executable subset does not allow loops, even if the
-# experimental structured checker understands them.
-& dotnet run --no-build -c Release --project $compiler -- static-facts $structured *> $null
-if ($LASTEXITCODE -eq 0) {
-    throw 'Shipping scalar verifier accidentally accepted structured while'
-}
-
-# No strict admission profile exists for unsigned advisory facts.
-& dotnet run --no-build -c Release --project $compiler -- static-facts $scalar hard *> $null
-if ($LASTEXITCODE -ne 2) {
-    throw "Unexpected strict-profile CLI result: $LASTEXITCODE"
-}
-
-$withBom = Join-Path $tempRoot ('net-static-facts-bom-' + [Guid]::NewGuid().ToString('N') + '.ores')
-$payload = [Text.Encoding]::UTF8.GetBytes('fnc main():int{return 42;}')
-$withBomBytes = [byte[]]::new(3 + $payload.Length)
-$withBomBytes[0] = 0xef
-$withBomBytes[1] = 0xbb
-$withBomBytes[2] = 0xbf
-[Array]::Copy($payload, 0, $withBomBytes, 3, $payload.Length)
-[IO.File]::WriteAllBytes($withBom, $withBomBytes)
-& dotnet run --no-build -c Release --project $compiler -- static-facts $withBom *> $null
-if ($LASTEXITCODE -eq 0) { throw 'BOM source was silently signed after stripping bytes' }
-
-# A source file in another format cannot be quietly relabelled and signed.
-$wrongExt = Join-Path $tempRoot ('net-static-facts-other-' + [Guid]::NewGuid().ToString('N') + '.txt')
-Copy-Item -LiteralPath $scalar -Destination $wrongExt -Force
-& dotnet run --no-build -c Release --project $compiler -- static-facts $wrongExt *> $null
-if ($LASTEXITCODE -eq 0) {
-    throw 'Static facts accepted a source file without the .ores extension'
-}
-
-# Remove generated files even when the workflow runs on a persistent self-hosted runner.
-foreach ($fixture in @($structured, $withBom, $wrongExt)) {
-    if (Test-Path -LiteralPath $fixture) {
-        Remove-Item -LiteralPath $fixture -Force
+finally {
+    foreach ($fixture in @($structured, $withBom, $wrongExt)) {
+        if (-not [string]::IsNullOrWhiteSpace($fixture) -and
+            (Test-Path -LiteralPath $fixture)) {
+            Remove-Item -LiteralPath $fixture -Force
+        }
     }
 }
-$global:LASTEXITCODE = 0  # expected failed negative executions
-Write-Host 'Oreslang .NET static-facts/v0 CLI, byte identity and fail-closed tests passed'
