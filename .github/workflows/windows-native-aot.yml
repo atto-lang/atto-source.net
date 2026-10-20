@@ -8,18 +8,24 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: native-aot-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   windows-x64:
     runs-on: windows-2022
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
       - name: Verify pinned Sendable Serializable DATA CONTROL contract
         run: python scripts/verify_serde_contract.py
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: '10.0.x'
       - name: Validate PowerShell verification syntax
@@ -58,6 +64,15 @@ jobs:
       - name: Exercise the released Native AOT compiler CLI
         shell: pwsh
         run: ./verification/assert-native-compiler-cli.ps1 -Compiler ./artifacts/compiler/win-x64/oresnet.exe -ValidSource examples/hello.ores
+      - name: Adversarial scalar runner self-tests (Windows)
+        shell: pwsh
+        run: python contracts/scalar/v1/selftest.py
+      - name: Shared scalar source admission on the released Native AOT compiler
+        shell: pwsh
+        run: >
+          python contracts/scalar/v1/run.py --backend net --mode admission
+          --command './artifacts/compiler/win-x64/oresnet.exe check {source}'
+          --revision '${{ github.sha }}' --report artifacts/scalar-parity-net-win-x64.json
       - name: Execute real Windows Native AOT binary
         shell: pwsh
         run: |
@@ -155,6 +170,13 @@ jobs:
         run: ./verification/assert-aot-gates.ps1 -Rid linux-x64
       - name: Run frontend, metadata and mailbox regressions
         run: dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
+      - name: Adversarial scalar runner self-tests (Linux)
+        run: python3 contracts/scalar/v1/selftest.py
+      - name: Shared scalar source admission diagnostic (managed compiler only)
+        run: >
+          python3 contracts/scalar/v1/run.py --backend net --mode admission
+          --command 'dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -- check {source}'
+          --revision '${{ github.sha }}' --report artifacts/scalar-parity-net-linux-diagnostic.json
       - name: Emit generated CIL using the compiler
         run: |
           mkdir -p artifacts/generated
