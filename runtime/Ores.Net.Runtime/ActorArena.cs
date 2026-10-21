@@ -200,6 +200,8 @@ public unsafe sealed class ActorArena : IDisposable
     private readonly int _scratchPhysicalBytes;
     private readonly int _maxLifetimePins;
     private readonly int _maxReadLoans;
+    private readonly ActorArenaBudget _budget;
+    private readonly int _budgetBytes;
     private readonly Slot[] _slots;
     private readonly int[] _freeSlots;
 
@@ -217,13 +219,15 @@ public unsafe sealed class ActorArena : IDisposable
     private bool _turnActive;
     private bool _retired;
     private bool _reclaimed;
+    private bool _budgetRefunded;
 
     public ActorArena(ulong actorId, ulong incarnation,
         int persistentBytes = 8 * 1024 * 1024,
         int scratchBytes = 1024 * 1024,
         int maxAllocations = 4096,
         int maxLifetimePins = 4096,
-        int maxReadLoans = 4096)
+        int maxReadLoans = 4096,
+        ActorArenaBudget? budget = null)
     {
         if (actorId == 0)
             throw new ArgumentOutOfRangeException(nameof(actorId));
@@ -252,20 +256,25 @@ public unsafe sealed class ActorArena : IDisposable
         _scratchPhysicalBytes = RoundUp(scratchBytes, SlabAlignment);
         _maxLifetimePins = maxLifetimePins;
         _maxReadLoans = maxReadLoans;
+        _budget = budget ?? ActorArenaBudget.Process;
+        _budgetBytes = checked(_persistentPhysicalBytes + _scratchPhysicalBytes);
         _slots = new Slot[maxAllocations];
         _freeSlots = new int[maxAllocations];
 
-        _authority = Guid.NewGuid();
-        if (_authority == Guid.Empty)
-            throw new InvalidOperationException("Actor arena authority must not be empty");
-
-        _persistent = (byte*)NativeMemory.AlignedAlloc(
-            checked((nuint)_persistentPhysicalBytes), (nuint)SlabAlignment);
-        if (_persistent == null)
-            throw new OutOfMemoryException("Unable to reserve persistent actor arena");
-
+        _budget.Reserve(_budgetBytes);
         try
         {
+            _authority = Guid.NewGuid();
+            if (_authority == Guid.Empty)
+                throw new InvalidOperationException(
+                    "Actor arena authority must not be empty");
+
+            _persistent = (byte*)NativeMemory.AlignedAlloc(
+                checked((nuint)_persistentPhysicalBytes), (nuint)SlabAlignment);
+            if (_persistent == null)
+                throw new OutOfMemoryException(
+                    "Unable to reserve persistent actor arena");
+
             _scratch = (byte*)NativeMemory.AlignedAlloc(
                 checked((nuint)_scratchPhysicalBytes), (nuint)SlabAlignment);
             if (_scratch == null)
@@ -276,8 +285,18 @@ public unsafe sealed class ActorArena : IDisposable
         }
         catch
         {
-            NativeMemory.AlignedFree(_persistent);
-            _persistent = null;
+            if (_scratch != null)
+            {
+                NativeMemory.AlignedFree(_scratch);
+                _scratch = null;
+            }
+            if (_persistent != null)
+            {
+                NativeMemory.AlignedFree(_persistent);
+                _persistent = null;
+            }
+            _budget.Refund(_budgetBytes);
+            _budgetRefunded = true;
             throw;
         }
     }
@@ -286,6 +305,7 @@ public unsafe sealed class ActorArena : IDisposable
     public ulong Incarnation => _incarnation;
     public int PersistentCapacityBytes => _persistentCapacity;
     public int ScratchCapacityBytes => _scratchCapacity;
+    public int ReservedNativeBytes => _budgetBytes;
 
     public bool IsRetired
     {
@@ -696,6 +716,12 @@ public unsafe sealed class ActorArena : IDisposable
             Zero(_scratch, _scratchPhysicalBytes);
             NativeMemory.AlignedFree(_scratch);
             _scratch = null;
+        }
+
+        if (!_budgetRefunded)
+        {
+            _budget.Refund(_budgetBytes);
+            _budgetRefunded = true;
         }
 
         Array.Clear(_slots, 0, _slots.Length);

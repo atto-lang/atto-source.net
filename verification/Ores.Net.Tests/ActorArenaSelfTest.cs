@@ -7,6 +7,7 @@ internal static class ActorArenaSelfTest
         PersistentAndScratchLifetimes();
         ReadLoanFreezesAllocationAcrossTurns();
         LifetimePinDelaysPhysicalReclaim();
+        AggregateBudgetAdmissionIsNeutral();
         RetirementSealsAdmissionButAllowsTurnCleanup();
         CrossArenaAuthorityAndGenerationFences();
         Console.WriteLine("PASS .NET actor-owned unmanaged arena, loans, pins and quiescent reclaim");
@@ -137,6 +138,56 @@ internal static class ActorArenaSelfTest
         Require(arena.IsReclaimed, "last lifetime pin triggers physical reclaim");
         Require(arena.TryReclaim(), "reclaim is idempotent after physical release");
         arena.Dispose();
+    }
+
+    private static void AggregateBudgetAdmissionIsNeutral()
+    {
+        const int reserved = 1280;
+        var budget = new ActorArenaBudget(reserved);
+
+        var first = new ActorArena(
+            actorId: 3501, incarnation: 1,
+            persistentBytes: 1024, scratchBytes: 256,
+            maxAllocations: 4, maxLifetimePins: 2, maxReadLoans: 2,
+            budget: budget);
+        Require(first.ReservedNativeBytes == reserved &&
+            budget.ReservedBytes == reserved,
+            "arena reserves aggregate native capacity before use");
+
+        ExpectInvalid(() => _ = new ActorArena(
+            actorId: 3502, incarnation: 1,
+            persistentBytes: 1024, scratchBytes: 256,
+            maxAllocations: 4, maxLifetimePins: 2, maxReadLoans: 2,
+            budget: budget),
+            "aggregate budget denies second arena");
+        Require(budget.ReservedBytes == reserved,
+            "failed aggregate admission is accounting-neutral");
+
+        Require(first.Retire(), "quiescent arena reclaims immediately");
+        Require(budget.ReservedBytes == 0,
+            "physical reclaim refunds aggregate arena capacity");
+        first.Dispose();
+
+        var replacement = new ActorArena(
+            actorId: 3503, incarnation: 1,
+            persistentBytes: 1024, scratchBytes: 256,
+            maxAllocations: 4, maxLifetimePins: 2, maxReadLoans: 2,
+            budget: budget);
+        Require(budget.ReservedBytes == reserved,
+            "refunded native capacity can be admitted by a new actor");
+        replacement.Dispose();
+        Require(budget.ReservedBytes == 0,
+            "replacement retirement refunds exactly once");
+
+        var tooSmall = new ActorArenaBudget(reserved - 1);
+        ExpectInvalid(() => _ = new ActorArena(
+            actorId: 3504, incarnation: 1,
+            persistentBytes: 1024, scratchBytes: 256,
+            maxAllocations: 4, maxLifetimePins: 2, maxReadLoans: 2,
+            budget: tooSmall),
+            "constructor rejected by aggregate budget");
+        Require(tooSmall.ReservedBytes == 0,
+            "rejected constructor consumes no aggregate reservation");
     }
 
     private static void RetirementSealsAdmissionButAllowsTurnCleanup()
