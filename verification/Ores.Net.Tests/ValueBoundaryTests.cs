@@ -17,7 +17,16 @@ internal static class ValueBoundaryTests
             Reject(() => { _ = OresParser.Parse(source); }, name + "/shipping");
             Reject(() => { _ = OresStructuredParser.Parse(source); }, name + "/structured");
         }
-        Console.WriteLine($"{cases.Count} value boundary cases rejected by both frontends");
+        var taskPath = Path.Combine(AppContext.BaseDirectory, "cpu-gpu-task-unsupported-v2.json");
+        var taskCases = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(taskPath))
+            ?? throw new Exception("Missing CPU/GPU task v2 corpus");
+        if (taskCases.Count != 10) throw new Exception("Incomplete CPU/GPU task v2 corpus");
+        foreach (var (name, source) in taskCases)
+        {
+            Reject(() => { _ = OresParser.Parse(source); }, name + "/task-v2/shipping");
+            Reject(() => { _ = OresStructuredParser.Parse(source); }, name + "/task-v2/structured");
+        }
+        Console.WriteLine($"{cases.Count} value boundary + {taskCases.Count} CPU/GPU task v2 cases rejected by both frontends");
     }
 
     private static void Reject(Action parse, string name)
