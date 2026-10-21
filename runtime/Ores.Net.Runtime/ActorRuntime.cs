@@ -116,6 +116,38 @@ public sealed class ActorContext
     public ActorShardColumns CreateShard(int rows, int fields,
         ActorDataLayout layout, int lanes = 1) =>
         new(_arena, _turn, rows, fields, layout, lanes);
+
+    public double ReadShard(ActorShardColumns shard, int row, int field)
+    {
+        ArgumentNullException.ThrowIfNull(shard);
+        return shard.Read(_turn, row, field);
+    }
+
+    public void WriteShard(ActorShardColumns shard, int row, int field, double value)
+    {
+        ArgumentNullException.ThrowIfNull(shard);
+        shard.Write(_turn, row, field, value);
+    }
+
+    public void IntegrateShard(ActorShardColumns shard,
+        int positionField, int velocityField, double dt)
+    {
+        ArgumentNullException.ThrowIfNull(shard);
+        shard.Integrate(_turn, positionField, velocityField, dt);
+    }
+
+    public void CopyShardColumnInto(ActorShardColumns shard, int field,
+        Span<double> destination)
+    {
+        ArgumentNullException.ThrowIfNull(shard);
+        shard.CopyColumnInto(_turn, field, destination);
+    }
+
+    public void ReleaseShard(ActorShardColumns shard)
+    {
+        ArgumentNullException.ThrowIfNull(shard);
+        shard.Release(_turn);
+    }
 }
 
 /// <summary>
@@ -350,7 +382,7 @@ public sealed class ActorRuntime : IDisposable
             while (processed < _options.MessagesPerDispatch)
             {
                 byte[]? payload;
-                ActorArenaTurn? turn;
+                ActorArenaTurn turn;
 
                 lock (cell.Gate)
                 {
@@ -363,6 +395,7 @@ public sealed class ActorRuntime : IDisposable
                         cell.Reference.Id, cell.Reference.Generation);
                 }
 
+                bool succeeded = false;
                 try
                 {
                     using (turn)
@@ -371,7 +404,7 @@ public sealed class ActorRuntime : IDisposable
                             cell.Reference, cell.Kind, cell.Arena, turn);
                         cell.Handler(context, payload);
                     }
-                    Interlocked.Increment(ref _completedMessages);
+                    succeeded = true;
                 }
                 catch (Exception)
                 {
@@ -382,6 +415,8 @@ public sealed class ActorRuntime : IDisposable
                 finally
                 {
                     CryptographicOperations.ZeroMemory(payload);
+                    if (succeeded)
+                        Interlocked.Increment(ref _completedMessages);
                 }
 
                 processed++;
