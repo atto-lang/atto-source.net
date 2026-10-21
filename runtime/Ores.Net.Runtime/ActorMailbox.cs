@@ -125,7 +125,7 @@ public sealed class ActorMailbox
 
         // Match Forge: check receiver authority before disclosing payload sizes.
         if (length > MaxMessageBytes)
-            throw new ArgumentOutOfRangeException(nameof(length), "Message exceeds 1 MiB");
+            throw new ArgumentOutOfRangeException("data", "Message exceeds 1 MiB");
         if (length < 0)
             throw new ArgumentOutOfRangeException(nameof(length));
         if (_messages.Count >= _maxMessages || _queuedBytes > _maxQueuedBytes ||

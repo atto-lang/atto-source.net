@@ -18,7 +18,10 @@ Every live actor owns:
 
 There is no thread pool per actor. The runtime owns exactly three actor execution
 domains. Pool structures exist when the runtime is created, but carrier threads
-are created lazily when the corresponding domain first receives work.
+are created lazily when the corresponding domain first receives work. Each domain
+has a maximum of 256 configured workers and 65,536 queued work tokens. Even
+on systems reporting very high CPU counts, default worker counts are clamped
+to that bound before thread creation.
 
 CONTROL is not a fourth carrier pool. Stop and fault are control-state changes on
 the actor cell. An already admitted actor-domain dispatch performs finalization

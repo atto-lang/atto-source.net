@@ -445,40 +445,40 @@ public sealed class ActorRuntime : IDisposable
         }
         finally
         {
-            lock (cell.Gate)
+            try
             {
-                cell.Scheduled = 0;
-                if (cell.Stopping)
+                lock (cell.Gate)
                 {
-                    finalize = true;
-                }
-                else if (cell.Mailbox.QueuedMessages != 0)
-                {
-                    try
+                    cell.Scheduled = 0;
+                    if (cell.Stopping)
                     {
-                        if (!TryScheduleLocked(cell))
+                        finalize = true;
+                    }
+                    else if (cell.Mailbox.QueuedMessages != 0)
+                    {
+                        try
+                        {
+                            if (!TryScheduleLocked(cell))
+                            {
+                                MarkStoppingLocked(cell);
+                                finalize = true;
+                            }
+                        }
+                        catch
                         {
                             MarkStoppingLocked(cell);
                             finalize = true;
                         }
                     }
-                    catch
-                    {
-                        MarkStoppingLocked(cell);
-                        finalize = true;
-                    }
                 }
-            }
 
-            try
-            {
                 if (finalize)
                     FinalizeCell(cell);
             }
             finally
             {
-                // Never leave thread-static runtime identity behind if
-                // finalization itself throws on a reusable carrier.
+                // Even a failure during dispatch-token teardown must not
+                // poison a reusable carrier's thread-static runtime identity.
                 s_currentRuntime = previous;
             }
         }

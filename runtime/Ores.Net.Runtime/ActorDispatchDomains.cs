@@ -21,6 +21,9 @@ public enum ActorKind
 /// </summary>
 public sealed class ActorDispatcherOptions
 {
+    public const int MaxWorkersPerDomain = 256;
+    public const int MaxQueueCapacityPerDomain = 65_536;
+
     public int PrivateWorkers { get; init; } = DefaultPrivateWorkers();
     public int SharedWorkers { get; init; } = DefaultSharedWorkers();
     public int UntrustedWorkers { get; init; } = DefaultUntrustedWorkers();
@@ -28,33 +31,36 @@ public sealed class ActorDispatcherOptions
 
     internal void Validate()
     {
-        if (PrivateWorkers <= 0)
+        if (PrivateWorkers <= 0 || PrivateWorkers > MaxWorkersPerDomain)
             throw new ArgumentOutOfRangeException(nameof(PrivateWorkers));
-        if (SharedWorkers <= 0)
+        if (SharedWorkers <= 0 || SharedWorkers > MaxWorkersPerDomain)
             throw new ArgumentOutOfRangeException(nameof(SharedWorkers));
-        if (UntrustedWorkers <= 0)
+        if (UntrustedWorkers <= 0 || UntrustedWorkers > MaxWorkersPerDomain)
             throw new ArgumentOutOfRangeException(nameof(UntrustedWorkers));
-        if (QueueCapacityPerDomain <= 0)
+        if (QueueCapacityPerDomain <= 0 ||
+            QueueCapacityPerDomain > MaxQueueCapacityPerDomain)
             throw new ArgumentOutOfRangeException(nameof(QueueCapacityPerDomain));
     }
 
     private static int DefaultPrivateWorkers()
     {
         int cores = Math.Max(1, Environment.ProcessorCount);
-        return cores == 1 ? 1 : Math.Max(1, cores / 2);
+        return Math.Min(MaxWorkersPerDomain,
+            cores == 1 ? 1 : Math.Max(1, cores / 2));
     }
 
     private static int DefaultSharedWorkers()
     {
         int cores = Math.Max(1, Environment.ProcessorCount);
-        return cores <= 2 ? 1 : Math.Max(1, (cores - DefaultPrivateWorkers()) / 2);
+        return Math.Min(MaxWorkersPerDomain,
+            cores <= 2 ? 1 : Math.Max(1, (cores - DefaultPrivateWorkers()) / 2));
     }
 
     private static int DefaultUntrustedWorkers()
     {
         int cores = Math.Max(1, Environment.ProcessorCount);
         int used = DefaultPrivateWorkers() + DefaultSharedWorkers();
-        return Math.Max(1, cores - used);
+        return Math.Min(MaxWorkersPerDomain, Math.Max(1, cores - used));
     }
 }
 
