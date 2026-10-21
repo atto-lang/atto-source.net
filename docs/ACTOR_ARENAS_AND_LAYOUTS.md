@@ -18,8 +18,10 @@ threads; it must end the turn and admit a new one on resume.
 
 - **Aggregate budget** — each arena reserves its aligned persistent + scratch capacity against a runtime/process `ActorArenaBudget` before native allocation; failed admission is accounting-neutral and physical reclaim refunds exactly once.\n- **Persistent region** — native aligned storage that survives actor turns.
   Allocations use opaque arena/slot/generation capabilities. Partial frees never
-  relocate live bytes; when the final allocation is dropped the persistent bump
-  region is scrubbed and recycled.
+  relocate live bytes. Dropping the current tail rewinds the bump pointer
+  immediately, allowing repeated LIFO transients next to a permanent actor
+  root without exhaustion. Interior holes are not yet reused. When the final
+  allocation is dropped, the entire persistent bump region is scrubbed and recycled.
 - **Scratch region** — native turn-scoped bump storage. Every turn exit scrubs the
   used scratch prefix and invalidates all scratch capabilities by turn epoch.
 - **Read loan** — may survive suspension and carrier migration. It prevents write

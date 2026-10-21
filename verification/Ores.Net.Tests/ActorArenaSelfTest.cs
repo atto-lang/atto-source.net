@@ -10,6 +10,7 @@ internal static class ActorArenaSelfTest
         LifetimePinDelaysPhysicalReclaim();
         AggregateBudgetAdmissionIsNeutral();
         RuntimeBudgetsAlsoChargeProcessLimit();
+        PersistentRootWithTailTempsDoesNotExhaustArena();
         RetirementSealsAdmissionButAllowsTurnCleanup();
         CrossArenaAuthorityAndGenerationFences();
         ForgedMetadataCannotAcquireMemoryAuthority();
@@ -214,6 +215,40 @@ internal static class ActorArenaSelfTest
         Require(tenant.ReservedBytes == 0 &&
                 ActorArenaBudget.Process.ReservedBytes == processBefore,
             "physical reclamation refunds both budgets exactly once");
+    }
+
+    private static void PersistentRootWithTailTempsDoesNotExhaustArena()
+    {
+        using var arena = new ActorArena(
+            actorId: 9701, incarnation: 1,
+            persistentBytes: 128, scratchBytes: 64,
+            maxAllocations: 4, maxLifetimePins: 2, maxReadLoans: 2);
+
+        ActorArenaHandle root;
+        using (var turn = arena.EnterTurn(9701, 1))
+        {
+            root = arena.AllocatePersistent(turn, 8, alignment: 8);
+            arena.Write(turn, root, 0, new byte[] { 0x63 });
+        }
+
+        for (int i = 0; i < 2048; i++)
+        {
+            using var turn = arena.EnterTurn(9701, 1);
+            var temporary = arena.AllocatePersistent(turn, 64, alignment: 8);
+            arena.Write(turn, temporary, 0, new byte[] { 0xCD });
+            arena.ReleasePersistent(turn, temporary);
+
+            var check = new byte[1];
+            arena.Read(turn, root, 0, check);
+            Require(check[0] == 0x63, "persistent root survives transient tail release");
+            Require(arena.LiveAllocations == 1 && arena.PersistentLiveBytes == 8,
+                "only the persistent root retains actor-owned bytes");
+        }
+
+        using (var turn = arena.EnterTurn(9701, 1))
+            arena.ReleasePersistent(turn, root);
+        Require(arena.LiveAllocations == 0 && arena.PersistentLiveBytes == 0,
+            "root finally drops without leaving transient arena allocations");
     }
 
     private static void RetirementSealsAdmissionButAllowsTurnCleanup()
