@@ -276,10 +276,9 @@ public sealed class ActorRuntime : IDisposable
             if (cell.Stopping || !cell.Mailbox.Authorizes(destination))
                 throw new InvalidOperationException(
                     "Actor reference is stale or actor is stopping");
-
-            // Reject invalid DATA before lazily starting a carrier. The cell
-            // gate prevents a concurrent Stop from changing admission state.
-            cell.Mailbox.ValidateSend(destination, payload.Length);
+            // Do not start a carrier for a message that cannot enter the
+            // mailbox. Send revalidates after scheduling before publication.
+            cell.Mailbox.ValidateAdmission(destination, payload.Length);
 
             // Publish the dispatch token before the message while holding the
             // cell gate. A newly-started carrier blocks on this same gate, so
@@ -446,40 +445,40 @@ public sealed class ActorRuntime : IDisposable
         }
         finally
         {
-            lock (cell.Gate)
+            try
             {
-                cell.Scheduled = 0;
-                if (cell.Stopping)
+                lock (cell.Gate)
                 {
-                    finalize = true;
-                }
-                else if (cell.Mailbox.QueuedMessages != 0)
-                {
-                    try
+                    cell.Scheduled = 0;
+                    if (cell.Stopping)
                     {
-                        if (!TryScheduleLocked(cell))
+                        finalize = true;
+                    }
+                    else if (cell.Mailbox.QueuedMessages != 0)
+                    {
+                        try
+                        {
+                            if (!TryScheduleLocked(cell))
+                            {
+                                MarkStoppingLocked(cell);
+                                finalize = true;
+                            }
+                        }
+                        catch
                         {
                             MarkStoppingLocked(cell);
                             finalize = true;
                         }
                     }
-                    catch
-                    {
-                        MarkStoppingLocked(cell);
-                        finalize = true;
-                    }
                 }
-            }
 
-            try
-            {
                 if (finalize)
                     FinalizeCell(cell);
             }
             finally
             {
-                // Never leave thread-static runtime identity behind if
-                // finalization itself throws on a reusable carrier.
+                // Even a failure during dispatch-token teardown must not
+                // poison a reusable carrier's thread-static runtime identity.
                 s_currentRuntime = previous;
             }
         }

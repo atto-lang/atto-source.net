@@ -7,7 +7,7 @@ internal static class ActorRuntimeSelfTest
     {
         ThreeKindsUseAssignedDomainsAndActorArenas();
         UnknownActorKindFailsBeforeNativeAllocation();
-        InvalidSendDoesNotStartCarrier();
+        RejectedMessagesDoNotStartCarriers();
         OneActorNeverRunsTwoHandlersConcurrently();
         DeliveredMessageStorageIsTurnBound();
         PersistentShardSurvivesAcrossActorTurns();
@@ -38,32 +38,31 @@ internal static class ActorRuntimeSelfTest
             "invalid kind must not consume actor, native-memory or carrier capacity");
     }
 
-    private static void InvalidSendDoesNotStartCarrier()
+    private static void RejectedMessagesDoNotStartCarriers()
     {
         using var runtime = new ActorRuntime(Options());
-        var actor = runtime.Spawn(ActorKind.Private,
-            static (_, _) => throw new Exception("invalid send must not be delivered"));
-        Require(runtime.StartedCarrierThreads == 0, "spawn is lazy");
+        var actor = runtime.Spawn(ActorKind.Shared, static (_, _) => { });
+        Require(runtime.StartedCarrierThreads == 0,
+            "actor spawn leaves carrier threads unstarted");
 
-        bool oversizedRejected = false;
+        bool rejected = false;
         try
         {
             runtime.Send(actor, new byte[ActorMailbox.MaxMessageBytes + 1]);
         }
         catch (ArgumentOutOfRangeException)
         {
-            oversizedRejected = true;
+            rejected = true;
         }
-        Require(oversizedRejected, "oversized message is rejected before dispatch");
+        Require(rejected, "oversized message is rejected");
         Require(runtime.StartedCarrierThreads == 0 &&
-                runtime.CompletedMessages == 0 &&
-                runtime.FaultedTurns == 0,
-            "invalid send cannot launch an actor worker or deliver a message");
+                runtime.CompletedMessages == 0 && runtime.LiveActors == 1,
+            "invalid payload does not consume carrier capacity or actor state");
 
         runtime.Stop(actor);
         Require(WaitUntil(() => runtime.LiveActors == 0 &&
-                                runtime.NativeReservedBytes == 0),
-            "stopped actor refunds native memory after invalid send");
+                 runtime.NativeReservedBytes == 0),
+            "rejected-message actor stops without native-memory leak");
     }
 
     private static ActorRuntimeOptions Options() => new()

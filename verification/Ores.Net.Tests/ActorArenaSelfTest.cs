@@ -207,12 +207,13 @@ internal static class ActorArenaSelfTest
 
         Require(tenant.ReservedBytes == 1280 &&
                 ActorArenaBudget.Process.ReservedBytes == processBefore + 1280,
-            "tenant arena must charge tenant and aggregate process budgets");
-        Require(arena.Retire(), "unowned arena can reclaim immediately");
+            "tenant arena must charge tenant and process budgets");
+
+        Require(arena.Retire(), "quiescent actor may reclaim immediately");
         arena.Dispose();
         Require(tenant.ReservedBytes == 0 &&
                 ActorArenaBudget.Process.ReservedBytes == processBefore,
-            "quiescent reclaim must refund both budgets exactly once");
+            "physical reclamation refunds both budgets exactly once");
     }
 
     private static void RetirementSealsAdmissionButAllowsTurnCleanup()

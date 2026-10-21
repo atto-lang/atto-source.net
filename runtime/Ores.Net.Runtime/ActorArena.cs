@@ -278,7 +278,7 @@ public unsafe sealed class ActorArena : IDisposable
         _budget.Reserve(_budgetBytes);
         try
         {
-            // A runtime-specific budget does not replace the process-wide cap.
+            // Runtime/tenant budgets cannot bypass the process-wide cap.
             if (!ReferenceEquals(_budget, ActorArenaBudget.Process))
             {
                 ActorArenaBudget.Process.Reserve(_budgetBytes);

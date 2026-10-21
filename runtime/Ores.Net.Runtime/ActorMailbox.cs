@@ -98,12 +98,12 @@ public sealed class ActorMailbox
         }
     }
 
-    // The actor runtime holds its cell gate over validation, scheduling and
-    // Send. Preflight invalid/over-budget DATA before creating a lazy carrier.
-    internal void ValidateSend(ActorRef destination, int messageLength)
+    // Runtime callers may check admission before starting a worker. The
+    // actual Send checks again under this gate before publishing any bytes.
+    internal void ValidateAdmission(ActorRef destination, int length)
     {
         lock (_gate)
-            ValidateSendLocked(destination, messageLength);
+            ValidateSendLocked(destination, length);
     }
 
     public void Send(ActorRef destination, ReadOnlySpan<byte> data)
@@ -117,16 +117,19 @@ public sealed class ActorMailbox
         }
     }
 
-    private void ValidateSendLocked(ActorRef destination, int messageLength)
+    private void ValidateSendLocked(ActorRef destination, int length)
     {
-        if (_closed || destination.Id != _id || destination.Generation != _generation ||
-            destination.Nonce != _nonce)
+        if (_closed || destination.Id != _id ||
+            destination.Generation != _generation || destination.Nonce != _nonce)
             throw new InvalidOperationException("Actor reference is stale or mailbox is closed");
-        // Match Forge: receiver authority is checked before size disclosures.
-        if (messageLength < 0 || messageLength > MaxMessageBytes)
-            throw new ArgumentOutOfRangeException(nameof(messageLength), "Message exceeds 1 MiB");
+
+        // Match Forge: check receiver authority before disclosing payload sizes.
+        if (length > MaxMessageBytes)
+            throw new ArgumentOutOfRangeException("data", "Message exceeds 1 MiB");
+        if (length < 0)
+            throw new ArgumentOutOfRangeException(nameof(length));
         if (_messages.Count >= _maxMessages || _queuedBytes > _maxQueuedBytes ||
-            messageLength > _maxQueuedBytes - _queuedBytes)
+            length > _maxQueuedBytes - _queuedBytes)
             throw new InvalidOperationException("Mailbox capacity exceeded");
     }
 

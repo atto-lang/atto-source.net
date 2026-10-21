@@ -4,6 +4,7 @@ internal static class ActorDispatchDomainsSelfTest
 {
     public static void Run()
     {
+        RejectOversizedSchedulerConfiguration();
         var options = new ActorDispatcherOptions
         {
             PrivateWorkers = 2,
@@ -91,6 +92,39 @@ internal static class ActorDispatchDomainsSelfTest
 
         Console.WriteLine(
             "PASS .NET three lazy actor dispatch domains with no per-actor pools");
+    }
+
+    private static void RejectOversizedSchedulerConfiguration()
+    {
+        static bool Denied(ActorDispatcherOptions options)
+        {
+            try
+            {
+                using var invalid = new ActorDispatchDomains(options);
+                return false;
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                return true;
+            }
+        }
+
+        Require(Denied(new ActorDispatcherOptions
+        {
+            PrivateWorkers = ActorDispatcherOptions.MaxWorkersPerDomain + 1
+        }), "unbounded private carrier configuration rejected");
+        Require(Denied(new ActorDispatcherOptions
+        {
+            SharedWorkers = ActorDispatcherOptions.MaxWorkersPerDomain + 1
+        }), "unbounded shared carrier configuration rejected");
+        Require(Denied(new ActorDispatcherOptions
+        {
+            UntrustedWorkers = ActorDispatcherOptions.MaxWorkersPerDomain + 1
+        }), "unbounded untrusted carrier configuration rejected");
+        Require(Denied(new ActorDispatcherOptions
+        {
+            QueueCapacityPerDomain = ActorDispatcherOptions.MaxQueueCapacityPerDomain + 1
+        }), "unbounded dispatch queue capacity rejected");
     }
 
     private static void Require(bool condition, string scenario)
