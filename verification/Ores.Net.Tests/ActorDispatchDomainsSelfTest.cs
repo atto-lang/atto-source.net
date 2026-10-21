@@ -68,6 +68,27 @@ internal static class ActorDispatchDomainsSelfTest
             TimeSpan.FromSeconds(5)),
             "dispatch completion/fault accounting converges");
 
+        using var selfDisposeDone = new ManualResetEventSlim();
+        bool selfDisposeRejected = false;
+        Require(domains.TryDispatch(ActorKind.Shared, () =>
+        {
+            try
+            {
+                domains.Dispose();
+            }
+            catch (InvalidOperationException)
+            {
+                selfDisposeRejected = true;
+            }
+            finally
+            {
+                selfDisposeDone.Set();
+            }
+        }), "self-dispose probe admitted");
+        Require(selfDisposeDone.Wait(TimeSpan.FromSeconds(5)) &&
+            selfDisposeRejected,
+            "carrier self-dispose is rejected instead of self-joining");
+
         Console.WriteLine(
             "PASS .NET three lazy actor dispatch domains with no per-actor pools");
     }
