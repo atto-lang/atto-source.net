@@ -66,6 +66,7 @@ ActorMailboxAuthorizationPrioritySelfTest.Run();
 ActorMailboxPrivateDataSelfTest.Run();
 ActorArenaSelfTest.Run();
 ActorShardColumnsSelfTest.Run();
+ActorMixedShardSelfTest.Run();
 ActorCompressed32ReferenceSelfTest.Run();
 
 // Import parity is deliberately not claimed for the .NET scalar compiler.
