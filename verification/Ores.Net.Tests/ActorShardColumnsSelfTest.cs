@@ -77,7 +77,7 @@ internal static class ActorShardColumnsSelfTest
             using var arena = NewArena(6108);
             using var turn = arena.EnterTurn(6108, 1);
             _ = new ActorShardColumns(arena, turn,
-                rows: 262_144, fields: 1,
+                rows: 699_050, fields: 3,
                 ActorDataLayout.Aosoa, lanes: 1024);
         }, "AoSoA padded geometry cannot exceed the shard cap");
 
