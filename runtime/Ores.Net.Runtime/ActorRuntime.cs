@@ -226,6 +226,8 @@ public sealed class ActorRuntime : IDisposable
     public ActorRef Spawn(ActorKind kind, ActorMessageHandler handler)
     {
         ArgumentNullException.ThrowIfNull(handler);
+        if (kind is not (ActorKind.Private or ActorKind.Shared or ActorKind.Untrusted))
+            throw new ArgumentOutOfRangeException(nameof(kind));
 
         lock (_gate)
         {

@@ -12,6 +12,8 @@ internal static class ActorArenaSelfTest
         RetirementSealsAdmissionButAllowsTurnCleanup();
         CrossArenaAuthorityAndGenerationFences();
         ForgedMetadataCannotAcquireMemoryAuthority();
+        ActiveTurnRequiresExactTokenAndCarrier();
+        ForgedLoanAndPinCannotPrematurelyReclaim();
         Console.WriteLine("PASS .NET actor-owned unmanaged arena, loans, pins and quiescent reclaim");
     }
 
@@ -315,6 +317,98 @@ internal static class ActorArenaSelfTest
             Require(arena.LiveAllocations == 0 && arena.PersistentLiveBytes == 0,
                 "forgery rejection does not corrupt arena accounting");
         }
+    }
+
+
+    private static void ActiveTurnRequiresExactTokenAndCarrier()
+    {
+        using var arena = new ActorArena(
+            actorId: 7001, incarnation: 9,
+            persistentBytes: 1024, scratchBytes: 256,
+            maxAllocations: 4, maxLifetimePins: 2, maxReadLoans: 2);
+
+        var turn = arena.EnterTurn(7001, 9);
+        var persistent = arena.AllocatePersistent(turn, 8);
+        arena.Write(turn, persistent, 0, new byte[] { 0x54 });
+
+        var forgedTurn = CloneWithoutIssuance(turn);
+        ExpectInvalid(() => arena.Read(forgedTurn, persistent, 0, new byte[1]),
+            "metadata-equivalent turn cannot read actor memory");
+        ExpectInvalid(forgedTurn.Dispose,
+            "metadata-equivalent turn cannot end the issued physical turn");
+
+        Task.Run(() =>
+        {
+            ExpectInvalid(() => arena.Read(turn, persistent, 0, new byte[1]),
+                "stolen turn cannot read bytes on a second carrier");
+            ExpectInvalid(() => arena.AllocateScratch(turn, 8),
+                "stolen turn cannot allocate scratch on a second carrier");
+            ExpectInvalid(turn.Dispose,
+                "off-carrier Dispose cannot close the physical turn");
+        }).GetAwaiter().GetResult();
+
+        var check = new byte[1];
+        arena.Read(turn, persistent, 0, check);
+        Require(check[0] == 0x54, "off-carrier denial preserves owner turn");
+        ExpectInvalid(() => arena.EnterTurn(7001, 9),
+            "off-carrier Dispose must not prematurely release the live turn");
+
+        turn.Dispose();
+        // Idempotent release of an already-closed turn is safe on other carriers.
+        Task.Run(turn.Dispose).GetAwaiter().GetResult();
+
+        Task.Run(() =>
+        {
+            using var migrated = arena.EnterTurn(7001, 9);
+            var bytes = new byte[1];
+            arena.Read(migrated, persistent, 0, bytes);
+            Require(bytes[0] == 0x54, "fresh physical turn can migrate carriers");
+            arena.ReleasePersistent(migrated, persistent);
+        }).GetAwaiter().GetResult();
+    }
+
+    private static void ForgedLoanAndPinCannotPrematurelyReclaim()
+    {
+        using var arena = new ActorArena(
+            actorId: 8001, incarnation: 1,
+            persistentBytes: 1024, scratchBytes: 256,
+            maxAllocations: 4, maxLifetimePins: 2, maxReadLoans: 2);
+
+        ActorArenaReadLoan loan;
+        ActorArenaLifetimePin pin;
+        ActorArenaHandle handle;
+        using (var turn = arena.EnterTurn(8001, 1))
+        {
+            handle = arena.AllocatePersistent(turn, 8);
+            loan = arena.BorrowRead(turn, handle);
+            pin = arena.AcquireLifetimePin(turn);
+            var fakeLoan = CloneWithoutIssuance(loan);
+            var fakePin = CloneWithoutIssuance(pin);
+
+            ExpectInvalid(fakeLoan.Dispose,
+                "metadata-equivalent read loan cannot release a legitimate loan");
+            ExpectInvalid(fakePin.Dispose,
+                "metadata-equivalent lifetime pin cannot release a legitimate pin");
+            Require(arena.OutstandingReadLoans == 1 &&
+                    arena.OutstandingLifetimePins == 1,
+                "forged release must leave both lifetime counters unchanged");
+            ExpectInvalid(() => arena.Write(turn, handle, 0, new byte[] { 7 }),
+                "legitimate read loan still blocks mutation after forged release");
+            ExpectInvalid(() => arena.ReleasePersistent(turn, handle),
+                "legitimate read loan still blocks drop after forged release");
+        }
+
+        Require(!arena.Retire(), "legitimate loan and pin delay retired arena reclaim");
+        Task.Run(loan.Dispose).GetAwaiter().GetResult();
+        Require(!arena.IsReclaimed &&
+                arena.OutstandingReadLoans == 0 &&
+                arena.OutstandingLifetimePins == 1,
+            "live pin alone still delays native reclamation");
+
+        Task.Run(pin.Dispose).GetAwaiter().GetResult();
+        Require(arena.IsReclaimed, "last legitimate pin completes native reclamation");
+        loan.Dispose();
+        pin.Dispose();
     }
 
     private static T CloneWithoutIssuance<T>(T issued) where T : class

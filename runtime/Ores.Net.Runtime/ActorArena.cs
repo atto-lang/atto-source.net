@@ -88,11 +88,12 @@ public sealed class ActorArenaTurn : IDisposable
     internal ulong Epoch { get; }
     internal bool Released => Volatile.Read(ref _released) != 0;
 
-    public void Dispose()
-    {
-        if (Interlocked.Exchange(ref _released, 1) == 0)
-            Arena.ReleaseTurn(this);
-    }
+    // Physical turns must be closed by their admitting carrier. Validation and
+    // the released flag transition happen atomically under the arena gate.
+    // A stolen Dispose must not poison this token or free scratch memory.
+    public void Dispose() => Arena.ReleaseTurn(this);
+
+    internal void MarkReleased() => Volatile.Write(ref _released, 1);
 }
 
 /// <summary>
@@ -156,7 +157,7 @@ public sealed class ActorArenaLifetimePin : IDisposable
         if (Interlocked.Exchange(ref _released, 1) != 0)
             return;
         var arena = Interlocked.Exchange(ref _arena, null);
-        arena?.ReleaseLifetimePin(Authority);
+        arena?.ReleaseLifetimePin(this);
     }
 }
 
@@ -207,8 +208,13 @@ public unsafe sealed class ActorArena : IDisposable
     private readonly int _budgetBytes;
     private readonly Slot[] _slots;
     private readonly int[] _freeSlots;
-    // Current-turn scratch issuance. HashSet uses reference identity for sealed handles.
-    private readonly HashSet<ActorScratchHandle> _issuedScratch = new();
+    // Only exact issued objects carry authority, including lifetime-only tokens.
+    private readonly HashSet<ActorScratchHandle> _issuedScratch =
+        new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<ActorArenaReadLoan> _issuedReadLoans =
+        new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<ActorArenaLifetimePin> _issuedLifetimePins =
+        new(ReferenceEqualityComparer.Instance);
 
     private byte* _persistent;
     private byte* _scratch;
@@ -222,6 +228,8 @@ public unsafe sealed class ActorArena : IDisposable
     private int _readLoans;
     private ulong _turnEpoch;
     private bool _turnActive;
+    private ActorArenaTurn? _activeTurn;
+    private Thread? _activeCarrier;
     private bool _retired;
     private bool _reclaimed;
     private bool _budgetRefunded;
@@ -343,8 +351,9 @@ public unsafe sealed class ActorArena : IDisposable
     }
 
     /// <summary>
-    /// Admit one physical turn. Actor identity is logical scheduler authority;
-    /// carrier thread identity is intentionally irrelevant.
+    /// Admit one physical turn. Actor identity is independent of carrier threads
+    /// across turns, but each live turn is bound to its admitting carrier.
+    /// Async suspension must end the physical turn and resume in a new turn.
     /// </summary>
     public ActorArenaTurn EnterTurn(ulong actorId, ulong incarnation)
     {
@@ -364,6 +373,8 @@ public unsafe sealed class ActorArena : IDisposable
             var admitted = new ActorArenaTurn(
                 this, _authority, _actorId, _incarnation, nextEpoch);
             _turnEpoch = nextEpoch;
+            _activeTurn = admitted;
+            _activeCarrier = Thread.CurrentThread;
             _turnActive = true;
             return admitted;
         }
@@ -506,6 +517,8 @@ public unsafe sealed class ActorArena : IDisposable
             ref Slot slot = ref ValidateHandleLocked(handle);
             var loan = new ActorArenaReadLoan(this, _authority, handle.Slot,
                 handle.Generation, _actorId, _incarnation, handle.Length);
+            if (!_issuedReadLoans.Add(loan))
+                throw new InvalidOperationException("Duplicate read-loan issuance");
             slot.ReadLoans = checked(slot.ReadLoans + 1);
             _readLoans++;
             return loan;
@@ -525,6 +538,8 @@ public unsafe sealed class ActorArena : IDisposable
             if (_externalPins == _maxLifetimePins)
                 throw new InvalidOperationException("Actor lifetime-pin quota exhausted");
             var pin = new ActorArenaLifetimePin(this, _authority);
+            if (!_issuedLifetimePins.Add(pin))
+                throw new InvalidOperationException("Duplicate lifetime-pin issuance");
             _externalPins++;
             return pin;
         }
@@ -621,19 +636,28 @@ public unsafe sealed class ActorArena : IDisposable
 
     internal void ReleaseTurn(ActorArenaTurn turn)
     {
+        ArgumentNullException.ThrowIfNull(turn);
         lock (_gate)
         {
-            if (_reclaimed)
-                throw new InvalidOperationException("Actor turn released after arena reclamation");
-            if (!_turnActive || turn.Arena != this || turn.Authority != _authority ||
+            // Idempotent even after final arena reclaim; never consume the
+            // token until owner/thread/turn identity has been checked.
+            if (turn.Released)
+                return;
+            if (_reclaimed || !_turnActive ||
+                !ReferenceEquals(_activeTurn, turn) ||
+                !ReferenceEquals(_activeCarrier, Thread.CurrentThread) ||
+                turn.Arena != this || turn.Authority != _authority ||
                 turn.ActorId != _actorId || turn.Incarnation != _incarnation ||
                 turn.Epoch != _turnEpoch)
-                throw new InvalidOperationException("Stale or foreign actor turn release");
+                throw new InvalidOperationException("Stale, foreign or off-carrier actor turn release");
 
             if (_scratchHighWater != 0)
                 Zero(_scratch, _scratchHighWater);
             _scratchHighWater = 0;
             _issuedScratch.Clear();
+            turn.MarkReleased();
+            _activeTurn = null;
+            _activeCarrier = null;
             _turnActive = false;
             TryReclaimLocked();
         }
@@ -652,8 +676,9 @@ public unsafe sealed class ActorArena : IDisposable
 
             ref Slot slot = ref _slots[loan.Slot];
             if (!slot.Live || slot.Generation != loan.Generation ||
-                slot.ReadLoans <= 0 || _readLoans <= 0)
-                throw new InvalidOperationException("Stale actor read loan release");
+                slot.ReadLoans <= 0 || _readLoans <= 0 ||
+                !_issuedReadLoans.Remove(loan))
+                throw new InvalidOperationException("Unissued or stale actor read loan release");
 
             slot.ReadLoans--;
             _readLoans--;
@@ -661,14 +686,16 @@ public unsafe sealed class ActorArena : IDisposable
         }
     }
 
-    internal void ReleaseLifetimePin(Guid authority)
+    internal void ReleaseLifetimePin(ActorArenaLifetimePin pin)
     {
+        ArgumentNullException.ThrowIfNull(pin);
         lock (_gate)
         {
             if (_reclaimed)
                 throw new InvalidOperationException("Lifetime pin outlived physical arena");
-            if (authority != _authority || _externalPins <= 0)
-                throw new InvalidOperationException("Foreign actor lifetime-pin release");
+            if (pin.Authority != _authority || _externalPins <= 0 ||
+                !_issuedLifetimePins.Remove(pin))
+                throw new InvalidOperationException("Unissued or foreign actor lifetime-pin release");
             _externalPins--;
             TryReclaimLocked();
         }
@@ -706,9 +733,12 @@ public unsafe sealed class ActorArena : IDisposable
     {
         ArgumentNullException.ThrowIfNull(turn);
         EnsureNotReclaimedLocked();
-        if (turn.Released || !_turnActive || turn.Arena != this ||
-            turn.Authority != _authority || turn.ActorId != _actorId ||
-            turn.Incarnation != _incarnation || turn.Epoch != _turnEpoch)
+        if (turn.Released || !_turnActive ||
+            !ReferenceEquals(_activeTurn, turn) ||
+            !ReferenceEquals(_activeCarrier, Thread.CurrentThread) ||
+            turn.Arena != this || turn.Authority != _authority ||
+            turn.ActorId != _actorId || turn.Incarnation != _incarnation ||
+            turn.Epoch != _turnEpoch)
             throw new InvalidOperationException("Stale or foreign actor turn");
     }
 
@@ -752,6 +782,10 @@ public unsafe sealed class ActorArena : IDisposable
         Array.Clear(_slots, 0, _slots.Length);
         Array.Clear(_freeSlots, 0, _freeSlots.Length);
         _issuedScratch.Clear();
+        _issuedReadLoans.Clear();
+        _issuedLifetimePins.Clear();
+        _activeTurn = null;
+        _activeCarrier = null;
         _nextSlot = 0;
         _freeSlotCount = 0;
         _liveAllocations = 0;

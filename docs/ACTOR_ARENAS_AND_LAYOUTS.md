@@ -9,8 +9,12 @@ claiming that CoreCLR itself exposes independently collected GC heaps.
 
 ## Memory model
 
-Each `ActorArena` is bound to one logical actor ID and incarnation. Carrier
-threads are deliberately not part of the authority model.
+Each `ActorArena` is bound to one logical actor ID and incarnation. A physical
+turn is bound to its exact issued turn object **and** admitting carrier thread,
+preventing concurrently stolen turn use and premature scratch release. Actors
+may migrate to another carrier **between** physical turns, after the prior
+turn has closed. Suspend/resume must not carry one live physical turn across
+threads; it must end the turn and admit a new one on resume.
 
 - **Aggregate budget** — each arena reserves its aligned persistent + scratch capacity against a runtime/process `ActorArenaBudget` before native allocation; failed admission is accounting-neutral and physical reclaim refunds exactly once.\n- **Persistent region** — native aligned storage that survives actor turns.
   Allocations use opaque arena/slot/generation capabilities. Partial frees never
@@ -22,7 +26,8 @@ threads are deliberately not part of the authority model.
   and drop of its allocation, but cannot dereference bytes without a newly
   admitted owner turn.
 - **Lifetime pin** — continuation/FFI/I/O lifetime only. It delays physical arena
-  reclamation and intentionally has no read/write/handle API.
+  reclamation and intentionally has no read/write/handle API. Both pins and
+  read-loan release require their exact issued token to prevent forged release.
 - **Retirement** — logical retirement seals new turns, allocations, loans and
   pins first. Physical zeroize/free waits for the active turn, read loans and
   lifetime pins to quiesce.
@@ -104,7 +109,8 @@ to CLR object allocation or silently changing ownership semantics.
 ## Verification
 
 `ActorArenaSelfTest` exercises exact issued-handle identity (including
-metadata-equivalent reflected clones), persistent/scratch lifetime, stale generation
+metadata-equivalent reflected clones), cross-thread stolen turns, forged
+loan/pin release, turn migration, persistent/scratch lifetime, stale generation
 replay, same-ID cross-arena denial, suspension loans, off-carrier release,
 retirement ordering, quota refund and scrubbed reuse.
 
