@@ -83,6 +83,42 @@ internal static class StructuredSourceTests
                 Operator: StructuredOperator.Add
             } }, "arithmetic AST operator precedence");
 
+        var arithmetic76 = OresStructuredParser.Parse("""
+            pub fnc main(): int {
+              return 100 - (3 + 2) - 19;
+            }
+            """);
+        Require(arithmetic76.Body[0] is StructuredReturn {
+            Value: StructuredBinary {
+                Operator: StructuredOperator.Subtract,
+                Left: StructuredBinary {
+                    Operator: StructuredOperator.Subtract,
+                    Left: StructuredInt { Value: 100 },
+                    Right: StructuredBinary {
+                        Operator: StructuredOperator.Add,
+                        Left: StructuredInt { Value: 3 },
+                        Right: StructuredInt { Value: 2 }
+                    }
+                },
+                Right: StructuredInt { Value: 19 }
+            }
+        }, "shared arithmetic-76 typed AST");
+
+        foreach (var operation in new[] { "ref", "unref", "deref", "deref mut", "raw" })
+        {
+            try { _ = OresStructuredParser.Parse(
+                $"fnc main():int{{return rt {operation} value;}}"); }
+            catch (FormatException ex)
+            {
+                Require(ex.Message.Contains("requires provenance-checked pointer lowering",
+                    StringComparison.Ordinal),
+                    "structured pointer rejection must name provenance lowering");
+                continue;
+            }
+            throw new Exception("Structured source incorrectly accepted pointer operation: rt " +
+                operation);
+        }
+
         // AST height must be bounded even when the source is a flat chain.
         // Grammar recursion depth alone cannot enforce this invariant.
         var maxHeightExpression = string.Join("+", Enumerable.Repeat("1", 128));

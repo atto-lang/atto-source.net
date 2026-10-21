@@ -15,6 +15,14 @@ static void Reject(Action action, string why)
     throw new Exception("Expected parser rejection: " + why);
 }
 
+static void RejectDiagnostic(Action action, string diagnostic, string why)
+{
+    try { action(); }
+    catch (FormatException ex) when
+        (ex.Message.Contains(diagnostic, StringComparison.OrdinalIgnoreCase)) { return; }
+    throw new Exception("Expected parser rejection with diagnostic '" + diagnostic + "': " + why);
+}
+
 static void InvalidSend(Action action, string why)
 {
     try { action(); }
@@ -22,20 +30,51 @@ static void InvalidSend(Action action, string why)
     throw new Exception("Expected mailbox rejection: " + why);
 }
 
+// Opaque top types and value-producing conditionals are language-reserved,
+ // but this i64-only bootstrap has no tagged dynamic-value ABI or typed CFG
+ // lowering for them yet. Reject before OresIR/CIL emission.
+foreach (var opaque in new[] { "any", "unknown", "Any", "Unknown" })
+    RejectDiagnostic(
+        () => OresParser.Parse("fnc main():" + opaque + "{return 1;}"),
+        "tagged opaque-value ABI",
+        "opaque top type " + opaque);
+RejectDiagnostic(
+    () => OresParser.Parse("fnc main():int{return 1 ? 2 : 3;}"),
+    "ternary expression requires bool typing and CFG branch-merge lowering",
+    "ternary must not fall through to i64 CIL lowering");
+Require(OresParser.Parse("fnc main():int{return 1;} // any unknown ?") is Literal,
+    "opaque-top and ternary tokens in comments remain lexically invisible");
+
 SourceByteBudgetTests.Run();
+
+// The canonical actor negative includes a later assignment. Lex its punctuation
+// while preserving the precise unsupported top-level declaration diagnostic.
+try
+{
+    OresParser.Parse("define actor Worker as { pub fnc on_message(int n): int { return n; } }\n" +
+        "pub fnc main(): int { const worker = spawn Worker(); stop worker; return 43; }\n");
+    throw new Exception("Unsupported actor declaration was admitted");
+}
+catch (FormatException ex) when (ex.Message == "Expected 'fnc' at offset 7") { }
+Reject(() => OresParser.Parse("fnc main():int { return 1=2; }"), "assignment expression");
+Reject(() => OresParser.Parse("fnc main():int { const x = 1; return x; }"), "local assignment");
+
 ActorRefNoWireSelfTest.Run();
 ActorPhysicalTurnCreditsSelfTest.Run();
 ActorMaxThreadsSourceAdmissionSelfTest.Run();
 ActorMailboxBoundsSelfTest.Run();
 ActorMailboxRestartAtomicitySelfTest.Run();
 ActorMailboxAuthorizationPrioritySelfTest.Run();
+ActorMailboxPrivateDataSelfTest.Run();
 
 // Import parity is deliberately not claimed for the .NET scalar compiler.
 // Each form must fail at lexical admission with a specific import diagnostic,
 // before either typed IR verification or Native AOT CIL emission.
 foreach (var path in new[] {
     "+/src/helper", "+src/helper", "@/src/helper", "pkg:math/src/helper", "./helper",
-    "../helper", "common/helper", ".hidden/helper"
+    "../helper", "common/helper", ".hidden/helper",
+    "+/src//helper", "+/src/./helper", "+/src/../helper",
+    "pkg:math/src/../helper", @"pkg:math\src\helper"
 })
 {
     try
@@ -50,6 +89,16 @@ foreach (var path in new[] {
 }
 Require(OresParser.Parse("fnc main():int{return 42;} // import not code") is Literal,
     "import in a comment must not be treated as an import declaration");
+
+
+foreach (var operation in new[] { "ref", "unref", "deref", "deref mut", "raw" })
+{
+    try { _ = OresParser.Parse($"fnc main():int{{return rt {operation} value;}}"); }
+    catch (FormatException ex) when
+        (ex.Message.Contains("requires provenance-checked pointer lowering",
+            StringComparison.Ordinal)) { continue; }
+    throw new Exception("Unsupported pointer operation did not fail closed: rt " + operation);
+}
 
 
 foreach (var invalid in new[] { "\0", "\ud800", "\udc00", "\ud800x" })
@@ -493,6 +542,7 @@ Require(RuntimeHost.Execute(() => throw new OverflowException()) == 70,
 Require(RuntimeHost.Execute(() => throw new DivideByZeroException()) == 70,
     "divide zero error returned");
 
+SourceI64Conformance.Run();
 CfgVerifierTests.Run();
 CfgCilStressTests.Run();
 StructuredSourceTests.Run();
