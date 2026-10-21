@@ -68,7 +68,47 @@ internal static class ActorNativeArenaSelfTest
         Require(!staleScope.CleanupOk && arena.LiveAllocations == 0,
             "stale tracked owner is reported without suppressing later cleanup");
 
+        ConcurrentDisposeDoesNotRaceNativeAccess();
         Console.WriteLine("PASS .NET unmanaged actor arena, primitive handles, stack cleanup scopes");
+    }
+
+    private static void ConcurrentDisposeDoesNotRaceNativeAccess()
+    {
+        for (int round = 0; round < 20; round++)
+        {
+            using var contender = new ActorNativeArena(512, 8);
+            ulong handle = contender.Allocate(8);
+            Require(handle != ActorNativeArena.InvalidHandle, "race fixture allocation");
+            Require(contender.WriteInt64(handle, 0, round), "race fixture initialized");
+
+            using var entered = new ManualResetEventSlim();
+            var reader = Task.Run(() =>
+            {
+                entered.Set();
+                for (int i = 0; i < 2_000; i++)
+                {
+                    try
+                    {
+                        long value = contender.ReadInt64(handle);
+                        Require(value == round, "native read returned corrupted data");
+                    }
+                    catch (InvalidOperationException) when (contender.IsDisposed)
+                    {
+                        break;
+                    }
+                }
+            });
+            Require(entered.Wait(TimeSpan.FromSeconds(5)),
+                "reader enters the concurrent disposal scenario");
+            var disposer = Task.Run(contender.Dispose);
+            Task.WaitAll(reader, disposer);
+            Require(contender.IsDisposed && contender.LiveAllocations == 0,
+                "concurrent disposal completed with no live arena allocations");
+            Require(!contender.WriteByte(handle, 0, 123),
+                "disposed native storage never admits writes");
+            RejectInvalid(() => _ = contender.ReadInt64(handle),
+                "disposed native storage never admits reads");
+        }
     }
 
     private static void Require(bool value, string why)

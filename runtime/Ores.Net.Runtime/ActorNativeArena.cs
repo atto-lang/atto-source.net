@@ -28,6 +28,8 @@ public sealed unsafe class ActorNativeArena : IDisposable
 
     private static long s_nextSequence = 1;
 
+    // Serializes byte access, metadata updates and native reclamation.
+    private readonly object _gate = new();
     private readonly int[] _offsets;
     private readonly int[] _lengths;
     private readonly ulong[] _tokens;
@@ -59,12 +61,14 @@ public sealed unsafe class ActorNativeArena : IDisposable
     }
 
     public int CapacityBytes => _capacity;
-    public int UsedBytes => _cursor;
-    public int LiveAllocations => _liveCount;
-    public bool IsDisposed => _disposed;
+    public int UsedBytes { get { lock (_gate) return _cursor; } }
+    public int LiveAllocations { get { lock (_gate) return _liveCount; } }
+    public bool IsDisposed { get { lock (_gate) return _disposed; } }
 
     public ulong Allocate(int bytes, int alignment = 8)
     {
+        lock (_gate)
+        {
         if (_disposed || bytes <= 0 || alignment <= 0 || (alignment & (alignment - 1)) != 0
             || alignment > 64 || (_freeCount == 0 && _nextSlot >= _live.Length))
             return InvalidHandle;
@@ -91,10 +95,14 @@ public sealed unsafe class ActorNativeArena : IDisposable
         _cursor = aligned + bytes;
         _liveCount++;
         return token;
+    
+        }
     }
 
     public bool Drop(ulong handle)
     {
+        lock (_gate)
+        {
         int slot = ValidSlot(handle);
         if (slot < 0) return false;
 
@@ -112,44 +120,64 @@ public sealed unsafe class ActorNativeArena : IDisposable
             _cursor = 0;
         }
         return true;
+    
+        }
     }
 
     public bool WriteInt64(ulong handle, int relativeOffset, long value)
     {
+        lock (_gate)
+        {
         int slot = ValidSlot(handle);
         if (slot < 0 || relativeOffset < 0 || relativeOffset > _lengths[slot] - sizeof(long))
             return false;
         Unsafe.WriteUnaligned<long>(_memory + _offsets[slot] + relativeOffset, value);
         return true;
+    
+        }
     }
 
     public long ReadInt64(ulong handle, int relativeOffset = 0)
     {
+        lock (_gate)
+        {
         int slot = ValidSlot(handle);
         if (slot < 0 || relativeOffset < 0 || relativeOffset > _lengths[slot] - sizeof(long))
             throw new InvalidOperationException("invalid, stale or out-of-bounds actor arena handle");
         return Unsafe.ReadUnaligned<long>(_memory + _offsets[slot] + relativeOffset);
+    
+        }
     }
 
     public bool WriteByte(ulong handle, int relativeOffset, byte value)
     {
+        lock (_gate)
+        {
         int slot = ValidSlot(handle);
         if (slot < 0 || relativeOffset < 0 || relativeOffset >= _lengths[slot])
             return false;
         _memory[_offsets[slot] + relativeOffset] = value;
         return true;
+    
+        }
     }
 
     public byte ReadByte(ulong handle, int relativeOffset)
     {
+        lock (_gate)
+        {
         int slot = ValidSlot(handle);
         if (slot < 0 || relativeOffset < 0 || relativeOffset >= _lengths[slot])
             throw new InvalidOperationException("invalid, stale or out-of-bounds actor arena handle");
         return _memory[_offsets[slot] + relativeOffset];
+    
+        }
     }
 
     public void Dispose()
     {
+        lock (_gate)
+        {
         if (_disposed) return;
         if (_memory != null)
         {
@@ -166,6 +194,8 @@ public sealed unsafe class ActorNativeArena : IDisposable
         _freeCount = 0;
         _liveCount = 0;
         _disposed = true;
+    
+        }
     }
 
     private int ValidSlot(ulong handle)
