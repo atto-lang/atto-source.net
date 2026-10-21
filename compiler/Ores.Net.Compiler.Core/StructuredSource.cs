@@ -362,7 +362,7 @@ public static class OresStructuredParser
                 string operation = Current.Text;
                 if (operation is "ref" or "unref" or "deref" or "raw")
                     throw new FormatException(
-                        $"Pointer operation 'rt {operation}' requires provenance-checked pointer lowering; unsupported in the .NET structured backend at offset {at}");
+                        $"Pointer-style operation 'rt {operation}' is not valid Oreslang source; use rt copy/share/take/borrow or rt mut borrow; unsupported in the .NET structured backend at offset {at}");
                 throw new FormatException(
                     $"Runtime ownership operation requires typed lowering; unsupported in the .NET structured backend at offset {at}");
             }
