@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
 
@@ -68,9 +69,14 @@ public sealed unsafe class ActorNativeArena : IDisposable
             || alignment > 64 || (_freeCount == 0 && _nextSlot >= _live.Length))
             return InvalidHandle;
 
-        long alignedLong = ((long)_cursor + alignment - 1L) & -(long)alignment;
-        if (alignedLong < 0 || alignedLong > int.MaxValue) return InvalidHandle;
-        int aligned = (int)alignedLong;
+        nuint baseAddress = (nuint)_memory;
+        nuint currentAddress = baseAddress + (nuint)_cursor;
+        nuint mask = (nuint)(alignment - 1);
+        if (currentAddress > nuint.MaxValue - mask) return InvalidHandle;
+        nuint alignedAddress = (currentAddress + mask) & ~mask;
+        nuint alignedOffset = alignedAddress - baseAddress;
+        if (alignedOffset > int.MaxValue) return InvalidHandle;
+        int aligned = (int)alignedOffset;
         if (aligned > _capacity || bytes > _capacity - aligned) return InvalidHandle;
 
         ulong sequence = NextSequence();
@@ -113,7 +119,7 @@ public sealed unsafe class ActorNativeArena : IDisposable
         int slot = ValidSlot(handle);
         if (slot < 0 || relativeOffset < 0 || relativeOffset > _lengths[slot] - sizeof(long))
             return false;
-        *(long*)(_memory + _offsets[slot] + relativeOffset) = value;
+        Unsafe.WriteUnaligned<long>(_memory + _offsets[slot] + relativeOffset, value);
         return true;
     }
 
@@ -122,7 +128,7 @@ public sealed unsafe class ActorNativeArena : IDisposable
         int slot = ValidSlot(handle);
         if (slot < 0 || relativeOffset < 0 || relativeOffset > _lengths[slot] - sizeof(long))
             throw new InvalidOperationException("invalid, stale or out-of-bounds actor arena handle");
-        return *(long*)(_memory + _offsets[slot] + relativeOffset);
+        return Unsafe.ReadUnaligned<long>(_memory + _offsets[slot] + relativeOffset);
     }
 
     public bool WriteByte(ulong handle, int relativeOffset, byte value)
