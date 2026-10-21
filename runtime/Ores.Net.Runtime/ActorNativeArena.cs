@@ -45,14 +45,16 @@ public sealed unsafe class ActorNativeArena : IDisposable
         if (bytes <= 0) throw new ArgumentOutOfRangeException(nameof(bytes));
         if (slots <= 0 || slots > MaxSlots) throw new ArgumentOutOfRangeException(nameof(slots));
 
-        _memory = (byte*)NativeMemory.AllocZeroed((nuint)bytes);
-        if (_memory is null) throw new OutOfMemoryException("actor native arena allocation failed");
-        _capacity = bytes;
+        // Allocate managed control metadata first. If one of these allocations
+        // fails, no unmanaged block exists yet and therefore nothing can leak.
         _offsets = new int[slots];
         _lengths = new int[slots];
         _tokens = new ulong[slots];
         _live = new bool[slots];
         _freeSlots = new int[slots];
+        _memory = (byte*)NativeMemory.AllocZeroed((nuint)bytes);
+        if (_memory == null) throw new OutOfMemoryException("actor native arena allocation failed");
+        _capacity = bytes;
     }
 
     public int CapacityBytes => _capacity;
@@ -143,7 +145,7 @@ public sealed unsafe class ActorNativeArena : IDisposable
     public void Dispose()
     {
         if (_disposed) return;
-        if (_memory is not null)
+        if (_memory != null)
         {
             Zero(0, _capacity);
             NativeMemory.Free(_memory);
@@ -171,7 +173,7 @@ public sealed unsafe class ActorNativeArena : IDisposable
 
     private void Zero(int start, int length)
     {
-        if (_memory is null || length <= 0) return;
+        if (_memory == null || length <= 0) return;
         new Span<byte>(_memory + start, length).Clear();
     }
 
