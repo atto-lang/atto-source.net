@@ -12,7 +12,7 @@ claiming that CoreCLR itself exposes independently collected GC heaps.
 Each `ActorArena` is bound to one logical actor ID and incarnation. Carrier
 threads are deliberately not part of the authority model.
 
-- **Persistent region** — native aligned storage that survives actor turns.
+- **Aggregate budget** — each arena reserves its aligned persistent + scratch capacity against a runtime/process `ActorArenaBudget` before native allocation; failed admission is accounting-neutral and physical reclaim refunds exactly once.\n- **Persistent region** — native aligned storage that survives actor turns.
   Allocations use opaque arena/slot/generation capabilities. Partial frees never
   relocate live bytes; when the final allocation is dropped the persistent bump
   region is scrubbed and recycled.
@@ -67,7 +67,7 @@ AoS/SoA/AoSoA copies.
 
 Implemented in this slice:
 
-1. Per-actor unmanaged persistent and scratch storage.
+1. Per-actor unmanaged persistent and scratch storage plus aggregate native-memory reservation.
 2. Single physical turn admission per actor arena.
 3. Generation/incarnation/arena authority fencing.
 4. Read loans across suspension with mutation/drop exclusion.
