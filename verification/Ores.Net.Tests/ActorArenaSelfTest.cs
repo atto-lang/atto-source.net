@@ -1,4 +1,5 @@
 using Ores.Net.Runtime;
+using System.Reflection;
 
 internal static class ActorArenaSelfTest
 {
@@ -10,6 +11,7 @@ internal static class ActorArenaSelfTest
         AggregateBudgetAdmissionIsNeutral();
         RetirementSealsAdmissionButAllowsTurnCleanup();
         CrossArenaAuthorityAndGenerationFences();
+        ForgedMetadataCannotAcquireMemoryAuthority();
         Console.WriteLine("PASS .NET actor-owned unmanaged arena, loans, pins and quiescent reclaim");
     }
 
@@ -264,6 +266,65 @@ internal static class ActorArenaSelfTest
             var value = new byte[1];
             right.Read(rightTurn, stale, 0, value);
         }, "same numeric actor identity cannot cross arena authority");
+    }
+
+
+    private static void ForgedMetadataCannotAcquireMemoryAuthority()
+    {
+        using var arena = new ActorArena(
+            actorId: 6001, incarnation: 2,
+            persistentBytes: 1024, scratchBytes: 256,
+            maxAllocations: 4, maxLifetimePins: 2, maxReadLoans: 2);
+
+        using (var turn = arena.EnterTurn(6001, 2))
+        {
+            var persistent = arena.AllocatePersistent(turn, 8);
+            var scratch = arena.AllocateScratch(turn, 8);
+            arena.Write(turn, persistent, 0, new byte[] { 0x51 });
+            arena.WriteScratch(turn, scratch, 0, new byte[] { 0xA3 });
+
+            // Clones preserve *all* private numeric metadata, including the
+            // arena Guid. They must not be accepted as independently issued
+            // authority. This is defense in depth for trusted host boundaries.
+            var forgedPersistent = CloneWithoutIssuance(persistent);
+            var forgedScratch = CloneWithoutIssuance(scratch);
+            Require(!ReferenceEquals(persistent, forgedPersistent) &&
+                    !ReferenceEquals(scratch, forgedScratch),
+                "reflection created separate matching-metadata objects");
+
+            ExpectInvalid(() => arena.Read(turn, forgedPersistent, 0, new byte[1]),
+                "reconstructed persistent capability read");
+            ExpectInvalid(() => arena.Write(turn, forgedPersistent, 0, new byte[] { 1 }),
+                "reconstructed persistent capability write");
+            ExpectInvalid(() => arena.ReleasePersistent(turn, forgedPersistent),
+                "reconstructed persistent capability drop");
+            ExpectInvalid(() => arena.BorrowRead(turn, forgedPersistent),
+                "reconstructed persistent capability borrow");
+
+            ExpectInvalid(() => arena.ReadScratch(turn, forgedScratch, 0, new byte[1]),
+                "reconstructed scratch capability read");
+            ExpectInvalid(() => arena.WriteScratch(turn, forgedScratch, 0, new byte[] { 1 }),
+                "reconstructed scratch capability write");
+
+            byte[] read = new byte[1];
+            arena.Read(turn, persistent, 0, read);
+            Require(read[0] == 0x51, "original persistent capability remains valid");
+            arena.ReadScratch(turn, scratch, 0, read);
+            Require(read[0] == 0xA3, "original scratch capability remains valid");
+            arena.ReleasePersistent(turn, persistent);
+            Require(arena.LiveAllocations == 0 && arena.PersistentLiveBytes == 0,
+                "forgery rejection does not corrupt arena accounting");
+        }
+    }
+
+    private static T CloneWithoutIssuance<T>(T issued) where T : class
+    {
+        MethodInfo? clone = typeof(object).GetMethod(
+            "MemberwiseClone", BindingFlags.Instance | BindingFlags.NonPublic);
+        if (clone is null)
+            throw new Exception("Reflection clone regression setup unavailable");
+        return (T)(clone.Invoke(issued, null) ??
+            throw new Exception("Reflection clone regression setup returned null"));
     }
 
     private static void ExpectInvalid(Action action, string scenario)

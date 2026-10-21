@@ -33,14 +33,19 @@ this is not a claim of a zero-GC .NET process.
 
 ## Authority and ABA rules
 
-Persistent capabilities carry an unexposed arena authority, actor identity,
-incarnation, slot and slot generation. A default value is invalid. A capability
+Persistent capabilities are opaque issued object references containing unexposed
+arena authority, actor identity, incarnation, slot and generation. The arena
+requires **exact issued object identity**, not merely matching metadata; null or
+reconstructed handles cannot acquire read/write/drop/borrow authority. A handle
 from another arena is rejected even when the numeric actor ID/incarnation match.
 Dropping a slot increments its generation before reuse; generation exhaustion
 fails closed rather than wrapping into live authority.
 
-Scratch capabilities additionally carry the active turn epoch. A capability from
-a previous turn cannot address newly reused scratch bytes.
+Scratch capabilities additionally carry the active turn epoch and must be
+registered as exact objects issued during that turn. Issuance is bounded to
+65,536 capabilities per turn. A metadata-equivalent clone or a capability from
+a previous turn cannot address newly reused scratch bytes. Scratch issuance
+metadata is cleared on turn exit and at physical reclamation.
 
 The runtime never exposes a raw native pointer to guest-facing callers.
 
@@ -98,7 +103,8 @@ to CLR object allocation or silently changing ownership semantics.
 
 ## Verification
 
-`ActorArenaSelfTest` exercises persistent/scratch lifetime, stale generation
+`ActorArenaSelfTest` exercises exact issued-handle identity (including
+metadata-equivalent reflected clones), persistent/scratch lifetime, stale generation
 replay, same-ID cross-arena denial, suspension loans, off-carrier release,
 retirement ordering, quota refund and scrubbed reuse.
 
