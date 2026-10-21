@@ -7,6 +7,8 @@ internal static class ActorRuntimeSelfTest
         ThreeKindsUseAssignedDomainsAndActorArenas();
         OneActorNeverRunsTwoHandlersConcurrently();
         DeliveredMessageStorageIsTurnBound();
+        PersistentShardSurvivesAcrossActorTurns();
+        RetainedContextCannotUseExpiredTurn();
         LifetimePinCanOutliveActorTurnAndStop();
         HandlerFaultRetiresOnlyThatActor();
         Console.WriteLine(
@@ -165,6 +167,88 @@ internal static class ActorRuntimeSelfTest
         runtime.Stop(actor);
         Require(WaitUntil(() => runtime.LiveActors == 0),
             "message-lifetime actor finalizes");
+    }
+
+    private static void PersistentShardSurvivesAcrossActorTurns()
+    {
+        using var runtime = new ActorRuntime(Options());
+        using var done = new ManualResetEventSlim();
+        ActorShardColumns? shard = null;
+        double before = double.NaN;
+        double after = double.NaN;
+
+        var actor = runtime.Spawn(ActorKind.Private, (context, message) =>
+        {
+            if (message.Span[0] == 1)
+            {
+                shard = context.CreateShard(
+                    rows: 4, fields: 2, ActorDataLayout.Soa);
+                for (int row = 0; row < 4; row++)
+                {
+                    context.WriteShard(shard, row, 0, row * 10.0);
+                    context.WriteShard(shard, row, 1, row + 0.5);
+                }
+                return;
+            }
+
+            Require(shard is not null,
+                "persistent shard from prior turn is available");
+            before = context.ReadShard(shard!, 2, 0);
+            context.IntegrateShard(
+                shard!, positionField: 0, velocityField: 1, dt: 0.5);
+            after = context.ReadShard(shard!, 2, 0);
+            context.ReleaseShard(shard!);
+            done.Set();
+        });
+
+        runtime.Send(actor, new byte[] { 1 });
+        runtime.Send(actor, new byte[] { 2 });
+
+        Require(done.Wait(TimeSpan.FromSeconds(5)),
+            "persistent shard is usable on a later actor turn");
+        Require(WaitUntil(() => runtime.CompletedMessages == 2),
+            "cross-turn shard messages complete");
+        Require(before == 20.0 && after == 21.25,
+            "SoA shard preserves state and dense-kernel semantics across turns");
+
+        runtime.Stop(actor);
+        Require(WaitUntil(() => runtime.LiveActors == 0),
+            "cross-turn shard actor finalizes");
+    }
+
+    private static void RetainedContextCannotUseExpiredTurn()
+    {
+        using var runtime = new ActorRuntime(Options());
+        using var captured = new ManualResetEventSlim();
+        ActorContext? retained = null;
+
+        var actor = runtime.Spawn(ActorKind.Shared, (context, _) =>
+        {
+            retained = context;
+            captured.Set();
+        });
+
+        runtime.Send(actor, new byte[] { 1 });
+        Require(captured.Wait(TimeSpan.FromSeconds(5)),
+            "actor context captured during turn");
+        Require(WaitUntil(() => runtime.CompletedMessages == 1),
+            "captured actor turn completed");
+
+        bool rejected = false;
+        try
+        {
+            _ = retained!.AllocateScratch(8);
+        }
+        catch (InvalidOperationException)
+        {
+            rejected = true;
+        }
+        Require(rejected,
+            "retained ActorContext cannot reacquire arena authority after turn exit");
+
+        runtime.Stop(actor);
+        Require(WaitUntil(() => runtime.LiveActors == 0),
+            "expired-context actor finalizes");
     }
 
     private static void LifetimePinCanOutliveActorTurnAndStop()
