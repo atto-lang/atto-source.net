@@ -33,6 +33,8 @@ public static class OresParser
         // UTF-8 bytes, matching the disk/CLI boundary, not code-unit count.
         if (System.Text.Encoding.UTF8.GetByteCount(source) > 1_048_576)
             throw new FormatException("Source exceeds 1 MiB UTF-8 parser limit");
+        // No structural match lowering or readonly shape metadata in scalar CIL yet.
+        StructuralShapeAdmission.RejectUnsupportedPatterns(source);
         var lexer = new Lexer(source);
         var tokens = new List<Token>();
         for (;;)
