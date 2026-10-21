@@ -335,9 +335,12 @@ public unsafe sealed class ActorArena : IDisposable
             if (_turnEpoch == ulong.MaxValue)
                 throw new OverflowException("Actor arena turn epoch exhausted");
 
-            _turnEpoch++;
+            ulong nextEpoch = _turnEpoch + 1;
+            var admitted = new ActorArenaTurn(
+                this, _authority, _actorId, _incarnation, nextEpoch);
+            _turnEpoch = nextEpoch;
             _turnActive = true;
-            return new ActorArenaTurn(this, _authority, _actorId, _incarnation, _turnEpoch);
+            return admitted;
         }
     }
 
@@ -468,11 +471,11 @@ public unsafe sealed class ActorArena : IDisposable
                 throw new InvalidOperationException("Actor read-loan quota exhausted");
 
             ref Slot slot = ref ValidateHandleLocked(handle);
+            var loan = new ActorArenaReadLoan(this, _authority, handle.Slot,
+                handle.Generation, _actorId, _incarnation, handle.Length);
             slot.ReadLoans = checked(slot.ReadLoans + 1);
             _readLoans++;
-
-            return new ActorArenaReadLoan(this, _authority, handle.Slot,
-                handle.Generation, _actorId, _incarnation, handle.Length);
+            return loan;
         }
     }
 
@@ -488,8 +491,9 @@ public unsafe sealed class ActorArena : IDisposable
             EnsureAdmissionOpenLocked();
             if (_externalPins == _maxLifetimePins)
                 throw new InvalidOperationException("Actor lifetime-pin quota exhausted");
+            var pin = new ActorArenaLifetimePin(this, _authority);
             _externalPins++;
-            return new ActorArenaLifetimePin(this, _authority);
+            return pin;
         }
     }
 
