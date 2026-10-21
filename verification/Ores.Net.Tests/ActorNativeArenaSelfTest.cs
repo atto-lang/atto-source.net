@@ -1,0 +1,85 @@
+using Ores.Net.Runtime;
+
+internal static class ActorNativeArenaSelfTest
+{
+    public static void Run()
+    {
+        using var arena = new ActorNativeArena(256, 8);
+        using var other = new ActorNativeArena(256, 8);
+
+        ulong first = arena.Allocate(24, 8);
+        ulong foreign = other.Allocate(24, 8);
+        Require(first != ActorNativeArena.InvalidHandle, "first native actor allocation");
+        Require(foreign != ActorNativeArena.InvalidHandle, "foreign native actor allocation");
+        Require(arena.WriteInt64(first, 0, 42), "native actor write");
+        Require(arena.ReadInt64(first) == 42, "native actor read");
+        Require(!arena.WriteInt64(foreign, 0, 7), "foreign handle fails closed");
+        RejectInvalid(() => _ = arena.ReadInt64(foreign), "foreign read");
+
+        Require(arena.Drop(first), "deterministic drop");
+        Require(!arena.Drop(first), "double drop rejected");
+        ulong replacement = arena.Allocate(24, 8);
+        Require(replacement != ActorNativeArena.InvalidHandle && replacement != first,
+            "slot reuse mints a fresh global token");
+        Require(arena.ReadInt64(replacement) == 0, "recycled bytes are zeroed");
+        Require(arena.Drop(replacement), "replacement drop");
+        Require(arena.LiveAllocations == 0 && arena.UsedBytes == 0,
+            "last owner drop recycles bump capacity");
+
+        for (int i = 0; i < 10_000; i++)
+        {
+            ulong handle = arena.Allocate(16, 8);
+            Require(handle != ActorNativeArena.InvalidHandle, "long-lived actor allocation");
+            Require(arena.WriteInt64(handle, 0, i), "long-lived actor write");
+            Require(arena.ReadInt64(handle) == i, "long-lived actor read");
+            Require(arena.Drop(handle), "long-lived actor deterministic drop");
+        }
+        Require(arena.LiveAllocations == 0 && arena.UsedBytes == 0,
+            "10k request turns leave no guest allocation live");
+
+        Span<ulong> tracking = stackalloc ulong[4];
+        var scope = new ActorNativeArena.CleanupScope(arena, tracking);
+        ulong lexicalA = scope.Allocate(16, 8);
+        ulong lexicalB = scope.Allocate(16, 8);
+        Require(lexicalA != 0 && lexicalB != 0 && scope.Tracked == 2,
+            "stack cleanup scope tracks lexical owners");
+        Require(scope.Drop(lexicalA), "explicit lexical drop disarms one owner");
+        Require(scope.Release(lexicalB), "move/transfer disarms lexical cleanup");
+        scope.Dispose();
+        Require(scope.CleanupOk && arena.LiveAllocations == 1,
+            "scope keeps transferred owner alive");
+        Require(arena.Drop(lexicalB), "transferred owner is dropped by new owner");
+
+        Span<ulong> automaticTracking = stackalloc ulong[4];
+        var automatic = new ActorNativeArena.CleanupScope(arena, automaticTracking);
+        Require(automatic.Allocate(16) != 0 && automatic.Allocate(16) != 0,
+            "automatic cleanup fixture");
+        automatic.Dispose();
+        Require(automatic.CleanupOk && arena.LiveAllocations == 0,
+            "scope exit deterministically drops all untransferred owners");
+
+        Span<ulong> staleTracking = stackalloc ulong[4];
+        var staleScope = new ActorNativeArena.CleanupScope(arena, staleTracking);
+        ulong stale = staleScope.Allocate(16);
+        ulong survivor = staleScope.Allocate(16);
+        Require(stale != 0 && survivor != 0, "stale cleanup fixture");
+        Require(arena.Drop(stale), "out-of-band drop fixture");
+        staleScope.Dispose();
+        Require(!staleScope.CleanupOk && arena.LiveAllocations == 0,
+            "stale tracked owner is reported without suppressing later cleanup");
+
+        Console.WriteLine("PASS .NET unmanaged actor arena, primitive handles, stack cleanup scopes");
+    }
+
+    private static void Require(bool value, string why)
+    {
+        if (!value) throw new Exception("ActorNativeArena FAILED: " + why);
+    }
+
+    private static void RejectInvalid(Action action, string why)
+    {
+        try { action(); }
+        catch (InvalidOperationException) { return; }
+        throw new Exception("ActorNativeArena expected rejection: " + why);
+    }
+}
