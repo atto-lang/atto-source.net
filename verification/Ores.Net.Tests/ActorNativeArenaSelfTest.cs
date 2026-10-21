@@ -69,7 +69,27 @@ internal static class ActorNativeArenaSelfTest
             "stale tracked owner is reported without suppressing later cleanup");
 
         ConcurrentDisposeDoesNotRaceNativeAccess();
+        RejectUnboundedNativeArenaReservation();
         Console.WriteLine("PASS .NET unmanaged actor arena, primitive handles, stack cleanup scopes");
+    }
+
+    private static void RejectUnboundedNativeArenaReservation()
+    {
+        bool rejected = false;
+        try
+        {
+            using var invalid = new ActorNativeArena(
+                ActorNativeArena.MaximumCapacityBytes + 1, 1);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            rejected = true;
+        }
+        Require(rejected, "oversized unmanaged reservation rejects before allocation");
+
+        using var small = new ActorNativeArena(64, 1);
+        Require(small.Allocate(64, 1) != ActorNativeArena.InvalidHandle,
+            "bounded valid arena still allocates normally");
     }
 
     private static void ConcurrentDisposeDoesNotRaceNativeAccess()

@@ -21,6 +21,7 @@ namespace Ores.Net.Runtime;
 public sealed unsafe class ActorNativeArena : IDisposable
 {
     public const ulong InvalidHandle = 0;
+    public const int MaximumCapacityBytes = 64 * 1024 * 1024;
     private const int SlotBits = 16;
     private const ulong SlotMask = (1UL << SlotBits) - 1;
     private const long MaxSequence = (1L << (64 - SlotBits)) - 1;
@@ -45,7 +46,9 @@ public sealed unsafe class ActorNativeArena : IDisposable
 
     public ActorNativeArena(int bytes, int slots)
     {
-        if (bytes <= 0) throw new ArgumentOutOfRangeException(nameof(bytes));
+        if (bytes <= 0 || bytes > MaximumCapacityBytes)
+            throw new ArgumentOutOfRangeException(nameof(bytes),
+                "Actor-native arena capacity must be between 1 and 64 MiB");
         if (slots <= 0 || slots > MaxSlots) throw new ArgumentOutOfRangeException(nameof(slots));
 
         // Allocate managed control metadata first. If one of these allocations
