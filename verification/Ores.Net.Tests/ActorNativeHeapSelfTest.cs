@@ -68,6 +68,33 @@ internal static class ActorNativeHeapSelfTest
             "persistent state survived transient free/reuse");
         Require(heapA.LiveAllocations == 1, "per-actor allocation accounting");
 
+        // Exercise a genuinely interior hole while a later allocation
+        // remains live. First-fit must split the hole for aligned reuse,
+        // then coalesce both fragments when the new allocation is dropped.
+        using (var fragmented = new ActorNativeHeap(alice, 40, 4))
+        {
+            var head = fragmented.Allocate(alice, 1, 1);
+            var center = fragmented.Allocate(alice, 32, 1);
+            var tail = fragmented.Allocate(alice, 1, 1);
+            Require(head.HasValue && center.HasValue && tail.HasValue,
+                "fragmentation fixture admission");
+            Require(fragmented.Write(alice, tail.Value, new byte[] { 23 }),
+                "write stable trailing allocation");
+            Require(fragmented.Remove(alice, center.Value), "create interior hole");
+            var aligned = fragmented.Allocate(alice, 8, 8);
+            Require(aligned.HasValue, "reuse interior hole with alignment padding");
+            Require(fragmented.Remove(alice, aligned.Value), "return split hole");
+            var whole = fragmented.Allocate(alice, 32, 1);
+            Require(whole.HasValue, "coalesced interior hole must fit full 32-byte region");
+            Span<byte> tailValue = stackalloc byte[1];
+            Require(fragmented.Read(alice, tail.Value, tailValue) && tailValue[0] == 23,
+                "live trailing allocation cannot be compacted or overwritten");
+            Require(fragmented.Remove(alice, whole.Value) &&
+                    fragmented.Remove(alice, tail.Value) &&
+                    fragmented.Remove(alice, head.Value),
+                "all persistent and transient native allocations released");
+        }
+
         RejectWire(() => JsonSerializer.Serialize(root.Value));
         RejectWire(() => JsonSerializer.Deserialize<ActorHeapHandle>("{}"));
         var pending = heapA.AcquireLifetimeLease(alice);
