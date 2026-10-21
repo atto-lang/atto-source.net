@@ -225,10 +225,6 @@ internal static class ActorArenaSelfTest
         {
             return;
         }
-        catch (ObjectDisposedException)
-        {
-            return;
-        }
 
         throw new Exception("Actor arena unexpectedly admitted: " + scenario);
     }
