@@ -48,6 +48,7 @@ internal static class ActorMailboxBoundsSelfTest
         if (!single.TryReceive(out var payload) || payload is null || payload[0] != 42)
             throw new Exception("slot not released");
         ActorNativeHeapSelfTest.Run();
+        ActorNativeBudgetSelfTest.Run();
         Console.WriteLine("PASS .NET mailbox limits, exact byte refund, empty data, restart");
     }
 }
