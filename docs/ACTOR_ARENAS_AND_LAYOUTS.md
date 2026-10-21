@@ -108,3 +108,19 @@ deterministic release back to the actor arena.
 
 The repository's Windows Native AOT workflow remains the authoritative build
 gate for this implementation.
+
+
+## Grouped SoAoS and compressed32 parity follow-up
+
+The dense actor shard now has four intentionally different host physical geometries:
+
+- **AoS:** complete scalar rows are adjacent.
+- **SoA:** one whole scalar column follows another.
+- **AoSoA:** fields are arrays inside fixed-width row tiles.
+- **SoAoS:** declared field groups are separate arrays of compact row subrecords. For four fields grouped `[2,2]`, group zero contains `row0(field0,field1), row1(...)`; group one independently contains `row0(field2,field3), row1(...)`. This is not an alias for SoA or AoSoA.
+
+`GetPhysicalByteOffset` returns a checked offset relative to the shard allocation for compiler/diagnostic geometry tests. It never exposes an unmanaged pointer or guest authority. Current shard values are still homogeneous `f64`; heterogeneous scalar ABI lowering remains a separate compiler task.
+
+The runtime also defines `ActorCompressed32Reference` with the shared Java/LLVM representation: `0` is null and a non-null unsigned word encodes `canonicalActorOffset/8 + 1`. The largest encoded object start is 34,359,738,352 bytes (32 GiB - 16); a stored 64-bit host cell must have zero upper 32 bits. The codec checks representation and logical-span bounds only. It is deliberately **not** a capability: arena ownership, actor incarnation, object-start issuance, generation/liveness, type/layout identity and borrow authorization must all be checked separately before a decoded reference can touch memory.
+
+This branch still does not lower Oreslang guest objects or inverted classes into these structures, and it does not prove Native AOT execution until the exact-head workflow actually runs its build/test steps.
