@@ -13,7 +13,7 @@ CFG, SSA, ownership/borrow moves, non-null contracts, generic instantiation clos
 General functions, calls, locals, loops, structs, records, exhaustive generic specialization, interop metadata, checked arithmetic, exceptions and full stack traces where permitted. Build-time trim manifest and diagnostics for unsupported dynamic features.
 
 ### N4 — Actor runtime contract
-Four scheduler domains, CONTROL coordinator, bounded mailboxes, typed ActorRef, supervision, send acknowledgements, actor-owned arenas where safe, stable Result serialization and generation-aware transport.
+Three actor execution domains (`PRIVATE`, `SHARED`, `UNTRUSTED`) plus a zero-thread CONTROL coordinator, bounded mailboxes, typed ActorRef, supervision, send acknowledgements, actor-owned arenas where safe, stable Result serialization and generation-aware transport.
 
 ### N5 — Async and cross-generation upgrades
 `await`, `select`, `*_blocking` cooperative suspension without blocking scheduler threads; process-level staged native-generation replacement and rollback (no runtime code loading).
