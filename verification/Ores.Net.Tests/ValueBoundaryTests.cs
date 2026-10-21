@@ -32,7 +32,7 @@ internal static class ValueBoundaryTests
         var borrowCases = new Dictionary<string, string>
         {
             ["shared-borrow"] = "pub fnc main():int{return task { return rt borrow owner; };}",
-            ["exclusive-borrow"] = "pub fnc main():int{return task { return rt borrow mut owner; };}",
+            ["exclusive-borrow"] = "pub fnc main():int{return task { return rt mut borrow owner; };}",
             ["nested-borrow"] = "pub fnc main():int{return task { return task { return rt borrow owner; }; };}",
             ["task-comment-line"] = "pub fnc main():int{return task // hidden boundary\n { return rt borrow owner; };}",
             ["task-comment-block"] = "pub fnc main():int{return task /* comment */ { return rt borrow owner; };}",
