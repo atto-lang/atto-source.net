@@ -381,16 +381,17 @@ public sealed class ActorRuntime : IDisposable
             int processed = 0;
             while (processed < _options.MessagesPerDispatch)
             {
-                byte[]? payload;
+                byte[] payload;
                 ActorArenaTurn turn;
 
                 lock (cell.Gate)
                 {
                     if (cell.Stopping ||
-                        !cell.Mailbox.TryReceive(out payload) ||
-                        payload is null)
+                        !cell.Mailbox.TryReceive(out byte[]? dequeued) ||
+                        dequeued is null)
                         break;
 
+                    payload = dequeued;
                     turn = cell.Arena.EnterTurn(
                         cell.Reference.Id, cell.Reference.Generation);
                 }
