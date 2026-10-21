@@ -119,6 +119,32 @@ internal static class StructuredSourceTests
                 operation);
         }
 
+        foreach (var operation in new[] { "copy", "share", "take", "borrow", "mut borrow" })
+        {
+            try { _ = OresStructuredParser.Parse(
+                $"fnc main():int{{return rt {operation} value;}}"); }
+            catch (FormatException ex)
+            {
+                Require(ex.Message.Contains("requires typed actor-arena lowering",
+                    StringComparison.Ordinal),
+                    "structured ownership rejection must name actor-arena lowering");
+                continue;
+            }
+            throw new Exception("Structured source incorrectly accepted ownership operation: rt " +
+                operation);
+        }
+        try
+        {
+            _ = OresStructuredParser.Parse(
+                "fnc main():int{return rt borrow mut value;}");
+            throw new Exception("Structured source admitted legacy rt borrow mut");
+        }
+        catch (FormatException ex)
+        {
+            Require(ex.Message.Contains("use 'rt mut borrow'", StringComparison.Ordinal),
+                "legacy mutable borrow diagnostic must name canonical spelling");
+        }
+
         // AST height must be bounded even when the source is a flat chain.
         // Grammar recursion depth alone cannot enforce this invariant.
         var maxHeightExpression = string.Join("+", Enumerable.Repeat("1", 128));
