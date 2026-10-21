@@ -49,8 +49,13 @@ public static class ActorCompressed32Reference
         long offset = DecodeStored(storedWord) ??
             throw new InvalidOperationException("null compressed32 reference");
 
-        if (logicalSpanBytes < 0 || accessBytes <= 0 ||
-            offset > logicalSpanBytes || accessBytes > logicalSpanBytes - offset)
+        // A compressed actor-relative reference can address at most its
+        // canonical 32-bit logical span, even if the host supplies a wider
+        // integer. Never let an oversized span authorize a crossing read.
+        if (logicalSpanBytes < 0 ||
+            logicalSpanBytes > MaximumLogicalSpanBytes ||
+            accessBytes <= 0 || offset > logicalSpanBytes ||
+            accessBytes > logicalSpanBytes - offset)
             throw new InvalidOperationException(
                 "compressed32 reference is outside the logical actor span");
 

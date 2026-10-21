@@ -41,6 +41,16 @@ internal static class ActorCompressed32ReferenceSelfTest
             "access cannot extend beyond logical span");
         Require(ActorCompressed32Reference.DereferenceChecked(1, 8, 8) == 0,
             "first object can occupy offset zero");
+        Require(ActorCompressed32Reference.DereferenceChecked(uint.MaxValue,
+            ActorCompressed32Reference.MaximumLogicalSpanBytes, 8) ==
+            ActorCompressed32Reference.MaximumEncodedStartingOffsetBytes,
+            "last encoded object fits exactly at maximum logical span");
+        Reject(() => ActorCompressed32Reference.DereferenceChecked(1,
+            ActorCompressed32Reference.MaximumLogicalSpanBytes + 1, 8),
+            "oversized actor span must not bypass compressed32 range");
+        Reject(() => ActorCompressed32Reference.DereferenceChecked(uint.MaxValue,
+            ActorCompressed32Reference.MaximumLogicalSpanBytes, 16),
+            "maximum encoded offset cannot authorize overlong access");
 
         Console.WriteLine("PASS .NET compressed32 actor-relative representation boundaries");
     }
