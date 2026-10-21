@@ -31,14 +31,14 @@ internal static class ValueBoundaryTests
         // is a typed Send/Sync/loan and physical-quiescence lowering.
         var borrowCases = new Dictionary<string, string>
         {
-            ["shared-borrow"] = "pub fnc main():int{return task { return rt borrow owner; };}",
-            ["exclusive-borrow"] = "pub fnc main():int{return task { return rt mut borrow owner; };}",
-            ["nested-borrow"] = "pub fnc main():int{return task { return task { return rt borrow owner; }; };}",
-            ["task-comment-line"] = "pub fnc main():int{return task // hidden boundary\n { return rt borrow owner; };}",
-            ["task-comment-block"] = "pub fnc main():int{return task /* comment */ { return rt borrow owner; };}",
-            ["task-comment-nested"] = "pub fnc main():int{return task /* outer /* inner */ outer */ { return rt borrow owner; };}",
-            ["task-multiline"] = "pub fnc main():int{return task \n { return rt borrow owner; };}",
-            ["classic-for-init-borrow"] = "pub fnc main():int{return task { for (val loop = rt borrow owner; false; ) {} return 0; };}"
+            ["shared-borrow"] = "pub fnc main(int owner):int{return task { return rt borrow owner; };}",
+            ["exclusive-borrow"] = "pub fnc main(int owner):int{return task { return rt mut borrow owner; };}",
+            ["nested-borrow"] = "pub fnc main(int owner):int{return task { return task { return rt borrow owner; }; };}",
+            ["task-comment-line"] = "pub fnc main(int owner):int{return task // hidden boundary\n { return rt borrow owner; };}",
+            ["task-comment-block"] = "pub fnc main(int owner):int{return task /* comment */ { return rt borrow owner; };}",
+            ["task-comment-nested"] = "pub fnc main(int owner):int{return task /* outer /* inner */ outer */ { return rt borrow owner; };}",
+            ["task-multiline"] = "pub fnc main(int owner):int{return task \n { return rt borrow owner; };}",
+            ["classic-for-init-borrow"] = "pub fnc main(int owner):int{return task { for (val loop = rt borrow owner; false; ) {} return 0; };}"
         };
         foreach (var (name, source) in borrowCases)
         {
