@@ -98,23 +98,39 @@ public sealed class ActorMailbox
         }
     }
 
+    // Runtime callers may check admission before starting a worker. The
+    // actual Send checks again under this gate before publishing any bytes.
+    internal void ValidateAdmission(ActorRef destination, int length)
+    {
+        lock (_gate)
+            ValidateSendLocked(destination, length);
+    }
+
     public void Send(ActorRef destination, ReadOnlySpan<byte> data)
     {
         lock (_gate)
         {
-            if (_closed || destination.Id != _id || destination.Generation != _generation ||
-                destination.Nonce != _nonce)
-                throw new InvalidOperationException("Actor reference is stale or mailbox is closed");
-            // Match Forge: receiver authority is checked before size disclosures.
-            if (data.Length > MaxMessageBytes)
-                throw new ArgumentOutOfRangeException(nameof(data), "Message exceeds 1 MiB");
-            if (_messages.Count >= _maxMessages || _queuedBytes > _maxQueuedBytes ||
-                data.Length > _maxQueuedBytes - _queuedBytes)
-                throw new InvalidOperationException("Mailbox capacity exceeded");
+            ValidateSendLocked(destination, data.Length);
             var ownedCopy = data.ToArray();
             _messages.Enqueue(ownedCopy);
             _queuedBytes += ownedCopy.Length;
         }
+    }
+
+    private void ValidateSendLocked(ActorRef destination, int length)
+    {
+        if (_closed || destination.Id != _id ||
+            destination.Generation != _generation || destination.Nonce != _nonce)
+            throw new InvalidOperationException("Actor reference is stale or mailbox is closed");
+
+        // Match Forge: check receiver authority before disclosing payload sizes.
+        if (length > MaxMessageBytes)
+            throw new ArgumentOutOfRangeException(nameof(length), "Message exceeds 1 MiB");
+        if (length < 0)
+            throw new ArgumentOutOfRangeException(nameof(length));
+        if (_messages.Count >= _maxMessages || _queuedBytes > _maxQueuedBytes ||
+            length > _maxQueuedBytes - _queuedBytes)
+            throw new InvalidOperationException("Mailbox capacity exceeded");
     }
 
     public bool TryReceive(out byte[]? payload)

@@ -7,6 +7,7 @@ internal static class ActorRuntimeSelfTest
     {
         ThreeKindsUseAssignedDomainsAndActorArenas();
         UnknownActorKindFailsBeforeNativeAllocation();
+        RejectedMessagesDoNotStartCarriers();
         OneActorNeverRunsTwoHandlersConcurrently();
         DeliveredMessageStorageIsTurnBound();
         PersistentShardSurvivesAcrossActorTurns();
@@ -35,6 +36,33 @@ internal static class ActorRuntimeSelfTest
         Require(runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0 &&
                 runtime.StartedCarrierThreads == 0,
             "invalid kind must not consume actor, native-memory or carrier capacity");
+    }
+
+    private static void RejectedMessagesDoNotStartCarriers()
+    {
+        using var runtime = new ActorRuntime(Options());
+        var actor = runtime.Spawn(ActorKind.Shared, static (_, _) => { });
+        Require(runtime.StartedCarrierThreads == 0,
+            "actor spawn leaves carrier threads unstarted");
+
+        bool rejected = false;
+        try
+        {
+            runtime.Send(actor, new byte[ActorMailbox.MaxMessageBytes + 1]);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            rejected = true;
+        }
+        Require(rejected, "oversized message is rejected");
+        Require(runtime.StartedCarrierThreads == 0 &&
+                runtime.CompletedMessages == 0 && runtime.LiveActors == 1,
+            "invalid payload does not consume carrier capacity or actor state");
+
+        runtime.Stop(actor);
+        Require(WaitUntil(() => runtime.LiveActors == 0 &&
+                 runtime.NativeReservedBytes == 0),
+            "rejected-message actor stops without native-memory leak");
     }
 
     private static ActorRuntimeOptions Options() => new()

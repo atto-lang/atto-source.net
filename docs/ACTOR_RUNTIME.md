@@ -29,7 +29,10 @@ CONTROL worker.
 
 `Send` validates local actor authority before publishing work. When an actor is
 not already scheduled, the dispatch token is admitted while holding the actor
-cell gate before the message is copied into the mailbox. A newly created carrier
+cell gate before the message is copied into the mailbox. The mailbox
+prevalidates authority, size, message count and byte capacity before scheduling,
+so a rejected message does not start a carrier. The mailbox revalidates under
+its gate before publication. A newly created carrier
 must acquire that same gate, so it cannot observe an empty mailbox and lose the
 wake-up.
 

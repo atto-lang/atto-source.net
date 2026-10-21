@@ -276,6 +276,9 @@ public sealed class ActorRuntime : IDisposable
             if (cell.Stopping || !cell.Mailbox.Authorizes(destination))
                 throw new InvalidOperationException(
                     "Actor reference is stale or actor is stopping");
+            // Do not start a carrier for a message that cannot enter the
+            // mailbox. Send revalidates after scheduling before publication.
+            cell.Mailbox.ValidateAdmission(destination, payload.Length);
 
             // Publish the dispatch token before the message while holding the
             // cell gate. A newly-started carrier blocks on this same gate, so
