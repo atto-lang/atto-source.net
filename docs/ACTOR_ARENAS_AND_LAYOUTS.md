@@ -16,7 +16,7 @@ may migrate to another carrier **between** physical turns, after the prior
 turn has closed. Suspend/resume must not carry one live physical turn across
 threads; it must end the turn and admit a new one on resume.
 
-- **Aggregate budget** — each arena reserves its aligned persistent + scratch capacity against a runtime/process `ActorArenaBudget` before native allocation; failed admission is accounting-neutral and physical reclaim refunds exactly once.\n- **Persistent region** — native aligned storage that survives actor turns.
+- **Aggregate budget** — each arena reserves aligned persistent + scratch capacity against its runtime/tenant `ActorArenaBudget` **and** the process-wide native cap (charged only once when those budgets are the same object). Constructor failures roll back both, and physical reclaim refunds both exactly once.\n- **Persistent region** — native aligned storage that survives actor turns.
   Allocations use opaque arena/slot/generation capabilities. Partial frees never
   relocate live bytes; when the final allocation is dropped the persistent bump
   region is scrubbed and recycled.
@@ -31,6 +31,10 @@ threads; it must end the turn and admit a new one on resume.
 - **Retirement** — logical retirement seals new turns, allocations, loans and
   pins first. Physical zeroize/free waits for the active turn, read loans and
   lifetime pins to quiesce.
+
+Mailbox admission validates authorization, message size and queue capacity
+before acquiring a lazy actor-worker dispatch token. Invalid sends cannot
+start a carrier solely to reject a message.
 
 The runtime uses `NativeMemory.AlignedAlloc` / `AlignedFree`. Managed CLR
 objects still exist for scheduler/control metadata and capability wrappers, so

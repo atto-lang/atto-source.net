@@ -9,6 +9,7 @@ internal static class ActorArenaSelfTest
         ReadLoanFreezesAllocationAcrossTurns();
         LifetimePinDelaysPhysicalReclaim();
         AggregateBudgetAdmissionIsNeutral();
+        RuntimeBudgetsAlsoChargeProcessLimit();
         RetirementSealsAdmissionButAllowsTurnCleanup();
         CrossArenaAuthorityAndGenerationFences();
         ForgedMetadataCannotAcquireMemoryAuthority();
@@ -192,6 +193,26 @@ internal static class ActorArenaSelfTest
             "constructor rejected by aggregate budget");
         Require(tooSmall.ReservedBytes == 0,
             "rejected constructor consumes no aggregate reservation");
+    }
+
+    private static void RuntimeBudgetsAlsoChargeProcessLimit()
+    {
+        long processBefore = ActorArenaBudget.Process.ReservedBytes;
+        var tenant = new ActorArenaBudget(2048);
+        var arena = new ActorArena(
+            actorId: 3601, incarnation: 1,
+            persistentBytes: 1024, scratchBytes: 256,
+            maxAllocations: 4, maxLifetimePins: 2, maxReadLoans: 2,
+            budget: tenant);
+
+        Require(tenant.ReservedBytes == 1280 &&
+                ActorArenaBudget.Process.ReservedBytes == processBefore + 1280,
+            "tenant arena must charge tenant and aggregate process budgets");
+        Require(arena.Retire(), "unowned arena can reclaim immediately");
+        arena.Dispose();
+        Require(tenant.ReservedBytes == 0 &&
+                ActorArenaBudget.Process.ReservedBytes == processBefore,
+            "quiescent reclaim must refund both budgets exactly once");
     }
 
     private static void RetirementSealsAdmissionButAllowsTurnCleanup()

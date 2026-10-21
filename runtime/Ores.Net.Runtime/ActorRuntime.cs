@@ -277,6 +277,10 @@ public sealed class ActorRuntime : IDisposable
                 throw new InvalidOperationException(
                     "Actor reference is stale or actor is stopping");
 
+            // Reject invalid DATA before lazily starting a carrier. The cell
+            // gate prevents a concurrent Stop from changing admission state.
+            cell.Mailbox.ValidateSend(destination, payload.Length);
+
             // Publish the dispatch token before the message while holding the
             // cell gate. A newly-started carrier blocks on this same gate, so
             // it cannot observe an empty mailbox and lose the wakeup.

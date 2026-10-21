@@ -7,6 +7,7 @@ internal static class ActorRuntimeSelfTest
     {
         ThreeKindsUseAssignedDomainsAndActorArenas();
         UnknownActorKindFailsBeforeNativeAllocation();
+        InvalidSendDoesNotStartCarrier();
         OneActorNeverRunsTwoHandlersConcurrently();
         DeliveredMessageStorageIsTurnBound();
         PersistentShardSurvivesAcrossActorTurns();
@@ -35,6 +36,34 @@ internal static class ActorRuntimeSelfTest
         Require(runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0 &&
                 runtime.StartedCarrierThreads == 0,
             "invalid kind must not consume actor, native-memory or carrier capacity");
+    }
+
+    private static void InvalidSendDoesNotStartCarrier()
+    {
+        using var runtime = new ActorRuntime(Options());
+        var actor = runtime.Spawn(ActorKind.Private,
+            static (_, _) => throw new Exception("invalid send must not be delivered"));
+        Require(runtime.StartedCarrierThreads == 0, "spawn is lazy");
+
+        bool oversizedRejected = false;
+        try
+        {
+            runtime.Send(actor, new byte[ActorMailbox.MaxMessageBytes + 1]);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            oversizedRejected = true;
+        }
+        Require(oversizedRejected, "oversized message is rejected before dispatch");
+        Require(runtime.StartedCarrierThreads == 0 &&
+                runtime.CompletedMessages == 0 &&
+                runtime.FaultedTurns == 0,
+            "invalid send cannot launch an actor worker or deliver a message");
+
+        runtime.Stop(actor);
+        Require(WaitUntil(() => runtime.LiveActors == 0 &&
+                                runtime.NativeReservedBytes == 0),
+            "stopped actor refunds native memory after invalid send");
     }
 
     private static ActorRuntimeOptions Options() => new()

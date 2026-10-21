@@ -233,6 +233,7 @@ public unsafe sealed class ActorArena : IDisposable
     private bool _retired;
     private bool _reclaimed;
     private bool _budgetRefunded;
+    private bool _processBudgetReserved;
 
     public ActorArena(ulong actorId, ulong incarnation,
         int persistentBytes = 8 * 1024 * 1024,
@@ -277,6 +278,13 @@ public unsafe sealed class ActorArena : IDisposable
         _budget.Reserve(_budgetBytes);
         try
         {
+            // A runtime-specific budget does not replace the process-wide cap.
+            if (!ReferenceEquals(_budget, ActorArenaBudget.Process))
+            {
+                ActorArenaBudget.Process.Reserve(_budgetBytes);
+                _processBudgetReserved = true;
+            }
+
             _authority = Guid.NewGuid();
             if (_authority == Guid.Empty)
                 throw new InvalidOperationException(
@@ -307,6 +315,11 @@ public unsafe sealed class ActorArena : IDisposable
             {
                 NativeMemory.AlignedFree(_persistent);
                 _persistent = null;
+            }
+            if (_processBudgetReserved)
+            {
+                ActorArenaBudget.Process.Refund(_budgetBytes);
+                _processBudgetReserved = false;
             }
             _budget.Refund(_budgetBytes);
             _budgetRefunded = true;
@@ -778,6 +791,11 @@ public unsafe sealed class ActorArena : IDisposable
         if (!_budgetRefunded)
         {
             _budget.Refund(_budgetBytes);
+            if (_processBudgetReserved)
+            {
+                ActorArenaBudget.Process.Refund(_budgetBytes);
+                _processBudgetReserved = false;
+            }
             _budgetRefunded = true;
         }
 
