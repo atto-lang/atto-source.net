@@ -23,6 +23,16 @@ internal static class ActorShardColumnsSelfTest
                 ActorDataLayout.Soa, lanes: 4);
         }, "SoA cannot pretend to carry AoSoA lane metadata");
 
+        using (var arena = NewArena(6102))
+        using (var turn = arena.EnterTurn(6102, 1))
+        {
+            Reject(() => _ = new ActorShardColumns(arena, turn, 8, 3,
+                (ActorDataLayout)int.MaxValue),
+                "undefined layout must fail before native allocation");
+            Require(arena.PersistentLiveBytes == 0 && arena.LiveAllocations == 0,
+                "invalid layout admission must not consume actor arena capacity");
+        }
+
         Console.WriteLine("PASS .NET actor-owned AoS/SoA/AoSoA shard layouts and dense kernel");
     }
 

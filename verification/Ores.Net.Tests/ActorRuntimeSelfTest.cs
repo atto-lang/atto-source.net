@@ -5,6 +5,7 @@ internal static class ActorRuntimeSelfTest
     public static void Run()
     {
         ThreeKindsUseAssignedDomainsAndActorArenas();
+        UnknownActorKindFailsBeforeNativeAllocation();
         OneActorNeverRunsTwoHandlersConcurrently();
         DeliveredMessageStorageIsTurnBound();
         PersistentShardSurvivesAcrossActorTurns();
@@ -13,6 +14,25 @@ internal static class ActorRuntimeSelfTest
         HandlerFaultRetiresOnlyThatActor();
         Console.WriteLine(
             "PASS .NET integrated actor runtime mailbox, arena, domains, stop and fault isolation");
+    }
+
+    private static void UnknownActorKindFailsBeforeNativeAllocation()
+    {
+        using var runtime = new ActorRuntime(Options());
+        bool rejected = false;
+        try
+        {
+            runtime.Spawn((ActorKind)int.MaxValue, static (_, _) => { });
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            rejected = true;
+        }
+
+        Require(rejected, "unknown actor kind must be rejected at spawn admission");
+        Require(runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0 &&
+                runtime.StartedCarrierThreads == 0,
+            "invalid kind must not consume actor, native-memory or carrier capacity");
     }
 
     private static ActorRuntimeOptions Options() => new()
