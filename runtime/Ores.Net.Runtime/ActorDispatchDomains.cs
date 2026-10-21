@@ -112,6 +112,14 @@ public sealed class ActorDispatchDomains : IDisposable
 
     public void Dispose()
     {
+        if (Volatile.Read(ref _closed) != 0)
+            return;
+        if (_private.IsCurrentWorker ||
+            _shared.IsCurrentWorker ||
+            _untrusted.IsCurrentWorker)
+            throw new InvalidOperationException(
+                "ActorDispatchDomains.Dispose cannot join its current carrier");
+
         if (Interlocked.Exchange(ref _closed, 1) != 0)
             return;
 
@@ -159,6 +167,15 @@ public sealed class ActorDispatchDomains : IDisposable
         internal int StartedWorkers
         {
             get { lock (_gate) return _workers.Count; }
+        }
+
+        internal bool IsCurrentWorker
+        {
+            get
+            {
+                lock (_gate)
+                    return _workers.Contains(Thread.CurrentThread);
+            }
         }
 
         internal int WorkerStartFailures =>
@@ -234,8 +251,16 @@ public sealed class ActorDispatchDomains : IDisposable
                 IsBackground = true,
                 Name = _threadPrefix + sequence
             };
-            worker.Start();
             _workers.Add(worker);
+            try
+            {
+                worker.Start();
+            }
+            catch
+            {
+                _workers.Remove(worker);
+                throw;
+            }
         }
 
         private void WorkerLoop()
