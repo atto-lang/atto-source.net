@@ -99,6 +99,23 @@ foreach (var operation in new[] { "ref", "unref", "deref", "deref mut", "raw" })
 }
 
 
+foreach (var operation in new[] { "copy", "share", "take", "borrow", "mut borrow" })
+{
+    try { _ = OresParser.Parse($"fnc main():int{{return rt {operation} value;}}"); }
+    catch (FormatException ex) when
+        (ex.Message.Contains("requires typed actor-arena lowering",
+            StringComparison.Ordinal)) { continue; }
+    throw new Exception("Unsupported ownership operation did not fail closed: rt " + operation);
+}
+try
+{
+    _ = OresParser.Parse("fnc main():int{return rt borrow mut value;}");
+    throw new Exception("Legacy rt borrow mut spelling was admitted");
+}
+catch (FormatException ex) when
+    (ex.Message.Contains("use 'rt mut borrow'", StringComparison.Ordinal)) { }
+
+
 foreach (var invalid in new[] { "\0", "\ud800", "\udc00", "\ud800x" })
     Reject(() => OresParser.Parse("fnc main():int{return 1;} // " + invalid),
         "invalid encoding in ignored comment");
