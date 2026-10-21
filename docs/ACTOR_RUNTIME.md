@@ -124,6 +124,7 @@ Unsupported source features remain fail-closed.
 - persistent SoA state across separate actor turns,
 - rejection of retained/expired actor contexts,
 - lifetime pins surviving stop and releasing from another carrier, and
-- fault isolation between sibling actors.
+- fault isolation between sibling actors,
+- scrubbed buffers and fault accounting when arena turn admission fails after dequeue.
 
 The Windows Native AOT workflow remains the authoritative compiler/AOT gate.

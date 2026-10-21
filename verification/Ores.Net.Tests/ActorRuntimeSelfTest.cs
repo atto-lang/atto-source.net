@@ -1,4 +1,5 @@
 using Ores.Net.Runtime;
+using System.Reflection;
 
 internal static class ActorRuntimeSelfTest
 {
@@ -12,6 +13,7 @@ internal static class ActorRuntimeSelfTest
         RetainedContextCannotUseExpiredTurn();
         LifetimePinCanOutliveActorTurnAndStop();
         HandlerFaultRetiresOnlyThatActor();
+        FailedTurnAdmissionScrubsDequeuedMessage();
         Console.WriteLine(
             "PASS .NET integrated actor runtime mailbox, arena, domains, stop and fault isolation");
     }
@@ -327,6 +329,72 @@ internal static class ActorRuntimeSelfTest
         runtime.Stop(healthy);
         Require(WaitUntil(() => runtime.LiveActors == 0),
             "healthy sibling remains independently stoppable");
+    }
+
+
+    private static void FailedTurnAdmissionScrubsDequeuedMessage()
+    {
+        using var runtime = new ActorRuntime(Options());
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var actor = runtime.Spawn(ActorKind.Shared, (context, message) =>
+        {
+            if (message.Span[0] != 1)
+                throw new Exception("Second message must fail turn admission");
+
+            // Exercise the exception path without introducing a production
+            // fault-injection API: retire the exposed-to-this-test host arena
+            // while its first turn remains active.
+            var field = typeof(ActorContext).GetField(
+                "_arena", BindingFlags.Instance | BindingFlags.NonPublic);
+            if (field?.GetValue(context) is not ActorArena arena)
+                throw new Exception("Could not locate actor arena in test");
+            Require(!arena.Retire(), "active turn delays forced arena reclaim");
+            entered.Set();
+            if (!release.Wait(TimeSpan.FromSeconds(10)))
+                throw new Exception("Failed-turn test timed out");
+        });
+
+        runtime.Send(actor, new byte[] { 1 });
+        try
+        {
+            Require(entered.Wait(TimeSpan.FromSeconds(5)),
+                "first handler retired arena while retaining its turn");
+            runtime.Send(actor, new byte[] { 2, 0xC1, 0xC2, 0xC3 });
+
+            // Capture the mailbox-owned second envelope, not the caller's
+            // input. It must be scrubbed even when EnterTurn rejects it.
+            var actorsField = typeof(ActorRuntime).GetField(
+                "_actors", BindingFlags.Instance | BindingFlags.NonPublic);
+            if (actorsField?.GetValue(runtime) is not System.Collections.IDictionary actors ||
+                actors[actor.Id] is not object cell)
+                throw new Exception("Could not locate actor cell in test");
+            var mailboxField = cell.GetType().GetField(
+                "<Mailbox>k__BackingField",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            if (mailboxField?.GetValue(cell) is not ActorMailbox mailbox)
+                throw new Exception("Could not locate test mailbox");
+
+            var messagesField = typeof(ActorMailbox).GetField(
+                "_messages", BindingFlags.Instance | BindingFlags.NonPublic);
+            if (messagesField?.GetValue(mailbox) is not Queue<byte[]> messages ||
+                messages.Count != 1)
+                throw new Exception("Could not capture pending envelope");
+            byte[] ownedEnvelope = messages.Peek();
+            release.Set();
+            Require(WaitUntil(() => runtime.LiveActors == 0),
+                "turn-admission failure must retire its actor");
+            Require(runtime.CompletedMessages == 1 && runtime.FaultedTurns == 1,
+                "failed turn admission accounts for one successful and one failed message");
+            Require(ownedEnvelope.AsSpan().IndexOfAnyExcept((byte)0) < 0,
+                "dequeued message must be erased after failed turn admission");
+            Require(runtime.NativeReservedBytes == 0,
+                "failed turn admission eventually refunds actor native capacity");
+        }
+        finally
+        {
+            release.Set();
+        }
     }
 
     private static bool WaitUntil(Func<bool> condition) =>
