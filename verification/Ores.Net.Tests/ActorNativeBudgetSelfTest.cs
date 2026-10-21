@@ -45,7 +45,7 @@ internal static class ActorNativeBudgetSelfTest
         Require(quota.ReservedBytes == 0, "all actor regions physically reclaimed");
 
         var contended = new ActorNativeMemoryBudget(128 * 8);
-        Parallel.For(0, 256, i =>
+        Parallel.For(0, 256, new ParallelOptions { MaxDegreeOfParallelism = 8 }, i =>
         {
             var cap = new ActorMailbox((ulong)(1_000 + i)).CurrentRef;
             using var heap = new ActorNativeHeap(cap, 128, 1, contended);
