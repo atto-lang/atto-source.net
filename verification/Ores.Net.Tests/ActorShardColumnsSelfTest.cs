@@ -55,6 +55,32 @@ internal static class ActorShardColumnsSelfTest
                 ActorDataLayout.Soa, soaosGroupWidths: new[] { 2, 1 });
         }, "non-SoAoS layout cannot carry SoAoS metadata");
 
+        Reject(() =>
+        {
+            using var arena = NewArena(6106);
+            using var turn = arena.EnterTurn(6106, 1);
+            _ = new ActorShardColumns(arena, turn, 1, 1,
+                (ActorDataLayout)999);
+        }, "unknown layout enum fails closed before arena allocation");
+
+        Reject(() =>
+        {
+            using var arena = NewArena(6107);
+            using var turn = arena.EnterTurn(6107, 1);
+            _ = new ActorShardColumns(arena, turn,
+                rows: int.MaxValue, fields: int.MaxValue,
+                ActorDataLayout.Soa);
+        }, "oversized logical geometry rejects without arithmetic wraparound");
+
+        Reject(() =>
+        {
+            using var arena = NewArena(6108);
+            using var turn = arena.EnterTurn(6108, 1);
+            _ = new ActorShardColumns(arena, turn,
+                rows: 262_144, fields: 1,
+                ActorDataLayout.Aosoa, lanes: 1024);
+        }, "AoSoA padded geometry cannot exceed the shard cap");
+
         ExerciseDistinctSoaosGeometry();
 
         Console.WriteLine("PASS .NET actor-owned AoS/SoA/AoSoA/SoAoS shard layouts and dense kernel");
