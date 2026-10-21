@@ -260,14 +260,14 @@ public unsafe sealed class ActorArena : IDisposable
             throw new InvalidOperationException("Actor arena authority must not be empty");
 
         _persistent = (byte*)NativeMemory.AlignedAlloc(
-            checked((nuint)_persistentPhysicalBytes), SlabAlignment);
+            checked((nuint)_persistentPhysicalBytes), (nuint)SlabAlignment);
         if (_persistent == null)
             throw new OutOfMemoryException("Unable to reserve persistent actor arena");
 
         try
         {
             _scratch = (byte*)NativeMemory.AlignedAlloc(
-                checked((nuint)_scratchPhysicalBytes), SlabAlignment);
+                checked((nuint)_scratchPhysicalBytes), (nuint)SlabAlignment);
             if (_scratch == null)
                 throw new OutOfMemoryException("Unable to reserve actor scratch arena");
 
@@ -694,8 +694,8 @@ public unsafe sealed class ActorArena : IDisposable
             _scratch = null;
         }
 
-        Array.Clear(_slots);
-        Array.Clear(_freeSlots);
+        Array.Clear(_slots, 0, _slots.Length);
+        Array.Clear(_freeSlots, 0, _freeSlots.Length);
         _nextSlot = 0;
         _freeSlotCount = 0;
         _liveAllocations = 0;
