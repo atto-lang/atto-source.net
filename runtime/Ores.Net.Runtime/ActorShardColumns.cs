@@ -6,13 +6,14 @@ public enum ActorDataLayout
 {
     Aos,
     Soa,
-    Aosoa
+    Aosoa,
+    Soaos
 }
 
 /// <summary>
 /// Actor-owned dense homogeneous scalar shard backed by ActorArena unmanaged
 /// storage. Exactly one physical layout is authoritative at a time: AoS, SoA,
-/// or tiled AoSoA. This is the .NET host substrate for future inverted-class,
+/// tiled AoSoA, or grouped SoAoS. This is the .NET host substrate for future inverted-class,
 /// ECS, and data-oriented lowering; it is not yet source-language lowering.
 /// </summary>
 public sealed class ActorShardColumns
@@ -22,10 +23,14 @@ public sealed class ActorShardColumns
 
     private readonly ActorArena _arena;
     private readonly ActorArenaHandle _storage;
+    private readonly long[]? _soaosGroupBaseScalars;
+    private readonly int[]? _soaosFieldOffsets;
+    private readonly int[]? _soaosFieldGroupWidths;
     private bool _released;
 
     public ActorShardColumns(ActorArena arena, ActorArenaTurn turn,
-        int rows, int fields, ActorDataLayout layout, int lanes = 1)
+        int rows, int fields, ActorDataLayout layout, int lanes = 1,
+        int[]? soaosGroupWidths = null)
     {
         ArgumentNullException.ThrowIfNull(arena);
         ArgumentNullException.ThrowIfNull(turn);
@@ -44,7 +49,34 @@ public sealed class ActorShardColumns
         else if (lanes != 1)
         {
             throw new ArgumentOutOfRangeException(nameof(lanes),
-                "AoS and SoA use a lane width of one");
+                "AoS, SoA, and SoAoS use a lane width of one");
+        }
+
+        if (layout == ActorDataLayout.Soaos)
+        {
+            if (soaosGroupWidths is null || soaosGroupWidths.Length == 0)
+                throw new ArgumentException(
+                    "SoAoS requires one or more nonempty field groups",
+                    nameof(soaosGroupWidths));
+
+            long groupedFields = 0;
+            foreach (int width in soaosGroupWidths)
+            {
+                if (width <= 0)
+                    throw new ArgumentOutOfRangeException(nameof(soaosGroupWidths),
+                        "SoAoS group widths must be positive");
+                groupedFields = checked(groupedFields + width);
+            }
+            if (groupedFields != fields)
+                throw new ArgumentException(
+                    "SoAoS group widths must exactly partition every field",
+                    nameof(soaosGroupWidths));
+        }
+        else if (soaosGroupWidths is not null)
+        {
+            throw new ArgumentException(
+                "SoAoS group metadata is only valid for the SoAoS layout",
+                nameof(soaosGroupWidths));
         }
 
         Rows = rows;
@@ -54,6 +86,28 @@ public sealed class ActorShardColumns
         PhysicalRows = layout == ActorDataLayout.Aosoa
             ? RoundRows(rows, lanes)
             : rows;
+
+        if (layout == ActorDataLayout.Soaos)
+        {
+            _soaosGroupBaseScalars = new long[fields];
+            _soaosFieldOffsets = new int[fields];
+            _soaosFieldGroupWidths = new int[fields];
+
+            int field = 0;
+            long groupBaseScalar = 0;
+            foreach (int width in soaosGroupWidths!)
+            {
+                for (int withinGroup = 0; withinGroup < width; withinGroup++)
+                {
+                    _soaosGroupBaseScalars[field] = groupBaseScalar;
+                    _soaosFieldOffsets[field] = withinGroup;
+                    _soaosFieldGroupWidths[field] = width;
+                    field++;
+                }
+                groupBaseScalar = checked(groupBaseScalar + checked((long)rows * width));
+            }
+            GroupCount = soaosGroupWidths!.Length;
+        }
 
         long scalars = checked((long)PhysicalRows * fields);
         long byteLength = checked(scalars * sizeof(double));
@@ -72,6 +126,7 @@ public sealed class ActorShardColumns
     public int Lanes { get; }
     public int ByteLength { get; }
     public ActorDataLayout Layout { get; }
+    public int GroupCount { get; }
 
     public double Read(ActorArenaTurn turn, int row, int field)
     {
@@ -134,6 +189,16 @@ public sealed class ActorShardColumns
     }
 
     /// <summary>
+    /// Return a checked byte offset relative to this shard allocation. This is
+    /// a host/compiler geometry hook, not a native pointer or guest capability.
+    /// </summary>
+    public int GetPhysicalByteOffset(int row, int field)
+    {
+        EnsureLive();
+        return ByteOffset(row, field);
+    }
+
+    /// <summary>
     /// Deterministically release this shard while its owning actor turn is
     /// admitted. The underlying bytes are zeroed before the slot is reusable.
     /// </summary>
@@ -159,6 +224,10 @@ public sealed class ActorShardColumns
             ActorDataLayout.Aosoa => checked(
                 (((long)(row / Lanes) * Fields + field) * Lanes) +
                 (row % Lanes)),
+            ActorDataLayout.Soaos => checked(
+                _soaosGroupBaseScalars![field] +
+                checked((long)row * _soaosFieldGroupWidths![field]) +
+                _soaosFieldOffsets![field]),
             _ => throw new InvalidOperationException("Unknown actor shard layout")
         };
 
