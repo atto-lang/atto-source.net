@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Reflection;
 using Ores.Net.Runtime;
 
 internal static class ActorNativeHeapSelfTest
@@ -99,8 +100,18 @@ internal static class ActorNativeHeapSelfTest
         RejectWire(() => JsonSerializer.Deserialize<ActorHeapHandle>("{}"));
         var pending = heapA.AcquireLifetimeLease(alice);
         Require(pending is not null, "actor async lifetime admitted");
+        // Copy the private managed pointer without obtaining a new lease.
+        // It must not be able to consume another operation's lifetime hold.
+        var method = typeof(object).GetMethod("MemberwiseClone",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Require(method is not null, "lease-clone test setup");
+        var forged = (ActorNativeHeap.LifetimeLease)method!.Invoke(pending, null)!;
+        Require(!ReferenceEquals(pending, forged), "distinct reflected lease token");
+        Reject(forged.Dispose, "forged heap lifetime lease release");
         Require(!heapA.Retire(alice), "pending async reference must defer native free");
         Require(!heapA.Retired, "quarantined actor memory remains allocated");
+        Require(heapA.LiveAllocations == 1,
+            "forged lease cannot trigger early native reclamation");
         Require(!heapA.Allocate(alice, 1).HasValue, "retiring actor rejects new allocations");
         Require(!heapA.Write(alice, root.Value, new byte[] {1}), "retiring actor rejects writes");
         Require(heapA.AcquireLifetimeLease(alice) is null, "retiring actor rejects leases");

@@ -86,7 +86,7 @@ public sealed unsafe class ActorNativeHeap : IDisposable
 
         public void Dispose()
         {
-            Interlocked.Exchange(ref _heap, null)?.ReleaseLease();
+            Interlocked.Exchange(ref _heap, null)?.ReleaseLease(this);
         }
     }
 
@@ -96,6 +96,9 @@ public sealed unsafe class ActorNativeHeap : IDisposable
     private readonly Slot[] _slots;
     private readonly int[] _freeSlots;
     private readonly Hole[] _holes;
+    // Only the exact lease objects minted by this heap may release native life.
+    private readonly HashSet<LifetimeLease> _issuedLeases =
+        new(ReferenceEqualityComparer.Instance);
     private readonly int _capacity;
     private byte* _memory;
     private int _nextSlot;
@@ -165,17 +168,22 @@ public sealed unsafe class ActorNativeHeap : IDisposable
             RequireOwner(actor);
             if (_closing) return null;
             // Allocate the managed lease before changing admission accounting.
+            if (_leases == MaximumSlots)
+                return null;
             var lease = new LifetimeLease(this);
+            if (!_issuedLeases.Add(lease))
+                throw new InvalidOperationException("duplicate heap lease issuance");
             checked { ++_leases; }
             return lease;
         }
     }
 
-    private void ReleaseLease()
+    private void ReleaseLease(LifetimeLease lease)
     {
         lock (_gate)
         {
-            if (_leases <= 0) throw new InvalidOperationException("actor heap lease underflow");
+            if (_leases <= 0 || !_issuedLeases.Remove(lease))
+                throw new InvalidOperationException("unissued or stale actor heap lease");
             --_leases;
             if (_closing && _leases == 0) ReleaseNative();
         }
@@ -370,6 +378,11 @@ public sealed unsafe class ActorNativeHeap : IDisposable
         _holeCount = 0;
         _freeCount = 0;
         _nextSlot = 0;
+        _issuedLeases.Clear();
+        // Native bytes are scrubbed before free; also eliminate stale metadata.
+        Array.Clear(_slots);
+        Array.Clear(_freeSlots);
+        Array.Clear(_holes);
     }
 
     /// <summary>Trusted owner/supervisor cleanup; pending leases defer physical free.</summary>
