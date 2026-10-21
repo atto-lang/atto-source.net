@@ -26,7 +26,33 @@ internal static class ValueBoundaryTests
             Reject(() => { _ = OresParser.Parse(source); }, name + "/task-v2/shipping");
             Reject(() => { _ = OresStructuredParser.Parse(source); }, name + "/task-v2/structured");
         }
-        Console.WriteLine($"{cases.Count} value boundary + {taskCases.Count} CPU/GPU task v2 cases rejected by both frontends");
+        // Stronger than generic parse failure: ordinary borrowed task
+        // captures must stop at the contextual Task boundary until there
+        // is a typed Send/Sync/loan and physical-quiescence lowering.
+        var borrowCases = new Dictionary<string, string>
+        {
+            ["shared-borrow"] = "pub fnc main():int{return task { return rt borrow owner; };}",
+            ["exclusive-borrow"] = "pub fnc main():int{return task { return rt borrow mut owner; };}",
+            ["nested-borrow"] = "pub fnc main():int{return task { return task { return rt borrow owner; }; };}"
+        };
+        foreach (var (name, source) in borrowCases)
+        {
+            RejectTaskBorrow(() => { _ = OresParser.Parse(source); }, name + "/shipping");
+            RejectTaskBorrow(() => { _ = OresStructuredParser.Parse(source); }, name + "/structured");
+        }
+        Console.WriteLine($"{cases.Count} value boundary + {taskCases.Count} CPU/GPU task v2 + {borrowCases.Count} borrowed Task cases rejected by both frontends");
+    }
+
+    private static void RejectTaskBorrow(Action parse, string name)
+    {
+        try { parse(); }
+        catch (FormatException error)
+        {
+            if (!error.Message.Contains("execution task", StringComparison.OrdinalIgnoreCase))
+                throw new Exception(name + ": rejection must occur at Task admission, got " + error.Message);
+            return;
+        }
+        throw new Exception(name + ": borrowed Task was admitted without ownership proof");
     }
 
     private static void Reject(Action parse, string name)
