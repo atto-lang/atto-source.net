@@ -33,13 +33,17 @@ cell gate before the message is copied into the mailbox. A newly created carrier
 must acquire that same gate, so it cannot observe an empty mailbox and lose the
 wake-up.
 
-Each dequeued message receives exactly one `ActorArenaTurn`. The handler sees
+Each successfully admitted message receives exactly one `ActorArenaTurn`.
+If turn admission fails after dequeue, the actor faults and the transferred
+message buffer is scrubbed before its dispatch token exits. The handler sees
 an `ActorContext`, not the underlying arena or native pointer. Scratch storage
 dies on turn exit. Persistent allocations and actor-owned AoS/SoA/AoSoA shards
 may survive into later turns through opaque handles.
 
 The mailbox's delivered byte array is borrowed only for the handler turn and is
-cryptographically zeroed after the handler returns. Retaining the
+cryptographically zeroed after the handler returns, including handler failure.
+The runtime also clears thread-local carrier identity even when finalization
+throws. Retaining the
 `ReadOnlyMemory<byte>` does not extend its useful lifetime. `CompletedMessages`
 advances only after that cleanup completes.
 

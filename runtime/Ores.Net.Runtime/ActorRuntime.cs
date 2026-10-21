@@ -394,8 +394,21 @@ public sealed class ActorRuntime : IDisposable
                         break;
 
                     payload = dequeued;
-                    turn = cell.Arena.EnterTurn(
-                        cell.Reference.Id, cell.Reference.Generation);
+                    try
+                    {
+                        turn = cell.Arena.EnterTurn(
+                            cell.Reference.Id, cell.Reference.Generation);
+                    }
+                    catch (Exception)
+                    {
+                        // The mailbox transferred this buffer to us before
+                        // turn admission. Do not strand sensitive bytes on the
+                        // exceptional path or allow repeated failed scheduling.
+                        CryptographicOperations.ZeroMemory(payload);
+                        Interlocked.Increment(ref _faultedTurns);
+                        MarkStoppingLocked(cell);
+                        break;
+                    }
                 }
 
                 bool succeeded = false;
@@ -454,9 +467,17 @@ public sealed class ActorRuntime : IDisposable
                 }
             }
 
-            if (finalize)
-                FinalizeCell(cell);
-            s_currentRuntime = previous;
+            try
+            {
+                if (finalize)
+                    FinalizeCell(cell);
+            }
+            finally
+            {
+                // Never leave thread-static runtime identity behind if
+                // finalization itself throws on a reusable carrier.
+                s_currentRuntime = previous;
+            }
         }
     }
 

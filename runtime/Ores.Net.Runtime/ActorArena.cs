@@ -639,8 +639,10 @@ public unsafe sealed class ActorArena : IDisposable
         ArgumentNullException.ThrowIfNull(turn);
         lock (_gate)
         {
-            // Idempotent even after final arena reclaim; never consume the
-            // token until owner/thread/turn identity has been checked.
+            // Idempotent after final reclaim only for a token genuinely
+            // owned by this arena. A foreign token is never accepted.
+            if (!ReferenceEquals(turn.Arena, this))
+                throw new InvalidOperationException("Foreign actor turn release");
             if (turn.Released)
                 return;
             if (_reclaimed || !_turnActive ||
