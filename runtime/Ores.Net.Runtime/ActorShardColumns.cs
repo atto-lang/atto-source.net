@@ -38,6 +38,17 @@ public sealed class ActorShardColumns
             throw new ArgumentOutOfRangeException(nameof(rows));
         if (fields <= 0)
             throw new ArgumentOutOfRangeException(nameof(fields));
+        if (layout is not (ActorDataLayout.Aos or ActorDataLayout.Soa or
+            ActorDataLayout.Aosoa or ActorDataLayout.Soaos))
+            throw new ArgumentOutOfRangeException(nameof(layout));
+
+        // Reject impossible logical geometry before tile rounding, group
+        // validation, or metadata allocation. Physical AoSoA padding is checked
+        // again below.
+        const long maxScalars = MaxShardBytes / sizeof(double);
+        if ((long)rows > maxScalars / fields)
+            throw new ArgumentOutOfRangeException(nameof(rows),
+                "Actor shard exceeds the 16 MiB per-shard limit");
 
         if (layout == ActorDataLayout.Aosoa)
         {
@@ -52,6 +63,23 @@ public sealed class ActorShardColumns
                 "AoS, SoA, and SoAoS use a lane width of one");
         }
 
+        Rows = rows;
+        Fields = fields;
+        Layout = layout;
+        Lanes = lanes;
+        PhysicalRows = layout == ActorDataLayout.Aosoa
+            ? RoundRows(rows, lanes)
+            : rows;
+
+        if ((long)PhysicalRows > maxScalars / fields)
+            throw new ArgumentOutOfRangeException(nameof(rows),
+                "Actor shard padding exceeds the 16 MiB per-shard limit");
+
+        long scalars = (long)PhysicalRows * fields;
+        ByteLength = checked((int)(scalars * sizeof(double)));
+
+        // Group validation occurs only after the total geometry is bounded, so
+        // hostile dimensions cannot force unbounded metadata work/allocation.
         if (layout == ActorDataLayout.Soaos)
         {
             if (soaosGroupWidths is null || soaosGroupWidths.Length == 0)
@@ -66,47 +94,23 @@ public sealed class ActorShardColumns
                     throw new ArgumentOutOfRangeException(nameof(soaosGroupWidths),
                         "SoAoS group widths must be positive");
                 groupedFields = checked(groupedFields + width);
+                if (groupedFields > fields)
+                    throw new ArgumentException(
+                        "SoAoS group widths exceed the declared field count",
+                        nameof(soaosGroupWidths));
             }
             if (groupedFields != fields)
                 throw new ArgumentException(
                     "SoAoS group widths must exactly partition every field",
                     nameof(soaosGroupWidths));
-        }
-        else if (soaosGroupWidths is not null)
-        {
-            throw new ArgumentException(
-                "SoAoS group metadata is only valid for the SoAoS layout",
-                nameof(soaosGroupWidths));
-        }
 
-        Rows = rows;
-        Fields = fields;
-        Layout = layout;
-        Lanes = lanes;
-        PhysicalRows = layout == ActorDataLayout.Aosoa
-            ? RoundRows(rows, lanes)
-            : rows;
-
-        long scalars = checked((long)PhysicalRows * fields);
-        long byteLength = checked(scalars * sizeof(double));
-        if (byteLength > MaxShardBytes)
-            throw new ArgumentOutOfRangeException(nameof(rows),
-                "Actor shard exceeds the 16 MiB per-shard limit");
-
-        ByteLength = checked((int)byteLength);
-
-        // Only allocate managed layout-index metadata after the shard's bounded
-        // physical size is proven. A hostile field count must not force large
-        // CLR allocations before the 16 MiB actor-shard admission check.
-        if (layout == ActorDataLayout.Soaos)
-        {
             _soaosGroupBaseScalars = new long[fields];
             _soaosFieldOffsets = new int[fields];
             _soaosFieldGroupWidths = new int[fields];
 
             int field = 0;
             long groupBaseScalar = 0;
-            foreach (int width in soaosGroupWidths!)
+            foreach (int width in soaosGroupWidths)
             {
                 for (int withinGroup = 0; withinGroup < width; withinGroup++)
                 {
@@ -115,9 +119,15 @@ public sealed class ActorShardColumns
                     _soaosFieldGroupWidths[field] = width;
                     field++;
                 }
-                groupBaseScalar = checked(groupBaseScalar + checked((long)rows * width));
+                groupBaseScalar += (long)rows * width;
             }
-            GroupCount = soaosGroupWidths!.Length;
+            GroupCount = soaosGroupWidths.Length;
+        }
+        else if (soaosGroupWidths is not null)
+        {
+            throw new ArgumentException(
+                "SoAoS group metadata is only valid for the SoAoS layout",
+                nameof(soaosGroupWidths));
         }
 
         _arena = arena;
