@@ -158,14 +158,6 @@ public sealed unsafe class ActorNativeArena : IDisposable
         _freeCount = 0;
         _liveCount = 0;
         _disposed = true;
-        GC.SuppressFinalize(this);
-    }
-
-    ~ActorNativeArena()
-    {
-        // Safety fallback only. Correct Oreslang lowering must call Dispose after
-        // quiescence; finalization is not part of the deterministic memory model.
-        Dispose();
     }
 
     private int ValidSlot(ulong handle)
