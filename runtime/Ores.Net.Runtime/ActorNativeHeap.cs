@@ -97,6 +97,7 @@ public sealed unsafe class ActorNativeHeap : IDisposable
     private readonly int[] _freeSlots;
     private readonly Hole[] _holes;
     private readonly int _capacity;
+    private readonly ActorNativeMemoryBudget? _budget;
     private byte* _memory;
     private int _nextSlot;
     private int _freeCount;
@@ -106,7 +107,8 @@ public sealed unsafe class ActorNativeHeap : IDisposable
     private int _leases;
     private bool _closing;
 
-    public ActorNativeHeap(ActorRef owner, int capacity, int maxSlots)
+    public ActorNativeHeap(ActorRef owner, int capacity, int maxSlots,
+        ActorNativeMemoryBudget? sharedBudget = null)
     {
         if (owner.Id == 0 || owner.Generation == 0 || owner.Nonce == Guid.Empty)
             throw new ArgumentException("A live actor capability is required", nameof(owner));
@@ -121,8 +123,22 @@ public sealed unsafe class ActorNativeHeap : IDisposable
         _holes = new Hole[maxSlots + 1];
         for (int i = 0; i < maxSlots; ++i) _slots[i].Generation = 1;
 
-        _memory = (byte*)NativeMemory.AllocZeroed((nuint)capacity);
-        if (_memory == null) throw new OutOfMemoryException("actor-native heap allocation failed");
+        // Prevent hundreds of actor-local quotas from exhausting the process.
+        // Accounting must be reserved before issuing an unmanaged pointer.
+        if (sharedBudget != null && !sharedBudget.TryReserve(capacity))
+            throw new InvalidOperationException("aggregate native actor memory budget exhausted");
+        try
+        {
+            _memory = (byte*)NativeMemory.AllocZeroed((nuint)capacity);
+            if (_memory == null)
+                throw new OutOfMemoryException("actor-native heap allocation failed");
+            _budget = sharedBudget;
+        }
+        catch
+        {
+            sharedBudget?.Release(capacity);
+            throw;
+        }
     }
 
     public int Capacity => _capacity;
@@ -365,6 +381,9 @@ public sealed unsafe class ActorNativeHeap : IDisposable
         CryptographicOperations.ZeroMemory(new Span<byte>(_memory, _capacity));
         NativeMemory.Free(_memory);
         _memory = null;
+        // No native bytes are left pinned once the underlying allocation is
+        // released. Idempotence is guaranteed by the null-pointer sentinel.
+        _budget?.Release(_capacity);
         _live = 0;
         _used = 0;
         _holeCount = 0;
