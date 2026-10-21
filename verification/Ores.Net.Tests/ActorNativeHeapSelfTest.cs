@@ -77,7 +77,7 @@ internal static class ActorNativeHeapSelfTest
         Require(!heapA.Allocate(alice, 1).HasValue, "retiring actor rejects new allocations");
         Require(!heapA.Write(alice, root.Value, new byte[] {1}), "retiring actor rejects writes");
         Require(heapA.AcquireLifetimeLease(alice) is null, "retiring actor rejects leases");
-        pending.Dispose();
+        pending!.Dispose();
         pending.Dispose();
         Require(heapA.Retired && heapA.LiveAllocations == 0, "final lease frees native heap exactly once");
         Require(heapA.Retire(alice), "idempotent retirement");
