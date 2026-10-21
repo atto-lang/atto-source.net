@@ -87,6 +87,17 @@ public sealed class ActorShardColumns
             ? RoundRows(rows, lanes)
             : rows;
 
+        long scalars = checked((long)PhysicalRows * fields);
+        long byteLength = checked(scalars * sizeof(double));
+        if (byteLength > MaxShardBytes)
+            throw new ArgumentOutOfRangeException(nameof(rows),
+                "Actor shard exceeds the 16 MiB per-shard limit");
+
+        ByteLength = checked((int)byteLength);
+
+        // Only allocate managed layout-index metadata after the shard's bounded
+        // physical size is proven. A hostile field count must not force large
+        // CLR allocations before the 16 MiB actor-shard admission check.
         if (layout == ActorDataLayout.Soaos)
         {
             _soaosGroupBaseScalars = new long[fields];
@@ -109,13 +120,6 @@ public sealed class ActorShardColumns
             GroupCount = soaosGroupWidths!.Length;
         }
 
-        long scalars = checked((long)PhysicalRows * fields);
-        long byteLength = checked(scalars * sizeof(double));
-        if (byteLength > MaxShardBytes)
-            throw new ArgumentOutOfRangeException(nameof(rows),
-                "Actor shard exceeds the 16 MiB per-shard limit");
-
-        ByteLength = checked((int)byteLength);
         _arena = arena;
         _storage = arena.AllocatePersistent(turn, ByteLength, alignment: 8);
     }
