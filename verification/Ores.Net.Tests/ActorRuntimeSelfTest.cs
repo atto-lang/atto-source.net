@@ -181,12 +181,13 @@ internal static class ActorRuntimeSelfTest
         {
             if (message.Span[0] == 1)
             {
-                shard = context.CreateShard(
-                    rows: 4, fields: 2, ActorDataLayout.Soa);
+                var created = context.CreateShard(
+                    rows: 4, fields: 2, layout: ActorDataLayout.Soa);
+                shard = created;
                 for (int row = 0; row < 4; row++)
                 {
-                    context.WriteShard(shard, row, 0, row * 10.0);
-                    context.WriteShard(shard, row, 1, row + 0.5);
+                    context.WriteShard(created, row, 0, row * 10.0);
+                    context.WriteShard(created, row, 1, row + 0.5);
                 }
                 return;
             }
