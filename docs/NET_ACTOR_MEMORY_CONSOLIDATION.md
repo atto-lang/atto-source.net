@@ -52,3 +52,24 @@ A 24-round concurrent cancellation/retirement test races two off-carrier
 pin releases and requires idempotent native-budget recovery. These tests
 exercise host integration, not compiler-generated async frames. They remain
 unexecuted until source-org CI is restored.
+
+## Prototype capability migration matrix
+
+| Candidate feature | Conditions before adoption into `ActorArena` |
+| --- | --- |
+| Primitive `ulong` token and lexical cleanup scope | Prove provenance and exact issuance, generated cleanup on all exits, and compiler rejection of aliased/copyable ownership. A bare numeric offset cannot authorize a guest dereference. |
+| Interior free-hole recycling | Differential allocation traces, overlap/ABA/generation-rollover checks, loan-protected frees, byte scrubbing and deterministic alignment under churn. No second actor heap. |
+| Async/FFI leases | Preserve exact-issued `ActorArenaLifetimePin` accounting across stop, cancellation and cross-carrier callback completion; last release triggers physical free exactly once. |
+| Compressed32 offsets and SoAoS | Validate owner, incarnation, bounds, shape and live turn separately from offsets; compare logical values with AoS/SoA/AoSoA and backend golden vectors. |
+| Process/tenant quota | All production actor-native allocations must use one budget ledger; CLR metadata, mailbox bytes and process RSS require separate measurement and caps. |
+
+Additional release experiments: randomized overlapping-hole sequences, stale and
+forged capabilities, maximum generation, forced allocation failure, cross-runtime
+reservation pressure, physical zeroization, cancellation and actor-fault
+interleavings. Neither this source guard nor the new lifetime stress tests
+establish model-checked correctness or a passing NativeAOT build.
+
+This document consolidates the design and host-budget coverage originally
+developed in draft #140. That PR's independent review history remains
+available, but future architecture corrections should target the integrated
+#141 branch rather than creating another allocator implementation.
