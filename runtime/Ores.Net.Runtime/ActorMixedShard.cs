@@ -256,7 +256,9 @@ public sealed class ActorMixedShard
             throw new InvalidOperationException("bool required");
         Span<byte> bytes = stackalloc byte[1];
         _arena.Read(turn, _storage, offset, bytes);
-        return bytes[0] != 0;
+        if (bytes[0] > 1)
+            throw new InvalidOperationException("noncanonical bool byte in actor storage");
+        return bytes[0] == 1;
     }
     public void WriteBool(ActorArenaTurn turn, int row, string field, bool value)
     {
