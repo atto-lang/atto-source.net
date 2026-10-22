@@ -82,7 +82,8 @@ internal static class ActorShardColumnsSelfTest
         }, "AoSoA padded geometry cannot exceed the shard cap");
 
         RejectOversizedFieldMetadata();
-        RejectOversizedGroupArrayBeforeClone();
+        RejectOversizedGroupCount();
+        RejectOverlongGroupsWithBoundedManagedAllocations();
         ExerciseStableCallerGroups();
         ExerciseDistinctSoaosGeometry();
 
@@ -166,35 +167,57 @@ internal static class ActorShardColumnsSelfTest
             "rejected excessive field geometry consumes no native actor capacity");
     }
 
-    private static void RejectOversizedGroupArrayBeforeClone()
+    private static void RejectOversizedGroupCount()
     {
         using var arena = NewArena(6203);
         using var turn = arena.EnterTurn(6203, 1);
-        // Warm the failing admission and exception construction before
-        // measuring managed allocations on the same carrier thread.
-        int[] warm = new int[8];
+        var manyGroups = new int[ActorShardColumns.MaxFieldsPerShard + 1];
+        Array.Fill(manyGroups, 1);
+        Reject(() => _ = new ActorShardColumns(
+            arena, turn, rows: 1,
+            fields: ActorShardColumns.MaxFieldsPerShard,
+            ActorDataLayout.Soaos, soaosGroupWidths: manyGroups),
+            "overlong SoAoS group array must fail before cloning metadata");
+        Require(arena.LiveAllocations == 0 && arena.PersistentLiveBytes == 0,
+            "overlong SoAoS group admission consumes no arena reservation");
+
+        // The largest admitted group count still has valid disjoint geometry.
+        var boundedGroups = new int[ActorShardColumns.MaxFieldsPerShard];
+        Array.Fill(boundedGroups, 1);
+        var largest = new ActorShardColumns(arena, turn, rows: 1,
+            fields: ActorShardColumns.MaxFieldsPerShard,
+            ActorDataLayout.Soaos, soaosGroupWidths: boundedGroups);
+        Require(largest.GroupCount == ActorShardColumns.MaxFieldsPerShard &&
+                largest.GetPhysicalByteOffset(0, largest.Fields - 1) ==
+                (largest.Fields - 1) * sizeof(double),
+            "maximum bounded SoAoS metadata has exact last-field offset");
+        largest.Release(turn);
+        Require(arena.PersistentLiveBytes == 0,
+            "largest bounded SoAoS geometry is released");
+    }
+
+    private static void RejectOverlongGroupsWithBoundedManagedAllocations()
+    {
+        using var arena = NewArena(6204);
+        using var turn = arena.EnterTurn(6204, 1);
+        // Warm the exception path so the measurement isolates the
+        // rejected array-cloning cost rather than first-call JIT overhead.
         Reject(() => _ = new ActorShardColumns(arena, turn,
             rows: 2, fields: 2, ActorDataLayout.Soaos,
-            soaosGroupWidths: warm), "excessive SoAoS group warmup");
+            soaosGroupWidths: new int[8]),
+            "overlong group warmup");
 
-        int[] oversized = new int[65_536];
+        var oversized = new int[65_536];
         long before = GC.GetAllocatedBytesForCurrentThread();
         Reject(() => _ = new ActorShardColumns(arena, turn,
             rows: 2, fields: 2, ActorDataLayout.Soaos,
             soaosGroupWidths: oversized),
-            "oversized group metadata must fail before cloning");
+            "oversized group array rejected before snapshot");
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
         Require(allocated < 128 * 1024,
-            "oversized SoAoS input must not allocate a 256 KiB clone");
+            "malformed SoAoS input cannot clone 256 KiB of metadata");
         Require(arena.LiveAllocations == 0 && arena.PersistentLiveBytes == 0,
-            "oversized group preflight leaves native arena uncharged");
-
-        // A valid input continues to be snapshotted after preflight.
-        var shard = new ActorShardColumns(arena, turn,
-            rows: 2, fields: 2, ActorDataLayout.Soaos,
-            soaosGroupWidths: new[] { 1, 1 });
-        Require(shard.GroupCount == 2, "valid bounded groups are accepted");
-        shard.Release(turn);
+            "rejected oversized group admission has no native allocations");
     }
 
     private static void ExerciseStableCallerGroups()
