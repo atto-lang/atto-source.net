@@ -124,6 +124,70 @@ public sealed unsafe class ActorNativeHeap : IDisposable
             => ReferenceEquals(Volatile.Read(ref _heap), heap);
     }
 
+    /// <summary>
+    /// Stack-only deterministic ownership of one temporary native allocation.
+    /// A ref struct is not a GC-allocated wrapper and cannot be boxed or
+    /// captured by an ordinary heap-resident continuation. Oreslang source
+    /// lowering must still prove move-only ownership and suspend legality;
+    /// C# permits copying ref structs, so a copied scope fails closed on its
+    /// second attempted drop rather than freeing another generation.
+    /// </summary>
+    public ref struct OwnedAllocation
+    {
+        private ActorNativeHeap? _heap;
+        private readonly ActorRef _owner;
+        private readonly ActorHeapHandle _handle;
+
+        internal OwnedAllocation(ActorNativeHeap heap, ActorRef owner,
+            ActorHeapHandle handle)
+        {
+            _heap = heap;
+            _owner = owner;
+            _handle = handle;
+        }
+
+        public bool IsValid => _heap is not null;
+
+        public bool Write(ReadOnlySpan<byte> bytes, int offset = 0)
+        {
+            var heap = _heap ?? throw new InvalidOperationException(
+                "actor scoped allocation has been dropped or was not admitted");
+            return heap.Write(_owner, _handle, bytes, offset);
+        }
+
+        public bool Read(Span<byte> destination, int offset = 0)
+        {
+            var heap = _heap ?? throw new InvalidOperationException(
+                "actor scoped allocation has been dropped or was not admitted");
+            return heap.Read(_owner, _handle, destination, offset);
+        }
+
+        /// <summary>Scrub/drop on exit. Never silently abandon a live loan.</summary>
+        public void Dispose()
+        {
+            var heap = _heap;
+            if (heap is null) return;
+            if (!heap.Remove(_owner, _handle))
+                throw new InvalidOperationException(
+                    "scoped native object cannot drop while borrowed or retiring");
+            _heap = null;
+        }
+    }
+
+    /// <summary>
+    /// Admit one temporary value whose native memory is released by a
+    /// compiler-generated using/finally scope. A default scope means
+    /// bounded slot/byte admission failed.
+    /// </summary>
+    public OwnedAllocation AllocateScoped(ActorRef actor, int length,
+        int alignment = 8)
+    {
+        var handle = Allocate(actor, length, alignment);
+        return handle.HasValue
+            ? new OwnedAllocation(this, actor, handle.Value)
+            : default;
+    }
+
     private readonly object _gate = new();
     private readonly ActorRef _owner;
     private readonly Guid _identity = Guid.NewGuid();
