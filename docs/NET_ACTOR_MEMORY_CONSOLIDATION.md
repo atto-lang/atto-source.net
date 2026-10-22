@@ -41,3 +41,14 @@ separate managed GC heap per actor or zero-CLR-GC guarantee.
 This PR's Node contract is an **advisory source-wiring guard**, not source
 compiler lowering, formal verification, memory safety certification or a
 security boundary.
+
+## Reconciled behavioral proofs from #140
+
+The consolidated architecture branch also runs the #140 cross-runtime
+physical quota test: stopping an actor with an outstanding lifetime pin must
+retain global native reservations until the last external lease releases,
+while an unrelated actor in a different ActorRuntime refunds its own bytes.
+A 24-round concurrent cancellation/retirement test races two off-carrier
+pin releases and requires idempotent native-budget recovery. These tests
+exercise host integration, not compiler-generated async frames. They remain
+unexecuted until source-org CI is restored.

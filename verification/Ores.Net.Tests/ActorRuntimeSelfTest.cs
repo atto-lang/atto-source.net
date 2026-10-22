@@ -14,6 +14,8 @@ internal static class ActorRuntimeSelfTest
         GroupedSoaosShardSurvivesAcrossActorTurns();
         RetainedContextCannotUseExpiredTurn();
         LifetimePinCanOutliveActorTurnAndStop();
+        CrossRuntimeNativeCapacityRemainsChargedUntilQuiescence();
+        ConcurrentRetirementAndCancelledLifetimePins();
         HandlerFaultRetiresOnlyThatActor();
         ConcurrentDisposersAwaitCarrierQuiescence();
         FailedTurnAdmissionScrubsDequeuedMessage();
@@ -398,6 +400,125 @@ internal static class ActorRuntimeSelfTest
         lifetimePin!.Dispose();
         Require(WaitUntil(() => runtime.NativeReservedBytes == 0),
             "off-carrier pin release performs final physical reclaim");
+    }
+
+    private static void CrossRuntimeNativeCapacityRemainsChargedUntilQuiescence()
+    {
+        long baseline = ActorArenaBudget.Process.ReservedBytes;
+        using var runtimeA = new ActorRuntime(Options());
+        using var runtimeB = new ActorRuntime(Options());
+        using var pinned = new ManualResetEventSlim();
+        ActorArenaLifetimePin? retained = null;
+
+        var first = runtimeA.Spawn(ActorKind.Private, (context, _) =>
+        {
+            retained = context.PinLifetime();
+            pinned.Set();
+        });
+        var second = runtimeB.Spawn(ActorKind.Shared, static (_, _) => { });
+
+        const long actorBytes = 4096 + 512;
+        Require(ActorArenaBudget.Process.ReservedBytes == baseline + 2 * actorBytes,
+            "independent actor runtimes both reserve global native capacity");
+        Require(runtimeA.NativeReservedBytes == actorBytes &&
+                runtimeB.NativeReservedBytes == actorBytes,
+            "runtime-local native budget tracks only its own actors");
+
+        runtimeA.Send(first, new byte[] { 1 });
+        Require(pinned.Wait(TimeSpan.FromSeconds(5)) &&
+                WaitUntil(() => runtimeA.CompletedMessages == 1),
+            "first actor holds a real async/FFI lifetime pin");
+
+        runtimeA.Stop(first);
+        Require(WaitUntil(() => runtimeA.LiveActors == 0),
+            "pinned actor leaves live registry at logical retirement");
+        Require(ActorArenaBudget.Process.ReservedBytes == baseline + 2 * actorBytes &&
+                runtimeA.NativeReservedBytes == actorBytes,
+            "actor pinned after Stop remains charged until physical free");
+
+        runtimeB.Stop(second);
+        Require(WaitUntil(() => runtimeB.LiveActors == 0 &&
+                                runtimeB.NativeReservedBytes == 0),
+            "unrelated actor runtime reclaims independently");
+        Require(ActorArenaBudget.Process.ReservedBytes == baseline + actorBytes,
+            "only the physically retained actor stays in global budget");
+
+        Require(retained is not null, "pinned actor produced a lifetime token");
+        Task.Run(() => retained!.Dispose()).GetAwaiter().GetResult();
+        Require(WaitUntil(() => runtimeA.NativeReservedBytes == 0 &&
+                                ActorArenaBudget.Process.ReservedBytes == baseline),
+            "off-carrier final pin release refunds runtime and process once");
+        retained!.Dispose();
+        Require(ActorArenaBudget.Process.ReservedBytes == baseline,
+            "duplicate pin dispose must never double-refund global budget");
+    }
+
+    private static void ConcurrentRetirementAndCancelledLifetimePins()
+    {
+        const int rounds = 24;
+        const long bytesPerActor = 4096 + 512;
+        long initial = ActorArenaBudget.Process.ReservedBytes;
+
+        for (int round = 0; round < rounds; round++)
+        {
+            using var runtime = new ActorRuntime(Options());
+            using var acquired = new ManualResetEventSlim();
+            ActorArenaLifetimePin? first = null;
+            ActorArenaLifetimePin? second = null;
+
+            var actor = runtime.Spawn(ActorKind.Private, (context, _) =>
+            {
+                first = context.PinLifetime();
+                second = context.PinLifetime();
+                acquired.Set();
+            });
+            try
+            {
+                runtime.Send(actor, new byte[] { 1 });
+                Require(acquired.Wait(TimeSpan.FromSeconds(5)) &&
+                        WaitUntil(() => runtime.CompletedMessages == 1),
+                    "cancellation stress pins are issued in a completed actor turn");
+                Require(ActorArenaBudget.Process.ReservedBytes == initial + bytesPerActor,
+                    "each live actor consumes exactly one global native reservation");
+
+                runtime.Stop(actor);
+                Require(WaitUntil(() => runtime.LiveActors == 0),
+                    "stopped actor leaves registry before callbacks release pins");
+                Require(runtime.NativeReservedBytes == bytesPerActor,
+                    "two outstanding cancellation pins defer native release");
+
+                Require(first is not null && second is not null,
+                    "both lifetime pins remain accessible after logical stop");
+                using var release = new ManualResetEventSlim();
+                Task one = Task.Run(() =>
+                {
+                    release.Wait();
+                    first!.Dispose();
+                    first.Dispose();
+                });
+                Task two = Task.Run(() =>
+                {
+                    release.Wait();
+                    second!.Dispose();
+                    second.Dispose();
+                });
+                release.Set();
+                Task.WaitAll(one, two);
+
+                Require(WaitUntil(() => runtime.NativeReservedBytes == 0),
+                    "concurrent off-carrier cancellation drains actor native bytes");
+                Require(ActorArenaBudget.Process.ReservedBytes == initial,
+                    "cancellation stress restores global process budget exactly");
+            }
+            finally
+            {
+                first?.Dispose();
+                second?.Dispose();
+                runtime.Stop(actor);
+            }
+        }
+        Require(ActorArenaBudget.Process.ReservedBytes == initial,
+            "all cancellation and stop interleavings leave no native reservation");
     }
 
     private static void HandlerFaultRetiresOnlyThatActor()
