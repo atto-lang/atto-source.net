@@ -279,6 +279,22 @@ public sealed class ActorMixedShard
             WriteF64(turn, i, position, ReadF64(turn, i, position) +
                 ReadF64(turn, i, velocity) * dt);
     }
+    /// <summary>
+    /// Acquire a whole-shard immutable read loan. It can outlive its current
+    /// scheduler turn, but carries no permission to dereference native bytes.
+    /// The caller must reenter the owning actor to read. Writes and release
+    /// are blocked until every outstanding loan is disposed.
+    ///
+    /// This is a conservative allocation-wide fence, NOT yet field-sensitive
+    /// ECS borrowing or source-level rt borrow lowering.
+    /// </summary>
+    public ActorArenaReadLoan BorrowRead(ActorArenaTurn turn)
+    {
+        if (_released)
+            throw new ObjectDisposedException(nameof(ActorMixedShard));
+        return _arena.BorrowRead(turn, _storage);
+    }
+
     public void Release(ActorArenaTurn turn)
     {
         if (_released) return;
