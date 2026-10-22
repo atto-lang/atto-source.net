@@ -116,13 +116,27 @@ public sealed unsafe class ActorNativeArena : IDisposable
         int droppedLength = _lengths[slot];
         bool wasTail = droppedOffset + droppedLength == _cursor;
         Zero(droppedOffset, droppedLength);
-        if (wasTail) _cursor = droppedOffset;
         _live[slot] = false;
         _tokens[slot] = 0;
         _offsets[slot] = 0;
         _lengths[slot] = 0;
         _freeSlots[_freeCount++] = slot;
         _liveCount--;
+
+        if (wasTail && _liveCount != 0)
+        {
+            // Scrubbed earlier-freed holes at the end also become reusable
+            // once the newest live allocation disappears. Bounded O(slots)
+            // scan, no host heap allocation and no relocation of live bytes.
+            int highestLiveEnd = 0;
+            for (int i = 0; i < _nextSlot; i++)
+            {
+                if (_live[i])
+                    highestLiveEnd = Math.Max(highestLiveEnd,
+                        checked(_offsets[i] + _lengths[i]));
+            }
+            _cursor = highestLiveEnd;
+        }
 
         if (_liveCount == 0)
         {
