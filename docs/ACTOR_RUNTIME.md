@@ -5,6 +5,11 @@ Status: **host-runtime integration substrate; source/compiler lowering pending**
 This layer connects the previously independent mailbox, actor-owned unmanaged
 arena, and three runtime-wide dispatch domains into one serial actor cell.
 
+ActorRuntime.Dispose serializes concurrent callers across worker joins and
+native arena retirement. A second caller cannot return merely because the
+runtime has already closed new admissions; it waits until teardown finishes.
+Disposal from an actor carrier remains prohibited to avoid self-join.
+
 ## Actor cell
 
 Every live actor owns:

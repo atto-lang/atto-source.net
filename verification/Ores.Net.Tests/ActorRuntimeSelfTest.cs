@@ -14,6 +14,7 @@ internal static class ActorRuntimeSelfTest
         RetainedContextCannotUseExpiredTurn();
         LifetimePinCanOutliveActorTurnAndStop();
         HandlerFaultRetiresOnlyThatActor();
+        ConcurrentDisposersAwaitCarrierQuiescence();
         FailedTurnAdmissionScrubsDequeuedMessage();
         Console.WriteLine(
             "PASS .NET integrated actor runtime mailbox, arena, domains, stop and fault isolation");
@@ -423,6 +424,59 @@ internal static class ActorRuntimeSelfTest
         {
             release.Set();
         }
+    }
+
+    private static void ConcurrentDisposersAwaitCarrierQuiescence()
+    {
+        var runtime = new ActorRuntime(Options());
+        using var inHandler = new ManualResetEventSlim();
+        using var allowReturn = new ManualResetEventSlim();
+        using var startedFirst = new ManualResetEventSlim();
+        using var startedSecond = new ManualResetEventSlim();
+
+        var actor = runtime.Spawn(ActorKind.Private, (_, _) =>
+        {
+            inHandler.Set();
+            if (!allowReturn.Wait(TimeSpan.FromSeconds(10)))
+                throw new Exception("disposal regression handler timed out");
+        });
+
+        runtime.Send(actor, new byte[] { 7 });
+        Task? first = null;
+        Task? second = null;
+        try
+        {
+            Require(inHandler.Wait(TimeSpan.FromSeconds(5)),
+                "long-running handler entered before concurrent dispose");
+
+            first = Task.Run(() =>
+            {
+                startedFirst.Set();
+                runtime.Dispose();
+            });
+            second = Task.Run(() =>
+            {
+                startedSecond.Set();
+                runtime.Dispose();
+            });
+
+            Require(startedFirst.Wait(TimeSpan.FromSeconds(5)) &&
+                    startedSecond.Wait(TimeSpan.FromSeconds(5)),
+                "both disposal calls started");
+            Require(!Task.WhenAny(first!, second!).Wait(TimeSpan.FromMilliseconds(150)),
+                "neither disposer may return while its actor handler is active");
+        }
+        finally
+        {
+            allowReturn.Set();
+            if (first is not null && second is not null)
+                Task.WaitAll(first, second);
+            else
+                runtime.Dispose();
+        }
+
+        Require(runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0,
+            "both disposal callers observed complete native reclamation");
     }
 
     private static bool WaitUntil(Func<bool> condition) =>
