@@ -164,6 +164,9 @@ public sealed class ActorRuntime : IDisposable
     private static ActorRuntime? s_currentRuntime;
 
     private readonly object _gate = new();
+    // A second Dispose caller must wait for worker joining and reclamation,
+    // not merely observe the _closed admission flag and return prematurely.
+    private readonly object _disposeGate = new();
     private readonly Dictionary<ulong, ActorCell> _actors = new();
     private readonly ActorRuntimeOptions _options;
     private readonly ActorArenaBudget _nativeBudget;
@@ -315,32 +318,36 @@ public sealed class ActorRuntime : IDisposable
             throw new InvalidOperationException(
                 "ActorRuntime.Dispose cannot run from one of its actor carriers");
 
-        ActorCell[] cells;
-        lock (_gate)
+        // Hold across joins and final reclamation, not just the _closed check.
+        lock (_disposeGate)
         {
-            if (_closed)
-                return;
-            _closed = true;
-            cells = _actors.Values.ToArray();
-        }
-
-        foreach (ActorCell cell in cells)
-        {
-            bool finalizeNow;
-            lock (cell.Gate)
+            ActorCell[] cells;
+            lock (_gate)
             {
-                MarkStoppingLocked(cell);
-                finalizeNow = cell.Scheduled == 0;
+                if (_closed)
+                    return;
+                _closed = true;
+                cells = _actors.Values.ToArray();
             }
-            if (finalizeNow)
+
+            foreach (ActorCell cell in cells)
+            {
+                bool finalizeNow;
+                lock (cell.Gate)
+                {
+                    MarkStoppingLocked(cell);
+                    finalizeNow = cell.Scheduled == 0;
+                }
+                if (finalizeNow)
+                    FinalizeCell(cell);
+            }
+
+            _domains.Dispose();
+
+            // All queued/running dispatch tokens have returned at this point.
+            foreach (ActorCell cell in cells)
                 FinalizeCell(cell);
         }
-
-        _domains.Dispose();
-
-        // All queued/running dispatch tokens have returned at this point.
-        foreach (ActorCell cell in cells)
-            FinalizeCell(cell);
     }
 
     private ActorCell Lookup(ActorRef actor)

@@ -465,6 +465,11 @@ public unsafe sealed class ActorArena : IDisposable
             if (slot.Generation == ulong.MaxValue)
                 throw new OverflowException("Actor allocation generation exhausted");
 
+            // A last-in-first-out temporary can be reclaimed immediately
+            // without moving any earlier live allocations. This is the
+            // common persistent-root + per-message-transient actor pattern.
+            bool wasTail = slot.Offset + slot.Length == _persistentHighWater;
+            int freedOffset = slot.Offset;
             Zero(_persistent + slot.Offset, slot.Length);
             _persistentLiveBytes -= slot.Length;
             _liveAllocations--;
@@ -475,6 +480,9 @@ public unsafe sealed class ActorArena : IDisposable
             slot.Generation++;
 
             _freeSlots[_freeSlotCount++] = handle.Slot;
+
+            if (wasTail)
+                _persistentHighWater = freedOffset;
 
             if (_liveAllocations == 0)
             {
