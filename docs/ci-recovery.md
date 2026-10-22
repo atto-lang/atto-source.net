@@ -117,3 +117,36 @@ The workflow includes `linux-aot-diagnostic` to test the CIL metadata generator 
 4. Verify real Native AOT PE images; reject both managed apphosts and accidentally copied `OresGenerated.dll`.
 5. Add separate Native AOT negative tests for overflow and division-by-zero exit status before closing bootstrap.
 6. Keep [PR #1](https://github.com/ores-truffle-oreslang/oreslang-source.net/pull/1) draft and unmerged until evidence is collected.
+
+## Exact PR-head and native verification receipt gate (proposed hardening)
+
+The Native AOT and declaration-integrity workflows explicitly check out
+`github.event.pull_request.head.sha` for pull requests (or `github.sha` for
+push/manual runs), then compare `git rev-parse HEAD` to the expected immutable
+source commit before running source validation. The Windows job emits a scoped
+receipt *only after* the managed tests, native compiler, native PE checks,
+negative cases, and native CFG executable tests have succeeded in order. The
+receipt identifies source SHA, tree SHA, repository, workflow run/attempt and
+`win-x64` target; a Linux diagnostic is not a Windows release receipt.
+
+**Release check:** Require a successful originating-repository Windows Native
+AOT job with its expected workflow run ID, positive executed step records,
+completed checkout/test/publish/execution steps, matching commit/tree identity,
+and the receipt uploaded in that same successful attempt. Receipt JSON alone is
+not independently signed and must not replace GitHub step/status evidence.
+Never infer a passing test or issue a release from a failed/zero-step run.
+
+This workflow hardening is not a fix for exhausted minutes, missing runners or
+policy/billing denials. When runners do not start, a repo owner/billing admin
+must resolve that infrastructure block before this can produce any receipt.
+For a pull request from a different repository, exact-head checkout requires
+that Git commit be accessible to the source workflow; fail closed otherwise.
+
+## Coordinated PR rollout (2026-10-22)
+
+The immutable PR-head checkouts and Windows x64 NativeAOT receipt originated
+in draft #138. The combined release-gate proposal is carried forward into
+#139 with the read-only exact-head Actions run/jobs verifier. Treat these as
+one proposed release gate: the receipt alone cannot certify runtime execution,
+while jobs JSON without a validated checkout SHA cannot certify reviewed source.
+Both components are still unexecuted because runner scheduling remains blocked.
