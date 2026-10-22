@@ -113,9 +113,12 @@ public sealed class ActorContext
         Span<byte> destination) =>
         _arena.ReadScratch(_turn, handle, offset, destination);
 
+    // Grouped SoAoS metadata is copied into bounded per-field geometry by
+    // ActorShardColumns; caller arrays are not retained beyond construction.
     public ActorShardColumns CreateShard(int rows, int fields,
-        ActorDataLayout layout, int lanes = 1) =>
-        new(_arena, _turn, rows, fields, layout, lanes);
+        ActorDataLayout layout, int lanes = 1,
+        int[]? soaosGroupWidths = null) =>
+        new(_arena, _turn, rows, fields, layout, lanes, soaosGroupWidths);
 
     public double ReadShard(ActorShardColumns shard, int row, int field)
     {

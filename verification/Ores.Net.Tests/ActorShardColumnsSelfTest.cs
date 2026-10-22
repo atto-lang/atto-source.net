@@ -23,17 +23,71 @@ internal static class ActorShardColumnsSelfTest
                 ActorDataLayout.Soa, lanes: 4);
         }, "SoA cannot pretend to carry AoSoA lane metadata");
 
-        using (var arena = NewArena(6102))
-        using (var turn = arena.EnterTurn(6102, 1))
+        Reject(() =>
         {
-            Reject(() => _ = new ActorShardColumns(arena, turn, 8, 3,
-                (ActorDataLayout)int.MaxValue),
-                "undefined layout must fail before native allocation");
-            Require(arena.PersistentLiveBytes == 0 && arena.LiveAllocations == 0,
-                "invalid layout admission must not consume actor arena capacity");
-        }
+            using var arena = NewArena(6102);
+            using var turn = arena.EnterTurn(6102, 1);
+            _ = new ActorShardColumns(arena, turn, 8, 3,
+                ActorDataLayout.Soaos);
+        }, "SoAoS requires explicit field groups");
 
-        Console.WriteLine("PASS .NET actor-owned AoS/SoA/AoSoA shard layouts and dense kernel");
+        Reject(() =>
+        {
+            using var arena = NewArena(6103);
+            using var turn = arena.EnterTurn(6103, 1);
+            _ = new ActorShardColumns(arena, turn, 8, 3,
+                ActorDataLayout.Soaos, soaosGroupWidths: new[] { 2, 0, 1 });
+        }, "SoAoS group width cannot be zero");
+
+        Reject(() =>
+        {
+            using var arena = NewArena(6104);
+            using var turn = arena.EnterTurn(6104, 1);
+            _ = new ActorShardColumns(arena, turn, 8, 3,
+                ActorDataLayout.Soaos, soaosGroupWidths: new[] { 2 });
+        }, "SoAoS groups must cover every field");
+
+        Reject(() =>
+        {
+            using var arena = NewArena(6105);
+            using var turn = arena.EnterTurn(6105, 1);
+            _ = new ActorShardColumns(arena, turn, 8, 3,
+                ActorDataLayout.Soa, soaosGroupWidths: new[] { 2, 1 });
+        }, "non-SoAoS layout cannot carry SoAoS metadata");
+
+        Reject(() =>
+        {
+            using var arena = NewArena(6106);
+            using var turn = arena.EnterTurn(6106, 1);
+            _ = new ActorShardColumns(arena, turn, 1, 1,
+                (ActorDataLayout)999);
+        }, "unknown layout enum fails closed before arena allocation");
+
+        Reject(() =>
+        {
+            using var arena = NewArena(6107);
+            using var turn = arena.EnterTurn(6107, 1);
+            _ = new ActorShardColumns(arena, turn,
+                rows: int.MaxValue, fields: int.MaxValue,
+                ActorDataLayout.Soa);
+        }, "oversized logical geometry rejects without arithmetic wraparound");
+
+        Reject(() =>
+        {
+            using var arena = NewArena(6108);
+            using var turn = arena.EnterTurn(6108, 1);
+            _ = new ActorShardColumns(arena, turn,
+                rows: 699_050, fields: 3,
+                ActorDataLayout.Aosoa, lanes: 1024);
+        }, "AoSoA padded geometry cannot exceed the shard cap");
+
+        RejectOversizedFieldMetadata();
+        RejectOversizedGroupCount();
+        RejectOverlongGroupsWithBoundedManagedAllocations();
+        ExerciseStableCallerGroups();
+        ExerciseDistinctSoaosGeometry();
+
+        Console.WriteLine("PASS .NET actor-owned AoS/SoA/AoSoA/SoAoS shard layouts and dense kernel");
     }
 
     private static void ExerciseLayout(ActorDataLayout layout)
@@ -42,8 +96,9 @@ internal static class ActorShardColumnsSelfTest
         using var arena = NewArena(actorId);
         using var turn = arena.EnterTurn(actorId, 1);
         int lanes = layout == ActorDataLayout.Aosoa ? 4 : 1;
+        int[]? groups = layout == ActorDataLayout.Soaos ? new[] { 2, 1 } : null;
         var shard = new ActorShardColumns(arena, turn,
-            rows: 7, fields: 3, layout, lanes);
+            rows: 7, fields: 3, layout, lanes, soaosGroupWidths: groups);
 
         Require(shard.Rows == 7 && shard.Fields == 3,
             layout + " logical dimensions");
@@ -52,6 +107,9 @@ internal static class ActorShardColumnsSelfTest
         if (layout == ActorDataLayout.Aosoa)
             Require(shard.PhysicalRows == 8,
                 "AoSoA pads to the next tile without changing logical rows");
+        if (layout == ActorDataLayout.Soaos)
+            Require(shard.GroupCount == 2 && shard.PhysicalRows == 7,
+                "SoAoS preserves logical rows and explicit field groups");
 
         for (int row = 0; row < shard.Rows; row++)
         {
@@ -90,6 +148,121 @@ internal static class ActorShardColumnsSelfTest
             layout + " release refunds actor arena bytes");
         Reject(() => shard.Read(turn, 0, 0),
             layout + " released shard cannot be reused");
+    }
+
+    private static void RejectOversizedFieldMetadata()
+    {
+        using var arena = NewArena(6201);
+        using var turn = arena.EnterTurn(6201, 1);
+        Reject(() => _ = new ActorShardColumns(arena, turn, rows: 1,
+            fields: ActorShardColumns.MaxFieldsPerShard + 1,
+            ActorDataLayout.Soa),
+            "oversized field count rejected before host metadata allocation");
+
+        Reject(() => _ = new ActorShardColumns(arena, turn, rows: 1,
+            fields: ActorShardColumns.MaxFieldsPerShard + 1,
+            ActorDataLayout.Soaos, soaosGroupWidths: new[] { 1 }),
+            "oversized SoAoS field count rejected before groups are processed");
+        Require(arena.LiveAllocations == 0 && arena.PersistentLiveBytes == 0,
+            "rejected excessive field geometry consumes no native actor capacity");
+    }
+
+    private static void RejectOversizedGroupCount()
+    {
+        using var arena = NewArena(6203);
+        using var turn = arena.EnterTurn(6203, 1);
+        var manyGroups = new int[ActorShardColumns.MaxFieldsPerShard + 1];
+        Array.Fill(manyGroups, 1);
+        Reject(() => _ = new ActorShardColumns(
+            arena, turn, rows: 1,
+            fields: ActorShardColumns.MaxFieldsPerShard,
+            ActorDataLayout.Soaos, soaosGroupWidths: manyGroups),
+            "overlong SoAoS group array must fail before cloning metadata");
+        Require(arena.LiveAllocations == 0 && arena.PersistentLiveBytes == 0,
+            "overlong SoAoS group admission consumes no arena reservation");
+
+        // The largest admitted group count still has valid disjoint geometry.
+        var boundedGroups = new int[ActorShardColumns.MaxFieldsPerShard];
+        Array.Fill(boundedGroups, 1);
+        var largest = new ActorShardColumns(arena, turn, rows: 1,
+            fields: ActorShardColumns.MaxFieldsPerShard,
+            ActorDataLayout.Soaos, soaosGroupWidths: boundedGroups);
+        Require(largest.GroupCount == ActorShardColumns.MaxFieldsPerShard &&
+                largest.GetPhysicalByteOffset(0, largest.Fields - 1) ==
+                (largest.Fields - 1) * sizeof(double),
+            "maximum bounded SoAoS metadata has exact last-field offset");
+        largest.Release(turn);
+        Require(arena.PersistentLiveBytes == 0,
+            "largest bounded SoAoS geometry is released");
+    }
+
+    private static void RejectOverlongGroupsWithBoundedManagedAllocations()
+    {
+        using var arena = NewArena(6204);
+        using var turn = arena.EnterTurn(6204, 1);
+        // Warm the exception path so the measurement isolates the
+        // rejected array-cloning cost rather than first-call JIT overhead.
+        Reject(() => _ = new ActorShardColumns(arena, turn,
+            rows: 2, fields: 2, ActorDataLayout.Soaos,
+            soaosGroupWidths: new int[8]),
+            "overlong group warmup");
+
+        var oversized = new int[65_536];
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        Reject(() => _ = new ActorShardColumns(arena, turn,
+            rows: 2, fields: 2, ActorDataLayout.Soaos,
+            soaosGroupWidths: oversized),
+            "oversized group array rejected before snapshot");
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Require(allocated < 128 * 1024,
+            "malformed SoAoS input cannot clone 256 KiB of metadata");
+        Require(arena.LiveAllocations == 0 && arena.PersistentLiveBytes == 0,
+            "rejected oversized group admission has no native allocations");
+    }
+
+    private static void ExerciseStableCallerGroups()
+    {
+        using var arena = NewArena(6202);
+        using var turn = arena.EnterTurn(6202, 1);
+        int[] widths = { 2, 1 };
+        var shard = new ActorShardColumns(arena, turn,
+            rows: 4, fields: 3, ActorDataLayout.Soaos, soaosGroupWidths: widths);
+        int offset = shard.GetPhysicalByteOffset(1, 1);
+        // Changing the caller's array cannot change established shard geometry.
+        widths[0] = 1;
+        widths[1] = 2;
+        Require(shard.GetPhysicalByteOffset(1, 1) == offset &&
+                shard.GroupCount == 2,
+            "SoAoS geometry remains independent of mutable group input");
+        shard.Release(turn);
+    }
+
+    private static void ExerciseDistinctSoaosGeometry()
+    {
+        using var arena = NewArena(6200);
+        using var turn = arena.EnterTurn(6200, 1);
+        var soa = new ActorShardColumns(arena, turn,
+            rows: 4, fields: 4, ActorDataLayout.Soa);
+        var soaos = new ActorShardColumns(arena, turn,
+            rows: 4, fields: 4, ActorDataLayout.Soaos,
+            soaosGroupWidths: new[] { 2, 2 });
+
+        Require(soa.GetPhysicalByteOffset(1, 1) == 40,
+            "SoA field-one row-one byte geometry");
+        Require(soaos.GetPhysicalByteOffset(1, 1) == 24,
+            "SoAoS first subrecord group byte geometry");
+        Require(soa.GetPhysicalByteOffset(1, 2) == 72,
+            "SoA field-two row-one byte geometry");
+        Require(soaos.GetPhysicalByteOffset(1, 2) == 80,
+            "SoAoS second subrecord group byte geometry");
+        Require(soa.GetPhysicalByteOffset(1, 1) !=
+                soaos.GetPhysicalByteOffset(1, 1),
+            "SoAoS must not alias SoA physical geometry");
+
+        soa.Release(turn);
+        soaos.Release(turn);
+        Require(arena.PersistentLiveBytes == 0,
+            "geometry fixtures release both unmanaged allocations");
     }
 
     private static ActorArena NewArena(ulong actorId) => new(
