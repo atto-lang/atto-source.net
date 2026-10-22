@@ -140,6 +140,12 @@ internal static class ActorNativeHeapSelfTest
         Console.WriteLine("PASS .NET per-actor unmanaged heaps, bounds, loans, ABA, recycle, retirement");
     }
 
+    private static void Require(bool good, string reason)
+    {
+        if (!good)
+            throw new Exception("actor native heap budget: " + reason);
+    }
+
     private static void NativeCapacityBudgetWaitsForFinalLease(ActorRef actor)
     {
         var tenant = new ActorNativeHeapBudget(192);
