@@ -71,6 +71,17 @@ public static class OresStructuredParser
                 throw new FormatException("Structured token budget exceeded");
             if (token.Text.Length == 0) break;
         }
+        for (int i = 0; i + 1 < tokens.Count; i++)
+        {
+            if ((tokens[i].Text is "tuple" or "structural") &&
+                tokens[i + 1].Text == "(")
+                throw new FormatException(
+                    $"Tuple-v2 source requires typed tuple ownership/ABI lowering at offset {tokens[i].Offset}");
+            if (i + 2 < tokens.Count && tokens[i].Text == "." &&
+                tokens[i + 1].Text == "." && tokens[i + 2].Text == ".")
+                throw new FormatException(
+                    $"Tuple-v2 explicit spread requires single-evaluation checked lowering at offset {tokens[i].Offset}");
+        }
         return new Reader(tokens).ReadProgram();
     }
 
@@ -106,7 +117,7 @@ public static class OresStructuredParser
             }
             else if (ch == '=' && index + 1 < source.Length &&
                      source[index + 1] == '=') index += 2;
-            else if ("()+-*{}:;=<".IndexOf(ch) >= 0) index++;
+            else if ("()+-*{}:;=<.".IndexOf(ch) >= 0) index++;
             else throw new FormatException($"Invalid character at offset {offset}");
             return new Token(source[offset..index], offset);
         }
@@ -179,8 +190,12 @@ public static class OresStructuredParser
             Expect("fnc");
             Expect("main");
             Expect("(");
+            if (Current.Text == "(")
+                throw Error("Tuple-v2 shorthand parameter requires typed tuple ownership/ABI lowering");
             Expect(")");
             Expect(":");
+            if (Current.Text == "(")
+                throw Error("Tuple-v2 shorthand return requires typed tuple ownership/ABI lowering");
             Expect("int");
             var (body, returns) = Block(0);
             if (!returns) throw Error("Not every path returns int");
@@ -363,6 +378,19 @@ public static class OresStructuredParser
                 if (operation is "ref" or "unref" or "deref" or "raw")
                     throw new FormatException(
                         $"Pointer-style operation 'rt {operation}' is not valid Oreslang source; use rt copy/share/take/borrow or rt mut borrow; unsupported in the .NET structured backend at offset {at}");
+
+                string ownership = operation;
+                if (operation == "mut" && index + 1 < tokens.Count &&
+                    tokens[index + 1].Text == "borrow")
+                    ownership = "mut borrow";
+                if (operation == "borrow" && index + 1 < tokens.Count &&
+                    tokens[index + 1].Text == "mut")
+                    throw new FormatException(
+                        $"Legacy ownership spelling 'rt borrow mut' is rejected; use 'rt mut borrow' at offset {at}");
+                if (ownership is "copy" or "share" or "take" or "borrow" or "mut borrow")
+                    throw new FormatException(
+                        $"Ownership operation 'rt {ownership}' requires typed actor-arena lowering; unsupported in the .NET structured backend at offset {at}");
+
                 throw new FormatException(
                     $"Runtime ownership operation requires typed lowering; unsupported in the .NET structured backend at offset {at}");
             }

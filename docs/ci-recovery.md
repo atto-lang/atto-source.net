@@ -8,6 +8,56 @@ Before changing application code in response to a failing runner, examine the in
 
 Never mirror this *private* source repository into a public test repository to obtain Actions minutes. If the source must be mirrored to another GitHub organization, use a private destination controlled by the repository owners, explicit access controls, no secrets, and purge temporary branches after validation.
 
+## Source-local, self-hosted Windows fallback (2026-10-20)
+
+If the repository owner's hosted-runner minutes/billing allocation is unavailable,
+the workflow at `.github/workflows/windows-native-aot.yml` now includes an
+**opt-in** `self-hosted-windows-static-facts` job. It is **off by default**,
+never requires a private cross-organization source mirror, and fetches only
+this same repository's **exact pull-request head** using a read-only
+`GITHUB_TOKEN` (checkout credentials are not persisted).
+
+Owner setup, without adding a source-access token or new GitHub secret:
+
+1. Register an **isolated, preferably ephemeral** Windows x64 GitHub
+   self-hosted runner on this repository or organization, with
+   `oreslang-net-aot` as an additional runner label. The runner needs
+   .NET 10 SDK, compatible VS C++ Native AOT tools, PowerShell and Python
+   for the existing source tests. **Do not run untrusted code or other
+   organizations' repositories on that runner.**
+2. Under repository **Settings → Secrets and variables → Actions → Variables**,
+   create the **non-secret** repository variable
+   `ORESLANG_NET_SELFHOSTED_WINDOWS` with exact value `enabled`.
+3. Run/retrigger a same-repository pull request against this branch.
+   The job condition excludes forks and push events. Its checkout is
+   explicitly pinned to `github.event.pull_request.head.sha`; it checks the
+   Git HEAD before running build commands.
+4. Review **executed steps**, not only overall workflow status. The job must
+   actually complete the .NET compiler/runtime harness, managed CLI facts,
+   Windows Native AOT publish, native compiler checks, source SHA256
+   equality and native-versus-managed JSON equality. Retain exact-head
+   execution evidence and clean/retire any persistent runner afterward.
+5. Remove or disable the repository variable when the runner is unavailable.
+   The normal Windows hosted job remains a separate mandatory release gate
+   unless a reviewer explicitly accepts equivalent self-hosted evidence.
+
+The extra job uses source-local checkout, so **no tokens, credentials or
+private Git tree objects are copied into another organization**. GitHub
+currently documents self-hosted runner usage as free of standard hosted-runner
+minute billing, but some organization-level Actions policies may still
+prevent scheduling. Runner labels alone do **not** create or register a runner.
+
+The exact PR-head run inspected before this fallback
+[39479176297](https://github.com/ores-truffle-oreslang/oreslang-source.net/actions/runs/39479176297)
+showed both GitHub-hosted jobs failing in approximately two seconds,
+with **no assigned runner name, no executed steps and no job log artifact**.
+That evidence strongly indicates the runner was never allocated, but
+cannot distinguish billing from scheduling or policy without owner-level
+usage/settings visibility. A later Actions run
+[39481699261](https://github.com/ores-truffle-oreslang/oreslang-source.net/actions/runs/39481699261)
+recognized the optional self-hosted job as `skipped` while its opt-in
+variable was unset; this is **not test execution evidence**.
+
 ## Independent no-source runner probe
 
 A temporary private diagnostic PR in `3FA-app/3fa-app-e2e` ran a workflow that only printed `dotnet --info` on `windows-2022` and `ubuntu-latest`. [Run 38658939713](https://github.com/3FA-app/3fa-app-e2e/actions/runs/38658939713) also concluded **failure** for both jobs with **zero returned steps**. No Oreslang source or secrets were copied. The probe PR was closed without merge and its temporary workflow file deleted.

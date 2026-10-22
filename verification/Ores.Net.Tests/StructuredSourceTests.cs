@@ -104,6 +104,29 @@ internal static class StructuredSourceTests
             }
         }, "shared arithmetic-76 typed AST");
 
+        static void RejectTupleV2(string source, string reason)
+        {
+            try { _ = OresStructuredParser.Parse(source); }
+            catch (FormatException ex)
+            {
+                Require(ex.Message.Contains("Tuple-v2", StringComparison.Ordinal) &&
+                        ex.Message.Contains("offset", StringComparison.Ordinal),
+                    reason + ": tuple-v2 rejection was incidental: " + ex.Message);
+                return;
+            }
+            throw new Exception("Tuple-v2 source incorrectly accepted: " + reason);
+        }
+        RejectTupleV2("fnc main(tuple (int,int) value):int{return 1;}",
+            "explicit tuple parameter");
+        RejectTupleV2("fnc main(structural (int,int) value):int{return 1;}",
+            "structural tuple parameter");
+        RejectTupleV2("fnc main((int,int) value):int{return 1;}",
+            "shorthand tuple parameter");
+        RejectTupleV2("fnc main():tuple (int,int){return 1;}",
+            "tuple return");
+        RejectTupleV2("fnc main():int{return call(...pair);}",
+            "explicit tuple spread");
+
         foreach (var operation in new[] { "ref", "unref", "deref", "deref mut", "raw" })
         {
             try { _ = OresStructuredParser.Parse(
@@ -117,6 +140,32 @@ internal static class StructuredSourceTests
             }
             throw new Exception("Structured source incorrectly accepted pointer operation: rt " +
                 operation);
+        }
+
+        foreach (var operation in new[] { "copy", "share", "take", "borrow", "mut borrow" })
+        {
+            try { _ = OresStructuredParser.Parse(
+                $"fnc main():int{{return rt {operation} value;}}"); }
+            catch (FormatException ex)
+            {
+                Require(ex.Message.Contains("requires typed actor-arena lowering",
+                    StringComparison.Ordinal),
+                    "structured ownership rejection must name actor-arena lowering");
+                continue;
+            }
+            throw new Exception("Structured source incorrectly accepted ownership operation: rt " +
+                operation);
+        }
+        try
+        {
+            _ = OresStructuredParser.Parse(
+                "fnc main():int{return rt borrow mut value;}");
+            throw new Exception("Structured source admitted legacy rt borrow mut");
+        }
+        catch (FormatException ex)
+        {
+            Require(ex.Message.Contains("use 'rt mut borrow'", StringComparison.Ordinal),
+                "legacy mutable borrow diagnostic must name canonical spelling");
         }
 
         foreach (var source in new[] {
