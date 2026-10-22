@@ -20,6 +20,9 @@ public sealed class ActorShardColumns
 {
     public const int MaxShardBytes = 16 * 1024 * 1024;
     public const int MaxAosoaLanes = 1024;
+    // Bound managed SoAoS metadata independently from the native byte quota.
+    // Each SoAoS field requires one 64-bit and two 32-bit geometry entries.
+    public const int MaxFieldsPerShard = 4096;
 
     private readonly ActorArena _arena;
     private readonly ActorArenaHandle _storage;
@@ -36,8 +39,9 @@ public sealed class ActorShardColumns
         ArgumentNullException.ThrowIfNull(turn);
         if (rows <= 0)
             throw new ArgumentOutOfRangeException(nameof(rows));
-        if (fields <= 0)
-            throw new ArgumentOutOfRangeException(nameof(fields));
+        if (fields <= 0 || fields > MaxFieldsPerShard)
+            throw new ArgumentOutOfRangeException(nameof(fields),
+                "Actor shard field count exceeds bounded layout metadata");
         if (layout is not (ActorDataLayout.Aos or ActorDataLayout.Soa or
             ActorDataLayout.Aosoa or ActorDataLayout.Soaos))
             throw new ArgumentOutOfRangeException(nameof(layout));
@@ -87,8 +91,16 @@ public sealed class ActorShardColumns
                     "SoAoS requires one or more nonempty field groups",
                     nameof(soaosGroupWidths));
 
+            // Use a private stable snapshot for validation and geometry.
+            // Caller-owned mutable input must not be re-read mid-admission.
+            int[] groupWidths = (int[])soaosGroupWidths.Clone();
+            if (groupWidths.Length > fields)
+                throw new ArgumentException(
+                    "SoAoS cannot declare more groups than fields",
+                    nameof(soaosGroupWidths));
+
             long groupedFields = 0;
-            foreach (int width in soaosGroupWidths)
+            foreach (int width in groupWidths)
             {
                 if (width <= 0)
                     throw new ArgumentOutOfRangeException(nameof(soaosGroupWidths),
@@ -110,7 +122,7 @@ public sealed class ActorShardColumns
 
             int field = 0;
             long groupBaseScalar = 0;
-            foreach (int width in soaosGroupWidths)
+            foreach (int width in groupWidths)
             {
                 for (int withinGroup = 0; withinGroup < width; withinGroup++)
                 {
@@ -121,7 +133,7 @@ public sealed class ActorShardColumns
                 }
                 groupBaseScalar += (long)rows * width;
             }
-            GroupCount = soaosGroupWidths.Length;
+            GroupCount = groupWidths.Length;
         }
         else if (soaosGroupWidths is not null)
         {
