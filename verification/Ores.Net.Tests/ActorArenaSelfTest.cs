@@ -11,6 +11,7 @@ internal static class ActorArenaSelfTest
         AggregateBudgetAdmissionIsNeutral();
         RuntimeBudgetsAlsoChargeProcessLimit();
         PersistentRootWithTailTempsDoesNotExhaustArena();
+        OutOfOrderDropsCoalesceDeadTail();
         RetirementSealsAdmissionButAllowsTurnCleanup();
         CrossArenaAuthorityAndGenerationFences();
         ForgedMetadataCannotAcquireMemoryAuthority();
@@ -215,6 +216,41 @@ internal static class ActorArenaSelfTest
         Require(tenant.ReservedBytes == 0 &&
                 ActorArenaBudget.Process.ReservedBytes == processBefore,
             "physical reclamation refunds both budgets exactly once");
+    }
+
+    private static void OutOfOrderDropsCoalesceDeadTail()
+    {
+        using var arena = new ActorArena(
+            actorId: 9702, incarnation: 1,
+            persistentBytes: 96, scratchBytes: 64,
+            maxAllocations: 4, maxLifetimePins: 2, maxReadLoans: 2);
+        using var turn = arena.EnterTurn(9702, 1);
+        var root = arena.AllocatePersistent(turn, 8);
+        arena.Write(turn, root, 0, new byte[] { 0x74 });
+        var middle = arena.AllocatePersistent(turn, 40);
+        var tail = arena.AllocatePersistent(turn, 40);
+        arena.Write(turn, middle, 0, new byte[] { 0xA5 });
+        arena.Write(turn, tail, 0, new byte[] { 0xC7 });
+
+        // Drop the older middle allocation before the newest allocation.
+        // Rewinding only to the newest allocation's start leaves 40 dead
+        // bytes stranded above the surviving permanent root.
+        arena.ReleasePersistent(turn, middle);
+        arena.ReleasePersistent(turn, tail);
+        var replacement = arena.AllocatePersistent(turn, 80);
+        var zeroed = new byte[80];
+        arena.Read(turn, replacement, 0, zeroed);
+        Require(zeroed.All(static value => value == 0),
+            "coalesced tail reallocation cannot reveal freed bytes");
+
+        var rootCheck = new byte[1];
+        arena.Read(turn, root, 0, rootCheck);
+        Require(rootCheck[0] == 0x74,
+            "tail coalescing cannot move or overwrite live actor roots");
+        arena.ReleasePersistent(turn, replacement);
+        arena.ReleasePersistent(turn, root);
+        Require(arena.PersistentLiveBytes == 0 && arena.LiveAllocations == 0,
+            "out-of-order tail cleanup refunds all persistent allocation state");
     }
 
     private static void PersistentRootWithTailTempsDoesNotExhaustArena()
