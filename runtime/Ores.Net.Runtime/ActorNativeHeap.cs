@@ -86,7 +86,7 @@ public sealed unsafe class ActorNativeHeap : IDisposable
 
         public void Dispose()
         {
-            Interlocked.Exchange(ref _heap, null)?.ReleaseLease();
+            Interlocked.Exchange(ref _heap, null)?.ReleaseLease(this);
         }
     }
 
@@ -96,7 +96,12 @@ public sealed unsafe class ActorNativeHeap : IDisposable
     private readonly Slot[] _slots;
     private readonly int[] _freeSlots;
     private readonly Hole[] _holes;
+    // Only the exact lease objects minted by this heap may release native life.
+    private readonly HashSet<LifetimeLease> _issuedLeases =
+        new(ReferenceEqualityComparer.Instance);
     private readonly int _capacity;
+    private readonly ActorNativeHeapBudget _budget;
+    private bool _processReservation;
     private byte* _memory;
     private int _nextSlot;
     private int _freeCount;
@@ -106,7 +111,8 @@ public sealed unsafe class ActorNativeHeap : IDisposable
     private int _leases;
     private bool _closing;
 
-    public ActorNativeHeap(ActorRef owner, int capacity, int maxSlots)
+    public ActorNativeHeap(ActorRef owner, int capacity, int maxSlots,
+        ActorNativeHeapBudget? budget = null)
     {
         if (owner.Id == 0 || owner.Generation == 0 || owner.Nonce == Guid.Empty)
             throw new ArgumentException("A live actor capability is required", nameof(owner));
@@ -121,8 +127,30 @@ public sealed unsafe class ActorNativeHeap : IDisposable
         _holes = new Hole[maxSlots + 1];
         for (int i = 0; i < maxSlots; ++i) _slots[i].Generation = 1;
 
-        _memory = (byte*)NativeMemory.AllocZeroed((nuint)capacity);
-        if (_memory == null) throw new OutOfMemoryException("actor-native heap allocation failed");
+        _budget = budget ?? ActorNativeHeapBudget.Process;
+        _budget.Reserve(capacity);
+        try
+        {
+            if (!ReferenceEquals(_budget, ActorNativeHeapBudget.Process))
+            {
+                ActorNativeHeapBudget.Process.Reserve(capacity);
+                _processReservation = true;
+            }
+
+            _memory = (byte*)NativeMemory.AllocZeroed((nuint)capacity);
+            if (_memory == null)
+                throw new OutOfMemoryException("actor-native heap allocation failed");
+        }
+        catch
+        {
+            if (_processReservation)
+            {
+                ActorNativeHeapBudget.Process.Refund(capacity);
+                _processReservation = false;
+            }
+            _budget.Refund(capacity);
+            throw;
+        }
     }
 
     public int Capacity => _capacity;
@@ -165,17 +193,22 @@ public sealed unsafe class ActorNativeHeap : IDisposable
             RequireOwner(actor);
             if (_closing) return null;
             // Allocate the managed lease before changing admission accounting.
+            if (_leases == MaximumSlots)
+                return null;
             var lease = new LifetimeLease(this);
+            if (!_issuedLeases.Add(lease))
+                throw new InvalidOperationException("duplicate heap lease issuance");
             checked { ++_leases; }
             return lease;
         }
     }
 
-    private void ReleaseLease()
+    private void ReleaseLease(LifetimeLease lease)
     {
         lock (_gate)
         {
-            if (_leases <= 0) throw new InvalidOperationException("actor heap lease underflow");
+            if (_leases <= 0 || !_issuedLeases.Remove(lease))
+                throw new InvalidOperationException("unissued or stale actor heap lease");
             --_leases;
             if (_closing && _leases == 0) ReleaseNative();
         }
@@ -365,11 +398,23 @@ public sealed unsafe class ActorNativeHeap : IDisposable
         CryptographicOperations.ZeroMemory(new Span<byte>(_memory, _capacity));
         NativeMemory.Free(_memory);
         _memory = null;
+        // Physical reclamation, not logical retirement, releases quota.
+        _budget.Refund(_capacity);
+        if (_processReservation)
+        {
+            ActorNativeHeapBudget.Process.Refund(_capacity);
+            _processReservation = false;
+        }
         _live = 0;
         _used = 0;
         _holeCount = 0;
         _freeCount = 0;
         _nextSlot = 0;
+        _issuedLeases.Clear();
+        // Native bytes are scrubbed before free; also eliminate stale metadata.
+        Array.Clear(_slots);
+        Array.Clear(_freeSlots);
+        Array.Clear(_holes);
     }
 
     /// <summary>Trusted owner/supervisor cleanup; pending leases defer physical free.</summary>
