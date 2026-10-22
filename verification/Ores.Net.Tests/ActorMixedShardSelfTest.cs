@@ -25,6 +25,54 @@ internal static class ActorMixedShardSelfTest
         persistentBytes: 2 * 1024 * 1024, scratchBytes: 64 * 1024,
         maxAllocations: 32, maxLifetimePins: 8, maxReadLoans: 8);
 
+    private static int FieldWidth(ActorMixedScalarKind type) => type switch
+    {
+        ActorMixedScalarKind.Bool => 1,
+        ActorMixedScalarKind.F64 => 8,
+        ActorMixedScalarKind.U32 or ActorMixedScalarKind.Ref32 => 4,
+        _ => throw new Exception("unknown test scalar")
+    };
+
+    private static void ExercisePhysicalLayoutSweep()
+    {
+        int id = 8300;
+        foreach (var kind in new[] {
+            ActorDataLayout.Aos, ActorDataLayout.Soa,
+            ActorDataLayout.Aosoa, ActorDataLayout.Soaos
+        })
+        foreach (int rows in new[] { 1, 2, 3, 5, 8, 17 })
+        foreach (int lanes in (kind == ActorDataLayout.Aosoa
+            ? new[] { 1, 2, 4, 8 } : new[] { 1 }))
+        {
+            ulong actorId = (ulong)id++;
+            using var arena = NewArena(actorId);
+            using var turn = arena.EnterTurn(actorId, 1);
+            var shard = new ActorMixedShard(arena, turn, Fields, rows, kind,
+                lanes: lanes, groups: kind == ActorDataLayout.Soaos
+                    ? new[] { new[] { 0, 2 }, new[] { 1, 3 } } : null);
+            var occupied = new HashSet<int>();
+            for (int row = 0; row < rows; row++)
+            for (int field = 0; field < Fields.Length; field++)
+            {
+                int offset = shard.GetPhysicalByteOffset(row, Fields[field].Name);
+                int width = FieldWidth(Fields[field].Kind);
+                Require(offset >= 0 && offset <= shard.ByteLength - width,
+                    "mixed cell must be completely inside allocated arena");
+                Require(offset % width == 0, "mixed scalar must be naturally aligned");
+                for (int i = 0; i < width; i++)
+                    Require(occupied.Add(checked(offset + i)),
+                        "two distinct logical cells overlap a physical byte");
+            }
+            Reject(() => shard.GetPhysicalByteOffset(rows, "id"),
+                "tail padding must not introduce live ECS rows");
+            Reject(() => shard.GetPhysicalByteOffset(0, "toString"),
+                "inherited names are not field declarations");
+            shard.Release(turn);
+            Require(arena.PersistentLiveBytes == 0,
+                "swept shard releases all native bytes");
+        }
+    }
+
     public static void Run()
     {
         var kinds = new[]
@@ -117,6 +165,7 @@ internal static class ActorMixedShardSelfTest
             Require(valid.ReadU32(turn, 0, "id") == 42, "subsequent valid admission");
             valid.Release(turn);
         }
+        ExercisePhysicalLayoutSweep();
         Console.WriteLine("PASS .NET unmanaged heterogeneous actor shards in four layouts");
     }
 }
