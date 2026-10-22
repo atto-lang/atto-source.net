@@ -173,6 +173,56 @@ internal static class ActorMixedShardSelfTest
                 Require(shard.ReadU32(turn, row, "id") == 0, "zero initialized u32");
                 Require(!shard.ReadBool(turn, row, "flag"), "zero initialized bool");
             }
+            // Verify every physical cell, not only selected golden offsets.
+            // Padding and masked AoSoA tail lanes must never alias live rows.
+            var occupiedBytes = new HashSet<int>();
+            for (int row = 0; row < rows; row++)
+            foreach (var field in fields)
+            {
+                int width = FieldWidth(field.Kind);
+                int offset = shard.GetPhysicalByteOffset(row, field.Name);
+                Require(offset >= 0 && offset <= shard.ByteLength - width,
+                    "portable logical cell inside physical allocation");
+                Require(offset % width == 0, "portable scalar alignment");
+                for (int i = 0; i < width; i++)
+                    Require(occupiedBytes.Add(checked(offset + i)),
+                        "portable live scalar cells cannot overlap");
+            }
+            for (int row = 0; row < rows; row++)
+            {
+                Require(shard.ReadU32(turn, row, "next") == 0, "portable ref32 zero");
+                Require(BitConverter.DoubleToInt64Bits(shard.ReadF64(turn, row, "x")) == 0,
+                    "portable f64 +0 initialized");
+                shard.WriteU32(turn, row, "id", uint.MaxValue - (uint)row);
+                shard.WriteU32(turn, row, "next", 0x80000000U + (uint)row);
+                shard.WriteBool(turn, row, "flag", row % 2 == 0);
+                shard.WriteF64(turn, row, "x", row + 0.375);
+            }
+            void VerifyIndependentCells()
+            {
+                for (int row = 0; row < rows; row++)
+                {
+                    Require(shard.ReadU32(turn, row, "id") == uint.MaxValue - (uint)row,
+                        "portable id row isolation");
+                    Require(shard.ReadU32(turn, row, "next") == 0x80000000U + (uint)row,
+                        "portable ref32 row isolation");
+                    Require(shard.ReadBool(turn, row, "flag") == (row % 2 == 0),
+                        "portable bool row isolation");
+                    Require(shard.ReadF64(turn, row, "x") == row + 0.375,
+                        "portable f64 row isolation");
+                }
+            }
+            VerifyIndependentCells();
+            Reject(() => shard.WriteBool(turn, 0, "id", true),
+                "portable mismatched bool writer");
+            Reject(() => shard.WriteF64(turn, 0, "next", 1.0),
+                "portable mismatched f64 writer");
+            Reject(() => shard.WriteBool(turn, -1, "flag", true),
+                "portable invalid lower row");
+            Reject(() => shard.ReadF64(turn, rows, "x"),
+                "portable invalid upper row");
+            VerifyIndependentCells(); // All rejected operations preserve every cell.
+
             shard.WriteU32(turn, 0, "id", uint.MaxValue);
             shard.WriteU32(turn, 0, "next", uint.MaxValue);
             shard.WriteBool(turn, 0, "flag", true);
