@@ -71,6 +71,7 @@ internal static class ActorNativeArenaSelfTest
         ConcurrentDisposeDoesNotRaceNativeAccess();
         RejectUnboundedNativeArenaReservation();
         PersistentRootAndTemporaryTailChurn();
+        OutOfOrderDropsCoalesceNativeTail();
         SteadyStateManagedAllocationBudget();
         Console.WriteLine("PASS .NET unmanaged actor arena, primitive handles, stack cleanup scopes");
     }
@@ -109,6 +110,33 @@ internal static class ActorNativeArenaSelfTest
             "steady-state primitive native allocate/read/write/drop must not allocate CLR objects");
         Require(arena.LiveAllocations == 0 && arena.UsedBytes == 0,
             "steady-state benchmark leaves no retained actor allocation");
+    }
+
+    private static void OutOfOrderDropsCoalesceNativeTail()
+    {
+        using var arena = new ActorNativeArena(96, 4);
+        ulong root = arena.Allocate(8);
+        ulong older = arena.Allocate(40);
+        ulong newer = arena.Allocate(40);
+        Require(root != 0 && older != 0 && newer != 0,
+            "out-of-order native tail fixture admitted");
+        Require(arena.WriteInt64(root, 0, 0x234567),
+            "permanent native root initialized");
+        Require(arena.WriteInt64(older, 0, 0xABCD) &&
+                arena.WriteInt64(newer, 0, 0xFEDC),
+            "native transient values initialized");
+
+        Require(arena.Drop(older) && arena.Drop(newer),
+            "out-of-order transient drops succeed");
+        ulong reused = arena.Allocate(80);
+        Require(reused != 0,
+            "coalesced dead native tail accepts a large replacement");
+        Require(arena.ReadInt64(reused) == 0,
+            "reused native bytes were scrubbed");
+        Require(arena.ReadInt64(root) == 0x234567,
+            "coalescing preserves live native root");
+        Require(arena.Drop(reused) && arena.Drop(root),
+            "coalesced tail allocations have deterministic cleanup");
     }
 
     private static void PersistentRootAndTemporaryTailChurn()
