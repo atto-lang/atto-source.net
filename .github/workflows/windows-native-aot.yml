@@ -82,7 +82,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Native AOT static-facts command failed' }
           # Compare the *entire* JSON text line-for-line against the same
           # commit's managed compiler; PowerShell captures strings, not raw bytes.
-          $managed = & dotnet run --no-build -c Release --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -- static-facts $source
+          $managed = & dotnet ./compiler/Ores.Net.Compiler/bin/Release/net10.0/oresnet.dll static-facts $source
           if ($LASTEXITCODE -ne 0) { throw 'Managed static-facts command failed' }
           if (($raw -join "`n") -cne ($managed -join "`n")) {
             throw 'Managed and published Native AOT compiler static facts differ'
@@ -298,7 +298,7 @@ jobs:
           $source = 'contracts/scalar/v1/fixtures/literal-42.ores'
           $native = & ./artifacts/compiler/win-x64/oresnet.exe static-facts $source
           if ($LASTEXITCODE -ne 0) { throw 'Native AOT static facts failed' }
-          $managed = & dotnet run --no-build -c Release --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -- static-facts $source
+          $managed = & dotnet ./compiler/Ores.Net.Compiler/bin/Release/net10.0/oresnet.dll static-facts $source
           if ($LASTEXITCODE -ne 0) { throw 'Managed static facts failed' }
           if (($native -join "`n") -cne ($managed -join "`n")) {
             throw 'Published Native AOT and managed static facts disagree'
