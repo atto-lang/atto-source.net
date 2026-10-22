@@ -70,7 +70,101 @@ internal static class ActorNativeArenaSelfTest
 
         ConcurrentDisposeDoesNotRaceNativeAccess();
         RejectUnboundedNativeArenaReservation();
+        PersistentRootAndTemporaryTailChurn();
+        OutOfOrderDropsCoalesceNativeTail();
+        SteadyStateManagedAllocationBudget();
         Console.WriteLine("PASS .NET unmanaged actor arena, primitive handles, stack cleanup scopes");
+    }
+
+    private static void SteadyStateManagedAllocationBudget()
+    {
+        using var arena = new ActorNativeArena(256, 4);
+
+        // Warm every path and JIT generic helper before taking a measurement.
+        for (int i = 0; i < 100; i++)
+        {
+            ulong warm = arena.Allocate(16);
+            Require(warm != ActorNativeArena.InvalidHandle, "allocation warmup");
+            Require(arena.WriteInt64(warm, 0, i), "write warmup");
+            Require(arena.ReadInt64(warm) == i, "read warmup");
+            Require(arena.Drop(warm), "drop warmup");
+        }
+
+        bool correct = true;
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 5_000; i++)
+        {
+            ulong handle = arena.Allocate(16);
+            if (handle == ActorNativeArena.InvalidHandle ||
+                !arena.WriteInt64(handle, 0, i) ||
+                arena.ReadInt64(handle) != i ||
+                !arena.Drop(handle))
+            {
+                correct = false;
+                break;
+            }
+        }
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Require(correct, "bounded native operations remain functional");
+        Require(allocated == 0,
+            "steady-state primitive native allocate/read/write/drop must not allocate CLR objects");
+        Require(arena.LiveAllocations == 0 && arena.UsedBytes == 0,
+            "steady-state benchmark leaves no retained actor allocation");
+    }
+
+    private static void OutOfOrderDropsCoalesceNativeTail()
+    {
+        using var arena = new ActorNativeArena(96, 4);
+        ulong root = arena.Allocate(8);
+        ulong older = arena.Allocate(40);
+        ulong newer = arena.Allocate(40);
+        Require(root != 0 && older != 0 && newer != 0,
+            "out-of-order native tail fixture admitted");
+        Require(arena.WriteInt64(root, 0, 0x234567),
+            "permanent native root initialized");
+        Require(arena.WriteInt64(older, 0, 0xABCD) &&
+                arena.WriteInt64(newer, 0, 0xFEDC),
+            "native transient values initialized");
+
+        Require(arena.Drop(older) && arena.Drop(newer),
+            "out-of-order transient drops succeed");
+        ulong reused = arena.Allocate(80);
+        Require(reused != 0,
+            "coalesced dead native tail accepts a large replacement");
+        Require(arena.ReadInt64(reused) == 0,
+            "reused native bytes were scrubbed");
+        Require(arena.ReadInt64(root) == 0x234567,
+            "coalescing preserves live native root");
+        Require(arena.Drop(reused) && arena.Drop(root),
+            "coalesced tail allocations have deterministic cleanup");
+    }
+
+    private static void PersistentRootAndTemporaryTailChurn()
+    {
+        using var arena = new ActorNativeArena(128, 3);
+        ulong root = arena.Allocate(8);
+        Require(root != ActorNativeArena.InvalidHandle,
+            "permanent root initialized");
+        Require(arena.WriteInt64(root, 0, 0x12345678),
+            "permanent root contents written");
+
+        for (int i = 0; i < 10_000; i++)
+        {
+            ulong transient = arena.Allocate(64, 8);
+            Require(transient != ActorNativeArena.InvalidHandle,
+                "transient tail allocations cannot exhaust permanent-root arena");
+            Require(arena.WriteInt64(transient, 0, i),
+                "transient value write");
+            Require(arena.Drop(transient),
+                "transient value dropped");
+            Require(arena.LiveAllocations == 1,
+                "temporary drop preserves only permanent root");
+            Require(arena.ReadInt64(root) == 0x12345678,
+                "temporary reuse cannot overwrite live actor root");
+        }
+
+        Require(arena.Drop(root) && arena.UsedBytes == 0,
+            "final root drop reclaims bump capacity");
     }
 
     private static void RejectUnboundedNativeArenaReservation()
