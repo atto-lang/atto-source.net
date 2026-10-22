@@ -58,6 +58,7 @@ public sealed unsafe class ActorNativeHeap : IDisposable
         internal int Offset;
         internal int Length;
         internal ulong Generation;
+        internal int ReadLoans;
         internal bool Live;
     }
 
@@ -88,6 +89,39 @@ public sealed unsafe class ActorNativeHeap : IDisposable
         {
             Interlocked.Exchange(ref _heap, null)?.ReleaseLease();
         }
+    }
+
+    /// <summary>
+    /// Borrowed immutable slot access. One reference-type guard costs one
+    /// CLR allocation per outstanding loan, not per payload read/write.
+    /// Neither pointers nor memory views escape; reads copy under the heap
+    /// lock. The loan is revoked on Dispose and cannot cross actor authority.
+    /// </summary>
+    public sealed class ReadOnlyLoan : IDisposable
+    {
+        private ActorNativeHeap? _heap;
+        private readonly ActorHeapHandle _handle;
+
+        internal ReadOnlyLoan(ActorNativeHeap heap, ActorHeapHandle handle)
+        {
+            _heap = heap;
+            _handle = handle;
+        }
+
+        public bool Read(ActorRef actor, Span<byte> destination, int offset = 0)
+        {
+            var heap = Volatile.Read(ref _heap);
+            if (heap == null) throw new ObjectDisposedException(nameof(ReadOnlyLoan));
+            return heap.ReadBorrowed(actor, this, _handle, destination, offset);
+        }
+
+        public void Dispose()
+        {
+            Interlocked.Exchange(ref _heap, null)?.ReleaseReadLoan(_handle);
+        }
+
+        internal bool BelongsTo(ActorNativeHeap heap)
+            => ReferenceEquals(Volatile.Read(ref _heap), heap);
     }
 
     private readonly object _gate = new();
@@ -187,6 +221,62 @@ public sealed unsafe class ActorNativeHeap : IDisposable
         }
     }
 
+    /// <summary>
+    /// Borrow a single live allocation immutably across a suspension.
+    /// All ordinary writes/deletes to that allocation are rejected until
+    /// the loan is released. New loan admissions close at retirement.
+    /// </summary>
+    public ReadOnlyLoan? AcquireReadOnlyLoan(ActorRef actor, ActorHeapHandle handle)
+    {
+        lock (_gate)
+        {
+            RequireOwner(actor);
+            if (_closing || !Valid(handle)) return null;
+            ref Slot slot = ref _slots[handle.Slot];
+            if (_leases == int.MaxValue || slot.ReadLoans == int.MaxValue)
+                throw new OverflowException("actor heap read loan count exhausted");
+            // Construct before recording the pin to avoid a phantom loan on OOM.
+            var loan = new ReadOnlyLoan(this, handle);
+            ++slot.ReadLoans;
+            ++_leases;
+            return loan;
+        }
+    }
+
+    private bool ReadBorrowed(ActorRef actor, ReadOnlyLoan loan,
+        ActorHeapHandle handle, Span<byte> destination, int offset)
+    {
+        lock (_gate)
+        {
+            RequireOwner(actor);
+            // Already admitted loans may finish during stop/drain, while
+            // new actor turns and acquisitions are sealed.
+            if (!loan.BelongsTo(this) || !Valid(handle) ||
+                _slots[handle.Slot].ReadLoans <= 0) return false;
+            Slot slot = _slots[handle.Slot];
+            if (offset < 0 || offset > slot.Length ||
+                destination.Length > slot.Length - offset) return false;
+            new ReadOnlySpan<byte>(_memory + slot.Offset + offset, destination.Length)
+                .CopyTo(destination);
+            return true;
+        }
+    }
+
+    private void ReleaseReadLoan(ActorHeapHandle handle)
+    {
+        lock (_gate)
+        {
+            if (!Valid(handle)) throw new InvalidOperationException(
+                "read-only loan refers to a stale or retired native allocation");
+            ref Slot slot = ref _slots[handle.Slot];
+            if (slot.ReadLoans <= 0 || _leases <= 0)
+                throw new InvalidOperationException("actor heap read loan underflow");
+            --slot.ReadLoans;
+            --_leases;
+            if (_closing && _leases == 0) ReleaseNative();
+        }
+    }
+
     private void ReleaseLease()
     {
         lock (_gate)
@@ -273,6 +363,7 @@ public sealed unsafe class ActorNativeHeap : IDisposable
             RequireOwner(actor);
             if (_closing || !Valid(handle)) return false;
             Slot slot = _slots[handle.Slot];
+            if (slot.ReadLoans != 0) return false;
             if (offset < 0 || offset > slot.Length ||
                 bytes.Length > slot.Length - offset) return false;
             bytes.CopyTo(new Span<byte>(_memory + slot.Offset + offset, bytes.Length));
@@ -303,12 +394,14 @@ public sealed unsafe class ActorNativeHeap : IDisposable
             RequireOwner(actor);
             if (_closing || !Valid(handle)) return false;
             ref Slot slot = ref _slots[handle.Slot];
+            if (slot.ReadLoans != 0) return false;
             // Exhausted generations are not recycled, preventing handle ABA.
             if (slot.Generation == ulong.MaxValue) return false;
             CryptographicOperations.ZeroMemory(new Span<byte>(_memory + slot.Offset, slot.Length));
             int offset = slot.Offset;
             int length = slot.Length;
             slot.Live = false;
+            slot.ReadLoans = 0;
             ++slot.Generation;
             _freeSlots[_freeCount++] = handle.Slot;
             --_live;
