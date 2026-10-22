@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Ores.Net.Runtime;
 
 internal static class ActorMixedShardSelfTest
@@ -113,6 +114,143 @@ internal static class ActorMixedShardSelfTest
         }
     }
 
+    private static void ExercisePortableGoldenVectors()
+    {
+        using var document = JsonDocument.Parse(File.ReadAllBytes(
+            Path.Combine(AppContext.BaseDirectory, "mixed-layout-golden-v1.json")));
+        var contract = document.RootElement;
+        Require(contract.GetProperty("version").GetInt32() == 1, "portable vector version");
+        Require(contract.GetProperty("scope").GetString() == "runtime-host-mixed-layout-only",
+            "portable vectors cannot attest source compilation");
+        var fields = contract.GetProperty("fields").EnumerateArray().Select(field =>
+            new ActorMixedField(field.GetProperty("name").GetString()!,
+                field.GetProperty("type").GetString() switch
+                {
+                    "u32" => ActorMixedScalarKind.U32,
+                    "f64" => ActorMixedScalarKind.F64,
+                    "bool" => ActorMixedScalarKind.Bool,
+                    "ref32" => ActorMixedScalarKind.Ref32,
+                    _ => throw new Exception("unknown portable scalar")
+                })).ToArray();
+        var names = fields.Select((field, index) => (field.Name, Index: index))
+            .ToDictionary(item => item.Name, item => item.Index, StringComparer.Ordinal);
+        ulong actorId = 21000;
+        foreach (var vector in contract.GetProperty("layouts").EnumerateArray())
+        {
+            var kind = vector.GetProperty("layout").GetString() switch
+            {
+                "aos" => ActorDataLayout.Aos,
+                "soa" => ActorDataLayout.Soa,
+                "aosoa" => ActorDataLayout.Aosoa,
+                "soaos" => ActorDataLayout.Soaos,
+                _ => throw new Exception("unknown portable layout")
+            };
+            int rows = vector.GetProperty("rows").GetInt32();
+            int lanes = vector.TryGetProperty("tileWidth", out var tile) ? tile.GetInt32() : 1;
+            int[][]? groups = vector.TryGetProperty("groups", out var groupData)
+                ? groupData.EnumerateArray().Select(group => group.EnumerateArray()
+                    .Select(name => names[name.GetString()!]).ToArray()).ToArray()
+                : null;
+            using var arena = NewArena(actorId++);
+            using var turn = arena.EnterTurn(arena.ActorId, 1);
+            foreach (var invalidRows in contract.GetProperty("rejectRows").EnumerateArray())
+                Reject(() => new ActorMixedShard(arena, turn, fields,
+                    invalidRows.GetInt32(), kind, lanes: lanes, groups: groups),
+                    "portable nonpositive rows");
+            Require(arena.PersistentLiveBytes == 0, "rejected rows commit no payload");
+
+            var shard = new ActorMixedShard(arena, turn, fields, rows, kind,
+                lanes: lanes, groups: groups);
+            Require(shard.ByteLength == vector.GetProperty("byteLength").GetInt32(),
+                "portable physical byte length");
+            Require(shard.PayloadBytes == vector.GetProperty("payloadBytes").GetInt64(),
+                "portable payload length");
+            foreach (var entry in vector.GetProperty("offsets").EnumerateArray())
+                Require(shard.GetPhysicalByteOffset(entry[0].GetInt32(), entry[1].GetString()!)
+                    == entry[2].GetInt32(), "portable golden byte offset");
+            for (int row = 0; row < rows; row++)
+            {
+                Require(shard.ReadU32(turn, row, "id") == 0, "zero initialized u32");
+                Require(!shard.ReadBool(turn, row, "flag"), "zero initialized bool");
+            }
+            // Verify every physical cell, not only selected golden offsets.
+            // Padding and masked AoSoA tail lanes must never alias live rows.
+            var occupiedBytes = new HashSet<int>();
+            for (int row = 0; row < rows; row++)
+            foreach (var field in fields)
+            {
+                int width = FieldWidth(field.Kind);
+                int offset = shard.GetPhysicalByteOffset(row, field.Name);
+                Require(offset >= 0 && offset <= shard.ByteLength - width,
+                    "portable logical cell inside physical allocation");
+                Require(offset % width == 0, "portable scalar alignment");
+                for (int i = 0; i < width; i++)
+                    Require(occupiedBytes.Add(checked(offset + i)),
+                        "portable live scalar cells cannot overlap");
+            }
+            for (int row = 0; row < rows; row++)
+            {
+                Require(shard.ReadU32(turn, row, "next") == 0, "portable ref32 zero");
+                Require(BitConverter.DoubleToInt64Bits(shard.ReadF64(turn, row, "x")) == 0,
+                    "portable f64 +0 initialized");
+                shard.WriteU32(turn, row, "id", uint.MaxValue - (uint)row);
+                shard.WriteU32(turn, row, "next", 0x80000000U + (uint)row);
+                shard.WriteBool(turn, row, "flag", row % 2 == 0);
+                shard.WriteF64(turn, row, "x", row + 0.375);
+            }
+            void VerifyIndependentCells()
+            {
+                for (int row = 0; row < rows; row++)
+                {
+                    Require(shard.ReadU32(turn, row, "id") == uint.MaxValue - (uint)row,
+                        "portable id row isolation");
+                    Require(shard.ReadU32(turn, row, "next") == 0x80000000U + (uint)row,
+                        "portable ref32 row isolation");
+                    Require(shard.ReadBool(turn, row, "flag") == (row % 2 == 0),
+                        "portable bool row isolation");
+                    Require(shard.ReadF64(turn, row, "x") == row + 0.375,
+                        "portable f64 row isolation");
+                }
+            }
+            VerifyIndependentCells();
+            Reject(() => shard.WriteBool(turn, 0, "id", true),
+                "portable mismatched bool writer");
+            Reject(() => shard.WriteF64(turn, 0, "next", 1.0),
+                "portable mismatched f64 writer");
+            Reject(() => shard.WriteBool(turn, -1, "flag", true),
+                "portable invalid lower row");
+            Reject(() => shard.ReadF64(turn, rows, "x"),
+                "portable invalid upper row");
+            VerifyIndependentCells(); // All rejected operations preserve every cell.
+
+            shard.WriteU32(turn, 0, "id", uint.MaxValue);
+            shard.WriteU32(turn, 0, "next", uint.MaxValue);
+            shard.WriteBool(turn, 0, "flag", true);
+            shard.WriteF64(turn, 0, "x", -0.0);
+            shard.WriteF64(turn, 1, "x", double.NaN);
+            shard.WriteF64(turn, 2, "x", double.PositiveInfinity);
+            Require(shard.ReadU32(turn, 0, "id") == uint.MaxValue, "portable u32 max");
+            Require(shard.ReadU32(turn, 0, "next") == uint.MaxValue, "portable ref32 max");
+            Require(shard.ReadBool(turn, 0, "flag"), "portable bool");
+            Require(BitConverter.DoubleToInt64Bits(shard.ReadF64(turn, 0, "x")) ==
+                BitConverter.DoubleToInt64Bits(-0.0), "portable signed zero");
+            Require(double.IsNaN(shard.ReadF64(turn, 1, "x")), "portable NaN");
+            Require(double.IsPositiveInfinity(shard.ReadF64(turn, 2, "x")), "portable infinity");
+            shard.WriteF64(turn, 2, "x", double.NegativeInfinity);
+            Require(double.IsNegativeInfinity(shard.ReadF64(turn, 2, "x")), "portable negative infinity");
+            Reject(() => shard.WriteU32(turn, rows, "id", 42), "portable upper row fence");
+            Reject(() => shard.ReadU32(turn, -1, "id"), "portable lower row fence");
+            Reject(() => shard.WriteU32(turn, 0, "not_declared", 42), "portable field fence");
+            Require(shard.ReadU32(turn, 0, "id") == uint.MaxValue,
+                "rejected writes preserve payload");
+            shard.Release(turn);
+            Require(arena.PersistentLiveBytes == 0, "portable release reclaims payload");
+            Reject(() => shard.ReadU32(turn, 0, "id"), "portable stale read");
+            Reject(() => shard.WriteU32(turn, 0, "id", 1), "portable stale write");
+            shard.Release(turn);
+        }
+    }
+
     public static void Run()
     {
         var kinds = new[]
@@ -206,6 +344,7 @@ internal static class ActorMixedShardSelfTest
             valid.Release(turn);
         }
         ExercisePhysicalLayoutSweep();
+        ExercisePortableGoldenVectors();
         ExerciseReadLoanLifetime();
         Console.WriteLine("PASS .NET unmanaged heterogeneous actor shards in four layouts");
     }
