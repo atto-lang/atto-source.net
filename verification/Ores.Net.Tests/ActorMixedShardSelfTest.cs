@@ -33,6 +33,46 @@ internal static class ActorMixedShardSelfTest
         _ => throw new Exception("unknown test scalar")
     };
 
+    private static void ExerciseReadLoanLifetime()
+    {
+        using var arena = NewArena(8420);
+        var turn = arena.EnterTurn(8420, 1);
+        var shard = new ActorMixedShard(arena, turn, Fields, 3,
+            ActorDataLayout.Soaos, groups: new[] { new[] { 0, 2 }, new[] { 1, 3 } });
+        shard.WriteU32(turn, 0, "id", 42);
+        var loan = shard.BorrowRead(turn);
+        Require(loan.Length == shard.ByteLength,
+            "read loan covers the exact persistent shard allocation");
+        Require(shard.ReadU32(turn, 0, "id") == 42,
+            "immutable loan must still allow owner-turn reads");
+        Reject(() => shard.WriteU32(turn, 0, "id", 99),
+            "read loan prohibits any writes in the same shard");
+        Reject(() => shard.WriteBool(turn, 0, "flag", true),
+            "read loan covers all shards' fields until field-sensitive lowering exists");
+        Reject(() => shard.Release(turn),
+            "read loan blocks whole-shard reclamation");
+        // Suspend/end this physical turn; a read-only loan is a lifetime fence,
+        // not a second thread authority or a way to access the memory without
+        // entering the owning actor.
+        turn.Dispose();
+        using (var resumed = arena.EnterTurn(8420, 1))
+        {
+            Require(shard.ReadU32(resumed, 0, "id") == 42,
+                "immutable loan survives suspension and owner-turn migration");
+            Reject(() => shard.WriteU32(resumed, 0, "id", 99),
+                "read loan remains active across turns");
+            loan.Dispose();
+            loan.Dispose();
+            shard.WriteU32(resumed, 0, "id", 99);
+            Require(shard.ReadU32(resumed, 0, "id") == 99,
+                "writes resume after the last loan closes");
+            shard.Release(resumed);
+            Require(arena.PersistentLiveBytes == 0, "loan-retired bytes refunded");
+            Reject(() => shard.BorrowRead(resumed),
+                "released mixed shard cannot mint a new loan");
+        }
+    }
+
     private static void ExercisePhysicalLayoutSweep()
     {
         int id = 8300;
@@ -166,6 +206,7 @@ internal static class ActorMixedShardSelfTest
             valid.Release(turn);
         }
         ExercisePhysicalLayoutSweep();
+        ExerciseReadLoanLifetime();
         Console.WriteLine("PASS .NET unmanaged heterogeneous actor shards in four layouts");
     }
 }
