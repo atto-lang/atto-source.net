@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Threading;
 
 namespace Ores.Net.Runtime;
@@ -21,6 +22,7 @@ namespace Ores.Net.Runtime;
 public sealed unsafe class ActorNativeArena : IDisposable
 {
     public const ulong InvalidHandle = 0;
+    public const int MaximumCapacityBytes = 64 * 1024 * 1024;
     private const int SlotBits = 16;
     private const ulong SlotMask = (1UL << SlotBits) - 1;
     private const long MaxSequence = (1L << (64 - SlotBits)) - 1;
@@ -45,7 +47,9 @@ public sealed unsafe class ActorNativeArena : IDisposable
 
     public ActorNativeArena(int bytes, int slots)
     {
-        if (bytes <= 0) throw new ArgumentOutOfRangeException(nameof(bytes));
+        if (bytes <= 0 || bytes > MaximumCapacityBytes)
+            throw new ArgumentOutOfRangeException(nameof(bytes),
+                "Actor-native arena capacity must be between 1 and 64 MiB");
         if (slots <= 0 || slots > MaxSlots) throw new ArgumentOutOfRangeException(nameof(slots));
 
         // Allocate managed control metadata first. If one of these allocations
@@ -106,13 +110,33 @@ public sealed unsafe class ActorNativeArena : IDisposable
         int slot = ValidSlot(handle);
         if (slot < 0) return false;
 
-        Zero(_offsets[slot], _lengths[slot]);
+        // Rewind a just-dropped bump tail even when an earlier actor root
+        // remains live. Bytes are scrubbed before reducing the cursor.
+        int droppedOffset = _offsets[slot];
+        int droppedLength = _lengths[slot];
+        bool wasTail = droppedOffset + droppedLength == _cursor;
+        Zero(droppedOffset, droppedLength);
         _live[slot] = false;
         _tokens[slot] = 0;
         _offsets[slot] = 0;
         _lengths[slot] = 0;
         _freeSlots[_freeCount++] = slot;
         _liveCount--;
+
+        if (wasTail && _liveCount != 0)
+        {
+            // Scrubbed earlier-freed holes at the end also become reusable
+            // once the newest live allocation disappears. Bounded O(slots)
+            // scan, no host heap allocation and no relocation of live bytes.
+            int highestLiveEnd = 0;
+            for (int i = 0; i < _nextSlot; i++)
+            {
+                if (_live[i])
+                    highestLiveEnd = Math.Max(highestLiveEnd,
+                        checked(_offsets[i] + _lengths[i]));
+            }
+            _cursor = highestLiveEnd;
+        }
 
         if (_liveCount == 0)
         {
@@ -210,7 +234,9 @@ public sealed unsafe class ActorNativeArena : IDisposable
     private void Zero(int start, int length)
     {
         if (_memory == null || length <= 0) return;
-        new Span<byte>(_memory + start, length).Clear();
+        // Do not allow reclamation scrubbing to be optimized away before
+        // NativeMemory.Free or reused object storage is returned to an actor.
+        CryptographicOperations.ZeroMemory(new Span<byte>(_memory + start, length));
     }
 
     private static ulong NextSequence()
