@@ -53,6 +53,25 @@ A public native heap API cannot by itself prove that every source-language
 borrow or continuation is tracked. Strict no-GC and hard-real-time profiles
 **must fail closed** until those compiler and scheduler proofs exist.
 
+## Bounded per-message native scratch
+
+`ActorTurnScratch` provides a separate bounded unmanaged scratch region per
+serial actor, with a freshly minted turn-generation token and compact
+value-type allocation handles. Allocation/read/write remain checks-and-copy
+operations without managed guest object creation. `EndTurn` scrubs bytes,
+rewinds the bump cursor, and revokes every prior turn/handle; repeated
+messages reuse the same native allocation. A second overlapping turn is
+rejected. `Retire` rejects while the serial turn is active and refunds the
+aggregate memory budget only after physically releasing its native slab.
+
+**Not safe across suspension by itself.** A scratch handle cannot be retained
+across `await`, callback export or FFI pin. The source compiler must reject
+such escapes or promote/spill the value into the persistent actor heap with
+valid lifetime/borrow tracking. Concurrent actors need separate scratch
+regions per admitted handler or another compiler-proved exclusion protocol.
+No source-level compiler integration or GC-allocation measurement is claimed
+by adding this host substrate.
+
 ## Explicit immutable borrowed access (prototype)
 
 An actor can now call `AcquireReadOnlyLoan(actor, handle)` to pin a single
