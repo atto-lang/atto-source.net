@@ -16,6 +16,7 @@ internal static class ActorRuntimeSelfTest
         LifetimePinCanOutliveActorTurnAndStop();
         CrossRuntimeNativeCapacityRemainsChargedUntilQuiescence();
         ConcurrentRetirementAndCancelledLifetimePins();
+        CancellationTokenAndStopRaceRetainsNativeMemorySafely();
         HandlerFaultRetiresOnlyThatActor();
         ConcurrentDisposersAwaitCarrierQuiescence();
         FailedTurnAdmissionScrubsDequeuedMessage();
@@ -520,6 +521,73 @@ internal static class ActorRuntimeSelfTest
         }
         Require(ActorArenaBudget.Process.ReservedBytes == initial,
             "all cancellation and stop interleavings leave no native reservation");
+    }
+
+    private static void CancellationTokenAndStopRaceRetainsNativeMemorySafely()
+    {
+        // Cancellation callbacks may execute on an arbitrary .NET carrier.
+        // Exercise real CancellationTokenSource.Cancel callbacks, not only
+        // manual Task.Run(pin.Dispose) stand-ins for I/O cancellation.
+        const int rounds = 24;
+        long processBaseline = ActorArenaBudget.Process.ReservedBytes;
+        for (int round = 0; round < rounds; round++)
+        {
+            using var runtime = new ActorRuntime(Options());
+            using var cancellation = new CancellationTokenSource();
+            using var entered = new ManualResetEventSlim();
+            using var go = new ManualResetEventSlim();
+            CancellationTokenRegistration callback = default;
+            ActorArenaLifetimePin? outstanding = null;
+
+            var actor = runtime.Spawn(ActorKind.Shared, (context, _) =>
+            {
+                outstanding = context.PinLifetime();
+                callback = cancellation.Token.Register(() => outstanding!.Dispose());
+                entered.Set();
+            });
+
+            try
+            {
+                runtime.Send(actor, new byte[] { 1 });
+                Require(entered.Wait(TimeSpan.FromSeconds(5)) &&
+                        WaitUntil(() => runtime.CompletedMessages == 1),
+                    "cancellable operation was registered by a completed actor turn");
+
+                // The actor is no longer executing when the external stop
+                // and cancellation race begins; neither path may reclaim
+                // the pinned native region before the last pin release.
+                Task stop = Task.Run(() =>
+                {
+                    go.Wait();
+                    runtime.Stop(actor);
+                });
+                Task cancel = Task.Run(() =>
+                {
+                    go.Wait();
+                    cancellation.Cancel();
+                });
+                go.Set();
+                Require(Task.WaitAll(new[] { stop, cancel }, TimeSpan.FromSeconds(5)),
+                    "stop and cancellation callbacks must quiesce within timeout");
+                Require(WaitUntil(() => runtime.LiveActors == 0 &&
+                                        runtime.NativeReservedBytes == 0),
+                    "cancel/stop interleaving must eventually free actor arena");
+                Require(ActorArenaBudget.Process.ReservedBytes == processBaseline,
+                    "cancellation completion must refund native quota exactly once");
+                outstanding!.Dispose();
+                Require(ActorArenaBudget.Process.ReservedBytes == processBaseline,
+                    "repeated cancel callback cleanup must not double-refund");
+            }
+            finally
+            {
+                go.Set();
+                callback.Dispose();
+                outstanding?.Dispose();
+                runtime.Stop(actor);
+            }
+        }
+        Require(ActorArenaBudget.Process.ReservedBytes == processBaseline,
+            "all real cancellation-token stress rounds restore process-native quota");
     }
 
     private static void HandlerFaultRetiresOnlyThatActor()
