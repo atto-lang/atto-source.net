@@ -58,7 +58,7 @@ Features: decimal signed 64-bit literals (including `-9223372036854775808`), par
 | `compiler/Ores.Net.Compiler.Core` | Lexer/parser/AST and direct System.Reflection.Metadata CIL emission |
 | `compiler/Ores.Net.Compiler` | Native AOT-compiled CLI (`oresnet`) |
 | `host/Ores.Net.NativeHost` | Statically references generated CIL and Native AOT publishes it |
-| `runtime/Ores.Net.Runtime` | AOT-compatible runtime API, bounded byte mailbox prototype |
+| `runtime/Ores.Net.Runtime` | AOT-compatible runtime API, bounded mailbox, unmanaged actor arenas, and AoS/SoA/AoSoA shard substrate |
 | `verification/Ores.Net.Tests` | Parser/CIL metadata/mailbox tests (Mono.Cecil is test-only) |
 | `scripts/` | Windows-only Native AOT publish pipeline |
 | `docs/` | Backend contracts and implementation roadmap |
@@ -89,7 +89,7 @@ dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Releas
 
 Unit tests use a managed development-time test harness; this is **not part of the shipped compiler or application**. CI must publish both deliverables to native executables and execute the resulting Windows binary. The absence of a `.runtimeconfig.json` is a supplemental check; the successful Native AOT publish is the decisive proof. CI status must be checked before claiming working Windows artifacts.
 
-**Runtime limitations:** This is a single-process actor mailbox prototype. .NET Native AOT still includes managed GC; it does **not** intrinsically provide per-actor heaps or a zero-GC runtime. Actor references now carry an internal random nonce in addition to ID/generation, preventing accidental local same-ID spoofing. These are **not authenticated distributed capabilities**, and managed Native AOT still does not provide per-actor private heaps. No in-process hot-code reload can rely on `Assembly.Load`; full code replacement requires process-generation rollout.
+**Runtime limitations:** This remains a bootstrap compiler and single-process actor runtime. .NET Native AOT still includes managed GC and CoreCLR does **not** intrinsically provide independently collected per-actor GC heaps. Oreslang now provides an explicit bounded unmanaged `ActorArena` substrate with persistent actor-private bytes, turn-scoped scratch, aggregate native-memory budgeting, suspension-safe read loans, lifetime-only pins, generation fencing, quiescent zeroize/free, and actor-owned AoS/SoA/AoSoA shards. General guest object allocation, ownership/borrow syntax, async-frame lowering, shared-domain arenas, native collections, and zero-managed-allocation steady-state execution are still pending and must fail closed. Actor references carry an internal random nonce in addition to ID/generation; these are **not authenticated distributed capabilities**. No in-process hot-code reload can rely on `Assembly.Load`; full code replacement requires process-generation rollout. See [actor arenas and layouts](docs/ACTOR_ARENAS_AND_LAYOUTS.md).
 
 See [architecture](docs/architecture.md), [roadmap](docs/roadmap.md), [CI recovery runbook](docs/ci-recovery.md), and [security and verification](verification/README.md). This repository's license remains unspecified and should be chosen by its maintainers.
 

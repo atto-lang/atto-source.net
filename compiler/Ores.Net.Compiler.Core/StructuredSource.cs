@@ -363,6 +363,19 @@ public static class OresStructuredParser
                 if (operation is "ref" or "unref" or "deref" or "raw")
                     throw new FormatException(
                         $"Pointer operation 'rt {operation}' requires provenance-checked pointer lowering; unsupported in the .NET structured backend at offset {at}");
+
+                string ownership = operation;
+                if (operation == "mut" && index + 1 < tokens.Count &&
+                    tokens[index + 1].Text == "borrow")
+                    ownership = "mut borrow";
+                if (operation == "borrow" && index + 1 < tokens.Count &&
+                    tokens[index + 1].Text == "mut")
+                    throw new FormatException(
+                        $"Legacy ownership spelling 'rt borrow mut' is rejected; use 'rt mut borrow' at offset {at}");
+                if (ownership is "copy" or "share" or "take" or "borrow" or "mut borrow")
+                    throw new FormatException(
+                        $"Ownership operation 'rt {ownership}' requires typed actor-arena lowering; unsupported in the .NET structured backend at offset {at}");
+
                 throw new FormatException(
                     $"Runtime ownership operation requires typed lowering; unsupported in the .NET structured backend at offset {at}");
             }
