@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Threading;
 
 namespace Ores.Net.Runtime;
@@ -219,7 +220,9 @@ public sealed unsafe class ActorNativeArena : IDisposable
     private void Zero(int start, int length)
     {
         if (_memory == null || length <= 0) return;
-        new Span<byte>(_memory + start, length).Clear();
+        // Do not allow reclamation scrubbing to be optimized away before
+        // NativeMemory.Free or reused object storage is returned to an actor.
+        CryptographicOperations.ZeroMemory(new Span<byte>(_memory + start, length));
     }
 
     private static ulong NextSequence()

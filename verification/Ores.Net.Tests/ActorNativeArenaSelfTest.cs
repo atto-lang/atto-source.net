@@ -71,7 +71,44 @@ internal static class ActorNativeArenaSelfTest
         ConcurrentDisposeDoesNotRaceNativeAccess();
         RejectUnboundedNativeArenaReservation();
         PersistentRootAndTemporaryTailChurn();
+        SteadyStateManagedAllocationBudget();
         Console.WriteLine("PASS .NET unmanaged actor arena, primitive handles, stack cleanup scopes");
+    }
+
+    private static void SteadyStateManagedAllocationBudget()
+    {
+        using var arena = new ActorNativeArena(256, 4);
+
+        // Warm every path and JIT generic helper before taking a measurement.
+        for (int i = 0; i < 100; i++)
+        {
+            ulong warm = arena.Allocate(16);
+            Require(warm != ActorNativeArena.InvalidHandle, "allocation warmup");
+            Require(arena.WriteInt64(warm, 0, i), "write warmup");
+            Require(arena.ReadInt64(warm) == i, "read warmup");
+            Require(arena.Drop(warm), "drop warmup");
+        }
+
+        bool correct = true;
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 5_000; i++)
+        {
+            ulong handle = arena.Allocate(16);
+            if (handle == ActorNativeArena.InvalidHandle ||
+                !arena.WriteInt64(handle, 0, i) ||
+                arena.ReadInt64(handle) != i ||
+                !arena.Drop(handle))
+            {
+                correct = false;
+                break;
+            }
+        }
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Require(correct, "bounded native operations remain functional");
+        Require(allocated == 0,
+            "steady-state primitive native allocate/read/write/drop must not allocate CLR objects");
+        Require(arena.LiveAllocations == 0 && arena.UsedBytes == 0,
+            "steady-state benchmark leaves no retained actor allocation");
     }
 
     private static void PersistentRootAndTemporaryTailChurn()
