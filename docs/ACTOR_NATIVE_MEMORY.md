@@ -53,6 +53,24 @@ A public native heap API cannot by itself prove that every source-language
 borrow or continuation is tracked. Strict no-GC and hard-real-time profiles
 **must fail closed** until those compiler and scheduler proofs exist.
 
+## Explicit immutable borrowed access (prototype)
+
+An actor can now call `AcquireReadOnlyLoan(actor, handle)` to pin a single
+generation-checked allocation. While that loan exists, checked writes and
+deletion of **that allocation** fail closed; unrelated allocations remain
+mutable. The loan can copy bytes into a caller-owned destination and can drain
+during actor retirement. The last loan releases its native lifetime pin so a
+previously requested retirement may physically reclaim bytes and release the
+aggregate memory budget.
+
+Acquiring and releasing a loan allocates one small managed reference-type
+guard per outstanding borrow; ordinary payload reads/writes remain
+non-allocating. Guest callers must not manufacture `ActorRef` authority or
+export borrowed native memory as raw pointers. The borrow checker and task
+scheduler still need to generate/track these loans across `await`, native
+callbacks, failure unwind and cancellation. A manually acquired loan does
+**not** prove that all source-language mutable aliases were rejected.
+
 ## Remaining integration and verification gates
 
 - Lower source actor object fields, collections, text, closures, async frames,
