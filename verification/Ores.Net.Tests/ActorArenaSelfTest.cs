@@ -334,25 +334,30 @@ internal static class ActorArenaSelfTest
                     int alignment = (Next() & 1) == 0 ? 8 : 16;
                     int beforeAllocations = arena.LiveAllocations;
                     int beforeBytes = arena.PersistentLiveBytes;
+                    ActorArenaHandle? newlyAllocated = null;
                     try
                     {
-                        var handle = arena.AllocatePersistent(turn, bytes, alignment);
-                        var cleared = new byte[bytes];
-                        arena.Read(turn, handle, 0, cleared);
-                        Require(cleared.All(static b => b == 0),
-                            $"seed={seed:x8} op={operation}: reused native bytes not scrubbed");
-                        byte pattern = (byte)(1 + (Next() % 254));
-                        arena.Write(turn, handle, 0, new byte[] { pattern });
-                        live.Add((handle, bytes, pattern));
-                        retainedBytes += bytes;
+                        newlyAllocated = arena.AllocatePersistent(turn, bytes, alignment);
                     }
                     catch (InvalidOperationException)
                     {
-                        // Bounded bump arenas intentionally reject interior
-                        // fragmentation/slot exhaustion. Rejection is atomic.
+                        // Only capacity/slot admission may be rejected by this
+                        // fixture. Never swallow read/write/overlap failures.
                         Require(arena.LiveAllocations == beforeAllocations &&
                                 arena.PersistentLiveBytes == beforeBytes,
                             $"seed={seed:x8} op={operation}: denied allocation changed live accounting");
+                    }
+
+                    if (newlyAllocated is not null)
+                    {
+                        var cleared = new byte[bytes];
+                        arena.Read(turn, newlyAllocated, 0, cleared);
+                        Require(cleared.All(static b => b == 0),
+                            $"seed={seed:x8} op={operation}: reused native bytes not scrubbed");
+                        byte pattern = (byte)(1 + (Next() % 254));
+                        arena.Write(turn, newlyAllocated, 0, new byte[] { pattern });
+                        live.Add((newlyAllocated, bytes, pattern));
+                        retainedBytes += bytes;
                     }
                 }
 
