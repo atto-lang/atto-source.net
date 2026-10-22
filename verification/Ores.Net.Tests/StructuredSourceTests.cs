@@ -104,6 +104,29 @@ internal static class StructuredSourceTests
             }
         }, "shared arithmetic-76 typed AST");
 
+        static void RejectTupleV2(string source, string reason)
+        {
+            try { _ = OresStructuredParser.Parse(source); }
+            catch (FormatException ex)
+            {
+                Require(ex.Message.Contains("Tuple-v2", StringComparison.Ordinal) &&
+                        ex.Message.Contains("offset", StringComparison.Ordinal),
+                    reason + ": tuple-v2 rejection was incidental: " + ex.Message);
+                return;
+            }
+            throw new Exception("Tuple-v2 source incorrectly accepted: " + reason);
+        }
+        RejectTupleV2("fnc main(tuple (int,int) value):int{return 1;}",
+            "explicit tuple parameter");
+        RejectTupleV2("fnc main(structural (int,int) value):int{return 1;}",
+            "structural tuple parameter");
+        RejectTupleV2("fnc main((int,int) value):int{return 1;}",
+            "shorthand tuple parameter");
+        RejectTupleV2("fnc main():tuple (int,int){return 1;}",
+            "tuple return");
+        RejectTupleV2("fnc main():int{return call(...pair);}",
+            "explicit tuple spread");
+
         foreach (var operation in new[] { "ref", "unref", "deref", "deref mut", "raw" })
         {
             try { _ = OresStructuredParser.Parse(
