@@ -187,6 +187,29 @@ internal static class StructuredSourceTests
             "literal exceeding i64 range");
         Reject("fnc main():int{let int x=-9223372036854775809;return x;}",
             "negative literal below i64 range");
+        static void RejectTupleV2(string source, string reason)
+        {
+            try { _ = OresStructuredParser.Parse(source); }
+            catch (FormatException ex)
+            {
+                Require(ex.Message.Contains("Tuple-v2", StringComparison.Ordinal) &&
+                        ex.Message.Contains("offset", StringComparison.Ordinal),
+                    reason + ": tuple-v2 rejection was incidental: " + ex.Message);
+                return;
+            }
+            throw new Exception("Tuple-v2 source incorrectly accepted: " + reason);
+        }
+        RejectTupleV2("fnc main(tuple (int,int) value):int{return 1;}",
+            "explicit tuple parameter");
+        RejectTupleV2("fnc main(structural (int,int) value):int{return 1;}",
+            "structural tuple parameter");
+        RejectTupleV2("fnc main((int,int) value):int{return 1;}",
+            "shorthand tuple parameter");
+        RejectTupleV2("fnc main():tuple (int,int){return 1;}",
+            "tuple return");
+        RejectTupleV2("fnc main():int{return call(...pair);}",
+            "explicit tuple spread");
+
         Reject("fnc main():int{let int x=1@2;return x;}",
             "invalid character");
         Reject("fnc main():int{let int x=1;}\u0000", "NUL");
