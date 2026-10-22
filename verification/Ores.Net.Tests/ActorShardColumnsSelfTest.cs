@@ -83,6 +83,7 @@ internal static class ActorShardColumnsSelfTest
 
         RejectOversizedFieldMetadata();
         RejectOversizedGroupCount();
+        RejectOverlongGroupsWithBoundedManagedAllocations();
         ExerciseStableCallerGroups();
         ExerciseDistinctSoaosGeometry();
 
@@ -193,6 +194,30 @@ internal static class ActorShardColumnsSelfTest
         largest.Release(turn);
         Require(arena.PersistentLiveBytes == 0,
             "largest bounded SoAoS geometry is released");
+    }
+
+    private static void RejectOverlongGroupsWithBoundedManagedAllocations()
+    {
+        using var arena = NewArena(6204);
+        using var turn = arena.EnterTurn(6204, 1);
+        // Warm the exception path so the measurement isolates the
+        // rejected array-cloning cost rather than first-call JIT overhead.
+        Reject(() => _ = new ActorShardColumns(arena, turn,
+            rows: 2, fields: 2, ActorDataLayout.Soaos,
+            soaosGroupWidths: new int[8]),
+            "overlong group warmup");
+
+        var oversized = new int[65_536];
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        Reject(() => _ = new ActorShardColumns(arena, turn,
+            rows: 2, fields: 2, ActorDataLayout.Soaos,
+            soaosGroupWidths: oversized),
+            "oversized group array rejected before snapshot");
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Require(allocated < 128 * 1024,
+            "malformed SoAoS input cannot clone 256 KiB of metadata");
+        Require(arena.LiveAllocations == 0 && arena.PersistentLiveBytes == 0,
+            "rejected oversized group admission has no native allocations");
     }
 
     private static void ExerciseStableCallerGroups()
