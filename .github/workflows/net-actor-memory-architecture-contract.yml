@@ -1,0 +1,26 @@
+name: .NET actor memory architecture guard
+on:
+  pull_request:
+    paths:
+      - 'runtime/Ores.Net.Runtime/ActorRuntime.cs'
+      - 'runtime/Ores.Net.Runtime/ActorArena.cs'
+      - 'runtime/Ores.Net.Runtime/ActorShardColumns.cs'
+      - 'verification/actor-memory-architecture-contract.mjs'
+      - 'verification/actor-memory-architecture-contract.test.mjs'
+      - 'docs/NET_ACTOR_MEMORY_CONSOLIDATION.md'
+      - '.github/workflows/net-actor-memory-architecture-contract.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  architecture-source-check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Verify canonical native actor memory wiring
+        run: node verification/actor-memory-architecture-contract.mjs
+      - name: Run architecture negative fixtures
+        run: node --test verification/actor-memory-architecture-contract.test.mjs
