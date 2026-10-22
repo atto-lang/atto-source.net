@@ -82,6 +82,7 @@ internal static class ActorShardColumnsSelfTest
         }, "AoSoA padded geometry cannot exceed the shard cap");
 
         RejectOversizedFieldMetadata();
+        RejectOversizedGroupArrayBeforeClone();
         ExerciseStableCallerGroups();
         ExerciseDistinctSoaosGeometry();
 
@@ -163,6 +164,37 @@ internal static class ActorShardColumnsSelfTest
             "oversized SoAoS field count rejected before groups are processed");
         Require(arena.LiveAllocations == 0 && arena.PersistentLiveBytes == 0,
             "rejected excessive field geometry consumes no native actor capacity");
+    }
+
+    private static void RejectOversizedGroupArrayBeforeClone()
+    {
+        using var arena = NewArena(6203);
+        using var turn = arena.EnterTurn(6203, 1);
+        // Warm the failing admission and exception construction before
+        // measuring managed allocations on the same carrier thread.
+        int[] warm = new int[8];
+        Reject(() => _ = new ActorShardColumns(arena, turn,
+            rows: 2, fields: 2, ActorDataLayout.Soaos,
+            soaosGroupWidths: warm), "excessive SoAoS group warmup");
+
+        int[] oversized = new int[65_536];
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        Reject(() => _ = new ActorShardColumns(arena, turn,
+            rows: 2, fields: 2, ActorDataLayout.Soaos,
+            soaosGroupWidths: oversized),
+            "oversized group metadata must fail before cloning");
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Require(allocated < 128 * 1024,
+            "oversized SoAoS input must not allocate a 256 KiB clone");
+        Require(arena.LiveAllocations == 0 && arena.PersistentLiveBytes == 0,
+            "oversized group preflight leaves native arena uncharged");
+
+        // A valid input continues to be snapshotted after preflight.
+        var shard = new ActorShardColumns(arena, turn,
+            rows: 2, fields: 2, ActorDataLayout.Soaos,
+            soaosGroupWidths: new[] { 1, 1 });
+        Require(shard.GroupCount == 2, "valid bounded groups are accepted");
+        shard.Release(turn);
     }
 
     private static void ExerciseStableCallerGroups()
