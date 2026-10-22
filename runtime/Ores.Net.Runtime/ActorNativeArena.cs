@@ -109,7 +109,13 @@ public sealed unsafe class ActorNativeArena : IDisposable
         int slot = ValidSlot(handle);
         if (slot < 0) return false;
 
-        Zero(_offsets[slot], _lengths[slot]);
+        // Rewind a just-dropped bump tail even when an earlier actor root
+        // remains live. Bytes are scrubbed before reducing the cursor.
+        int droppedOffset = _offsets[slot];
+        int droppedLength = _lengths[slot];
+        bool wasTail = droppedOffset + droppedLength == _cursor;
+        Zero(droppedOffset, droppedLength);
+        if (wasTail) _cursor = droppedOffset;
         _live[slot] = false;
         _tokens[slot] = 0;
         _offsets[slot] = 0;

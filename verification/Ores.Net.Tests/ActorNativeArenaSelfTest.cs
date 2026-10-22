@@ -70,7 +70,36 @@ internal static class ActorNativeArenaSelfTest
 
         ConcurrentDisposeDoesNotRaceNativeAccess();
         RejectUnboundedNativeArenaReservation();
+        PersistentRootAndTemporaryTailChurn();
         Console.WriteLine("PASS .NET unmanaged actor arena, primitive handles, stack cleanup scopes");
+    }
+
+    private static void PersistentRootAndTemporaryTailChurn()
+    {
+        using var arena = new ActorNativeArena(128, 3);
+        ulong root = arena.Allocate(8);
+        Require(root != ActorNativeArena.InvalidHandle,
+            "permanent root initialized");
+        Require(arena.WriteInt64(root, 0, 0x12345678),
+            "permanent root contents written");
+
+        for (int i = 0; i < 10_000; i++)
+        {
+            ulong transient = arena.Allocate(64, 8);
+            Require(transient != ActorNativeArena.InvalidHandle,
+                "transient tail allocations cannot exhaust permanent-root arena");
+            Require(arena.WriteInt64(transient, 0, i),
+                "transient value write");
+            Require(arena.Drop(transient),
+                "transient value dropped");
+            Require(arena.LiveAllocations == 1,
+                "temporary drop preserves only permanent root");
+            Require(arena.ReadInt64(root) == 0x12345678,
+                "temporary reuse cannot overwrite live actor root");
+        }
+
+        Require(arena.Drop(root) && arena.UsedBytes == 0,
+            "final root drop reclaims bump capacity");
     }
 
     private static void RejectUnboundedNativeArenaReservation()
