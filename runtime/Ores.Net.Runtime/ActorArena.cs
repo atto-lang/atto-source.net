@@ -469,7 +469,6 @@ public unsafe sealed class ActorArena : IDisposable
             // without moving any earlier live allocations. This is the
             // common persistent-root + per-message-transient actor pattern.
             bool wasTail = slot.Offset + slot.Length == _persistentHighWater;
-            int freedOffset = slot.Offset;
             Zero(_persistent + slot.Offset, slot.Length);
             _persistentLiveBytes -= slot.Length;
             _liveAllocations--;
@@ -481,8 +480,22 @@ public unsafe sealed class ActorArena : IDisposable
 
             _freeSlots[_freeSlotCount++] = handle.Slot;
 
-            if (wasTail)
-                _persistentHighWater = freedOffset;
+            if (wasTail && _liveAllocations != 0)
+            {
+                // Every discarded allocation was already scrubbed at drop.
+                // Coalesce the entire dead tail, even if earlier interior
+                // frees preceded this last-in-use drop. This bounded scan
+                // never relocates an outstanding live allocation/handle.
+                int highestLiveEnd = 0;
+                for (int i = 0; i < _nextSlot; i++)
+                {
+                    ref Slot candidate = ref _slots[i];
+                    if (candidate.Live)
+                        highestLiveEnd = Math.Max(highestLiveEnd,
+                            checked(candidate.Offset + candidate.Length));
+                }
+                _persistentHighWater = highestLiveEnd;
+            }
 
             if (_liveAllocations == 0)
             {

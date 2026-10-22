@@ -1,0 +1,11 @@
+import {test} from "node:test";
+import assert from "node:assert/strict";
+import {readSources,validateArchitecture} from "./actor-memory-architecture-contract.mjs";
+const src=readSources();
+test("canonical ActorArena integration",()=>assert.deepEqual(validateArchitecture(src),[]));
+const denied=(name,patch)=>test(name,()=>assert.notDeepEqual(validateArchitecture(patch(src)),[]));
+denied("reject prototype heap",x=>({...x,runtime:x.runtime.replace("arena = new ActorArena(","arena = new ActorNativeHeap(")}));
+denied("reject missing carrier checks",x=>({...x,arena:x.arena.replaceAll("ReferenceEquals(_activeCarrier, Thread.CurrentThread)","true")}));
+denied("reject missing process budget",x=>({...x,arena:x.arena.replace("ActorArenaBudget.Process.Reserve(","Budget.Reserve(")}));
+denied("reject excessive group clone",x=>({...x,shard:x.shard.replace("if (soaosGroupWidths.Length > fields)","if (groupWidths.Length > fields)")}));
+denied("reject missing SoAoS",x=>({...x,shard:x.shard.replaceAll("ActorDataLayout.Soaos","ActorDataLayout.Other")}));
