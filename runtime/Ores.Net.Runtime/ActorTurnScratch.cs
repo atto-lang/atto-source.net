@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using System.Threading;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -62,6 +63,12 @@ public sealed unsafe class ActorTurnScratch : IDisposable
 {
     public const int MaximumCapacity = 16 * 1024 * 1024;
 
+    // Physical carrier authority: a copied actor ref/turn token alone is not
+    // sufficient to access live scratch from another OS/CLR thread. This
+    // intentionally does not flow through ExecutionContext or await.
+    [ThreadStatic] private static ActorTurnScratch? s_currentCarrier;
+    [ThreadStatic] private static ulong s_carrierEpoch;
+
     private readonly object _gate = new();
     private readonly ActorRef _owner;
     private readonly ActorNativeMemoryBudget? _budget;
@@ -104,7 +111,8 @@ public sealed unsafe class ActorTurnScratch : IDisposable
     }
 
     private bool ValidTurn(ActorScratchTurn turn)
-        => !_retired && _active && turn.Arena == _identity && turn.Epoch == _epoch;
+        => !_retired && _active && turn.Arena == _identity && turn.Epoch == _epoch
+            && ReferenceEquals(s_currentCarrier, this) && s_carrierEpoch == _epoch;
 
     private bool ValidHandle(ActorScratchTurn turn, ActorScratchHandle h)
         => ValidTurn(turn) && h.Arena == _identity && h.Epoch == _epoch &&
@@ -120,11 +128,13 @@ public sealed unsafe class ActorTurnScratch : IDisposable
         lock (_gate)
         {
             RequireOwner(actor);
-            if (_retired || _active || _epoch == ulong.MaxValue)
+            if (_retired || _active || s_currentCarrier != null || _epoch == ulong.MaxValue)
                 throw new InvalidOperationException(
                     "scratch turn is active, retired or epoch space exhausted");
-            _active = true;
             ++_epoch;
+            _active = true;
+            s_currentCarrier = this;
+            s_carrierEpoch = _epoch;
             return new ActorScratchTurn(_identity, _epoch);
         }
     }
@@ -195,6 +205,8 @@ public sealed unsafe class ActorTurnScratch : IDisposable
             CryptographicOperations.ZeroMemory(new Span<byte>(_buffer, _used));
             _used = 0;
             _active = false;
+            s_carrierEpoch = 0;
+            s_currentCarrier = null;
         }
     }
 

@@ -50,6 +50,7 @@ internal static class ActorMailboxBoundsSelfTest
         ActorNativeHeapSelfTest.Run();
         ActorNativeBudgetSelfTest.Run();
         ActorTurnScratchSelfTest.Run();
+        ActorScratchCarrierSelfTest.Run();
         Console.WriteLine("PASS .NET mailbox limits, exact byte refund, empty data, restart");
     }
 }
