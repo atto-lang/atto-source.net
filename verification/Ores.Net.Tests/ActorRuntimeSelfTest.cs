@@ -494,16 +494,17 @@ internal static class ActorRuntimeSelfTest
                 {
                     release.Wait();
                     first!.Dispose();
-                    first.Dispose();
+                    first!.Dispose();
                 });
                 Task two = Task.Run(() =>
                 {
                     release.Wait();
                     second!.Dispose();
-                    second.Dispose();
+                    second!.Dispose();
                 });
                 release.Set();
-                Task.WaitAll(one, two);
+                Require(Task.WaitAll(new[] { one, two }, TimeSpan.FromSeconds(5)),
+                    "cancelled lifetime callbacks must finish without blocking");
 
                 Require(WaitUntil(() => runtime.NativeReservedBytes == 0),
                     "concurrent off-carrier cancellation drains actor native bytes");
