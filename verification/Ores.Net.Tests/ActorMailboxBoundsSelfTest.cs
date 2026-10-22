@@ -49,6 +49,8 @@ internal static class ActorMailboxBoundsSelfTest
             throw new Exception("slot not released");
         ActorNativeHeapSelfTest.Run();
         ActorNativeBudgetSelfTest.Run();
+        ActorTurnScratchSelfTest.Run();
+        ActorScratchCarrierSelfTest.Run();
         Console.WriteLine("PASS .NET mailbox limits, exact byte refund, empty data, restart");
     }
 }
