@@ -82,6 +82,7 @@ internal static class ActorShardColumnsSelfTest
         }, "AoSoA padded geometry cannot exceed the shard cap");
 
         RejectOversizedFieldMetadata();
+        RejectOversizedGroupCount();
         ExerciseStableCallerGroups();
         ExerciseDistinctSoaosGeometry();
 
@@ -163,6 +164,35 @@ internal static class ActorShardColumnsSelfTest
             "oversized SoAoS field count rejected before groups are processed");
         Require(arena.LiveAllocations == 0 && arena.PersistentLiveBytes == 0,
             "rejected excessive field geometry consumes no native actor capacity");
+    }
+
+    private static void RejectOversizedGroupCount()
+    {
+        using var arena = NewArena(6203);
+        using var turn = arena.EnterTurn(6203, 1);
+        var manyGroups = new int[ActorShardColumns.MaxFieldsPerShard + 1];
+        Array.Fill(manyGroups, 1);
+        Reject(() => _ = new ActorShardColumns(
+            arena, turn, rows: 1,
+            fields: ActorShardColumns.MaxFieldsPerShard,
+            ActorDataLayout.Soaos, soaosGroupWidths: manyGroups),
+            "overlong SoAoS group array must fail before cloning metadata");
+        Require(arena.LiveAllocations == 0 && arena.PersistentLiveBytes == 0,
+            "overlong SoAoS group admission consumes no arena reservation");
+
+        // The largest admitted group count still has valid disjoint geometry.
+        var boundedGroups = new int[ActorShardColumns.MaxFieldsPerShard];
+        Array.Fill(boundedGroups, 1);
+        var largest = new ActorShardColumns(arena, turn, rows: 1,
+            fields: ActorShardColumns.MaxFieldsPerShard,
+            ActorDataLayout.Soaos, soaosGroupWidths: boundedGroups);
+        Require(largest.GroupCount == ActorShardColumns.MaxFieldsPerShard &&
+                largest.GetPhysicalByteOffset(0, largest.Fields - 1) ==
+                (largest.Fields - 1) * sizeof(double),
+            "maximum bounded SoAoS metadata has exact last-field offset");
+        largest.Release(turn);
+        Require(arena.PersistentLiveBytes == 0,
+            "largest bounded SoAoS geometry is released");
     }
 
     private static void ExerciseStableCallerGroups()

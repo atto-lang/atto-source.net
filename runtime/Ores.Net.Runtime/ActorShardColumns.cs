@@ -91,13 +91,18 @@ public sealed class ActorShardColumns
                     "SoAoS requires one or more nonempty field groups",
                     nameof(soaosGroupWidths));
 
-            // Use a private stable snapshot for validation and geometry.
-            // Caller-owned mutable input must not be re-read mid-admission.
-            int[] groupWidths = (int[])soaosGroupWidths.Clone();
-            if (groupWidths.Length > fields)
+            // Read-only array length is stable even if callers mutate
+            // elements concurrently. Reject oversized group metadata before
+            // allocating a cloned managed array.
+            if (soaosGroupWidths.Length > fields)
                 throw new ArgumentException(
                     "SoAoS cannot declare more groups than fields",
                     nameof(soaosGroupWidths));
+
+            // Validate and build geometry from a single private snapshot.
+            // Concurrent caller writes can change contents between elements,
+            // but cannot change this bounded array after cloning.
+            int[] groupWidths = (int[])soaosGroupWidths.Clone();
 
             long groupedFields = 0;
             foreach (int width in groupWidths)
