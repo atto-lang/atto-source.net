@@ -12,6 +12,8 @@ internal static class ActorArenaSelfTest
         RuntimeBudgetsAlsoChargeProcessLimit();
         PersistentRootWithTailTempsDoesNotExhaustArena();
         OutOfOrderDropsCoalesceDeadTail();
+        SeededPersistentAllocationChurnPreservesRoots();
+        RetiredContinuationCannotReenterActorArena();
         RetirementSealsAdmissionButAllowsTurnCleanup();
         CrossArenaAuthorityAndGenerationFences();
         ForgedMetadataCannotAcquireMemoryAuthority();
@@ -285,6 +287,158 @@ internal static class ActorArenaSelfTest
             arena.ReleasePersistent(turn, root);
         Require(arena.LiveAllocations == 0 && arena.PersistentLiveBytes == 0,
             "root finally drops without leaving transient arena allocations");
+    }
+
+    private static void SeededPersistentAllocationChurnPreservesRoots()
+    {
+        // Fully deterministic state machine and seeds: repeat a failure
+        // without relying on the host Random implementation or timing.
+        foreach (uint seed in new uint[] { 0xA515BEEFu, 0xC0FFEE01u, 0x13579BDFu, 0x2468ACE1u })
+        {
+            uint state = seed;
+            uint Next()
+            {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                return state;
+            }
+
+            using var arena = new ActorArena(
+                actorId: 9200 + seed, incarnation: 1,
+                persistentBytes: 512, scratchBytes: 64,
+                maxAllocations: 32, maxLifetimePins: 4, maxReadLoans: 4);
+            using var turn = arena.EnterTurn(9200 + seed, 1);
+            var root = arena.AllocatePersistent(turn, 8);
+            arena.Write(turn, root, 0, new byte[] { 0x5A });
+
+            var live = new List<(ActorArenaHandle Handle, int Bytes, byte Pattern)>();
+            int retainedBytes = 8;
+            for (int operation = 0; operation < 1024; operation++)
+            {
+                uint choice = Next();
+                if (live.Count > 0 && (choice % 3 == 0 || live.Count >= 24))
+                {
+                    int index = (int)(Next() % (uint)live.Count);
+                    var removed = live[index];
+                    arena.ReleasePersistent(turn, removed.Handle);
+                    retainedBytes -= removed.Bytes;
+                    live.RemoveAt(index);
+                    ExpectInvalid(() =>
+                        arena.Read(turn, removed.Handle, 0, new byte[1]),
+                        "recycled generation must reject stale actor handle");
+                }
+                else
+                {
+                    int bytes = 8 * (1 + (int)(Next() % 4));
+                    int alignment = (Next() & 1) == 0 ? 8 : 16;
+                    int beforeAllocations = arena.LiveAllocations;
+                    int beforeBytes = arena.PersistentLiveBytes;
+                    try
+                    {
+                        var handle = arena.AllocatePersistent(turn, bytes, alignment);
+                        var cleared = new byte[bytes];
+                        arena.Read(turn, handle, 0, cleared);
+                        Require(cleared.All(static b => b == 0),
+                            $"seed={seed:x8} op={operation}: reused native bytes not scrubbed");
+                        byte pattern = (byte)(1 + (Next() % 254));
+                        arena.Write(turn, handle, 0, new byte[] { pattern });
+                        live.Add((handle, bytes, pattern));
+                        retainedBytes += bytes;
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // Bounded bump arenas intentionally reject interior
+                        // fragmentation/slot exhaustion. Rejection is atomic.
+                        Require(arena.LiveAllocations == beforeAllocations &&
+                                arena.PersistentLiveBytes == beforeBytes,
+                            $"seed={seed:x8} op={operation}: denied allocation changed live accounting");
+                    }
+                }
+
+                Require(arena.LiveAllocations == live.Count + 1 &&
+                        arena.PersistentLiveBytes == retainedBytes,
+                    $"seed={seed:x8} op={operation}: actor allocation accounting diverged");
+                var one = new byte[1];
+                arena.Read(turn, root, 0, one);
+                Require(one[0] == 0x5A,
+                    $"seed={seed:x8} op={operation}: persistent actor root changed");
+
+                foreach (var item in live)
+                {
+                    arena.Read(turn, item.Handle, 0, one);
+                    Require(one[0] == item.Pattern,
+                        $"seed={seed:x8} op={operation}: live allocation overlapped or was moved");
+                }
+            }
+
+            // Drop in deliberately non-LIFO order. Once all transients
+            // disappear, the surviving root must not strand any tail space.
+            while (live.Count > 0)
+            {
+                int index = (int)(Next() % (uint)live.Count);
+                var removed = live[index];
+                arena.ReleasePersistent(turn, removed.Handle);
+                live.RemoveAt(index);
+            }
+            var large = arena.AllocatePersistent(turn, 480, alignment: 16);
+            var bytesAfterCoalescing = new byte[480];
+            arena.Read(turn, large, 0, bytesAfterCoalescing);
+            Require(bytesAfterCoalescing.All(static b => b == 0),
+                $"seed={seed:x8}: coalesced native tail must be scrubbed");
+            arena.ReleasePersistent(turn, large);
+            arena.ReleasePersistent(turn, root);
+            Require(arena.PersistentLiveBytes == 0 &&
+                    arena.LiveAllocations == 0,
+                $"seed={seed:x8}: all randomized allocations must be reclaimed");
+        }
+    }
+
+    private static void RetiredContinuationCannotReenterActorArena()
+    {
+        const ulong actorId = 9301;
+        long baseline = ActorArenaBudget.Process.ReservedBytes;
+        using var arena = new ActorArena(
+            actorId, incarnation: 1,
+            persistentBytes: 256, scratchBytes: 64,
+            maxAllocations: 8, maxLifetimePins: 4, maxReadLoans: 4);
+        ActorArenaLifetimePin pinned;
+        ActorArenaHandle root;
+        ActorArenaTurn expiredTurn;
+        using (var active = arena.EnterTurn(actorId, 1))
+        {
+            expiredTurn = active;
+            root = arena.AllocatePersistent(active, 8);
+            arena.Write(active, root, 0, new byte[] { 0x93 });
+            pinned = arena.AcquireLifetimePin(active);
+        }
+
+        Require(!arena.Retire() && !arena.IsReclaimed &&
+                arena.OutstandingLifetimePins == 1,
+            "retired suspended actor retains physical capacity while pinned");
+        ExpectInvalid(() => arena.EnterTurn(actorId, 1),
+            "cancelled/resuming continuation must not enter a retired actor");
+        ExpectInvalid(() => arena.Read(expiredTurn, root, 0, new byte[1]),
+            "expired physical turn cannot read borrowed native state");
+        Require(ActorArenaBudget.Process.ReservedBytes > baseline,
+            "retired actor cannot refund pinned physical reservation");
+
+        Task task = Task.Run(() =>
+        {
+            pinned.Dispose();
+            pinned.Dispose();
+        });
+        Require(task.Wait(TimeSpan.FromSeconds(5)),
+            "cancelled continuation must release off-carrier within bounded time");
+        Require(arena.IsReclaimed &&
+                arena.OutstandingLifetimePins == 0 &&
+                ActorArenaBudget.Process.ReservedBytes == baseline,
+            "last off-carrier pin release scrubs/frees native bytes exactly once");
+
+        bool disposed = false;
+        try { arena.EnterTurn(actorId, 1); }
+        catch (ObjectDisposedException) { disposed = true; }
+        Require(disposed, "resumption after physical free must be rejected");
     }
 
     private static void RetirementSealsAdmissionButAllowsTurnCleanup()
