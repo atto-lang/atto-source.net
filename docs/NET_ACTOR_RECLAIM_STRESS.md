@@ -23,6 +23,12 @@ review branches; #125/#133/#134 are not rewritten or merged.
   and the **final real release** refunds the process budget exactly once.
 - Existing #141 tests additionally check cross-runtime global capacity
   accounting and 24 rounds of concurrent off-carrier pin disposal.
+- A new 24-round **real CancellationTokenSource.Cancel callback** races with
+  ActorRuntime.Stop after one actor turn registers its lifetime hold.
+  Whichever operation wins, final callback cleanup must release native bytes
+  and both actor-runtime and process-native reservations exactly once.
+  This is a .NET host cancellation callback, **not** an Oreslang-compiled
+  suspended I/O continuation.
 
 ## Reproduction
 
