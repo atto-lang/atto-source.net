@@ -136,7 +136,53 @@ internal static class ActorNativeHeapSelfTest
         Require(bounded.Allocate(bob, 8).HasValue
                 && !bounded.Remove(bob, only.Value), "generation fenced slot reuse");
 
+        NativeCapacityBudgetWaitsForFinalLease(alice);
         Console.WriteLine("PASS .NET per-actor unmanaged heaps, bounds, loans, ABA, recycle, retirement");
+    }
+
+    private static void Require(bool good, string reason)
+    {
+        if (!good)
+            throw new Exception("actor native heap budget: " + reason);
+    }
+
+    private static void NativeCapacityBudgetWaitsForFinalLease(ActorRef actor)
+    {
+        var tenant = new ActorNativeHeapBudget(192);
+        long processBefore = ActorNativeHeapBudget.Process.ReservedBytes;
+        using var one = new ActorNativeHeap(actor, 128, 2, tenant);
+        Require(tenant.ReservedBytes == 128 &&
+                ActorNativeHeapBudget.Process.ReservedBytes == processBefore + 128,
+            "heap reserves native bytes in tenant and heap-process budgets");
+
+        bool denied = false;
+        try
+        {
+            using var rejected = new ActorNativeHeap(actor, 128, 2, tenant);
+        }
+        catch (InvalidOperationException)
+        {
+            denied = true;
+        }
+        Require(denied, "tenant quota blocks a second native heap");
+        Require(tenant.ReservedBytes == 128 &&
+                ActorNativeHeapBudget.Process.ReservedBytes == processBefore + 128,
+            "rejected reservation is accounting-neutral");
+
+        var lifetime = one.AcquireLifetimeLease(actor);
+        Require(lifetime is not null, "quiescence fixture acquires real lease");
+        Require(!one.Retire(actor), "outstanding lease delays native release");
+        Require(tenant.ReservedBytes == 128,
+            "logical retirement cannot refund physically resident memory");
+
+        lifetime!.Dispose();
+        Require(one.Retired && tenant.ReservedBytes == 0 &&
+                ActorNativeHeapBudget.Process.ReservedBytes == processBefore,
+            "last issued lease refunds physical reservation exactly once");
+        one.Dispose();
+        Require(tenant.ReservedBytes == 0 &&
+                ActorNativeHeapBudget.Process.ReservedBytes == processBefore,
+            "repeated retirement cannot double-refund budget");
     }
 
     // ActorMailbox itself is not IDisposable. This holder merely makes the
