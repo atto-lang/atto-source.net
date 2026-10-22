@@ -11,6 +11,7 @@ internal static class ActorRuntimeSelfTest
         OneActorNeverRunsTwoHandlersConcurrently();
         DeliveredMessageStorageIsTurnBound();
         PersistentShardSurvivesAcrossActorTurns();
+        GroupedSoaosShardSurvivesAcrossActorTurns();
         RetainedContextCannotUseExpiredTurn();
         LifetimePinCanOutliveActorTurnAndStop();
         HandlerFaultRetiresOnlyThatActor();
@@ -266,6 +267,69 @@ internal static class ActorRuntimeSelfTest
         runtime.Stop(actor);
         Require(WaitUntil(() => runtime.LiveActors == 0),
             "cross-turn shard actor finalizes");
+    }
+
+    private static void GroupedSoaosShardSurvivesAcrossActorTurns()
+    {
+        using var runtime = new ActorRuntime(Options());
+        using var done = new ManualResetEventSlim();
+        ActorShardColumns? shard = null;
+        bool invalidGroupsRejected = false;
+        double before = double.NaN;
+        double after = double.NaN;
+        double invariant = double.NaN;
+
+        var actor = runtime.Spawn(ActorKind.Shared, (context, message) =>
+        {
+            if (message.Span[0] == 1)
+            {
+                try
+                {
+                    _ = context.CreateShard(rows: 4, fields: 3,
+                        layout: ActorDataLayout.Soaos,
+                        soaosGroupWidths: new[] { 2 });
+                }
+                catch (ArgumentException)
+                {
+                    invalidGroupsRejected = true;
+                }
+
+                var created = context.CreateShard(
+                    rows: 4, fields: 3, layout: ActorDataLayout.Soaos,
+                    soaosGroupWidths: new[] { 2, 1 });
+                shard = created;
+                for (int row = 0; row < 4; row++)
+                {
+                    context.WriteShard(created, row, 0, row * 10.0);
+                    context.WriteShard(created, row, 1, row + 0.5);
+                    context.WriteShard(created, row, 2, 300.0 + row);
+                }
+                return;
+            }
+
+            Require(shard is not null, "SoAoS shard survives the physical turn");
+            before = context.ReadShard(shard!, 2, 0);
+            context.IntegrateShard(shard!, 0, 1, 0.5);
+            after = context.ReadShard(shard!, 2, 0);
+            invariant = context.ReadShard(shard!, 2, 2);
+            context.ReleaseShard(shard!);
+            done.Set();
+        });
+
+        runtime.Send(actor, new byte[] { 1 });
+        runtime.Send(actor, new byte[] { 2 });
+        Require(done.Wait(TimeSpan.FromSeconds(5)),
+            "SoAoS actor runs across separate physical turns");
+        Require(WaitUntil(() => runtime.CompletedMessages == 2),
+            "SoAoS actor messages complete in serial order");
+        Require(invalidGroupsRejected &&
+                before == 20.0 && after == 21.25 && invariant == 302.0,
+            "SoAoS groups preserve independent state and kernel parity");
+
+        runtime.Stop(actor);
+        Require(WaitUntil(() => runtime.LiveActors == 0 &&
+                                runtime.NativeReservedBytes == 0),
+            "SoAoS actor finalization refunds native reservations");
     }
 
     private static void RetainedContextCannotUseExpiredTurn()
