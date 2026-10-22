@@ -72,6 +72,48 @@ regions per admitted handler or another compiler-proved exclusion protocol.
 No source-level compiler integration or GC-allocation measurement is claimed
 by adding this host substrate.
 
+## Explicit immutable borrowed access (prototype)
+
+An actor can now call `AcquireReadOnlyLoan(actor, handle)` to pin a single
+generation-checked allocation. While that loan exists, checked writes and
+deletion of **that allocation** fail closed; unrelated allocations remain
+mutable. The loan can copy bytes into a caller-owned destination and can drain
+during actor retirement. The last loan releases its native lifetime pin so a
+previously requested retirement may physically reclaim bytes and release the
+aggregate memory budget.
+
+Acquiring and releasing a loan allocates one small managed reference-type
+guard per outstanding borrow; ordinary payload reads/writes remain
+non-allocating. Guest callers must not manufacture `ActorRef` authority or
+export borrowed native memory as raw pointers. The borrow checker and task
+scheduler still need to generate/track these loans across `await`, native
+callbacks, failure unwind and cancellation. A manually acquired loan does
+**not** prove that all source-language mutable aliases were rejected.
+
+## Stack-only deterministic temporary object ownership
+
+`ActorNativeHeap.AllocateScoped(owner, size, alignment)` returns a C#
+`ref struct OwnedAllocation` rather than allocating a managed wrapper
+on the CLR heap. Generated synchronous `using`/`try-finally` code can
+reclaim and zero native temporary slots on both normal and exception
+exits, even while older actor fields remain alive. Scope read/write
+paths remain actor-authorized and generation-checked.
+
+The `ref struct` restriction forbids ordinary managed boxing and
+capturing in heap-resident delegates, but C# `ref struct` values are
+**copyable**, not linear capabilities. A duplicate may attempt a second
+drop; the underlying native heap rejects it through the slot generation
+check. Source-level Oreslang `rt take` and borrow checking must still
+prove a single owner and reject prohibited captures/suspensions. Failed
+drop due to an outstanding native read loan throws instead of silently
+freeing borrowed storage. The runtime supervisor must still complete
+lease draining before actor retirement.
+
+This is a no-wrapper allocation **for the temporary scope**, not a
+claim that the rest of the compiler and runtime generate no CLR GC work.
+Long-lived async frames belong in a separately proven persistent actor
+heap/continuation arena.
+
 ## Remaining integration and verification gates
 
 - Lower source actor object fields, collections, text, closures, async frames,
