@@ -19,7 +19,7 @@ Upcoming typed OresIR should represent actor send/await, ownership moves, borrow
 
 The current `ActorMailbox` copies untyped bytes, caps queue depth and byte usage, serializes mutation under a lock, and rejects mismatched actor generations. **It is not a full OresVM runtime.** In particular, it provides neither per-actor managed heaps, authenticated capabilities, scheduler domains, isolation proof, supervision, futures nor hot reload.
 
-Production integration requires a versioned wire protocol with serializer contracts, immutable envelope metadata, actor-group permits, and a runtime scheduler. Plan for CLR GC interactions honestly: managed Native AOT retains GC; private actor arenas may require native allocations and a carefully validated lifetime protocol.
+Production integration requires a versioned wire protocol with serializer contracts, immutable envelope metadata, actor-group permits, and a runtime scheduler. Scheduler parity uses exactly three runtime-wide actor execution domains (`PRIVATE`, `SHARED`, `UNTRUSTED`); CONTROL is a zero-thread coordination plane that admits work onto existing actor domains rather than a fourth carrier pool. Plan for CLR GC interactions honestly: managed Native AOT retains GC; private actor arenas may require native allocations and a carefully validated lifetime protocol.
 
 ## Hot code replacement under strict AOT
 

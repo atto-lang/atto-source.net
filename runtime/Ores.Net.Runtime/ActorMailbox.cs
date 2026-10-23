@@ -87,6 +87,17 @@ public sealed class ActorMailbox
         get { lock (_gate) return _messages.Count; }
     }
 
+    internal bool Authorizes(ActorRef destination)
+    {
+        lock (_gate)
+        {
+            return !_closed &&
+                destination.Id == _id &&
+                destination.Generation == _generation &&
+                destination.Nonce == _nonce;
+        }
+    }
+
     public void Send(ActorRef destination, ReadOnlySpan<byte> data)
     {
         lock (_gate)
