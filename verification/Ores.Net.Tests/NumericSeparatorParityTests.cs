@@ -40,7 +40,7 @@ public static class NumericSeparatorParityTests
 
         // Bad separators must fail before OresIR or Native AOT emission.
         foreach (var invalid in new[] {
-            "1_", "1__0", "1_a", "1_+2", "1_ 2", "10__20",
+            "1_", "1__0", "1___2", "1_-2", "1_a", "1_+2", "1_ 2", "10__20",
             "+9_223_372_036_854_775_808", "-9_223_372_036_854_775_809",
             "9_223_372_036_854_775_808"
         })
@@ -68,17 +68,29 @@ public static class NumericSeparatorParityTests
         Directory.CreateDirectory(folder);
         try
         {
-            var path = Path.Combine(folder, "OresGenerated.dll");
-            var ir = OresIrLowering.Lower(OresParser.Parse(
-                "pub fnc main():int{return +(4_0 + 2); }"));
-            CilEmitter.EmitLibrary(ir, path);
-            using var assembly = AssemblyDefinition.ReadAssembly(path);
-            var method = assembly.MainModule.Types.Single(t =>
-                t.FullName == "Oreslang.Generated.OresProgram").Methods.Single(m => m.Name == "Run");
-            Require(CilReferenceEvaluator.Evaluate(method) == 42,
-                "emitted CIL matches verified typed SSA");
+            var cilCase = 0;
+            foreach (var (expression, expected) in new (string, long)[] {
+                ("+(4_0+2)", 42),
+                ("9_223_372_036_854_775_807", long.MaxValue),
+                ("-9_223_372_036_854_775_808", long.MinValue)
+            })
+            {
+                var caseFolder = Path.Combine(folder, "cil-case-" + cilCase++);
+                Directory.CreateDirectory(caseFolder);
+                var path = Path.Combine(caseFolder, "OresGenerated.dll");
+                var ir = OresIrLowering.Lower(OresParser.Parse(
+                    "pub fnc main():int{return " + expression + ";}"));
+                Require(OresIrReferenceEvaluator.Evaluate(ir) == expected,
+                    "typed SSA matches CIL expectation: " + expression);
+                CilEmitter.EmitLibrary(ir, path);
+                using var assembly = AssemblyDefinition.ReadAssembly(path);
+                var method = assembly.MainModule.Types.Single(t =>
+                    t.FullName == "Oreslang.Generated.OresProgram").Methods.Single(m => m.Name == "Run");
+                Require(CilReferenceEvaluator.Evaluate(method) == expected,
+                    "emitted CIL matches verified typed SSA: " + expression);
+            }
         }
         finally { Directory.Delete(folder, recursive: true); }
-        Console.WriteLine("numeric separators: seven SSA positives, nine syntax/range rejections, one CIL differential");
+        Console.WriteLine("numeric separators: seven SSA positives, eleven syntax/range rejections, three CIL differentials");
     }
 }
