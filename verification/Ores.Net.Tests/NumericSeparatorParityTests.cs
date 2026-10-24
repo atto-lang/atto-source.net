@@ -40,6 +40,21 @@ public static class NumericSeparatorParityTests
             Value: StructuredInt { Value: long.MinValue }
         }, "structured parser retains signed minimum");
 
+        // Structural admission alone is not numeric value parity. Verify the
+        // actual i64 value for noncanonical but grammatically legal spellings.
+        foreach (var (expression, expected) in new (string, long)[] {
+            ("-0_9223372036854775808", long.MinValue),
+            ("0_9223372036854775807", long.MaxValue)
+        })
+        {
+            var parsed = OresStructuredParser.Parse(
+                "pub fnc main():int{return " + expression + ";}");
+            Require(parsed.Body[0] is StructuredReturn {
+                Value: StructuredInt literal
+            } && literal.Value == expected,
+                "structured parser retains padded i64 value: " + expression);
+        }
+
         // Bad separators must fail before OresIR or Native AOT emission.
         foreach (var invalid in new[] {
             "1_", "1__0", "1___2", "1_-2", "1_a", "1_+2", "1_ 2", "10__20",
