@@ -23,6 +23,8 @@ public static class NumericSeparatorParityTests
             ("+0_0_4_2", 42),
             ("9_223_372_036_854_775_807", long.MaxValue),
             ("-9_223_372_036_854_775_808", long.MinValue),
+            ("-0_9223372036854775808", long.MinValue),
+            ("0_9223372036854775807", long.MaxValue),
             ("0_0_0", 0)
         })
         {
@@ -42,7 +44,7 @@ public static class NumericSeparatorParityTests
         foreach (var invalid in new[] {
             "1_", "1__0", "1___2", "1_-2", "1_a", "1_+2", "1_ 2", "10__20",
             "+9_223_372_036_854_775_808", "-9_223_372_036_854_775_809",
-            "9_223_372_036_854_775_808"
+            "9_223_372_036_854_775_808", "-0_9223372036854775809"
         })
         {
             try
@@ -72,7 +74,9 @@ public static class NumericSeparatorParityTests
             foreach (var (expression, expected) in new (string, long)[] {
                 ("+(4_0+2)", 42),
                 ("9_223_372_036_854_775_807", long.MaxValue),
-                ("-9_223_372_036_854_775_808", long.MinValue)
+                ("-9_223_372_036_854_775_808", long.MinValue),
+                ("-0_9223372036854775808", long.MinValue),
+                ("0_9223372036854775807", long.MaxValue)
             })
             {
                 var caseFolder = Path.Combine(folder, "cil-case-" + cilCase++);
@@ -91,6 +95,6 @@ public static class NumericSeparatorParityTests
             }
         }
         finally { Directory.Delete(folder, recursive: true); }
-        Console.WriteLine("numeric separators: seven SSA positives, eleven syntax/range rejections, three CIL differentials");
+        Console.WriteLine("numeric separators: nine SSA positives, twelve syntax/range rejections, five CIL differentials");
     }
 }
