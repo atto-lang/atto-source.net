@@ -412,7 +412,7 @@ public static class OresStructuredParser
             {
                 int at = Current.Offset;
                 index++;
-                if (Current.Text.Replace("_", "", StringComparison.Ordinal) == "9223372036854775808")
+                if (Current.Text.Replace("_", "", StringComparison.Ordinal).TrimStart('0') == "9223372036854775808")
                 {
                     index++;
                     return new StructuredInt(at, long.MinValue);
