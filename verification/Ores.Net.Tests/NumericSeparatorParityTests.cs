@@ -25,7 +25,18 @@ public static class NumericSeparatorParityTests
             ("-9_223_372_036_854_775_808", long.MinValue),
             ("0_0_0", 0)
         })
+        {
             Require(Evaluate(expression) == expected, "typed SSA value: " + expression);
+            var structured = OresStructuredParser.Parse(
+                "pub fnc main():int{return " + expression + ";}");
+            Require(structured.Body.Count == 1 && structured.Body[0] is StructuredReturn,
+                "structured admission matches shipping parser: " + expression);
+        }
+        var structuredMin = OresStructuredParser.Parse(
+            "pub fnc main():int{return -9_223_372_036_854_775_808;}");
+        Require(structuredMin.Body[0] is StructuredReturn {
+            Value: StructuredInt { Value: long.MinValue }
+        }, "structured parser retains signed minimum");
 
         // Bad separators must fail before OresIR or Native AOT emission.
         foreach (var invalid in new[] {
@@ -38,8 +49,16 @@ public static class NumericSeparatorParityTests
             {
                 _ = OresParser.Parse("pub fnc main():int{return " + invalid + ";}");
             }
-            catch (FormatException) { continue; }
-            throw new Exception("invalid separator or range accepted: " + invalid);
+            catch (FormatException)
+            {
+                try {
+                    _ = OresStructuredParser.Parse(
+                        "pub fnc main():int{return " + invalid + ";}");
+                }
+                catch (FormatException) { continue; }
+                throw new Exception("structured parser admitted rejected value: " + invalid);
+            }
+            throw new Exception("shipping parser admitted invalid value: " + invalid);
         }
 
         // One emitted CIL executable method must preserve the source value,
