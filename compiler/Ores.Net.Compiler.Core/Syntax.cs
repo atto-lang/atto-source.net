@@ -271,7 +271,7 @@ public static class OresParser
             if (Take("-"))
             {
                 // Signed minimum needs special treatment: its magnitude is > long.MaxValue.
-                if (Current.Text.Replace("_", "", StringComparison.Ordinal) == "9223372036854775808")
+                if (Current.Text.Replace("_", "", StringComparison.Ordinal).TrimStart('0') == "9223372036854775808")
                 {
                     _index++;
                     return new Literal(long.MinValue);
