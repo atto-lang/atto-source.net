@@ -96,7 +96,20 @@ public static class OresParser
             var ch = text[_i];
             if (ch is >= '0' and <= '9')
             {
-                do { _i++; } while (_i < text.Length && text[_i] is >= '0' and <= '9');
+                // Match the reference's decimal digit separators without
+                // admitting trailing, adjacent or non-digit underscores.
+                // Only ASCII decimal digits are accepted, never host-culture
+                // separators or floating-point literals.
+                _i++;
+                while (_i < text.Length)
+                {
+                    if (text[_i] is >= '0' and <= '9') { _i++; continue; }
+                    if (text[_i] != '_') break;
+                    if (_i + 1 >= text.Length ||
+                        text[_i + 1] is not (>= '0' and <= '9'))
+                        throw new FormatException($"Invalid i64 digit separator at offset {_i}");
+                    _i++;
+                }
                 return new Token(text[start.._i], start);
             }
             if (ch is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or '_')
@@ -258,7 +271,7 @@ public static class OresParser
             if (Take("-"))
             {
                 // Signed minimum needs special treatment: its magnitude is > long.MaxValue.
-                if (Current.Text == "9223372036854775808")
+                if (Current.Text.Replace("_", "", StringComparison.Ordinal) == "9223372036854775808")
                 {
                     _index++;
                     return new Literal(long.MinValue);
@@ -275,7 +288,8 @@ public static class OresParser
                 throw new FormatException($"Expected integer at offset {Current.Offset}");
             var raw = Current.Text;
             _index++;
-            if (!long.TryParse(raw, NumberStyles.None, CultureInfo.InvariantCulture, out long result))
+            if (!long.TryParse(raw.Replace("_", "", StringComparison.Ordinal),
+                NumberStyles.None, CultureInfo.InvariantCulture, out long result))
                 throw new FormatException($"Invalid i64 at offset {tokens[_index - 1].Offset}");
             return new Literal(result);
         }
