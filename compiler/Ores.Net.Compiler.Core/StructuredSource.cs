@@ -187,6 +187,11 @@ public static class OresStructuredParser
                     exposed = true;
                 }
             }
+            // Preserve the canonical receiver-erased class-method contract
+            // without falsely admitting syntax that the CIL/Native AOT backend
+            // cannot yet compile. This non-executing parser is scalar-only.
+            if (Current.Text is "class" or "actor")
+                throw Error("Nominal class/actor methods require receiver-erased method slots, type/borrow checking and Native AOT CIL lowering; unsupported in .NET structured frontend");
             Expect("fnc");
             Expect("main");
             Expect("(");
