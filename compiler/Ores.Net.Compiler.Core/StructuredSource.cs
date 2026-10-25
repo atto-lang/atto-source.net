@@ -83,7 +83,7 @@ public static class OresStructuredParser
                  (tokens[^1].Text == "pub" && tokens.Count > 1 &&
                   tokens[^2].Text == "define")))
                 throw new FormatException(
-                    $"Class/actor declarations require typed method and ownership lowering at offset {token.Offset}");
+                    $"Nominal class/actor methods require receiver-erased method slots, type/borrow checking and Native AOT CIL lowering; unsupported in .NET structured frontend at offset {token.Offset}");
             if (token.Text is "lex" or "nlex")
             {
                 int after = token.Offset + token.Text.Length;

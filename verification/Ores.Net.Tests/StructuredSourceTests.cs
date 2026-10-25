@@ -323,9 +323,20 @@ internal static class StructuredSourceTests
             "negative literal below i64 range");
         Reject("fnc main():int{let int x=1@2;return x;}",
             "invalid character");
-        foreach (string real in new[] { "0.125", "1e10", "1E-10", "123.456d", "123d" })
-            Reject("fnc main():int{return " + real + ";}",
-                "real/decimal literal must fail closed: " + real);
+        foreach (string real in new[] { "0.125", "1e10", "1E-10", "123.456d", "123d",
+                                       "1_000.5", "1_0e+2", "1_2d" })
+        {
+            try { _ = OresStructuredParser.Parse("fnc main():int{return " + real + ";}"); }
+            catch (FormatException ex)
+            {
+                Require(ex.Message.Contains(
+                    "Floating-point/decimal literal requires typed numeric lowering",
+                    StringComparison.Ordinal),
+                    "real/decimal literal must fail before token splitting: " + real);
+                continue;
+            }
+            throw new Exception("Structured source incorrectly accepted real/decimal literal: " + real);
+        }
         Reject("fnc main():int{let int x=1;}\u0000", "NUL");
         Reject("fnc main():int{return 1;}\uD800", "invalid UTF16");
         Reject("fnc main():int{return 1;}//comment\nextra", "trailing syntax");
@@ -362,12 +373,20 @@ internal static class StructuredSourceTests
             "Private abstract class hooks require typed virtual dispatch");
 
         // Contextual capture keywords remain valid ordinary scalar local names.
-        var plainLex = OresStructuredParser.Parse(
-            "fnc main():int{let int lex=42;return lex;}");
-        Require(plainLex.Body.Count == 2 &&
-                plainLex.Body[1] is StructuredReturn {
-                    Value: StructuredRead { Name: "lex", Type: IrValueType.I64 }
-                }, "lex remains an ordinary scalar identifier");
+        foreach (string captureName in new[] { "lex", "nlex" })
+        {
+            var plainCaptureName = OresStructuredParser.Parse(
+                $"fnc main():int{{let int {captureName}=42;return {captureName};}}");
+            Require(plainCaptureName.Body.Count == 2 &&
+                    plainCaptureName.Body[1] is StructuredReturn {
+                        Value: StructuredRead { Type: IrValueType.I64 } read
+                    } && read.Name == captureName,
+                captureName + " remains an ordinary scalar identifier");
+        }
+        // Ignored comment text cannot activate unsupported capture guards.
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{// lex[self] || -> nlex[self] critical |state| -> 1\nreturn 42;}"
+            ).Body.Count == 1, "capture syntax in a comment remains inert");
 
         // Until this backend has a class-aware method table, capture and
         // borrow analysis, it must reject these canonical constructs rather
@@ -403,7 +422,7 @@ internal static class StructuredSourceTests
                 unsupported.StartsWith("define actor", StringComparison.Ordinal) ||
                 unsupported.StartsWith("define pub class", StringComparison.Ordinal) ||
                 unsupported.StartsWith("pub define class", StringComparison.Ordinal)
-                    ? "Class/actor declarations require typed method and ownership lowering"
+                    ? "Nominal class/actor methods require receiver-erased method slots"
                     : "Lexical captures require checked closure lowering");
         }
 
