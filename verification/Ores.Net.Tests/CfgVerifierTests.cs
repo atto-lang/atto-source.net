@@ -90,6 +90,114 @@ internal static class CfgVerifierTests
             new CountDriftList<CfgBlock>(new[] { driftEntry }));
         CheckCil(OresCfgVerifier.Verify(drift), 23, "count-drift-safe-snapshot");
 
+        // Signed less-than must not be implemented using unsigned clt.un
+        // or checked subtraction (which can overflow at i64 boundaries).
+        foreach (var (a, bValue, expected) in new (long, long, bool)[] {
+            (long.MinValue, long.MaxValue, true),
+            (long.MaxValue, long.MinValue, false),
+            (-1L, 0L, true),
+            (0L, -1L, false),
+            (0L, 0L, false),
+            (long.MinValue, long.MinValue, false),
+            (long.MaxValue, long.MaxValue, false)
+        })
+        {
+            var signedStart = Block("entry", Array.Empty<CfgParameter>(), new[] {
+                new CfgInstruction(0, CfgOpcode.ConstantI64, IrValueType.I64,
+                    I64Constant: a),
+                new CfgInstruction(1, CfgOpcode.ConstantI64, IrValueType.I64,
+                    I64Constant: bValue),
+                new CfgInstruction(2, CfgOpcode.LessThanI64, IrValueType.Bool,
+                    Left: 0, Right: 1),
+                new CfgInstruction(3, CfgOpcode.ConstantI64, IrValueType.I64,
+                    I64Constant: 1),
+                new CfgInstruction(4, CfgOpcode.ConstantI64, IrValueType.I64,
+                    I64Constant: 0)
+            }, new CfgBranch(2, "less", Array.Empty<int>(),
+                "notless", Array.Empty<int>()));
+            var signedGraph = new CfgFunction("signedlt", IrValueType.I64,
+                "entry", new[] {
+                    signedStart,
+                    Block("less", Array.Empty<CfgParameter>(),
+                        Array.Empty<CfgInstruction>(), new CfgReturn(3)),
+                    Block("notless", Array.Empty<CfgParameter>(),
+                        Array.Empty<CfgInstruction>(), new CfgReturn(4))
+                });
+            CheckCil(OresCfgVerifier.Verify(signedGraph), expected ? 1 : 0,
+                "signed-less-than-boundary");
+        }
+
+        Reject(new CfgFunction("bad_lt_type", IrValueType.I64, "entry",
+            new[] { Block("entry", Array.Empty<CfgParameter>(), new[] {
+                new CfgInstruction(0, CfgOpcode.ConstantI64, IrValueType.I64,
+                    I64Constant: 1),
+                new CfgInstruction(1, CfgOpcode.ConstantI64, IrValueType.I64,
+                    I64Constant: 2),
+                new CfgInstruction(2, CfgOpcode.LessThanI64, IrValueType.I64,
+                    Left: 0, Right: 1)
+            }, new CfgReturn(2)) }), "less-than must return bool");
+
+        // Real SSA loop: both i and total cross header/backedge block
+        // parameters. The signed comparison determines the exit at i == 10.
+        var sumEntry = Block("entry", Array.Empty<CfgParameter>(), new[] {
+            new CfgInstruction(0, CfgOpcode.ConstantI64, IrValueType.I64,
+                I64Constant: 0),
+            new CfgInstruction(1, CfgOpcode.ConstantI64, IrValueType.I64,
+                I64Constant: 0)
+        }, new CfgJump("header", new[] { 0, 1 }));
+        var sumHeader = Block("header", new[] {
+            new CfgParameter(2, IrValueType.I64),
+            new CfgParameter(3, IrValueType.I64)
+        }, new[] {
+            new CfgInstruction(4, CfgOpcode.ConstantI64, IrValueType.I64,
+                I64Constant: 10),
+            new CfgInstruction(5, CfgOpcode.LessThanI64, IrValueType.Bool,
+                Left: 2, Right: 4)
+        }, new CfgBranch(5, "body", new[] { 2, 3 },
+            "exit", new[] { 3 }));
+        var sumBody = Block("body", new[] {
+            new CfgParameter(6, IrValueType.I64),
+            new CfgParameter(7, IrValueType.I64)
+        }, new[] {
+            new CfgInstruction(8, CfgOpcode.CheckedAdd, IrValueType.I64,
+                Left: 7, Right: 6),
+            new CfgInstruction(9, CfgOpcode.ConstantI64, IrValueType.I64,
+                I64Constant: 1),
+            new CfgInstruction(10, CfgOpcode.CheckedAdd, IrValueType.I64,
+                Left: 6, Right: 9)
+        }, new CfgJump("header", new[] { 10, 8 }));
+        var sumExit = Block("exit", new[] {
+            new CfgParameter(11, IrValueType.I64)
+        }, Array.Empty<CfgInstruction>(), new CfgReturn(11));
+        var sumGraph = new CfgFunction("sum0to9", IrValueType.I64, "entry",
+            new[] { sumEntry, sumHeader, sumBody, sumExit });
+        CheckCil(OresCfgVerifier.Verify(sumGraph), 45,
+            "signed-while-sum45");
+        CheckCil(OresCfgVerifier.Verify(sumGraph with {
+            Blocks = new[] { sumExit, sumBody, sumEntry, sumHeader }
+        }), 45, "signed-while-sum45-reordered");
+
+        // Type confusion and bogus payloads must fail before any CIL
+        // emission, not silently reinterpret bools as signed integers.
+        Reject(new CfgFunction("bad_lt_operand", IrValueType.I64, "entry",
+            new[] { Block("entry", Array.Empty<CfgParameter>(), new[] {
+                new CfgInstruction(0, CfgOpcode.ConstantBool, IrValueType.Bool,
+                    BoolConstant: true),
+                new CfgInstruction(1, CfgOpcode.ConstantI64, IrValueType.I64,
+                    I64Constant: 3),
+                new CfgInstruction(2, CfgOpcode.LessThanI64, IrValueType.Bool,
+                    Left: 0, Right: 1)
+            }, new CfgReturn(1)) }), "less-than rejects bool operand");
+        Reject(new CfgFunction("bad_lt_payload", IrValueType.I64, "entry",
+            new[] { Block("entry", Array.Empty<CfgParameter>(), new[] {
+                new CfgInstruction(0, CfgOpcode.ConstantI64, IrValueType.I64,
+                    I64Constant: 1),
+                new CfgInstruction(1, CfgOpcode.ConstantI64, IrValueType.I64,
+                    I64Constant: 2),
+                new CfgInstruction(2, CfgOpcode.LessThanI64, IrValueType.Bool,
+                    Left: 0, Right: 1, I64Constant: 0)
+            }, new CfgReturn(1)) }), "less-than rejects extra immediate");
+
         // Loop-carried i64 value. Typed block parameters serve as SSA phi
         // arguments on the entry edge and the backedge.
         var entry = Block("entry", Array.Empty<CfgParameter>(),
@@ -504,6 +612,18 @@ internal static class CfgVerifierTests
             var entry = assembly.MainModule.Types.Single(t =>
                 t.FullName == "Oreslang.Generated.OresProgram")
                 .Methods.Single(m => m.Name == "Run");
+
+            int signedOpCount = graph.Blocks.Sum(b =>
+                b.Instructions.Count(op => op.Opcode == CfgOpcode.LessThanI64));
+            if (signedOpCount != 0)
+            {
+                Expect(entry.Body.Instructions.Count(ins =>
+                    ins.OpCode.Code == Mono.Cecil.Cil.Code.Clt) == signedOpCount,
+                    label + ": signed less-than must emit exactly one clt per CFG op");
+                Expect(!entry.Body.Instructions.Any(ins =>
+                    ins.OpCode.Code == Mono.Cecil.Cil.Code.Clt_Un),
+                    label + ": unsigned clt.un is forbidden for i64 less-than");
+            }
 
             Expect(entry.Body.MaxStackSize == 2,
                 label + ": emitted CFG stack bound");

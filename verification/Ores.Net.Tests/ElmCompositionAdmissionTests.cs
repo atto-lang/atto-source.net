@@ -7,8 +7,13 @@ internal static class ElmCompositionAdmissionTests
     public static void Run()
     {
         const string control = "pub fnc main():int{return (5+3)*7-14;}";
-        _ = OresParser.Parse(control);
-        _ = OresStructuredParser.Parse(control);
+        foreach (var accepted in new[] { control,
+            "// Option Result Future Observable Stream Channel flat_map and_then ? raise panic\n" + control,
+            "/* nested /* Option? */ Result? Future */ " + control })
+        {
+            _ = OresParser.Parse(accepted);
+            _ = OresStructuredParser.Parse(accepted);
+        }
 
         var path = Path.Combine(AppContext.BaseDirectory, "elm-composition-rejections.json");
         var cases = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(path))
