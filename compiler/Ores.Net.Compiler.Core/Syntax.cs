@@ -62,7 +62,7 @@ public static class OresParser
                 if (text[_i] == '/' && _i + 1 < text.Length && text[_i + 1] == '/')
                 {
                     _i += 2;
-                    while (_i < text.Length && text[_i] != '\n') _i++;
+                    while (_i < text.Length && text[_i] is not ('\n' or '\r' or '\u0085' or '\u2028' or '\u2029')) _i++;
                     continue;
                 }
                 // Keep comments lexically invisible even when they occur
@@ -149,6 +149,9 @@ public static class OresParser
                         throw new FormatException(
                             $"execution task requires scheduler-aware Future/continuation lowering; no implicit inline execution at offset {start}");
                 }
+                if (word == "enum")
+                    throw new FormatException(
+                        $"nominal enum overloads require compiler-bound dispatch (unsupported .NET bootstrap) at offset {start}");
                 return new Token(word, start);
             }
             // Recognize the contiguous operator as one token, but never

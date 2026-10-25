@@ -126,7 +126,37 @@ public static class OresStructuredParser
                     source[index + 1] == '/')
                 {
                     index += 2;
-                    while (index < source.Length && source[index] != '\n') index++;
+                    while (index < source.Length && source[index] is not ('\n' or '\r' or '\u0085' or '\u2028' or '\u2029')) index++;
+                    continue;
+                }
+                // Match the shipping scalar lexer: comments are not source
+                // tokens, including nested enum-looking text. Bound nesting
+                // before any CFG/IR admission to avoid pathological input.
+                if (source[index] == '/' && index + 1 < source.Length &&
+                    source[index + 1] == '*')
+                {
+                    int start = index;
+                    index += 2;
+                    int depth = 1;
+                    while (depth > 0)
+                    {
+                        if (index == source.Length)
+                            throw new FormatException($"Unterminated block comment at offset {start}");
+                        if (index + 1 < source.Length &&
+                            source[index] == '/' && source[index + 1] == '*')
+                        {
+                            if (++depth > 128)
+                                throw new FormatException($"Block comment nesting exceeds 128 at offset {start}");
+                            index += 2;
+                        }
+                        else if (index + 1 < source.Length &&
+                                 source[index] == '*' && source[index + 1] == '/')
+                        {
+                            depth--;
+                            index += 2;
+                        }
+                        else index++;
+                    }
                     continue;
                 }
                 break;
@@ -179,7 +209,13 @@ public static class OresStructuredParser
                     $"Lexical captures require checked closure lowering at offset {offset}");
             else if ("()+-*{}:;=<.,?".IndexOf(ch) >= 0) index++;
             else throw new FormatException($"Invalid character at offset {offset}");
-            return new Token(source[offset..index], offset);
+            var tokenText = source[offset..index];
+            if (tokenText == "import")
+                throw new FormatException("source imports require verified module graph lowering");
+            if (tokenText == "enum")
+                throw new FormatException(
+                    $"nominal enum overloads require compiler-bound dispatch (unsupported .NET bootstrap) at offset {offset}");
+            return new Token(tokenText, offset);
         }
     }
 

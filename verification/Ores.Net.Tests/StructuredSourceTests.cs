@@ -62,6 +62,59 @@ internal static class StructuredSourceTests
             }
             throw new Exception(".NET structured frontend silently admitted unlowered method source: " + source);
         }
+        foreach (var source in new[] {
+            "define enum Color as\n  Red\nend\nfnc main():int{return 1;}",
+            "fnc main():int{return 1;}\ndefine enum Color as\n  Red\nend"
+        })
+        {
+            try { _ = OresStructuredParser.Parse(source); }
+            catch (FormatException ex) when (
+                ex.Message.Contains("nominal enum overloads require compiler-bound dispatch",
+                    StringComparison.Ordinal)) { continue; }
+            throw new Exception("Structured .NET source accepted unsupported nominal enum syntax");
+        }
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{return 1;} // enum stays in comment").Body.Count == 1,
+            "enum word in a comment is not a declaration");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{/* enum Color /* enum Mode */ nested */return 1;}").Body.Count == 1,
+            "nested block-comment enum tokens are non-executable");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{return 1;} /* enum Color */").Body.Count == 1,
+            "trailing block-comment enum tokens are non-executable");
+        static void BlockCommentReject(string source, string reason)
+        {
+            try { _ = OresStructuredParser.Parse(source); }
+            catch (FormatException ex) when (
+                ex.Message.Contains(reason, StringComparison.Ordinal) &&
+                ex.Message.Contains("offset", StringComparison.Ordinal)) { return; }
+            throw new Exception("Structured block-comment diagnostic failed: " + reason);
+        }
+        BlockCommentReject("fnc main():int{return 1;} /* enum Color",
+            "Unterminated block comment");
+        // The pre-lexing Unicode validator must also inspect ignored text.
+        BlockCommentReject("fnc main():int{return 1;} /* " + ((char)0xD800) + " */",
+            "Invalid UTF-16");
+        BlockCommentReject("fnc main():int{return 1;} /* " + ((char)0) + " */",
+            "Source contains NUL");
+        // Structural admission runs before lexing and owns the public
+        // 64-level limit. Preserve its canonical failure instead of expecting
+        // the private lexer's larger defensive bound to be reached.
+        const string commentPrefix = "fnc main():int{return 1;} ";
+        Require(OresStructuredParser.Parse(commentPrefix +
+            string.Concat(Enumerable.Repeat("/*", 64)) +
+            string.Concat(Enumerable.Repeat("*/", 64))).Body.Count == 1,
+            "64 nested comments must remain valid at the admission boundary");
+        try
+        {
+            _ = OresStructuredParser.Parse(commentPrefix +
+                string.Concat(Enumerable.Repeat("/*", 65)) +
+                string.Concat(Enumerable.Repeat("*/", 65)));
+            throw new Exception("65 nested comments bypassed structural admission");
+        }
+        catch (FormatException ex) when (ex.Message ==
+            $"Structural admission comment nesting exceeded at offset {commentPrefix.Length + 128}") { }
+
 
         const string sum = """
             define pub fnc main(): int {

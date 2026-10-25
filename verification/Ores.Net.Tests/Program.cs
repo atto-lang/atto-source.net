@@ -55,6 +55,27 @@ foreach (var source in new[] {
     "define class X as foo(int x):int {return x;} foo(self,int x):int {return x;} end"
 })
     Reject(() => OresParser.Parse(source), "unimplemented class method receiver parity");
+// Nominal enum overloads require compiler-owned type identities and an
+// executable selected-slot ABI. The scalar .NET frontend must not accept
+// their source syntax before those paths exist (including case payloads).
+foreach (var source in new[] {
+    "define enum Color as\n  Red\n  Blue\nend\nfnc main():int{return 1;}",
+    "define enum Color as\n  Red\nend\ndefine enum Mode as\n  Fast\nend\n" +
+        "fnc pick(Color x):int{return 1;} fnc pick(Mode x):int{return 2;} " +
+        "fnc main():int{return 0;}"
+})
+{
+    try { _ = OresParser.Parse(source); }
+    catch (FormatException ex) when (
+        ex.Message.Contains("nominal enum overloads require compiler-bound dispatch",
+            StringComparison.Ordinal)) { continue; }
+    throw new Exception("Unsupported nominal enum source must fail with an explicit diagnostic");
+}
+Require(OresParser.Parse("fnc main():int{return 1;} // enum is comment") is Literal,
+    "enum inside a source comment must not trigger overload admission");
+Require(OresParser.Parse(
+    "fnc main():int{return 1;} /* enum Color /* enum Mode */ end */") is Literal,
+    "nested block-comment enum words must not trigger overload admission");
 
 SourceByteBudgetTests.Run();
 StructuralPatternAdmissionTests.Run();
@@ -79,6 +100,7 @@ ActorMailboxAuthorizationPrioritySelfTest.Run();
 ActorMailboxPrivateDataSelfTest.Run();
 ActorArenaSelfTest.Run();
 ActorShardColumnsSelfTest.Run();
+ProjectRootSourceTests.Run(); // host-only resolver, not linked .NET source imports
 
 // Import parity is deliberately not claimed for the .NET scalar compiler.
 // Each form must fail at lexical admission with a specific import diagnostic,
@@ -87,7 +109,10 @@ foreach (var path in new[] {
     "+/src/helper", "+src/helper", "@/src/helper", "pkg:math/src/helper", "./helper",
     "../helper", "common/helper", ".hidden/helper",
     "+/src//helper", "+/src/./helper", "+/src/../helper",
-    "pkg:math/src/../helper", @"pkg:math\src\helper"
+    "pkg:math/src/../helper", @"pkg:math\src\helper",
+    "+/../outside", "+//src/helper", @"+/src\helper",
+    "pkg:missing/helper", "+/nested/lib/child", "+/nested/parent-alias",
+    "+/dangling/lib/child"
 })
 {
     try
@@ -100,6 +125,28 @@ foreach (var path in new[] {
             StringComparison.Ordinal)) { continue; }
     throw new Exception("Unsupported import was not rejected for the right reason: " + path);
 }
+// Every supported line separator ends a comment. Otherwise a single-file
+// parser can emit an unrelated successful artifact while silently ignoring
+// an import that begins on the next logical line.
+foreach (var separator in new[] { "\r", "\r\n", "\n", "\u0085", "\u2028", "\u2029" })
+{
+    var withImport = "fnc main():int{return 42;} // comment" + separator +
+        "import fnc helper from \"./other\";";
+    foreach (var parse in new Action<string>[] {
+        source => { _ = OresParser.Parse(source); },
+        source => { _ = OresStructuredParser.Parse(source); }
+    })
+    {
+        try { parse(withImport); }
+        catch (FormatException ex) when
+            (ex.Message.Contains("source imports require verified module graph lowering",
+                StringComparison.Ordinal)) { continue; }
+        throw new Exception("A line separator hid an import from a .NET parser");
+    }
+}
+Require(OresParser.Parse("fnc main():int{return 42;} // import\r") is Literal,
+    "CR-only trailing comment must not be interpreted as an import");
+
 Require(OresParser.Parse("fnc main():int{return 42;} // import not code") is Literal,
     "import in a comment must not be treated as an import declaration");
 
