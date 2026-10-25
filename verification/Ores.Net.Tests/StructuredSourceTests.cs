@@ -21,6 +21,20 @@ internal static class StructuredSourceTests
         throw new Exception("Structured source incorrectly accepted: " + reason);
     }
 
+    private static void RejectFeature(string source, string expectedDiagnostic)
+    {
+        try { _ = OresStructuredParser.Parse(source); }
+        catch (FormatException error)
+        {
+            Require(error.Message.Contains(expectedDiagnostic, StringComparison.OrdinalIgnoreCase),
+                "unsupported feature rejected for wrong reason: " + error.Message);
+            Require(error.Message.Contains("offset", StringComparison.Ordinal),
+                "unsupported feature missing source position");
+            return;
+        }
+        throw new Exception("Unsupported receiver/capture syntax was admitted");
+    }
+
     public static void Run()
     {
         // Canonical Java foo() == foo(self) uses one caller-visible slot.
@@ -350,6 +364,67 @@ internal static class StructuredSourceTests
         Require(nested.Body[1] is StructuredIf {
             Then.Count: 2, Else.Count: 2
         }, "parallel branch-local scopes");
+
+        // Abstract class admission must reject for the missing virtual-dispatch
+        // capability, not merely because the generic scalar parser sees a
+        // surprising token. The generic contract is intentionally unsupported.
+        RejectFeature("define abstract class Framework as "
+            + "private abstract receive(int x): int; end",
+            "Private abstract class hooks require typed virtual dispatch");
+
+        // Contextual capture keywords remain valid ordinary scalar local names.
+        foreach (string captureName in new[] { "lex", "nlex" })
+        {
+            var plainCaptureName = OresStructuredParser.Parse(
+                $"fnc main():int{{let int {captureName}=42;return {captureName};}}");
+            Require(plainCaptureName.Body.Count == 2 &&
+                    plainCaptureName.Body[1] is StructuredReturn {
+                        Value: StructuredRead { Type: IrValueType.I64 } read
+                    } && read.Name == captureName,
+                captureName + " remains an ordinary scalar identifier");
+        }
+        // Ignored comment text cannot activate unsupported capture guards.
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{// lex[self] || -> nlex[self] critical |state| -> 1\nreturn 42;}"
+            ).Body.Count == 1, "capture syntax in a comment remains inert");
+
+        // Until this backend has a class-aware method table, capture and
+        // borrow analysis, it must reject these canonical constructs rather
+        // than interpreting them as scalar code or ignoring a receiver marker.
+        foreach (string unsupported in new[]
+        {
+            "define class Foo as fnc read(self, int x): int { return x; } end",
+            "define actor Foo as receive(self, int x): void { return; } end",
+            "define actor Foo as on_start(self): void { return; } end",
+            "define actor Foo as receive(ActorMail<int> mail): void { self.receive(mail); } end",
+            "define class Foo as private abstract receive(int x): int; end",
+            "define pub class Foo as fnc read(self, int x): int { return x; } end",
+            "pub define class Foo as fnc read(self, int x): int { return x; } end",
+            "fnc main():int{let int x=1;return lex[x] || -> x;}",
+            "fnc main():int{let int x=1;return nlex[x] || -> x;}",
+            "fnc main():int{let int x=1;return nlex || -> x;}",
+            "fnc main():int{let int x=1;return lex[self] || -> x;}",
+            "define class Foo as fnc read(mut self, int x): int { return x; } end",
+            "define class Foo as fnc read(self Foo)(int x): int { return x; } end",
+            "fnc main():int{let int x=1;return lex[x,x] || -> x;}",
+            "fnc main():int{let int x=1;return lex[missing] || -> x;}",
+            "fnc main():int{let int x=1;return lex[] || -> x;}",
+            "fnc main():int{let int x=1;return nlex[self] || -> x;}",
+            "fnc main():int{let int x=1;return nlex[] || -> x;}",
+            "fnc main():int{let int x=1;return lex[x] |x| -> x;}",
+            "fnc main():int{let int x=1;return |y| -> x;}",
+            "fnc main():int{let int x=1;return lex[x] || -> nlex || -> x;}",
+            "fnc main():int{let int x=1;return nlex[self] critical |state| -> 1;}",
+        })
+        {
+            RejectFeature(unsupported,
+                unsupported.StartsWith("define class", StringComparison.Ordinal) ||
+                unsupported.StartsWith("define actor", StringComparison.Ordinal) ||
+                unsupported.StartsWith("define pub class", StringComparison.Ordinal) ||
+                unsupported.StartsWith("pub define class", StringComparison.Ordinal)
+                    ? "Nominal class/actor methods require receiver-erased method slots"
+                    : "Lexical captures require checked closure lowering");
+        }
 
         Console.WriteLine("Structured source parser and typed diagnostics passed");
     }

@@ -68,6 +68,32 @@ public static class OresStructuredParser
         while (true)
         {
             var token = lexer.Read();
+            // The scalar bootstrap does not have class/actor dispatch or
+            // ownership-aware lexical closures. Refuse these at source admission
+            // with a stable capability diagnostic, not an accidental parse error.
+            if (token.Text == "abstract" && tokens.Count > 0 &&
+                (tokens[^1].Text == "define" ||
+                 (tokens[^1].Text == "pub" && tokens.Count > 1 &&
+                  tokens[^2].Text == "define")))
+                throw new FormatException(
+                    $"Private abstract class hooks require typed virtual dispatch and superclass-only invocation at offset {token.Offset}");
+            if ((token.Text == "class" || token.Text == "actor") &&
+                tokens.Count > 0 &&
+                (tokens[^1].Text == "define" ||
+                 (tokens[^1].Text == "pub" && tokens.Count > 1 &&
+                  tokens[^2].Text == "define")))
+                throw new FormatException(
+                    $"Nominal class/actor methods require receiver-erased method slots, type/borrow checking and Native AOT CIL lowering; unsupported in .NET structured frontend at offset {token.Offset}");
+            if (token.Text is "lex" or "nlex")
+            {
+                int after = token.Offset + token.Text.Length;
+                while (after < source.Length && char.IsWhiteSpace(source[after])) after++;
+                if (after < source.Length &&
+                    (source[after] == '[' || source[after] == '|' ||
+                     (token.Text == "nlex" && source[after] == '(')))
+                    throw new FormatException(
+                        $"Lexical captures require checked closure lowering at offset {token.Offset}");
+            }
             tokens.Add(token);
             if (tokens.Count > MaxTokens)
                 throw new FormatException("Structured token budget exceeded");
@@ -148,6 +174,9 @@ public static class OresStructuredParser
             }
             else if (ch == '=' && index + 1 < source.Length &&
                      source[index + 1] == '=') index += 2;
+            else if (ch == '|')
+                throw new FormatException(
+                    $"Lexical captures require checked closure lowering at offset {offset}");
             else if ("()+-*{}:;=<.,?".IndexOf(ch) >= 0) index++;
             else throw new FormatException($"Invalid character at offset {offset}");
             return new Token(source[offset..index], offset);
