@@ -61,6 +61,8 @@ public static class OresStructuredParser
         // UTF-8 bytes, matching the disk/CLI boundary, not code-unit count.
         if (System.Text.Encoding.UTF8.GetByteCount(source) > 1_048_576)
             throw new FormatException("Source exceeds 1 MiB UTF-8 parser limit");
+        // No structural match lowering or readonly shape metadata in scalar CIL yet.
+        StructuralShapeAdmission.RejectUnsupportedPatterns(source);
         var lexer = new Lexer(source);
         var tokens = new List<Token>();
         while (true)
@@ -70,6 +72,17 @@ public static class OresStructuredParser
             if (tokens.Count > MaxTokens)
                 throw new FormatException("Structured token budget exceeded");
             if (token.Text.Length == 0) break;
+        }
+        for (int i = 0; i + 1 < tokens.Count; i++)
+        {
+            if ((tokens[i].Text is "tuple" or "structural") &&
+                tokens[i + 1].Text == "(")
+                throw new FormatException(
+                    $"Tuple-v2 source requires typed tuple ownership/ABI lowering at offset {tokens[i].Offset}");
+            if (i + 2 < tokens.Count && tokens[i].Text == "." &&
+                tokens[i + 1].Text == "." && tokens[i + 2].Text == ".")
+                throw new FormatException(
+                    $"Tuple-v2 explicit spread requires single-evaluation checked lowering at offset {tokens[i].Offset}");
         }
         return new Reader(tokens).ReadProgram();
     }
@@ -97,16 +110,34 @@ public static class OresStructuredParser
             char ch = source[index];
             if (Digit(ch))
             {
-                do { index++; } while (index < source.Length && Digit(source[index]));
+                index++;
+                while (index < source.Length)
+                {
+                    if (Digit(source[index])) { index++; continue; }
+                    if (source[index] != '_') break;
+                    if (index + 1 >= source.Length || !Digit(source[index + 1]))
+                        throw new FormatException($"Invalid i64 digit separator at offset {index}");
+                    index++;
+                }
             }
             else if (Alpha(ch) || ch == '_')
             {
                 do { index++; } while (index < source.Length &&
                     (Alpha(source[index]) || Digit(source[index]) || source[index] == '_'));
+                string word = source[offset..index];
+                if (word is "cpu" or "gpu" or "nb")
+                    throw new FormatException(
+                        $"execution region '{word}' requires verified CPU/GPU Task lowering; no implicit CPU fallback at offset {offset}");
+                if (word == "task")
+                {
+                    if (ContextualTaskBoundary.OpensBlock(source, index))
+                        throw new FormatException(
+                            $"execution task requires scheduler-aware Future/continuation lowering; no implicit inline execution at offset {offset}");
+                }
             }
             else if (ch == '=' && index + 1 < source.Length &&
                      source[index + 1] == '=') index += 2;
-            else if ("()+-*{}:;=<".IndexOf(ch) >= 0) index++;
+            else if ("()+-*{}:;=<.,?".IndexOf(ch) >= 0) index++;
             else throw new FormatException($"Invalid character at offset {offset}");
             return new Token(source[offset..index], offset);
         }
@@ -176,11 +207,20 @@ public static class OresStructuredParser
                     exposed = true;
                 }
             }
+            // Preserve the canonical receiver-erased class-method contract
+            // without falsely admitting syntax that the CIL/Native AOT backend
+            // cannot yet compile. This non-executing parser is scalar-only.
+            if (Current.Text is "class" or "actor")
+                throw Error("Nominal class/actor methods require receiver-erased method slots, type/borrow checking and Native AOT CIL lowering; unsupported in .NET structured frontend");
             Expect("fnc");
             Expect("main");
             Expect("(");
+            if (Current.Text == "(")
+                throw Error("Tuple-v2 shorthand parameter requires typed tuple ownership/ABI lowering");
             Expect(")");
             Expect(":");
+            if (Current.Text == "(")
+                throw Error("Tuple-v2 shorthand return requires typed tuple ownership/ABI lowering");
             Expect("int");
             var (body, returns) = Block(0);
             if (!returns) throw Error("Not every path returns int");
@@ -362,7 +402,20 @@ public static class OresStructuredParser
                 string operation = Current.Text;
                 if (operation is "ref" or "unref" or "deref" or "raw")
                     throw new FormatException(
-                        $"Pointer operation 'rt {operation}' requires provenance-checked pointer lowering; unsupported in the .NET structured backend at offset {at}");
+                        $"Pointer-style operation 'rt {operation}' is not valid Oreslang source; use rt copy/share/take/borrow or rt mut borrow; unsupported in the .NET structured backend at offset {at}");
+
+                string ownership = operation;
+                if (operation == "mut" && index + 1 < tokens.Count &&
+                    tokens[index + 1].Text == "borrow")
+                    ownership = "mut borrow";
+                if (operation == "borrow" && index + 1 < tokens.Count &&
+                    tokens[index + 1].Text == "mut")
+                    throw new FormatException(
+                        $"Legacy ownership spelling 'rt borrow mut' is rejected; use 'rt mut borrow' at offset {at}");
+                if (ownership is "copy" or "share" or "take" or "borrow" or "mut borrow")
+                    throw new FormatException(
+                        $"Ownership operation 'rt {ownership}' requires typed actor-arena lowering; unsupported in the .NET structured backend at offset {at}");
+
                 throw new FormatException(
                     $"Runtime ownership operation requires typed lowering; unsupported in the .NET structured backend at offset {at}");
             }
@@ -376,7 +429,7 @@ public static class OresStructuredParser
             {
                 int at = Current.Offset;
                 index++;
-                if (Current.Text == "9223372036854775808")
+                if (Current.Text.Replace("_", "", StringComparison.Ordinal).TrimStart('0') == "9223372036854775808")
                 {
                     index++;
                     return new StructuredInt(at, long.MinValue);
@@ -398,8 +451,8 @@ public static class OresStructuredParser
             if (raw.Length > 0 && Digit(raw[0]))
             {
                 index++;
-                if (!long.TryParse(raw, NumberStyles.None,
-                    CultureInfo.InvariantCulture, out long n))
+                if (!long.TryParse(raw.Replace("_", "", StringComparison.Ordinal),
+                    NumberStyles.None, CultureInfo.InvariantCulture, out long n))
                     throw new FormatException($"Invalid i64 at offset {offset}");
                 return new StructuredInt(offset, n);
             }

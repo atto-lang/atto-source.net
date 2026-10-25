@@ -23,7 +23,7 @@ HEAD=<independently-reviewed-40-character-PR-head>
 RUN_ID=<actual-Windows-Native-AOT-run-id>
 ATTEMPT=1
 gh api "repos/$REPO/actions/runs/$RUN_ID" > run.json
-gh api "repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100" > jobs.json
+gh api "repos/$REPO/actions/runs/$RUN_ID/attempts/$ATTEMPT/jobs?per_page=100" > jobs.json
 node verification/ci-evidence-gate.mjs --repo "$REPO" --head "$HEAD" \
   --run-id "$RUN_ID" --attempt "$ATTEMPT" \
   --workflow "Windows Native AOT" --run run.json --jobs jobs.json
@@ -31,8 +31,13 @@ node verification/ci-evidence-gate.mjs --repo "$REPO" --head "$HEAD" \
 
 The gate fails if any of the following is true: different run/repo/SHA/
 attempt/workflow, non-successful run, incomplete jobs list, missing required
-job, zero executed job steps, missing named managed-test/native-execution
-steps, or failed/skipped job steps. It does **not** independently replay
+job, zero executed job steps, missing any explicitly named hosted workflow
+step, malformed/duplicate step names or numbers, or failed/skipped required
+job steps. Every job must identify the selected run, attempt and source head. The disabled opt-in
+`self-hosted-windows-static-facts` job may be skipped; successful mandatory
+hosted Windows and Linux jobs remain required; an enabled self-hosted job must
+execute all its explicitly named steps successfully. Checkout assertions and the
+Windows receipt emission/upload steps must also succeed. It does **not** independently replay
 a binary, validate the runner's logs or prove a compiler's memory safety.
 
 Repeat independently for `Integration declaration integrity` using
