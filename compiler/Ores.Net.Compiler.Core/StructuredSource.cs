@@ -137,7 +137,7 @@ public static class OresStructuredParser
             }
             else if (ch == '=' && index + 1 < source.Length &&
                      source[index + 1] == '=') index += 2;
-            else if ("()+-*{}:;=<.,".IndexOf(ch) >= 0) index++;
+            else if ("()+-*{}:;=<.,?".IndexOf(ch) >= 0) index++;
             else throw new FormatException($"Invalid character at offset {offset}");
             return new Token(source[offset..index], offset);
         }
@@ -402,7 +402,7 @@ public static class OresStructuredParser
                 string operation = Current.Text;
                 if (operation is "ref" or "unref" or "deref" or "raw")
                     throw new FormatException(
-                        $"Pointer operation 'rt {operation}' requires provenance-checked pointer lowering; unsupported in the .NET structured backend at offset {at}");
+                        $"Pointer-style operation 'rt {operation}' is not valid Oreslang source; use rt copy/share/take/borrow or rt mut borrow; unsupported in the .NET structured backend at offset {at}");
 
                 string ownership = operation;
                 if (operation == "mut" && index + 1 < tokens.Count &&

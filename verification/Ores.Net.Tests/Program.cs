@@ -108,7 +108,7 @@ foreach (var operation in new[] { "ref", "unref", "deref", "deref mut", "raw" })
 {
     try { _ = OresParser.Parse($"fnc main():int{{return rt {operation} value;}}"); }
     catch (FormatException ex) when
-        (ex.Message.Contains("requires provenance-checked pointer lowering",
+        (ex.Message.Contains("is not valid Oreslang source",
             StringComparison.Ordinal)) { continue; }
     throw new Exception("Unsupported pointer operation did not fail closed: rt " + operation);
 }
@@ -130,6 +130,16 @@ try
 catch (FormatException ex) when
     (ex.Message.Contains("use 'rt mut borrow'", StringComparison.Ordinal)) { }
 
+
+foreach (var forbiddenSource in new[] {
+    "fnc main():int{return &value;}",
+    "fnc main():int{return &mut value;}",
+    "fnc main():int{return *value;}",
+    "fnc main():int{return rt borrow mut value;}",
+    "fnc main():Pointer<int>{return value;}"
+})
+    Reject(() => OresParser.Parse(forbiddenSource),
+        "pointer/reference spellings and legacy mutable-borrow syntax");
 
 foreach (var invalid in new[] { "\0", "\ud800", "\udc00", "\ud800x" })
     Reject(() => OresParser.Parse("fnc main():int{return 1;} // " + invalid),

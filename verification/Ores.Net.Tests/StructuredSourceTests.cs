@@ -159,9 +159,9 @@ internal static class StructuredSourceTests
                 $"fnc main():int{{return rt {operation} value;}}"); }
             catch (FormatException ex)
             {
-                Require(ex.Message.Contains("requires provenance-checked pointer lowering",
+                Require(ex.Message.Contains("is not valid Oreslang source",
                     StringComparison.Ordinal),
-                    "structured pointer rejection must name provenance lowering");
+                    "structured pointer rejection must identify invalid source syntax");
                 continue;
             }
             throw new Exception("Structured source incorrectly accepted pointer operation: rt " +
@@ -193,6 +193,15 @@ internal static class StructuredSourceTests
             Require(ex.Message.Contains("use 'rt mut borrow'", StringComparison.Ordinal),
                 "legacy mutable borrow diagnostic must name canonical spelling");
         }
+
+        foreach (var source in new[] {
+            "fnc main():int{return &value;}",
+            "fnc main():int{return &mut value;}",
+            "fnc main():int{return *value;}",
+            "fnc main():int{return rt borrow mut value;}",
+            "fnc main():Pointer<int>{return value;}"
+        })
+            Reject(source, "pointer/reference spellings and legacy mutable-borrow syntax");
 
         // AST height must be bounded even when the source is a flat chain.
         // Grammar recursion depth alone cannot enforce this invariant.
