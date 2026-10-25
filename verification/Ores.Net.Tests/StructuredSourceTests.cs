@@ -323,6 +323,9 @@ internal static class StructuredSourceTests
             "negative literal below i64 range");
         Reject("fnc main():int{let int x=1@2;return x;}",
             "invalid character");
+        foreach (string real in new[] { "0.125", "1e10", "1E-10", "123.456d", "123d" })
+            Reject("fnc main():int{return " + real + ";}",
+                "real/decimal literal must fail closed: " + real);
         Reject("fnc main():int{let int x=1;}\u0000", "NUL");
         Reject("fnc main():int{return 1;}\uD800", "invalid UTF16");
         Reject("fnc main():int{return 1;}//comment\nextra", "trailing syntax");

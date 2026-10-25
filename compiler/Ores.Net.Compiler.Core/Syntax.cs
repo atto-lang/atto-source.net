@@ -112,6 +112,17 @@ public static class OresParser
                         throw new FormatException($"Invalid i64 digit separator at offset {_i}");
                     _i++;
                 }
+                // The bootstrap compiler is i64-only. Reject Java-compatible
+                // real-literal starts before splitting into integer tokens.
+                if (_i < text.Length &&
+                    ((text[_i] == '.' && _i + 1 < text.Length && text[_i + 1] is >= '0' and <= '9') ||
+                     ((text[_i] == 'e' || text[_i] == 'E') && _i + 1 < text.Length &&
+                       (text[_i + 1] is >= '0' and <= '9' ||
+                        ((text[_i + 1] == '+' || text[_i + 1] == '-') &&
+                          _i + 2 < text.Length && text[_i + 2] is >= '0' and <= '9'))) ||
+                     (text[_i] == 'd' && (_i + 1 == text.Length ||
+                         !(char.IsLetterOrDigit(text[_i + 1]) || text[_i + 1] == '_')))))
+                    throw new FormatException($"Floating-point/decimal literal requires typed numeric lowering at offset {start}");
                 return new Token(text[start.._i], start);
             }
             if (ch is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or '_')
