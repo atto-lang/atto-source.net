@@ -60,6 +60,7 @@ internal static class CfgCilTestInterpreter
                 case Code.Mul_Ovf:
                 case Code.Div:
                 case Code.Ceq:
+                case Code.Clt:
                 {
                     long right = stack.Pop();
                     long left = stack.Pop();
@@ -70,6 +71,7 @@ internal static class CfgCilTestInterpreter
                         Code.Mul_Ovf => checked(left * right),
                         Code.Div => DivideChecked(left, right),
                         Code.Ceq => left == right ? 1L : 0L,
+                        Code.Clt => left < right ? 1L : 0L,
                         _ => throw new FormatException("Unexpected CFG CIL opcode")
                     });
                     break;
