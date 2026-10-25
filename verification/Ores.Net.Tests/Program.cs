@@ -45,6 +45,17 @@ RejectDiagnostic(
 Require(OresParser.Parse("fnc main():int{return 1;} // any unknown ?") is Literal,
     "opaque-top and ternary tokens in comments remain lexically invisible");
 
+// Shipping scalar parser has no class-method CIL/Native AOT lowering.
+ // It must reject the exact Java receiver-parity sources before emission,
+ // independently of the experimental structured parser's diagnostic gate.
+foreach (var source in new[] {
+    "define class X1 as foo():void {} end",
+    "define class X2 as foo(self):void {} end",
+    "define class X as foo():void {} foo(self):void {} end",
+    "define class X as foo(int x):int {return x;} foo(self,int x):int {return x;} end"
+})
+    Reject(() => OresParser.Parse(source), "unimplemented class method receiver parity");
+
 SourceByteBudgetTests.Run();
 NumericSeparatorParityTests.Run();
 
