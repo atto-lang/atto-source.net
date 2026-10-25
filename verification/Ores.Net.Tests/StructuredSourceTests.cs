@@ -23,6 +23,32 @@ internal static class StructuredSourceTests
 
     public static void Run()
     {
+        // Canonical Java foo() == foo(self) uses one caller-visible slot.
+        // The .NET bootstrap has neither nominal class AST nor CIL dispatch:
+        // validate a *specific* fail-closed diagnostic for the exact sources
+        // instead of calling parser acceptance "implementation parity".
+        foreach (var source in new[] {
+            "define class X1 as foo():void {} end",
+            "define class X2 as foo(self):void {} end",
+            "define class X as foo():void {} foo(self):void {} end",
+            "define class X as foo(int x):void {} foo(self,int x):void {} end",
+            "define class X as foo(self,int x):int {return x;} end",
+            "define class X as foo(mut self):void {} end",
+            "define actor X as on_start(self):void {} end"
+        })
+        {
+            try { _ = OresStructuredParser.Parse(source); }
+            catch (FormatException ex)
+            {
+                Require(ex.Message.Contains("receiver-erased method slots", StringComparison.Ordinal)
+                        && ex.Message.Contains("Native AOT CIL lowering", StringComparison.Ordinal)
+                        && ex.Message.Contains("offset", StringComparison.Ordinal),
+                    "class/actor must be rejected by a specific parity gate: " + ex.Message);
+                continue;
+            }
+            throw new Exception(".NET structured frontend silently admitted unlowered method source: " + source);
+        }
+
         const string sum = """
             define pub fnc main(): int {
                 let int total = 0;
