@@ -173,6 +173,29 @@ catch (FormatException ex) when (ex.Message.Contains("Unterminated block comment
 Reject(() => OresParser.Parse("fnc main():int{return 1; /*".PadRight(150, '/') + "/*x*/;}"),
     "malformed unclosed nested comments");
 
+// Refinement types are design-only on .NET. Until checked construction and
+// invariant-preserving lowering exist, reject every proposed surface family
+// rather than silently erasing constraints to the scalar base type.
+Require(OresParser.Parse("fnc main():int{return 42;}") is Literal,
+    "refinement rejection control must compile in the scalar subset");
+foreach (var refinement in new[] {
+    "@Size(min=1,max=32) type Username = string; fnc main():int{return 42;}",
+    "type NonEmpty = string with length gt 0; fnc main():int{return 42;}",
+    "type NonBlank = string where it.trim().length > 0; fnc main():int{return 42;}",
+    "define newtype Username(string) with length gte 1; fnc main():int{return 42;}",
+    "type Port = int with value gte 1 and value lte 65535; fnc main():int{return 42;}",
+    "type Port = int with value >= 1 and value <= 65535; fnc main():int{return 42;}",
+    "type Percentage = int with value gte 0 and value lte 100; fnc main():int{return 42;}",
+    "type Percentage = int with value >= 0 and value <= 100; fnc main():int{return 42;}",
+    "type Legacy = int with value ge 1; fnc main():int{return 42;}",
+    "type Legacy = int with value le 10; fnc main():int{return 42;}",
+    "type T = string with length gt 0 or length eq 10; fnc main():int{return 42;}"
+})
+{
+    Reject(() => OresParser.Parse(refinement),
+        "unsupported refinement syntax must fail closed before CIL emission");
+}
+
 var positive = OresParser.Parse("define pub fnc main() : int { return 2 + 3 * 4; }");
 Require(positive is Binary { Operator: '+' }, "top-level expression shape");
 Require(OresParser.Parse("define pub fnc main() -> int { return 2 + 3 * 4; }")
