@@ -119,9 +119,7 @@ public static class OresParser
                         $"execution region '{word}' requires verified CPU/GPU Task lowering; no implicit CPU fallback at offset {start}");
                 if (word == "task")
                 {
-                    int look = _i;
-                    while (look < text.Length && char.IsWhiteSpace(text[look])) look++;
-                    if (look < text.Length && text[look] == '{')
+                    if (ContextualTaskBoundary.OpensBlock(text, _i))
                         throw new FormatException(
                             $"execution task requires scheduler-aware Future/continuation lowering; no implicit inline execution at offset {start}");
                 }

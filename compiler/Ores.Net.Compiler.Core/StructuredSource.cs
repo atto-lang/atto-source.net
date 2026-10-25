@@ -109,9 +109,7 @@ public static class OresStructuredParser
                         $"execution region '{word}' requires verified CPU/GPU Task lowering; no implicit CPU fallback at offset {offset}");
                 if (word == "task")
                 {
-                    int look = index;
-                    while (look < source.Length && char.IsWhiteSpace(source[look])) look++;
-                    if (look < source.Length && source[look] == '{')
+                    if (ContextualTaskBoundary.OpensBlock(source, index))
                         throw new FormatException(
                             $"execution task requires scheduler-aware Future/continuation lowering; no implicit inline execution at offset {offset}");
                 }
