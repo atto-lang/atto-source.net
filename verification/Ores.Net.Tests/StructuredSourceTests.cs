@@ -97,10 +97,23 @@ internal static class StructuredSourceTests
             "Invalid UTF-16");
         BlockCommentReject("fnc main():int{return 1;} /* " + ((char)0) + " */",
             "Source contains NUL");
-        BlockCommentReject("fnc main():int{return 1;} " +
-            string.Concat(Enumerable.Repeat("/*", 129)) +
-            string.Concat(Enumerable.Repeat("*/", 129)),
-            "Block comment nesting exceeds 128");
+        // Structural admission runs before lexing and owns the public
+        // 64-level limit. Preserve its canonical failure instead of expecting
+        // the private lexer's larger defensive bound to be reached.
+        const string commentPrefix = "fnc main():int{return 1;} ";
+        Require(OresStructuredParser.Parse(commentPrefix +
+            string.Concat(Enumerable.Repeat("/*", 64)) +
+            string.Concat(Enumerable.Repeat("*/", 64))).Body.Count == 1,
+            "64 nested comments must remain valid at the admission boundary");
+        try
+        {
+            _ = OresStructuredParser.Parse(commentPrefix +
+                string.Concat(Enumerable.Repeat("/*", 65)) +
+                string.Concat(Enumerable.Repeat("*/", 65)));
+            throw new Exception("65 nested comments bypassed structural admission");
+        }
+        catch (FormatException ex) when (ex.Message ==
+            $"Structural admission comment nesting exceeded at offset {commentPrefix.Length + 128}") { }
 
 
         const string sum = """
