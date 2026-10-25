@@ -37,6 +37,32 @@ internal static class StructuredSourceTests
 
     public static void Run()
     {
+        // Canonical Java foo() == foo(self) uses one caller-visible slot.
+        // The .NET bootstrap has neither nominal class AST nor CIL dispatch:
+        // validate a *specific* fail-closed diagnostic for the exact sources
+        // instead of calling parser acceptance "implementation parity".
+        foreach (var source in new[] {
+            "define class X1 as foo():void {} end",
+            "define class X2 as foo(self):void {} end",
+            "define class X as foo():void {} foo(self):void {} end",
+            "define class X as foo(int x):void {} foo(self,int x):void {} end",
+            "define class X as foo(self,int x):int {return x;} end",
+            "define class X as foo(mut self):void {} end",
+            "define actor X as on_start(self):void {} end"
+        })
+        {
+            try { _ = OresStructuredParser.Parse(source); }
+            catch (FormatException ex)
+            {
+                Require(ex.Message.Contains("receiver-erased method slots", StringComparison.Ordinal)
+                        && ex.Message.Contains("Native AOT CIL lowering", StringComparison.Ordinal)
+                        && ex.Message.Contains("offset", StringComparison.Ordinal),
+                    "class/actor must be rejected by a specific parity gate: " + ex.Message);
+                continue;
+            }
+            throw new Exception(".NET structured frontend silently admitted unlowered method source: " + source);
+        }
+
         const string sum = """
             define pub fnc main(): int {
                 let int total = 0;
@@ -96,6 +122,100 @@ internal static class StructuredSourceTests
             is StructuredReturn { Value: StructuredBinary {
                 Operator: StructuredOperator.Add
             } }, "arithmetic AST operator precedence");
+
+        var arithmetic76 = OresStructuredParser.Parse("""
+            pub fnc main(): int {
+              return 100 - (3 + 2) - 19;
+            }
+            """);
+        Require(arithmetic76.Body[0] is StructuredReturn {
+            Value: StructuredBinary {
+                Operator: StructuredOperator.Subtract,
+                Left: StructuredBinary {
+                    Operator: StructuredOperator.Subtract,
+                    Left: StructuredInt { Value: 100 },
+                    Right: StructuredBinary {
+                        Operator: StructuredOperator.Add,
+                        Left: StructuredInt { Value: 3 },
+                        Right: StructuredInt { Value: 2 }
+                    }
+                },
+                Right: StructuredInt { Value: 19 }
+            }
+        }, "shared arithmetic-76 typed AST");
+
+        static void RejectTupleV2(string source, string reason)
+        {
+            try { _ = OresStructuredParser.Parse(source); }
+            catch (FormatException ex)
+            {
+                Require(ex.Message.Contains("Tuple-v2", StringComparison.Ordinal) &&
+                        ex.Message.Contains("offset", StringComparison.Ordinal),
+                    reason + ": tuple-v2 rejection was incidental: " + ex.Message);
+                return;
+            }
+            throw new Exception("Tuple-v2 source incorrectly accepted: " + reason);
+        }
+        RejectTupleV2("fnc main(tuple (int,int) value):int{return 1;}",
+            "explicit tuple parameter");
+        RejectTupleV2("fnc main(structural (int,int) value):int{return 1;}",
+            "structural tuple parameter");
+        RejectTupleV2("fnc main((int,int) value):int{return 1;}",
+            "shorthand tuple parameter");
+        RejectTupleV2("fnc main():tuple (int,int){return 1;}",
+            "tuple return");
+        RejectTupleV2("fnc main():int{return call(...pair);}",
+            "explicit tuple spread");
+
+        foreach (var operation in new[] { "ref", "unref", "deref", "deref mut", "raw" })
+        {
+            try { _ = OresStructuredParser.Parse(
+                $"fnc main():int{{return rt {operation} value;}}"); }
+            catch (FormatException ex)
+            {
+                Require(ex.Message.Contains("is not valid Oreslang source",
+                    StringComparison.Ordinal),
+                    "structured pointer rejection must identify invalid source syntax");
+                continue;
+            }
+            throw new Exception("Structured source incorrectly accepted pointer operation: rt " +
+                operation);
+        }
+
+        foreach (var operation in new[] { "copy", "share", "take", "borrow", "mut borrow" })
+        {
+            try { _ = OresStructuredParser.Parse(
+                $"fnc main():int{{return rt {operation} value;}}"); }
+            catch (FormatException ex)
+            {
+                Require(ex.Message.Contains("requires typed actor-arena lowering",
+                    StringComparison.Ordinal),
+                    "structured ownership rejection must name actor-arena lowering");
+                continue;
+            }
+            throw new Exception("Structured source incorrectly accepted ownership operation: rt " +
+                operation);
+        }
+        try
+        {
+            _ = OresStructuredParser.Parse(
+                "fnc main():int{return rt borrow mut value;}");
+            throw new Exception("Structured source admitted legacy rt borrow mut");
+        }
+        catch (FormatException ex)
+        {
+            Require(ex.Message.Contains("use 'rt mut borrow'", StringComparison.Ordinal),
+                "legacy mutable borrow diagnostic must name canonical spelling");
+        }
+
+        foreach (var source in new[] {
+            "fnc main():int{return &value;}",
+            "fnc main():int{return &mut value;}",
+            "fnc main():int{return *value;}",
+            "fnc main():int{return rt borrow mut value;}",
+            "fnc main():Pointer<int>{return value;}"
+        })
+            Reject(source, "pointer/reference spellings and legacy mutable-borrow syntax");
 
         // AST height must be bounded even when the source is a flat chain.
         // Grammar recursion depth alone cannot enforce this invariant.
