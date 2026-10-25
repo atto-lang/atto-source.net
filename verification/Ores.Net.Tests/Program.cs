@@ -45,8 +45,20 @@ RejectDiagnostic(
 Require(OresParser.Parse("fnc main():int{return 1;} // any unknown ?") is Literal,
     "opaque-top and ternary tokens in comments remain lexically invisible");
 
+// Shipping scalar parser has no class-method CIL/Native AOT lowering.
+ // It must reject the exact Java receiver-parity sources before emission,
+ // independently of the experimental structured parser's diagnostic gate.
+foreach (var source in new[] {
+    "define class X1 as foo():void {} end",
+    "define class X2 as foo(self):void {} end",
+    "define class X as foo():void {} foo(self):void {} end",
+    "define class X as foo(int x):int {return x;} foo(self,int x):int {return x;} end"
+})
+    Reject(() => OresParser.Parse(source), "unimplemented class method receiver parity");
+
 SourceByteBudgetTests.Run();
 StructuralPatternAdmissionTests.Run();
+NumericSeparatorParityTests.Run();
 
 // The canonical actor negative includes a later assignment. Lex its punctuation
 // while preserving the precise unsupported top-level declaration diagnostic.
@@ -65,6 +77,8 @@ ActorMailboxBoundsSelfTest.Run();
 ActorMailboxRestartAtomicitySelfTest.Run();
 ActorMailboxAuthorizationPrioritySelfTest.Run();
 ActorMailboxPrivateDataSelfTest.Run();
+ActorArenaSelfTest.Run();
+ActorShardColumnsSelfTest.Run();
 
 // Import parity is deliberately not claimed for the .NET scalar compiler.
 // Each form must fail at lexical admission with a specific import diagnostic,
@@ -98,6 +112,23 @@ foreach (var operation in new[] { "ref", "unref", "deref", "deref mut", "raw" })
             StringComparison.Ordinal)) { continue; }
     throw new Exception("Unsupported pointer operation did not fail closed: rt " + operation);
 }
+
+
+foreach (var operation in new[] { "copy", "share", "take", "borrow", "mut borrow" })
+{
+    try { _ = OresParser.Parse($"fnc main():int{{return rt {operation} value;}}"); }
+    catch (FormatException ex) when
+        (ex.Message.Contains("requires typed actor-arena lowering",
+            StringComparison.Ordinal)) { continue; }
+    throw new Exception("Unsupported ownership operation did not fail closed: rt " + operation);
+}
+try
+{
+    _ = OresParser.Parse("fnc main():int{return rt borrow mut value;}");
+    throw new Exception("Legacy rt borrow mut spelling was admitted");
+}
+catch (FormatException ex) when
+    (ex.Message.Contains("use 'rt mut borrow'", StringComparison.Ordinal)) { }
 
 
 foreach (var invalid in new[] { "\0", "\ud800", "\udc00", "\ud800x" })
@@ -153,6 +184,29 @@ catch (FormatException ex) when (ex.Message.Contains("Unterminated block comment
         StringComparison.Ordinal)) { }
 Reject(() => OresParser.Parse("fnc main():int{return 1; /*".PadRight(150, '/') + "/*x*/;}"),
     "malformed unclosed nested comments");
+
+// Refinement types are design-only on .NET. Until checked construction and
+// invariant-preserving lowering exist, reject every proposed surface family
+// rather than silently erasing constraints to the scalar base type.
+Require(OresParser.Parse("fnc main():int{return 42;}") is Literal,
+    "refinement rejection control must compile in the scalar subset");
+foreach (var refinement in new[] {
+    "@Size(min=1,max=32) type Username = string; fnc main():int{return 42;}",
+    "type NonEmpty = string with length gt 0; fnc main():int{return 42;}",
+    "type NonBlank = string where it.trim().length > 0; fnc main():int{return 42;}",
+    "define newtype Username(string) with length gte 1; fnc main():int{return 42;}",
+    "type Port = int with value gte 1 and value lte 65535; fnc main():int{return 42;}",
+    "type Port = int with value >= 1 and value <= 65535; fnc main():int{return 42;}",
+    "type Percentage = int with value gte 0 and value lte 100; fnc main():int{return 42;}",
+    "type Percentage = int with value >= 0 and value <= 100; fnc main():int{return 42;}",
+    "type Legacy = int with value ge 1; fnc main():int{return 42;}",
+    "type Legacy = int with value le 10; fnc main():int{return 42;}",
+    "type T = string with length gt 0 or length eq 10; fnc main():int{return 42;}"
+})
+{
+    Reject(() => OresParser.Parse(refinement),
+        "unsupported refinement syntax must fail closed before CIL emission");
+}
 
 var positive = OresParser.Parse("define pub fnc main() : int { return 2 + 3 * 4; }");
 Require(positive is Binary { Operator: '+' }, "top-level expression shape");
@@ -545,5 +599,6 @@ SourceI64Conformance.Run();
 CfgVerifierTests.Run();
 CfgCilStressTests.Run();
 StructuredSourceTests.Run();
+StaticFactsV0Tests.Run();
 ValueBoundaryTests.Run();
 Console.WriteLine("Oreslang .NET bootstrap, CFG verifier, CIL stress and structured source tests passed");
