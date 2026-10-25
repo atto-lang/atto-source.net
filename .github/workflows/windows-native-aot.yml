@@ -187,6 +187,63 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or ($output | Out-String).Trim() -ne '2211') {
             throw "CFG Native AOT atomic swap regression: expected 2211, got '$output'"
           }
+      - name: Execute shared five-backend native.add source in real Windows Native AOT
+        shell: pwsh
+        run: |
+          # Source bytes are identical to the shared Java/LLVM native.add fixture.
+          # A compiler "check" or a managed CIL emit is NOT the executed proof.
+          ./scripts/publish-windows.ps1 -Source contracts/v1/semantics/fixtures/add.ores -Rid win-x64 -Output artifacts/parity
+          $exe = 'artifacts/parity/win-x64/oreslang-app.exe'
+          if (-not (Test-Path -LiteralPath $exe)) { throw 'Shared conformance Native AOT binary missing' }
+          ./verification/assert-native-release.ps1 -Binary $exe -Rid win-x64
+          $actual = & $exe
+          if ($LASTEXITCODE -ne 0 -or ($actual | Out-String).Trim() -ne '42') {
+            throw "Shared native.add actual guest execution expected 42, got '$actual'"
+          }
+          Write-Host 'native.add shared source executed in Windows Native AOT: 42'
+          # Distinct generated-source builds must stay distinct. Re-publishing
+          # native.add must not overwrite, delete, or contaminate the earlier
+          # released hello.ores executable produced from this same host project.
+          $previous = 'artifacts/apps/win-x64/oreslang-app.exe'
+          if (-not (Test-Path -LiteralPath $previous)) {
+            throw 'Earlier hello.ores Native AOT executable disappeared'
+          }
+          $previousOutput = & $previous
+          if ($LASTEXITCODE -ne 0 -or ($previousOutput | Out-String).Trim() -ne '14') {
+            throw "Earlier hello.ores Native AOT output changed after native.add: '$previousOutput'"
+          }
+          Write-Host 'Native AOT source isolation proven: hello=14 and native.add=42'
+      - name: Execute shared native.precedence in Windows Native AOT
+        shell: pwsh
+        run: |
+          # Requires real compiled/linked/native execution, not a source check.
+          $source = 'contracts/v1/semantics/fixtures/precedence.ores'
+          $blob = (git hash-object -- $source | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or $blob -ne '2d09e697ad4eeac4ee263c3656b92998c67f0bfc') {
+            throw "Canonical Java/LLVM native.precedence source blob changed: $blob"
+          }
+          ./scripts/publish-windows.ps1 -Source $source -Rid win-x64 -Output artifacts/parity-precedence
+          $exe = 'artifacts/parity-precedence/win-x64/oreslang-app.exe'
+          if (-not (Test-Path -LiteralPath $exe)) {
+            throw 'Precedence Native AOT executable missing'
+          }
+          ./verification/assert-native-release.ps1 -Binary $exe -Rid win-x64
+          $result = & $exe
+          if ($LASTEXITCODE -ne 0 -or ($result | Out-String).Trim() -ne '40') {
+            throw "Native AOT native.precedence expected 40, got '$result'"
+          }
+          # Prevent distinct source builds from overwriting one another.
+          foreach ($case in @(
+            @{Exe='artifacts/parity/win-x64/oreslang-app.exe'; Value='42'},
+            @{Exe='artifacts/apps/win-x64/oreslang-app.exe'; Value='14'}
+          )) {
+            if (-not (Test-Path -LiteralPath $case.Exe)) { throw "Prior output missing: $($case.Exe)" }
+            $prior = & $case.Exe
+            if ($LASTEXITCODE -ne 0 -or ($prior | Out-String).Trim() -ne $case.Value) {
+              throw "Native AOT source isolation failed: $($case.Exe) expected $($case.Value), got '$prior'"
+            }
+          }
+          Write-Host 'Native AOT parity: hello=14, add=42, precedence=40'
       # Reaching this step proves that all preceding native publish, PE,
       # managed-regression and CFG-execution checks finished in this same job.
       # GitHub's successful job conclusion and nonempty step records remain

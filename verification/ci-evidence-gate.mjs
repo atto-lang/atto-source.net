@@ -26,6 +26,8 @@ const requiredByWorkflow = {
       "Execute Native AOT checked-arithmetic error cases",
       "Reject managed sidecar next to an otherwise native executable",
       "Compile verified CFG into a real Windows Native AOT executable",
+      "Execute shared five-backend native.add source in real Windows Native AOT",
+      "Execute shared native.precedence in Windows Native AOT",
       "Emit exact-head Windows Native AOT run receipt",
       "Upload exact-head Windows Native AOT receipt",
       "Upload native executable"
