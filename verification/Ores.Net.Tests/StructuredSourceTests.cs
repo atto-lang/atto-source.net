@@ -309,9 +309,20 @@ internal static class StructuredSourceTests
             "negative literal below i64 range");
         Reject("fnc main():int{let int x=1@2;return x;}",
             "invalid character");
-        foreach (string real in new[] { "0.125", "1e10", "1E-10", "123.456d", "123d" })
-            Reject("fnc main():int{return " + real + ";}",
-                "real/decimal literal must fail closed: " + real);
+        foreach (string real in new[] { "0.125", "1e10", "1E-10", "123.456d", "123d",
+                                       "1_000.5", "1_0e+2", "1_2d" })
+        {
+            try { _ = OresStructuredParser.Parse("fnc main():int{return " + real + ";}"); }
+            catch (FormatException ex)
+            {
+                Require(ex.Message.Contains(
+                    "Floating-point/decimal literal requires typed numeric lowering",
+                    StringComparison.Ordinal),
+                    "real/decimal literal must fail before token splitting: " + real);
+                continue;
+            }
+            throw new Exception("Structured source incorrectly accepted real/decimal literal: " + real);
+        }
         Reject("fnc main():int{let int x=1;}\u0000", "NUL");
         Reject("fnc main():int{return 1;}\uD800", "invalid UTF16");
         Reject("fnc main():int{return 1;}//comment\nextra", "trailing syntax");
