@@ -114,6 +114,15 @@ public static class OresParser
                 // a verified source graph / native AOT linker exists.
                 if (word == "import")
                     throw new FormatException("source imports require verified module graph lowering");
+                if (word is "cpu" or "gpu" or "nb")
+                    throw new FormatException(
+                        $"execution region '{word}' requires verified CPU/GPU Task lowering; no implicit CPU fallback at offset {start}");
+                if (word == "task")
+                {
+                    if (ContextualTaskBoundary.OpensBlock(text, _i))
+                        throw new FormatException(
+                            $"execution task requires scheduler-aware Future/continuation lowering; no implicit inline execution at offset {start}");
+                }
                 return new Token(word, start);
             }
             // Recognize the contiguous operator as one token, but never
