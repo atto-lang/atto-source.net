@@ -43,7 +43,7 @@ public static class StructuralShapeAdmission
                     else i++;
                 }
                 if (depth != 0)
-                    throw new FormatException($"Unterminated source comment at offset {start}");
+                    throw new FormatException($"Unterminated block comment at offset {start}");
                 continue;
             }
             if (c is '"' or '\'')
