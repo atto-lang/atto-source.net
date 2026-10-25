@@ -57,6 +57,7 @@ foreach (var source in new[] {
     Reject(() => OresParser.Parse(source), "unimplemented class method receiver parity");
 
 SourceByteBudgetTests.Run();
+StructuralPatternAdmissionTests.Run();
 NumericSeparatorParityTests.Run();
 
 // The canonical actor negative includes a later assignment. Lex its punctuation
