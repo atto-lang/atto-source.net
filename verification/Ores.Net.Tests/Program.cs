@@ -15,6 +15,14 @@ static void Reject(Action action, string why)
     throw new Exception("Expected parser rejection: " + why);
 }
 
+static void RejectDiagnostic(Action action, string diagnostic, string why)
+{
+    try { action(); }
+    catch (FormatException ex) when
+        (ex.Message.Contains(diagnostic, StringComparison.OrdinalIgnoreCase)) { return; }
+    throw new Exception("Expected parser rejection with diagnostic '" + diagnostic + "': " + why);
+}
+
 static void InvalidSend(Action action, string why)
 {
     try { action(); }
@@ -22,6 +30,31 @@ static void InvalidSend(Action action, string why)
     throw new Exception("Expected mailbox rejection: " + why);
 }
 
+// Opaque top types and value-producing conditionals are language-reserved,
+ // but this i64-only bootstrap has no tagged dynamic-value ABI or typed CFG
+ // lowering for them yet. Reject before OresIR/CIL emission.
+foreach (var opaque in new[] { "any", "unknown", "Any", "Unknown" })
+    RejectDiagnostic(
+        () => OresParser.Parse("fnc main():" + opaque + "{return 1;}"),
+        "tagged opaque-value ABI",
+        "opaque top type " + opaque);
+RejectDiagnostic(
+    () => OresParser.Parse("fnc main():int{return 1 ? 2 : 3;}"),
+    "ternary expression requires bool typing and CFG branch-merge lowering",
+    "ternary must not fall through to i64 CIL lowering");
+Require(OresParser.Parse("fnc main():int{return 1;} // any unknown ?") is Literal,
+    "opaque-top and ternary tokens in comments remain lexically invisible");
+
+// Shipping scalar parser has no class-method CIL/Native AOT lowering.
+ // It must reject the exact Java receiver-parity sources before emission,
+ // independently of the experimental structured parser's diagnostic gate.
+foreach (var source in new[] {
+    "define class X1 as foo():void {} end",
+    "define class X2 as foo(self):void {} end",
+    "define class X as foo():void {} foo(self):void {} end",
+    "define class X as foo(int x):int {return x;} foo(self,int x):int {return x;} end"
+})
+    Reject(() => OresParser.Parse(source), "unimplemented class method receiver parity");
 // Nominal enum overloads require compiler-owned type identities and an
 // executable selected-slot ABI. The scalar .NET frontend must not accept
 // their source syntax before those paths exist (including case payloads).
@@ -45,17 +78,41 @@ Require(OresParser.Parse(
     "nested block-comment enum words must not trigger overload admission");
 
 SourceByteBudgetTests.Run();
+StructuralPatternAdmissionTests.Run();
+NumericSeparatorParityTests.Run();
+
+// The canonical actor negative includes a later assignment. Lex its punctuation
+// while preserving the precise unsupported top-level declaration diagnostic.
+try
+{
+    OresParser.Parse("define actor Worker as { pub fnc on_message(int n): int { return n; } }\n" +
+        "pub fnc main(): int { const worker = spawn Worker(); stop worker; return 43; }\n");
+    throw new Exception("Unsupported actor declaration was admitted");
+}
+catch (FormatException ex) when (ex.Message == "Expected 'fnc' at offset 7") { }
+Reject(() => OresParser.Parse("fnc main():int { return 1=2; }"), "assignment expression");
+Reject(() => OresParser.Parse("fnc main():int { const x = 1; return x; }"), "local assignment");
+
 ActorRefNoWireSelfTest.Run();
 ActorMailboxBoundsSelfTest.Run();
 ActorMailboxRestartAtomicitySelfTest.Run();
 ActorMailboxAuthorizationPrioritySelfTest.Run();
+ActorMailboxPrivateDataSelfTest.Run();
+ActorArenaSelfTest.Run();
+ActorShardColumnsSelfTest.Run();
+ProjectRootSourceTests.Run(); // host-only resolver, not linked .NET source imports
 
 // Import parity is deliberately not claimed for the .NET scalar compiler.
 // Each form must fail at lexical admission with a specific import diagnostic,
 // before either typed IR verification or Native AOT CIL emission.
 foreach (var path in new[] {
     "+/src/helper", "+src/helper", "@/src/helper", "pkg:math/src/helper", "./helper",
-    "../helper", "common/helper", ".hidden/helper"
+    "../helper", "common/helper", ".hidden/helper",
+    "+/src//helper", "+/src/./helper", "+/src/../helper",
+    "pkg:math/src/../helper", @"pkg:math\src\helper",
+    "+/../outside", "+//src/helper", @"+/src\helper",
+    "pkg:missing/helper", "+/nested/lib/child", "+/nested/parent-alias",
+    "+/dangling/lib/child"
 })
 {
     try
@@ -68,9 +125,68 @@ foreach (var path in new[] {
             StringComparison.Ordinal)) { continue; }
     throw new Exception("Unsupported import was not rejected for the right reason: " + path);
 }
+// Every supported line separator ends a comment. Otherwise a single-file
+// parser can emit an unrelated successful artifact while silently ignoring
+// an import that begins on the next logical line.
+foreach (var separator in new[] { "\r", "\r\n", "\n", "\u0085", "\u2028", "\u2029" })
+{
+    var withImport = "fnc main():int{return 42;} // comment" + separator +
+        "import fnc helper from \"./other\";";
+    foreach (var parse in new Action<string>[] {
+        source => { _ = OresParser.Parse(source); },
+        source => { _ = OresStructuredParser.Parse(source); }
+    })
+    {
+        try { parse(withImport); }
+        catch (FormatException ex) when
+            (ex.Message.Contains("source imports require verified module graph lowering",
+                StringComparison.Ordinal)) { continue; }
+        throw new Exception("A line separator hid an import from a .NET parser");
+    }
+}
+Require(OresParser.Parse("fnc main():int{return 42;} // import\r") is Literal,
+    "CR-only trailing comment must not be interpreted as an import");
+
 Require(OresParser.Parse("fnc main():int{return 42;} // import not code") is Literal,
     "import in a comment must not be treated as an import declaration");
 
+
+foreach (var operation in new[] { "ref", "unref", "deref", "deref mut", "raw" })
+{
+    try { _ = OresParser.Parse($"fnc main():int{{return rt {operation} value;}}"); }
+    catch (FormatException ex) when
+        (ex.Message.Contains("is not valid Oreslang source",
+            StringComparison.Ordinal)) { continue; }
+    throw new Exception("Unsupported pointer operation did not fail closed: rt " + operation);
+}
+
+
+foreach (var operation in new[] { "copy", "share", "take", "borrow", "mut borrow" })
+{
+    try { _ = OresParser.Parse($"fnc main():int{{return rt {operation} value;}}"); }
+    catch (FormatException ex) when
+        (ex.Message.Contains("requires typed actor-arena lowering",
+            StringComparison.Ordinal)) { continue; }
+    throw new Exception("Unsupported ownership operation did not fail closed: rt " + operation);
+}
+try
+{
+    _ = OresParser.Parse("fnc main():int{return rt borrow mut value;}");
+    throw new Exception("Legacy rt borrow mut spelling was admitted");
+}
+catch (FormatException ex) when
+    (ex.Message.Contains("use 'rt mut borrow'", StringComparison.Ordinal)) { }
+
+
+foreach (var forbiddenSource in new[] {
+    "fnc main():int{return &value;}",
+    "fnc main():int{return &mut value;}",
+    "fnc main():int{return *value;}",
+    "fnc main():int{return rt borrow mut value;}",
+    "fnc main():Pointer<int>{return value;}"
+})
+    Reject(() => OresParser.Parse(forbiddenSource),
+        "pointer/reference spellings and legacy mutable-borrow syntax");
 
 foreach (var invalid in new[] { "\0", "\ud800", "\udc00", "\ud800x" })
     Reject(() => OresParser.Parse("fnc main():int{return 1;} // " + invalid),
@@ -126,6 +242,29 @@ catch (FormatException ex) when (ex.Message.Contains("Unterminated block comment
 Reject(() => OresParser.Parse("fnc main():int{return 1; /*".PadRight(150, '/') + "/*x*/;}"),
     "malformed unclosed nested comments");
 
+// Refinement types are design-only on .NET. Until checked construction and
+// invariant-preserving lowering exist, reject every proposed surface family
+// rather than silently erasing constraints to the scalar base type.
+Require(OresParser.Parse("fnc main():int{return 42;}") is Literal,
+    "refinement rejection control must compile in the scalar subset");
+foreach (var refinement in new[] {
+    "@Size(min=1,max=32) type Username = string; fnc main():int{return 42;}",
+    "type NonEmpty = string with length gt 0; fnc main():int{return 42;}",
+    "type NonBlank = string where it.trim().length > 0; fnc main():int{return 42;}",
+    "define newtype Username(string) with length gte 1; fnc main():int{return 42;}",
+    "type Port = int with value gte 1 and value lte 65535; fnc main():int{return 42;}",
+    "type Port = int with value >= 1 and value <= 65535; fnc main():int{return 42;}",
+    "type Percentage = int with value gte 0 and value lte 100; fnc main():int{return 42;}",
+    "type Percentage = int with value >= 0 and value <= 100; fnc main():int{return 42;}",
+    "type Legacy = int with value ge 1; fnc main():int{return 42;}",
+    "type Legacy = int with value le 10; fnc main():int{return 42;}",
+    "type T = string with length gt 0 or length eq 10; fnc main():int{return 42;}"
+})
+{
+    Reject(() => OresParser.Parse(refinement),
+        "unsupported refinement syntax must fail closed before CIL emission");
+}
+
 var positive = OresParser.Parse("define pub fnc main() : int { return 2 + 3 * 4; }");
 Require(positive is Binary { Operator: '+' }, "top-level expression shape");
 Require(OresParser.Parse("define pub fnc main() -> int { return 2 + 3 * 4; }")
@@ -142,6 +281,11 @@ Reject(() => OresParser.Parse("fnc main():int{return 3; } extra"), "trailing syn
 Reject(() => OresParser.Parse("pub pub fnc main():int{return 3;}"), "duplicate pub");
 Reject(() => OresParser.Parse("fnc main():int{return 9223372036854775808;}"), "i64 range");
 Reject(() => OresParser.Parse("fnc main():int{return 1 @ 3;}"), "illegal character");
+foreach (string real in new[] { "0.125", "1e10", "1E-10", "123.456d", "123d",
+                               "1_000.5", "1_0e+2", "1_2d" })
+    RejectDiagnostic(() => OresParser.Parse("fnc main():int{return " + real + ";}"),
+        "Floating-point/decimal literal requires typed numeric lowering",
+        "real/decimal literal must fail before token splitting: " + real);
 Reject(() => OresParser.Parse("fnc main():int{return (1+2;}"), "unmatched parentheses");
 
 // Typed OresIR stage-one verification: no forward SSA references,
@@ -513,8 +657,10 @@ Require(RuntimeHost.Execute(() => throw new OverflowException()) == 70,
 Require(RuntimeHost.Execute(() => throw new DivideByZeroException()) == 70,
     "divide zero error returned");
 
+SourceI64Conformance.Run();
 CfgVerifierTests.Run();
 CfgCilStressTests.Run();
 StructuredSourceTests.Run();
+StaticFactsV0Tests.Run();
 ValueBoundaryTests.Run();
 Console.WriteLine("Oreslang .NET bootstrap, CFG verifier, CIL stress and structured source tests passed");

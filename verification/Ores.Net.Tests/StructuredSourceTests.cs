@@ -21,8 +21,47 @@ internal static class StructuredSourceTests
         throw new Exception("Structured source incorrectly accepted: " + reason);
     }
 
+    private static void RejectFeature(string source, string expectedDiagnostic)
+    {
+        try { _ = OresStructuredParser.Parse(source); }
+        catch (FormatException error)
+        {
+            Require(error.Message.Contains(expectedDiagnostic, StringComparison.OrdinalIgnoreCase),
+                "unsupported feature rejected for wrong reason: " + error.Message);
+            Require(error.Message.Contains("offset", StringComparison.Ordinal),
+                "unsupported feature missing source position");
+            return;
+        }
+        throw new Exception("Unsupported receiver/capture syntax was admitted");
+    }
+
     public static void Run()
     {
+        // Canonical Java foo() == foo(self) uses one caller-visible slot.
+        // The .NET bootstrap has neither nominal class AST nor CIL dispatch:
+        // validate a *specific* fail-closed diagnostic for the exact sources
+        // instead of calling parser acceptance "implementation parity".
+        foreach (var source in new[] {
+            "define class X1 as foo():void {} end",
+            "define class X2 as foo(self):void {} end",
+            "define class X as foo():void {} foo(self):void {} end",
+            "define class X as foo(int x):void {} foo(self,int x):void {} end",
+            "define class X as foo(self,int x):int {return x;} end",
+            "define class X as foo(mut self):void {} end",
+            "define actor X as on_start(self):void {} end"
+        })
+        {
+            try { _ = OresStructuredParser.Parse(source); }
+            catch (FormatException ex)
+            {
+                Require(ex.Message.Contains("receiver-erased method slots", StringComparison.Ordinal)
+                        && ex.Message.Contains("Native AOT CIL lowering", StringComparison.Ordinal)
+                        && ex.Message.Contains("offset", StringComparison.Ordinal),
+                    "class/actor must be rejected by a specific parity gate: " + ex.Message);
+                continue;
+            }
+            throw new Exception(".NET structured frontend silently admitted unlowered method source: " + source);
+        }
         foreach (var source in new[] {
             "define enum Color as\n  Red\nend\nfnc main():int{return 1;}",
             "fnc main():int{return 1;}\ndefine enum Color as\n  Red\nend"
@@ -123,6 +162,100 @@ internal static class StructuredSourceTests
             is StructuredReturn { Value: StructuredBinary {
                 Operator: StructuredOperator.Add
             } }, "arithmetic AST operator precedence");
+
+        var arithmetic76 = OresStructuredParser.Parse("""
+            pub fnc main(): int {
+              return 100 - (3 + 2) - 19;
+            }
+            """);
+        Require(arithmetic76.Body[0] is StructuredReturn {
+            Value: StructuredBinary {
+                Operator: StructuredOperator.Subtract,
+                Left: StructuredBinary {
+                    Operator: StructuredOperator.Subtract,
+                    Left: StructuredInt { Value: 100 },
+                    Right: StructuredBinary {
+                        Operator: StructuredOperator.Add,
+                        Left: StructuredInt { Value: 3 },
+                        Right: StructuredInt { Value: 2 }
+                    }
+                },
+                Right: StructuredInt { Value: 19 }
+            }
+        }, "shared arithmetic-76 typed AST");
+
+        static void RejectTupleV2(string source, string reason)
+        {
+            try { _ = OresStructuredParser.Parse(source); }
+            catch (FormatException ex)
+            {
+                Require(ex.Message.Contains("Tuple-v2", StringComparison.Ordinal) &&
+                        ex.Message.Contains("offset", StringComparison.Ordinal),
+                    reason + ": tuple-v2 rejection was incidental: " + ex.Message);
+                return;
+            }
+            throw new Exception("Tuple-v2 source incorrectly accepted: " + reason);
+        }
+        RejectTupleV2("fnc main(tuple (int,int) value):int{return 1;}",
+            "explicit tuple parameter");
+        RejectTupleV2("fnc main(structural (int,int) value):int{return 1;}",
+            "structural tuple parameter");
+        RejectTupleV2("fnc main((int,int) value):int{return 1;}",
+            "shorthand tuple parameter");
+        RejectTupleV2("fnc main():tuple (int,int){return 1;}",
+            "tuple return");
+        RejectTupleV2("fnc main():int{return call(...pair);}",
+            "explicit tuple spread");
+
+        foreach (var operation in new[] { "ref", "unref", "deref", "deref mut", "raw" })
+        {
+            try { _ = OresStructuredParser.Parse(
+                $"fnc main():int{{return rt {operation} value;}}"); }
+            catch (FormatException ex)
+            {
+                Require(ex.Message.Contains("is not valid Oreslang source",
+                    StringComparison.Ordinal),
+                    "structured pointer rejection must identify invalid source syntax");
+                continue;
+            }
+            throw new Exception("Structured source incorrectly accepted pointer operation: rt " +
+                operation);
+        }
+
+        foreach (var operation in new[] { "copy", "share", "take", "borrow", "mut borrow" })
+        {
+            try { _ = OresStructuredParser.Parse(
+                $"fnc main():int{{return rt {operation} value;}}"); }
+            catch (FormatException ex)
+            {
+                Require(ex.Message.Contains("requires typed actor-arena lowering",
+                    StringComparison.Ordinal),
+                    "structured ownership rejection must name actor-arena lowering");
+                continue;
+            }
+            throw new Exception("Structured source incorrectly accepted ownership operation: rt " +
+                operation);
+        }
+        try
+        {
+            _ = OresStructuredParser.Parse(
+                "fnc main():int{return rt borrow mut value;}");
+            throw new Exception("Structured source admitted legacy rt borrow mut");
+        }
+        catch (FormatException ex)
+        {
+            Require(ex.Message.Contains("use 'rt mut borrow'", StringComparison.Ordinal),
+                "legacy mutable borrow diagnostic must name canonical spelling");
+        }
+
+        foreach (var source in new[] {
+            "fnc main():int{return &value;}",
+            "fnc main():int{return &mut value;}",
+            "fnc main():int{return *value;}",
+            "fnc main():int{return rt borrow mut value;}",
+            "fnc main():Pointer<int>{return value;}"
+        })
+            Reject(source, "pointer/reference spellings and legacy mutable-borrow syntax");
 
         // AST height must be bounded even when the source is a flat chain.
         // Grammar recursion depth alone cannot enforce this invariant.
@@ -230,6 +363,20 @@ internal static class StructuredSourceTests
             "negative literal below i64 range");
         Reject("fnc main():int{let int x=1@2;return x;}",
             "invalid character");
+        foreach (string real in new[] { "0.125", "1e10", "1E-10", "123.456d", "123d",
+                                       "1_000.5", "1_0e+2", "1_2d" })
+        {
+            try { _ = OresStructuredParser.Parse("fnc main():int{return " + real + ";}"); }
+            catch (FormatException ex)
+            {
+                Require(ex.Message.Contains(
+                    "Floating-point/decimal literal requires typed numeric lowering",
+                    StringComparison.Ordinal),
+                    "real/decimal literal must fail before token splitting: " + real);
+                continue;
+            }
+            throw new Exception("Structured source incorrectly accepted real/decimal literal: " + real);
+        }
         Reject("fnc main():int{let int x=1;}\u0000", "NUL");
         Reject("fnc main():int{return 1;}\uD800", "invalid UTF16");
         Reject("fnc main():int{return 1;}//comment\nextra", "trailing syntax");
@@ -257,6 +404,67 @@ internal static class StructuredSourceTests
         Require(nested.Body[1] is StructuredIf {
             Then.Count: 2, Else.Count: 2
         }, "parallel branch-local scopes");
+
+        // Abstract class admission must reject for the missing virtual-dispatch
+        // capability, not merely because the generic scalar parser sees a
+        // surprising token. The generic contract is intentionally unsupported.
+        RejectFeature("define abstract class Framework as "
+            + "private abstract receive(int x): int; end",
+            "Private abstract class hooks require typed virtual dispatch");
+
+        // Contextual capture keywords remain valid ordinary scalar local names.
+        foreach (string captureName in new[] { "lex", "nlex" })
+        {
+            var plainCaptureName = OresStructuredParser.Parse(
+                $"fnc main():int{{let int {captureName}=42;return {captureName};}}");
+            Require(plainCaptureName.Body.Count == 2 &&
+                    plainCaptureName.Body[1] is StructuredReturn {
+                        Value: StructuredRead { Type: IrValueType.I64 } read
+                    } && read.Name == captureName,
+                captureName + " remains an ordinary scalar identifier");
+        }
+        // Ignored comment text cannot activate unsupported capture guards.
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{// lex[self] || -> nlex[self] critical |state| -> 1\nreturn 42;}"
+            ).Body.Count == 1, "capture syntax in a comment remains inert");
+
+        // Until this backend has a class-aware method table, capture and
+        // borrow analysis, it must reject these canonical constructs rather
+        // than interpreting them as scalar code or ignoring a receiver marker.
+        foreach (string unsupported in new[]
+        {
+            "define class Foo as fnc read(self, int x): int { return x; } end",
+            "define actor Foo as receive(self, int x): void { return; } end",
+            "define actor Foo as on_start(self): void { return; } end",
+            "define actor Foo as receive(ActorMail<int> mail): void { self.receive(mail); } end",
+            "define class Foo as private abstract receive(int x): int; end",
+            "define pub class Foo as fnc read(self, int x): int { return x; } end",
+            "pub define class Foo as fnc read(self, int x): int { return x; } end",
+            "fnc main():int{let int x=1;return lex[x] || -> x;}",
+            "fnc main():int{let int x=1;return nlex[x] || -> x;}",
+            "fnc main():int{let int x=1;return nlex || -> x;}",
+            "fnc main():int{let int x=1;return lex[self] || -> x;}",
+            "define class Foo as fnc read(mut self, int x): int { return x; } end",
+            "define class Foo as fnc read(self Foo)(int x): int { return x; } end",
+            "fnc main():int{let int x=1;return lex[x,x] || -> x;}",
+            "fnc main():int{let int x=1;return lex[missing] || -> x;}",
+            "fnc main():int{let int x=1;return lex[] || -> x;}",
+            "fnc main():int{let int x=1;return nlex[self] || -> x;}",
+            "fnc main():int{let int x=1;return nlex[] || -> x;}",
+            "fnc main():int{let int x=1;return lex[x] |x| -> x;}",
+            "fnc main():int{let int x=1;return |y| -> x;}",
+            "fnc main():int{let int x=1;return lex[x] || -> nlex || -> x;}",
+            "fnc main():int{let int x=1;return nlex[self] critical |state| -> 1;}",
+        })
+        {
+            RejectFeature(unsupported,
+                unsupported.StartsWith("define class", StringComparison.Ordinal) ||
+                unsupported.StartsWith("define actor", StringComparison.Ordinal) ||
+                unsupported.StartsWith("define pub class", StringComparison.Ordinal) ||
+                unsupported.StartsWith("pub define class", StringComparison.Ordinal)
+                    ? "Nominal class/actor methods require receiver-erased method slots"
+                    : "Lexical captures require checked closure lowering");
+        }
 
         Console.WriteLine("Structured source parser and typed diagnostics passed");
     }

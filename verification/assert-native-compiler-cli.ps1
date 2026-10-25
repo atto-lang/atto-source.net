@@ -21,12 +21,22 @@ function Assert-Exit {
     }
 }
 
+Push-Location -LiteralPath $work
 try {
     Assert-Exit -Expected 2 -Arguments @() -Case 'no args'
     Assert-Exit -Expected 2 -Arguments @('compile', $source) -Case 'missing --out'
-    Assert-Exit -Expected 2 -Arguments @('check', $source, '--out', 'ignored') -Case 'check extra args'
+    $out = Join-Path $work 'OresGenerated.dll'
+    Assert-Exit -Expected 2 -Arguments @('check', $source, '--out', $out) -Case 'check must not compile'
+    if (Test-Path -LiteralPath $out) {
+        throw 'Validation-only check unexpectedly published a compiled assembly'
+    }
     Assert-Exit -Expected 2 -Arguments @('compile', $source, '--other', 'ignored') -Case 'unknown flag'
     Assert-Exit -Expected 0 -Arguments @('check', $source) -Case 'valid check'
+    # A successful source/typed-IR check must not become an executable result.
+    # Exactly the separate compile command may publish OresGenerated.dll.
+    if ((Get-ChildItem -LiteralPath $work -Force | Measure-Object).Count -ne 0) {
+        throw 'Validation-only check modified the artifact working directory'
+    }
 
     $oversize = Join-Path $work 'oversize.ores'
     [IO.File]::WriteAllBytes($oversize, [byte[]]::new(1048577))
@@ -38,7 +48,6 @@ try {
 
     $invalidSource = Join-Path $work 'invalid.ores'
     [IO.File]::WriteAllText($invalidSource, 'fnc main():int {return 1 @ 3;}')
-    $out = Join-Path $work 'OresGenerated.dll'
     Assert-Exit -Expected 1 -Arguments @('compile', $invalidSource, '--out', $out) -Case 'invalid syntax'
     if (Test-Path -LiteralPath $out) {
         throw 'Invalid source unexpectedly generated CIL'
@@ -48,8 +57,14 @@ try {
     if (-not (Test-Path -LiteralPath $out)) {
         throw 'Valid source failed to produce assembly'
     }
+    # Compile output alone is not an executed Native AOT guest. The separate
+    # Windows Native AOT workflow must publish and RUN oreslang-app.exe.
+    if ((Get-Item -LiteralPath $out).Length -le 0) {
+        throw 'Compiled assembly is empty'
+    }
     Write-Host 'Native compiler CLI negative and positive tests passed'
 }
 finally {
+    Pop-Location
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }
