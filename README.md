@@ -58,10 +58,27 @@ Features: decimal signed 64-bit literals (including `-9223372036854775808`), par
 | `compiler/Ores.Net.Compiler.Core` | Lexer/parser/AST and direct System.Reflection.Metadata CIL emission |
 | `compiler/Ores.Net.Compiler` | Native AOT-compiled CLI (`oresnet`) |
 | `host/Ores.Net.NativeHost` | Statically references generated CIL and Native AOT publishes it |
-| `runtime/Ores.Net.Runtime` | AOT-compatible runtime API, bounded byte mailbox prototype |
+| `runtime/Ores.Net.Runtime` | AOT-compatible runtime API, bounded mailbox, unmanaged actor arenas, and AoS/SoA/AoSoA shard substrate |
 | `verification/Ores.Net.Tests` | Parser/CIL metadata/mailbox tests (Mono.Cecil is test-only) |
 | `scripts/` | Windows-only Native AOT publish pipeline |
 | `docs/` | Backend contracts and implementation roadmap |
+
+## Advisory static analysis facts (v0)
+
+Two **non-executing** CLI modes now export `ores-static-facts/v0` JSON with
+SHA-256 identity of admitted UTF-8 source, a canonical `__root__.main/0`
+procedure, and no unproved security or actor claims:
+
+- `oresnet static-facts file.ores` uses the **shipping** scalar parser,
+  frozen typed/verified OresIR, and the same accepted subset as `check`.
+- `oresnet static-facts-structured file.ores` uses the **experimental,
+  non-production** typed structured parser. Its `while` statements are
+  marked `exit=unknown` and `safepoint=false`. This mode does **not**
+  establish executable CIL or full Native AOT parity.
+
+Both reject unsupported effects and malformed source instead of inventing
+proofs. See [`.NET static facts v0`](docs/STATIC_FACTS_V0_NET.md) for
+limits, trust boundaries, format and CI verification.
 
 ## Verification
 
@@ -72,9 +89,13 @@ dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Releas
 
 Unit tests use a managed development-time test harness; this is **not part of the shipped compiler or application**. CI must publish both deliverables to native executables and execute the resulting Windows binary. The absence of a `.runtimeconfig.json` is a supplemental check; the successful Native AOT publish is the decisive proof. CI status must be checked before claiming working Windows artifacts.
 
-**Runtime limitations:** This is a single-process actor mailbox prototype. .NET Native AOT still includes managed GC; it does **not** intrinsically provide per-actor heaps or a zero-GC runtime. Actor references now carry an internal random nonce in addition to ID/generation, preventing accidental local same-ID spoofing. These are **not authenticated distributed capabilities**, and managed Native AOT still does not provide per-actor private heaps. No in-process hot-code reload can rely on `Assembly.Load`; full code replacement requires process-generation rollout.
+**Runtime limitations:** This remains a bootstrap compiler and single-process actor runtime. .NET Native AOT still includes managed GC and CoreCLR does **not** intrinsically provide independently collected per-actor GC heaps. Oreslang now provides an explicit bounded unmanaged `ActorArena` substrate with persistent actor-private bytes, turn-scoped scratch, aggregate native-memory budgeting, suspension-safe read loans, lifetime-only pins, generation fencing, quiescent zeroize/free, and actor-owned AoS/SoA/AoSoA shards. General guest object allocation, ownership/borrow syntax, async-frame lowering, shared-domain arenas, native collections, and zero-managed-allocation steady-state execution are still pending and must fail closed. Actor references carry an internal random nonce in addition to ID/generation; these are **not authenticated distributed capabilities**. No in-process hot-code reload can rely on `Assembly.Load`; full code replacement requires process-generation rollout. See [actor arenas and layouts](docs/ACTOR_ARENAS_AND_LAYOUTS.md).
 
 See [architecture](docs/architecture.md), [roadmap](docs/roadmap.md), [CI recovery runbook](docs/ci-recovery.md), and [security and verification](verification/README.md). This repository's license remains unspecified and should be chosen by its maintainers.
 
 See [value-boundary audit and admission tests](docs/VALUE_BOUNDARIES.md) for
 aggregate, call, string, conditional and async feature limits.
+
+## Engineering policy: no Python
+
+Python is prohibited in this repository and throughout the `ores-truffle-oreslang` organization for scripts, tests, CI helpers, code generators, analyzers, automation, and host tooling. Existing Python functionality must be migrated to **Rust** without weakening behavior, security checks, fixtures, or test coverage. Do not add `.py`, `.pyi`, `.ipynb`, Python dependency manifests, `python`/`python3` commands, `pip`, `pytest`, `poetry`, `uv`, or `actions/setup-python`. The .NET compiler/backend remains .NET/C#; the Python-to-Rust mandate applies to Python tooling rather than rewriting language-specific implementation code.

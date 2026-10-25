@@ -21,6 +21,7 @@ function Assert-Exit {
     }
 }
 
+Push-Location -LiteralPath $work
 try {
     Assert-Exit -Expected 2 -Arguments @() -Case 'no args'
     Assert-Exit -Expected 2 -Arguments @('compile', $source) -Case 'missing --out'
@@ -64,5 +65,6 @@ try {
     Write-Host 'Native compiler CLI negative and positive tests passed'
 }
 finally {
+    Pop-Location
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }
