@@ -46,6 +46,7 @@ Require(OresParser.Parse("fnc main():int{return 1;} // any unknown ?") is Litera
     "opaque-top and ternary tokens in comments remain lexically invisible");
 
 SourceByteBudgetTests.Run();
+NumericSeparatorParityTests.Run();
 
 // The canonical actor negative includes a later assignment. Lex its punctuation
 // while preserving the precise unsupported top-level declaration diagnostic.

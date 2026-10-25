@@ -108,7 +108,15 @@ public static class OresStructuredParser
             char ch = source[index];
             if (Digit(ch))
             {
-                do { index++; } while (index < source.Length && Digit(source[index]));
+                index++;
+                while (index < source.Length)
+                {
+                    if (Digit(source[index])) { index++; continue; }
+                    if (source[index] != '_') break;
+                    if (index + 1 >= source.Length || !Digit(source[index + 1]))
+                        throw new FormatException($"Invalid i64 digit separator at offset {index}");
+                    index++;
+                }
             }
             else if (Alpha(ch) || ch == '_')
             {
@@ -127,7 +135,7 @@ public static class OresStructuredParser
             }
             else if (ch == '=' && index + 1 < source.Length &&
                      source[index + 1] == '=') index += 2;
-            else if ("()+-*{}:;=<.".IndexOf(ch) >= 0) index++;
+            else if ("()+-*{}:;=<.,".IndexOf(ch) >= 0) index++;
             else throw new FormatException($"Invalid character at offset {offset}");
             return new Token(source[offset..index], offset);
         }
@@ -414,7 +422,7 @@ public static class OresStructuredParser
             {
                 int at = Current.Offset;
                 index++;
-                if (Current.Text == "9223372036854775808")
+                if (Current.Text.Replace("_", "", StringComparison.Ordinal).TrimStart('0') == "9223372036854775808")
                 {
                     index++;
                     return new StructuredInt(at, long.MinValue);
@@ -436,8 +444,8 @@ public static class OresStructuredParser
             if (raw.Length > 0 && Digit(raw[0]))
             {
                 index++;
-                if (!long.TryParse(raw, NumberStyles.None,
-                    CultureInfo.InvariantCulture, out long n))
+                if (!long.TryParse(raw.Replace("_", "", StringComparison.Ordinal),
+                    NumberStyles.None, CultureInfo.InvariantCulture, out long n))
                     throw new FormatException($"Invalid i64 at offset {offset}");
                 return new StructuredInt(offset, n);
             }
