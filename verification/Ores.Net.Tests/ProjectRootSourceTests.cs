@@ -41,6 +41,175 @@ internal static class ProjectRootSourceTests
             File.WriteAllText(manifest, "schema_version = \"1\"\n");
             Check(ProjectRootSourceResolver.Resolve(app, "+/src/answer") == Path.GetFullPath(source),
                   "inferred extension");
+            // TOML line endings are LF or CRLF. A bare CR can otherwise
+            // conceal [project] or a second root after a # comment.
+            File.WriteAllText(manifest,
+                "schema_version = \"1\" # comment\r[project]\rroot = \"../other\"\n");
+            Reject(() => ProjectRootSourceResolver.Resolve(app, "+/src/answer"),
+                   "bare CR concealed project root after comment");
+            File.WriteAllText(manifest, "schema_version = \"1\"\r");
+            Reject(() => ProjectRootSourceResolver.Resolve(app, "+/src/answer"),
+                   "bare CR at EOF admitted");
+            File.WriteAllText(manifest, "schema_version = \"1\"\r\n");
+            Check(ProjectRootSourceResolver.Resolve(app, "+/src/answer") == Path.GetFullPath(source),
+                  "legal CRLF manifest was incorrectly rejected");
+
+            string legacyManifest = Path.Combine(app, ".oreslangc.cfg.toml");
+            File.WriteAllText(legacyManifest, "schema_version = \"1\"\n");
+            File.Delete(manifest);
+            Directory.CreateDirectory(manifest);
+            Reject(() => ProjectRootSourceResolver.Resolve(app, "+/src/answer"),
+                   "modern directory marker fell back to valid legacy manifest");
+            Directory.Delete(manifest);
+            try
+            {
+                File.CreateSymbolicLink(manifest, legacyManifest);
+                Reject(() => ProjectRootSourceResolver.Resolve(app, "+/src/answer"),
+                       "symlinked modern marker inherited legacy authority");
+                File.Delete(manifest);
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or
+                     PlatformNotSupportedException or IOException)
+            {
+                // Some Windows runners deny test symlink creation; the
+                // deterministic directory-marker regression still executes.
+                if (File.Exists(manifest)) File.Delete(manifest);
+            }
+            File.WriteAllText(manifest, "schema_version = \"1\"\n");
+            // Host-only explicit relative resolution, never bare .hidden lookup
+            // and never authority across a nested legacy package manifest.
+            string routes = Path.Combine(app, "src", "routes");
+            Directory.CreateDirectory(routes);
+            string importer = Path.Combine(routes, "main.ores");
+            File.WriteAllText(importer, "fnc main():int{return 42;}\n");
+            string local = Path.Combine(routes, "local.ores");
+            File.WriteAllText(local, "fnc local():int{return 42;}\n");
+            Check(ProjectRootSourceResolver.ResolveRelative(importer, "./local", app) ==
+                  Path.GetFullPath(local), "./ did not resolve relative to importer");
+            Check(ProjectRootSourceResolver.ResolveRelative(importer, "../answer", app) ==
+                  Path.GetFullPath(source), "../ did not resolve relative to importer");
+            foreach (var bad in new[] { "local", ".hidden/local", "./", "../",
+                                        "./missing", "./local.java", "./main",
+                                        "../../../../outside", "./local//alias",
+                                        "./local\\\\alias" })
+                Reject(() => ProjectRootSourceResolver.ResolveRelative(importer, bad, app),
+                       "bad relative import admitted: " + bad);
+            var legacyChild = Path.Combine(routes, "child");
+            Directory.CreateDirectory(legacyChild);
+            File.WriteAllText(Path.Combine(legacyChild, "hidden.ores"),
+                              "fnc hidden():int{return 1;}\n");
+            File.WriteAllText(Path.Combine(legacyChild, ".oreslangc.cfg.toml"),
+                              "legacy marker\n");
+            Reject(() => ProjectRootSourceResolver.ResolveRelative(importer, "./child/hidden", app),
+                   "relative import crossed nested legacy package");
+            // A dangling legacy marker is still authoritative: never treat
+            // it as absent and permit a parent's relative import.
+            string danglingMarker = Path.Combine(legacyChild, ".oreslangc.cfg.toml");
+            File.Delete(danglingMarker);
+            bool danglingCreated = false;
+            try
+            {
+                File.CreateSymbolicLink(danglingMarker,
+                    Path.Combine(legacyChild, "nonexistent-legacy-config.toml"));
+                danglingCreated = true;
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or
+                     PlatformNotSupportedException or IOException)
+            {
+                // Some runner environments prohibit symlink fixtures.
+            }
+            try
+            {
+                if (danglingCreated)
+                    Reject(() => ProjectRootSourceResolver.ResolveRelative(
+                            importer, "./child/hidden", app),
+                           "dangling nested legacy marker lost package authority");
+            }
+            finally
+            {
+                if (danglingCreated) File.Delete(danglingMarker);
+                File.WriteAllText(danglingMarker, "legacy marker\n");
+            }
+            Reject(() => ProjectRootSourceResolver.Resolve(app, "+/src/routes/child/hidden"),
+                   "rooted import crossed nested legacy package");
+            // A parent-owned importer must not launder child package
+            // ownership through a symlinked *target* in its own directory.
+            string targetAlias = Path.Combine(routes, "child-alias.ores");
+            bool aliasCreated = false;
+            try
+            {
+                File.CreateSymbolicLink(targetAlias, Path.Combine(legacyChild, "hidden.ores"));
+                aliasCreated = true;
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or
+                     PlatformNotSupportedException or IOException)
+            {
+                // Nonprivileged Windows test runners may deny symlink creation.
+            }
+            if (aliasCreated)
+                Reject(() => ProjectRootSourceResolver.ResolveRelative(
+                        importer, "./child-alias", app),
+                       "relative target symlink bypassed nested legacy package");
+            string selectedFile = Path.Combine(app, "appdata", "lib", "answer.ores");
+            Directory.CreateDirectory(Path.GetDirectoryName(selectedFile)!);
+            File.WriteAllText(selectedFile, "pub fnc answer():int{return 42;}\n");
+            File.WriteAllText(manifest,
+                "schema_version = \"1\"\n[project]\nroot = \"appdata\"\n");
+            Check(ProjectRootSourceResolver.Resolve(app, "+/lib/answer") ==
+                  Path.GetFullPath(selectedFile), "explicit project.root ignored");
+            string selectedEntry = Path.Combine(app, "appdata", "src", "entry.ores");
+            Directory.CreateDirectory(Path.GetDirectoryName(selectedEntry)!);
+            File.WriteAllText(selectedEntry, "fnc main():int{return 42;}\n");
+            Check(ProjectRootSourceResolver.ResolveRelative(
+                    selectedEntry, "../lib/answer", Path.Combine(app, "appdata")) ==
+                  Path.GetFullPath(selectedFile),
+                  "relative import escaped the configured project root namespace");
+            Reject(() => ProjectRootSourceResolver.ResolveRelative(
+                    selectedEntry, "../../src/answer", Path.Combine(app, "appdata")),
+                   "relative source crossed configured project root boundary");
+            string nestedManifest = Path.Combine(app, "appdata", ".ores.pkg.toml");
+            File.WriteAllText(nestedManifest, "schema_version = \"1\"\n");
+            Reject(() => ProjectRootSourceResolver.Resolve(app, "+/lib/answer"),
+                   "nested package manifest must not inherit parent authority");
+            File.Delete(nestedManifest);
+            string intermediate = Path.Combine(app, "parent", "appdata");
+            Directory.CreateDirectory(Path.Combine(intermediate, "lib"));
+            File.WriteAllText(Path.Combine(intermediate, "lib", "answer.ores"),
+                "pub fnc answer():int{return 42;}\n");
+            string intermediateManifest = Path.Combine(app, "parent", ".ores.pkg.toml");
+            File.WriteAllText(intermediateManifest, "schema_version = \"1\"\n");
+            File.WriteAllText(manifest,
+                "schema_version = \"1\"\n[project]\nroot = \"parent/appdata\"\n");
+            Reject(() => ProjectRootSourceResolver.Resolve(app, "+/lib/answer"),
+                   "intermediate nested package manifest ignored");
+            File.Delete(intermediateManifest);
+            File.WriteAllText(manifest,
+                "schema_version = \"1\"\n[project]\nroot = \"appdata\"\n");
+            Reject(() => ProjectRootSourceResolver.Resolve(app, "+/src/answer"),
+                   "manifest directory escaped selected project.root");
+            foreach (var invalidRoot in new[] { "../other", "/tmp", "appdata/../src",
+                                                 "", "appdata\\other", "appdata//lib", "appdata/", "appdata/." })
+            {
+                File.WriteAllText(manifest,
+                    "schema_version = \"1\"\n[project]\nroot = \"" + invalidRoot + "\"\n");
+                Reject(() => ProjectRootSourceResolver.Resolve(app, "+/lib/answer"),
+                       "unsafe project.root accepted: " + invalidRoot);
+            }
+            File.WriteAllText(manifest,
+                "schema_version = \"1\"\n[project]\nroot = \"appdata\"\nroot = \"appdata\"\n");
+            Reject(() => ProjectRootSourceResolver.Resolve(app, "+/lib/answer"),
+                   "duplicate project.root accepted");
+            File.WriteAllText(manifest, "schema_version = \"1\"\n[ project ]\nroot = \"appdata\"\n");
+            Reject(() => ProjectRootSourceResolver.Resolve(app, "+/lib/answer"),
+                   "unrecognized project table silently ignored");
+            File.WriteAllText(manifest, "schema_version = \"1\"\n[project]\n[project]\nroot = \"appdata\"\n");
+            Reject(() => ProjectRootSourceResolver.Resolve(app, "+/lib/answer"),
+                   "duplicate project table admitted");
+            File.WriteAllText(manifest, "schema_version = \"1\"\nproject.root = \"appdata\"\n");
+            Reject(() => ProjectRootSourceResolver.Resolve(app, "+/lib/answer"),
+                   "unsupported dotted root accepted");
+            File.WriteAllText(manifest, "schema_version = \"1\"\n");
+
             Check(ProjectRootSourceResolver.Resolve(app, "+/src/answer.ores") ==
                   Path.GetFullPath(source), "exact extension");
             foreach (var bad in new[] {
