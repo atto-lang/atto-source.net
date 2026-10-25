@@ -135,7 +135,7 @@ public static class OresStructuredParser
             }
             else if (ch == '=' && index + 1 < source.Length &&
                      source[index + 1] == '=') index += 2;
-            else if ("()+-*{}:;=<.".IndexOf(ch) >= 0) index++;
+            else if ("()+-*{}:;=<.,".IndexOf(ch) >= 0) index++;
             else throw new FormatException($"Invalid character at offset {offset}");
             return new Token(source[offset..index], offset);
         }
