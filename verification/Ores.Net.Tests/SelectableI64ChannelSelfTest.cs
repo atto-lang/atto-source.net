@@ -11,17 +11,20 @@ internal static class SelectableI64ChannelSelfTest
         SelectableI64Channel channel,
         SelectArbiter.Registration registration,
         Action<long> result,
-        Action callback)
+        Action callback,
+        Action<SelectableI64Channel.ReadOutcome>? outcome = null)
     {
         return channel.SubscribeReadable(subscription =>
         {
             callback();
             var notifications = channel.CreateNotificationBatch();
-            long value = default;
+            SelectableI64Channel.ReadResult committed = default;
             var won = registration.TryWin(() =>
-                channel.TryCommitRead(subscription, out value, notifications));
+                channel.TryCommitRead(subscription, out committed, notifications));
             notifications.Dispatch();
-            if (won) result(value);
+            if (!won) return;
+            outcome?.Invoke(committed.Outcome);
+            if (committed.HasValue) result(committed.Value);
         });
     }
 
@@ -29,15 +32,19 @@ internal static class SelectableI64ChannelSelfTest
         SelectableI64Channel channel,
         SelectArbiter.Registration registration,
         long value,
-        Action callback)
+        Action callback,
+        Action<SelectableI64Channel.WriteOutcome>? outcome = null)
     {
         return channel.SubscribeWritable(subscription =>
         {
             callback();
             var notifications = channel.CreateNotificationBatch();
-            _ = registration.TryWin(() =>
-                channel.TryCommitWrite(subscription, value, notifications));
+            SelectableI64Channel.WriteOutcome committed = default;
+            var won = registration.TryWin(() =>
+                channel.TryCommitWrite(
+                    subscription, value, out committed, notifications));
             notifications.Dispatch();
+            if (won) outcome?.Invoke(committed);
         });
     }
 
@@ -224,6 +231,105 @@ internal static class SelectableI64ChannelSelfTest
             "stale loser did not consume winning write value");
     }
 
+    private static void CloseWakesPendingReadAsEof()
+    {
+        var channel = new SelectableI64Channel(1);
+        using var select = new SelectArbiter(1);
+        var read = select.RegisterCase(0);
+        long value = 123;
+        var callbacks = 0;
+        var outcome = SelectableI64Channel.ReadOutcome.NotReady;
+
+        var wait = BindRead(channel, read,
+            v => value = v,
+            () => callbacks++,
+            o => outcome = o);
+        read.Arm(() => wait.Close());
+
+        Require(select.Winner is null && channel.PendingReaders == 1,
+            "empty read remains pending before close");
+        Require(channel.Close(), "first close wins");
+        Require(channel.IsClosed, "closed flag visible");
+        Require(select.Winner == 0, "close wakes pending read");
+        Require(outcome == SelectableI64Channel.ReadOutcome.Eof,
+            "closed drained read commits EOF");
+        Require(value == 123, "EOF does not fabricate value");
+        Require(callbacks == 1 && channel.PendingReaders == 0,
+            "EOF waiter consumed exactly once");
+        Require(!channel.Close(), "close idempotent");
+    }
+
+    private static void ClosedChannelDrainsBufferedValueBeforeEof()
+    {
+        var channel = new SelectableI64Channel(2);
+        Require(channel.TryWrite(41), "seed buffered value");
+        Require(channel.Close(), "close with buffered value");
+        Require(!channel.TryWrite(42), "direct write denied after close");
+
+        using (var firstSelect = new SelectArbiter(1))
+        {
+            var first = firstSelect.RegisterCase(0);
+            long value = 0;
+            var outcome = SelectableI64Channel.ReadOutcome.NotReady;
+            var wait = BindRead(channel, first,
+                v => value = v,
+                () => { },
+                o => outcome = o);
+            first.Arm(() => wait.Close());
+
+            Require(firstSelect.Winner == 0,
+                "buffered closed read is immediately selectable");
+            Require(outcome == SelectableI64Channel.ReadOutcome.Value &&
+                    value == 41,
+                "buffer drains before EOF");
+        }
+
+        using var eofSelect = new SelectArbiter(1);
+        var eof = eofSelect.RegisterCase(0);
+        long eofValue = 77;
+        var eofOutcome = SelectableI64Channel.ReadOutcome.NotReady;
+        var eofWait = BindRead(channel, eof,
+            v => eofValue = v,
+            () => { },
+            o => eofOutcome = o);
+        eof.Arm(() => eofWait.Close());
+
+        Require(eofSelect.Winner == 0 &&
+                eofOutcome == SelectableI64Channel.ReadOutcome.Eof,
+            "drained closed channel yields EOF");
+        Require(eofValue == 77, "EOF leaves value untouched");
+    }
+
+    private static void CloseWakesPendingWriteAsClosedWithoutPublication()
+    {
+        var channel = new SelectableI64Channel(1);
+        Require(channel.TryWrite(7), "fill channel");
+
+        using var select = new SelectArbiter(1);
+        var write = select.RegisterCase(0);
+        var callbacks = 0;
+        var outcome = SelectableI64Channel.WriteOutcome.NotReady;
+        var wait = BindWrite(channel, write, 8,
+            () => callbacks++,
+            o => outcome = o);
+        write.Arm(() => wait.Close());
+
+        Require(select.Winner is null && channel.PendingWriters == 1,
+            "full-channel write pending");
+        Require(channel.Close(), "close wakes writer");
+        Require(select.Winner == 0, "closed write becomes terminal winner");
+        Require(outcome == SelectableI64Channel.WriteOutcome.Closed,
+            "closed write reports terminal closed outcome");
+        Require(callbacks == 1 && channel.PendingWriters == 0,
+            "closed writer consumed exactly once");
+        Require(channel.Count == 1, "closed write did not publish");
+        Require(!channel.TryWrite(9), "later writes rejected");
+
+        Require(channel.TryRead(out var existing) && existing == 7,
+            "pre-close buffered value preserved");
+        Require(channel.Count == 0, "buffer drained");
+    }
+
     private static void ImmediateCallbackFailureDoesNotLeakWaiter()
     {
         var channel = new SelectableI64Channel(1, 2);
@@ -270,7 +376,7 @@ internal static class SelectableI64ChannelSelfTest
         var batch = second.CreateNotificationBatch();
         Require(!second.TryCommitRead(foreign, out _, batch),
             "foreign read subscription rejected");
-        Require(!second.TryCommitWrite(foreign, 1, batch),
+        Require(!second.TryCommitWrite(foreign, 1, out _, batch),
             "foreign write subscription rejected");
         Require(foreign.Close(), "foreign source subscription closes");
     }
@@ -283,6 +389,9 @@ internal static class SelectableI64ChannelSelfTest
         FreeingCapacityWakesPendingWrite();
         CancellationDetachesWaiter();
         StaleNotificationCannotConsumeForLoser();
+        CloseWakesPendingReadAsEof();
+        ClosedChannelDrainsBufferedValueBeforeEof();
+        CloseWakesPendingWriteAsClosedWithoutPublication();
         ImmediateCallbackFailureDoesNotLeakWaiter();
         AsyncNotificationFailureIsRecorded();
         ForeignSubscriptionCannotCommit();
