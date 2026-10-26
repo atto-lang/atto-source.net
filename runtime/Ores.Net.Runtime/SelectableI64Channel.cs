@@ -10,7 +10,7 @@ public sealed class SelectableI64Channel
     private const int MaxCapacity = 1_048_576;
     private const int MaxWaiterLimit = 4096;
 
-    private enum WaitKind
+    internal enum WaitKind
     {
         Read,
         Write
@@ -220,15 +220,14 @@ public sealed class SelectableI64Channel
     private void Capture(Waiter[] waiters, NotificationBatch notifications)
     {
         notifications.Attach(this);
-        foreach (var waiter in waiters)
+        var kind = ReferenceEquals(waiters, _readers)
+            ? WaitKind.Read : WaitKind.Write;
+        for (var index = 0; index < waiters.Length; index++)
         {
+            var waiter = waiters[index];
             if (!waiter.Active || waiter.Notify is null) continue;
             notifications.Add(waiter.Notify,
-                new Subscription(this,
-                    ReferenceEquals(waiters, _readers)
-                        ? WaitKind.Read : WaitKind.Write,
-                    Array.IndexOf(waiters, waiter),
-                    waiter.Id));
+                new Subscription(this, kind, index, waiter.Id));
         }
     }
 
