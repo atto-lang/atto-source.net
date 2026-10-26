@@ -99,6 +99,19 @@ conditional commit, cleanup-failure capture, and reentrancy rejection. It does
 continuation scheduling; the compiler must continue to reject select syntax
 until those layers are implemented and verified.
 
+### Selectable i64 channel substrate
+
+Stacked on the runtime `SelectArbiter`, the .NET runtime now has a bounded
+`SelectableI64Channel` proof for the first scalar select profile. Readable and
+writable readiness subscriptions are revocable, selected reads consume only
+inside the arbiter conditional commit, selected writes publish only inside that
+same transaction, and stale captured readiness notifications revalidate their
+subscription identity before touching the buffer.
+
+This remains runtime-only. It does not enable source `Channel<T>` or
+`select`; generic typed channels, Future arms, close/EOF semantics, actor-lane
+continuations, suspension and compiler lowering remain pending.
+
 **Runtime limitations:** This remains a bootstrap compiler and single-process actor runtime. .NET Native AOT still includes managed GC and CoreCLR does **not** intrinsically provide independently collected per-actor GC heaps. Oreslang now provides an explicit bounded unmanaged `ActorArena` substrate with persistent actor-private bytes, turn-scoped scratch, aggregate native-memory budgeting, suspension-safe read loans, lifetime-only pins, generation fencing, quiescent zeroize/free, and actor-owned AoS/SoA/AoSoA shards. General guest object allocation, ownership/borrow syntax, async-frame lowering, shared-domain arenas, native collections, and zero-managed-allocation steady-state execution are still pending and must fail closed. Actor references carry an internal random nonce in addition to ID/generation; these are **not authenticated distributed capabilities**. No in-process hot-code reload can rely on `Assembly.Load`; full code replacement requires process-generation rollout. See [actor arenas and layouts](docs/ACTOR_ARENAS_AND_LAYOUTS.md).
 
 See [architecture](docs/architecture.md), [roadmap](docs/roadmap.md), [CI recovery runbook](docs/ci-recovery.md), and [security and verification](verification/README.md). This repository's license remains unspecified and should be chosen by its maintainers.
