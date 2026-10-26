@@ -227,6 +227,15 @@ public static class ExplicitExportSyntax
         private ExplicitExportKind? ParseKind()
         {
             if (!TryKind(Current.Text, out var kind)) return null;
+            // 'symbol' is contextual. With no following target/group it is an
+            // ordinary local identifier, e.g. export symbol as PublicSymbol;
+            if (kind == ExplicitExportKind.Symbol)
+            {
+                string next = index + 1 < tokens.Count ? tokens[index + 1].Text : "";
+                bool typedSymbol = next == "#" || next == "{" ||
+                    (IsIdentifier(next) && next != "as");
+                if (!typedSymbol) return null;
+            }
             index++;
             return kind;
         }
