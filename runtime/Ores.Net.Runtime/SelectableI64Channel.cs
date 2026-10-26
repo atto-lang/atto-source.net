@@ -10,6 +10,32 @@ public sealed class SelectableI64Channel
     private const int MaxCapacity = 1_048_576;
     private const int MaxWaiterLimit = 4096;
 
+    public enum ReadStatus
+    {
+        WouldBlock,
+        Value,
+        Eof
+    }
+
+    public readonly struct ReadResult
+    {
+        internal ReadResult(ReadStatus status, long value = default)
+        {
+            Status = status;
+            Value = value;
+        }
+
+        public ReadStatus Status { get; }
+        public long Value { get; }
+    }
+
+    public enum WriteStatus
+    {
+        WouldBlock,
+        Written,
+        Closed
+    }
+
     internal enum WaitKind
     {
         Read,
@@ -32,6 +58,7 @@ public sealed class SelectableI64Channel
     private int _count;
     private ulong _nextWaiterId = 1;
     private Exception? _notificationFailure;
+    private bool _closed;
 
     public SelectableI64Channel(int capacity, int maxWaiters = 64)
     {
@@ -52,6 +79,11 @@ public sealed class SelectableI64Channel
     public int Count
     {
         get { lock (_gate) return _count; }
+    }
+
+    public bool Closed
+    {
+        get { lock (_gate) return _closed; }
     }
 
     public int PendingReaders
@@ -75,15 +107,25 @@ public sealed class SelectableI64Channel
     public Subscription SubscribeWritable(Action<Subscription> notify) =>
         Subscribe(WaitKind.Write, notify);
 
-    /// <summary>
-    /// Commit a read for an active readiness subscription. Call only from
-    /// SelectArbiter.Registration.TryWin(commit). The caller must create an
-    /// empty NotificationBatch before entering the select commit and dispatch
-    /// it only after TryWin returns.
-    /// </summary>
+    public bool Close()
+    {
+        var readers = CreateNotificationBatch();
+        var writers = CreateNotificationBatch();
+        lock (_gate)
+        {
+            if (_closed) return false;
+            Capture(_readers, readers);
+            Capture(_writers, writers);
+            _closed = true;
+        }
+        readers.Dispatch();
+        writers.Dispatch();
+        return true;
+    }
+
     public bool TryCommitRead(
         Subscription subscription,
-        out long value,
+        out ReadResult result,
         NotificationBatch notifications)
     {
         ArgumentNullException.ThrowIfNull(notifications);
@@ -91,28 +133,42 @@ public sealed class SelectableI64Channel
 
         lock (_gate)
         {
-            if (!Matches(subscription, WaitKind.Read) || _count == 0)
+            if (!Matches(subscription, WaitKind.Read))
             {
-                value = default;
+                result = new ReadResult(ReadStatus.WouldBlock);
                 return false;
             }
 
-            Capture(_writers, notifications);
-            value = _values[_head];
+            if (_count == 0)
+            {
+                if (!_closed)
+                {
+                    result = new ReadResult(ReadStatus.WouldBlock);
+                    return false;
+                }
+                CloseLocked(_readers[subscription.Index]);
+                result = new ReadResult(ReadStatus.Eof);
+                return true;
+            }
+
+            if (_closed && _count == 1)
+                Capture(_readers, notifications);
+            else
+                Capture(_writers, notifications);
+
+            var value = _values[_head];
             _head = (_head + 1) % _values.Length;
             _count--;
             CloseLocked(_readers[subscription.Index]);
+            result = new ReadResult(ReadStatus.Value, value);
             return true;
         }
     }
 
-    /// <summary>
-    /// Commit a write for an active readiness subscription. Call only from
-    /// SelectArbiter.Registration.TryWin(commit).
-    /// </summary>
     public bool TryCommitWrite(
         Subscription subscription,
         long value,
+        out WriteStatus result,
         NotificationBatch notifications)
     {
         ArgumentNullException.ThrowIfNull(notifications);
@@ -120,15 +176,29 @@ public sealed class SelectableI64Channel
 
         lock (_gate)
         {
-            if (!Matches(subscription, WaitKind.Write) ||
-                _count == _values.Length)
+            if (!Matches(subscription, WaitKind.Write))
+            {
+                result = WriteStatus.WouldBlock;
                 return false;
+            }
+            if (_closed)
+            {
+                CloseLocked(_writers[subscription.Index]);
+                result = WriteStatus.Closed;
+                return true;
+            }
+            if (_count == _values.Length)
+            {
+                result = WriteStatus.WouldBlock;
+                return false;
+            }
 
             Capture(_readers, notifications);
             _values[_tail] = value;
             _tail = (_tail + 1) % _values.Length;
             _count++;
             CloseLocked(_writers[subscription.Index]);
+            result = WriteStatus.Written;
             return true;
         }
     }
@@ -138,7 +208,7 @@ public sealed class SelectableI64Channel
         var notifications = CreateNotificationBatch();
         lock (_gate)
         {
-            if (_count == _values.Length) return false;
+            if (_closed || _count == _values.Length) return false;
             Capture(_readers, notifications);
             _values[_tail] = value;
             _tail = (_tail + 1) % _values.Length;
@@ -148,23 +218,40 @@ public sealed class SelectableI64Channel
         return true;
     }
 
-    public bool TryRead(out long value)
+    public ReadResult TryReadResult()
     {
         var notifications = CreateNotificationBatch();
+        ReadResult result;
         lock (_gate)
         {
             if (_count == 0)
-            {
-                value = default;
-                return false;
-            }
-            Capture(_writers, notifications);
-            value = _values[_head];
+                return new ReadResult(
+                    _closed ? ReadStatus.Eof : ReadStatus.WouldBlock);
+
+            if (_closed && _count == 1)
+                Capture(_readers, notifications);
+            else
+                Capture(_writers, notifications);
+
+            var value = _values[_head];
             _head = (_head + 1) % _values.Length;
             _count--;
+            result = new ReadResult(ReadStatus.Value, value);
         }
         notifications.Dispatch();
-        return true;
+        return result;
+    }
+
+    public bool TryRead(out long value)
+    {
+        var result = TryReadResult();
+        if (result.Status == ReadStatus.Value)
+        {
+            value = result.Value;
+            return true;
+        }
+        value = default;
+        return false;
     }
 
     public NotificationBatch CreateNotificationBatch() =>
@@ -197,8 +284,8 @@ public sealed class SelectableI64Channel
             waiter.Notify = notify;
 
             var ready = kind == WaitKind.Read
-                ? _count != 0
-                : _count != _values.Length;
+                ? _count != 0 || _closed
+                : _count != _values.Length || _closed;
             if (ready) immediate = notify;
         }
 
