@@ -87,6 +87,13 @@ public static class ExplicitExportSyntaxTests
         Reject("export const ready as 'ready';", "EXPORT_LITERAL_ALIAS_UNSUPPORTED");
         Reject("export class Foo as \"foo\";", "EXPORT_LITERAL_ALIAS_UNSUPPORTED");
 
+        var contextualSymbol = Parse("export symbol as PublicSymbol;");
+        Require(contextualSymbol.Kind is null &&
+                contextualSymbol.Items.Count == 1 &&
+                contextualSymbol.Items[0].LocalName == "symbol" &&
+                contextualSymbol.Items[0].ExternalName == "PublicSymbol",
+            "contextual symbol identifier");
+
         // Comments are lexical trivia, including nested block comments.
         var commented = Parse("/* outer /* nested */ */ export /*x*/ class X;");
         Require(commented.Kind == ExplicitExportKind.Class, "comments changed grammar");
