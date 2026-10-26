@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -23,6 +24,7 @@ internal static class AsyncIoBoundarySelfTest
             "synchronous HTTP transport"),
     };
 
+    [ModuleInitializer]
     public static void Run()
     {
         string root = FindRepositoryRoot();
