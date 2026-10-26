@@ -67,6 +67,9 @@ internal static class StructuredSourceTests
         Require(OresStructuredParser.Parse(
             "fnc main():int{/* select over default: {} end */return 1;}").Body.Count == 1,
             "select text in a comment must not trigger the capability gate");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{let int select=1;return select;}").Body.Count == 2,
+            "select identifier must not trigger the static-select capability gate");
 
         // Canonical Java foo() == foo(self) uses one caller-visible slot.
         // The .NET bootstrap has neither nominal class AST nor CIL dispatch:
