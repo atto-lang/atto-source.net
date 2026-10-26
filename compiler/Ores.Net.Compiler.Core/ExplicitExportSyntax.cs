@@ -268,9 +268,15 @@ public static class ExplicitExportSyntax
             string local = Name("EXPORT_MALFORMED_TARGET");
             if (kind == ExplicitExportKind.Symbol)
             {
-                if (Take("as") && Take("#"))
-                    throw Error("EXPORT_SYMBOL_IDENTITY_TARGET_REQUIRES_SYMBOL_SOURCE",
-                        "Symbol identity target requires a #symbol source");
+                if (Take("as"))
+                {
+                    if (Take("#"))
+                        throw Error("EXPORT_SYMBOL_IDENTITY_TARGET_REQUIRES_SYMBOL_SOURCE",
+                            "Symbol identity target requires a #symbol source");
+                    if (Current.Literal)
+                        throw Error("EXPORT_LITERAL_ALIAS_UNSUPPORTED",
+                            "runtime literal is not a source export name");
+                }
                 throw Error("EXPORT_KIND_MISMATCH", "export symbol requires #symbol target");
             }
 
