@@ -218,7 +218,7 @@ public static class OresParser
             }
             const string keyword = "select";
             if (i + keyword.Length > source.Length ||
-                !source.AsSpan(i, keyword.Length).SequenceEqual(keyword))
+                !source.AsSpan(i, keyword.Length).SequenceEqual(keyword.AsSpan()))
                 return false;
             int end = i + keyword.Length;
             return end == source.Length ||
