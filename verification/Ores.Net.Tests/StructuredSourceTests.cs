@@ -37,6 +37,37 @@ internal static class StructuredSourceTests
 
     public static void Run()
     {
+
+        foreach (var form in new[] {
+            "select { default: { return 1; } }",
+            "select over default: { return 1; } end",
+            "do select { default: { return 1; } }",
+            "do select over default: { return 1; } end",
+            "nb select { default: { return 1; } }",
+            "nb select over default: { return 1; } end",
+            "do nb select { default: { return 1; } }",
+            "do nb select over default: { return 1; } end",
+            "try select { default: { return 1; } }",
+            "try select over default: { return 1; } end"
+        })
+        {
+            const string diagnostic =
+                "Static select requires checked Channel/Future arbitration, actor-lane continuation, ownership and cancellation lowering in the .NET backend";
+            var source = "fnc main():int{" + form + " return 0;}";
+            try { _ = OresStructuredParser.Parse(source); }
+            catch (FormatException ex)
+            {
+                Require(ex.Message.Contains(diagnostic, StringComparison.Ordinal) &&
+                        ex.Message.Contains("offset", StringComparison.Ordinal),
+                    "static select must fail at the explicit backend capability gate: " + ex.Message);
+                continue;
+            }
+            throw new Exception(".NET structured frontend silently admitted unsupported select: " + form);
+        }
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{/* select over default: {} end */return 1;}").Body.Count == 1,
+            "select text in a comment must not trigger the capability gate");
+
         // Canonical Java foo() == foo(self) uses one caller-visible slot.
         // The .NET bootstrap has neither nominal class AST nor CIL dispatch:
         // validate a *specific* fail-closed diagnostic for the exact sources
