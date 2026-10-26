@@ -476,6 +476,36 @@ try
             "source export alias must not become CLR method metadata");
     }
 
+    // Scope narrowing and multiple source aliases must not change CLR
+    // methods, assembly bytes or native export directives. Only the source
+    // binding table can carry these names; unsupported semantic families
+    // remain rejected by the narrow scalar frontend.
+    foreach (var (label, source, expectedScope, aliases) in new[] {
+        ("file", "export[file] fnc main as file_main; fnc main():int{return 2+3*4;}",
+            SourceExportScope.File, new[] {"file_main"}),
+        ("package", "export[pkg] fnc main as package_main; fnc main():int{return 2+3*4;}",
+            SourceExportScope.Package, new[] {"package_main"}),
+        ("multiple", "export fnc main as public_main; export fnc main as other_main; " +
+            "fnc main():int{return 2+3*4;}",
+            SourceExportScope.Public, new[] {"public_main", "other_main"})
+    })
+    {
+        var parsed = OresParser.ParseWithExports(source);
+        Require(parsed.SourceExportBindings.Count == aliases.Length &&
+            parsed.SourceExportBindings.All(binding => binding.Scope == expectedScope),
+            "source-only export alias/scope metadata: " + label);
+        Require(parsed.SourceExportBindings.Select(binding => binding.ExternalName)
+            .SequenceEqual(aliases), "source export order and identity: " + label);
+        var scopedDll = Path.Combine(folder, "OresGenerated.source-" + label + ".dll");
+        CilEmitter.EmitLibrary(parsed.Expression, scopedDll);
+        Require(File.ReadAllBytes(generated).AsSpan().SequenceEqual(File.ReadAllBytes(scopedDll)),
+            "source-only exports must not change CIL bytes: " + label);
+        using var scopedAssembly = AssemblyDefinition.ReadAssembly(scopedDll);
+        Require(!scopedAssembly.MainModule.Types.SelectMany(type => type.Methods)
+            .Any(method => aliases.Contains(method.Name)),
+            "source aliases must not generate CLR method exports: " + label);
+    }
+
     var illegalOutput = Path.Combine(folder, "OresGenerated.invalid.dll");
     Reject(() => CilEmitter.EmitLibrary(
         new Binary('%', new Literal(2), new Literal(3)), illegalOutput),
