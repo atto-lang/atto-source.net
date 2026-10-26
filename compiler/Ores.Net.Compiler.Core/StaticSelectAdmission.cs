@@ -11,9 +11,34 @@ internal static class StaticSelectAdmission
     internal static FormatException Unsupported(int offset) =>
         new($"{Diagnostic} at offset {offset}");
 
-    internal static bool FollowedBySelect(string source, int offset)
+    internal static bool FollowedByStaticSelect(string source, int offset)
     {
         int i = offset;
+        if (!SkipTrivia(source, ref i)) return false;
+
+        const string keyword = "select";
+        if (i + keyword.Length > source.Length ||
+            !source.AsSpan(i, keyword.Length).SequenceEqual(keyword.AsSpan()))
+            return false;
+        int end = i + keyword.Length;
+        if (end < source.Length &&
+            (char.IsLetterOrDigit(source[end]) || source[end] == '_'))
+            return false;
+
+        i = end;
+        if (!SkipTrivia(source, ref i) || i >= source.Length) return false;
+        if (source[i] == '{') return true;
+        if (!(char.IsLetter(source[i]) || source[i] == '_')) return false;
+
+        int start = i++;
+        while (i < source.Length &&
+               (char.IsLetterOrDigit(source[i]) || source[i] == '_'))
+            i++;
+        return IsStaticSelectFollower(source[start..i]);
+    }
+
+    private static bool SkipTrivia(string source, ref int i)
+    {
         while (i < source.Length)
         {
             if (char.IsWhiteSpace(source[i])) { i++; continue; }
@@ -42,13 +67,6 @@ internal static class StaticSelectAdmission
             }
             break;
         }
-
-        const string keyword = "select";
-        if (i + keyword.Length > source.Length ||
-            !source.AsSpan(i, keyword.Length).SequenceEqual(keyword.AsSpan()))
-            return false;
-        int end = i + keyword.Length;
-        return end == source.Length ||
-               !(char.IsLetterOrDigit(source[end]) || source[end] == '_');
+        return true;
     }
 }
