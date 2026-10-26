@@ -77,6 +77,9 @@ Require(OresParser.Parse(
     "fnc main():int{return 1;} /* enum Color /* enum Mode */ end */") is Literal,
     "nested block-comment enum words must not trigger overload admission");
 
+// Shared export grammar vectors now run on the same candidate branch as the
+// real scalar-main binder. This is not a general CLR export implementation.
+ExplicitExportSyntaxTests.Run();
 SourceByteBudgetTests.Run();
 StructuralPatternAdmissionTests.Run();
 NumericSeparatorParityTests.Run();
@@ -263,6 +266,43 @@ foreach (var refinement in new[] {
 {
     Reject(() => OresParser.Parse(refinement),
         "unsupported refinement syntax must fail closed before CIL emission");
+}
+
+// Reconcile the standalone 32-vector source grammar with the executable
+// scalar-main binder. Accepted scalar syntax must preserve exactly the same
+// alias spellings and scopes in the post-declaration source binding table.
+// Other declaration families stay parser-only until real CIL lowering exists.
+foreach (var sourceExport in new[] {
+    "export fnc main as public_main;",
+    "export[pkg] fnc main as package_main;",
+    "export[file] fnc main as local_main;",
+    "export main as public_main;",
+    "export fnc {main as public_main,};",
+    "export fnc {main as first, main as second,};"
+})
+{
+    var syntax = ExplicitExportSyntax.Parse(sourceExport);
+    var compiled = OresParser.ParseWithExports(
+        sourceExport + " fnc main():int{return 42;}");
+    var expectedScope = syntax.Scope switch
+    {
+        ExplicitExportScope.File => SourceExportScope.File,
+        ExplicitExportScope.Package => SourceExportScope.Package,
+        _ => SourceExportScope.Public
+    };
+    Require(compiled.Expression is Literal { Value: 42 },
+        "syntax/binder composition must not change compiled expression");
+    Require(compiled.SourceExportBindings.Count == syntax.Items.Count,
+        "syntax/binder export binding cardinality must match");
+    foreach (var item in syntax.Items)
+    {
+        Require(compiled.SourceExportBindings.Any(binding =>
+            binding.LocalName == item.LocalName &&
+            binding.ExternalName == item.ExternalName &&
+            binding.Scope == expectedScope &&
+            binding.LocalSymbolId == "$root::fnc::main"),
+            "syntax/binder resolved identity, alias and scope must match");
+    }
 }
 
 // Explicit-export v1 metadata for the .NET scalar frontend's real supported
