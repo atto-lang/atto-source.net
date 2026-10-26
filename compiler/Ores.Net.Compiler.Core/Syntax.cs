@@ -45,6 +45,13 @@ public static class OresParser
                 throw new FormatException("Token count exceeds bootstrap limit");
             if (token.Text.Length == 0) break;
         }
+        for (int i = 0; i + 1 < tokens.Count; i++)
+        {
+            if (tokens[i].Text == "select" &&
+                tokens[i + 1].Text is "{" or "over" or "first" or "fair" or "random")
+                throw new FormatException(
+                    $"Static select requires checked Channel/Future arbitration, actor-lane continuation, ownership and cancellation lowering in the .NET backend at offset {tokens[i].Offset}");
+        }
         return new Reader(tokens).ParseProgram();
     }
 
@@ -140,7 +147,8 @@ public static class OresParser
                 // a verified source graph / native AOT linker exists.
                 if (word == "import")
                     throw new FormatException("source imports require verified module graph lowering");
-                if (word is "cpu" or "gpu" or "nb")
+                if (word is "cpu" or "gpu" ||
+                    (word == "nb" && !FollowedBySelect(text, _i)))
                     throw new FormatException(
                         $"execution region '{word}' requires verified CPU/GPU Task lowering; no implicit CPU fallback at offset {start}");
                 if (word == "task")
@@ -175,6 +183,46 @@ public static class OresParser
                 return new Token(text[start.._i], start);
             }
             throw new FormatException($"Invalid character at offset {start}");
+        }
+
+        private static bool FollowedBySelect(string source, int offset)
+        {
+            int i = offset;
+            while (i < source.Length)
+            {
+                if (char.IsWhiteSpace(source[i])) { i++; continue; }
+                if (i + 1 < source.Length && source[i] == '/' && source[i + 1] == '/')
+                {
+                    i += 2;
+                    while (i < source.Length &&
+                           source[i] is not ('\n' or '\r' or '\u0085' or '\u2028' or '\u2029'))
+                        i++;
+                    continue;
+                }
+                if (i + 1 < source.Length && source[i] == '/' && source[i + 1] == '*')
+                {
+                    i += 2;
+                    int depth = 1;
+                    while (i < source.Length && depth > 0)
+                    {
+                        if (i + 1 < source.Length && source[i] == '/' && source[i + 1] == '*')
+                        { depth++; i += 2; }
+                        else if (i + 1 < source.Length && source[i] == '*' && source[i + 1] == '/')
+                        { depth--; i += 2; }
+                        else i++;
+                    }
+                    if (depth != 0) return false;
+                    continue;
+                }
+                break;
+            }
+            const string keyword = "select";
+            if (i + keyword.Length > source.Length ||
+                !source.AsSpan(i, keyword.Length).SequenceEqual(keyword))
+                return false;
+            int end = i + keyword.Length;
+            return end == source.Length ||
+                   !(char.IsLetterOrDigit(source[end]) || source[end] == '_');
         }
     }
 
