@@ -84,9 +84,6 @@ public static class OresStructuredParser
                   tokens[^2].Text == "define")))
                 throw new FormatException(
                     $"Nominal class/actor methods require receiver-erased method slots, type/borrow checking and Native AOT CIL lowering; unsupported in .NET structured frontend at offset {token.Offset}");
-            if (token.Text == "select")
-                throw new FormatException(
-                    $"Static select requires checked Channel/Future arbitration, actor-lane continuation, ownership and cancellation lowering in the .NET backend at offset {token.Offset}");
             if (token.Text is "lex" or "nlex")
             {
                 int after = token.Offset + token.Text.Length;
@@ -104,6 +101,10 @@ public static class OresStructuredParser
         }
         for (int i = 0; i + 1 < tokens.Count; i++)
         {
+            if (tokens[i].Text == "select" &&
+                tokens[i + 1].Text is "{" or "over" or "first" or "fair" or "random")
+                throw new FormatException(
+                    $"Static select requires checked Channel/Future arbitration, actor-lane continuation, ownership and cancellation lowering in the .NET backend at offset {tokens[i].Offset}");
             if ((tokens[i].Text is "tuple" or "structural") &&
                 tokens[i + 1].Text == "(")
                 throw new FormatException(
