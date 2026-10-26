@@ -18,10 +18,10 @@ internal static class SelectableI64ChannelSelfTest
             callback();
             var notifications = channel.CreateNotificationBatch();
             long value = default;
-            _ = registration.TryWin(() =>
+            var won = registration.TryWin(() =>
                 channel.TryCommitRead(subscription, out value, notifications));
             notifications.Dispatch();
-            if (registration.IsWinner) result(value);
+            if (won) result(value);
         });
     }
 
@@ -265,8 +265,7 @@ internal static class SelectableI64ChannelSelfTest
     {
         var first = new SelectableI64Channel(1);
         var second = new SelectableI64Channel(1);
-        SelectableI64Channel.Subscription? foreign = null;
-        foreign = first.SubscribeReadable(_ => { });
+        var foreign = first.SubscribeReadable(_ => { });
 
         var batch = second.CreateNotificationBatch();
         Require(!second.TryCommitRead(foreign, out _, batch),
