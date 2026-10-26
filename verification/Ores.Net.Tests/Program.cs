@@ -746,4 +746,9 @@ CfgCilStressTests.Run();
 StructuredSourceTests.Run();
 StaticFactsV0Tests.Run();
 ValueBoundaryTests.Run();
+
+ExpectExportFailure(
+    "export symbol as PublicSymbol; fnc main(): int { return 1; }",
+    "EXPORT_UNKNOWN_TARGET");
+
 Console.WriteLine("Oreslang .NET bootstrap, CFG verifier, CIL stress and structured source tests passed");
