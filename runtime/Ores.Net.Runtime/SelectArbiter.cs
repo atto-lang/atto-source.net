@@ -196,6 +196,7 @@ public sealed class SelectArbiter : IDisposable
         Action? immediate = null;
         lock (_gate)
         {
+            EnsureNoCommitReentry();
             var slot = _slots[index];
             switch (slot.State)
             {
@@ -224,7 +225,7 @@ public sealed class SelectArbiter : IDisposable
 
         try
         {
-            immediate();
+            immediate!();
         }
         catch (Exception error)
         {
