@@ -29,18 +29,20 @@ internal static class SelectArbiterSelfTest
         });
 
         Require(wins == 1, "concurrent ready race must have exactly one winner");
-        Require(select.Winner is int winner, "winner index missing");
+        var winner = select.Winner;
+        Require(winner.HasValue, "winner index missing");
+        var winnerIndex = winner.GetValueOrDefault();
 
         var revokedTotal = 0;
         for (var i = 0; i < count; i++)
         {
             var observed = Volatile.Read(ref revoked[i]);
-            Require(observed == (i == winner ? 0 : 1),
+            Require(observed == (i == winnerIndex ? 0 : 1),
                 "loser revocation count mismatch at index " + i);
             revokedTotal += observed;
         }
         Require(revokedTotal == count - 1, "all and only losers are revoked");
-        Require(registrations[winner].IsWinner, "winning registration identity");
+        Require(registrations[winnerIndex].IsWinner, "winning registration identity");
     }
 
     private static void TerminalBeforeArmRevokesLateLoser()
