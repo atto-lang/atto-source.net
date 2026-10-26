@@ -196,7 +196,7 @@ public static class OresStructuredParser
                     (Alpha(source[index]) || Digit(source[index]) || source[index] == '_'));
                 string word = source[offset..index];
                 if (word is "cpu" or "gpu" ||
-                    (word == "nb" && !StaticSelectAdmission.FollowedBySelect(source, index)))
+                    (word == "nb" && !StaticSelectAdmission.FollowedByStaticSelect(source, index)))
                     throw new FormatException(
                         $"execution region '{word}' requires verified CPU/GPU Task lowering; no implicit CPU fallback at offset {offset}");
                 if (word == "task")
