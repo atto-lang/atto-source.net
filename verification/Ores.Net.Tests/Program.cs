@@ -265,6 +265,72 @@ foreach (var refinement in new[] {
         "unsupported refinement syntax must fail closed before CIL emission");
 }
 
+// Explicit-export v1 metadata for the .NET scalar frontend's real supported
+// declaration family: the single fnc main. OresParser.Parse remains the
+// executable API; ParseWithExports exposes source-interface metadata only.
+{
+    var parsed = OresParser.ParseWithExports(
+        "export fnc main as public_main; fnc main():int{return 42;}");
+    Require(parsed.Expression is Literal { Value: 42 }, "explicit export preserves scalar AST");
+    Require(parsed.SourceExportBindings.Count == 1, "one explicit .NET source binding");
+    var binding = parsed.SourceExportBindings[0];
+    Require(binding.OwnerNamespaceId == "$root" &&
+            binding.LocalSymbolId == "$root::fnc::main" &&
+            binding.LocalKind == "fnc" &&
+            binding.LocalName == "main" &&
+            binding.ExternalName == "public_main" &&
+            binding.Scope == SourceExportScope.Public &&
+            binding.Origin == SourceExportOrigin.ExplicitExport,
+        "stable .NET explicit export binding");
+}
+{
+    var before = OresParser.ParseWithExports(
+        "export[pkg] fnc main; fnc main():int{return 7;}");
+    var after = OresParser.ParseWithExports(
+        "fnc main():int{return 7;} export[pkg] fnc main;");
+    Require(before.SourceExportBindings.SequenceEqual(after.SourceExportBindings),
+        "forward and after-declaration .NET exports are semantically identical");
+    Require(before.SourceExportBindings[0].Scope == SourceExportScope.Package,
+        "package source scope is metadata only");
+}
+{
+    var idempotent = OresParser.ParseWithExports(
+        "export fnc main; pub fnc main():int{return 1;}");
+    Require(idempotent.SourceExportBindings.Count == 1 &&
+            idempotent.SourceExportBindings[0].Origin == SourceExportOrigin.ImplicitPub,
+        "inline pub plus identical .NET explicit export is idempotent");
+}
+RejectDiagnostic(
+    () => OresParser.ParseWithExports("export[pkg] fnc main; pub fnc main():int{return 1;}"),
+    "EXPORT_SCOPE_CONFLICT", "narrow export cannot contradict pub main");
+RejectDiagnostic(
+    () => OresParser.ParseWithExports("export class main; fnc main():int{return 1;}"),
+    "EXPORT_KIND_MISMATCH", "typed export kind mismatch");
+RejectDiagnostic(
+    () => OresParser.ParseWithExports("export fnc missing; fnc main():int{return 1;}"),
+    "EXPORT_UNKNOWN_TARGET", "unknown local source export");
+RejectDiagnostic(
+    () => OresParser.ParseWithExports("export {}; fnc main():int{return 1;}"),
+    "EXPORT_EMPTY_GROUP", "empty export group");
+RejectDiagnostic(
+    () => OresParser.ParseWithExports("export fnc {,main}; fnc main():int{return 1;}"),
+    "EXPORT_MALFORMED_LIST", "leading export comma");
+RejectDiagnostic(
+    () => OresParser.ParseWithExports("export *; fnc main():int{return 1;}"),
+    "EXPORT_WILDCARD_UNSUPPORTED", "wildcard export");
+RejectDiagnostic(
+    () => OresParser.ParseWithExports("export dep::main; fnc main():int{return 1;}"),
+    "EXPORT_QUALIFIED_TARGET_UNSUPPORTED", "qualified export target");
+RejectDiagnostic(
+    () => OresParser.ParseWithExports("export main(int); fnc main():int{return 1;}"),
+    "EXPORT_CALLABLE_SIGNATURE_UNSUPPORTED", "callable export selector");
+RejectDiagnostic(
+    () => OresParser.ParseWithExports("export fnc main as 'ready'; fnc main():int{return 1;}"),
+    "EXPORT_LITERAL_ALIAS_UNSUPPORTED", "literal export alias");
+RejectDiagnostic(
+    () => OresParser.ParseWithExports("export symbol #ready as #ready; fnc main():int{return 1;}"),
+    "EXPORT_BACKEND_UNSUPPORTED_KIND", "Symbol declarations are unavailable in scalar .NET");
+
 var positive = OresParser.Parse("define pub fnc main() : int { return 2 + 3 * 4; }");
 Require(positive is Binary { Operator: '+' }, "top-level expression shape");
 Require(OresParser.Parse("define pub fnc main() -> int { return 2 + 3 * 4; }")
@@ -392,6 +458,23 @@ try
     CilEmitter.EmitLibrary(positive, reproducible);
     Require(File.ReadAllBytes(generated).AsSpan().SequenceEqual(File.ReadAllBytes(reproducible)),
         "generated CIL must be byte-for-byte deterministic");
+
+    // Explicit source export bindings are not CLR/native export directives.
+    // The executable AST is identical, therefore deterministic emitted CIL
+    // must also be byte-for-byte identical and must not acquire the alias.
+    var exportParsed = OresParser.ParseWithExports(
+        "export fnc main as public_main; fnc main():int{return 2+3*4;}");
+    var exportDll = Path.Combine(folder, "OresGenerated.export-boundary.dll");
+    CilEmitter.EmitLibrary(exportParsed.Expression, exportDll);
+    Require(File.ReadAllBytes(generated).AsSpan().SequenceEqual(File.ReadAllBytes(exportDll)),
+        "explicit Oreslang export must not alter CLR assembly bytes");
+    using (var exportAssembly = AssemblyDefinition.ReadAssembly(exportDll))
+    {
+        Require(!exportAssembly.MainModule.Types
+            .SelectMany(type => type.Methods)
+            .Any(method => method.Name == "public_main"),
+            "source export alias must not become CLR method metadata");
+    }
 
     var illegalOutput = Path.Combine(folder, "OresGenerated.invalid.dll");
     Reject(() => CilEmitter.EmitLibrary(
