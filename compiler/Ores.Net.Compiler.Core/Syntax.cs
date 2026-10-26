@@ -162,7 +162,7 @@ public static class OresParser
                     throw new FormatException($"Unterminated string literal at offset {start}");
                 string value = text[valueStart.._i];
                 _i++;
-                return new Token(quote + value + quote, start);
+                return new Token($"{quote}{value}{quote}", start);
             }
             if (ch is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or '_')
             {
@@ -234,6 +234,9 @@ public static class OresParser
             if (!Take(value))
                 throw new FormatException($"Expected '{value}' at offset {Current.Offset}");
         }
+
+        private FormatException Error(string message) =>
+            new($"{message} at offset {Current.Offset}");
 
         private sealed record PendingExport(
             SourceExportScope Scope,
@@ -356,7 +359,7 @@ public static class OresParser
             if (Take("#"))
             {
                 string local = "#" + ExportIdentifier();
-                if (kind is not null and not "symbol")
+                if (kind is not null && kind != "symbol")
                     throw Error("[EXPORT_KIND_MISMATCH] Symbol literal does not match typed export kind");
                 bool selfIdentity = false;
                 if (Take("as"))
@@ -460,7 +463,7 @@ public static class OresParser
                 {
                     if (item.Symbol)
                         throw new FormatException("[EXPORT_BACKEND_UNSUPPORTED_KIND] .NET scalar bootstrap has no Symbol declarations");
-                    if (declaration.Kind is not null and not "fnc")
+                    if (declaration.Kind is not null && declaration.Kind != "fnc")
                     {
                         if (item.Local == "main")
                             throw new FormatException("[EXPORT_KIND_MISMATCH] typed export kind does not match local fnc main");
