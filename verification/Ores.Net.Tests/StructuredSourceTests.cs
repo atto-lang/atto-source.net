@@ -44,7 +44,7 @@ internal static class StructuredSourceTests
             "do select { default: { return 1; } }",
             "do select over default: { return 1; } end",
             "nb select { default: { return 1; } }",
-            "nb select over default: { return 1; } end",
+            "nb /* prefix */ select /* delimiter */ over default: { return 1; } end",
             "do nb select { default: { return 1; } }",
             "do nb select over default: { return 1; } end",
             "try select { default: { return 1; } }",
@@ -99,6 +99,22 @@ internal static class StructuredSourceTests
         Require(OresParser.Parse(
             "fnc main():int{/* nb select over default: {} end */return 1;}") is Literal,
             "shipping parser must ignore select text inside comments");
+
+        foreach (var parse in new Func<string, object>[] {
+            source => OresParser.Parse(source),
+            source => OresStructuredParser.Parse(source)
+        })
+        {
+            try { _ = parse("fnc main():int{nb select();return 0;}"); }
+            catch (FormatException ex)
+            {
+                Require(ex.Message.Contains("execution region 'nb'", StringComparison.Ordinal),
+                    "call-like nb select spelling must preserve the existing nb capability gate: " +
+                    ex.Message);
+                continue;
+            }
+            throw new Exception("call-like nb select spelling unexpectedly bypassed nb admission");
+        }
 
         // Canonical Java foo() == foo(self) uses one caller-visible slot.
         // The .NET bootstrap has neither nominal class AST nor CIL dispatch:
