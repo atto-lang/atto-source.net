@@ -147,7 +147,7 @@ public static class OresParser
                 if (word == "import")
                     throw new FormatException("source imports require verified module graph lowering");
                 if (word is "cpu" or "gpu" ||
-                    (word == "nb" && !StaticSelectAdmission.FollowedBySelect(text, _i)))
+                    (word == "nb" && !StaticSelectAdmission.FollowedByStaticSelect(text, _i)))
                     throw new FormatException(
                         $"execution region '{word}' requires verified CPU/GPU Task lowering; no implicit CPU fallback at offset {start}");
                 if (word == "task")
