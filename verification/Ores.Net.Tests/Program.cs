@@ -94,6 +94,8 @@ Reject(() => OresParser.Parse("fnc main():int { return 1=2; }"), "assignment exp
 Reject(() => OresParser.Parse("fnc main():int { const x = 1; return x; }"), "local assignment");
 
 ActorRefNoWireSelfTest.Run();
+ActorPhysicalTurnCreditsSelfTest.Run();
+ActorMaxThreadsSourceAdmissionSelfTest.Run();
 ActorMailboxBoundsSelfTest.Run();
 ActorMailboxRestartAtomicitySelfTest.Run();
 ActorMailboxAuthorizationPrioritySelfTest.Run();

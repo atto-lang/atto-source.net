@@ -45,6 +45,30 @@ public static class OresParser
                 throw new FormatException("Token count exceeds bootstrap limit");
             if (token.Text.Length == 0) break;
         }
+        // A host-only credit gate is not a source actor scheduler. Diagnose
+        // valid source actor annotations explicitly rather than treating
+        // their presence as evidence of executable actor lowering.
+        for (int i = 0; i < tokens.Count; ++i)
+        {
+            if (tokens[i].Text == "@" && i + 1 < tokens.Count
+                && tokens[i + 1].Text == "ActorMaxThreads")
+            {
+                bool wellFormed = i + 6 < tokens.Count
+                    && tokens[i + 2].Text == "("
+                    && tokens[i + 3].Text == "MaxActorThreads"
+                    && tokens[i + 4].Text == "."
+                    && (tokens[i + 5].Text is "LOW" or "MEDIUM" or "HIGH")
+                    && tokens[i + 6].Text == ")";
+                if (!wellFormed)
+                    throw new FormatException("malformed @ActorMaxThreads; expected MaxActorThreads.LOW/MEDIUM/HIGH");
+                throw new FormatException(
+                    "source actor @ActorMaxThreads is unsupported in .NET scalar lowering; no parallel actor execution");
+            }
+            if (tokens[i].Text == "define" && i + 1 < tokens.Count
+                && tokens[i + 1].Text == "actor")
+                throw new FormatException(
+                    "source actors require typed actor scheduler lowering in .NET");
+        }
         return new Reader(tokens).ParseProgram();
     }
 
@@ -169,7 +193,7 @@ public static class OresParser
             // Lex assignment punctuation so unsupported declarations are rejected
             // at their declaration, rather than at a later initializer. The
             // arithmetic parser still has no assignment production.
-            if ("()+-*/{}:;.=?".IndexOf(ch) >= 0)
+            if ("@()+-*/{}:;.=?".IndexOf(ch) >= 0)
             {
                 _i++;
                 return new Token(text[start.._i], start);
