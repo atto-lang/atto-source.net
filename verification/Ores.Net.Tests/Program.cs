@@ -80,6 +80,7 @@ Require(OresParser.Parse(
 SourceByteBudgetTests.Run();
 StructuralPatternAdmissionTests.Run();
 NumericSeparatorParityTests.Run();
+CrossBackendCheckedI64ParityTests.Run();
 
 // The canonical actor negative includes a later assignment. Lex its punctuation
 // while preserving the precise unsupported top-level declaration diagnostic.
