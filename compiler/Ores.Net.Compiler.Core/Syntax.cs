@@ -183,8 +183,7 @@ public static class OresParser
             }
             throw new FormatException($"Invalid character at offset {start}");
         }
-
-
+    }
 
     private sealed class Reader(List<Token> tokens)
     {
