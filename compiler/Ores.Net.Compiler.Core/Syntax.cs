@@ -310,9 +310,13 @@ public static class OresParser
                 throw Error("[EXPORT_REEXPORT_UNSUPPORTED] export from is reserved for future re-export syntax");
 
             string? kind = null;
+            bool contextualSymbolKind =
+                Current.Text == "symbol" &&
+                _index + 1 < tokens.Count &&
+                tokens[_index + 1].Text is not ("as" or ";" or ",");
             if (Current.Text is "module" or "actor" or "class" or "fnc" or "routine" or
                 "interface" or "contract" or "trait" or "struct" or "type" or
-                "const" or "val" or "let" or "symbol" or "model")
+                "const" or "val" or "let" or "model" || contextualSymbolKind)
             {
                 kind = Current.Text;
                 _index++;
