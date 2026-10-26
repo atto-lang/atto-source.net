@@ -7,12 +7,29 @@ public sealed record Literal(long Value) : Expression;
 public sealed record Unary(char Operator, Expression Value) : Expression;
 public sealed record Binary(char Operator, Expression Left, Expression Right) : Expression;
 
+public enum SourceExportScope { File, Package, Public }
+public enum SourceExportOrigin { ImplicitPub, ExplicitExport }
+public sealed record SourceExportBinding(
+    string OwnerNamespaceId,
+    string LocalSymbolId,
+    string LocalKind,
+    string LocalName,
+    string ExternalName,
+    SourceExportScope Scope,
+    SourceExportOrigin Origin);
+public sealed record ParsedSource(
+    Expression Expression,
+    IReadOnlyList<SourceExportBinding> SourceExportBindings);
+
 public static class OresParser
 {
     private const int MaxDepth = 128;
     private const int MaxTokens = 100_000;
 
-    public static Expression Parse(string source)
+    public static Expression Parse(string source) =>
+        ParseWithExports(source).Expression;
+
+    public static ParsedSource ParseWithExports(string source)
     {
         ArgumentNullException.ThrowIfNull(source);
         if (source.Length > 1_048_576)
@@ -125,6 +142,28 @@ public static class OresParser
                     throw new FormatException($"Floating-point/decimal literal requires typed numeric lowering at offset {start}");
                 return new Token(text[start.._i], start);
             }
+            if (ch is '"' or '\'')
+            {
+                char quote = ch;
+                _i++;
+                var valueStart = _i;
+                bool escaped = false;
+                while (_i < text.Length)
+                {
+                    char current = text[_i];
+                    if (!escaped && current == quote) break;
+                    if (current is '\n' or '\r')
+                        throw new FormatException($"Raw newline in string literal at offset {start}");
+                    if (!escaped && current == '\\') escaped = true;
+                    else escaped = false;
+                    _i++;
+                }
+                if (_i == text.Length)
+                    throw new FormatException($"Unterminated string literal at offset {start}");
+                string value = text[valueStart.._i];
+                _i++;
+                return new Token(quote + value + quote, start);
+            }
             if (ch is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or '_')
             {
                 _i++;
@@ -169,7 +208,7 @@ public static class OresParser
             // Lex assignment punctuation so unsupported declarations are rejected
             // at their declaration, rather than at a later initializer. The
             // arithmetic parser still has no assignment production.
-            if ("()+-*/{}:;.=?".IndexOf(ch) >= 0)
+            if ("()[]+-*/{}:;,.=?#<>".IndexOf(ch) >= 0)
             {
                 _i++;
                 return new Token(text[start.._i], start);
@@ -196,8 +235,17 @@ public static class OresParser
                 throw new FormatException($"Expected '{value}' at offset {Current.Offset}");
         }
 
-        public Expression ParseProgram()
+        private sealed record PendingExport(
+            SourceExportScope Scope,
+            string? Kind,
+            IReadOnlyList<(string Local, string? External, bool Symbol, bool SelfIdentity)> Items,
+            int Offset);
+
+        public ParsedSource ParseProgram()
         {
+            var exports = new List<PendingExport>();
+            while (Current.Text == "export") exports.Add(ParseExport());
+
             bool defined = false, exposed = false;
             while (Current.Text is "define" or "pub")
             {
@@ -224,9 +272,210 @@ public static class OresParser
             var expression = ParseAdd(0);
             Expect(";");
             Expect("}");
+
+            while (Current.Text == "export") exports.Add(ParseExport());
             if (Current.Text.Length != 0)
                 throw new FormatException($"Unexpected token at offset {Current.Offset}");
-            return expression;
+
+            return new ParsedSource(expression, ResolveExports(exports, exposed));
+        }
+
+        private PendingExport ParseExport()
+        {
+            int at = Current.Offset;
+            Expect("export");
+            SourceExportScope scope = SourceExportScope.Public;
+            if (Current.Text is "[" or "(")
+            {
+                string close = Take("[") ? "]" : (Take("(") ? ")" : throw Error("Invalid export scope"));
+                if (Current.Text == "file") scope = SourceExportScope.File;
+                else if (Current.Text is "pkg" or "package") scope = SourceExportScope.Package;
+                else throw Error("[EXPORT_UNKNOWN_SCOPE] expected file, pkg, or package export scope");
+                _index++;
+                Expect(close);
+                if (Current.Text is "[" or "(")
+                    throw Error("[EXPORT_MULTIPLE_SCOPES] export accepts exactly one scope");
+            }
+
+            if (Take("*"))
+            {
+                if (Take("from"))
+                    throw Error("[EXPORT_REEXPORT_UNSUPPORTED] export * from is reserved for future re-export syntax");
+                throw Error("[EXPORT_WILDCARD_UNSUPPORTED] wildcard exports are not enabled in v1");
+            }
+            if (Take("from"))
+                throw Error("[EXPORT_REEXPORT_UNSUPPORTED] export from is reserved for future re-export syntax");
+
+            string? kind = null;
+            if (Current.Text is "module" or "actor" or "class" or "fnc" or "routine" or
+                "interface" or "contract" or "trait" or "struct" or "type" or
+                "const" or "val" or "let" or "symbol" or "model")
+            {
+                kind = Current.Text;
+                _index++;
+            }
+            else if (Current.Text is "string" or "String" or "int" or "bool" or "void")
+                throw Error("[EXPORT_UNKNOWN_DECLARATION_KIND] typed export prefixes are declaration families, not runtime value types");
+
+            var items = new List<(string Local, string? External, bool Symbol, bool SelfIdentity)>();
+            if (Take("{"))
+            {
+                if (Take("}")) throw Error("[EXPORT_EMPTY_GROUP] export groups cannot be empty");
+                while (true)
+                {
+                    if (Current.Text == ",")
+                        throw Error("[EXPORT_MALFORMED_LIST] leading or repeated comma in export group");
+                    if (Current.Text == "{")
+                        throw Error("[EXPORT_NESTED_GROUP] nested export groups are not supported");
+                    if (Current.Text is "module" or "actor" or "class" or "fnc" or "routine" or
+                        "interface" or "contract" or "trait" or "struct" or "type" or
+                        "const" or "val" or "let" or "symbol" or "model")
+                        throw Error("[EXPORT_KIND_PREFIX_IN_GROUP] typed export kind belongs before the group");
+                    items.Add(ParseExportItem(kind));
+                    if (Take(","))
+                    {
+                        if (Take("}")) break;
+                        continue;
+                    }
+                    if (Take("}")) break;
+                    RejectExportSuffix();
+                    throw Error("[EXPORT_MALFORMED_LIST] expected ',' or '}' after export item");
+                }
+            }
+            else items.Add(ParseExportItem(kind));
+
+            RejectExportSuffix();
+            if (!Take(";"))
+                throw Error("[EXPORT_SEMICOLON_REQUIRED] export declarations must end with ';'");
+            return new PendingExport(scope, kind, items.AsReadOnly(), at);
+        }
+
+        private (string Local, string? External, bool Symbol, bool SelfIdentity)
+            ParseExportItem(string? kind)
+        {
+            if (Take("#"))
+            {
+                string local = "#" + ExportIdentifier();
+                if (kind is not null and not "symbol")
+                    throw Error("[EXPORT_KIND_MISMATCH] Symbol literal does not match typed export kind");
+                bool selfIdentity = false;
+                if (Take("as"))
+                {
+                    if (Take("#"))
+                    {
+                        string target = "#" + ExportIdentifier();
+                        if (!string.Equals(target, local, StringComparison.Ordinal))
+                            throw Error("[EXPORT_SYMBOL_IDENTITY_MISMATCH] Symbol export identity must be unchanged");
+                        selfIdentity = true;
+                    }
+                    else if (IsQuoted(Current.Text))
+                        throw Error("[EXPORT_LITERAL_ALIAS_UNSUPPORTED] runtime literals are not export binding names");
+                    else
+                        throw Error("[EXPORT_SYMBOL_BINDING_ALIAS_UNSUPPORTED] Symbol identities are not ordinary binding aliases");
+                }
+                return (local, null, true, selfIdentity);
+            }
+
+            if (kind == "symbol")
+            {
+                if (IsIdentifier(Current.Text) &&
+                    _index + 2 < tokens.Count &&
+                    tokens[_index + 1].Text == "as" &&
+                    tokens[_index + 2].Text == "#")
+                    throw Error("[EXPORT_SYMBOL_IDENTITY_TARGET_REQUIRES_SYMBOL_SOURCE] a Symbol identity target requires a #symbol source");
+                throw Error("[EXPORT_SYMBOL_LITERAL_REQUIRED] Symbol exports name nominal #symbol identities");
+            }
+
+            string name = ExportIdentifier();
+            string? alias = null;
+            if (Take("as"))
+            {
+                if (Current.Text == "#")
+                    throw Error("[EXPORT_SYMBOL_IDENTITY_TARGET_REQUIRES_SYMBOL_SOURCE] only a Symbol source may use Symbol identity after 'as'");
+                if (IsQuoted(Current.Text))
+                    throw Error("[EXPORT_LITERAL_ALIAS_UNSUPPORTED] runtime literals are not export binding names");
+                alias = ExportIdentifier();
+            }
+            return (name, alias, false, false);
+        }
+
+        private string ExportIdentifier()
+        {
+            if (!IsIdentifier(Current.Text))
+                throw Error("[EXPORT_MALFORMED_TARGET] expected export identifier");
+            string result = Current.Text;
+            _index++;
+            return result;
+        }
+
+        private static bool IsIdentifier(string value) =>
+            value.Length > 0 &&
+            (value[0] is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or '_') &&
+            value.Skip(1).All(c => c is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_');
+
+        private static bool IsQuoted(string value) =>
+            value.Length >= 2 &&
+            ((value[0] == '\'' && value[^1] == '\'') ||
+             (value[0] == '"' && value[^1] == '"'));
+
+        private void RejectExportSuffix()
+        {
+            if (Current.Text is "." or ":" or "/")
+                throw Error("[EXPORT_QUALIFIED_TARGET_UNSUPPORTED] v1 local exports use simple local names only");
+            if (Current.Text is "<" or ">")
+                throw Error("[EXPORT_GENERIC_TARGET_UNSUPPORTED] export generic instantiations are not supported");
+            if (Current.Text == "(")
+                throw Error("[EXPORT_CALLABLE_SIGNATURE_UNSUPPORTED] export overload selectors use the logical family name");
+            if (Current.Text == "{")
+                throw Error("[EXPORT_NESTED_GROUP] nested export groups are not supported");
+        }
+
+        private static IReadOnlyList<SourceExportBinding> ResolveExports(
+            IReadOnlyList<PendingExport> exports, bool exposed)
+        {
+            var bindings = new List<SourceExportBinding>();
+            var external = new Dictionary<string, SourceExportBinding>(StringComparer.Ordinal);
+
+            void Add(SourceExportBinding candidate)
+            {
+                if (external.TryGetValue(candidate.ExternalName, out var prior))
+                {
+                    if (prior.LocalSymbolId == candidate.LocalSymbolId &&
+                        prior.Scope == candidate.Scope) return;
+                    if (prior.LocalSymbolId == candidate.LocalSymbolId)
+                        throw new FormatException("[EXPORT_SCOPE_CONFLICT] source binding has conflicting scopes");
+                    throw new FormatException("[EXPORT_ALIAS_COLLISION] external export name is already bound");
+                }
+                external.Add(candidate.ExternalName, candidate);
+                bindings.Add(candidate);
+            }
+
+            if (exposed)
+                Add(new SourceExportBinding("$root", "$root::fnc::main", "fnc",
+                    "main", "main", SourceExportScope.Public, SourceExportOrigin.ImplicitPub));
+
+            foreach (var declaration in exports)
+            {
+                foreach (var item in declaration.Items)
+                {
+                    if (item.Symbol)
+                        throw new FormatException("[EXPORT_BACKEND_UNSUPPORTED_KIND] .NET scalar bootstrap has no Symbol declarations");
+                    if (declaration.Kind is not null and not "fnc")
+                    {
+                        if (item.Local == "main")
+                            throw new FormatException("[EXPORT_KIND_MISMATCH] typed export kind does not match local fnc main");
+                        throw new FormatException("[EXPORT_BACKEND_UNSUPPORTED_KIND] .NET scalar bootstrap only lowers fnc main");
+                    }
+                    if (item.Local != "main")
+                        throw new FormatException("[EXPORT_UNKNOWN_TARGET] .NET scalar bootstrap has only local fnc main");
+                    if (exposed && declaration.Scope != SourceExportScope.Public)
+                        throw new FormatException("[EXPORT_SCOPE_CONFLICT] public main cannot be exported at narrower scope");
+                    Add(new SourceExportBinding("$root", "$root::fnc::main", "fnc",
+                        "main", item.External ?? "main", declaration.Scope,
+                        SourceExportOrigin.ExplicitExport));
+                }
+            }
+            return bindings.AsReadOnly();
         }
 
         private Expression ParseAdd(int depth)
