@@ -747,8 +747,10 @@ StructuredSourceTests.Run();
 StaticFactsV0Tests.Run();
 ValueBoundaryTests.Run();
 
-ExpectExportFailure(
-    "export symbol as PublicSymbol; fnc main(): int { return 1; }",
-    "EXPORT_UNKNOWN_TARGET");
+RejectDiagnostic(
+    () => OresParser.ParseWithExports(
+        "export symbol as PublicSymbol; fnc main(): int { return 1; }"),
+    "EXPORT_UNKNOWN_TARGET",
+    "contextual symbol identifier is not stolen by typed export grammar");
 
 Console.WriteLine("Oreslang .NET bootstrap, CFG verifier, CIL stress and structured source tests passed");
