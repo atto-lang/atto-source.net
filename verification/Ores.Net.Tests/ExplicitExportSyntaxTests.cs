@@ -86,6 +86,7 @@ public static class ExplicitExportSyntaxTests
         Reject("export string ready as 'ready';", "EXPORT_UNKNOWN_DECLARATION_KIND");
         Reject("export const ready as 'ready';", "EXPORT_LITERAL_ALIAS_UNSUPPORTED");
         Reject("export class Foo as \"foo\";", "EXPORT_LITERAL_ALIAS_UNSUPPORTED");
+        Reject("export symbol ready as 'ready';", "EXPORT_LITERAL_ALIAS_UNSUPPORTED");
 
         var contextualSymbol = Parse("export symbol as PublicSymbol;");
         Require(contextualSymbol.Kind is null &&
@@ -98,6 +99,6 @@ public static class ExplicitExportSyntaxTests
         var commented = Parse("/* outer /* nested */ */ export /*x*/ class X;");
         Require(commented.Kind == ExplicitExportKind.Class, "comments changed grammar");
 
-        Console.WriteLine("explicit export syntax: 31 shared vectors + comment-trivia hardening");
+        Console.WriteLine("explicit export syntax: 32 shared vectors + comment-trivia hardening");
     }
 }
