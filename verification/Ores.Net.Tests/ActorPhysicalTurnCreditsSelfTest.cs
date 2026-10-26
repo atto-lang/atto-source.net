@@ -17,6 +17,41 @@ internal static class ActorPhysicalTurnCreditsSelfTest
         a!.Dispose();
         Check(serial.Active == 0, "idempotent release");
 
+        // A permit is a single-use credit even if multiple host threads
+        // dispose the same reference simultaneously. Releasing twice could
+        // otherwise underflow the two-bit active count and reopen capacity.
+        var racing = new ActorPhysicalTurnCredits();
+        var sharedPermit = racing.TryAcquire();
+        Check(sharedPermit is not null, "concurrent disposal setup");
+        using (var startDispose = new ManualResetEventSlim(false))
+        {
+            var disposers = new Thread[16];
+            for (int i = 0; i < disposers.Length; i++)
+            {
+                disposers[i] = new Thread(() =>
+                {
+                    if (!startDispose.Wait(TimeSpan.FromSeconds(10)))
+                        throw new Exception("concurrent dispose start timeout");
+                    sharedPermit!.Dispose();
+                }) { IsBackground = true };
+                disposers[i].Start();
+            }
+            startDispose.Set();
+            foreach (var thread in disposers)
+                Check(thread.Join(10000), "concurrent dispose worker stuck");
+        }
+        Check(racing.Active == 0, "concurrent duplicate disposal underflow");
+        using (var recovered = racing.TryAcquire())
+        {
+            Check(recovered is not null && racing.Active == 1,
+                "credit reusable after simultaneous duplicate disposal");
+            racing.Close();
+            Check(racing.IsClosed && racing.TryAcquire() is null,
+                "retired actor cannot reacquire a released credit");
+        }
+        Check(racing.Active == 0 && racing.IsClosed,
+            "last permit release preserves retirement");
+
         var parallel = new ActorPhysicalTurnCredits(3);
         var first = parallel.TryAcquire();
         var second = parallel.TryAcquire();
