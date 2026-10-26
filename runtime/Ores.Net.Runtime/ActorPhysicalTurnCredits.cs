@@ -32,9 +32,14 @@ public sealed class ActorPhysicalTurnCredits
         int before = Volatile.Read(ref _state);
         if ((before & ClosedBit) != 0 || (before & ActiveMask) >= Maximum)
             return null;
+        // Allocate the lease BEFORE publishing the credit. If allocation
+        // fails (including OOM), no active turn has been reserved and there
+        // is no unreachable credit to strand a host actor indefinitely.
+        // A lost CAS discards this unpublished lease without releasing a credit.
+        var permit = new Permit(this);
         // One CAS attempt; no spin, wait, monitor or thread provisioning.
         return Interlocked.CompareExchange(ref _state, before + 1, before) == before
-            ? new Permit(this) : null;
+            ? permit : null;
     }
 
     public void Close() => Interlocked.Or(ref _state, ClosedBit);
