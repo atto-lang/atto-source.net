@@ -8,3 +8,12 @@
 /.github/private-ci-independent-reviewer.json @ORESoftware
 /.github/private-ci-required-checks.json @ORESoftware
 /.github/workflows/private-ci-policy.yml @ORESoftware
+
+# Native AOT compiler/runtime and verification trust boundaries.
+/compiler/ @ORESoftware
+/runtime/ @ORESoftware
+/host/ @ORESoftware
+/verification/ @ORESoftware
+/contracts/ @ORESoftware
+/tools/ @ORESoftware
+/scripts/ @ORESoftware
