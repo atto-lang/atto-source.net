@@ -170,8 +170,78 @@ internal static class SelectContinuationFenceSelfTest
         Require(fence.TryConsume(ticket), "live ticket still consumes");
     }
 
+
+    private static void TerminalCloseCannotReopen()
+    {
+        var fence = new SelectContinuationFence(maxTickets: 2);
+        var first = fence.Register(1);
+        var second = fence.Register(1);
+        Require(!fence.Closed && fence.Close(), "first terminal close");
+        Require(fence.Closed && !fence.Close(), "close idempotent");
+        Require(fence.PendingTickets == 0 && fence.Generation == 1, "closed without generation reuse");
+        Require(!fence.Advance(1), "closed fence cannot advance");
+        Require(!first.Active && !second.Active, "all pending tickets invalidated");
+        Require(!first.Close() && !second.Close(), "closed ticket close rejected");
+        Require(!fence.TryConsume(first), "delivery after close rejected");
+        var rejected = false;
+        try { _ = fence.Register(1); }
+        catch (InvalidOperationException) { rejected = true; }
+        Require(rejected, "closed fence rejects registration");
+        var sibling = new SelectContinuationFence();
+        Require(sibling.TryConsume(sibling.Register(1)), "sibling unaffected");
+    }
+
+    private static void CloseAtGenerationLimit()
+    {
+        var fence = new SelectContinuationFence(generation: ulong.MaxValue);
+        var ticket = fence.Register(ulong.MaxValue);
+        Require(fence.Close(), "terminal close does not need another generation");
+        Require(!fence.Advance(ulong.MaxValue), "closed limit cannot advance");
+        Require(!fence.TryConsume(ticket), "limit ticket invalidated");
+    }
+
+    private static void ConcurrentCancellationAndDelivery()
+    {
+        for (var round = 0; round < 256; round++)
+        {
+            var fence = new SelectContinuationFence(maxTickets: 1);
+            var ticket = fence.Register(1);
+            var consumed = false;
+            var cancelled = false;
+            System.Threading.Tasks.Parallel.Invoke(
+                () => consumed = fence.TryConsume(ticket),
+                () => cancelled = ticket.Close());
+            Require(consumed != cancelled, "exactly one cancel/delivery winner");
+            Require(fence.PendingTickets == 0, "concurrent winner releases slot");
+        }
+    }
+
+    private static void RegistrationRacingTerminalClose()
+    {
+        for (var round = 0; round < 256; round++)
+        {
+            var fence = new SelectContinuationFence(maxTickets: 1);
+            SelectContinuationFence.Ticket ticket = null!;
+            var rejected = false;
+            System.Threading.Tasks.Parallel.Invoke(
+                () => {
+                    try { ticket = fence.Register(1); }
+                    catch (InvalidOperationException) { rejected = true; }
+                },
+                () => Require(fence.Close(), "shutdown wins once"));
+            Require(rejected || ticket is not null, "registration outcome recorded");
+            Require(fence.Closed && fence.PendingTickets == 0, "no reservation survives shutdown");
+            Require(ticket is null || !ticket.Active, "registered ticket is invalidated");
+            Require(!fence.TryConsume(ticket!), "no post-shutdown delivery");
+        }
+    }
+
     public static void Run()
     {
+        TerminalCloseCannotReopen();
+        CloseAtGenerationLimit();
+        ConcurrentCancellationAndDelivery();
+        RegistrationRacingTerminalClose();
         CapacityFailurePreservesReservations();
         AdvanceRestoresFullCapacity();
         GenerationOverflowPreservesReservations();
