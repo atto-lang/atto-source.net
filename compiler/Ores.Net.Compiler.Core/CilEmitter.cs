@@ -282,6 +282,10 @@ public static class CilEmitter
             if (entry.Locals is not null) hash.AppendData(entry.Locals.ToArray());
         foreach (var signature in signatureBlobs)
             hash.AppendData(signature.ToArray());
+        // The MVID must also change when a method is renamed but its body
+        // and signature stay byte-for-byte identical.
+        foreach (var method in methods)
+            hash.AppendData(System.Text.Encoding.UTF8.GetBytes(method.Name));
         var mvid = new Guid(hash.GetHashAndReset().AsSpan(0, 16));
         metadata.AddModule(0, metadata.GetOrAddString("OresGenerated.dll"),
             metadata.GetOrAddGuid(mvid), default, default);
