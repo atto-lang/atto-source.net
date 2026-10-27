@@ -87,6 +87,51 @@ internal static class StructuredCfgLoweringTests
             }
             """;
         Check(sum, 45, "two loop-carried SSA values sum 0..9");
+        // Actual typed source-call semantics are checked in the independent
+        // reference evaluator, emitted CIL interpreter and deterministic PE.
+        // This is an acyclic, expression-only helper milestone, not a
+        // general function ABI or runtime call instruction.
+        Check("fnc plus_one(int x):int{return x+1;}fnc main():int{return plus_one(41);}",
+            42, "one typed i64 helper");
+        Check("fnc twice(int x):int{return x*2;}fnc answer():int{return twice(21);}fnc main():int{return answer();}",
+            42, "chained helper functions");
+        Check("fnc sum(int x,int y):int{return x+y;}fnc main():int{return sum(19,23);}",
+            42, "two parameter bindings in source order");
+        Check("fnc is_five(int x):bool{return x==5;}fnc main():int{if is_five(5){return 42;}else{return 0;}}",
+            42, "typed boolean result controls branch");
+        Check("fnc plus_one(int x):int{return x+1;}fnc main():int{let int x=99;return plus_one(41);}",
+            42, "callee cannot capture caller local");
+        Check("fnc from_constant():int{return 42;}fnc main():int{return from_constant();}",
+            42, "zero argument call");
+        Check("fnc plus_one(int x):int{return x+1;}fnc main():int{let int result=0;let int i=0;while i<3{result=plus_one(result);i=i+1;}return result;}",
+            3, "helper calls inside loop body");
+        Check("fnc add(int x,int y):int{return x+y;}fnc main():int{return add(10,add(20,12));}",
+            42, "nested call evaluation");
+
+        // Negative tests must reject before CIL artifact creation.
+        Reject("fnc main():int{return unknown(42);}", "unknown helper");
+        Reject("fnc main():int{return plus_one(41);}fnc plus_one(int x):int{return x+1;}",
+            "forward helper calls disabled");
+        Reject("fnc recursive(int x):int{return recursive(x);}fnc main():int{return recursive(1);}",
+            "recursive helper calls disabled");
+        Reject("fnc loop(int x):int{return loop(x);}fnc main():int{return 0;}",
+            "unreachable recursive helper still denied");
+        Reject("fnc add(int x,int y):int{return x+y;}fnc main():int{return add(1);}",
+            "arity mismatch");
+        Reject("fnc is_true(bool ok):bool{return ok;}fnc main():int{if is_true(1){return 1;}return 0;}",
+            "typed argument mismatch");
+        Reject("fnc bad(int x,int x):int{return x;}fnc main():int{return 0;}",
+            "duplicate parameter");
+        Reject("fnc wrong(int x):bool{return x;}fnc main():int{return 0;}",
+            "wrong return type");
+        Reject("fnc bad(int x):int{let int y=x;return y;}fnc main():int{return bad(1);}",
+            "helper statement bodies not yet supported");
+        Reject("fnc same():int{return 1;}fnc same():int{return 2;}fnc main():int{return 0;}",
+            "duplicate helper declarations");
+        CheckOverflow("fnc inc(int x):int{return x+1;}fnc main():int{return inc(9223372036854775807);}",
+            "typed call overflow preserves checked CIL");
+
+
         Check("fnc main():int{return 2+3*4;}", 14, "arithmetic");
         Check("fnc main():int{let int i=0;while i<10 {i=i+1;}return i;}",
             10, "single loop-carried variable");
