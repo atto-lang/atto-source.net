@@ -37,6 +37,19 @@ public static class CilEmitter
     // backend. Each SSA value has a typed i64 local slot, so shared subgraphs
     // and unused instructions have defined, non-exponential execution.
     public static void EmitLibrary(VerifiedIrFunction program, string outputFile)
+        => EmitVerifiedLibrary(program, outputFile, "Run");
+
+    // Distinct static ABI for the closed, experimental Task<int> root profile.
+    // The matching native host supplies the statically linked Task/Future entry
+    // shim; the compiled producer is ordinary verified i64 CIL, not interpreted.
+    public static void EmitTaskI64Library(VerifiedTaskI64Program program, string outputFile)
+    {
+        ArgumentNullException.ThrowIfNull(program);
+        EmitVerifiedLibrary(program.Producer, outputFile, "RunTaskI64Producer");
+    }
+
+    private static void EmitVerifiedLibrary(VerifiedIrFunction program, string outputFile,
+        string entryName)
     {
         ArgumentNullException.ThrowIfNull(program);
         ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
@@ -61,7 +74,7 @@ public static class CilEmitter
                 localVariablesSignature: localSignature,
                 attributes: MethodBodyAttributes.InitLocals);
             return (bodyOffset, methodCode, localsBlob);
-        });
+        }, entryName);
     }
 
     // Experimental CFG entry point. Only VerifiedCfgFunction is accepted;
@@ -108,7 +121,8 @@ public static class CilEmitter
 
     internal static void EmitLibraryCore(string outputFile,
         Func<MetadataBuilder, MethodBodyStreamEncoder,
-            (int BodyOffset, BlobBuilder Code, BlobBuilder? Locals)> buildBody)
+            (int BodyOffset, BlobBuilder Code, BlobBuilder? Locals)> buildBody,
+        string entryName = "Run")
     {
         var ilStream = new BlobBuilder();
         var bodyStream = new MethodBodyStreamEncoder(ilStream);
@@ -163,7 +177,7 @@ public static class CilEmitter
         var run = metadata.AddMethodDefinition(
             MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.HideBySig,
             MethodImplAttributes.IL,
-            metadata.GetOrAddString("Run"),
+            metadata.GetOrAddString(entryName),
             metadata.GetOrAddBlob(signature),
             bodyOffset,
             MetadataTokens.ParameterHandle(1));

@@ -5,11 +5,13 @@ using System.Text;
 // passed validation then crashed with IndexOutOfRangeException instead of usage.
 bool validCheck = args.Length == 2 && args[0] == "check";
 bool validCompile = args.Length == 4 && args[0] == "compile" && args[2] == "--out";
+bool validTaskCheck = args.Length == 2 && args[0] == "check-task-i64";
+bool validTaskCompile = args.Length == 4 && args[0] == "compile-task-i64" && args[2] == "--out";
 bool validStaticFacts = args.Length == 2 &&
     (args[0] == "static-facts" || args[0] == "static-facts-structured");
-if (!validCheck && !validCompile && !validStaticFacts)
+if (!validCheck && !validCompile && !validStaticFacts && !validTaskCheck && !validTaskCompile)
 {
-    Console.Error.WriteLine("usage: oresnet check input.ores | oresnet compile input.ores --out path/OresGenerated.dll | oresnet static-facts input.ores | oresnet static-facts-structured input.ores");
+    Console.Error.WriteLine("usage: oresnet check input.ores | oresnet compile input.ores --out path/OresGenerated.dll | oresnet check-task-i64 input.ores | oresnet compile-task-i64 input.ores --out path/OresGenerated.dll | oresnet static-facts input.ores | oresnet static-facts-structured input.ores");
     return 2;
 }
 
@@ -19,6 +21,19 @@ try
         !string.Equals(Path.GetExtension(args[1]), ".ores", StringComparison.OrdinalIgnoreCase))
         throw new FormatException("Static-facts export requires a .ores source file");
     var source = ReadBoundedSource(args[1], rejectBom: validStaticFacts);
+    if (validTaskCheck || validTaskCompile)
+    {
+        var taskProgram = TaskI64Source.Check(source);
+        if (validTaskCompile)
+        {
+            if (!string.Equals(Path.GetFileName(args[3]), "OresGenerated.dll", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Generated assembly must be named OresGenerated.dll");
+            CilEmitter.EmitTaskI64Library(taskProgram, args[3]);
+            Console.WriteLine("Emitted closed Task-i64 producer CIL; requires TaskI64 native host");
+        }
+        else Console.WriteLine("Closed root Task-i64 profile and verified producer IR: OK");
+        return 0;
+    }
     if (validStaticFacts)
     {
         // The production command uses the exact verified scalar IR gate.
