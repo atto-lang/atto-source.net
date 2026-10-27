@@ -11,6 +11,15 @@ public sealed record StructuredRead(int At, string Name, IrValueType ValueType)
     : StructuredExpr(At, ValueType);
 public sealed record StructuredNegate(int At, StructuredExpr Value)
     : StructuredExpr(At, IrValueType.I64);
+// First typed call milestone: statically resolved, expression-only helpers.
+// Calls are expanded into verified SSA before emitting any CIL.
+public sealed record StructuredCall(int At, string Name,
+    IReadOnlyList<StructuredExpr> Arguments, IrValueType ResultType)
+    : StructuredExpr(At, ResultType);
+public sealed record StructuredParameter(string Name, IrValueType Type);
+public sealed record StructuredFunction(string Name,
+    IReadOnlyList<StructuredParameter> Parameters, IrValueType ResultType,
+    StructuredExpr ReturnValue);
 public enum StructuredOperator { Add, Subtract, Multiply, EqualI64, LessThanI64 }
 public sealed record StructuredBinary(int At, StructuredOperator Operator,
     StructuredExpr Left, StructuredExpr Right, IrValueType ResultType)
@@ -26,7 +35,8 @@ public sealed record StructuredIf(int At, StructuredExpr Condition,
     : StructuredStmt(At);
 public sealed record StructuredWhile(int At, StructuredExpr Condition,
     IReadOnlyList<StructuredStmt> Body) : StructuredStmt(At);
-public sealed record StructuredProgram(string Name, IReadOnlyList<StructuredStmt> Body);
+public sealed record StructuredProgram(string Name, IReadOnlyList<StructuredStmt> Body,
+    IReadOnlyDictionary<string, StructuredFunction>? Functions = null);
 
 /// <summary>
 /// Narrow checked parser for a single int-returning main, initialized locals,
@@ -39,6 +49,8 @@ public static class OresStructuredParser
     private const int MaxStatements = 16_384;
     private const int MaxDepth = 128;
     private const int MaxIdentifier = 128;
+    private const int MaxHelpers = 64;
+    private const int MaxParameters = 16;
 
     public static StructuredProgram Parse(string source)
     {
@@ -232,6 +244,8 @@ public static class OresStructuredParser
     private sealed class Reader(List<Token> tokens)
     {
         private readonly List<Dictionary<string, IrValueType>> scopes = new();
+        private readonly Dictionary<string, StructuredFunction> functions =
+            new(StringComparer.Ordinal);
         private int index, statements;
         // Track actual AST height, not just grammar recursion depth. A flat
         // 50,000-term sum must not construct a 50,000-level tree for later passes.
@@ -278,40 +292,83 @@ public static class OresStructuredParser
         }
         public StructuredProgram ReadProgram()
         {
-            bool defined = false, exposed = false;
-            while (Current.Text is "define" or "pub")
+            // Acyclic helper declarations must precede main. The declaration
+            // registry only contains *fully typechecked* earlier functions:
+            // recursion, mutual recursion and forward references fail closed.
+            while (true)
             {
-                if (Take("define"))
+                bool defined = false, exposed = false;
+                while (Current.Text is "define" or "pub")
                 {
-                    if (defined) throw Error("Duplicate define modifier");
-                    defined = true;
+                    if (Take("define"))
+                    {
+                        if (defined) throw Error("Duplicate define modifier");
+                        defined = true;
+                    }
+                    else
+                    {
+                        Expect("pub");
+                        if (exposed) throw Error("Duplicate pub modifier");
+                        exposed = true;
+                    }
                 }
-                else
+                if (Current.Text is "class" or "actor")
+                    throw Error("Nominal class/actor methods require receiver-erased method slots, type/borrow checking and Native AOT CIL lowering; unsupported in .NET structured frontend");
+                Expect("fnc");
+                int at = Current.Offset;
+                string name = Name();
+                Expect("(");
+                if (Current.Text == "(")
+                    throw Error("Tuple-v2 shorthand parameter requires typed tuple ownership/ABI lowering");
+                var parameters = new List<StructuredParameter>();
+                var parameterTypes = new Dictionary<string, IrValueType>(StringComparer.Ordinal);
+                if (Current.Text != ")")
                 {
-                    Expect("pub");
-                    if (exposed) throw Error("Duplicate pub modifier");
-                    exposed = true;
+                    do
+                    {
+                        if (parameters.Count >= MaxParameters)
+                            throw Error("Typed helper parameter budget exceeded");
+                        IrValueType type = Type();
+                        string parameter = Name();
+                        if (!parameterTypes.TryAdd(parameter, type))
+                            throw Error("Duplicate typed helper parameter");
+                        parameters.Add(new StructuredParameter(parameter, type));
+                    }
+                    while (Take(","));
                 }
+                Expect(")");
+                Expect(":");
+                if (Current.Text == "(")
+                    throw Error("Tuple-v2 shorthand return requires typed tuple ownership/ABI lowering");
+                IrValueType resultType = Type();
+                if (name == "main")
+                {
+                    if (parameters.Count != 0 || resultType != IrValueType.I64)
+                        throw new FormatException($"main must have signature ():int at offset {at}");
+                    var (body, returns) = Block(0);
+                    if (!returns) throw Error("Not every path returns int");
+                    if (Current.Text.Length != 0) throw Error("Unexpected trailing token");
+                    return new StructuredProgram("main", body,
+                        new System.Collections.ObjectModel.ReadOnlyDictionary<string, StructuredFunction>(
+                            new Dictionary<string, StructuredFunction>(functions, StringComparer.Ordinal)));
+                }
+                if (functions.ContainsKey(name))
+                    throw new FormatException($"Duplicate typed helper at offset {at}");
+                if (functions.Count >= MaxHelpers)
+                    throw Error("Typed helper declaration budget exceeded");
+                // Intentionally expression-only until calls/stack frames get an
+                // independently verified general-function CIL ABI.
+                Expect("{");
+                scopes.Add(parameterTypes);
+                Expect("return");
+                StructuredExpr value = Expr(0);
+                Require(value, resultType, "Typed helper return type mismatch");
+                Expect(";");
+                Expect("}");
+                scopes.RemoveAt(scopes.Count - 1);
+                functions.Add(name, new StructuredFunction(name,
+                    Array.AsReadOnly(parameters.ToArray()), resultType, value));
             }
-            // Preserve the canonical receiver-erased class-method contract
-            // without falsely admitting syntax that the CIL/Native AOT backend
-            // cannot yet compile. This non-executing parser is scalar-only.
-            if (Current.Text is "class" or "actor")
-                throw Error("Nominal class/actor methods require receiver-erased method slots, type/borrow checking and Native AOT CIL lowering; unsupported in .NET structured frontend");
-            Expect("fnc");
-            Expect("main");
-            Expect("(");
-            if (Current.Text == "(")
-                throw Error("Tuple-v2 shorthand parameter requires typed tuple ownership/ABI lowering");
-            Expect(")");
-            Expect(":");
-            if (Current.Text == "(")
-                throw Error("Tuple-v2 shorthand return requires typed tuple ownership/ABI lowering");
-            Expect("int");
-            var (body, returns) = Block(0);
-            if (!returns) throw Error("Not every path returns int");
-            if (Current.Text.Length != 0) throw Error("Unexpected trailing token");
-            return new StructuredProgram("main", body);
         }
         private (IReadOnlyList<StructuredStmt> Body, bool Returns) Block(int depth)
         {
@@ -543,6 +600,36 @@ public static class OresStructuredParser
                 return new StructuredInt(offset, n);
             }
             var name = Name();
+            if (Take("("))
+            {
+                if (!functions.TryGetValue(name, out var target))
+                    throw new FormatException(
+                        $"Undefined, recursive or forward typed helper call at offset {offset}");
+                var args = new List<StructuredExpr>();
+                if (Current.Text != ")")
+                {
+                    do
+                    {
+                        if (args.Count >= MaxParameters)
+                            throw Error("Typed helper call argument budget exceeded");
+                        args.Add(Expr(depth + 1));
+                    }
+                    while (Take(","));
+                }
+                Expect(")");
+                if (args.Count != target.Parameters.Count)
+                    throw new FormatException($"Typed helper call arity mismatch at offset {offset}");
+                for (int i = 0; i < args.Count; i++)
+                    Require(args[i], target.Parameters[i].Type, "Typed helper argument type mismatch");
+                int height = 1;
+                foreach (var arg in args) height = Math.Max(height, Height(arg) + 1);
+                if (height > MaxDepth)
+                    throw new FormatException($"Typed helper call AST depth exceeds limit at offset {offset}");
+                var node = new StructuredCall(offset, name,
+                    Array.AsReadOnly(args.ToArray()), target.ResultType);
+                expressionHeights.Add(node, height);
+                return node;
+            }
             return new StructuredRead(offset, name, Lookup(name, offset));
         }
         private static void Require(StructuredExpr expression,
