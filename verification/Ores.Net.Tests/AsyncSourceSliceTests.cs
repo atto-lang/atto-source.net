@@ -44,11 +44,16 @@ internal static class AsyncSourceSliceTests
         // The ordinary compile-to-CIL path MUST stay fail-closed. This new
         // NativeAOT source runner is not a guest CIL lowering implementation.
         try { _ = OresParser.Parse(Guest); }
-        catch (FormatException error) when (
-            error.Message.Contains("execution task requires scheduler-aware Future",
-                StringComparison.Ordinal)) { goto compiler_closed; }
+        catch (FormatException) { goto compiler_closed; }
         throw new Exception("Async guest slice bypassed ordinary CIL admission");
         compiler_closed:;
+        try { _ = OresParser.Parse(
+            "fnc main():int{return Future.from_task(task {return 42;});}"); }
+        catch (FormatException error) when (
+            error.Message.Contains("execution task requires scheduler-aware Future",
+                StringComparison.Ordinal)) { goto targeted_diagnostic; }
+        throw new Exception("Inline conversion lost targeted scheduler-boundary diagnostic");
+        targeted_diagnostic:;
 
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource<long>(
