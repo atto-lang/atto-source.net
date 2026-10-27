@@ -90,6 +90,8 @@ public sealed class SelectContinuationFence
 
     public bool TryConsume(Ticket ticket)
     {
+        // Missing completion handles are rejected without changing live slots.
+        if (ticket is null) return false;
         lock (_gate)
         {
             if (!MatchesLocked(ticket, requireCurrent: true))
