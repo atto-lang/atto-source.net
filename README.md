@@ -190,3 +190,29 @@ These are **CI requirements**, not evidence of their execution. The
 repository's hosted Actions checks have returned zero executed steps; no
 new exact-head Linux publish is certified until real step logs, native
 artifacts, and independent review are available.
+
+
+### Optional exact-SHA source-local Linux AOT execution
+
+If hosted Actions cannot allocate runners, repository maintainers can use an
+**isolated, ephemeral, source-repository** Linux x64 runner with the additional
+label `oreslang-net-aot`. Provision .NET SDK 10, clang, zlib headers,
+binutils, `file`, `realpath`, and standard Unix tools. This does not require
+a cross-organization source mirror or secrets.
+
+**Never enable this runner on unreviewed code or while source-main is
+unprotected.** Once protected-main governance and independent review are in
+place, set the non-secret GitHub Actions repository variables
+`ORESLANG_NET_SELFHOSTED_LINUX=enabled` and
+`ORESLANG_NET_SELFHOSTED_LINUX_SHA=<exact reviewed PR-head commit SHA>`.
+Only same-repository PRs that match the approved 40-character SHA schedule
+the opt-in job. Reauthorization is required after *every* PR-head change.
+Use an ephemeral runner, no privileged shared runners or injected secrets,
+and unset both variables/retire the runner after execution.
+
+The job checks source head/tree, runs the managed suite, publishes actual
+Native AOT compiler/app binaries, executes canonical 14/42/40 sources and
+fail-closed source negatives, and retains a bounded SHA-256 receipt. The
+normal hosted jobs remain independent. A configured runner and actual
+nonzero executed job steps are required; this draft does **not** assert
+that the release has been compiled or tested.

@@ -129,3 +129,94 @@ jobs:
             artifacts/compiler/linux-x64/oresnet
           if-no-files-found: error
           retention-days: 14
+
+  # A reviewer/maintainer opts into this trusted source-repository runner for
+  # one exact PR head. A mutable branch can never authorize source execution.
+  # No private source is sent to an external organization.
+  linux-x64-approved-source-local:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      vars.ORESLANG_NET_SELFHOSTED_LINUX == 'enabled' &&
+      vars.ORESLANG_NET_SELFHOSTED_LINUX_SHA != '' &&
+      github.event.pull_request.head.sha == vars.ORESLANG_NET_SELFHOSTED_LINUX_SHA
+    runs-on: [self-hosted, Linux, X64, oreslang-net-aot]
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the exact approved originating source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Refuse unapproved source or missing Native AOT prerequisites
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          AUTHORIZED_HEAD: ${{ vars.ORESLANG_NET_SELFHOSTED_LINUX_SHA }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          test "$EXPECTED_HEAD" = "$AUTHORIZED_HEAD"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          for tool in dotnet clang readelf file realpath sha256sum; do
+            command -v "$tool" >/dev/null || { echo "Missing source-local tool: $tool" >&2; exit 1; }
+          done
+          [[ "$(dotnet --version)" == 10.* ]] || { echo 'Require .NET SDK 10' >&2; exit 1; }
+      - name: Run source-free release gates and managed regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash verification/assert-linux-native-release-selftest.sh
+          dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
+      - name: Publish native compiler and three isolated native applications
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git hash-object -- contracts/v1/semantics/fixtures/precedence.ores)" = 2d09e697ad4eeac4ee263c3656b92998c67f0bfc
+          bash scripts/publish-linux.sh examples/hello.ores
+          compiler=artifacts/compiler/linux-x64/oresnet
+          if "$compiler" check contracts/scalar/v1/fixtures/reject-actor.ores; then
+            echo 'Unsupported actor source admitted' >&2
+            exit 1
+          fi
+          denied=artifacts/rejected/linux-x64/OresGenerated.dll
+          mkdir -p "$(dirname "$denied")"
+          rm -f -- "$denied"
+          if "$compiler" compile contracts/scalar/v1/fixtures/reject-actor.ores --out "$denied"; then
+            echo 'Unsupported source generated CIL' >&2
+            exit 1
+          fi
+          test ! -e "$denied"
+          bash scripts/publish-linux.sh contracts/v1/semantics/fixtures/add.ores artifacts/parity
+          bash scripts/publish-linux.sh contracts/v1/semantics/fixtures/precedence.ores artifacts/parity-precedence
+          for binary in artifacts/apps/linux-x64/oreslang-app artifacts/parity/linux-x64/oreslang-app artifacts/parity-precedence/linux-x64/oreslang-app; do
+            bash verification/assert-linux-native-release.sh "$binary"
+          done
+          test "$(artifacts/apps/linux-x64/oreslang-app)" = 14
+          test "$(artifacts/parity/linux-x64/oreslang-app)" = 42
+          test "$(artifacts/parity-precedence/linux-x64/oreslang-app)" = 40
+          echo 'SOURCE_LOCAL_LINUX_NATIVE_AOT_REAL_14_42_40'
+      - name: Record source tree and released executable SHA-256 identities
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          AUTHORIZED_HEAD: ${{ vars.ORESLANG_NET_SELFHOSTED_LINUX_SHA }}
+        run: |
+          set -euo pipefail
+          test "$EXPECTED_HEAD" = "$AUTHORIZED_HEAD"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          mkdir -p artifacts/evidence
+          {
+            printf 'repository=%s\nsource_head=%s\nroot_tree=%s\nrun_id=%s\nrun_attempt=%s\n' "$GITHUB_REPOSITORY" "$EXPECTED_HEAD" "$(git rev-parse 'HEAD^{tree}')" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+            sha256sum artifacts/compiler/linux-x64/oresnet artifacts/apps/linux-x64/oreslang-app artifacts/parity/linux-x64/oreslang-app artifacts/parity-precedence/linux-x64/oreslang-app
+          } > artifacts/evidence/source-local-linux-sha256.txt
+      - name: Upload bounded source-local Native AOT receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: oreslang-net-source-local-linux-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/evidence/source-local-linux-sha256.txt
+          if-no-files-found: error
+          retention-days: 14
