@@ -41,6 +41,11 @@ internal static class GeneratorSourceV1SelfTest
             Require(activation.Close() == 0, "close after DONE changed state");
         }
 
+        var bounds = OresGeneratorV1Compiler.Compile(
+            "gen* bounds(): Iterator<int> { yield 9223372036854775807; yield -9223372036854775808; }");
+        Require(bounds.YieldAt(0) == long.MaxValue && bounds.YieldAt(1) == long.MinValue,
+            "full signed i64 yield range");
+
         // One compiled declaration may create independent lazy activations.
         using (var first = new LiteralGeneratorActivationV1(compiled.CopyYields()))
         using (var second = new LiteralGeneratorActivationV1(compiled.CopyYields()))
