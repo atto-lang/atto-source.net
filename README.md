@@ -112,11 +112,16 @@ The commands route the restricted typed `int`/`bool` structured AST through
 `OresStructuredCfgLowering`, `OresCfgVerifier`, and deterministic CIL.
 An additional stacked draft admits **previously declared, expression-only
 typed helper functions** with static calls, at most 64 helpers and 16
-parameters per helper. Calls evaluate arguments exactly once, left-to-right;
-compiler lowering binds arguments in a separate callee scope and expands the
-expression into verified SSA. Recursive calls, mutually recursive or forward
-references, dynamic dispatch, statement-bodied helpers, generic helper
-instantiations, and runtime function call CIL are deliberately unsupported.
+parameters per helper. The experimental `compile-structured` path now
+builds an independent **verified CFG for each helper** and emits a private
+static CIL MethodDef for each one. Call sites evaluate typed arguments exactly
+once, left-to-right, and emit direct `call` tokens to those MethodDefs.
+The legacy inlining/reference-evaluator path remains separately available
+for differential testing; shipping `compile` stays scalar-only. Acyclic
+expression-only calls are now genuine CIL function calls, not just inlined IR.
+Recursive calls, mutual recursion, forward references, dynamic dispatch,
+statement-bodied helpers, closures, generic helper instantiations, and full
+function/ownership ABI support remain deliberately unsupported.
 
 Example (experimental only):
 
@@ -137,8 +142,10 @@ Normal `check` / `compile` remain scalar-only and reject structured source.
 Windows and Linux workflows include a negative shipping-parser check and
 real native application smoke tests returning 45 from a loop-carried sum and
 42 from nested typed helper calls.
-The C# verification harness additionally checks that reachable overflows trap
-in emitted CIL, while unselected branches never run their traps.
+The C# verification harness additionally checks actual helper MethodDef
+metadata, direct `call` and `ldarg` opcodes, deterministic assemblies, call
+execution in a bounded verification-only CIL interpreter, and overflow traps
+in the legacy verified SSA path. No runtime interpreter ships with Native AOT.
 
 **Status: unverified draft.** Neither source-org zero-step GitHub Actions failures
 nor reference-interpreter success prove current-head Native AOT execution.
