@@ -138,6 +138,11 @@ public static class OresParser
                     (text[_i] is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_'))
                     _i++;
                 var word = text[start.._i];
+                // G0: do not allow unlowered native authority to be spelled as
+                // an ordinary identifier, parameter, member or callable.
+                if (word == "unsafe")
+                    throw new FormatException(
+                        $"unsafe boundary requires checked effects, native grants and Native AOT lowering at offset {start}");
                 if (word is "any" or "unknown" or "Any" or "Unknown")
                     throw new FormatException(
                         "any/unknown requires tagged opaque-value ABI and Native AOT runtime descriptors");
