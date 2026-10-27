@@ -201,6 +201,11 @@ public static class OresStructuredParser
                 do { index++; } while (index < source.Length &&
                     (Alpha(source[index]) || Digit(source[index]) || source[index] == '_'));
                 string word = source[offset..index];
+                // Structured/static-facts parser must not classify reserved
+                // unsafe source as a harmless scalar construct.
+                if (word == "unsafe")
+                    throw new FormatException(
+                        $"unsafe boundary requires checked effects and Native AOT lowering at offset {offset}");
                 if (word is "cpu" or "gpu" ||
                     (word == "nb" && !StaticSelectAdmission.FollowedByStaticSelect(source, index)))
                     throw new FormatException(
