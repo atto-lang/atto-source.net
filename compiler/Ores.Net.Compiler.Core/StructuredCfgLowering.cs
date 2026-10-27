@@ -69,7 +69,11 @@ public static class OresStructuredCfgLowering
                 int id = Emit(entry, CfgOpcode.Argument, p.Type, value: i);
                 parameters.Add(p.Name, new Binding(p.Type, id));
             }
-            entry.Terminator = new CfgReturn(Expression(helper.ReturnValue, entry, parameters));
+            // Parameter values are defined once by ldarg in the entry block.
+            // Branch, loop and local scope semantics reuse the verified main
+            // builder, but always retain a distinct MethodDef/SSA namespace.
+            if (EmitStatements(helper.Body, entry, parameters) is not null)
+                throw new FormatException("Typed helper has unterminated return path");
             return OresCfgVerifier.Verify(new CfgFunction(helper.Name, helper.ResultType,
                 entry.Name, blocks.Select(b => b.Freeze()).ToArray(),
                 helper.Parameters.Select(p => p.Type).ToArray()), signatures);
@@ -172,6 +176,9 @@ public static class OresStructuredCfgLowering
                         int value = Expression(call.Arguments[i], block, variables);
                         parameters.Add(parameter.Name, new Binding(parameter.Type, value));
                     }
+                    if (function.ReturnValue is null)
+                        throw new FormatException(
+                            "Statement-bodied helper requires the independent MethodDef ABI");
                     return Expression(function.ReturnValue, block, parameters);
                 }
                 case StructuredNegate negate:
