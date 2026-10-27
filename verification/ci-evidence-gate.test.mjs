@@ -148,3 +148,27 @@ test("hosted evidence fixtures cover every explicitly named source workflow step
     }
   }
 });
+
+test('Windows and Linux scalar provenance reports use exact checkout head, not synthetic PR merge SHA', () => {
+  const source=readFileSync(new URL("../.github/workflows/windows-native-aot.yml",import.meta.url),"utf8");
+  const exact="--revision '${{ github.event.pull_request.head.sha || github.sha }}'";
+  const synthetic="--revision '${{ github.sha }}'";
+  const windows=source.split("  windows-x64:\n")[1]?.split("  linux-aot-diagnostic:\n")[0];
+  const linux=source.split("  linux-aot-diagnostic:\n")[1]?.split("  self-hosted-windows-static-facts:\n")[0];
+  assert.ok(windows && linux,"both verified Windows and Linux jobs must exist");
+  for(const [label,job] of [["Windows",windows],["Linux",linux]]) {
+    assert.ok(job.includes("ref: ${{ github.event.pull_request.head.sha || github.sha }}"),label+" checkout must target PR head");
+    assert.equal(job.split(exact).length-1,1,label+" report must declare the exact PR head exactly once");
+    assert.ok(!job.includes(synthetic),label+" must not report synthetic merge SHA");
+  }
+});
+
+test('evidence-parser workflow itself tests the exact PR head on Windows workflow changes', () => {
+  const source=readFileSync(new URL("../.github/workflows/native-aot-evidence-contract.yml",import.meta.url),"utf8");
+  assert.ok(source.includes("      - '.github/workflows/windows-native-aot.yml'"));
+  assert.ok(source.includes("ref: ${{ github.event.pull_request.head.sha || github.sha }}"));
+  assert.ok(source.includes("EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}"));
+  assert.ok(source.includes("git rev-parse HEAD"));
+  assert.ok(source.includes("git diff --quiet --exit-code HEAD --"));
+  assert.ok(source.includes("node --test verification/ci-evidence-gate.test.mjs"));
+});

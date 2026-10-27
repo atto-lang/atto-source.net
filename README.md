@@ -82,6 +82,22 @@ Both reject unsupported effects and malformed source instead of inventing
 proofs. See [`.NET static facts v0`](docs/STATIC_FACTS_V0_NET.md) for
 limits, trust boundaries, format and CI verification.
 
+## Experimental structured CFG parity path
+
+Alongside the shipping scalar compiler, the managed verification harness now
+contains a non-shipping structured-source path for typed `int`/`bool` locals,
+assignments, `if`/`else`, `while`, early returns, equality and signed
+less-than. `OresStructuredCfgLowering` lowers that bounded AST into the
+existing verified SSA CFG and deterministic CIL emitter; differential tests
+compare the CFG reference evaluator with emitted CIL.
+
+This narrows semantic parity with the JavaScript and LLVM/Wasm backends, but it
+does **not** change the shipping `oresnet check/compile` grammar, prove
+cross-backend source-syntax identity, or establish Native AOT execution for the
+current head. Promotion to the production CLI requires an exact-head managed
+and Native AOT receipt plus review of the structured grammar against the shared
+Oreslang frontend contract.
+
 ## Verification
 
 ~~~powershell
