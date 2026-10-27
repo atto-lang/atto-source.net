@@ -15,10 +15,68 @@ internal static class SharedScalarParityConformance
         if (!valid) throw new InvalidOperationException("shared scalar parity: " + message);
     }
 
+    private static void RequireSafeDirectory(string path)
+    {
+        var info = new DirectoryInfo(path);
+        Require(info.Exists && (info.Attributes & FileAttributes.ReparsePoint) == 0,
+            "unsafe scalar corpus directory: " + path);
+    }
+
+    private static void RequireSafeFile(string path)
+    {
+        var info = new FileInfo(path);
+        Require(info.Exists && (info.Attributes &
+            (FileAttributes.Directory | FileAttributes.ReparsePoint)) == 0,
+            "unsafe scalar fixture file: " + path);
+    }
+
+    private static void RequireExactInventory(string fixtureDirectory,
+        IReadOnlySet<string> referenced)
+    {
+        RequireSafeDirectory(fixtureDirectory);
+        var entries = Directory.EnumerateFileSystemEntries(fixtureDirectory).ToArray();
+        Require(entries.Length == referenced.Count,
+            "unlisted fixture or missing reviewed fixture");
+        foreach (var path in entries)
+        {
+            RequireSafeFile(path);
+            Require(referenced.Contains(Path.GetFileName(path)),
+                "unlisted fixture: " + Path.GetFileName(path));
+        }
+    }
+
+    // Managed-only mutation regression: extras must fail before a test can
+    // present the pinned shared corpus as complete.
+    private static void CheckUnlistedFixtureRegression()
+    {
+        using var temp = new TemporaryDirectory();
+        var fixtures = Path.Combine(temp.Path, "fixtures");
+        Directory.CreateDirectory(fixtures);
+        File.WriteAllText(Path.Combine(fixtures, "pinned.ores"), "42");
+        var expected = new HashSet<string>(StringComparer.Ordinal) { "pinned.ores" };
+        RequireExactInventory(fixtures, expected);
+        File.WriteAllText(Path.Combine(fixtures, "unexpected.ores"), "43");
+        var refused = false;
+        try
+        {
+            RequireExactInventory(fixtures, expected);
+        }
+        catch (InvalidOperationException ex) when (
+            ex.Message.Contains("unlisted fixture", StringComparison.Ordinal))
+        {
+            refused = true;
+        }
+        Require(refused, "unlisted scalar fixture mutation must be rejected");
+    }
+
     public static void Run()
     {
         var root = Path.Combine(AppContext.BaseDirectory, "contracts", "scalar", "v1");
+        RequireSafeDirectory(root);
+        var fixtureDirectory = Path.Combine(root, "fixtures");
+        RequireSafeDirectory(fixtureDirectory);
         var manifestPath = Path.Combine(root, "cases.json");
+        RequireSafeFile(manifestPath);
         var manifestBytes = File.ReadAllBytes(manifestPath);
         Require(manifestBytes.Length is > 0 and <= 65536, "invalid manifest size");
 
@@ -33,6 +91,7 @@ internal static class SharedScalarParityConformance
         using var suiteHash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         suiteHash.AppendData(manifestBytes);
         var seen = new HashSet<string>(StringComparer.Ordinal);
+        var reviewedFiles = new HashSet<string>(StringComparer.Ordinal);
         var accepts = 0;
         var rejects = 0;
         using var temp = new TemporaryDirectory();
@@ -48,7 +107,10 @@ internal static class SharedScalarParityConformance
             Require(System.Text.RegularExpressions.Regex.IsMatch(file,
                 "^fixtures/[a-z0-9-]+\\.ores$"), "unsafe fixture path: " + file);
 
+            Require(reviewedFiles.Add(Path.GetFileName(file)),
+                "duplicate scalar fixture path: " + file);
             var fixturePath = Path.Combine(root, file.Replace('/', Path.DirectorySeparatorChar));
+            RequireSafeFile(fixturePath);
             var sourceBytes = File.ReadAllBytes(fixturePath);
             Require(sourceBytes.Length is > 0 and <= 1048576, "invalid fixture size: " + file);
             suiteHash.AppendData(Encoding.ASCII.GetBytes(file));
@@ -90,6 +152,8 @@ internal static class SharedScalarParityConformance
         }
 
         Require(accepts == 6 && rejects == 5, "accept/reject counts changed");
+        RequireExactInventory(fixtureDirectory, reviewedFiles);
+        CheckUnlistedFixtureRegression();
         var suite = Convert.ToHexString(suiteHash.GetHashAndReset()).ToLowerInvariant();
         Require(suite == ExpectedSuiteSha256, "suite SHA-256 differs from Wasm/JS contract");
         Console.WriteLine("shared scalar parity: 6 accepts + 5 denials; suite " + suite);
