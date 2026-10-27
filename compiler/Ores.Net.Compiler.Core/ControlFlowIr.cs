@@ -167,14 +167,14 @@ public static class OresCfgVerifier
             };
             blocks[i] = new CfgBlock(original.Name,
                 CopyIndexed(parameters, parameterCount),
-                CopyIndexed(instructions, instructionCount).Select(op =>
+                Array.AsReadOnly(CopyIndexed(instructions, instructionCount).Select(op =>
                 {
                     if (op is null) throw new FormatException("Null CFG instruction");
                     return op with
                     {
                         Arguments = op.Arguments is null ? null : FreezeArguments(op.Arguments)
                     };
-                }).ToArray(),
+                }).ToArray()),
                 frozenTerminator);
         }
 
