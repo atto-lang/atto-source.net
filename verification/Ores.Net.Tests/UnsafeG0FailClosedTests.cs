@@ -50,6 +50,42 @@ internal static class UnsafeG0FailClosedTests
                 throw new Exception("unsafe on a CR/LF line escaped the lexer");
             }
         }
+        // Both entry points must bound comment nesting, rather than
+        // silently treating pathological input as inert source.
+        var tooDeep = "fnc main():int{return 42;} " +
+                      string.Concat(Enumerable.Repeat("/*", 129)) +
+                      string.Concat(Enumerable.Repeat("*/", 129));
+        foreach (var parse in new Action<string>[] {
+            x => { _ = OresParser.Parse(x); },
+            x => { _ = OresStructuredParser.Parse(x); }
+        })
+        {
+            try { parse(tooDeep); }
+            catch (FormatException ex) when (
+                ex.Message.Contains("Block comment nesting exceeds 128",
+                    StringComparison.Ordinal)) { continue; }
+            throw new Exception("overnested source did not fail closed");
+        }
+        // Public parser callers may supply strings without going through a
+        // file decoder: never normalize away NUL or invalid UTF-16.
+        foreach (var malformed in new[] {
+            "fnc main():int{return 42;} // comment" + '\0',
+            "fnc main():int{return 42;} // comment" + '\uD800'
+        })
+        {
+            foreach (var parse in new Action<string>[] {
+                x => { _ = OresParser.Parse(x); },
+                x => { _ = OresStructuredParser.Parse(x); }
+            })
+            {
+                try { parse(malformed); }
+                catch (FormatException ex) when (
+                    ex.Message.Contains("NUL", StringComparison.Ordinal) ||
+                    ex.Message.Contains("invalid UTF-16", StringComparison.Ordinal))
+                { continue; }
+                throw new Exception("invalid source encoding evaded fail-closed admission");
+            }
+        }
         // This is a lexical keyword, not a substring check.
         foreach (var safe in new[] {
             "fnc main():int{return 42;} // unsafe",
