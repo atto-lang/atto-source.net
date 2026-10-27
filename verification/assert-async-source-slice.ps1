@@ -33,7 +33,7 @@ try {
         $guest.Replace('Future.from_task', 'Future.new'),
         $guest.Replace('Future.from_task', 'Task.from_future'),
         $guest.Replace('Future<int>', 'int'),
-        $guest + ' fnc hidden():int{return 1;}'
+        ($guest + ' fnc hidden():int{return 1;}')
     )) {
         [IO.File]::WriteAllText($file, $invalid, $encoding)
         $rejection = & $Compiler run-async $file 2>&1 | Out-String
