@@ -1,15 +1,18 @@
 using Ores.Net.Compiler;
 using System.Text;
+using System.Globalization;
+using Ores.Net.Runtime;
 
 // Reject invalid shapes before indexing args[3]. Previously "compile file.ores"
 // passed validation then crashed with IndexOutOfRangeException instead of usage.
 bool validCheck = args.Length == 2 && args[0] == "check";
+bool validAsyncRun = args.Length == 2 && args[0] == "run-async";
 bool validCompile = args.Length == 4 && args[0] == "compile" && args[2] == "--out";
 bool validStaticFacts = args.Length == 2 &&
     (args[0] == "static-facts" || args[0] == "static-facts-structured");
-if (!validCheck && !validCompile && !validStaticFacts)
+if (!validCheck && !validCompile && !validStaticFacts && !validAsyncRun)
 {
-    Console.Error.WriteLine("usage: oresnet check input.ores | oresnet compile input.ores --out path/OresGenerated.dll | oresnet static-facts input.ores | oresnet static-facts-structured input.ores");
+    Console.Error.WriteLine("usage: oresnet check input.ores | oresnet run-async input.ores | oresnet compile input.ores --out path/OresGenerated.dll | oresnet static-facts input.ores | oresnet static-facts-structured input.ores");
     return 2;
 }
 
@@ -27,6 +30,23 @@ try
         Console.WriteLine(args[0] == "static-facts"
             ? StaticFactsV0Exporter.FromCompiledScalarSource(source)
             : StaticFactsV0Exporter.FromStructuredSource(source));
+        return 0;
+    }
+    if (validAsyncRun)
+    {
+        // Explicit interpreter-only NativeAOT source slice. No generated CIL or
+        // arbitrary guest callbacks; never route this through scalar Run().
+        var guest = OresAsyncSourceSlice.Parse(source);
+        await using var scope = new OresTaskScope(maxProducers: 1, maxObservers: 2);
+        var producer = scope.Start(_ => ValueTask.FromResult(guest.LiteralValue));
+        var future = scope.FromTask(producer);
+        var observed = await future.ObserveAsync();
+        var retired = await producer.Retirement;
+        if (observed != guest.LiteralValue || retired.ProducerId != producer.ProducerId ||
+            retired.TerminalState != "succeeded" || scope.ProducerInvocations != 1 ||
+            scope.ActiveProducers != 0 || scope.ActiveObservers != 0)
+            throw new FormatException("Async source producer/observer retirement invariant failed");
+        Console.WriteLine(observed.ToString(CultureInfo.InvariantCulture));
         return 0;
     }
     var expression = OresParser.Parse(source);
