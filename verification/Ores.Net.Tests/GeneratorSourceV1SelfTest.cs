@@ -68,6 +68,16 @@ internal static class GeneratorSourceV1SelfTest
         ExpectReject(() => OresParser.Parse(source),
             "generator declarations require iterator-frame and continuation lowering");
 
+        foreach (var reserved in new[] {
+            "define", "class", "enum", "pattern", "module", "contract", "conforms",
+            "namespace", "gpu", "cpu", "quantum", "over", "structural", "bool", "pure",
+            "Some", "None", "Ok", "Err", "using", "requires", "serial"
+        })
+            ExpectReject(
+                () => OresGeneratorV1Compiler.Compile(
+                    $"gen* {reserved}(): Iterator<int> {{ yield 1; return; }}"),
+                "Reserved generator identifier");
+
         foreach (var invalid in new[] {
             "pub async gen* values(): AsyncIterator<int> { yield 1; return; }",
             "pub suspend gen* values(): AsyncIterator<int> { yield 1; return; }",
