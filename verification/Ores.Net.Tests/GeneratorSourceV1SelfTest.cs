@@ -78,6 +78,10 @@ internal static class GeneratorSourceV1SelfTest
                     $"gen* {reserved}(): Iterator<int> {{ yield 1; return; }}"),
                 "Reserved generator identifier");
 
+        ExpectReject(
+            () => OresGeneratorV1Compiler.Compile(new string('x', 1024 * 1024 + 1)),
+            "Source exceeds 1 MiB UTF-8 generator compiler limit");
+
         foreach (var invalid in new[] {
             "pub async gen* values(): AsyncIterator<int> { yield 1; return; }",
             "pub suspend gen* values(): AsyncIterator<int> { yield 1; return; }",
