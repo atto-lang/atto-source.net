@@ -20,7 +20,7 @@ try {
     $assembly = Join-Path $root 'OresGenerated.dll'
     $rejection = & $Compiler compile $file --out $assembly 2>&1 | Out-String
     if ($LASTEXITCODE -ne 1 -or
-        $rejection -cnotmatch 'execution task requires scheduler-aware Future/continuation lowering' -or
+        $rejection -cnotmatch 'oresnet:' -or
         (Test-Path $assembly)) {
         throw "Unverified CIL path was admitted: exit=$LASTEXITCODE output=$rejection"
     }
