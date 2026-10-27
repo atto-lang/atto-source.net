@@ -395,18 +395,24 @@ jobs:
           set -euo pipefail
           mkdir -p artifacts/structured-native/linux-x64 artifacts/structured-generated
           source_file='examples/structured-sum45.ores'
-          compiler='compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj'
-          if dotnet run --project "$compiler" -c Release -- check "$source_file"; then
+          compiler_project='compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj'
+          compiler_out='artifacts/structured-native/compiler-linux-x64'
+          dotnet publish "$compiler_project" -c Release -r linux-x64 -o "$compiler_out" -warnaserror
+          compiler="$compiler_out/oresnet"
+          test -x "$compiler"
+          file "$compiler" | grep -q 'ELF 64-bit'
+          test ! -e "$compiler_out/oresnet.runtimeconfig.json"
+          if "$compiler" check "$source_file"; then
             echo 'Shipping scalar compiler incorrectly accepted structured source' >&2
             exit 1
           fi
-          dotnet run --project "$compiler" -c Release -- check-structured "$source_file"
+          "$compiler" check-structured "$source_file"
           generated="$GITHUB_WORKSPACE/artifacts/structured-generated/OresGenerated.dll"
-          dotnet run --project "$compiler" -c Release -- compile-structured "$source_file" --out "$generated"
+          "$compiler" compile-structured "$source_file" --out "$generated"
           test -s "$generated"
           printf '%s' 'fnc main():int{select { }return 1;}' > "$RUNNER_TEMP/unsupported-select.ores"
           forbidden="$GITHUB_WORKSPACE/artifacts/structured-generated/denied/OresGenerated.dll"
-          if dotnet run --project "$compiler" -c Release -- compile-structured "$RUNNER_TEMP/unsupported-select.ores" --out "$forbidden"; then
+          if "$compiler" compile-structured "$RUNNER_TEMP/unsupported-select.ores" --out "$forbidden"; then
             echo 'Unsupported select source was compiled' >&2
             exit 1
           fi
