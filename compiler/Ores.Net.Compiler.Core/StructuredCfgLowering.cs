@@ -30,12 +30,16 @@ public static class OresStructuredCfgLowering
     private sealed class Builder
     {
         private readonly List<Block> blocks = new();
+        private IReadOnlyDictionary<string, StructuredFunction> functions =
+            new Dictionary<string, StructuredFunction>(StringComparer.Ordinal);
         private int nextValue;
 
         public VerifiedCfgFunction Lower(StructuredProgram program)
         {
             if (program.Name != "main")
                 throw new FormatException("Only typed main is supported");
+            functions = program.Functions ??
+                new Dictionary<string, StructuredFunction>(StringComparer.Ordinal);
             var entry = NewBlock();
             var environment = new Dictionary<string, Binding>(StringComparer.Ordinal);
             if (EmitStatements(program.Body, entry, environment) is not null)
@@ -86,6 +90,27 @@ public static class OresStructuredCfgLowering
                         variable.Type != read.Type)
                         throw new FormatException("Unbound structured CFG local");
                     return variable.ValueId;
+                case StructuredCall call:
+                {
+                    if (!functions.TryGetValue(call.Name, out var function) ||
+                        function.ResultType != call.Type ||
+                        function.Parameters.Count != call.Arguments.Count)
+                        throw new FormatException("Unverified structured helper call");
+
+                    // Evaluate each source argument once, left-to-right, and
+                    // bind into an independent callee scope. No dynamic call
+                    // target, implicit captures, stack frames or runtime JIT.
+                    var parameters = new Dictionary<string, Binding>(StringComparer.Ordinal);
+                    for (int i = 0; i < call.Arguments.Count; i++)
+                    {
+                        var parameter = function.Parameters[i];
+                        if (parameter.Type != call.Arguments[i].Type)
+                            throw new FormatException("Unverified structured call argument type");
+                        int value = Expression(call.Arguments[i], block, variables);
+                        parameters.Add(parameter.Name, new Binding(parameter.Type, value));
+                    }
+                    return Expression(function.ReturnValue, block, parameters);
+                }
                 case StructuredNegate negate:
                 {
                     int zero = Emit(block, CfgOpcode.ConstantI64, IrValueType.I64, value: 0);
