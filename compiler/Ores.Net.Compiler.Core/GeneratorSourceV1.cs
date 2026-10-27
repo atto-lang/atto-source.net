@@ -95,6 +95,13 @@ public static class OresGeneratorV1Compiler
 
     private static void ValidateSource(string source)
     {
+        // UTF-8 cannot encode fewer bytes than there are UTF-16 code units:
+        // ASCII is 1:1 and every non-ASCII scalar is at least as large in
+        // UTF-8 as its UTF-16 representation. Reject obviously oversized
+        // inputs before walking every code unit or doing a full byte count.
+        if (source.Length > MaxSourceBytes)
+            throw new FormatException("Source exceeds 1 MiB UTF-8 generator compiler limit");
+
         for (int i = 0; i < source.Length; i++)
         {
             char c = source[i];
