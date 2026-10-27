@@ -69,6 +69,35 @@ internal static class StructuredStaticAbiTests
         throw new Exception("Unsafe source accepted by static MethodDef ABI: " + label);
     }
 
+    private static void CheckOverflow(string source, string label)
+    {
+        var inline = OresStructuredCfgLowering.Lower(source);
+        bool sourceOverflow = false;
+        try { _ = CfgReferenceEvaluator.Evaluate(inline); }
+        catch (OverflowException) { sourceOverflow = true; }
+        if (!sourceOverflow)
+            throw new Exception("Reference helper call must overflow: " + label);
+
+        string folder = Path.Combine(Path.GetTempPath(),
+            "ores-static-abi-overflow-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            string file = Path.Combine(folder, "OresGenerated.dll");
+            CilEmitter.EmitLibrary(OresStructuredCfgLowering.LowerModule(source), file);
+            using var image = AssemblyDefinition.ReadAssembly(file);
+            var entry = image.MainModule.Types.Single(t =>
+                t.FullName == "Oreslang.Generated.OresProgram")
+                .Methods.Single(m => m.Name == "Run");
+            bool cilOverflow = false;
+            try { _ = CfgCilTestInterpreter.Evaluate(entry); }
+            catch (OverflowException) { cilOverflow = true; }
+            if (!cilOverflow)
+                throw new Exception("Emitted helper MethodDef lost checked overflow: " + label);
+        }
+        finally { Directory.Delete(folder, recursive: true); }
+    }
+
     public static void Run()
     {
         Check("fnc main():int{return 42;}", 42, 0, "single main remains supported");
@@ -91,6 +120,42 @@ internal static class StructuredStaticAbiTests
         Check("fnc unused():int{return 500;}" +
             "fnc main():int{return 42;}",
             42, 1, "declared but unreachable code preserved in module");
+        CheckOverflow("fnc inc(int x):int{return x+1;}" +
+            "fnc main():int{return inc(9223372036854775807);}",
+            "separate helper retains overflow trap");
+        Check("fnc huge(int x):int{return x+1;}" +
+            "fnc main():int{if false{return huge(9223372036854775807);}return 42;}",
+            42, 1, "unselected helper overflow must not run");
+        Check("fnc id(bool flag):bool{return flag;}" +
+            "fnc main():int{if id(true){return 42;}else{return 0;}}",
+            42, 1, "bool argument and bool return method signature");
+
+        // Verify-call operand lists are frozen at admission; a mutating
+        // caller cannot retarget a call after SSA/type checking.
+        var mutableArgs = new List<int> { 0 };
+        var signatures = new Dictionary<string, CfgCallSignature>(StringComparer.Ordinal)
+        {
+            ["callee"] = new(IrValueType.I64, new[] { IrValueType.I64 })
+        };
+        var graph = new CfgFunction("caller", IrValueType.I64, "entry", new[] {
+            new CfgBlock("entry", Array.Empty<CfgParameter>(), new[] {
+                new CfgInstruction(0, CfgOpcode.ConstantI64, IrValueType.I64,
+                    I64Constant: 41),
+                new CfgInstruction(1, CfgOpcode.Call, IrValueType.I64,
+                    Target: "callee", Arguments: mutableArgs)
+            }, new CfgReturn(1))
+        });
+        var verifiedCall = OresCfgVerifier.Verify(graph, signatures);
+        mutableArgs[0] = 999;
+        if (verifiedCall.Blocks[0].Instructions[1].Arguments![0] != 0)
+            throw new Exception("Verified call retained mutable operand alias");
+        try
+        {
+            _ = OresCfgVerifier.Verify(graph);
+            throw new Exception("Standalone verifier admitted unresolved call target");
+        }
+        catch (FormatException) { }
+
         Reject("fnc main():int{return missing();}", "unknown function");
         Reject("fnc first():int{return second();}fnc second():int{return 1;}" +
             "fnc main():int{return first();}", "forward call");
