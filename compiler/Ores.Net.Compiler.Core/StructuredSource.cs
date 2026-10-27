@@ -77,6 +77,12 @@ public static class OresStructuredParser
                   tokens[^2].Text == "define")))
                 throw new FormatException(
                     $"Private abstract class hooks require typed virtual dispatch and superclass-only invocation at offset {token.Offset}");
+            if (token.Text == "inverted" && tokens.Count > 0 &&
+                (tokens[^1].Text == "define" ||
+                 (tokens[^1].Text == "pub" && tokens.Count > 1 &&
+                  tokens[^2].Text == "define")))
+                throw new FormatException(
+                    $"Inverted class requires checked bracket-row and ownership lowering in the .NET backend at offset {token.Offset}");
             if ((token.Text == "class" || token.Text == "actor") &&
                 tokens.Count > 0 &&
                 (tokens[^1].Text == "define" ||
