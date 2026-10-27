@@ -15,7 +15,7 @@ concurrency:
 jobs:
   linux-x64-compiler-and-app:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -93,6 +93,32 @@ jobs:
           test "$("$add")" = 42
           test "$("$hello")" = 14
           echo 'LINUX_NET_NATIVE_AOT_PARITY_HELLO_14_ADD_42_PRECEDENCE_40'
+      - name: Execute opt-in structured CFG as linked Linux Native AOT
+        shell: bash
+        run: |
+          set -euo pipefail
+          compiler=artifacts/compiler/linux-x64/oresnet
+          source_file=examples/structured-sum45.ores
+          # Confirm the new language surface remains forbidden by production
+          # scalar admission; only the explicit structured CLI may accept it.
+          rejected=artifacts/rejected-structured/linux-x64/OresGenerated.dll
+          mkdir -p "$(dirname "$rejected")"
+          rm -f -- "$rejected"
+          if "$compiler" compile "$source_file" --out "$rejected"; then
+            echo 'Scalar Native AOT compiler accidentally accepted structured source' >&2
+            exit 1
+          fi
+          test ! -e "$rejected"
+          "$compiler" check-structured "$source_file"
+          bash scripts/publish-linux.sh "$source_file" artifacts/structured --structured
+          structured=artifacts/structured/linux-x64/oreslang-app
+          bash verification/assert-linux-native-release.sh "$structured"
+          test "$("$structured")" = 45
+          # Every earlier separately linked binary must remain unchanged.
+          test "$(artifacts/parity-precedence/linux-x64/oreslang-app)" = 40
+          test "$(artifacts/parity/linux-x64/oreslang-app)" = 42
+          test "$(artifacts/apps/linux-x64/oreslang-app)" = 14
+          echo 'LINUX_NET_NATIVE_AOT_STRUCTURED_SSA_CIL_EXECUTED_45'
       - name: Negative test for managed sidecar rejection
         shell: bash
         run: |
@@ -115,7 +141,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           tree="$(git rev-parse 'HEAD^{tree}')"
           mkdir -p artifacts/evidence
-          printf '{"schema":"oreslang.net.exact_head_native_aot_v1","repository":"%s","source_head_sha":"%s","tree_sha":"%s","run_id":%s,"run_attempt":%s,"runner_os":"Linux","target_rid":"linux-x64","checks":["managed-tests","native-compiler","native-app","negative-source-no-cil","source-isolation-3","canonical-precedence","sidecar-negative"],"source_only":false,"independently_verified":false}\n' \
+          printf '{"schema":"oreslang.net.exact_head_native_aot_v1","repository":"%s","source_head_sha":"%s","tree_sha":"%s","run_id":%s,"run_attempt":%s,"runner_os":"Linux","target_rid":"linux-x64","checks":["managed-tests","native-compiler","native-app","negative-source-no-cil","source-isolation-4","canonical-precedence","structured-ssa-cil-native45","sidecar-negative"],"source_only":false,"independently_verified":false}\n' \
             "$GITHUB_REPOSITORY" "$EXPECTED_HEAD" "$tree" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > artifacts/evidence/linux-native-aot.json
       - name: Upload Linux native executables and evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -126,6 +152,7 @@ jobs:
             artifacts/apps/linux-x64/oreslang-app
             artifacts/parity/linux-x64/oreslang-app
             artifacts/parity-precedence/linux-x64/oreslang-app
+            artifacts/structured/linux-x64/oreslang-app
             artifacts/compiler/linux-x64/oresnet
           if-no-files-found: error
           retention-days: 14
@@ -199,6 +226,28 @@ jobs:
           test "$(artifacts/parity/linux-x64/oreslang-app)" = 42
           test "$(artifacts/parity-precedence/linux-x64/oreslang-app)" = 40
           echo 'SOURCE_LOCAL_LINUX_NATIVE_AOT_REAL_14_42_40'
+      - name: Publish structured CFG as fourth independent Native AOT executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_file=examples/structured-sum45.ores
+          denied=artifacts/rejected-structured/linux-x64/OresGenerated.dll
+          compiler=artifacts/compiler/linux-x64/oresnet
+          mkdir -p "$(dirname "$denied")"
+          rm -f -- "$denied"
+          if "$compiler" compile "$source_file" --out "$denied"; then
+            echo 'Scalar compiler admitted structured source' >&2
+            exit 1
+          fi
+          test ! -e "$denied"
+          "$compiler" check-structured "$source_file"
+          bash scripts/publish-linux.sh "$source_file" artifacts/structured --structured
+          bash verification/assert-linux-native-release.sh artifacts/structured/linux-x64/oreslang-app
+          test "$(artifacts/structured/linux-x64/oreslang-app)" = 45
+          test "$(artifacts/apps/linux-x64/oreslang-app)" = 14
+          test "$(artifacts/parity/linux-x64/oreslang-app)" = 42
+          test "$(artifacts/parity-precedence/linux-x64/oreslang-app)" = 40
+          echo 'SOURCE_LOCAL_LINUX_NATIVE_AOT_STRUCTURED_SSA_45_PLUS_14_42_40'
       - name: Record source tree and released executable SHA-256 identities
         shell: bash
         env:
@@ -211,7 +260,7 @@ jobs:
           mkdir -p artifacts/evidence
           {
             printf 'repository=%s\nsource_head=%s\nroot_tree=%s\nrun_id=%s\nrun_attempt=%s\n' "$GITHUB_REPOSITORY" "$EXPECTED_HEAD" "$(git rev-parse 'HEAD^{tree}')" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
-            sha256sum artifacts/compiler/linux-x64/oresnet artifacts/apps/linux-x64/oreslang-app artifacts/parity/linux-x64/oreslang-app artifacts/parity-precedence/linux-x64/oreslang-app
+            sha256sum artifacts/compiler/linux-x64/oresnet artifacts/apps/linux-x64/oreslang-app artifacts/parity/linux-x64/oreslang-app artifacts/parity-precedence/linux-x64/oreslang-app artifacts/structured/linux-x64/oreslang-app
           } > artifacts/evidence/source-local-linux-sha256.txt
       - name: Upload bounded source-local Native AOT receipt
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
