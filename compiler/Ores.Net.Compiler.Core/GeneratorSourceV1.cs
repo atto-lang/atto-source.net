@@ -70,14 +70,7 @@ public static class OresGeneratorV1Compiler
             {
                 if (reader.Take('*'))
                     throw reader.Error("yield* requires delegated iterator lowering");
-                bool negative = reader.Take('-');
-                long value = reader.Integer();
-                if (negative)
-                {
-                    if (value == long.MinValue)
-                        throw reader.Error("invalid signed generator literal");
-                    value = checked(-value);
-                }
+                long value = reader.SignedInteger();
                 reader.Expect(';');
                 if (yields.Count == MaxYields)
                     throw reader.Error("generator source v1 exceeds 4096 yielded elements");
@@ -173,10 +166,16 @@ public static class OresGeneratorV1Compiler
             return value;
         }
 
-        public long Integer()
+        public long SignedInteger()
         {
             SkipTrivia();
             int start = _index;
+            bool negative = false;
+            if (_index < source.Length && source[_index] == '-')
+            {
+                negative = true;
+                _index++;
+            }
             if (_index >= source.Length || source[_index] is < '0' or > '9')
                 throw Error("integer literal expected");
 
@@ -203,9 +202,21 @@ public static class OresGeneratorV1Compiler
                 }
                 break;
             }
-            if (!long.TryParse(digits.ToString(), NumberStyles.None, CultureInfo.InvariantCulture, out long value))
+
+            if (!ulong.TryParse(digits.ToString(), NumberStyles.None, CultureInfo.InvariantCulture,
+                    out ulong magnitude))
                 throw new FormatException($"Invalid i64 at offset {start}");
-            return value;
+
+            if (!negative)
+            {
+                if (magnitude > long.MaxValue)
+                    throw new FormatException($"Invalid i64 at offset {start}");
+                return (long)magnitude;
+            }
+            if (magnitude == 9_223_372_036_854_775_808UL) return long.MinValue;
+            if (magnitude > long.MaxValue)
+                throw new FormatException($"Invalid i64 at offset {start}");
+            return -(long)magnitude;
         }
 
         public void ExpectEnd()
