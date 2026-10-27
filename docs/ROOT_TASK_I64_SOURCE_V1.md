@@ -14,7 +14,7 @@ pub fnc main(): int {
 ```
 
 `let` also binds the single view. Payload is signed i64, copyable by construction.
-The producer is checked, capture-free scalar + / - / * arithmetic (4096 verified
+The producer uses checked, capture-free scalar addition, subtraction and multiplication (4096 verified
 operations maximum). Strings, other generics, captures/borrows, effects, loops,
 producer await, actors, nested tasks, extra statements and mismatched awaited
 bindings fail before emission. General names do not grant runtime capability.

@@ -15,8 +15,13 @@ internal static class TaskI64SourceTests
             string path = Path.Combine(dir, "OresGenerated.dll");
             CilEmitter.EmitTaskI64Library(program, path);
             byte[] first = File.ReadAllBytes(path);
+            string scalarPath = Path.Combine(dir, "scalar.dll");
+            CilEmitter.EmitLibrary(program.Producer, scalarPath);
             using (var assembly = AssemblyDefinition.ReadAssembly(path))
             {
+                using var scalar = AssemblyDefinition.ReadAssembly(scalarPath);
+                if (assembly.MainModule.Mvid == scalar.MainModule.Mvid)
+                    throw new Exception("Task producer ABI reused scalar module identity");
                 var method = assembly.MainModule.Types.Single(t => t.Name == "OresProgram")
                     .Methods.Single(m => m.Name == "RunTaskI64Producer");
                 if (CilReferenceEvaluator.Evaluate(method) != 42 ||

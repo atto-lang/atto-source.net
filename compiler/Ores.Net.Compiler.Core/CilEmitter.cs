@@ -136,6 +136,11 @@ public static class CilEmitter
         contentHash.AppendData(ilStream.ToArray());
         if (localSignatureBlob is not null)
             contentHash.AppendData(localSignatureBlob.ToArray());
+        // Preserve established scalar IDs, but domain-separate the Task ABI:
+        // identical producer IL with a different entry symbol is not the same
+        // module and must not reuse a scalar module identity in build caches.
+        if (entryName != "Run")
+            contentHash.AppendData(System.Text.Encoding.UTF8.GetBytes("ores-task-abi-v1\0" + entryName));
         byte[] hash = contentHash.GetHashAndReset();
         var moduleId = new Guid(hash.AsSpan(0, 16));
         metadata.AddModule(
