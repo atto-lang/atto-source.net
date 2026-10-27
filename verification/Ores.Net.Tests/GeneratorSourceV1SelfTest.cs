@@ -46,6 +46,11 @@ internal static class GeneratorSourceV1SelfTest
         Require(bounds.YieldAt(0) == long.MaxValue && bounds.YieldAt(1) == long.MinValue,
             "full signed i64 yield range");
 
+        var triviaSigned = OresGeneratorV1Compiler.Compile(
+            "gen* spaced(): Iterator<int> { yield - /* trivia */ 2; return; }");
+        Require(triviaSigned.YieldAt(0) == -2,
+            "unary minus must preserve ordinary trivia/token boundaries");
+
         // One compiled declaration may create independent lazy activations.
         using (var first = new LiteralGeneratorActivationV1(compiled.CopyYields()))
         using (var second = new LiteralGeneratorActivationV1(compiled.CopyYields()))
@@ -71,7 +76,9 @@ internal static class GeneratorSourceV1SelfTest
             "pub gen* values(): Iterator<int> { return 1; }",
             "pub gen* values(): AsyncIterator<int> { yield 1; return; }",
             "pub fnc gen* values(): Iterator<int> { yield 1; return; }",
-            "pub gen* values(): Iterator<int> { yield 1 + 2; return; }"
+            "pub gen* values(): Iterator<int> { yield 1 + 2; return; }",
+            "pub gen* if(): Iterator<int> { yield 1; return; }",
+            "pub gen* routine(): Iterator<int> { yield 1; return; }"
         })
             ExpectReject(() => OresGeneratorV1Compiler.Compile(invalid), null);
     }
