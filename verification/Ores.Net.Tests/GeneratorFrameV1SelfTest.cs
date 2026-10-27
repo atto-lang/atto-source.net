@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using Ores.Net.Runtime;
 
 internal static class GeneratorFrameV1SelfTest
@@ -40,5 +41,30 @@ internal static class GeneratorFrameV1SelfTest
         if (bounded.Initialize() != 1 ||
             bounded.Pull(GeneratorFrameV1.MaxYields + 1, out _) != -1)
             throw new Exception("generator yield-count budget not enforced");
+
+        var forgedState = default(GeneratorFrameV1);
+        var forgedStateWords = MemoryMarshal.Cast<GeneratorFrameV1, int>(
+            MemoryMarshal.CreateSpan(ref forgedState, 1));
+        forgedStateWords[0] = 99;
+        if (forgedState.Initialize() != -1 || forgedState.IsTerminal)
+            throw new Exception("unknown generator frame state was accepted");
+
+        var forgedActive = default(GeneratorFrameV1);
+        var forgedActiveWords = MemoryMarshal.Cast<GeneratorFrameV1, int>(
+            MemoryMarshal.CreateSpan(ref forgedActive, 1));
+        forgedActiveWords[0] = 1;
+        forgedActiveWords[1] = GeneratorFrameV1.MaxYields + 1;
+        if (forgedActive.Initialize() != -1 ||
+            forgedActive.Pull(3, out _) != -1)
+            throw new Exception("forged active generator index was accepted");
+
+        var forgedTerminal = default(GeneratorFrameV1);
+        var forgedTerminalWords = MemoryMarshal.Cast<GeneratorFrameV1, int>(
+            MemoryMarshal.CreateSpan(ref forgedTerminal, 1));
+        forgedTerminalWords[0] = 2;
+        forgedTerminalWords[1] = 1;
+        if (forgedTerminal.Initialize() != -1 || forgedTerminal.IsTerminal ||
+            forgedTerminal.Pull(3, out _) != -1 || forgedTerminal.Close() != -1)
+            throw new Exception("forged terminal generator index was accepted");
     }
 }
