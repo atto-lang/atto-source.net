@@ -65,6 +65,11 @@ const requiredByWorkflow = {
     ]
   }
 };
+
+const requiredPathByWorkflow = {
+  "Windows Native AOT": ".github/workflows/windows-native-aot.yml",
+  "Integration declaration integrity": ".github/workflows/integration-declarations.yml"
+};
 export function verifyEvidence(run, response, expected) {
   const errors = [];
   const fail = (condition, explanation) => { if (!condition) errors.push(explanation); };
@@ -83,6 +88,7 @@ export function verifyEvidence(run, response, expected) {
   fail(run.repository?.full_name === expected.repo, "wrong run repository");
   fail(run.head_sha === expected.head, "run head is not the reviewed commit");
   fail(run.name === expected.workflow, "wrong workflow");
+  fail(run.path === requiredPathByWorkflow[expected.workflow], "wrong workflow path");
   fail(run.status === "completed" && run.conclusion === "success", "workflow has not passed");
   fail(["pull_request","workflow_dispatch","push"].includes(run.event), "unsupported workflow event");
   if (response === null || typeof response !== "object" || Array.isArray(response)) {
