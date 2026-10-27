@@ -103,6 +103,8 @@ ActorMailboxPrivateDataSelfTest.Run();
 ActorArenaSelfTest.Run();
 ActorShardColumnsSelfTest.Run();
 ProjectRootSourceTests.Run(); // host-only resolver, not linked .NET source imports
+ActorDispatchDomainsSelfTest.Run();
+ActorRuntimeSelfTest.Run();
 
 // Import parity is deliberately not claimed for the .NET scalar compiler.
 // Each form must fail at lexical admission with a specific import diagnostic,
@@ -666,3 +668,4 @@ StructuredSourceTests.Run();
 StaticFactsV0Tests.Run();
 ValueBoundaryTests.Run();
 Console.WriteLine("Oreslang .NET bootstrap, CFG verifier, CIL stress and structured source tests passed");
+
