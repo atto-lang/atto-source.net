@@ -13,9 +13,24 @@ internal static class CfgCilEmitter
     {
         ArgumentNullException.ThrowIfNull(graph);
         ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
-
         CilEmitter.EmitLibraryCore(outputFile, (metadata, bodies) =>
-        {
+            WriteMethod(graph, metadata, bodies, null));
+    }
+
+    public static void EmitLibrary(VerifiedCfgModule module, string outputFile)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+        ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
+        CilEmitter.EmitLibraryModuleCore(outputFile, module,
+            (graph, metadata, bodies, handles) =>
+                WriteMethod(graph, metadata, bodies, handles));
+    }
+
+    private static (int BodyOffset, BlobBuilder Code, BlobBuilder? Locals) WriteMethod(
+        VerifiedCfgFunction graph, MetadataBuilder metadata,
+        MethodBodyStreamEncoder bodies,
+        IReadOnlyDictionary<string, MethodDefinitionHandle>? handles)
+    {
             var blocks = graph.Blocks;
             int valueCount = blocks.Sum(b => b.Parameters.Count + b.Instructions.Count);
             int scratchCount = blocks.Sum(b => b.Parameters.Count);
@@ -104,6 +119,18 @@ internal static class CfgCilEmitter
                 {
                     switch (op.Opcode)
                     {
+                        case CfgOpcode.Argument:
+                            il.LoadArgument(checked((int)op.I64Constant!.Value));
+                            break;
+                        case CfgOpcode.Call:
+                            if (handles is null || op.Target is null ||
+                                !handles.TryGetValue(op.Target, out var callee) ||
+                                op.Arguments is null)
+                                throw new FormatException("Unlinked CFG native static method call");
+                            foreach (int argument in op.Arguments)
+                                il.LoadLocal(argument);
+                            il.Call(callee);
+                            break;
                         case CfgOpcode.ConstantI64:
                             il.LoadConstantI8(op.I64Constant!.Value);
                             break;
@@ -168,10 +195,12 @@ internal static class CfgCilEmitter
             // Every block is entered with an empty stack, each instruction
             // stores its result immediately, and the maximum temporary depth
             // is two (binary operation); control-flow edges never merge stacks.
-            int offset = bodies.AddMethodBody(il, maxStack: 2,
+            int maxStack = Math.Max(2, blocks.SelectMany(b => b.Instructions)
+                .Where(op => op.Opcode == CfgOpcode.Call)
+                .Select(op => op.Arguments!.Count).DefaultIfEmpty(0).Max());
+            int offset = bodies.AddMethodBody(il, maxStack: maxStack,
                 localVariablesSignature: signature,
                 attributes: MethodBodyAttributes.InitLocals);
             return (offset, code, signatureBlob);
-        });
     }
 }
