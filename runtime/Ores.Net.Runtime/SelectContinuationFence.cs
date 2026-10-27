@@ -4,7 +4,9 @@ namespace Ores.Net.Runtime;
 /// Actor-generation fence for queued select/await continuations.
 /// Completion producers enqueue tickets; the actor lane consumes a ticket
 /// immediately before executing the continuation. Generation advance
-/// invalidates all outstanding tickets.
+/// invalidates all outstanding tickets. Close permanently rejects new tickets.
+/// The scheduler must serialize consume-and-invoke with lifecycle changes on
+/// the actor lane; this fence does not join already-running native workers.
 /// </summary>
 public sealed class SelectContinuationFence
 {
@@ -13,7 +15,24 @@ public sealed class SelectContinuationFence
     private sealed class Slot
     {
         public ulong Id;
-        public ulong Generation;
+        public bool Closed
+    {
+        get { lock (_gate) return _closed; }
+    }
+
+    // Terminal shutdown cancels pending delivery, but does not join workers.
+    public bool Close()
+    {
+        lock (_gate)
+        {
+            if (_closed) return false;
+            _closed = true;
+            foreach (var slot in _slots) ClearLocked(slot);
+            return true;
+        }
+    }
+
+    public ulong Generation;
         public bool Active;
     }
 
@@ -21,6 +40,7 @@ public sealed class SelectContinuationFence
     private readonly Slot[] _slots;
     private ulong _generation;
     private ulong _nextId = 1;
+    private bool _closed;
 
     public SelectContinuationFence(
         ulong generation = 1,
@@ -60,6 +80,8 @@ public sealed class SelectContinuationFence
     {
         lock (_gate)
         {
+            if (_closed)
+                throw new InvalidOperationException("Continuation fence is closed");
             if (expectedGeneration != _generation)
                 throw new InvalidOperationException("stale actor generation");
 
@@ -105,7 +127,7 @@ public sealed class SelectContinuationFence
     {
         lock (_gate)
         {
-            if (expectedGeneration != _generation) return false;
+            if (_closed || expectedGeneration != _generation) return false;
             if (_generation == ulong.MaxValue)
                 throw new OverflowException("Actor generation exhausted");
 
