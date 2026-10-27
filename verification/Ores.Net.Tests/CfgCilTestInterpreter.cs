@@ -8,7 +8,15 @@ internal static class CfgCilTestInterpreter
     public static long Evaluate(MethodDefinition method, int maxSteps = 100_000)
     {
         if (maxSteps <= 0) throw new ArgumentOutOfRangeException(nameof(maxSteps));
-        if (!method.HasBody) throw new FormatException("Missing CFG CIL body");
+        return Execute(method, Array.Empty<long>(), ref maxSteps, 0);
+    }
+
+    private static long Execute(MethodDefinition method, long[] arguments,
+        ref int remainingSteps, int depth)
+    {
+        if (!method.HasBody || !method.IsStatic ||
+            method.Parameters.Count != arguments.Length || depth > 65)
+            throw new FormatException("Invalid or recursive CFG CIL method call");
 
         var instructions = method.Body.Instructions;
         var indexes = new Dictionary<Instruction, int>();
@@ -18,7 +26,7 @@ internal static class CfgCilTestInterpreter
         var locals = new long[method.Body.Variables.Count];
         var stack = new Stack<long>();
         int pc = 0;
-        for (int step = 0; step < maxSteps; step++)
+        while (remainingSteps-- > 0)
         {
             if (pc < 0 || pc >= instructions.Count)
                 throw new FormatException("CFG CIL branch escaped method");
@@ -39,6 +47,14 @@ internal static class CfgCilTestInterpreter
                 case Code.Ldc_I4_6: stack.Push(6); break;
                 case Code.Ldc_I4_7: stack.Push(7); break;
                 case Code.Ldc_I4_8: stack.Push(8); break;
+                case Code.Ldarg_0: stack.Push(arguments[0]); break;
+                case Code.Ldarg_1: stack.Push(arguments[1]); break;
+                case Code.Ldarg_2: stack.Push(arguments[2]); break;
+                case Code.Ldarg_3: stack.Push(arguments[3]); break;
+                case Code.Ldarg:
+                case Code.Ldarg_S:
+                    stack.Push(arguments[((ParameterDefinition)ins.Operand).Index]);
+                    break;
                 case Code.Ldloc_0: stack.Push(locals[0]); break;
                 case Code.Ldloc_1: stack.Push(locals[1]); break;
                 case Code.Ldloc_2: stack.Push(locals[2]); break;
@@ -93,6 +109,22 @@ internal static class CfgCilTestInterpreter
                     bool take = ins.OpCode.Code is Code.Brtrue or Code.Brtrue_S
                         ? nonzero : !nonzero;
                     if (take) pc = indexes[(Instruction)ins.Operand];
+                    break;
+                }
+                case Code.Call:
+                {
+                    if (ins.Operand is not MethodReference reference ||
+                        reference.DeclaringType.FullName != method.DeclaringType.FullName)
+                        throw new FormatException("External CFG CIL method call");
+                    var callee = method.DeclaringType.Methods.SingleOrDefault(m =>
+                        m.Name == reference.Name &&
+                        m.Parameters.Count == reference.Parameters.Count);
+                    if (callee is null || !callee.IsStatic)
+                        throw new FormatException("Undefined CFG CIL helper method");
+                    var callArguments = new long[callee.Parameters.Count];
+                    for (int arg = callArguments.Length - 1; arg >= 0; arg--)
+                        callArguments[arg] = stack.Pop();
+                    stack.Push(Execute(callee, callArguments, ref remainingSteps, depth + 1));
                     break;
                 }
                 case Code.Ret:
