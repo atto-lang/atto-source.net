@@ -53,6 +53,22 @@ internal static class SharedScalarParityConformance
             refused = true;
         }
         Require(refused, "mutated fixture must fail corpus admission");
+
+        // A fixture-only mutation test does not prove that changes to
+        // cases.json itself are caught before parsing or compiling a guest.
+        var changedManifest = (byte[])manifest.Clone();
+        changedManifest[0] ^= 1;
+        var manifestRefused = false;
+        try
+        {
+            RequirePinnedSuite(changedManifest, reviewed);
+        }
+        catch (InvalidOperationException ex) when (
+            ex.Message.Contains("suite SHA-256 differs", StringComparison.Ordinal))
+        {
+            manifestRefused = true;
+        }
+        Require(manifestRefused, "mutated scalar manifest must fail corpus admission");
     }
 
     private static void RequireSafeDirectory(string path)
