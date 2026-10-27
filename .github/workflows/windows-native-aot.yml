@@ -205,6 +205,13 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $generated)) {
             throw 'Experimental structured CIL emission failed'
           }
+          $unsupported = Join-Path $folder 'unsupported.ores'
+          [IO.File]::WriteAllText($unsupported, 'fnc main():int{select { }return 1;}', [Text.UTF8Encoding]::new($false))
+          $forbidden = Join-Path $folder 'denied/OresGenerated.dll'
+          & $compiler compile-structured $unsupported --out $forbidden
+          if ($LASTEXITCODE -eq 0 -or (Test-Path -LiteralPath $forbidden)) {
+            throw 'Unsupported select source emitted an artifact'
+          }
           $hostProject = 'host/Ores.Net.NativeHost/Ores.Net.NativeHost.csproj'
           $publishOut = 'artifacts/structured-native/win-x64'
           dotnet clean $hostProject -c Release -r win-x64 "-p:GeneratedAssembly=$generated"
@@ -399,6 +406,13 @@ jobs:
           generated="$GITHUB_WORKSPACE/artifacts/structured-generated/OresGenerated.dll"
           dotnet run --project "$compiler" -c Release -- compile-structured "$source_file" --out "$generated"
           test -s "$generated"
+          printf '%s' 'fnc main():int{select { }return 1;}' > "$RUNNER_TEMP/unsupported-select.ores"
+          forbidden="$GITHUB_WORKSPACE/artifacts/structured-generated/denied/OresGenerated.dll"
+          if dotnet run --project "$compiler" -c Release -- compile-structured "$RUNNER_TEMP/unsupported-select.ores" --out "$forbidden"; then
+            echo 'Unsupported select source was compiled' >&2
+            exit 1
+          fi
+          test ! -e "$forbidden"
           host='host/Ores.Net.NativeHost/Ores.Net.NativeHost.csproj'
           dotnet clean "$host" -c Release -r linux-x64 "-p:GeneratedAssembly=$generated"
           dotnet publish "$host" -c Release -r linux-x64 \
