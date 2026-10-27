@@ -31,7 +31,32 @@ jobs:
           test "$RUNNER_OS" = "Linux"
           python3 - <<'PY'
           import hashlib
+          import os
+          import re
+
+          # Nothing is checked out; this probe cannot read Oreslang sources.
+          run_id = os.environ.get("GITHUB_RUN_ID", "")
+          attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "")
+          event = os.environ.get("GITHUB_EVENT_NAME", "")
+          commit = os.environ.get("GITHUB_SHA", "")
+          if os.environ.get("GITHUB_ACTIONS") != "true":
+              raise SystemExit("Not running inside GitHub Actions")
+          if os.environ.get("RUNNER_OS") != "Linux":
+              raise SystemExit("Runner OS mismatch")
+          if not run_id.isdecimal() or int(run_id) < 1:
+              raise SystemExit("Missing valid workflow-run identity")
+          if not attempt.isdecimal() or int(attempt) < 1:
+              raise SystemExit("Missing valid workflow-run attempt")
+          if not re.fullmatch(r"[a-fA-F0-9]{40}", commit):
+              raise SystemExit("Missing 40-hex workflow commit")
+          if event not in ("push", "pull_request", "workflow_dispatch"):
+              raise SystemExit("Unexpected runner admission event")
+
           payload = b"oreslang-source-free-runner-admission-v1"
-          assert hashlib.sha256(payload).hexdigest()
-          print("RUNNER_ADMISSION_MEANINGFUL_STEP_EXECUTED")
+          digest = hashlib.sha256(payload).hexdigest()
+          if digest != "4a35cbaad4c7ea93615312c3e39ee83cae0405a29bdf9540094fb89524266b1e":
+              raise SystemExit("Canary digest mismatch")
+          # A green workflow is evidence of runner scheduling only, NOT of
+          # checkout, Git tree identity or Oreslang compilation/execution.
+          print(f"RUNNER_ADMISSION_MEANINGFUL_STEP_EXECUTED run={run_id} attempt={attempt}")
           PY
