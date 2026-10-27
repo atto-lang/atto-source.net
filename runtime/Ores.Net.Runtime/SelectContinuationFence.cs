@@ -15,7 +15,17 @@ public sealed class SelectContinuationFence
     private sealed class Slot
     {
         public ulong Id;
-        public bool Closed
+        public ulong Generation;
+        public bool Active;
+    }
+
+    private readonly object _gate = new();
+    private readonly Slot[] _slots;
+    private ulong _generation;
+    private ulong _nextId = 1;
+    private bool _closed;
+
+    public bool Closed
     {
         get { lock (_gate) return _closed; }
     }
@@ -31,16 +41,6 @@ public sealed class SelectContinuationFence
             return true;
         }
     }
-
-    public ulong Generation;
-        public bool Active;
-    }
-
-    private readonly object _gate = new();
-    private readonly Slot[] _slots;
-    private ulong _generation;
-    private ulong _nextId = 1;
-    private bool _closed;
 
     public SelectContinuationFence(
         ulong generation = 1,
