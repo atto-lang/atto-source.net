@@ -100,6 +100,7 @@ Reject(() => OresParser.Parse("fnc main():int { const x = 1; return x; }"), "loc
 
 ActorRefNoWireSelfTest.Run();
 ActorMailboxBoundsSelfTest.Run();
+SelectContinuationFenceSelfTest.Run();
 ActorMailboxRestartAtomicitySelfTest.Run();
 ActorMailboxAuthorizationPrioritySelfTest.Run();
 ActorMailboxPrivateDataSelfTest.Run();
