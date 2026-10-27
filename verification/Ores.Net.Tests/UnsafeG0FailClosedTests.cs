@@ -35,6 +35,21 @@ internal static class UnsafeG0FailClosedTests
                                     source);
             }
         }
+        foreach (var newline in new[] { "\r", "\r\n", "\n" })
+        {
+            var source = "fnc main():int{return 42;} // ignored" + newline + "unsafe";
+            foreach (var parse in new Action<string>[] {
+                x => { _ = OresParser.Parse(x); },
+                x => { _ = OresStructuredParser.Parse(x); }
+            })
+            {
+                try { parse(source); }
+                catch (FormatException ex) when (
+                    ex.Message.Contains("unsafe boundary requires checked effects",
+                        StringComparison.Ordinal)) { continue; }
+                throw new Exception("unsafe on a CR/LF line escaped the lexer");
+            }
+        }
         // This is a lexical keyword, not a substring check.
         foreach (var safe in new[] {
             "fnc main():int{return 42;} // unsafe",
