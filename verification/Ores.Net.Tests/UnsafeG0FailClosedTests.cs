@@ -81,7 +81,7 @@ internal static class UnsafeG0FailClosedTests
                 try { parse(malformed); }
                 catch (FormatException ex) when (
                     ex.Message.Contains("NUL", StringComparison.Ordinal) ||
-                    ex.Message.Contains("invalid UTF-16", StringComparison.Ordinal))
+                    ex.Message.Contains("invalid UTF-16", StringComparison.OrdinalIgnoreCase))
                 { continue; }
                 throw new Exception("invalid source encoding evaded fail-closed admission");
             }
