@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices;
+
 namespace Ores.Net.Runtime;
 
 /// <summary>
@@ -11,6 +13,7 @@ namespace Ores.Net.Runtime;
 /// reference; copying the struct would create an independent snapshot and is not
 /// a valid generator activation alias.
 /// </summary>
+[StructLayout(LayoutKind.Sequential)]
 public struct GeneratorFrameV1
 {
     public const int MaxYields = 4096;
@@ -21,14 +24,21 @@ public struct GeneratorFrameV1
     private int _state;
     private int _nextSlot;
 
-    public readonly bool IsTerminal => _state == Terminal;
+    public readonly bool IsTerminal => _state == Terminal && _nextSlot == 0;
 
     public int Initialize()
     {
-        if (_state != Fresh) return 0;
-        _state = Active;
-        _nextSlot = 0;
-        return 1;
+        if (_state == Fresh)
+        {
+            _state = Active;
+            _nextSlot = 0;
+            return 1;
+        }
+        if (_state == Active)
+            return _nextSlot >= 0 && _nextSlot <= MaxYields ? 0 : -1;
+        if (_state == Terminal)
+            return _nextSlot == 0 ? 0 : -1;
+        return -1;
     }
 
     public int Pull(int yieldCount, out int slot)
