@@ -113,14 +113,19 @@ internal static class CfgCilTestInterpreter
                 }
                 case Code.Call:
                 {
-                    if (ins.Operand is not MethodReference reference ||
-                        reference.DeclaringType.FullName != method.DeclaringType.FullName)
-                        throw new FormatException("External CFG CIL method call");
-                    var callee = method.DeclaringType.Methods.SingleOrDefault(m =>
-                        m.Name == reference.Name &&
-                        m.Parameters.Count == reference.Parameters.Count);
-                    if (callee is null || !callee.IsStatic)
-                        throw new FormatException("Undefined CFG CIL helper method");
+                    // The emitted ABI promises an exact, in-module MethodDef
+                    // token. Resolving by name/arity would let the test lane
+                    // execute a different target from the actual CIL token.
+                    // A MemberRef, external method, virtual target, or call to
+                    // Run is not an admitted static helper invocation.
+                    if (ins.Operand is not MethodDefinition callee ||
+                        !ReferenceEquals(callee.Module, method.Module) ||
+                        !ReferenceEquals(callee.DeclaringType, method.DeclaringType) ||
+                        !callee.IsStatic || !callee.IsPrivate ||
+                        !callee.Name.StartsWith("helper_", StringComparison.Ordinal) ||
+                        !callee.HasBody || callee.Parameters.Count > 16 ||
+                        stack.Count != callee.Parameters.Count)
+                        throw new FormatException("Invalid CFG CIL MethodDef call target");
                     var callArguments = new long[callee.Parameters.Count];
                     for (int arg = callArguments.Length - 1; arg >= 0; arg--)
                         callArguments[arg] = stack.Pop();
