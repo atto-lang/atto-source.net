@@ -98,6 +98,32 @@ current head. Promotion to the production CLI requires an exact-head managed
 and Native AOT receipt plus review of the structured grammar against the shared
 Oreslang frontend contract.
 
+### Experimental CLI for structured Native AOT source (draft)
+
+This branch adds two explicitly opt-in commands, separate from shipping
+`check` and `compile`:
+
+```sh
+oresnet check-structured examples/structured-sum45.ores
+oresnet compile-structured examples/structured-sum45.ores --out artifacts/generated/OresGenerated.dll
+```
+
+The commands route the restricted typed `int`/`bool` structured AST through
+`OresStructuredCfgLowering`, `OresCfgVerifier`, and deterministic CIL.
+They **do not** enable source actors, dynamic dispatch, imports, async I/O,
+`select`, ownership syntax, floats or general functions. Normal `check` /
+`compile` remain scalar-only and reject structured source.
+
+Windows and Linux workflows include a negative shipping-parser check and
+a real native application smoke test returning 45 from a loop-carried sum.
+The C# verification harness additionally checks that reachable overflows trap
+in emitted CIL, while unselected branches never run their traps.
+
+**Status: unverified draft.** Neither source-org zero-step GitHub Actions failures
+nor reference-interpreter success prove current-head Native AOT execution.
+No release or default-CLI promotion is allowed until exact-head Windows/Linux
+Native AOT steps execute and independent compiler/security review passes.
+
 ## Verification
 
 ~~~powershell

@@ -187,6 +187,50 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or ($output | Out-String).Trim() -ne '2211') {
             throw "CFG Native AOT atomic swap regression: expected 2211, got '$output'"
           }
+      - name: Prove experimental structured source in real Windows Native AOT
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $folder = Join-Path $env:RUNNER_TEMP 'ores-structured-source'
+          New-Item -ItemType Directory -Path $folder -Force | Out-Null
+          $source = (Resolve-Path 'examples/structured-sum45.ores').Path
+          $compiler = (Resolve-Path './artifacts/compiler/win-x64/oresnet.exe').Path
+          & $compiler check $source
+          if ($LASTEXITCODE -eq 0) { throw 'Shipping scalar compiler unexpectedly accepted structured source' }
+          $shipping = Join-Path $folder 'shipping/OresGenerated.dll'
+          New-Item -ItemType Directory -Path (Split-Path -Parent $shipping) -Force | Out-Null
+          & $compiler compile $source --out $shipping
+          if ($LASTEXITCODE -eq 0 -or (Test-Path -LiteralPath $shipping)) {
+            throw 'Shipping scalar compiler accepted structured source or emitted an artifact'
+          }
+          & $compiler check-structured $source
+          if ($LASTEXITCODE -ne 0) { throw 'Experimental structured source check failed' }
+          $generated = Join-Path $folder 'OresGenerated.dll'
+          & $compiler compile-structured $source --out $generated
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $generated)) {
+            throw 'Experimental structured CIL emission failed'
+          }
+          $unsupported = Join-Path $folder 'unsupported.ores'
+          [IO.File]::WriteAllText($unsupported, 'fnc main():int{select { }return 1;}', [Text.UTF8Encoding]::new($false))
+          $forbidden = Join-Path $folder 'denied/OresGenerated.dll'
+          New-Item -ItemType Directory -Path (Split-Path -Parent $forbidden) -Force | Out-Null
+          & $compiler compile-structured $unsupported --out $forbidden
+          if ($LASTEXITCODE -eq 0 -or (Test-Path -LiteralPath $forbidden)) {
+            throw 'Unsupported select source emitted an artifact'
+          }
+          $hostProject = 'host/Ores.Net.NativeHost/Ores.Net.NativeHost.csproj'
+          $publishOut = 'artifacts/structured-native/win-x64'
+          dotnet clean $hostProject -c Release -r win-x64 "-p:GeneratedAssembly=$generated"
+          if ($LASTEXITCODE -ne 0) { throw 'Structured host clean failed' }
+          dotnet publish $hostProject -c Release -r win-x64 -o $publishOut "-p:GeneratedAssembly=$generated" -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'Structured Native AOT publish failed' }
+          $binary = Join-Path $publishOut 'oreslang-app.exe'
+          ./verification/assert-native-release.ps1 -Binary $binary -Rid win-x64
+          $output = & $binary
+          if ($LASTEXITCODE -ne 0 -or ($output | Out-String).Trim() -ne '45') {
+            throw "Structured Native AOT expected 45, got '$output'"
+          }
+
       - name: Execute shared five-backend native.add source in real Windows Native AOT
         shell: pwsh
         run: |
@@ -285,7 +329,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - name: Upload native executable
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: oreslang-net-win-x64
           path: artifacts/apps/win-x64/
@@ -351,6 +395,53 @@ jobs:
       - name: Execute Linux Native AOT CFG branch and simultaneous-assignment fixture
         shell: bash
         run: bash ./verification/assert-linux-cfg-native.sh
+
+      - name: Prove experimental structured source in real Linux Native AOT
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/structured-native/linux-x64 artifacts/structured-generated
+          source_file='examples/structured-sum45.ores'
+          compiler_project='compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj'
+          compiler_out='artifacts/structured-native/compiler-linux-x64'
+          dotnet publish "$compiler_project" -c Release -r linux-x64 -o "$compiler_out" -warnaserror
+          compiler="$compiler_out/oresnet"
+          test -x "$compiler"
+          file "$compiler" | grep -q 'ELF 64-bit'
+          test ! -e "$compiler_out/oresnet.runtimeconfig.json"
+          if "$compiler" check "$source_file"; then
+            echo 'Shipping scalar compiler incorrectly accepted structured source' >&2
+            exit 1
+          fi
+          shipping="$GITHUB_WORKSPACE/artifacts/structured-generated/shipping/OresGenerated.dll"
+          mkdir -p "$(dirname "$shipping")"
+          if "$compiler" compile "$source_file" --out "$shipping"; then
+            echo 'Shipping scalar compiler compiled structured source' >&2
+            exit 1
+          fi
+          test ! -e "$shipping"
+          "$compiler" check-structured "$source_file"
+          generated="$GITHUB_WORKSPACE/artifacts/structured-generated/OresGenerated.dll"
+          "$compiler" compile-structured "$source_file" --out "$generated"
+          test -s "$generated"
+          printf '%s' 'fnc main():int{select { }return 1;}' > "$RUNNER_TEMP/unsupported-select.ores"
+          forbidden="$GITHUB_WORKSPACE/artifacts/structured-generated/denied/OresGenerated.dll"
+          mkdir -p "$(dirname "$forbidden")"
+          if "$compiler" compile-structured "$RUNNER_TEMP/unsupported-select.ores" --out "$forbidden"; then
+            echo 'Unsupported select source was compiled' >&2
+            exit 1
+          fi
+          test ! -e "$forbidden"
+          host='host/Ores.Net.NativeHost/Ores.Net.NativeHost.csproj'
+          dotnet clean "$host" -c Release -r linux-x64 "-p:GeneratedAssembly=$generated"
+          dotnet publish "$host" -c Release -r linux-x64 \
+            -o artifacts/structured-native/linux-x64 "-p:GeneratedAssembly=$generated" -warnaserror
+          binary='artifacts/structured-native/linux-x64/oreslang-app'
+          test -x "$binary"
+          test "$("$binary")" = 45
+          file "$binary" | grep -q 'ELF 64-bit'
+          test ! -f artifacts/structured-native/linux-x64/oreslang-app.runtimeconfig.json
+          test ! -f artifacts/structured-native/linux-x64/OresGenerated.dll
 
   # Optional budget-independent gate. Disabled unless repo owners register an
   # isolated, trusted Windows x64 runner with the oreslang-net-aot label and set
