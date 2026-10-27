@@ -37,6 +37,25 @@ internal static class StructuredSourceTests
 
     public static void Run()
     {
+        foreach (var source in new[] {
+            "define inverted class Particle as x: int; end",
+            "define pub inverted class Particle as x: int; end",
+            "pub define inverted class Particle as x: int; end"
+        })
+        {
+            try { _ = OresStructuredParser.Parse(source); }
+            catch (FormatException ex)
+            {
+                Require(ex.Message.Contains(
+                        "Inverted class requires checked bracket-row and ownership lowering",
+                        StringComparison.Ordinal) &&
+                        ex.Message.Contains("offset", StringComparison.Ordinal),
+                    "inverted class must fail through the dedicated backend gate: " + ex.Message);
+                continue;
+            }
+            throw new Exception(".NET frontend admitted unlowered inverted class source");
+        }
+
         // Canonical Java foo() == foo(self) uses one caller-visible slot.
         // The .NET bootstrap has neither nominal class AST nor CIL dispatch:
         // validate a *specific* fail-closed diagnostic for the exact sources
