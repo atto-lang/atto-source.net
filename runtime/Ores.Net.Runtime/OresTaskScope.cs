@@ -90,24 +90,34 @@ public sealed class OresTaskScope : IAsyncDisposable
     private async Task Forward<T>(
         Task<T> source, TaskCompletionSource<T> projection, CancellationToken token)
     {
+        T value = default!;
+        Exception? fault = null;
+        IReadOnlyCollection<Exception>? causes = null;
+        bool cancelled = false;
         try
         {
             var wait = source.WaitAsync(token); // NEVER cancel producer from observer.
-            try { projection.TrySetResult(await wait.ConfigureAwait(false)); }
-            catch (Exception) when (wait.IsCanceled)
-            {
-                projection.TrySetCanceled(token.IsCancellationRequested
-                    ? token : new CancellationToken(canceled: true));
-            }
+            try { value = await wait.ConfigureAwait(false); }
+            catch (Exception) when (wait.IsCanceled) { cancelled = true; }
             catch (Exception error)
             {
-                if (wait.Exception is { } failure)
-                    projection.TrySetException(failure.InnerExceptions);
-                else projection.TrySetException(error);
+                fault = error;
+                causes = wait.Exception?.InnerExceptions;
             }
         }
-        catch (Exception error) { projection.TrySetException(error); }
-        finally { Interlocked.Decrement(ref activeObservers); }
+        catch (Exception error) { fault = error; }
+        finally
+        {
+            // Release the continuation quota BEFORE publishing the observed
+            // completion. A completed observer is never still counted pending.
+            Interlocked.Decrement(ref activeObservers);
+        }
+        if (cancelled)
+            projection.TrySetCanceled(token.IsCancellationRequested
+                ? token : new CancellationToken(canceled: true));
+        else if (causes is { Count: > 0 }) projection.TrySetException(causes);
+        else if (fault is not null) projection.TrySetException(fault);
+        else projection.TrySetResult(value);
     }
 
     private async ValueTask Execute<T>(
