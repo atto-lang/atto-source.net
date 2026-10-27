@@ -5,11 +5,13 @@ using System.Text;
 // passed validation then crashed with IndexOutOfRangeException instead of usage.
 bool validCheck = args.Length == 2 && args[0] == "check";
 bool validCompile = args.Length == 4 && args[0] == "compile" && args[2] == "--out";
+bool validEmitSource = args.Length == 4 && args[2] == "--out" &&
+    (args[0] == "emit-csharp" || args[0] == "emit-fsharp");
 bool validStaticFacts = args.Length == 2 &&
     (args[0] == "static-facts" || args[0] == "static-facts-structured");
-if (!validCheck && !validCompile && !validStaticFacts)
+if (!validCheck && !validCompile && !validEmitSource && !validStaticFacts)
 {
-    Console.Error.WriteLine("usage: oresnet check input.ores | oresnet compile input.ores --out path/OresGenerated.dll | oresnet static-facts input.ores | oresnet static-facts-structured input.ores");
+    Console.Error.WriteLine("usage: oresnet check input.ores | oresnet compile input.ores --out path/OresGenerated.dll | oresnet emit-csharp input.ores --out path/OresProgram.cs | oresnet emit-fsharp input.ores --out path/OresProgram.fs | oresnet static-facts input.ores | oresnet static-facts-structured input.ores");
     return 2;
 }
 
@@ -40,6 +42,18 @@ try
             throw new ArgumentException("Generated assembly must be named OresGenerated.dll");
         CilEmitter.EmitLibrary(verified, args[3]);
         Console.WriteLine($"Emitted CIL: {Path.GetFullPath(args[3])}");
+    }
+    else if (validEmitSource)
+    {
+        var target = args[0] == "emit-csharp"
+            ? ManagedSourceTarget.CSharp : ManagedSourceTarget.FSharp;
+        var extension = target == ManagedSourceTarget.CSharp ? ".cs" : ".fs";
+        if (!string.Equals(Path.GetExtension(args[3]), extension,
+            StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException($"Managed source output requires {extension} extension");
+        var generatedSource = ManagedSourceEmitter.Emit(verified, target);
+        WriteAtomicSource(args[3], generatedSource);
+        Console.WriteLine($"Emitted {target} from verified OresIR: {Path.GetFullPath(args[3])}");
     }
     else Console.WriteLine("Oreslang subset syntax and typed OresIR: OK");
     return 0;
@@ -92,4 +106,25 @@ static string ReadBoundedSource(string path, bool rejectBom = false)
     if (rejectBom && start != 0)
         throw new FormatException("Static-facts export rejects BOM to preserve exact byte identity");
     return new UTF8Encoding(false, true).GetString(buffer, start, read - start);
+}
+
+
+// Publish a complete UTF-8 (no BOM) source file only after admission succeeds.
+// Temporary files are not discoverable as successful compiler outputs.
+static void WriteAtomicSource(string path, string content)
+{
+    if (Encoding.UTF8.GetByteCount(content) > 2 * 1024 * 1024)
+        throw new FormatException("Generated source exceeds 2 MiB limit");
+    var fullPath = Path.GetFullPath(path);
+    Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+    var tempPath = fullPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+    try
+    {
+        File.WriteAllText(tempPath, content, new UTF8Encoding(false));
+        File.Move(tempPath, fullPath, overwrite: true);
+    }
+    finally
+    {
+        if (File.Exists(tempPath)) File.Delete(tempPath);
+    }
 }
