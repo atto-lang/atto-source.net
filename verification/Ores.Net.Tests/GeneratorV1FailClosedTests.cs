@@ -10,7 +10,11 @@ internal static class GeneratorV1FailClosedTests
             "pub gen* values(): Iterator<int> { yield 1; }",
             "pub async gen* values(): AsyncIterator<int> { yield 1; }",
             "pub suspend gen* values(): AsyncIterator<int> { yield 1; }",
-            "generator fnc values(): int { yield 1; }"
+            "generator fnc values(): int { yield 1; }",
+            "generator routine values(): int { yield 1; }",
+            "pub fnc gen* values(): Iterator<int> { yield 1; }",
+            "pub routine gen* values(): Iterator<int> { yield 1; }",
+            "pub async fnc gen* values(): AsyncIterator<int> { yield 1; }"
         })
         {
             try
