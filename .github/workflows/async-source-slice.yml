@@ -74,7 +74,8 @@ jobs:
         run: |
           $sha = (git rev-parse HEAD).Trim()
           $tree = (git rev-parse 'HEAD^{tree}').Trim()
-          if (git diff --exit-code) { } else { throw 'Tracked source changed' }
+          git diff --exit-code | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'Tracked source changed' }
           [ordered]@{
             schema = 'net-async-source-interpreter-v1'
             source_commit = $sha
