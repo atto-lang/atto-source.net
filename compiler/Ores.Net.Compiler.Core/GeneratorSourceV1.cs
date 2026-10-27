@@ -160,11 +160,27 @@ public static class OresGeneratorV1Compiler
                 throw Error("identifier expected");
             if (value!.Length > MaxIdentifierLength)
                 throw new FormatException($"Identifier exceeds {MaxIdentifierLength} characters at offset {start}");
-            if (value is "pub" or "gen" or "generator" or "async" or "suspend" or "suspends"
-                or "yield" or "return" or "Iterator" or "AsyncIterator" or "int")
+            if (IsReservedIdentifier(value!))
                 throw new FormatException($"Reserved generator identifier '{value}' at offset {start}");
             return value;
         }
+
+        private static bool IsReservedIdentifier(string value) => value is
+            "import" or "from" or "as" or "extends" or "implements" or
+            "try" or "catch" or "throw" or "raise" or "panic" or "recover" or "finally" or
+            "end" or "fi" or "if" or "do" or "else" or "then" or "new" or
+            "spawn" or "stop" or "done" or "await" or "rt" or
+            "async" or "suspend" or "suspends" or "critical" or
+            "gen" or "generator" or "nlex" or "trap" or "actor" or "isoactor" or
+            "def" or "fnc" or "routine" or "while" or "for" or "of" or "loop" or
+            "block" or "break" or "continue" or "yield" or "super" or "elseif" or "elif" or
+            "switch" or "match" or "matches" or "is" or "default" or "eq" or "neq" or
+            "nb" or "select" or "readch" or "writech" or "cb" or "shared" or "untrusted" or
+            "type" or "types" or "typeof" or "interface" or "trait" or "struct" or "impl" or
+            "abstract" or "void" or "static" or "pub" or "private" or "return" or "defer" or
+            "val" or "const" or "let" or "mut" or "borrow" or "self" or
+            "true" or "false" or "null" or "obj" or "arr" or
+            "Iterator" or "AsyncIterator" or "int";
 
         public long SignedInteger()
         {
@@ -175,6 +191,10 @@ public static class OresGeneratorV1Compiler
             {
                 negative = true;
                 _index++;
+                // '-' is a token, not part of the integer token. Preserve
+                // ordinary Oreslang trivia rules between unary minus and its
+                // magnitude, including comments.
+                SkipTrivia();
             }
             if (_index >= source.Length || source[_index] is < '0' or > '9')
                 throw Error("integer literal expected");
