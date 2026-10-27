@@ -1,5 +1,3 @@
-namespace Ores.Net.Tests;
-
 internal static class AsyncOnlyIoPolicyTests
 {
     public static void Run()
