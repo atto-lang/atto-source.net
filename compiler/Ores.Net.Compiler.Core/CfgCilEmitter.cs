@@ -13,6 +13,8 @@ internal static class CfgCilEmitter
     {
         ArgumentNullException.ThrowIfNull(graph);
         ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
+        if (graph.Parameters.Count != 0 || graph.ResultType != IrValueType.I64)
+            throw new FormatException("Standalone CFG CIL requires parameterless i64 Run entry");
         CilEmitter.EmitLibraryCore(outputFile, (metadata, bodies) =>
             WriteMethod(graph, metadata, bodies, null));
     }
