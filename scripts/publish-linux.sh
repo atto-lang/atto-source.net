@@ -2,8 +2,8 @@
 # Both source compiler and generated application must publish as Native AOT.
 set -Eeuo pipefail
 
-if [[ $# -lt 1 || $# -gt 2 ]]; then
-  echo 'usage: bash scripts/publish-linux.sh source.ores [app-output-root]' >&2
+if [[ $# -lt 1 || $# -gt 3 ]]; then
+  echo 'usage: bash scripts/publish-linux.sh source.ores [app-output-root] [--structured]' >&2
   exit 2
 fi
 for tool in dotnet file readelf realpath; do
@@ -13,7 +13,17 @@ root="$(cd -- "$(dirname -- "$0")/.." && pwd)"
 source_file="$(realpath -- "$1")"
 [[ -f "$source_file" ]] || { echo "missing source: $source_file" >&2; exit 2; }
 output_root='artifacts/apps'
-if [[ $# -eq 2 ]]; then output_root="$2"; fi
+if [[ $# -ge 2 ]]; then output_root="$2"; fi
+# The experimental structured lane must be explicitly requested. Never
+# reinterpret unsupported source as structured code in the scalar release.
+compile_mode=compile
+if [[ $# -eq 3 ]]; then
+  if [[ "$3" != '--structured' ]]; then
+    echo 'unsupported native AOT publish mode (expected --structured)' >&2
+    exit 2
+  fi
+  compile_mode=compile-structured
+fi
 # Reject empty segments, dot components and critical build/evidence directories.
 if [[ ! "$output_root" =~ ^artifacts(/[a-zA-Z0-9_-]+)+$ ||
       "$output_root" =~ ^artifacts/(compiler|generated|evidence)(/|$) ]]; then
@@ -51,7 +61,7 @@ rm -f -- "$compiler" "$app" "$generated"
 dotnet publish compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj \
   -c Release -r "$rid" -o "$compiler_dir" -warnaserror
 bash verification/assert-linux-native-release.sh "$compiler"
-"$compiler" compile "$source_file" --out "$generated"
+"$compiler" "$compile_mode" "$source_file" --out "$generated"
 [[ -s "$generated" ]] || { echo 'native compiler did not emit CIL' >&2; exit 1; }
 # Stable OresGenerated assembly identity requires clearing previous host inputs.
 dotnet clean "$host" -c Release -r "$rid" "-p:GeneratedAssembly=$generated"

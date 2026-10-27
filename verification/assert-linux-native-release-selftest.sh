@@ -59,6 +59,7 @@ assert_rejected 'separate artifacts/' 'artifacts/../escape'
 assert_rejected 'separate artifacts/' 'artifacts/compiler'
 assert_rejected 'separate artifacts/' 'artifacts//apps'
 assert_rejected 'separate artifacts/' '/tmp/escape'
+assert_rejected 'unsupported native AOT publish mode' 'artifacts/structured' '--unexpected'
 mkdir -p "$work/escaped"
 ln -s "$work/escaped" "$staging/artifacts/apps"
 assert_rejected 'canonical checkout path'

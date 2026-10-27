@@ -190,3 +190,26 @@ These are **CI requirements**, not evidence of their execution. The
 repository's hosted Actions checks have returned zero executed steps; no
 new exact-head Linux publish is certified until real step logs, native
 artifacts, and independent review are available.
+
+### Experimental structured source in Linux Native AOT
+
+In the opt-in structured-compiler integration stack (#155 → #185), a fourth
+release fixture exercises `while`, typed locals and assignments through
+verified SSA CFG, metadata-only generated CIL and the linked Native AOT host:
+
+~~~bash
+bash scripts/publish-linux.sh examples/structured-sum45.ores artifacts/structured --structured
+./artifacts/structured/linux-x64/oreslang-app
+# 45
+~~~
+
+The ordinary `oresnet compile` path must **reject** that source without
+emitting CIL. `compile-structured` is intentionally experimental; this
+does not authorize async actors, ownership, imports or dynamic loading.
+The strict Linux CI gate runs all four binaries after publishing the
+structured fixture and requires expected outputs 14/42/40/45.
+
+This integration branch is unverified until exact-head .NET 10 managed
+tests and actual Linux/Windows Native AOT publish/execution run with
+nonempty CI job steps. Its parents are the independent #185 structured
+compiler and #200 Native AOT release branches.
