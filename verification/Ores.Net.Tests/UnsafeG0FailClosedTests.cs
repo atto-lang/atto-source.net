@@ -35,7 +35,7 @@ internal static class UnsafeG0FailClosedTests
                                     source);
             }
         }
-        foreach (var newline in new[] { "\r", "\r\n", "\n" })
+        foreach (var newline in new[] { "\r", "\r\n", "\n", "\u0085", "\u2028", "\u2029" })
         {
             var source = "fnc main():int{return 42;} // ignored" + newline + "unsafe";
             foreach (var parse in new Action<string>[] {
@@ -54,7 +54,8 @@ internal static class UnsafeG0FailClosedTests
         foreach (var safe in new[] {
             "fnc main():int{return 42;} // unsafe",
             "fnc main():int{return 42;} /* unsafe /* unsafe */ */",
-            "fnc main():int{return 42;} // unsafe_helper"
+            "fnc main():int{return 42;} // unsafe_helper",
+            "fnc main():int{return 42;} /* outer /* unsafe */ outer */"
         })
         {
             _ = OresParser.Parse(safe);
