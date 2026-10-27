@@ -7,6 +7,11 @@ internal static class GeneratorFrameV1SelfTest
     [ModuleInitializer]
     internal static void Run()
     {
+        if (Marshal.SizeOf<GeneratorFrameV1>() != 2 * sizeof(int))
+            throw new Exception("generator frame ABI must be exactly two sequential 32-bit words");
+        if (RuntimeHelpers.IsReferenceOrContainsReferences<GeneratorFrameV1>())
+            throw new Exception("generator frame ABI must not contain managed references");
+
         var frame = default(GeneratorFrameV1);
         if (frame.Pull(3, out _) != -1) throw new Exception("fresh generator pull accepted");
         if (frame.Close() != -1) throw new Exception("fresh generator close accepted");
