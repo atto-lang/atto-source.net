@@ -77,6 +77,7 @@ Require(OresParser.Parse(
     "fnc main():int{return 1;} /* enum Color /* enum Mode */ end */") is Literal,
     "nested block-comment enum words must not trigger overload admission");
 
+AsyncOnlyIoPolicyTests.Run();
 SourceByteBudgetTests.Run();
 StructuralPatternAdmissionTests.Run();
 NumericSeparatorParityTests.Run();
@@ -89,7 +90,8 @@ try
         "pub fnc main(): int { const worker = spawn Worker(); stop worker; return 43; }\n");
     throw new Exception("Unsupported actor declaration was admitted");
 }
-catch (FormatException ex) when (ex.Message == "Expected 'fnc' at offset 7") { }
+catch (FormatException ex) when
+    (ex.Message.Contains("source actors require typed actor scheduler lowering", StringComparison.Ordinal)) { }
 Reject(() => OresParser.Parse("fnc main():int { return 1=2; }"), "assignment expression");
 Reject(() => OresParser.Parse("fnc main():int { const x = 1; return x; }"), "local assignment");
 

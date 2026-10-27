@@ -122,6 +122,30 @@ internal static class ActorPhysicalTurnCreditsSelfTest
             foreach (var thread in workers) Check(thread.Join(10000), "worker stuck");
             Check(gate.Active == 0, "credit leaked");
         }
-        Console.WriteLine("PASS .NET host actor turn credits 1..3, retirement and 100 contention rounds");
+        // Admission racing with closure is linearized at the CAS. Once
+        // Close returns, all later attempts must fail while earlier permits
+        // can still release once without reopening the actor.
+        for (int round = 0; round < 64; round++)
+        {
+            var gate = new ActorPhysicalTurnCredits();
+            using var start = new ManualResetEventSlim(false);
+            ActorPhysicalTurnCredits.Permit? acquired = null;
+            var closer = new Thread(() => { start.Wait(); gate.Close(); })
+                { IsBackground = true };
+            var contender = new Thread(() => { start.Wait(); acquired = gate.TryAcquire(); })
+                { IsBackground = true };
+            closer.Start();
+            contender.Start();
+            start.Set();
+            Check(closer.Join(10000) && contender.Join(10000),
+                "concurrent closure/admission thread stuck");
+            Check(gate.IsClosed && gate.TryAcquire() is null,
+                "admission succeeded after close completed");
+            acquired?.Dispose();
+            acquired?.Dispose();
+            Check(gate.Active == 0 && gate.IsClosed,
+                "admission/closure race stranded credit or reopened actor");
+        }
+        Console.WriteLine("PASS .NET host actor turn credits 1..3, retirement, 100 contention and 64 closure race rounds");
     }
 }
