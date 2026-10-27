@@ -115,7 +115,7 @@ jobs:
         run: >
           python contracts/scalar/v1/run.py --backend net --mode admission
           --command './artifacts/compiler/win-x64/oresnet.exe check {source}'
-          --revision '${{ github.sha }}' --report artifacts/scalar-parity-net-win-x64.json
+          --revision '${{ github.event.pull_request.head.sha || github.sha }}' --report artifacts/scalar-parity-net-win-x64.json
       - name: Execute real Windows Native AOT binary
         shell: pwsh
         run: |
@@ -331,7 +331,7 @@ jobs:
         run: >
           python3 contracts/scalar/v1/run.py --backend net --mode admission
           --command 'dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -- check {source}'
-          --revision '${{ github.sha }}' --report artifacts/scalar-parity-net-linux-diagnostic.json
+          --revision '${{ github.event.pull_request.head.sha || github.sha }}' --report artifacts/scalar-parity-net-linux-diagnostic.json
       - name: Emit generated CIL using the compiler
         run: |
           mkdir -p artifacts/generated

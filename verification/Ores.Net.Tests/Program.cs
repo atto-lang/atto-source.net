@@ -661,9 +661,11 @@ Require(RuntimeHost.Execute(() => throw new DivideByZeroException()) == 70,
     "divide zero error returned");
 
 SourceI64Conformance.Run();
+SharedScalarParityConformance.Run();
 CfgVerifierTests.Run();
 CfgCilStressTests.Run();
 StructuredSourceTests.Run();
+StructuredCfgLoweringTests.Run();
 StaticFactsV0Tests.Run();
 ValueBoundaryTests.Run();
 Console.WriteLine("Oreslang .NET bootstrap, CFG verifier, CIL stress and structured source tests passed");
