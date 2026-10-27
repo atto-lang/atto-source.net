@@ -70,6 +70,11 @@ public static class CilEmitter
     public static void EmitLibrary(VerifiedCfgFunction program, string outputFile) =>
         CfgCilEmitter.EmitLibrary(program, outputFile);
 
+    // Only parser-checked and independently verified function modules may
+    // reach the multi-method emitter; no Reflection.Emit or runtime code load.
+    public static void EmitLibrary(VerifiedCfgModule module, string outputFile) =>
+        CfgCilEmitter.EmitLibrary(module, outputFile);
+
     private static int WriteVerifiedIr(VerifiedIrFunction program, InstructionEncoder il)
     {
         int maxStack = 1;
