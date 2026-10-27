@@ -15,6 +15,46 @@ internal static class SharedScalarParityConformance
         if (!valid) throw new InvalidOperationException("shared scalar parity: " + message);
     }
 
+    private sealed record ReviewedCase(string Id, string File, string Kind,
+        string? Expected, byte[] SourceBytes);
+
+    private static void RequirePinnedSuite(byte[] manifest,
+        IReadOnlyList<ReviewedCase> reviewed)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        hash.AppendData(manifest);
+        foreach (var row in reviewed)
+        {
+            hash.AppendData(Encoding.ASCII.GetBytes(row.File));
+            hash.AppendData(new byte[] { 0 });
+            hash.AppendData(row.SourceBytes);
+        }
+        var digest = Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+        Require(digest == ExpectedSuiteSha256, "suite SHA-256 differs from Wasm/JS contract");
+    }
+
+    private static void CheckTamperedFixtureRegression(byte[] manifest,
+        IReadOnlyList<ReviewedCase> reviewed)
+    {
+        Require(reviewed.Count > 0 && reviewed[0].SourceBytes.Length > 0,
+            "tamper test requires fixture bytes");
+        var corrupted = (byte[])reviewed[0].SourceBytes.Clone();
+        corrupted[0] ^= 1;
+        var altered = reviewed.ToList();
+        altered[0] = altered[0] with { SourceBytes = corrupted };
+        var refused = false;
+        try
+        {
+            RequirePinnedSuite(manifest, altered);
+        }
+        catch (InvalidOperationException ex) when (
+            ex.Message.Contains("suite SHA-256 differs", StringComparison.Ordinal))
+        {
+            refused = true;
+        }
+        Require(refused, "mutated fixture must fail corpus admission");
+    }
+
     private static void RequireSafeDirectory(string path)
     {
         var info = new DirectoryInfo(path);
@@ -88,14 +128,11 @@ internal static class SharedScalarParityConformance
         Require(cases.ValueKind == JsonValueKind.Array && cases.GetArrayLength() == 11,
             "case inventory drift");
 
-        using var suiteHash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        suiteHash.AppendData(manifestBytes);
+        var reviewed = new List<ReviewedCase>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var reviewedFiles = new HashSet<string>(StringComparer.Ordinal);
         var accepts = 0;
         var rejects = 0;
-        using var temp = new TemporaryDirectory();
-
         foreach (var testCase in cases.EnumerateArray())
         {
             var id = testCase.GetProperty("id").GetString() ?? "";
@@ -113,50 +150,62 @@ internal static class SharedScalarParityConformance
             RequireSafeFile(fixturePath);
             var sourceBytes = File.ReadAllBytes(fixturePath);
             Require(sourceBytes.Length is > 0 and <= 1048576, "invalid fixture size: " + file);
-            suiteHash.AppendData(Encoding.ASCII.GetBytes(file));
-            suiteHash.AppendData(new byte[] { 0 });
-            suiteHash.AppendData(sourceBytes);
-            var source = new UTF8Encoding(false, true).GetString(sourceBytes);
-
             if (kind == "accept")
             {
                 accepts++;
-                var expectedText = testCase.GetProperty("value").GetString();
-                Require(long.TryParse(expectedText, NumberStyles.AllowLeadingSign,
-                    CultureInfo.InvariantCulture, out var expected), "invalid expected i64: " + id);
+                reviewed.Add(new ReviewedCase(id, file, kind,
+                    testCase.GetProperty("value").GetString(), sourceBytes));
+            }
+            else
+            {
+                Require(kind == "reject", "unknown case kind: " + kind);
+                rejects++;
+                reviewed.Add(new ReviewedCase(id, file, kind, null, sourceBytes));
+            }
+        }
+
+        Require(accepts == 6 && rejects == 5, "accept/reject counts changed");
+        // Authenticate the entire corpus before any parser, IR or CIL execution.
+        RequireExactInventory(fixtureDirectory, reviewedFiles);
+        RequirePinnedSuite(manifestBytes, reviewed);
+        CheckUnlistedFixtureRegression();
+        CheckTamperedFixtureRegression(manifestBytes, reviewed);
+
+        using var temp = new TemporaryDirectory();
+        foreach (var row in reviewed)
+        {
+            var source = new UTF8Encoding(false, true).GetString(row.SourceBytes);
+            if (row.Kind == "accept")
+            {
+                Require(long.TryParse(row.Expected, NumberStyles.AllowLeadingSign,
+                    CultureInfo.InvariantCulture, out var expected),
+                    "invalid expected i64: " + row.Id);
                 var typed = OresIrLowering.Lower(OresParser.Parse(source));
                 Require(OresIrReferenceEvaluator.Evaluate(typed) == expected,
-                    "typed IR result mismatch: " + id);
-
-                var assemblyPath = Path.Combine(temp.Path, id.Replace('.', '-') + ".dll");
+                    "typed IR result mismatch: " + row.Id);
+                var assemblyPath = Path.Combine(temp.Path, row.Id.Replace('.', '-') + ".dll");
                 CilEmitter.EmitLibrary(typed, assemblyPath);
                 using var assembly = AssemblyDefinition.ReadAssembly(assemblyPath);
                 var method = assembly.MainModule.Types.Single(t =>
                     t.FullName == "Oreslang.Generated.OresProgram").Methods.Single(m => m.Name == "Run");
                 Require(CilReferenceEvaluator.Evaluate(method) == expected,
-                    "emitted CIL result mismatch: " + id);
+                    "emitted CIL result mismatch: " + row.Id);
                 continue;
             }
 
-            Require(kind == "reject", "unknown case kind: " + kind);
-            rejects++;
             try
             {
                 _ = OresParser.Parse(source);
-                throw new InvalidOperationException("shared scalar parity: rejected fixture admitted: " + id);
+                throw new InvalidOperationException(
+                    "shared scalar parity: rejected fixture admitted: " + row.Id);
             }
             catch (FormatException)
             {
-                // Expected: the bootstrap compiler must fail closed on all shared negatives.
+                // The bootstrap parser must reject the shared negative fixtures.
             }
         }
-
-        Require(accepts == 6 && rejects == 5, "accept/reject counts changed");
-        RequireExactInventory(fixtureDirectory, reviewedFiles);
-        CheckUnlistedFixtureRegression();
-        var suite = Convert.ToHexString(suiteHash.GetHashAndReset()).ToLowerInvariant();
-        Require(suite == ExpectedSuiteSha256, "suite SHA-256 differs from Wasm/JS contract");
-        Console.WriteLine("shared scalar parity: 6 accepts + 5 denials; suite " + suite);
+        Console.WriteLine("shared scalar parity: 6 accepts + 5 denials; suite " +
+            ExpectedSuiteSha256);
     }
 
     private sealed class TemporaryDirectory : IDisposable
