@@ -26,6 +26,7 @@ const requiredByWorkflow = {
       "Execute Native AOT checked-arithmetic error cases",
       "Reject managed sidecar next to an otherwise native executable",
       "Compile verified CFG into a real Windows Native AOT executable",
+      "Prove experimental structured source in real Windows Native AOT",
       "Execute shared five-backend native.add source in real Windows Native AOT",
       "Execute shared native.precedence in Windows Native AOT",
       "Emit exact-head Windows Native AOT run receipt",
@@ -44,7 +45,8 @@ const requiredByWorkflow = {
       "Emit generated CIL using the compiler",
       "Native AOT publish generated application (diagnostic only)",
       "Execute Linux Native AOT generated application",
-      "Execute Linux Native AOT CFG branch and simultaneous-assignment fixture"
+      "Execute Linux Native AOT CFG branch and simultaneous-assignment fixture",
+      "Prove experimental structured source in real Linux Native AOT"
     ],
     "self-hosted-windows-static-facts": [
       "Checkout trusted same-repository pull request",

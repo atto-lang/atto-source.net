@@ -5,11 +5,15 @@ using System.Text;
 // passed validation then crashed with IndexOutOfRangeException instead of usage.
 bool validCheck = args.Length == 2 && args[0] == "check";
 bool validCompile = args.Length == 4 && args[0] == "compile" && args[2] == "--out";
+// Opt-in verification lane only: never silently broaden shipping scalar check/compile.
+bool validStructuredCheck = args.Length == 2 && args[0] == "check-structured";
+bool validStructuredCompile = args.Length == 4 &&
+    args[0] == "compile-structured" && args[2] == "--out";
 bool validStaticFacts = args.Length == 2 &&
     (args[0] == "static-facts" || args[0] == "static-facts-structured");
-if (!validCheck && !validCompile && !validStaticFacts)
+if (!validCheck && !validCompile && !validStructuredCheck && !validStructuredCompile && !validStaticFacts)
 {
-    Console.Error.WriteLine("usage: oresnet check input.ores | oresnet compile input.ores --out path/OresGenerated.dll | oresnet static-facts input.ores | oresnet static-facts-structured input.ores");
+    Console.Error.WriteLine("usage: oresnet check input.ores | oresnet compile input.ores --out path/OresGenerated.dll | oresnet check-structured input.ores | oresnet compile-structured input.ores --out path/OresGenerated.dll | oresnet static-facts input.ores | oresnet static-facts-structured input.ores");
     return 2;
 }
 
@@ -27,6 +31,22 @@ try
         Console.WriteLine(args[0] == "static-facts"
             ? StaticFactsV0Exporter.FromCompiledScalarSource(source)
             : StaticFactsV0Exporter.FromStructuredSource(source));
+        return 0;
+    }
+    if (validStructuredCheck || validStructuredCompile)
+    {
+        // Experimental typed source -> verified CFG -> deterministic CIL.
+        // Never enter the shipping scalar path or accept unsupported effects.
+        var verifiedCfg = OresStructuredCfgLowering.Lower(source);
+        if (validStructuredCompile)
+        {
+            if (!string.Equals(Path.GetFileName(args[3]), "OresGenerated.dll",
+                StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Generated assembly must be named OresGenerated.dll");
+            CilEmitter.EmitLibrary(verifiedCfg, args[3]);
+            Console.WriteLine($"Emitted experimental structured CIL: {Path.GetFullPath(args[3])}");
+        }
+        else Console.WriteLine("Experimental structured source and verified CFG: OK");
         return 0;
     }
     var expression = OresParser.Parse(source);

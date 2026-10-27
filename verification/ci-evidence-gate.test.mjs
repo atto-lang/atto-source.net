@@ -1,5 +1,5 @@
 import { test } from "node:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import assert from "node:assert/strict";
 import { verifyEvidence } from "./ci-evidence-gate.mjs";
 
@@ -31,6 +31,7 @@ const jobs = {total_count:2,jobs:[
       "Execute Native AOT checked-arithmetic error cases",
       "Reject managed sidecar next to an otherwise native executable",
       "Compile verified CFG into a real Windows Native AOT executable",
+      "Prove experimental structured source in real Windows Native AOT",
       "Execute shared five-backend native.add source in real Windows Native AOT",
       "Execute shared native.precedence in Windows Native AOT",
       "Emit exact-head Windows Native AOT run receipt",
@@ -51,6 +52,7 @@ const jobs = {total_count:2,jobs:[
       "Native AOT publish generated application (diagnostic only)",
       "Execute Linux Native AOT generated application",
       "Execute Linux Native AOT CFG branch and simultaneous-assignment fixture",
+      "Prove experimental structured source in real Linux Native AOT",
     ].map((name,i)=>({name,number:i+1,status:"completed",conclusion:"success"}))},
 ]};
 const copy=x=>JSON.parse(JSON.stringify(x));
@@ -108,6 +110,16 @@ test("omitted substantive Linux CFG step denied",()=>{
     "Execute Linux Native AOT CFG branch and simultaneous-assignment fixture");
   assert.match(check(run,j).join(" "),/missing successful step/);
 });
+for (const [index, name] of [
+  [0, "Prove experimental structured source in real Windows Native AOT"],
+  [1, "Prove experimental structured source in real Linux Native AOT"]
+]) {
+  test(`missing experimental source Native AOT stage rejected: ${name}`, () => {
+    const j=copy(jobs);
+    j.jobs[index].steps=j.jobs[index].steps.filter(s=>s.name!==name);
+    assert.match(check(run,j).join(" "), /missing successful step/);
+  });
+}
 test("duplicate step names are ambiguous even with different numbers",()=>{
   const j=copy(jobs);j.jobs[0].steps.push({...j.jobs[0].steps[0],number:100});
   assert.match(check(run,j).join(" "),/duplicate step name/);
@@ -171,4 +183,98 @@ test('evidence-parser workflow itself tests the exact PR head on Windows workflo
   assert.ok(source.includes("git rev-parse HEAD"));
   assert.ok(source.includes("git diff --quiet --exit-code HEAD --"));
   assert.ok(source.includes("node --test verification/ci-evidence-gate.test.mjs"));
+});
+
+test('Native AOT structured lane rejects shipping compile and cannot pass due to missing output directories',()=>{
+  const source=readFileSync(new URL("../.github/workflows/windows-native-aot.yml",import.meta.url),"utf8");
+  const windows=source.split("      - name: Prove experimental structured source in real Windows Native AOT\n")[1]
+    ?.split("      - name: Execute shared five-backend native.add source in real Windows Native AOT\n")[0];
+  const linux=source.split("      - name: Prove experimental structured source in real Linux Native AOT\n")[1]
+    ?.split("  # Optional budget-independent gate.")[0];
+  assert.ok(windows && linux,"both platform structured native jobs must exist");
+  const ordered=(block,parts,label)=>{
+    let prev=-1;
+    for(const part of parts){
+      const index=block.indexOf(part);
+      assert.ok(index>prev,label+" requires ordered stage: "+part);
+      prev=index;
+    }
+  };
+  ordered(windows,[
+    "& $compiler check $source",
+    "$shipping = Join-Path $folder 'shipping/OresGenerated.dll'",
+    "New-Item -ItemType Directory -Path (Split-Path -Parent $shipping) -Force",
+    "& $compiler compile $source --out $shipping",
+    "if ($LASTEXITCODE -eq 0 -or (Test-Path -LiteralPath $shipping))",
+    "& $compiler check-structured $source",
+    "& $compiler compile-structured $source --out $generated",
+    "$forbidden = Join-Path $folder 'denied/OresGenerated.dll'",
+    "New-Item -ItemType Directory -Path (Split-Path -Parent $forbidden) -Force",
+    "& $compiler compile-structured $unsupported --out $forbidden"
+  ],"Windows");
+  ordered(linux,[
+    'if "$compiler" check "$source_file"; then',
+    'shipping="$GITHUB_WORKSPACE/artifacts/structured-generated/shipping/OresGenerated.dll"',
+    'mkdir -p "$(dirname "$shipping")"',
+    'if "$compiler" compile "$source_file" --out "$shipping"; then',
+    'test ! -e "$shipping"',
+    '"$compiler" check-structured "$source_file"',
+    '"$compiler" compile-structured "$source_file" --out "$generated"',
+    'forbidden="$GITHUB_WORKSPACE/artifacts/structured-generated/denied/OresGenerated.dll"',
+    'mkdir -p "$(dirname "$forbidden")"',
+    'if "$compiler" compile-structured "$RUNNER_TEMP/unsupported-select.ores" --out "$forbidden"; then'
+  ],"Linux");
+});
+
+test('Native AOT CI uses immutable action revisions, never mutable tags',()=>{
+  const files=[
+    "../.github/workflows/windows-native-aot.yml",
+    "../.github/workflows/native-aot-evidence-contract.yml"
+  ];
+  const references=source=>[...source.matchAll(/^\s*-?\s*uses:\s+([^\s#]+)/gm)]
+    .map(match=>match[1]).filter(ref=>!ref.startsWith("./"));
+  const isPinned=ref=>/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+@[a-f0-9]{40}$/i.test(ref);
+  for(const path of files){
+    const source=readFileSync(new URL(path,import.meta.url),"utf8");
+    const refs=references(source);
+    assert.ok(refs.length>=1,path+" has external workflow actions");
+    for(const ref of refs)assert.ok(isPinned(ref),path+" unpinned: "+ref);
+  }
+  const source=readFileSync(new URL(files[0],import.meta.url),"utf8");
+  assert.ok(references(source).includes("actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"),
+    "native executable upload must be pinned to audited upload-artifact revision");
+  const tampered=source.replace("actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+    "actions/upload-artifact@v4");
+  assert.ok(references(tampered).some(ref=>!isPinned(ref)),
+    "immutable action policy must detect an adversarial mutable-tag edit");
+});
+
+test('all CI workflow actions use immutable 40-hex commit SHAs',()=>{
+  const directory=new URL("../.github/workflows/",import.meta.url);
+  const names=readdirSync(directory).filter(name=>/\.ya?ml$/.test(name));
+  assert.ok(names.length>=14,"expected complete current workflow inventory");
+  const refs=source=>[...source.matchAll(/^\s*-?\s*uses:\s+([^\s#]+)/gm)]
+    .map(m=>m[1]).filter(ref=>!ref.startsWith("./"));
+  const pinned=ref=>/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+@[a-f0-9]{40}$/i.test(ref);
+  let count=0;
+  for(const name of names){
+    const source=readFileSync(new URL("../.github/workflows/"+name,import.meta.url),"utf8");
+    for(const ref of refs(source)){
+      count++;
+      assert.ok(pinned(ref),name+" uses an unpinned or malformed action "+ref);
+    }
+  }
+  assert.ok(count>=25,"workflow action inventory incomplete");
+  assert.ok(!pinned("actions/checkout@11bd71901bbe5b1630ceea73d27597364c9a"),
+    "truncated revision must fail the full-length pin validator");
+});
+
+test('DOP CPU region CI checks out exact source and does not persist credentials',()=>{
+  const source=readFileSync(new URL("../.github/workflows/dop-cpu-region-contract.yml",import.meta.url),"utf8");
+  assert.ok(source.includes("ref: ${{ github.event.pull_request.head.sha || github.sha }}"));
+  assert.ok(source.includes("persist-credentials: false"));
+  assert.ok(source.includes("EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}"));
+  assert.ok(source.includes("git rev-parse HEAD"));
+  assert.ok(source.includes("git diff --quiet --exit-code HEAD --"));
+  assert.ok(source.includes("git ls-files --others --exclude-standard"));
 });

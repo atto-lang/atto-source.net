@@ -34,8 +34,9 @@ internal static class StructuredCfgLoweringTests
         }
     }
 
-    // A checked SSA reference trap alone is insufficient: the source-level
-    // lowering and emitted CLR CIL must both preserve observable overflow.
+    // Both the independently verified CFG evaluator and emitted CIL must
+    // actually trap on a reachable checked-i64 overflow. Reference-only
+    // testing cannot prove the native-code input retains checked opcodes.
     private static void CheckOverflow(string source, string label)
     {
         var graph = OresStructuredCfgLowering.Lower(source);
@@ -43,7 +44,7 @@ internal static class StructuredCfgLoweringTests
         try { _ = CfgReferenceEvaluator.Evaluate(graph); }
         catch (OverflowException) { referenceTrapped = true; }
         if (!referenceTrapped)
-            throw new Exception("Structured CFG failed to trap overflow: " + label);
+            throw new Exception("Structured CFG missed overflow: " + label);
 
         string folder = Path.Combine(Path.GetTempPath(),
             "ores-structured-overflow-" + Guid.NewGuid().ToString("N"));
@@ -53,19 +54,16 @@ internal static class StructuredCfgLoweringTests
             string output = Path.Combine(folder, "OresGenerated.dll");
             CilEmitter.EmitLibrary(graph, output);
             using var assembly = AssemblyDefinition.ReadAssembly(output);
-            var entry = assembly.MainModule.Types.Single(t =>
+            var method = assembly.MainModule.Types.Single(t =>
                 t.FullName == "Oreslang.Generated.OresProgram")
                 .Methods.Single(m => m.Name == "Run");
             bool cilTrapped = false;
-            try { _ = CfgCilTestInterpreter.Evaluate(entry); }
+            try { _ = CfgCilTestInterpreter.Evaluate(method); }
             catch (OverflowException) { cilTrapped = true; }
             if (!cilTrapped)
-                throw new Exception("Structured emitted CIL lost overflow: " + label);
+                throw new Exception("Structured CIL lost checked overflow: " + label);
         }
-        finally
-        {
-            Directory.Delete(folder, recursive: true);
-        }
+        finally { Directory.Delete(folder, recursive: true); }
     }
 
     private static void Reject(string source, string label)
@@ -120,6 +118,10 @@ internal static class StructuredCfgLoweringTests
             long.MinValue, "signed minimum");
         Check("fnc main():int{let int n=-1;if n<0{return 1;}return 2;}",
             1, "signed negative comparison");
+        Check("fnc main():int{if true{return 7;}else{return -(-9223372036854775808);}}",
+            7, "unselected else must not execute checked-overflow trap");
+        Check("fnc main():int{if false{return -(-9223372036854775808);}else{return 8;}}",
+            8, "unselected then must not execute checked-overflow trap");
 
         Reject("fnc main():int{let int x=1;while true {let int x=2;}return x;}",
             "nested shadowing must not bypass lowering");
@@ -131,16 +133,18 @@ internal static class StructuredCfgLoweringTests
             "source int division requires float lowering");
 
         CheckOverflow("fnc main():int{return -(-9223372036854775808);}",
-            "checked unary negate minimum");
+            "checked negation");
         CheckOverflow("fnc main():int{return 9223372036854775807+1;}",
-            "checked add maximum");
+            "checked addition");
+        CheckOverflow("fnc main():int{return 9223372036854775807*2;}",
+            "checked multiplication");
         CheckOverflow("fnc main():int{return -9223372036854775808-1;}",
             "checked subtract minimum");
-        CheckOverflow("fnc main():int{return 9223372036854775807*2;}",
-            "checked multiply maximum");
         CheckOverflow(
             "fnc main():int{let int x=9223372036854775807;if true{x=x+1;}return x;}",
             "overflow through structured if/SSA join");
+        CheckOverflow("fnc main():int{let int x=9223372036854775807;while x==9223372036854775807{x=x+1;}return x;}",
+            "checked overflow inside loop");
         Console.WriteLine("Structured source to verified SSA CFG and CIL passed");
     }
 }
