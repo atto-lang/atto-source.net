@@ -1,8 +1,9 @@
 namespace Ores.Net.Compiler;
 
 /// <summary>
-/// Experimental, non-shipping lowering of the bounded typed structured parser
-/// into independently verified SSA CFG. No runtime execution or CLI routing.
+/// Experimental, opt-in lowering of bounded typed structured source into
+/// independently verified CFGs. Legacy Lower() inlines helper calls for
+/// differential tests; LowerModule() retains independent CIL call boundaries.
 /// A local is represented by its current SSA value, never a mutable IL slot.
 /// </summary>
 public static class OresStructuredCfgLowering
