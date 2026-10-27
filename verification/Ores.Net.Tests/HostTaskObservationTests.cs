@@ -116,6 +116,65 @@ internal static class HostTaskObservationTests
             producer.SetResult(3);
         }
 
+        // Two views share a producer but have independent cancellation rights.
+        var independentScope = new HostTaskObservationScope(2);
+        producer = Producer();
+        using (var cancellation = new CancellationTokenSource())
+        {
+            var cancelledView = independentScope.Observe(producer.Task, cancellation.Token);
+            var survivingView = independentScope.Observe(producer.Task);
+            cancellation.Cancel();
+            try { await cancelledView.WaitAsync(TimeSpan.FromSeconds(10)); }
+            catch (OperationCanceledException) when (cancelledView.IsCanceled) { }
+            Require(cancelledView.IsCanceled && !survivingView.IsCompleted &&
+                !producer.Task.IsCompleted, "one observer revoked another observer or producer");
+            producer.SetResult(19);
+            Require(await survivingView.WaitAsync(TimeSpan.FromSeconds(10)) == 19,
+                "independent observer lost producer result");
+            await Drained(independentScope);
+        }
+
+        // Cancellation after success cannot change an already-published outcome.
+        using (var lateCancellation = new CancellationTokenSource())
+        {
+            var view = scope.Observe(Task.FromResult(23), lateCancellation.Token);
+            Require(await view == 23, "late cancellation setup");
+            lateCancellation.Cancel();
+            Require(view.IsCompletedSuccessfully && await view == 23,
+                "late cancellation rewrote a terminal result");
+            await Drained(scope);
+        }
+
+        // Race admission itself: exactly capacity permits are issued while all
+        // admitted observations remain pending, not merely at a sampled instant.
+        var concurrentScope = new HostTaskObservationScope(4);
+        producer = Producer();
+        using (var stopObserving = new CancellationTokenSource())
+        {
+            var start = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var attempts = Enumerable.Range(0, 32).Select(_ => Task.Run(async () =>
+            {
+                await start.Task;
+                try { return concurrentScope.Observe(producer.Task, stopObserving.Token); }
+                catch (InvalidOperationException error) when (error.Message.Contains("quota"))
+                { return (Task<int>?)null; }
+            })).ToArray();
+            start.SetResult(true);
+            Task<int>?[] observations = await Task.WhenAll(attempts).WaitAsync(TimeSpan.FromSeconds(10));
+            Require(observations.Count(view => view is not null) == 4 &&
+                concurrentScope.PendingObservations == 4, "concurrent quota oversubscribed or lost permits");
+            stopObserving.Cancel();
+            foreach (var view in observations.OfType<Task<int>>())
+            {
+                try { await view.WaitAsync(TimeSpan.FromSeconds(10)); }
+                catch (OperationCanceledException) when (view.IsCanceled) { }
+                Require(view.IsCanceled, "concurrent observer did not cancel");
+            }
+            await Drained(concurrentScope);
+            Require(!producer.Task.IsCompleted, "quota cleanup cancelled independent producer");
+            producer.SetResult(31);
+        }
+
         // Host race coverage only: neither task here is an Oreslang actor/Task.
         for (int i = 0; i < 128; i++)
         {

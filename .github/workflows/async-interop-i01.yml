@@ -26,9 +26,11 @@ jobs:
           - os: ubuntu-24.04
             rid: linux-x64
             binary: Ores.Net.InteropProbe
+            compiler: oresnet
           - os: windows-2022
             rid: win-x64
             binary: Ores.Net.InteropProbe.exe
+            compiler: oresnet.exe
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -58,6 +60,12 @@ jobs:
         run: |
           dotnet publish verification/Ores.Net.InteropProbe -c Release -r '${{ matrix.rid }}' -p:PublishAot=true --self-contained true -o artifacts/interop-probe
           if ($LASTEXITCODE -ne 0) { throw 'NativeAOT publish failed' }
+      - name: Publish real native compiler and verify fail-closed admission
+        shell: pwsh
+        run: |
+          dotnet publish compiler/Ores.Net.Compiler -c Release -r '${{ matrix.rid }}' -p:PublishAot=true --self-contained true -o artifacts/interop-compiler
+          if ($LASTEXITCODE -ne 0) { throw 'Native compiler publish failed' }
+          ./verification/assert-async-interop-admission.ps1 -Compiler './artifacts/interop-compiler/${{ matrix.compiler }}' | Tee-Object artifacts/interop-compiler/admission-trace.txt
       - name: Execute native host subset and record scoped receipt
         shell: pwsh
         run: |
@@ -77,6 +85,8 @@ jobs:
             source_commit = $sha
             source_tree = $tree
             binary_sha256 = (Get-FileHash $binary -Algorithm SHA256).Hash.ToLowerInvariant()
+            compiler_sha256 = (Get-FileHash './artifacts/interop-compiler/${{ matrix.compiler }}' -Algorithm SHA256).Hash.ToLowerInvariant()
+            native_compiler_containment_cases = 8
             backend = 'net'
             profile = '${{ matrix.rid }}-nativeaot-host'
             exit_code = $code
@@ -93,4 +103,5 @@ jobs:
           path: |
             artifacts/interop-probe/trace.txt
             artifacts/interop-probe/receipt.json
+            artifacts/interop-compiler/admission-trace.txt
           if-no-files-found: error

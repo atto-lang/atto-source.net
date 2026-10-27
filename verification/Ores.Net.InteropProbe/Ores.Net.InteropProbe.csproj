@@ -7,4 +7,5 @@
     <ProjectReference Include="../../runtime/Ores.Net.Runtime/Ores.Net.Runtime.csproj" />
     <Compile Include="../Ores.Net.Tests/HostTaskObservationTests.cs" Link="HostTaskObservationTests.cs" />
   </ItemGroup>
+  <Import Project="../../build/StrictNativeAot.targets" />
 </Project>
