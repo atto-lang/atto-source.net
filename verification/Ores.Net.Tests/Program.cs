@@ -654,11 +654,11 @@ Require(restartActor.QueuedMessages == 0, "restart clears pending messages");
 
 
 int count = 0;
-Require(RuntimeHost.Execute(() => { count++; return 7; }) == 0 && count == 1,
+Require(await RuntimeHost.ExecuteAsync(() => { count++; return 7; }) == 0 && count == 1,
     "runtime host invokes entry once");
-Require(RuntimeHost.Execute(() => throw new OverflowException()) == 70,
+Require(await RuntimeHost.ExecuteAsync(() => throw new OverflowException()) == 70,
     "overflow error returned");
-Require(RuntimeHost.Execute(() => throw new DivideByZeroException()) == 70,
+Require(await RuntimeHost.ExecuteAsync(() => throw new DivideByZeroException()) == 70,
     "divide zero error returned");
 
 SourceI64Conformance.Run();
