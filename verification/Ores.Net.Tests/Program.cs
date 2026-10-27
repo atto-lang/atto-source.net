@@ -84,6 +84,7 @@ NumericSeparatorParityTests.Run();
 CrossBackendCheckedI64ParityTests.Run();
 AsyncInteropFailClosedTests.Run();
 await HostTaskObservationTests.Run();
+await AsyncSourceSliceTests.Run();
 
 // The canonical actor negative includes a later assignment. Lex its punctuation
 // while preserving the precise unsupported top-level declaration diagnostic.
