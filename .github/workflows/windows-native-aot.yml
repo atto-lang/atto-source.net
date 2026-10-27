@@ -193,8 +193,7 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $false
           $folder = Join-Path $env:RUNNER_TEMP 'ores-structured-source'
           New-Item -ItemType Directory -Path $folder -Force | Out-Null
-          $source = Join-Path $folder 'sum45.ores'
-          [IO.File]::WriteAllText($source, 'fnc main():int{let int total=0;let int i=0;while i<10{total=total+i;i=i+1;}return total;}', [Text.UTF8Encoding]::new($false))
+          $source = (Resolve-Path 'examples/structured-sum45.ores').Path
           $compiler = (Resolve-Path './artifacts/compiler/win-x64/oresnet.exe').Path
           & $compiler check $source
           if ($LASTEXITCODE -eq 0) { throw 'Shipping scalar compiler unexpectedly accepted structured source' }
@@ -395,8 +394,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts/structured-native/linux-x64 artifacts/structured-generated
-          source_file="$RUNNER_TEMP/ores-sum45.ores"
-          printf '%s' 'fnc main():int{let int total=0;let int i=0;while i<10{total=total+i;i=i+1;}return total;}' > "$source_file"
+          source_file='examples/structured-sum45.ores'
           compiler='compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj'
           if dotnet run --project "$compiler" -c Release -- check "$source_file"; then
             echo 'Shipping scalar compiler incorrectly accepted structured source' >&2
