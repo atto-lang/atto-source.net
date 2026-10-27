@@ -36,9 +36,9 @@ public sealed class OresTaskScope : IAsyncDisposable
             FullMode = BoundedChannelFullMode.Wait,
             AllowSynchronousContinuations = false
         });
-        // One fixed host scheduling pump per scope, never Task.Run on conversion.
+        // Single async channel reader, resumed asynchronously by bounded channel writes.\n        // No eager worker allocation and no scheduling on conversion.
         // Do not claim actor-lane affinity from this host scheduling mechanism.
-        pump = Task.Run(PumpAsync);
+        pump = PumpAsync();
     }
 
     public int ActiveProducers => Volatile.Read(ref activeProducers);
