@@ -15,7 +15,7 @@ public sealed class SelectContinuationFence
     private sealed class Slot
     {
         public ulong Id;
-    public ulong Generation;
+        public ulong Generation;
         public bool Active;
     }
 
@@ -110,7 +110,7 @@ public sealed class SelectContinuationFence
         }
     }
 
-    public bool TryConsume(Ticket ticket)
+    public bool TryConsume(Ticket? ticket)
     {
         // Missing completion handles are rejected without changing live slots.
         if (ticket is null) return false;
