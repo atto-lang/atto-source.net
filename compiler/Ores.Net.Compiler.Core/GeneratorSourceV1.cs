@@ -180,7 +180,12 @@ public static class OresGeneratorV1Compiler
             "abstract" or "void" or "static" or "pub" or "private" or "return" or "defer" or
             "val" or "const" or "let" or "mut" or "borrow" or "self" or
             "true" or "false" or "null" or "obj" or "arr" or
-            "Iterator" or "AsyncIterator" or "int";
+            "Iterator" or "AsyncIterator" or "int" or
+            "define" or "class" or "enum" or "pattern" or "module" or "contract" or
+            "conforms" or "namespace" or "gpu" or "cpu" or "quantum" or "over" or
+            "structural" or "bool" or "pure" or "Some" or "None" or "Ok" or "Err" or
+            "using" or "requires" or "serial" or "critical-read" or "critical-write" or
+            "nb-select";
 
         public long SignedInteger()
         {
