@@ -45,6 +45,12 @@ public static class OresParser
                 throw new FormatException("Token count exceeds bootstrap limit");
             if (token.Text.Length == 0) break;
         }
+        for (int i = 0; i + 1 < tokens.Count; i++)
+        {
+            if (tokens[i].Text == "select" &&
+                StaticSelectAdmission.IsStaticSelectFollower(tokens[i + 1].Text))
+                throw StaticSelectAdmission.Unsupported(tokens[i].Offset);
+        }
         return new Reader(tokens).ParseProgram();
     }
 
@@ -140,7 +146,8 @@ public static class OresParser
                 // a verified source graph / native AOT linker exists.
                 if (word == "import")
                     throw new FormatException("source imports require verified module graph lowering");
-                if (word is "cpu" or "gpu" or "nb")
+                if (word is "cpu" or "gpu" ||
+                    (word == "nb" && !StaticSelectAdmission.FollowedByStaticSelect(text, _i)))
                     throw new FormatException(
                         $"execution region '{word}' requires verified CPU/GPU Task lowering; no implicit CPU fallback at offset {start}");
                 if (word == "task")
@@ -152,6 +159,9 @@ public static class OresParser
                 if (word == "enum")
                     throw new FormatException(
                         $"nominal enum overloads require compiler-bound dispatch (unsupported .NET bootstrap) at offset {start}");
+                if (word is "gen" or "generator")
+                    throw new FormatException(
+                        $"generator declarations require iterator-frame and continuation lowering in .NET Native AOT backend at offset {start}");
                 return new Token(word, start);
             }
             // Recognize the contiguous operator as one token, but never

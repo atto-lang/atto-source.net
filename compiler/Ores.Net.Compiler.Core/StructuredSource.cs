@@ -77,6 +77,12 @@ public static class OresStructuredParser
                   tokens[^2].Text == "define")))
                 throw new FormatException(
                     $"Private abstract class hooks require typed virtual dispatch and superclass-only invocation at offset {token.Offset}");
+            if (token.Text == "inverted" && tokens.Count > 0 &&
+                (tokens[^1].Text == "define" ||
+                 (tokens[^1].Text == "pub" && tokens.Count > 1 &&
+                  tokens[^2].Text == "define")))
+                throw new FormatException(
+                    $"Inverted class requires checked bracket-row and ownership lowering in the .NET backend at offset {token.Offset}");
             if ((token.Text == "class" || token.Text == "actor") &&
                 tokens.Count > 0 &&
                 (tokens[^1].Text == "define" ||
@@ -101,6 +107,9 @@ public static class OresStructuredParser
         }
         for (int i = 0; i + 1 < tokens.Count; i++)
         {
+            if (tokens[i].Text == "select" &&
+                StaticSelectAdmission.IsStaticSelectFollower(tokens[i + 1].Text))
+                throw StaticSelectAdmission.Unsupported(tokens[i].Offset);
             if ((tokens[i].Text is "tuple" or "structural") &&
                 tokens[i + 1].Text == "(")
                 throw new FormatException(
@@ -192,7 +201,8 @@ public static class OresStructuredParser
                 do { index++; } while (index < source.Length &&
                     (Alpha(source[index]) || Digit(source[index]) || source[index] == '_'));
                 string word = source[offset..index];
-                if (word is "cpu" or "gpu" or "nb")
+                if (word is "cpu" or "gpu" ||
+                    (word == "nb" && !StaticSelectAdmission.FollowedByStaticSelect(source, index)))
                     throw new FormatException(
                         $"execution region '{word}' requires verified CPU/GPU Task lowering; no implicit CPU fallback at offset {offset}");
                 if (word == "task")
