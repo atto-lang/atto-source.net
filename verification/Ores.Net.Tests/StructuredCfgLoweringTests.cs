@@ -125,7 +125,7 @@ internal static class StructuredCfgLoweringTests
         Reject("fnc wrong(int x):bool{return x;}fnc main():int{return 0;}",
             "wrong return type");
         Reject("fnc bad(int x):int{let int y=x;return y;}fnc main():int{return bad(1);}",
-            "helper statement bodies not yet supported");
+            "legacy inlining oracle rejects statement bodies (module path has real MethodDef support)");
         Reject("fnc same():int{return 1;}fnc same():int{return 2;}fnc main():int{return 0;}",
             "duplicate helper declarations");
         CheckOverflow("fnc inc(int x):int{return x+1;}fnc main():int{return inc(9223372036854775807);}",
