@@ -15,23 +15,6 @@ public sealed class SelectContinuationFence
     private sealed class Slot
     {
         public ulong Id;
-        public bool Closed
-    {
-        get { lock (_gate) return _closed; }
-    }
-
-    // Terminal shutdown cancels pending delivery, but does not join workers.
-    public bool Close()
-    {
-        lock (_gate)
-        {
-            if (_closed) return false;
-            _closed = true;
-            foreach (var slot in _slots) ClearLocked(slot);
-            return true;
-        }
-    }
-
     public ulong Generation;
         public bool Active;
     }
@@ -60,6 +43,23 @@ public sealed class SelectContinuationFence
     public ulong Generation
     {
         get { lock (_gate) return _generation; }
+    }
+
+    public bool Closed
+    {
+        get { lock (_gate) return _closed; }
+    }
+
+    // Terminal shutdown cancels pending delivery, but does not join workers.
+    public bool Close()
+    {
+        lock (_gate)
+        {
+            if (_closed) return false;
+            _closed = true;
+            foreach (var slot in _slots) ClearLocked(slot);
+            return true;
+        }
     }
 
     public int PendingTickets
