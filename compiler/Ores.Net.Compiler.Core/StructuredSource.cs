@@ -19,7 +19,7 @@ public sealed record StructuredCall(int At, string Name,
 public sealed record StructuredParameter(string Name, IrValueType Type);
 public sealed record StructuredFunction(string Name,
     IReadOnlyList<StructuredParameter> Parameters, IrValueType ResultType,
-    StructuredExpr ReturnValue);
+    StructuredExpr? ReturnValue, IReadOnlyList<StructuredStmt> Body);
 public enum StructuredOperator { Add, Subtract, Multiply, EqualI64, LessThanI64 }
 public sealed record StructuredBinary(int At, StructuredOperator Operator,
     StructuredExpr Left, StructuredExpr Right, IrValueType ResultType)
@@ -247,6 +247,7 @@ public static class OresStructuredParser
         private readonly Dictionary<string, StructuredFunction> functions =
             new(StringComparer.Ordinal);
         private int index, statements;
+        private IrValueType activeReturnType = IrValueType.I64;
         // Track actual AST height, not just grammar recursion depth. A flat
         // 50,000-term sum must not construct a 50,000-level tree for later passes.
         // Records have structural equality; identity avoids recursive hashing.
@@ -343,6 +344,7 @@ public static class OresStructuredParser
                 IrValueType resultType = Type();
                 if (name == "main")
                 {
+                    activeReturnType = IrValueType.I64;
                     if (parameters.Count != 0 || resultType != IrValueType.I64)
                         throw new FormatException($"main must have signature ():int at offset {at}");
                     var (body, returns) = Block(0);
@@ -356,18 +358,20 @@ public static class OresStructuredParser
                     throw new FormatException($"Duplicate typed helper at offset {at}");
                 if (functions.Count >= MaxHelpers)
                     throw Error("Typed helper declaration budget exceeded");
-                // Intentionally expression-only until calls/stack frames get an
-                // independently verified general-function CIL ABI.
-                Expect("{");
+                // All helper bodies now share the same checked typed block
+                // parser as main. The separate MethodDef ABI isolates locals.
+                activeReturnType = resultType;
                 scopes.Add(parameterTypes);
-                Expect("return");
-                StructuredExpr value = Expr(0);
-                Require(value, resultType, "Typed helper return type mismatch");
-                Expect(";");
-                Expect("}");
+                var (helperBody, helperReturns) = Block(0);
                 scopes.RemoveAt(scopes.Count - 1);
+                if (!helperReturns)
+                    throw Error("Not every typed helper path returns");
+                StructuredExpr? inlineReturn =
+                    helperBody.Count == 1 && helperBody[0] is StructuredReturn only
+                        ? only.Value : null;
                 functions.Add(name, new StructuredFunction(name,
-                    Array.AsReadOnly(parameters.ToArray()), resultType, value));
+                    Array.AsReadOnly(parameters.ToArray()), resultType,
+                    inlineReturn, helperBody));
             }
         }
         private (IReadOnlyList<StructuredStmt> Body, bool Returns) Block(int depth)
@@ -398,7 +402,8 @@ public static class OresStructuredParser
             if (Take("return"))
             {
                 var value = Expr(depth + 1);
-                Require(value, IrValueType.I64, "Return must be int");
+                Require(value, activeReturnType,
+                    "Return value does not match function result type");
                 Expect(";");
                 return (new StructuredReturn(at, value), true);
             }
