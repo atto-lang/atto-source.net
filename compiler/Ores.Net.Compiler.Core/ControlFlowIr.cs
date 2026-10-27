@@ -103,9 +103,15 @@ public static class OresCfgVerifier
             throw new FormatException("Invalid CFG function signature");
 
         var parameters = function.Parameters ?? Array.Empty<IrValueType>();
-        if (parameters.Count > 16 || parameters.Any(t => t is not (IrValueType.I64 or IrValueType.Bool)))
+        int methodParameterCount = parameters.Count;
+        if (methodParameterCount < 0 || methodParameterCount > 16)
             throw new FormatException("Invalid CFG method signature");
-        var frozenParameters = Array.AsReadOnly(parameters.ToArray());
+        // Never enumerate an untrusted IReadOnlyList supplied to a verifier:
+        // its Count can be bounded while its iterator is infinite.
+        var frozenParameters = CopyIndexed(parameters, methodParameterCount);
+        for (int i = 0; i < frozenParameters.Count; i++)
+            if (frozenParameters[i] is not (IrValueType.I64 or IrValueType.Bool))
+                throw new FormatException("Invalid CFG method signature");
         var sourceBlocks = function.Blocks ??
             throw new FormatException("Missing CFG blocks");
         int blockCount = sourceBlocks.Count;
