@@ -69,6 +69,12 @@ public static class OresParser
                 throw new FormatException(
                     "source actors require typed actor scheduler lowering in .NET");
         }
+        for (int i = 0; i + 1 < tokens.Count; i++)
+        {
+            if (tokens[i].Text == "select" &&
+                StaticSelectAdmission.IsStaticSelectFollower(tokens[i + 1].Text))
+                throw StaticSelectAdmission.Unsupported(tokens[i].Offset);
+        }
         return new Reader(tokens).ParseProgram();
     }
 
@@ -164,7 +170,8 @@ public static class OresParser
                 // a verified source graph / native AOT linker exists.
                 if (word == "import")
                     throw new FormatException("source imports require verified module graph lowering");
-                if (word is "cpu" or "gpu" or "nb")
+                if (word is "cpu" or "gpu" ||
+                    (word == "nb" && !StaticSelectAdmission.FollowedByStaticSelect(text, _i)))
                     throw new FormatException(
                         $"execution region '{word}' requires verified CPU/GPU Task lowering; no implicit CPU fallback at offset {start}");
                 if (word == "task")
@@ -196,7 +203,7 @@ public static class OresParser
             // Lex assignment punctuation so unsupported declarations are rejected
             // at their declaration, rather than at a later initializer. The
             // arithmetic parser still has no assignment production.
-            if ("@()+-*/{}:;.=?".IndexOf(ch) >= 0)
+            if ("()+-*/{}:;.=?".IndexOf(ch) >= 0)
             {
                 _i++;
                 return new Token(text[start.._i], start);

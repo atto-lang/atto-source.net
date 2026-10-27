@@ -37,6 +37,85 @@ internal static class StructuredSourceTests
 
     public static void Run()
     {
+
+        foreach (var form in new[] {
+            "select { default: { return 1; } }",
+            "select over default: { return 1; } end",
+            "do select { default: { return 1; } }",
+            "do select over default: { return 1; } end",
+            "nb select { default: { return 1; } }",
+            "nb /* prefix */ select /* delimiter */ over default: { return 1; } end",
+            "do nb select { default: { return 1; } }",
+            "do nb select over default: { return 1; } end",
+            "try select { default: { return 1; } }",
+            "try select over default: { return 1; } end"
+        })
+        {
+            const string diagnostic =
+                "Static select requires checked Channel/Future arbitration, actor-lane continuation, ownership and cancellation lowering in the .NET backend";
+            var source = "fnc main():int{" + form + " return 0;}";
+            try { _ = OresStructuredParser.Parse(source); }
+            catch (FormatException ex)
+            {
+                Require(ex.Message.Contains(diagnostic, StringComparison.Ordinal) &&
+                        ex.Message.Contains("offset", StringComparison.Ordinal),
+                    "static select must fail at the explicit backend capability gate: " + ex.Message);
+                continue;
+            }
+            throw new Exception(".NET structured frontend silently admitted unsupported select: " + form);
+        }
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{/* select over default: {} end */return 1;}").Body.Count == 1,
+            "select text in a comment must not trigger the capability gate");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{let int select=1;return select;}").Body.Count == 2,
+            "select identifier must not trigger the static-select capability gate");
+
+        foreach (var form in new[] {
+            "select { default: { return 1; } }",
+            "select over default: { return 1; } end",
+            "do select { default: { return 1; } }",
+            "do select over default: { return 1; } end",
+            "nb select { default: { return 1; } }",
+            "nb /* keep trivia */ select over default: { return 1; } end",
+            "do nb select { default: { return 1; } }",
+            "do nb select over default: { return 1; } end",
+            "try select { default: { return 1; } }",
+            "try select over default: { return 1; } end"
+        })
+        {
+            try { _ = OresParser.Parse("fnc main():int{" + form + " return 0;}"); }
+            catch (FormatException ex)
+            {
+                Require(ex.Message.Contains(
+                        "Static select requires checked Channel/Future arbitration",
+                        StringComparison.Ordinal) &&
+                        ex.Message.Contains("offset", StringComparison.Ordinal),
+                    "shipping parser select rejection was incidental: " + ex.Message);
+                continue;
+            }
+            throw new Exception(".NET shipping scalar parser silently admitted unsupported select: " + form);
+        }
+        Require(OresParser.Parse(
+            "fnc main():int{/* nb select over default: {} end */return 1;}") is Literal,
+            "shipping parser must ignore select text inside comments");
+
+        foreach (var parse in new Func<string, object>[] {
+            source => OresParser.Parse(source),
+            source => OresStructuredParser.Parse(source)
+        })
+        {
+            try { _ = parse("fnc main():int{nb select();return 0;}"); }
+            catch (FormatException ex)
+            {
+                Require(ex.Message.Contains("execution region 'nb'", StringComparison.Ordinal),
+                    "call-like nb select spelling must preserve the existing nb capability gate: " +
+                    ex.Message);
+                continue;
+            }
+            throw new Exception("call-like nb select spelling unexpectedly bypassed nb admission");
+        }
+
         foreach (var source in new[] {
             "define inverted class Particle as x: int; end",
             "define pub inverted class Particle as x: int; end",
