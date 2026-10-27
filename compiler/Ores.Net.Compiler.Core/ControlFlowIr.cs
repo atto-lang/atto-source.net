@@ -1,7 +1,8 @@
 namespace Ores.Net.Compiler;
 
-// This CFG IR is deliberately separate from the current straight-line i64
-// code generator. It is verified but NOT executable or accepted by oresnet.
+// Experimental typed CFG/CIL path is exposed only through opt-in oresnet
+// check-structured / compile-structured. Production scalar CLI remains
+// independent; verified functions and call operands are never runtime JIT.
 public enum CfgOpcode
 {
     ConstantI64,
