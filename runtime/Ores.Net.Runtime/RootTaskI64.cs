@@ -138,6 +138,7 @@ public static class RootTaskI64
 
     private static void Pump()
     {
+        int turns = 0;
         for (;;)
         {
             Owner owner;
@@ -156,6 +157,19 @@ public static class RootTaskI64
                 // receipt. No producer can execute after this point.
                 lock (Gate) active--;
                 owner.Retire();
+            }
+            // Return the carrier after a bounded batch rather than allowing a
+            // continuously replenished root queue to monopolize one callback.
+            // No producer stack/borrow crosses this cooperative boundary.
+            if (++turns == 8)
+            {
+                lock (Gate)
+                {
+                    if (count == 0) { pumping = false; return; }
+                    if (ThreadPool.UnsafeQueueUserWorkItem(static _ => Pump(), null)) return;
+                }
+                // A rejected reschedule must not strand already-owned work.
+                turns = 0;
             }
         }
     }

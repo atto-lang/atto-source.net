@@ -36,7 +36,8 @@ Faulted cancellation-named exceptions remain failed; only preclaim owner
 cancellation creates authentic cancellation. The closed guest body can currently
 fail only through checked arithmetic, not throw/raise/panic syntax.
 
-One shared pool callback drains a fixed-capacity 64-entry root queue. Capacity
+One shared pump drains a fixed-capacity 64-entry root queue, handing its carrier
+back to the pool after at most eight producer turns when more work remains. Capacity
 includes executing producers; no executor or OS thread is created per Task.
 No ExecutionContext/actor authority flows into its callback. Each admitted source
 producer is finite and non-suspending; cooperation is at producer return. This
