@@ -64,9 +64,8 @@ public static class CilEmitter
         });
     }
 
-    // Experimental CFG entry point. Only VerifiedCfgFunction is accepted;
-    // the source CLI remains on verified straight-line OresIR until the
-    // CFG differential suite is proven green.
+    // Experimental CFG entry point. Only a verified function is accepted;
+    // the production scalar CLI continues to use straight-line OresIR.
     public static void EmitLibrary(VerifiedCfgFunction program, string outputFile) =>
         CfgCilEmitter.EmitLibrary(program, outputFile);
 
