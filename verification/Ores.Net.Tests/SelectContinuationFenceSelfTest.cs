@@ -160,6 +160,57 @@ internal static class SelectContinuationFenceSelfTest
         Reject<InvalidOperationException>(() => _ = closingFence.Register(11),
             "terminal close reopened by late producer");
 
+        // A receipt from another fence has the same initial slot/id and
+        // generation, but may never consume this fence's live ticket.
+        var ownerA = new SelectContinuationFence(generation: 19, maxTickets: 1);
+        var ownerB = new SelectContinuationFence(generation: 19, maxTickets: 1);
+        var ticketA = ownerA.Register(19);
+        var ticketB = ownerB.Register(19);
+        Require(!ownerA.TryConsume(ticketB) && !ownerB.TryConsume(ticketA) &&
+                ticketA.Active && ticketB.Active &&
+                ownerA.PendingTickets == 1 && ownerB.PendingTickets == 1,
+            "foreign fence tickets cannot retire local slots");
+        Require(ticketA.Close() && ticketB.Close(),
+            "foreign-ticket isolation preserves independent cleanup");
+
+        // A stale ticket must not close a newly admitted ticket reusing
+        // its slot after generation advancement.
+        var reuseFence = new SelectContinuationFence(generation: 20, maxTickets: 1);
+        var staleTicket = reuseFence.Register(20);
+        Require(reuseFence.Advance(20), "slot-reuse generation advances");
+        var freshTicket = reuseFence.Register(21);
+        Require(!staleTicket.Close() && !reuseFence.TryConsume(staleTicket) &&
+                freshTicket.Active && reuseFence.PendingTickets == 1,
+            "stale close cannot retire a successor generation ticket");
+        Require(reuseFence.TryConsume(freshTicket) && reuseFence.PendingTickets == 0,
+            "successor ticket survives stale receipt");
+
+        // Exercise the four competing linearization points repeatedly.
+        // Consumption and ticket close are mutually exclusive; advance may
+        // win either side, but terminal close always leaves no live receipts.
+        for (var round = 0; round < 256; round++)
+        {
+            var stressedFence = new SelectContinuationFence(
+                generation: 22, maxTickets: 1);
+            var stressedTicket = stressedFence.Register(22);
+            int ticketWinners = 0;
+            int fenceClosers = 0;
+            Parallel.Invoke(
+                () => { if (stressedFence.TryConsume(stressedTicket))
+                    Interlocked.Increment(ref ticketWinners); },
+                () => { if (stressedTicket.Close())
+                    Interlocked.Increment(ref ticketWinners); },
+                () => { _ = stressedFence.Advance(22); },
+                () => { if (stressedFence.Close())
+                    Interlocked.Increment(ref fenceClosers); });
+            Require(ticketWinners <= 1 && fenceClosers == 1 &&
+                    stressedFence.Closed && stressedFence.PendingTickets == 0 &&
+                    !stressedTicket.Active &&
+                    !stressedFence.TryConsume(stressedTicket) &&
+                    !stressedFence.Advance(stressedFence.Generation),
+                "256-round terminal lifecycle race preserves ticket isolation");
+        }
+
         Console.WriteLine("Select continuation fence lifecycle checks passed");
     }
 }
