@@ -94,8 +94,89 @@ internal static class SelectContinuationFenceSelfTest
         Require(delivered == 1, "current continuation delivered once");
     }
 
+
+    private static void CapacityFailurePreservesReservations()
+    {
+        var fence = new SelectContinuationFence(maxTickets: 2);
+        var first = fence.Register(1);
+        var second = fence.Register(1);
+        var rejected = false;
+        try { _ = fence.Register(1); }
+        catch (InvalidOperationException) { rejected = true; }
+        Require(rejected && fence.PendingTickets == 2, "capacity failure is atomic");
+        Require(first.Active && second.Active, "both reservations survive");
+        Require(first.Close(), "close releases one slot");
+        var replacement = fence.Register(1);
+        Require(!first.Close(), "old close cannot retire replacement");
+        Require(fence.PendingTickets == 2, "replacement remains reserved");
+        Require(fence.TryConsume(second), "second ticket survives");
+        Require(fence.TryConsume(replacement), "replacement consumes");
+        Require(fence.PendingTickets == 0, "no reservation leaked");
+    }
+
+    private static void AdvanceRestoresFullCapacity()
+    {
+        var fence = new SelectContinuationFence(maxTickets: 2);
+        var first = fence.Register(1);
+        var second = fence.Register(1);
+        Require(fence.Advance(1), "advance full fence");
+        Require(fence.PendingTickets == 0, "all old slots cleared");
+        var nextFirst = fence.Register(2);
+        var nextSecond = fence.Register(2);
+        Require(!first.Active && !second.Active, "all old tickets inactive");
+        Require(!first.Close() && !second.Close(), "old close cannot affect new slots");
+        Require(!fence.TryConsume(first) && !fence.TryConsume(second), "old delivery rejected");
+        Require(fence.PendingTickets == 2, "both new slots preserved");
+        Require(fence.TryConsume(nextFirst) && fence.TryConsume(nextSecond), "new delivery");
+    }
+
+    private static void GenerationOverflowPreservesReservations()
+    {
+        var fence = new SelectContinuationFence(generation: ulong.MaxValue, maxTickets: 1);
+        var ticket = fence.Register(ulong.MaxValue);
+        Require(!fence.Advance(ulong.MaxValue - 1), "stale advance at limit rejected");
+        var rejected = false;
+        try { _ = fence.Advance(ulong.MaxValue); }
+        catch (OverflowException) { rejected = true; }
+        Require(rejected, "generation cannot wrap");
+        Require(fence.Generation == ulong.MaxValue, "overflow preserves generation");
+        Require(fence.PendingTickets == 1 && ticket.Active, "overflow preserves reservation");
+        Require(fence.TryConsume(ticket), "current ticket remains deliverable");
+    }
+
+    private static void InvalidConfigurationRejected()
+    {
+        foreach (var capacity in new[] { -1, 0, 4097 })
+        {
+            var rejected = false;
+            try { _ = new SelectContinuationFence(maxTickets: capacity); }
+            catch (ArgumentOutOfRangeException) { rejected = true; }
+            Require(rejected, "invalid capacity rejected");
+        }
+        var generationRejected = false;
+        try { _ = new SelectContinuationFence(generation: 0); }
+        catch (ArgumentOutOfRangeException) { generationRejected = true; }
+        Require(generationRejected, "zero generation rejected");
+        Require(new SelectContinuationFence(maxTickets: 4096).PendingTickets == 0,
+            "maximum valid capacity accepted");
+    }
+
+    private static void NullTicketDoesNotConsumeReservation()
+    {
+        var fence = new SelectContinuationFence(maxTickets: 1);
+        var ticket = fence.Register(1);
+        Require(!fence.TryConsume(null!), "null ticket rejected");
+        Require(fence.PendingTickets == 1, "null rejection preserves live ticket");
+        Require(fence.TryConsume(ticket), "live ticket still consumes");
+    }
+
     public static void Run()
     {
+        CapacityFailurePreservesReservations();
+        AdvanceRestoresFullCapacity();
+        GenerationOverflowPreservesReservations();
+        InvalidConfigurationRejected();
+        NullTicketDoesNotConsumeReservation();
         TicketConsumesOnce();
         AdvanceInvalidatesQueuedOldTicket();
         SlotReuseKeepsIdentityDistinct();
