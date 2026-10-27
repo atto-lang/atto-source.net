@@ -11,9 +11,6 @@ internal static class StructuredStaticAbiTests
         string label, bool expressionOnlyReference = true)
     {
         var module = OresStructuredCfgLowering.LowerModule(source);
-        // The separately tested legacy expansion oracle only supports
-        // expression-only helpers. Statement helpers require real call frames,
-        // so test against exact observable outcomes and emitted CIL metadata.
         if (expressionOnlyReference)
         {
             var inline = OresStructuredCfgLowering.Lower(source);
@@ -49,16 +46,24 @@ internal static class StructuredStaticAbiTests
                 m.Body.Instructions.Count(i => i.OpCode.Code == Code.Call));
             if (helperCount > 0 && calls == 0)
                 throw new Exception("Source helpers were flattened instead of called: " + label);
-            foreach (var helper in type.Methods.Where(m => m != run))
+            // Compare the emitted MethodDef table against every independently
+            // verified CFG signature, not just the aggregate method count.
+            for (int index = 0; index < module.Helpers.Count; index++)
             {
+                var expectedHelper = module.Helpers[index];
+                var helper = type.Methods[index + 1];
                 if (!helper.IsPrivate || !helper.IsStatic ||
-                    !helper.Name.StartsWith("helper_", StringComparison.Ordinal))
-                    throw new Exception("Helper escaped private static MethodDef ABI: " + label);
-                for (int p = 0; p < helper.Parameters.Count; p++)
+                    helper.Name != "helper_" + expectedHelper.Name ||
+                    helper.Parameters.Count != expectedHelper.Parameters.Count ||
+                    helper.ReturnType.MetadataType != MetadataTypeFor(expectedHelper.ResultType))
+                    throw new Exception("Helper MethodDef signature mismatch: " + label);
+                for (int argument = 0; argument < helper.Parameters.Count; argument++)
                 {
-                    if (helper.Parameters[p].Name != "arg" + p ||
-                        helper.Parameters[p].Index != p)
-                        throw new Exception("Incorrect helper ParamList/sequence metadata: " + label);
+                    if (helper.Parameters[argument].ParameterType.MetadataType !=
+                        MetadataTypeFor(expectedHelper.Parameters[argument]) ||
+                        helper.Parameters[argument].Name != "arg" + argument ||
+                        helper.Parameters[argument].Index != argument)
+                        throw new Exception("Helper signature/ParamList ABI mismatch: " + label);
                 }
                 if (!helper.Body.Instructions.Any(i =>
                     i.OpCode.Code is Code.Ldarg_0 or Code.Ldarg_1 or Code.Ldarg_2
@@ -68,12 +73,28 @@ internal static class StructuredStaticAbiTests
             }
             foreach (var method in type.Methods)
                 foreach (var instruction in method.Body.Instructions)
+                {
                     if (instruction.OpCode.Code is Code.Calli or Code.Callvirt
                         or Code.Ldftn or Code.Newobj)
                         throw new Exception("Dynamic dispatch escaped static ABI: " + label);
+                    if (instruction.OpCode.Code != Code.Call) continue;
+                    if (instruction.Operand is not MethodDefinition callee ||
+                        !ReferenceEquals(callee.DeclaringType, type) ||
+                        !callee.IsPrivate || !callee.IsStatic ||
+                        !callee.Name.StartsWith("helper_", StringComparison.Ordinal) ||
+                        method.Body.MaxStackSize < callee.Parameters.Count)
+                        throw new Exception("Call operand was not a bounded local MethodDef: " + label);
+                }
         }
         finally { Directory.Delete(folder, recursive: true); }
     }
+
+    private static MetadataType MetadataTypeFor(IrValueType type) => type switch
+    {
+        IrValueType.I64 => MetadataType.Int64,
+        IrValueType.Bool => MetadataType.Boolean,
+        _ => throw new FormatException("Unsupported static ABI test type")
+    };
 
     private static void Reject(string source, string label)
     {
@@ -142,6 +163,20 @@ internal static class StructuredStaticAbiTests
         Check("fnc id(bool flag):bool{return flag;}" +
             "fnc main():int{if id(true){return 42;}else{return 0;}}",
             42, 1, "bool argument and bool return method signature");
+
+        // The maximum legal arity exercises 16 sequential pushes,
+        // ldarg.s for slots 4..15, MethodDef parameter encoding, and maxstack.
+        var names = Enumerable.Range(0, 16).Select(i => "a" + i).ToArray();
+        var parameters16 = string.Join(",", names.Select(n => "int " + n));
+        var values16 = string.Join(",", Enumerable.Range(1, 16));
+        var sum16 = string.Join("+", names);
+        Check("fnc sum16(" + parameters16 + "):int{return " + sum16 +
+            ";}fnc main():int{return sum16(" + values16 + ");}",
+            136, 1, "maximum sixteen-argument direct call");
+        Reject("fnc too_many(" +
+            string.Join(",", Enumerable.Range(0, 17).Select(i => "int p" + i)) +
+            "):int{return 1;}fnc main():int{return 42;}",
+            "seventeen-parameter helper must fail closed");
 
         // Verify-call operand lists are frozen at admission; a mutating
         // caller cannot retarget a call after SSA/type checking.
