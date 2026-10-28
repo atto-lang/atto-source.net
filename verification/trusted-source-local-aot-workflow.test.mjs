@@ -222,6 +222,28 @@ const fixedHostedMatrixBlocks = Object.freeze({
 function approvedFixedHostedMatrix(name, yaml) {
   const lines = fixedHostedMatrixBlocks[name];
   if (!lines) return false;
+  // Reject duplicate mapping keys: YAML can override the approved matrix
+  // without removing the expected literal matrix text.
+  const expectedJob = {
+    'actor-memory-native-aot.yml': 'actor-memory',
+    'async-interop-i01.yml': 'host-subset',
+    'select-native-aot.yml': 'native',
+    'signed-remainder-native-aot.yml': 'native',
+  }[name];
+  const sections = yaml.split(/^jobs:\s*$/m);
+  if (!expectedJob || sections.length !== 2) return false;
+  const body = sections[1];
+  const jobs = body.match(/^  [a-zA-Z_][\w-]*:\s*$/gm) ?? [];
+  if (jobs.length !== 1 || jobs[0].trim() !== expectedJob + ':') return false;
+  for (const [indent, key] of [[4, 'strategy'], [6, 'matrix'],
+                                [8, 'include'], [4, 'runs-on']]) {
+    const re = new RegExp('^ {' + indent + '}(?:["\\\']?' + key + '["\\\']?)\\\s*:', 'gm');
+    const matches = body.match(re) ?? [];
+    if (matches.length !== 1 || matches[0] !== ' '.repeat(indent) + key + ':') {
+      return false;
+    }
+  }
+  if ((body.match(/^          - os\s*:/gm) ?? []).length !== 2) return false;
   const fixedMatrix = lines.join('\n');
   if (yaml.split(fixedMatrix).length !== 2) return false;
   const dynamicRunner = '    runs-on: ${{ matrix.os }}';
@@ -270,6 +292,13 @@ for (const name of ['async-interop-i01.yml', 'select-native-aot.yml', 'signed-re
     ['extra unsafe job', yaml + '\n  attacker:\n    runs-on: [self-hosted, Linux]\n    steps: []\n'],
     ['additional matrix axis', yaml.replace('        include:',
       '        os: [ubuntu-24.04, self-hosted]\n        include:')],
+    ['duplicate strategy overriding runner matrix', yaml.replace(
+      '    steps:', '    strategy:\n      matrix:\n        os: [self-hosted]\n    steps:')],
+    ['duplicate matrix overriding approved rows', yaml.replace(
+      '    runs-on: ${{ matrix.os }}',
+      '      matrix:\n        os: [self-hosted]\n    runs-on: ${{ matrix.os }}')],
+    ['injected additional hosted job', yaml +
+      '\n  extra-job:\n    runs-on: ubuntu-latest\n    steps: []\n'],
   ]) {
     assert.ok(!approvedFixedHostedMatrix(name, changed),
       'Untrusted fixed-matrix mutation admitted: ' + name + '/' + mutation);
