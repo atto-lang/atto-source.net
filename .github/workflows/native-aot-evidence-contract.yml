@@ -15,6 +15,7 @@ on:
       - '.github/workflows/net-fence-smoke.yml'
       - '.github/workflows/actor-memory-native-aot.yml'
       - 'verification/trusted-source-local-aot-workflow.test.mjs'
+      - 'verification/trusted-bootstrap-admission.test.mjs'
   workflow_dispatch:
 
 permissions:
@@ -43,3 +44,5 @@ jobs:
         run: node --test verification/ci-evidence-gate.test.mjs
       - name: Verify source-local runner isolation and trusted workflow triggers
         run: node verification/trusted-source-local-aot-workflow.test.mjs
+      - name: Verify pinned source-local bootstrap workflow blobs
+        run: node --test verification/trusted-bootstrap-admission.test.mjs
