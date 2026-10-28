@@ -53,4 +53,4 @@ jobs:
           dotnet publish verification/Ores.Net.ActorMemoryProbe/Ores.Net.ActorMemoryProbe.csproj -c Release -r "$RID" -p:PublishAot=true -p:SelfContained=true -o "$output"
           test -f "$output/$BINARY"
           "$output/$BINARY" | tee "$RUNNER_TEMP/actor-memory-native.log"
-          grep -Fx 'PASS actor-memory-native-probe: three private heaps, foreign handles denied, pooled carriers, stale context denied, pinned STOP and physical reclaim' "$RUNNER_TEMP/actor-memory-native.log"
+          grep -Fx 'PASS actor-memory-native-probe: four private heaps (two shared-pool actors), foreign handles denied, pooled carriers, stale context denied, pinned STOP and physical reclaim' "$RUNNER_TEMP/actor-memory-native.log"
