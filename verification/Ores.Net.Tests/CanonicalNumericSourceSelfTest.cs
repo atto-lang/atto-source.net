@@ -82,6 +82,49 @@ internal static class CanonicalNumericSourceSelfTest
                     ", reference expects " + expectedValue);
             }
 
+            // The committed Native AOT guest must be an exact expansion of
+            // the reviewed 24-vector reference corpus, not handwritten tests.
+            string batchSource = BuildBatchSource(cases);
+            string batchPath = Path.Combine(repository, "examples",
+                "canonical-numeric", "all-vectors.ores");
+            Require(File.ReadAllText(batchPath) == batchSource,
+                "all-vectors.ores differs from the reviewed numeric contract");
+            var batch = OresSourceModuleCompiler.Compile(batchPath, new[] { repository });
+            Require(batch.Sources.Count == 2 &&
+                    batch.Sources.Any(unit =>
+                        unit.Path.EndsWith("/library/ores.core/numeric.ores",
+                            StringComparison.Ordinal) &&
+                        unit.Sha256 == PinnedSourceSha256),
+                "Native AOT batch lacks the canonical Oreslang dependency");
+            string batchOutput = Path.Combine(temporary, "OresGenerated.dll");
+            CilEmitter.EmitLibrary(batch.Module, batchOutput);
+            using (var batchImage = AssemblyDefinition.ReadAssembly(batchOutput))
+            {
+                var entry = batchImage.MainModule.Types.Single(t => t.Name == "OresProgram")
+                    .Methods.Single(m => m.Name == "Run");
+                Require(CfgCilTestInterpreter.Evaluate(entry) == 24,
+                    "24-vector batch did not execute all source checks in CIL");
+            }
+
+            // A one-case corrupted oracle must fail at that exact case;
+            // an accidentally skipped batch or constant-success result is red.
+            string mutant = BuildBatchSource(cases, corruptFirst: true)
+                .Replace("../../library/ores.core/numeric", "./numeric",
+                    StringComparison.Ordinal);
+            File.WriteAllText(Path.Combine(temporary, "main.ores"), mutant,
+                new UTF8Encoding(false));
+            var mutantLinked = OresSourceModuleCompiler.Compile(
+                Path.Combine(temporary, "main.ores"), new[] { temporary });
+            CilEmitter.EmitLibrary(mutantLinked.Module, batchOutput);
+            using (var mutantImage = AssemblyDefinition.ReadAssembly(batchOutput))
+            {
+                var entry = mutantImage.MainModule.Types.Single(t => t.Name == "OresProgram")
+                    .Methods.Single(m => m.Name == "Run");
+                Require(CfgCilTestInterpreter.Evaluate(entry) == -1,
+                    "deliberate corrupt oracle did not fail at numeric case 1");
+            }
+            Console.WriteLine("PASS canonical 24-case .ores guest batch and negative mutation");
+            
             // Unsupported source in a canonical module must be rejected by
             // the actual compiler, not lowered to host C# or silently skipped.
             File.WriteAllText(Path.Combine(temporary, "numeric.ores"),
@@ -105,6 +148,37 @@ internal static class CanonicalNumericSourceSelfTest
         {
             Directory.Delete(temporary, recursive: true);
         }
+    }
+
+    private static string BuildBatchSource(JsonElement cases, bool corruptFirst = false)
+    {
+        var result = new StringBuilder();
+        result.Append("// Generated from verification/contracts/core-math-i64.json; no host-language algorithms.\n");
+        result.Append("// Each mismatch returns a distinct negative case index; success returns 24.\n");
+        result.Append("// The canonical .ores dependency remains unchanged.\n");
+        result.Append("import module numeric from \"../../library/ores.core/numeric\";\n\n");
+        result.Append("pub fnc main(): int {\n");
+        int index = 0;
+        foreach (var item in cases.EnumerateArray())
+        {
+            index++;
+            string id = item.GetProperty("id").GetString()!;
+            string function = item.GetProperty("function").GetString()!;
+            if (function is not ("min_int" or "max_int" or "clamp_int"))
+                throw new FormatException("Unexpected canonical function: " + function);
+            string[] args = item.GetProperty("args").EnumerateArray()
+                .Select(a => a.GetString()!).ToArray();
+            string expected = item.GetProperty("expected").GetString()!;
+            if (corruptFirst && index == 1) expected = expected == "0" ? "1" : "0";
+            result.Append("  // ").Append(index).Append(": ").Append(id).Append('\n');
+            result.Append("  if numeric.").Append(function).Append('(')
+                .Append(string.Join(", ", args)).Append(") != ")
+                .Append(expected).Append("; do\n");
+            result.Append("    return -").Append(index).Append(";\n  fi\n");
+        }
+        result.Append("  return 24;\n}\n");
+        if (index != 24) throw new FormatException("Canonical numeric batch count drift");
+        return result.ToString();
     }
 
     private static string FindRepository()
