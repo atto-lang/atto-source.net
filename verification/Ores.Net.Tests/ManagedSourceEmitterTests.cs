@@ -62,6 +62,15 @@ public static class ManagedSourceEmitterTests
 
         Reject(() => ManagedSourceEmitter.Emit(ir, (ManagedSourceTarget)9),
             "unknown target rejected");
+        var remainder = OresIrLowering.Lower(OresParser.Parse(
+            "fnc main():int{return -9223372036854775808%-1;}"));
+        var remainderCs = ManagedSourceEmitter.Emit(remainder, ManagedSourceTarget.CSharp);
+        var remainderFs = ManagedSourceEmitter.Emit(remainder, ManagedSourceTarget.FSharp);
+        Require(remainderCs.Contains("_ = v0;", StringComparison.Ordinal) &&
+                remainderCs.Contains("_ = v1;", StringComparison.Ordinal) &&
+                remainderFs.Contains("ignore v0", StringComparison.Ordinal) &&
+                remainderFs.Contains("ignore v1", StringComparison.Ordinal),
+            "constant-zero remainder consumes already evaluated operands");
         Reject(() => OresParser.Parse("fnc main():int{return 3/2;}"),
             "source int/int division still rejected, not silently lowered to i64");
         Reject(() => OresParser.Parse("fnc main():int{return missing(1);}"),

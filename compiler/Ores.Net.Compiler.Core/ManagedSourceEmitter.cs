@@ -84,10 +84,26 @@ public static class ManagedSourceEmitter
                 };
                 // The verified rhs is a nonzero literal. Special-case -1
                 // to avoid the CLR's long.MinValue remainder overflow.
-                expr = op.Opcode == IrOpcode.SignedRemainderLiteral &&
-                    program.Instructions[right].Constant == -1
-                    ? "0L"
-                    : $"v{left} {sign} v{right}";
+                bool zeroRemainder = op.Opcode == IrOpcode.SignedRemainderLiteral &&
+                    program.Instructions[right].Constant == -1;
+                if (zeroRemainder)
+                {
+                    // Preserve eager SSA evaluation and mark both inputs as
+                    // consumed even though MIN % -1 must avoid CLR rem.
+                    // Otherwise constant operands cause CS0219 under the
+                    // generated project's warnings-as-errors policy.
+                    if (cs)
+                    {
+                        output.Append("        _ = v").Append(left).AppendLine(";");
+                        output.Append("        _ = v").Append(right).AppendLine(";");
+                    }
+                    else
+                    {
+                        output.Append("        ignore v").Append(left).AppendLine();
+                        output.Append("        ignore v").Append(right).AppendLine();
+                    }
+                }
+                expr = zeroRemainder ? "0L" : $"v{left} {sign} v{right}";
                 if (cs && op.Opcode != IrOpcode.SignedRemainderLiteral)
                     expr = $"checked({expr})";
             }
