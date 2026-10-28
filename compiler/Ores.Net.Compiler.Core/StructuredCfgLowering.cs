@@ -21,13 +21,23 @@ public static class OresStructuredCfgLowering
         var program = OresStructuredParser.Parse(source);
         var helperSignatures = new Dictionary<string, CfgCallSignature>(StringComparer.Ordinal);
         var methods = new List<VerifiedCfgFunction>();
-        foreach (var helper in program.Functions?.Values ??
-            Enumerable.Empty<StructuredFunction>())
+        var declarations = program.Functions ??
+            throw new FormatException("Missing structured function declaration table");
+        var order = program.FunctionOrder ??
+            throw new FormatException("Missing structured function order witness");
+        if (order.Count != declarations.Count || order.Count > 64)
+            throw new FormatException("Invalid structured function order witness");
+        foreach (string name in order)
         {
-            // A helper can call only earlier functions admitted into this map.
+            if (!declarations.TryGetValue(name, out var helper) ||
+                helper.Name != name || helperSignatures.ContainsKey(name))
+                throw new FormatException("Invalid or duplicate ordered helper function");
+            // The method order is the exact source order, NOT the incidental
+            // iteration order of a dictionary. A helper may refer only to
+            // earlier, already verified signatures.
             var verified = new Builder(emitCalls: true).LowerHelper(helper, helperSignatures);
             methods.Add(verified);
-            helperSignatures.Add(helper.Name, new CfgCallSignature(helper.ResultType,
+            helperSignatures.Add(name, new CfgCallSignature(helper.ResultType,
                 Array.AsReadOnly(helper.Parameters.Select(p => p.Type).ToArray())));
         }
         var main = new Builder(emitCalls: true).Lower(program, helperSignatures);
@@ -69,7 +79,11 @@ public static class OresStructuredCfgLowering
                 int id = Emit(entry, CfgOpcode.Argument, p.Type, value: i);
                 parameters.Add(p.Name, new Binding(p.Type, id));
             }
-            entry.Terminator = new CfgReturn(Expression(helper.ReturnValue, entry, parameters));
+            // Parameter values are defined once by ldarg in the entry block.
+            // Branch, loop and local scope semantics reuse the verified main
+            // builder, but always retain a distinct MethodDef/SSA namespace.
+            if (EmitStatements(helper.Body, entry, parameters) is not null)
+                throw new FormatException("Typed helper has unterminated return path");
             return OresCfgVerifier.Verify(new CfgFunction(helper.Name, helper.ResultType,
                 entry.Name, blocks.Select(b => b.Freeze()).ToArray(),
                 helper.Parameters.Select(p => p.Type).ToArray()), signatures);
@@ -172,6 +186,9 @@ public static class OresStructuredCfgLowering
                         int value = Expression(call.Arguments[i], block, variables);
                         parameters.Add(parameter.Name, new Binding(parameter.Type, value));
                     }
+                    if (function.ReturnValue is null)
+                        throw new FormatException(
+                            "Statement-bodied helper requires the independent MethodDef ABI");
                     return Expression(function.ReturnValue, block, parameters);
                 }
                 case StructuredNegate negate:
