@@ -68,7 +68,7 @@ public static class ManagedSourceEmitter
             }
             else if (op.Opcode is IrOpcode.CheckedAdd or IrOpcode.CheckedSubtract or
                      IrOpcode.CheckedMultiply or IrOpcode.CheckedDivide or
-                     IrOpcode.SignedRemainderLiteral &&
+                     IrOpcode.SignedRemainderLiteral or IrOpcode.NamedBitXor &&
                      op.Constant is null &&
                      op.Left is int left && op.Right is int right &&
                      left >= 0 && left < i && right >= 0 && right < i)
@@ -80,6 +80,7 @@ public static class ManagedSourceEmitter
                     IrOpcode.CheckedMultiply => "*",
                     IrOpcode.CheckedDivide => "/",
                     IrOpcode.SignedRemainderLiteral => "%",
+                    IrOpcode.NamedBitXor => cs ? "^" : "^^^",
                     _ => throw new FormatException("Unsupported verified IR opcode")
                 };
                 // The verified rhs is a nonzero literal. Special-case -1
@@ -104,7 +105,7 @@ public static class ManagedSourceEmitter
                     }
                 }
                 expr = zeroRemainder ? "0L" : $"v{left} {sign} v{right}";
-                if (cs && op.Opcode != IrOpcode.SignedRemainderLiteral)
+                if (cs && op.Opcode is not (IrOpcode.SignedRemainderLiteral or IrOpcode.NamedBitXor))
                     expr = $"checked({expr})";
             }
             else
