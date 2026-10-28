@@ -36,6 +36,32 @@ internal static class NativeQuicClient
     }
 
     /// <summary>
+    /// A narrowly authorized host-only QUIC connection. The supplied opaque,
+    /// single-use permit can authorize LOOPBACK destinations only. This is
+    /// not a guest feature and must not be widened to arbitrary egress.
+    /// </summary>
+    internal static async ValueTask<QuicConnection> ConnectHttp3Async(
+        QuicLoopbackPermit permit,
+        ulong actorId,
+        ulong actorGeneration,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(permit);
+        if (!cancellationToken.CanBeCanceled)
+            throw new ArgumentException("QUIC owner cancellation token required",
+                                        nameof(cancellationToken));
+        cancellationToken.ThrowIfCancellationRequested();
+        var admitted = permit.Consume(actorId, actorGeneration);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(admitted.Remaining);
+        // Important: no DNS lookup is performed here. The authorized pinned IP
+        // is copied into the provider options; TLS still verifies original SNI.
+        return await ConnectUncheckedAfterPolicyAsync(
+            admitted.Address, admitted.DnsName, Http3Alpn,
+            admitted.Remaining, deadline.Token).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// QUIC transport for an explicitly selected application ALPN.
     /// The cancellation token must carry a caller-owned finite deadline.
     /// Cancellation does not prove physical retirement: caller must await
@@ -45,6 +71,7 @@ internal static class NativeQuicClient
         IPEndPoint pinnedAuthorizedAddress,
         string canonicalDnsName,
         SslApplicationProtocol applicationProtocol,
+        TimeSpan handshakeTimeout,
         CancellationToken cancellationToken)
     {
         ValidateEndpoint(pinnedAuthorizedAddress, canonicalDnsName,
@@ -65,6 +92,8 @@ internal static class NativeQuicClient
                 ApplicationProtocols = new List<SslApplicationProtocol> { applicationProtocol }
                 // Never override chain or hostname validation with a permissive callback.
             },
+            HandshakeTimeout = handshakeTimeout,
+            IdleTimeout = TimeSpan.FromSeconds(30),
             DefaultCloseErrorCode = 0,
             DefaultStreamErrorCode = 0,
             MaxInboundBidirectionalStreams = MaxInboundBidiStreams,
@@ -73,8 +102,14 @@ internal static class NativeQuicClient
 
         // ConnectAsync negotiates TLS 1.3 and ALPN. The IP is never re-resolved
         // here: TargetHost authenticates the policy-authorized original name.
-        return await QuicConnection.ConnectAsync(options, cancellationToken)
+        var connection = await QuicConnection.ConnectAsync(options, cancellationToken)
             .ConfigureAwait(false);
+        if (cancellationToken.IsCancellationRequested)
+        {
+            await connection.DisposeAsync().ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        return connection;
     }
 
     internal static void ValidateEndpoint(
