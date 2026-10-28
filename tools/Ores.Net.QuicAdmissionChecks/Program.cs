@@ -80,6 +80,40 @@ MustDeny(() => QuicLoopbackPermit.AuthorizeForTrustedHost(
     "origin.example", 443, new[] { IPAddress.Loopback },
     0, 42, 7, 0, TimeSpan.FromSeconds(2)), "zero resolution generation");
 
+// No Unicode/raw IDN, label overrun, empty DNS labels or hyphen-edge SNI.
+foreach (var invalidName in new[] { "BÜCHER.example", "bücher.example",
+    "origin..example", "-bad.example", "bad-.example",
+    new string('a', 64) + ".example", "origin.example.", "BAD.example",
+    "bad_name.example", "a b.example" })
+{
+    if (QuicLoopbackPermit.IsCanonicalDnsName(invalidName))
+        throw new InvalidOperationException("Invalid canonical SNI accepted: " + invalidName);
+    MustDeny(() => QuicLoopbackPermit.AuthorizeForTrustedHost(
+        invalidName, 443, new[] { IPAddress.Loopback }, 0, 42, 7, 9,
+        TimeSpan.FromSeconds(2)), "invalid permit SNI " + invalidName);
+    MustReject(() => NativeQuicClient.ValidateEndpoint(
+        endpoint, invalidName, h3, token), "invalid native client SNI " + invalidName);
+}
+if (!QuicLoopbackPermit.IsCanonicalDnsName("xn--bcher-kva.example"))
+    throw new InvalidOperationException("Canonical ASCII IDN A-label rejected");
+
+// Parallel consumption must have exactly one winner even if calls race.
+var parallel = Issue(lifetime: TimeSpan.FromSeconds(8));
+var successfulConsumes = 0;
+var deniedConsumes = 0;
+Parallel.For(0, 128, _ =>
+{
+    try
+    {
+        parallel.Consume(42, 7);
+        Interlocked.Increment(ref successfulConsumes);
+    }
+    catch (SecurityException) { Interlocked.Increment(ref deniedConsumes); }
+});
+if (successfulConsumes != 1 || deniedConsumes != 127)
+    throw new InvalidOperationException("QUIC permit replay race: " +
+        successfulConsumes + " successes, " + deniedConsumes + " denials");
+
 var issued = Issue();
 MustDeny(() => issued.Consume(42, 8), "wrong actor generation");
 MustDeny(() => issued.Consume(42, 7), "wrong generation must consume permit");
