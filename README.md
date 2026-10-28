@@ -268,9 +268,26 @@ compiler and #200 Native AOT release branches.
 
 If hosted Actions cannot allocate runners, repository maintainers can use an
 **isolated, ephemeral, source-repository** Linux x64 runner with the additional
-label `oreslang-net-aot`. Provision .NET SDK 10, clang, zlib headers,
+label `oreslang-net-aot` **in the dedicated organization runner group
+`oreslang-net-aot-trusted`**. Provision .NET SDK 10, clang, zlib headers,
 binutils, `file`, `realpath`, and standard Unix tools. This does not require
 a cross-organization source mirror or secrets.
+
+**Runner group isolation is mandatory, not just the job-level `if` check.**
+Before registering a runner, an organization administrator must create the
+`oreslang-net-aot-trusted` runner group with **Selected repositories** set
+only to `ores-truffle-oreslang/oreslang-source.net`, and **Selected workflows**
+set only to
+`ores-truffle-oreslang/oreslang-source.net/.github/workflows/trusted-source-local-linux-aot.yml@refs/heads/main`,
+`ores-truffle-oreslang/oreslang-source.net/.github/workflows/trusted-source-local-windows-aot.yml@refs/heads/main`, and
+`ores-truffle-oreslang/oreslang-source.net/.github/workflows/trusted-source-local-fence-windows.yml@refs/heads/main`.
+Never register this worker in the default/all-workflows group. Otherwise a
+separately authored pull-request workflow could target the same self-hosted
+labels, bypassing this particular job's guard. Require an independent admin
+read-back of repository + workflow access restrictions before connecting an
+ephemeral, isolated runner. If these restrictions cannot be enforced, **do not
+register the runner or run unreviewed source**: fix source-hosted admission or
+use only a separately approved immutable private-source carrier instead.
 
 **Never enable this runner on unreviewed code or while source-main is
 unprotected.** The job refuses allocation unless GitHub reports
@@ -283,14 +300,7 @@ default `main` branch **before** enabling it. Set the non-secret GitHub
 Actions repository variables `ORESLANG_NET_SELFHOSTED_LINUX=enabled`,
 `ORESLANG_NET_SELFHOSTED_LINUX_SHA=<exact reviewed source commit SHA>`, and
 `ORESLANG_NET_SELFHOSTED_LINUX_TREE=<its verified 40-hex root Git tree>`.
-Then select **Trusted .NET Linux Native AOT (source-local exact SHA)**
-in Actions and use **Run workflow** on the protected `main` revision.
-The trusted runner is defined in the separate
-`.github/workflows/trusted-source-local-linux-aot.yml`, which has only a
-`workflow_dispatch` trigger. The ordinary `strict-linux-native-aot.yml`
-workflow still accepts `pull_request` events but has **no self-hosted job**;
-a pull request can neither edit that trusted runner's dispatched main
-workflow nor schedule the private runner directly.
+Run **Trusted .NET Linux Native AOT (source-local exact SHA)** from protected `main` in Actions. The trusted workflow is `.github/workflows/trusted-source-local-linux-aot.yml` and has **only** a manual `workflow_dispatch` trigger. The ordinary PR workflow has no self-hosted job; only the three protected-main workflows above may access the isolated runner group.
 The manually dispatched default-branch workflow first validates immutable
 SHA/tree controls, then checks out the reviewed commit from this same repo
 and validates the actual root tree **before executing source code**.

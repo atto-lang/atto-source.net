@@ -16,7 +16,7 @@ assert.ok(triggers, 'trusted workflow trigger stanza missing');
 assert.equal(triggers[1], '  workflow_dispatch:\n');
 assert.doesNotMatch(trusted, /^  (?:push|pull_request|pull_request_target|workflow_run):/m);
 assert.equal((trusted.match(/^  linux-x64-approved-source-local:/gm) ?? []).length, 1);
-assert.match(trusted, /^    runs-on: \[self-hosted, Linux, X64, oreslang-net-aot\]$/m);
+assert.match(trusted, /^    runs-on:\n      group: oreslang-net-aot-trusted\n      labels: \[self-hosted, Linux, X64, oreslang-net-aot\]$/m);
 
 const mandatory = [
   "github.event_name == 'workflow_dispatch'",
@@ -64,7 +64,7 @@ const wt = trustedWindows.match(/^on:\n((?:  [a-z_]+:\n)+)/m);
 assert.ok(wt);
 assert.equal(wt[1], '  workflow_dispatch:\n');
 assert.doesNotMatch(trustedWindows, /^  (?:push|pull_request|pull_request_target|workflow_run):/m);
-assert.match(trustedWindows, /^    runs-on: \[self-hosted, Windows, X64, oreslang-net-aot\]$/m);
+assert.match(trustedWindows, /^    runs-on:\n      group: oreslang-net-aot-trusted\n      labels: \[self-hosted, Windows, X64, oreslang-net-aot\]$/m);
 for (const s of [
   "github.event_name == 'workflow_dispatch'",
   "github.ref == 'refs/heads/main'",
@@ -94,7 +94,7 @@ assert.match(fenceHosted, /^  pull_request:\s*$/m);
 assert.doesNotMatch(fenceHosted, /source-local-windows-fence:/);
 assert.doesNotMatch(fenceHosted, /^    runs-on: \[self-hosted/m);
 assert.equal((fenceTrusted.match(/^on:\n((?:  [a-z_]+:\n)+)/m) ?? [])[1], '  workflow_dispatch:\n');
-assert.match(fenceTrusted, /^    runs-on: \[self-hosted, Windows, X64, oreslang-net-aot\]$/m);
+assert.match(fenceTrusted, /^    runs-on:\n      group: oreslang-net-aot-trusted\n      labels: \[self-hosted, Windows, X64, oreslang-net-aot\]$/m);
 for (const s of [
  "github.ref == 'refs/heads/main'", 'github.ref_protected == true',
  "github.repository_id == '1419704375'",
@@ -118,7 +118,10 @@ const allowed = new Set(['trusted-source-local-linux-aot.yml',
  'trusted-source-local-windows-aot.yml', 'trusted-source-local-fence-windows.yml']);
 for (const name of readdirSync('.github/workflows').filter(x => /\.ya?ml$/.test(x))) {
  const yaml = readFileSync('.github/workflows/' + name, 'utf8');
- const selectsPrivateRunner = /^\s+runs-on:\s*(?:self-hosted\b|\[\s*self-hosted\b)/m.test(yaml);
+ const selectsPrivateRunner =
+   /^\s+runs-on:\s*(?:self-hosted\b|\[\s*self-hosted\b)/m.test(yaml) ||
+   /^\s+group:\s*oreslang-net-aot-trusted\s*$/m.test(yaml) ||
+   /^\s+labels:\s*\[\s*self-hosted\b/m.test(yaml);
  if (!allowed.has(name)) assert.ok(!selectsPrivateRunner, 'PR workflow allocated self-hosted runner: ' + name);
  else assert.equal((yaml.match(/^on:\n((?:  [a-z_]+:\n)+)/m) ?? [])[1],
                    '  workflow_dispatch:\n', 'Unsafe trusted workflow event: ' + name);

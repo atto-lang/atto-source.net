@@ -28,7 +28,9 @@ jobs:
       vars.ORESLANG_NET_SELFHOSTED_LINUX == 'enabled' &&
       vars.ORESLANG_NET_SELFHOSTED_LINUX_SHA != '' &&
       vars.ORESLANG_NET_SELFHOSTED_LINUX_TREE != ''
-    runs-on: [self-hosted, Linux, X64, oreslang-net-aot]
+    runs-on:
+      group: oreslang-net-aot-trusted
+      labels: [self-hosted, Linux, X64, oreslang-net-aot]
     timeout-minutes: 120
     permissions:
       contents: read

@@ -50,3 +50,55 @@ jobs:
             grep -Fxq 'ISOLATED_FENCE_TESTS_PASSED' <<< "$output"
           done
           echo 'FENCE_REPEAT_COUNT=16'
+
+  source-local-windows-fence:
+    # Opt-in: only a trusted, isolated source-owned runner. No cross-org mirroring.
+    if: ${{ vars.ORESLANG_NET_SELFHOSTED_WINDOWS == 'enabled' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: [self-hosted, Windows, X64, oreslang-net-aot]
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout trusted same-repository reviewed PR head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Verify immutable source identity and clean checkout
+        shell: pwsh
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actual = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $actual -cne $env:EXPECTED_HEAD) { throw "Unexpected source HEAD: $actual" }
+          git diff --quiet --exit-code
+          if ($LASTEXITCODE -ne 0) { throw 'Tracked checkout dirty before testing' }
+          $untracked = @(git ls-files --others --exclude-standard)
+          if ($LASTEXITCODE -ne 0 -or $untracked.Count -ne 0) { throw 'Untracked checkout inputs before testing' }
+          Write-Output "FENCE_SOURCE_HEAD=$actual"
+          $tree = (git rev-parse 'HEAD^{tree}').Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve source root tree' }
+          Write-Output "FENCE_SOURCE_TREE=$tree"
+      - name: Install .NET 10
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build isolated fence harness with warnings as errors
+        shell: pwsh
+        run: |
+          dotnet --info
+          if ($LASTEXITCODE -ne 0) { throw 'dotnet SDK unavailable' }
+          dotnet build verification/Ores.Net.Fence.Tests/Ores.Net.Fence.Tests.csproj -c Release -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'Fence test build failed' }
+      - name: Execute 16 independent bounded race-stress rounds
+        shell: pwsh
+        run: |
+          for ($round = 1; $round -le 16; $round++) {
+            $output = @(dotnet run --no-build --project verification/Ores.Net.Fence.Tests/Ores.Net.Fence.Tests.csproj -c Release)
+            if ($LASTEXITCODE -ne 0 -or $output -cnotcontains 'ISOLATED_FENCE_TESTS_PASSED') {
+              throw "Fence lifecycle run $round failed or did not emit the exact success marker"
+            }
+            $output | Write-Output
+          }
+          Write-Output 'FENCE_REPEAT_COUNT=16'

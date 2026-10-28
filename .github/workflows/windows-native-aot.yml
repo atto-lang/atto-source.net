@@ -556,3 +556,80 @@ jobs:
           file "$binary" | grep -q 'ELF 64-bit'
           test ! -f artifacts/structured-function-bodies/linux-x64/oreslang-app.runtimeconfig.json
           test ! -f artifacts/structured-function-bodies/linux-x64/OresGenerated.dll
+
+  # Optional budget-independent gate. Disabled unless repo owners register an
+  # isolated, trusted Windows x64 runner with the oreslang-net-aot label and set
+  # ORESLANG_NET_SELFHOSTED_WINDOWS=enabled in repository Actions variables.
+  # Never send fork PR code to a self-hosted runner; all source stays in the
+  # same private repository under its ordinary read-only GITHUB_TOKEN.
+  self-hosted-windows-static-facts:
+    if: ${{ vars.ORESLANG_NET_SELFHOSTED_WINDOWS == 'enabled' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: [self-hosted, Windows, X64, oreslang-net-aot]
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout trusted same-repository pull request
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Confirm checked-out exact PR head
+        shell: pwsh
+        run: |
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -cne "${{ github.event.pull_request.head.sha }}") {
+            throw "Checkout identity mismatch: expected PR head ${{ github.event.pull_request.head.sha }}, got $actual"
+          }
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Check installed Windows Native AOT toolchain
+        shell: pwsh
+        run: |
+          dotnet --info
+          ./verification/assert-aot-gates.ps1 -Rid win-x64
+      - name: Run .NET compiler and runtime regression harness
+        shell: pwsh
+        run: dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
+      - name: Verify real scalar and experimental structured static facts
+        shell: pwsh
+        run: |
+          dotnet build compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -warnaserror
+          ./verification/assert-static-facts-v0.ps1
+      - name: Publish and verify released Native AOT compiler
+        shell: pwsh
+        run: |
+          ./scripts/publish-windows.ps1 -Source examples/hello.ores -Rid win-x64
+          ./verification/assert-native-release.ps1 -Binary ./artifacts/compiler/win-x64/oresnet.exe -Rid win-x64
+          ./verification/assert-native-release.ps1 -Binary ./artifacts/apps/win-x64/oreslang-app.exe -Rid win-x64
+          ./verification/assert-native-compiler-cli.ps1 -Compiler ./artifacts/compiler/win-x64/oresnet.exe -ValidSource examples/hello.ores
+      - name: Execute real published Windows Native AOT application
+        shell: pwsh
+        run: |
+          ./verification/assert-native-pe.ps1 -Binary ./artifacts/compiler/win-x64/oresnet.exe -Rid win-x64
+          ./verification/assert-native-pe.ps1 -Binary ./artifacts/apps/win-x64/oreslang-app.exe -Rid win-x64
+          $output = & ./artifacts/apps/win-x64/oreslang-app.exe
+          if ($LASTEXITCODE -ne 0 -or ($output | Out-String).Trim() -ne '14') {
+            throw "Native AOT app output mismatch: expected 14, received '$output'"
+          }
+          ./verification/assert-native-arithmetic.ps1 -Rid win-x64
+      - name: Match Native AOT static facts against managed facts at exact head
+        shell: pwsh
+        run: |
+          $source = 'contracts/scalar/v1/fixtures/literal-42.ores'
+          $native = & ./artifacts/compiler/win-x64/oresnet.exe static-facts $source
+          if ($LASTEXITCODE -ne 0) { throw 'Native AOT static facts failed' }
+          $managed = & dotnet run -c Release --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -- static-facts $source
+          if ($LASTEXITCODE -ne 0) { throw 'Managed static facts failed' }
+          if (($native -join "`n") -cne ($managed -join "`n")) {
+            throw 'Published Native AOT and managed static facts disagree'
+          }
+          $doc = (($native -join "`n") | ConvertFrom-Json)
+          $digest = (Get-FileHash $source -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($doc.version -ne 'ores-static-facts/v0' -or
+              $doc.unit -cne "sha256:$digest" -or
+              $doc.procedures[0].id -ne '__root__.main/0' -or
+              @($doc.procedures[0].loops).Count -ne 0) {
+            throw 'Published Native AOT static facts fail the shared contract'
+          }
