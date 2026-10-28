@@ -5,6 +5,21 @@ import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const requiredByWorkflow = {
+  "Strict .NET Linux x64 Native AOT": {
+    "linux-x64-compiler-and-app": [
+      "Verify exact source checkout",
+      "Install Native AOT toolchain",
+      "Check source scripts and managed compiler regressions",
+      "Compile native compiler and first native application",
+      "Prove second generated source gets its own Native AOT executable",
+      "Execute shared native.precedence and prove three-source isolation",
+      "Execute opt-in structured CFG as linked Linux Native AOT",
+      "Execute Linux Native AOT checked-arithmetic negatives",
+      "Negative test for managed sidecar rejection",
+      "Record exact-head Native AOT execution receipt",
+      "Upload Linux native executables and evidence"
+    ]
+  },
   "Windows Native AOT": {
     "windows-x64": [
       "Assert exact originating-source checkout (Windows)",
@@ -27,6 +42,9 @@ const requiredByWorkflow = {
       "Reject managed sidecar next to an otherwise native executable",
       "Compile verified CFG into a real Windows Native AOT executable",
       "Prove experimental structured source in real Windows Native AOT",
+      "Execute typed source helper calls in real Windows Native AOT",
+      "Execute typed statement-bodied helpers in real Windows Native AOT",
+      "Verify typed bindings in executed Windows Native AOT",
       "Execute shared five-backend native.add source in real Windows Native AOT",
       "Execute shared native.precedence in Windows Native AOT",
       "Emit exact-head Windows Native AOT run receipt",
@@ -46,18 +64,11 @@ const requiredByWorkflow = {
       "Native AOT publish generated application (diagnostic only)",
       "Execute Linux Native AOT generated application",
       "Execute Linux Native AOT CFG branch and simultaneous-assignment fixture",
-      "Prove experimental structured source in real Linux Native AOT"
+      "Prove experimental structured source in real Linux Native AOT",
+      "Execute typed source helper calls in real Linux Native AOT",
+      "Execute typed statement-bodied helpers in real Linux Native AOT",
+      "Verify typed bindings in executed Linux Native AOT"
     ],
-    "self-hosted-windows-static-facts": [
-      "Checkout trusted same-repository pull request",
-      "Confirm checked-out exact PR head",
-      "Check installed Windows Native AOT toolchain",
-      "Run .NET compiler and runtime regression harness",
-      "Verify real scalar and experimental structured static facts",
-      "Publish and verify released Native AOT compiler",
-      "Execute real published Windows Native AOT application",
-      "Match Native AOT static facts against managed facts at exact head"
-    ]
   },
   "Integration declaration integrity": {
     "declaration-integrity": [
@@ -67,12 +78,29 @@ const requiredByWorkflow = {
     ]
   }
 };
+
+const requiredPathByWorkflow = {
+  "Strict .NET Linux x64 Native AOT": ".github/workflows/strict-linux-native-aot.yml",
+  "Windows Native AOT": ".github/workflows/windows-native-aot.yml",
+  "Integration declaration integrity": ".github/workflows/integration-declarations.yml"
+};
+// Stable IDs verified against the source repository's actual Actions runs.
+// A same-name or same-path spoof cannot replace the originating workflow.
+const requiredWorkflowIdByWorkflow = {
+  "Strict .NET Linux x64 Native AOT": 398765873,
+  "Windows Native AOT": 384715065,
+  "Integration declaration integrity": 388530125
+};
 export function verifyEvidence(run, response, expected) {
   const errors = [];
   const fail = (condition, explanation) => { if (!condition) errors.push(explanation); };
   const hex = /^[a-f0-9]{40}$/i;
   fail(hex.test(expected.head), "expected head must be a full 40-digit SHA");
   fail(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(expected.repo), "invalid expected repository");
+  // Matching caller-supplied repo strings cannot certify unauthorized private
+  // source copying into a carrier: this ledger only validates source-org runs.
+  fail(expected.repo === "ores-truffle-oreslang/oreslang-source.net",
+    "native parity evidence requires the originating source repository");
   fail(Number.isSafeInteger(expected.runId) && expected.runId > 0, "expected run ID required");
   fail(Number.isSafeInteger(expected.attempt) && expected.attempt > 0, "expected attempt required");
   fail(Object.hasOwn(requiredByWorkflow,expected.workflow),"unrecognized workflow");
@@ -85,6 +113,8 @@ export function verifyEvidence(run, response, expected) {
   fail(run.repository?.full_name === expected.repo, "wrong run repository");
   fail(run.head_sha === expected.head, "run head is not the reviewed commit");
   fail(run.name === expected.workflow, "wrong workflow");
+  fail(run.path === requiredPathByWorkflow[expected.workflow], "wrong workflow path");
+  fail(run.workflow_id === requiredWorkflowIdByWorkflow[expected.workflow], "wrong workflow ID");
   fail(run.status === "completed" && run.conclusion === "success", "workflow has not passed");
   fail(["pull_request","workflow_dispatch","push"].includes(run.event), "unsupported workflow event");
   if (response === null || typeof response !== "object" || Array.isArray(response)) {
@@ -99,9 +129,6 @@ export function verifyEvidence(run, response, expected) {
   fail(Number.isInteger(response.total_count) && response.total_count === jobs.length && jobs.length > 0,
     "jobs list incomplete, empty or paginated");
   const requirements = requiredByWorkflow[expected.workflow] || {};
-  const disabledOptional = job => expected.workflow === "Windows Native AOT" &&
-    job.name === "self-hosted-windows-static-facts" &&
-    job.status === "completed" && job.conclusion === "skipped";
   const jobNames = new Set();
   for (const job of jobs) {
     if (!job || typeof job !== "object" || Array.isArray(job) ||
@@ -117,11 +144,12 @@ export function verifyEvidence(run, response, expected) {
   }
   for (const [name, stepsRequired] of Object.entries(requirements)) {
     const matches=jobs.filter(job=>job && job.name===name);
-    if (name === "self-hosted-windows-static-facts" && matches.length === 0) continue;
     fail(matches.length===1, `required job ${name} missing or duplicated`);
     if (matches.length!==1) continue;
     const job=matches[0];
-    if (disabledOptional(job)) continue;
+    if (expected.workflow === "Strict .NET Linux x64 Native AOT")
+      fail(Number.isSafeInteger(job.runner_id) && job.runner_id > 0,
+        "strict Linux runner was not allocated");
     fail(job.status==="completed" && job.conclusion==="success", `job ${name} not successful`);
     const steps=job.steps;
     if (!Array.isArray(steps) || steps.length===0) {
@@ -150,13 +178,8 @@ export function verifyEvidence(run, response, expected) {
     }
   }
   for (const job of jobs) {
-    if (job && !Object.hasOwn(requirements,job.name)) {
-      // This source-local fallback is opt-in; its disabled state must not
-      // invalidate successful mandatory hosted Windows and Linux evidence.
-      if (disabledOptional(job)) continue;
-      fail(job.status==="completed" && job.conclusion==="success",
-        `extra job ${job.name} is not successful`);
-    }
+    if (job && !Object.hasOwn(requirements,job.name))
+      errors.push(`unexpected job ${job.name}: no unreviewed self-hosted or extra runner can qualify source-native execution`);
   }
   return errors;
 }

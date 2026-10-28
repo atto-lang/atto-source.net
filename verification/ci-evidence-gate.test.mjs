@@ -6,8 +6,9 @@ import { verifyEvidence } from "./ci-evidence-gate.mjs";
 const repo = "ores-truffle-oreslang/oreslang-source.net";
 const sha = "abcdefabcdefabcdefabcdefabcdefabcdefabcd";
 const e = {repo,head:sha,runId:12345,attempt:1,workflow:"Windows Native AOT"};
-const run = {id:12345,run_attempt:1,name:"Windows Native AOT",head_sha:sha,
+const run = {id:12345,run_attempt:1,workflow_id:384715065,name:"Windows Native AOT",head_sha:sha,
   status:"completed",conclusion:"success",event:"pull_request",
+  path:".github/workflows/windows-native-aot.yml",
   repository:{full_name:repo}};
 const jobs = {total_count:2,jobs:[
   {name:"windows-x64",run_id:12345,run_attempt:1,head_sha:sha,
@@ -32,6 +33,9 @@ const jobs = {total_count:2,jobs:[
       "Reject managed sidecar next to an otherwise native executable",
       "Compile verified CFG into a real Windows Native AOT executable",
       "Prove experimental structured source in real Windows Native AOT",
+      "Execute typed source helper calls in real Windows Native AOT",
+      "Execute typed statement-bodied helpers in real Windows Native AOT",
+      "Verify typed bindings in executed Windows Native AOT",
       "Execute shared five-backend native.add source in real Windows Native AOT",
       "Execute shared native.precedence in Windows Native AOT",
       "Emit exact-head Windows Native AOT run receipt",
@@ -53,13 +57,82 @@ const jobs = {total_count:2,jobs:[
       "Execute Linux Native AOT generated application",
       "Execute Linux Native AOT CFG branch and simultaneous-assignment fixture",
       "Prove experimental structured source in real Linux Native AOT",
+      "Execute typed source helper calls in real Linux Native AOT",
+      "Execute typed statement-bodied helpers in real Linux Native AOT",
+      "Verify typed bindings in executed Linux Native AOT",
     ].map((name,i)=>({name,number:i+1,status:"completed",conclusion:"success"}))},
 ]};
 const copy=x=>JSON.parse(JSON.stringify(x));
+const strictWorkflow='Strict .NET Linux x64 Native AOT';
+const strictNames=[...readFileSync(new URL('../.github/workflows/strict-linux-native-aot.yml',import.meta.url),'utf8')
+  .matchAll(/^      - name: (.+)$/gm)].map(m=>m[1]);
+const strictExpected={...e,workflow:strictWorkflow};
+const strictRun={...run,name:strictWorkflow,path:'.github/workflows/strict-linux-native-aot.yml',workflow_id:398765873};
+const strictJobs={total_count:1,jobs:[{name:'linux-x64-compiler-and-app',runner_id:42,
+  run_id:e.runId,run_attempt:e.attempt,head_sha:sha,status:'completed',conclusion:'success',
+  steps:strictNames.map((name,i)=>({name,number:i+1,status:'completed',conclusion:'success'}))}]};
+test('strict Linux synthetic full-step contract is accepted',()=>{
+  assert.ok(strictNames.includes('Execute Linux Native AOT checked-arithmetic negatives'));
+  assert.deepEqual(verifyEvidence(strictRun,strictJobs,strictExpected),[]);
+});
+for(const name of strictNames)test('strict Linux mandatory step cannot be omitted: '+name,()=>{
+  const j=copy(strictJobs);j.jobs[0].steps=j.jobs[0].steps.filter(s=>s.name!==name);
+  assert.match(verifyEvidence(strictRun,j,strictExpected).join(' '),/missing successful step/);
+});
+for(const steps of [null,[]])test('strict Linux denies zero-step evidence '+JSON.stringify(steps),()=>{
+  const j=copy(strictJobs);j.jobs[0].steps=steps;
+  assert.match(verifyEvidence(strictRun,j,strictExpected).join(' '),/zero executed/);
+});
+test('strict Linux denies unallocated runner despite fabricated success steps',()=>{
+  const j=copy(strictJobs);j.jobs[0].runner_id=0;
+  assert.match(verifyEvidence(strictRun,j,strictExpected).join(' '),/not allocated/);
+});
+test('strict Linux denies another workflow path',()=>assert.match(verifyEvidence({...strictRun,path:'.github/workflows/other.yml'},strictJobs,strictExpected).join(' '),/workflow path/));
+test('carrier commit is not source-org exact-head execution evidence',()=>assert.notEqual(verifyEvidence({...strictRun,repository:{full_name:'honeypot-r-us-test/hnpt-e2e'}},strictJobs,strictExpected).length,0));
+test('caller cannot relabel alternate-org Linux success as source-native evidence',()=>{
+  const foreign='honeypot-r-us-test/hnpt-e2e';
+  const errors=verifyEvidence({...strictRun,repository:{full_name:foreign}},
+    strictJobs,{...strictExpected,repo:foreign});
+  assert.match(errors.join(' '),/originating source repository/);
+});
+test('caller cannot relabel alternate-org Windows success as source-native evidence',()=>{
+  const foreign='honeypot-r-us-test/hnpt-e2e';
+  const errors=verifyEvidence({...run,repository:{full_name:foreign}},
+    jobs,{...e,repo:foreign});
+  assert.match(errors.join(' '),/originating source repository/);
+});
+test('strict Linux rejects skipped arithmetic and wrong attempt',()=>{
+  const j=copy(strictJobs);j.jobs[0].steps.find(s=>s.name.includes('checked-arithmetic')).conclusion='skipped';
+  assert.notEqual(verifyEvidence(strictRun,j,strictExpected).length,0);
+  assert.notEqual(verifyEvidence({...strictRun,run_attempt:2},strictJobs,strictExpected).length,0);
+});
+test('same-path strict Linux workflow impersonation is denied by workflow ID',()=>{
+  const bad={...strictRun,workflow_id:384715065};
+  assert.match(verifyEvidence(bad,strictJobs,strictExpected).join(' '),/workflow ID/);
+});
 const check=(r,j)=>verifyEvidence(r,j,e);
 test("valid exact-head, same-run, full-step evidence",()=>assert.deepEqual(check(run,jobs),[]));
 test("zero steps are never proof",()=>{const j=copy(jobs);j.jobs[0].steps=[];assert.match(check(run,j).join(" "),/zero executed/);});
 test("different repository rejected",()=>assert.match(check({...run,repository:{full_name:"other/repo"}},jobs).join(" "),/repository/));
+test("same-name workflow at wrong path rejected",()=>assert.match(
+  check({...run,path:".github/workflows/spoof-windows-native-aot.yml"},jobs).join(" "),
+  /workflow path/));
+test("same-name and path but wrong workflow ID rejected",()=>assert.match(
+  check({...run,workflow_id:388530125},jobs).join(" "), /workflow ID/));
+test("missing workflow ID rejected",()=>{
+  const r=copy(run);delete r.workflow_id;
+  assert.match(check(r,jobs).join(" "), /workflow ID/);
+});
+// Current main requires additional executable typed-source proof on both OSes.
+// No green run may omit any of these substantive Native AOT stages.
+for (const [jobIndex, stepName] of [[0,"Execute typed source helper calls in real Windows Native AOT"],[0,"Execute typed statement-bodied helpers in real Windows Native AOT"],[0,"Verify typed bindings in executed Windows Native AOT"],[1,"Execute typed source helper calls in real Linux Native AOT"],[1,"Execute typed statement-bodied helpers in real Linux Native AOT"],[1,"Verify typed bindings in executed Linux Native AOT"]]) {
+  test(`new Native AOT stage is mandatory: ${stepName}`, () => {
+    const j=copy(jobs);
+    j.jobs[jobIndex].steps=j.jobs[jobIndex].steps.filter(s=>s.name!==stepName);
+    assert.match(check(run,j).join(" "), /missing successful step/);
+  });
+}
+
 test("wrong SHA rejected",()=>assert.match(check({...run,head_sha:"0".repeat(40)},jobs).join(" "),/head/));
 test("wrong attempt rejected",()=>assert.match(check({...run,run_attempt:2},jobs).join(" "),/attempt/));
 test("wrong run rejected",()=>assert.match(check({...run,id:44},jobs).join(" "),/run ID/));
@@ -70,24 +143,26 @@ test("pending workflow rejected",()=>assert.match(check({...run,status:"in_progr
 test("missing native execution step rejected",()=>{const j=copy(jobs);j.jobs[0].steps = j.jobs[0].steps.filter(s=>s.name!=="Execute real Windows Native AOT binary");assert.match(check(run,j).join(" "),/missing successful step/);});
 test("ambiguous duplicate job rejected",()=>{const j=copy(jobs);j.jobs.push(copy(j.jobs[0]));j.total_count=3;assert.match(check(run,j).join(" "),/duplicated/);});
 test("declaration-only evidence must not masquerade as AOT",()=>{
-  const x=copy(run);x.name="Integration declaration integrity";
+  const x=copy(run);x.name="Integration declaration integrity";x.path=".github/workflows/integration-declarations.yml";x.workflow_id=388530125;
   const p={...e,workflow:"Integration declaration integrity"};
   assert.notEqual(verifyEvidence(x,jobs,p).length,0);
 });
 
 test("checkout assertion is required",()=>{const j=copy(jobs);j.jobs[0].steps.shift();assert.match(check(run,j).join(" "),/missing successful step/);});
 test("receipt upload is required",()=>{const j=copy(jobs);j.jobs[0].steps.pop();assert.match(check(run,j).join(" "),/missing successful step/);});
-test("disabled self-hosted fallback is permitted only alongside mandatory hosted jobs",()=>{
-  const j=copy(jobs);j.jobs.push({name:"self-hosted-windows-static-facts",run_id:12345,run_attempt:1,head_sha:sha,status:"completed",conclusion:"skipped"});j.total_count++;
-  assert.deepEqual(check(run,j),[]);
-  j.jobs.shift();j.total_count--;assert.match(check(run,j).join(" "),/missing/);
+test("PR-triggered optional self-hosted runner cannot qualify Windows Native AOT",()=>{
+  const j=copy(jobs);j.jobs.push({name:"self-hosted-windows-static-facts",run_id:12345,
+    run_attempt:1,head_sha:sha,status:"completed",conclusion:"skipped"});j.total_count++;
+  assert.match(check(run,j).join(" "),/unexpected job/);
+  j.jobs.shift();j.total_count--;
+  assert.match(check(run,j).join(" "),/missing/);
 });
 test("failed opt-in self-hosted fallback remains rejected",()=>{
   const j=copy(jobs);j.jobs.push({name:"self-hosted-windows-static-facts",run_id:12345,run_attempt:1,head_sha:sha,status:"completed",conclusion:"failure"});j.total_count++;
-  assert.match(check(run,j).join(" "),/not successful/);
+  assert.match(check(run,j).join(" "),/unexpected job/);
 });
 test("Rust declaration tooling evidence is admitted and missing Rust tests rejected",()=>{
-  const p={...e,workflow:"Integration declaration integrity"};const r={...run,name:p.workflow};
+  const p={...e,workflow:"Integration declaration integrity"};const r={...run,name:p.workflow,path:".github/workflows/integration-declarations.yml",workflow_id:388530125};
   const j={total_count:1,jobs:[{name:"declaration-integrity",run_id:e.runId,run_attempt:1,head_sha:sha,status:"completed",conclusion:"success",steps:[
     "Assert exact originating-source checkout","Test Rust repository policy tooling",
     "Verify declaration-only manifest (not a runtime parity claim)"
