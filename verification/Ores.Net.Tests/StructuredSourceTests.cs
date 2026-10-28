@@ -37,6 +37,76 @@ internal static class StructuredSourceTests
 
     public static void Run()
     {
+        // Java reference binding kinds: compile-time const, single-write val,
+        // and assignable let. This tests typed parser admission.
+        var bindingKinds = OresStructuredParser.Parse("""
+            fnc main():int {
+                const int answer = 6 * 7;
+                const int next = answer + 1;
+                val int retained = next - 1;
+                let int mutable = retained;
+                mutable = mutable + 0;
+                return mutable;
+            }
+            """);
+        Require(bindingKinds.Body[0] is StructuredLet {
+            Name: "answer", Kind: StructuredBindingKind.Const,
+            Initializer: StructuredInt { Value: 42 }
+        }, "const evaluation replaces the initializer with a checked typed literal");
+        Require(bindingKinds.Body[1] is StructuredLet {
+            Name: "next", Kind: StructuredBindingKind.Const,
+            Initializer: StructuredInt { Value: 43 }
+        }, "const references propagate their checked compile-time value");
+        Require(bindingKinds.Body[2] is StructuredLet {
+            Name: "retained", Kind: StructuredBindingKind.Val
+        }, "val preserves runtime single-assignment marker");
+        Require(bindingKinds.Body[3] is StructuredLet {
+            Name: "mutable", Kind: StructuredBindingKind.Let,
+            Initializer: StructuredRead { Name: "retained" }
+        }, "val remains a runtime read and let remains mutable");
+        Require(bindingKinds.Body[4] is StructuredSet { Name: "mutable" },
+            "let assignment remains supported");
+
+        var constantBool = OresStructuredParser.Parse("""
+            fnc main():int {
+                const bool enabled = 6 * 7 eq 42;
+                if enabled { return 42; } else { return 0; }
+            }
+            """);
+        Require(constantBool.Body[1] is StructuredIf {
+            Condition: StructuredBool { Value: true }
+        }, "compile-time bool may appear in typed conditionals");
+        var runtimeBool = OresStructuredParser.Parse("""
+            fnc main():int {
+                val bool enabled = true;
+                if enabled { return 42; } else { return 0; }
+            }
+            """);
+        Require(runtimeBool.Body[1] is StructuredIf {
+            Condition: StructuredRead { Name: "enabled" }
+        }, "runtime val retains a typed read");
+
+        Reject("fnc main():int{val int v=1;v=2;return v;}",
+            "val is single-assignment");
+        Reject("fnc main():int{const int v=1;v=2;return v;}",
+            "const is immutable");
+        Reject("fnc main():int{val bool v=true;if v {v=false;}return 1;}",
+            "nested blocks cannot mutate outer val");
+        Reject("fnc main():int{let int x=2;const int c=x;return c;}",
+            "mutable input cannot become compile-time constant");
+        Reject("fnc main():int{val int x=2;const int c=x;return c;}",
+            "runtime single-write val is not const");
+        Reject("fnc main():int{const int x=9223372036854775807+1;return x;}",
+            "const arithmetic must trap during admission");
+        Reject("fnc main():int{const int x=-(-9223372036854775808);return x;}",
+            "const negation overflow is rejected during admission");
+        Reject("fnc main():int{const int x=3;const int x=4;return x;}",
+            "duplicate const binding is forbidden");
+        Reject("fnc main():int{val int x=x;return x;}",
+            "self-reference cannot bypass single-assignment");
+        Reject("fnc helper(int x):int{x=2;return x;}fnc main():int{return helper(1);}",
+            "typed helper parameters are immutable runtime bindings");
+
 
         foreach (var form in new[] {
             "select { default: { return 1; } }",
