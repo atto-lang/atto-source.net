@@ -137,11 +137,7 @@ internal static class NativeQuicClient
             pinnedAuthorizedAddress.Address.Equals(IPAddress.IPv6None))
             throw new ArgumentException("QUIC remote address must be a specific IP",
                                         nameof(pinnedAuthorizedAddress));
-        if (string.IsNullOrWhiteSpace(canonicalDnsName) ||
-            canonicalDnsName != canonicalDnsName.Trim() ||
-            canonicalDnsName != canonicalDnsName.ToLowerInvariant() ||
-            canonicalDnsName.EndsWith('.') ||
-            Uri.CheckHostName(canonicalDnsName) != UriHostNameType.Dns)
+        if (!QuicLoopbackPermit.IsCanonicalDnsName(canonicalDnsName))
             throw new ArgumentException("QUIC needs a canonical DNS SNI/verification name",
                                         nameof(canonicalDnsName));
         var alpn = applicationProtocol.Protocol.Span;
