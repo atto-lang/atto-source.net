@@ -15,10 +15,23 @@ trap 'rm -rf -- "$work"' EXIT
 
 for name in division-by-zero division-overflow; do
   source_file="examples/$name.ores"
-  denied="$work/$name.dll"
-  diagnostic="$work/$name.log"
+  case_dir="$work/$name"
+  mkdir -p -- "$case_dir"
+  # oresnet only accepts a generated assembly named OresGenerated.dll.
+  # Give each rejection a unique directory so the compiler can reach the
+  # source parser rather than rejecting our test's --out basename first.
+  denied="$case_dir/OresGenerated.dll"
+  diagnostic="$case_dir/diagnostic.log"
   if "$compiler" compile "$source_file" --out "$denied" >"$diagnostic" 2>&1; then
     echo "Source division unexpectedly compiled: $source_file" >&2
+    exit 1
+  else
+    status=$?
+  fi
+  if [[ "$status" -ne 1 ]]; then
+    printf 'Unexpected native compiler failure for %s: exit %s, expected source rejection 1\n' \
+      "$source_file" "$status" >&2
+    cat -- "$diagnostic" >&2
     exit 1
   fi
   if ! grep -Fqi 'float result lowering' "$diagnostic"; then
