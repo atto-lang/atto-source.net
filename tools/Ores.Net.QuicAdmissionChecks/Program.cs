@@ -42,13 +42,23 @@ try
 catch (OperationCanceledException) { }
 
 // No network is opened: naked inputs MUST NOT bypass missing egress permits.
-try
+// The QUIC entrypoint is annotated for Linux/Windows/macOS; guard its caller
+// too, so CA1416 remains a warnings-as-errors gate on all target RIDs.
+if (OperatingSystem.IsLinux() || OperatingSystem.IsWindows() ||
+    OperatingSystem.IsMacOS())
 {
-    NativeQuicClient.ConnectHttp3Async(endpoint, "origin.example", token)
-        .AsTask().GetAwaiter().GetResult();
-    throw new Exception("Missing egress permit bypassed");
+    try
+    {
+        NativeQuicClient.ConnectHttp3Async(endpoint, "origin.example", token)
+            .AsTask().GetAwaiter().GetResult();
+        throw new Exception("Missing egress permit bypassed");
+    }
+    catch (SecurityException) { }
 }
-catch (SecurityException) { }
+else if (NativeQuicClient.IsSupported)
+{
+    throw new Exception("Unsupported OS unexpectedly advertises native QUIC");
+}
 
 // No network is opened in this admission test. It is not QUIC/HTTP3 interop.
 Console.WriteLine("QUIC host admission negative checks passed; interop not asserted");
