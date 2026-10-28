@@ -237,17 +237,17 @@ public static class OresGeneratorV1Compiler
 
             if (!ulong.TryParse(digits.ToString(), NumberStyles.None, CultureInfo.InvariantCulture,
                     out ulong magnitude))
-                throw new FormatException($"Invalid i64 at offset {start}");
+                throw new FormatException($"Integer literal overflows signed 64-bit at offset {start}");
 
             if (!negative)
             {
                 if (magnitude > long.MaxValue)
-                    throw new FormatException($"Invalid i64 at offset {start}");
+                    throw new FormatException($"Integer literal overflows signed 64-bit at offset {start}");
                 return (long)magnitude;
             }
             if (magnitude == 9_223_372_036_854_775_808UL) return long.MinValue;
             if (magnitude > long.MaxValue)
-                throw new FormatException($"Invalid i64 at offset {start}");
+                throw new FormatException($"Integer literal overflows signed 64-bit at offset {start}");
             return -(long)magnitude;
         }
 
