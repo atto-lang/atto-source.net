@@ -251,8 +251,12 @@ function approvedFixedHostedMatrix(name, yaml) {
   const sections = yaml.split(/^jobs:\s*$/m);
   if (!expectedJob || sections.length !== 2) return false;
   const body = sections[1];
-  const jobs = body.match(/^  [a-zA-Z_][\w-]*:\s*$/gm) ?? [];
-  if (jobs.length !== 1 || jobs[0].trim() !== expectedJob + ':') return false;
+  // Enumerate ALL immediate job entries, including quoted or complex YAML
+  // mapping keys. A regex recognizing only plain identifiers silently ignores
+  // shadow jobs that invoke reusable workflows without a runs-on selector.
+  const jobLines = body.split(/\r?\n/).filter(line =>
+    /^  \S/.test(line) && !/^  #/.test(line));
+  if (jobLines.length !== 1 || jobLines[0] !== '  ' + expectedJob + ':') return false;
   for (const [indent, key] of [[4, 'strategy'], [6, 'matrix'],
                                 [8, 'include'], [4, 'runs-on']]) {
     const re = new RegExp('^ {' + indent + '}(?:["\\\']?' + key + '["\\\']?)\\\s*:', 'gm');
@@ -318,6 +322,16 @@ for (const name of ['async-interop-i01.yml', 'select-native-aot.yml', 'signed-re
       '      matrix:\n        os: [self-hosted]\n    runs-on: ${{ matrix.os }}')],
     ['injected additional hosted job', yaml +
       '\n  extra-job:\n    runs-on: ubuntu-latest\n    steps: []\n'],
+    ['double-quoted reusable workflow job', yaml +
+      '\n  "unapproved":\n    uses: outsider/repo/.github/workflows/worker.yml@main\n'],
+    ['single-quoted reusable workflow job', yaml +
+      "\n  'unapproved':\n    uses: outsider/repo/.github/workflows/worker.yml@main\n"],
+    ['YAML complex-key reusable workflow job', yaml +
+      '\n  ? unapproved\n  :\n    uses: outsider/repo/.github/workflows/worker.yml@main\n'],
+    ['quoted job with hosted runner', yaml +
+      '\n  "unapproved":\n    runs-on: ubuntu-24.04\n    steps: []\n'],
+    ['quoted replacement for the expected job', yaml.replace(
+      /^  ([a-z-]+):$/m, '  "$1":')],
   ]) {
     assert.ok(!approvedFixedHostedMatrix(name, changed),
       'Untrusted fixed-matrix mutation admitted: ' + name + '/' + mutation);
