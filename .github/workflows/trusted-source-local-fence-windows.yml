@@ -21,6 +21,8 @@ jobs:
       github.repository == 'ores-truffle-oreslang/oreslang-source.net' &&
       github.repository_id == '1419704375' &&
       github.workflow_ref == 'ores-truffle-oreslang/oreslang-source.net/.github/workflows/trusted-source-local-fence-windows.yml@refs/heads/main' &&
+      vars.ORESLANG_NET_SELFHOSTED_WINDOWS_FENCE_WORKFLOW_SHA != '' &&
+      github.workflow_sha == vars.ORESLANG_NET_SELFHOSTED_WINDOWS_FENCE_WORKFLOW_SHA &&
       vars.ORESLANG_NET_SELFHOSTED_WINDOWS == 'enabled' &&
       vars.ORESLANG_NET_SELFHOSTED_WINDOWS_SHA != '' &&
       vars.ORESLANG_NET_SELFHOSTED_WINDOWS_TREE != ''
@@ -34,6 +36,7 @@ jobs:
       - name: Authorize protected-main Windows fence snapshot before checkout
         shell: pwsh
         env:
+          APPROVED_WORKFLOW_SHA: ${{ vars.ORESLANG_NET_SELFHOSTED_WINDOWS_FENCE_WORKFLOW_SHA }}
           APPROVED_HEAD: ${{ vars.ORESLANG_NET_SELFHOSTED_WINDOWS_SHA }}
           APPROVED_TREE: ${{ vars.ORESLANG_NET_SELFHOSTED_WINDOWS_TREE }}
         run: |
@@ -43,10 +46,12 @@ jobs:
               $env:GITHUB_REF_PROTECTED -cne 'true' -or
               $env:GITHUB_REPOSITORY -cne 'ores-truffle-oreslang/oreslang-source.net' -or
               $env:GITHUB_REPOSITORY_ID -cne '1419704375' -or
-              $env:GITHUB_WORKFLOW_REF -cne 'ores-truffle-oreslang/oreslang-source.net/.github/workflows/trusted-source-local-fence-windows.yml@refs/heads/main' {
+              $env:GITHUB_WORKFLOW_REF -cne 'ores-truffle-oreslang/oreslang-source.net/.github/workflows/trusted-source-local-fence-windows.yml@refs/heads/main' -or
+              $env:GITHUB_WORKFLOW_SHA -cne $env:APPROVED_WORKFLOW_SHA) {
             throw 'Refuse untrusted Windows fence workflow event/ref'
           }
-          if ($env:APPROVED_HEAD -cnotmatch '^[0-9a-f]{40}$' -or
+          if ($env:APPROVED_WORKFLOW_SHA -cnotmatch '^[0-9a-f]{40}$' -or
+              $env:APPROVED_HEAD -cnotmatch '^[0-9a-f]{40}$' -or
               $env:APPROVED_TREE -cnotmatch '^[0-9a-f]{40}$') {
             throw 'Missing independent approval of exact source SHA/tree'
           }
@@ -107,7 +112,8 @@ jobs:
           [ordered]@{
             schema = 'oreslang.net.windows_fence_source_local_v1'
             repository = $env:GITHUB_REPOSITORY
-            workflow_sha = $env:GITHUB_SHA
+            workflow_sha = $env:GITHUB_WORKFLOW_SHA
+            workflow_ref = $env:GITHUB_WORKFLOW_REF
             tested_source_head = $env:APPROVED_HEAD
             tested_root_tree = $env:APPROVED_TREE
             run_id = $env:GITHUB_RUN_ID

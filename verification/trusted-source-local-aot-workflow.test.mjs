@@ -328,4 +328,53 @@ assert.throws(() => assertTrustedGateWired(light.replace(
   'run: node verification/trusted-source-local-aot-workflow.test.mjs',
   'run: echo no-op')), 'replacing trusted gate with a no-op must fail');
 
+// The workflow commit is a distinct authority from the tested source commit.
+// A valid path alone is insufficient: independent workflow-SHA authorization
+// must exist BEFORE runner allocation and must be verified again pre-checkout.
+const workflowAdmissionCases = [
+  ['Linux AOT', trusted, 'ORESLANG_NET_SELFHOSTED_LINUX_WORKFLOW_SHA', false],
+  ['Windows AOT', trustedWindows, 'ORESLANG_NET_SELFHOSTED_WINDOWS_WORKFLOW_SHA', true],
+  ['Windows fence', fenceTrusted, 'ORESLANG_NET_SELFHOSTED_WINDOWS_FENCE_WORKFLOW_SHA', true],
+];
+function assertImmutableWorkflowAdmission(label, source, variable, windows) {
+  const beforeAllocation = source.slice(0, source.indexOf('    runs-on:'));
+  const beforeCheckout = source.slice(0, source.indexOf('uses: actions/checkout@'));
+  assert.ok(beforeAllocation.includes("vars." + variable + " != ''"), label + ': missing independent workflow-SHA approval');
+  assert.ok(beforeAllocation.includes('github.workflow_sha == vars.' + variable), label + ': wrong workflow commit accepted');
+  assert.ok(beforeCheckout.includes('APPROVED_WORKFLOW_SHA: ${{ vars.' + variable + ' }}'), label + ': approval not bound to preflight');
+  if (windows) {
+    assert.ok(beforeCheckout.includes("$env:APPROVED_WORKFLOW_SHA -cnotmatch '^[0-9a-f]{40}$'"), label + ': unvalidated workflow SHA');
+    assert.ok(beforeCheckout.includes('$env:GITHUB_WORKFLOW_SHA -cne $env:APPROVED_WORKFLOW_SHA) {'), label + ': missing fail-closed PowerShell guard/closing parenthesis');
+    assert.ok(source.includes('workflow_sha = $env:GITHUB_WORKFLOW_SHA'), label + ': receipt has wrong workflow SHA');
+    assert.ok(source.includes('workflow_ref = $env:GITHUB_WORKFLOW_REF'), label + ': receipt has wrong workflow ref');
+    assert.ok(!source.includes('workflow_sha = $env:GITHUB_SHA'), label + ': receipt mislabels run SHA');
+  } else {
+    assert.ok(beforeCheckout.includes('[[ "$APPROVED_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]'), label + ': unvalidated workflow SHA');
+    assert.ok(beforeCheckout.includes('test "$GITHUB_WORKFLOW_SHA" = "$APPROVED_WORKFLOW_SHA"'), label + ': workflow SHA not checked before checkout');
+    assert.ok(source.includes('"$GITHUB_REPOSITORY" "$GITHUB_WORKFLOW_SHA" "$GITHUB_WORKFLOW_REF"'), label + ': incorrect receipt identity');
+    assert.ok(!source.includes('"$GITHUB_REPOSITORY" "$GITHUB_SHA" "$GITHUB_REF"'), label + ': receipt substitutes event SHA');
+  }
+}
+for (const [label, source, variable, windows] of workflowAdmissionCases) {
+  assertImmutableWorkflowAdmission(label, source, variable, windows);
+  const required = ["vars." + variable + " != ''", 'github.workflow_sha == vars.' + variable,
+    'APPROVED_WORKFLOW_SHA: ${{ vars.' + variable + ' }}'];
+  for (const fragment of required) {
+    const mutated = source.replace(fragment, '');
+    assert.throws(() => assertImmutableWorkflowAdmission(label, mutated, variable, windows),
+      label + ': deleting workflow authorization did not fail: ' + fragment);
+  }
+  const valid = 'a'.repeat(40), changed = 'b'.repeat(40);
+  const admitted = (observed, approved) => /^[a-f0-9]{40}$/.test(approved) && observed === approved;
+  assert.equal(admitted(valid, valid), true);
+  assert.equal(admitted(valid, ''), false);
+  assert.equal(admitted(changed, valid), false);
+  assert.equal(admitted(valid, changed), false);
+}
+// Preflight guards must be syntactically closed, not just contain the ref.
+for (const [label, source] of [['Windows AOT', trustedWindows], ['Windows fence', fenceTrusted]]) {
+  const ifBlock = source.split('if ($env:GITHUB_EVENT_NAME')[1]?.split("throw '")[0];
+  assert.ok(ifBlock && ifBlock.includes(') {'), label + ': malformed PowerShell conditional');
+}
+
 console.log('TRUSTED_SOURCE_LOCAL_AOT_WORKFLOW_CONTRACT_PASSED');

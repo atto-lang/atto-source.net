@@ -326,7 +326,15 @@ set only to
 `ores-truffle-oreslang/oreslang-source.net/.github/workflows/trusted-source-local-windows-aot.yml@refs/heads/main`, and
 `ores-truffle-oreslang/oreslang-source.net/.github/workflows/trusted-source-local-fence-windows.yml@refs/heads/main`.
 The trusted workflow also verifies its own canonical `GITHUB_WORKFLOW_REF`
-against that exact path before checkout. Dispatch concurrency is isolated
+against that exact path before checkout.
+**Before runner allocation**, the job additionally matches the GitHub-issued
+`github.workflow_sha` against an independently approved immutable workflow
+commit SHA; it verifies `GITHUB_WORKFLOW_SHA` a second time before checkout.
+A workflow path is not sufficient authority if its protected-main contents
+change. Review and update the per-workflow SHA variables only through the
+independent administrator process. Never substitute the tested source SHA
+for the workflow SHA.
+ Dispatch concurrency is isolated
 from normal push and PR runs, and a later manual dispatch cannot cancel an
 in-flight, approved Native AOT certification; it queues instead.
 Never register this worker in the default/all-workflows group. Otherwise a
@@ -346,6 +354,7 @@ repository variables have been accidentally enabled. Independently review
 and protect the source repository's
 default `main` branch **before** enabling it. Set the non-secret GitHub
 Actions repository variables `ORESLANG_NET_SELFHOSTED_LINUX=enabled`,
+`ORESLANG_NET_SELFHOSTED_LINUX_WORKFLOW_SHA=<independently reviewed trusted-workflow commit SHA>`,
 `ORESLANG_NET_SELFHOSTED_LINUX_SHA=<exact reviewed source commit SHA>`, and
 `ORESLANG_NET_SELFHOSTED_LINUX_TREE=<its verified 40-hex root Git tree>`.
 Manual dispatch of `strict-linux-native-aot.yml` skips the hosted release job instead of consuming hosted minutes. Use the separate trusted workflow only after independent source/reviewer and runner-group approval. Run **Trusted .NET Linux Native AOT (source-local exact SHA)** manually from protected `main` via `.github/workflows/trusted-source-local-linux-aot.yml`. The PR-triggered `.github/workflows/strict-linux-native-aot.yml` has no self-hosted job. Only the three selected trusted workflows above may access the isolated runner group.
@@ -358,7 +367,7 @@ revision, **not** the tested feature commit; the receipt independently names
 `workflow_sha`, `tested_source_head`, and `tested_root_tree`. A changed
 feature commit or tree requires fresh independent review and reauthorization.
 Use only isolated ephemeral runners, no privileged shared runners or injected
-secrets, and unset all three variables/retire the runner after execution.
+secrets, and disable the runner and clear all relevant enablement, source SHA/tree and workflow-SHA variables after execution.
 
 The job checks source head/tree, runs the managed suite, publishes actual
 Native AOT compiler/app binaries, executes canonical 14/42/40 sources plus structured CFG/SSA source=45 and
@@ -375,6 +384,7 @@ The optional Windows x64 runner lives only in
 pull-request-triggered `windows-native-aot.yml` never selects a self-hosted
 runner. Independent review and repository branch protection must precede
 setting `ORESLANG_NET_SELFHOSTED_WINDOWS=enabled`,
+`ORESLANG_NET_SELFHOSTED_WINDOWS_WORKFLOW_SHA=<reviewed Windows AOT workflow commit SHA>`,
 `ORESLANG_NET_SELFHOSTED_WINDOWS_SHA=<reviewed 40-hex commit>`, and
 `ORESLANG_NET_SELFHOSTED_WINDOWS_TREE=<reviewed 40-hex root tree>`.
 Use only an isolated ephemeral Windows x64 runner labeled `oreslang-net-aot`.
@@ -390,7 +400,9 @@ exports.
 `.github/workflows/trusted-source-local-fence-windows.yml` isolates the
 Windows 16-round continuation-fence test from the PR-triggered
 `net-fence-smoke.yml`. It is **manual-only on protected main** and reuses
-independently approved `ORESLANG_NET_SELFHOSTED_WINDOWS_SHA` and
+independently approved `ORESLANG_NET_SELFHOSTED_WINDOWS_FENCE_WORKFLOW_SHA`
+for its distinct immutable workflow revision, plus
+`ORESLANG_NET_SELFHOSTED_WINDOWS_SHA` and
 `ORESLANG_NET_SELFHOSTED_WINDOWS_TREE` snapshot controls. Exact Git
 commit/tree and clean checkout must be verified before the .NET 10 build.
 The receipt distinguishes the trusted workflow SHA and tested source tree.
