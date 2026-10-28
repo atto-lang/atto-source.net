@@ -1,0 +1,158 @@
+name: Strict .NET Linux x64 Native AOT
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: strict-net-aot-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-x64-compiler-and-app:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact source checkout
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-fA-F]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install Native AOT toolchain
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev binutils file
+      - name: Check source scripts and managed compiler regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/publish-linux.sh verification/assert-linux-native-release.sh verification/assert-linux-native-release-selftest.sh
+          bash verification/assert-linux-native-release-selftest.sh
+          dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
+      - name: Compile native compiler and first native application
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/publish-linux.sh examples/hello.ores
+          compiler=artifacts/compiler/linux-x64/oresnet
+          app=artifacts/apps/linux-x64/oreslang-app
+          test "$("$app")" = 14
+          "$compiler" check examples/hello.ores
+          if "$compiler" check contracts/scalar/v1/fixtures/reject-actor.ores; then
+            echo 'Unsupported actor source incorrectly admitted by native compiler' >&2
+            exit 1
+          fi
+          # Negative source must never produce a generated assembly, even if
+          # one was present from an earlier successful compile.
+          denied=artifacts/rejected/linux-x64/OresGenerated.dll
+          mkdir -p "$(dirname "$denied")"
+          rm -f -- "$denied"
+          if "$compiler" compile contracts/scalar/v1/fixtures/reject-actor.ores --out "$denied"; then
+            echo 'Native compiler generated CIL from rejected actor source' >&2
+            exit 1
+          fi
+          test ! -e "$denied"
+      - name: Prove second generated source gets its own Native AOT executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/publish-linux.sh contracts/v1/semantics/fixtures/add.ores artifacts/parity
+          test "$(artifacts/parity/linux-x64/oreslang-app)" = 42
+          test "$(artifacts/apps/linux-x64/oreslang-app)" = 14
+          echo 'LINUX_NET_NATIVE_AOT_COMPILER_AND_APP_EXECUTED'
+      - name: Execute shared native.precedence and prove three-source isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_file=contracts/v1/semantics/fixtures/precedence.ores
+          actual_blob="$(git hash-object -- "$source_file")"
+          test "$actual_blob" = 2d09e697ad4eeac4ee263c3656b92998c67f0bfc || {
+            echo "Canonical Java/LLVM native.precedence source blob changed: $actual_blob" >&2
+            exit 1
+          }
+          bash scripts/publish-linux.sh "$source_file" artifacts/parity-precedence
+          precedence=artifacts/parity-precedence/linux-x64/oreslang-app
+          add=artifacts/parity/linux-x64/oreslang-app
+          hello=artifacts/apps/linux-x64/oreslang-app
+          for binary in "$precedence" "$add" "$hello"; do
+            bash verification/assert-linux-native-release.sh "$binary"
+          done
+          test "$("$precedence")" = 40
+          test "$("$add")" = 42
+          test "$("$hello")" = 14
+          echo 'LINUX_NET_NATIVE_AOT_PARITY_HELLO_14_ADD_42_PRECEDENCE_40'
+      - name: Execute opt-in structured CFG as linked Linux Native AOT
+        shell: bash
+        run: |
+          set -euo pipefail
+          compiler=artifacts/compiler/linux-x64/oresnet
+          source_file=examples/structured-sum45.ores
+          # Confirm the new language surface remains forbidden by production
+          # scalar admission; only the explicit structured CLI may accept it.
+          rejected=artifacts/rejected-structured/linux-x64/OresGenerated.dll
+          mkdir -p "$(dirname "$rejected")"
+          rm -f -- "$rejected"
+          if "$compiler" compile "$source_file" --out "$rejected"; then
+            echo 'Scalar Native AOT compiler accidentally accepted structured source' >&2
+            exit 1
+          fi
+          test ! -e "$rejected"
+          "$compiler" check-structured "$source_file"
+          bash scripts/publish-linux.sh "$source_file" artifacts/structured --structured
+          structured=artifacts/structured/linux-x64/oreslang-app
+          bash verification/assert-linux-native-release.sh "$structured"
+          test "$("$structured")" = 45
+          # Every earlier separately linked binary must remain unchanged.
+          test "$(artifacts/parity-precedence/linux-x64/oreslang-app)" = 40
+          test "$(artifacts/parity/linux-x64/oreslang-app)" = 42
+          test "$(artifacts/apps/linux-x64/oreslang-app)" = 14
+          echo 'LINUX_NET_NATIVE_AOT_STRUCTURED_SSA_CIL_EXECUTED_45'
+      - name: Negative test for managed sidecar rejection
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          trap 'rm -rf -- "$work"' EXIT
+          cp artifacts/apps/linux-x64/oreslang-app "$work/oreslang-app"
+          bash verification/assert-linux-native-release.sh "$work/oreslang-app"
+          printf 'MZ' > "$work/OresGenerated.dll"
+          if bash verification/assert-linux-native-release.sh "$work/oreslang-app"; then
+            echo 'Native verifier accepted a managed DLL sidecar' >&2
+            exit 1
+          fi
+      - name: Record exact-head Native AOT execution receipt
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          mkdir -p artifacts/evidence
+          printf '{"schema":"oreslang.net.exact_head_native_aot_v1","repository":"%s","source_head_sha":"%s","tree_sha":"%s","run_id":%s,"run_attempt":%s,"runner_os":"Linux","target_rid":"linux-x64","checks":["managed-tests","native-compiler","native-app","negative-source-no-cil","source-isolation-4","canonical-precedence","structured-ssa-cil-native45","sidecar-negative"],"source_only":false,"independently_verified":false}\n' \
+            "$GITHUB_REPOSITORY" "$EXPECTED_HEAD" "$tree" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > artifacts/evidence/linux-native-aot.json
+      - name: Upload Linux native executables and evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: oreslang-net-linux-x64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/evidence/linux-native-aot.json
+            artifacts/apps/linux-x64/oreslang-app
+            artifacts/parity/linux-x64/oreslang-app
+            artifacts/parity-precedence/linux-x64/oreslang-app
+            artifacts/structured/linux-x64/oreslang-app
+            artifacts/compiler/linux-x64/oresnet
+          if-no-files-found: error
+          retention-days: 14

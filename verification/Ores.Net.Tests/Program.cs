@@ -97,14 +97,15 @@ Reject(() => OresParser.Parse("fnc main():int { const x = 1; return x; }"), "loc
 
 ActorRefNoWireSelfTest.Run();
 ActorMailboxBoundsSelfTest.Run();
+SelectContinuationFenceSelfTest.Run();
 ActorMailboxRestartAtomicitySelfTest.Run();
 ActorMailboxAuthorizationPrioritySelfTest.Run();
 ActorMailboxPrivateDataSelfTest.Run();
 ActorArenaSelfTest.Run();
 ActorShardColumnsSelfTest.Run();
-ProjectRootSourceTests.Run(); // host-only resolver, not linked .NET source imports
 ActorDispatchDomainsSelfTest.Run();
 ActorRuntimeSelfTest.Run();
+ProjectRootSourceTests.Run(); // host-only resolver, not linked .NET source imports
 
 // Import parity is deliberately not claimed for the .NET scalar compiler.
 // Each form must fail at lexical admission with a specific import diagnostic,
@@ -662,10 +663,12 @@ Require(await RuntimeHost.ExecuteAsync(() => throw new DivideByZeroException()) 
     "divide zero error returned");
 
 SourceI64Conformance.Run();
+SharedScalarParityConformance.Run();
 CfgVerifierTests.Run();
 CfgCilStressTests.Run();
 StructuredSourceTests.Run();
+StructuredCfgLoweringTests.Run();
+StructuredStaticAbiTests.Run();
 StaticFactsV0Tests.Run();
 ValueBoundaryTests.Run();
 Console.WriteLine("Oreslang .NET bootstrap, CFG verifier, CIL stress and structured source tests passed");
-
