@@ -88,6 +88,15 @@ internal static class StaticFactsV0Tests
         Reject(() => StaticFactsV0Exporter.FromStructuredSource(
             "fnc main():int{return side_effect();}"),
             "unknown callable");
+        // Structured CLI supports bounded helpers, but advisory facts v0
+        // cannot describe their procedures or call edges. Never claim the
+        // source has only main just because helpers are not referenced.
+        Reject(() => StaticFactsV0Exporter.FromStructuredSource(
+            "fnc unused(int x):int{return x+1;}fnc main():int{return 0;}"),
+            "hidden uncalled helper declaration");
+        Reject(() => StaticFactsV0Exporter.FromStructuredSource(
+            "fnc inc(int x):int{return x+1;}fnc main():int{return inc(41);}"),
+            "hidden admitted helper call");
         Reject(() => StaticFactsV0Exporter.FromStructuredSource(
             "fnc main():int{return 0;}\nfnc evil():int{return 1;}"),
             "hidden trailing function");

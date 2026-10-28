@@ -110,12 +110,33 @@ oresnet compile-structured examples/structured-sum45.ores --out artifacts/genera
 
 The commands route the restricted typed `int`/`bool` structured AST through
 `OresStructuredCfgLowering`, `OresCfgVerifier`, and deterministic CIL.
+An additional bounded slice admits **previously declared, expression-only
+typed helper functions** with static calls, at most 64 helpers and 16
+parameters per helper. Calls evaluate arguments exactly once, left-to-right;
+compiler lowering binds arguments in a separate callee scope and expands the
+expression into verified SSA. Recursive calls, mutually recursive or forward
+references, dynamic dispatch, statement-bodied helpers, generic helper
+instantiations, and runtime function call CIL are deliberately unsupported.
+
+Example (experimental only):
+
+```ores
+define pub fnc double(int value): int { return value * 2; }
+define pub fnc main(): int { return double(21); }
+```
+
+```sh
+oresnet check-structured examples/structured-functions.ores
+oresnet compile-structured examples/structured-functions.ores --out artifacts/generated/OresGenerated.dll
+```
+
 They **do not** enable source actors, dynamic dispatch, imports, async I/O,
-`select`, ownership syntax, floats or general functions. Normal `check` /
-`compile` remain scalar-only and reject structured source.
+`select`, ownership syntax, floats or general function ABI support.
+Normal `check` / `compile` remain scalar-only and reject structured source.
 
 Windows and Linux workflows include a negative shipping-parser check and
-a real native application smoke test returning 45 from a loop-carried sum.
+real native application smoke tests returning 45 from a loop-carried sum and
+42 from nested typed helper calls.
 The C# verification harness additionally checks that reachable overflows trap
 in emitted CIL, while unselected branches never run their traps.
 
