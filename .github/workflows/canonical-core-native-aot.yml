@@ -44,7 +44,7 @@ jobs:
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           if ((git rev-parse HEAD) -ne $env:EXPECTED_HEAD) { throw 'Source head mismatch' }
-          foreach ($path in @('library/ores.core/numeric.ores', 'verification/contracts/core-math-i64.json', 'examples/canonical-numeric/main.ores')) {
+          foreach ($path in @('library/ores.core/numeric.ores', 'verification/contracts/core-math-i64.json', 'examples/canonical-numeric/main.ores', 'examples/canonical-numeric/all-vectors.ores')) {
             if ((git hash-object --no-filters -- $path) -ne (git rev-parse "HEAD:$path")) {
               throw "Checkout changed committed file bytes: $path"
             }
@@ -92,6 +92,48 @@ jobs:
             executable_sha256=(Get-FileHash $binary -Algorithm SHA256).Hash.ToLowerInvariant()
             output="$output"
           } | ConvertTo-Json | Set-Content artifacts/canonical-core-app/receipt.json
+      - name: Compile and execute all 24 guest numeric vectors in Native AOT
+        shell: pwsh
+        run: |
+          $compiler = Join-Path 'artifacts/canonical-core-compiler' 'oresnet${{ matrix.suffix }}'
+          $raw = & $compiler compile-modules examples/canonical-numeric/all-vectors.ores --root . --out artifacts/canonical-core-vectors-generated/OresGenerated.dll
+          if ($LASTEXITCODE -ne 0) { throw '24-vector source batch compilation failed' }
+          $witness = $raw | ConvertFrom-Json
+          $canonical = @($witness.sources | Where-Object {
+            $_.path -eq '0/library/ores.core/numeric.ores' -and
+            $_.sha256 -eq '3d1d7b77068dd02b3d60b30b72f29a4537a933134ca79e1e81df096dc56f5f33'
+          })
+          $batchHash = (Get-FileHash examples/canonical-numeric/all-vectors.ores -Algorithm SHA256).Hash.ToLowerInvariant()
+          $guest = @($witness.sources | Where-Object {
+            $_.path -eq '0/examples/canonical-numeric/all-vectors.ores' -and $_.sha256 -eq $batchHash
+          })
+          if ($canonical.Count -ne 1 -or $guest.Count -ne 1 -or $witness.sources.Count -ne 2) {
+            throw 'Batch AOT provenance does not bind exact guest and core source bytes'
+          }
+          $generated = (Resolve-Path artifacts/canonical-core-vectors-generated/OresGenerated.dll).Path
+          dotnet clean host/Ores.Net.NativeHost -c Release -r '${{ matrix.rid }}' "-p:GeneratedAssembly=$generated"
+          if ($LASTEXITCODE -ne 0) { throw 'Native vector host clean failed' }
+          dotnet publish host/Ores.Net.NativeHost -c Release -r '${{ matrix.rid }}' -p:PublishAot=true "-p:GeneratedAssembly=$generated" -o artifacts/canonical-core-vectors-app -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'Native 24-vector AOT host publish failed' }
+          $binary = Join-Path 'artifacts/canonical-core-vectors-app' 'oreslang-app${{ matrix.suffix }}'
+          $output = & $binary
+          if ($LASTEXITCODE -ne 0 -or "$output".Trim() -ne '24') {
+            throw "24-vector native guest execution failed (negative outputs are indexed case IDs): $output"
+          }
+          New-Item artifacts/canonical-core-app -ItemType Directory -Force | Out-Null
+          $raw | Set-Content artifacts/canonical-core-app/vector24-source-graph.json
+          Copy-Item $binary (Join-Path 'artifacts/canonical-core-app' 'oreslang-all-24${{ matrix.suffix }}')
+          @{
+            scope='all-24-canonical-ores-core-i64-vectors-native-aot'
+            source_commit=(git rev-parse HEAD)
+            source_tree=(git rev-parse 'HEAD^{tree}')
+            rid='${{ matrix.rid }}'
+            canonical_source_sha256='3d1d7b77068dd02b3d60b30b72f29a4537a933134ca79e1e81df096dc56f5f33'
+            guest_source_sha256=$batchHash
+            executable_sha256=(Get-FileHash $binary -Algorithm SHA256).Hash.ToLowerInvariant()
+            passed_vectors=24
+            output="$output"
+          } | ConvertTo-Json | Set-Content artifacts/canonical-core-app/vector24-receipt.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: canonical-core-aot-${{ matrix.rid }}
