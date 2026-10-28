@@ -4,6 +4,7 @@ using System.Net.Security;
 using System.Security.Authentication;
 using System.Security;
 using System.Runtime.Versioning;
+using Ores.Net.Runtime;
 
 namespace Ores.Net.Runtime.Net;
 
@@ -63,23 +64,45 @@ internal static class NativeQuicClient
     [SupportedOSPlatform("osx")]
     internal static async ValueTask<QuicConnection> ConnectHttp3Async(
         QuicLoopbackPermit permit,
-        ulong actorId,
-        ulong actorGeneration,
+        ActorArena ownerArena,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(permit);
+        ArgumentNullException.ThrowIfNull(ownerArena);
         if (!cancellationToken.CanBeCanceled)
             throw new ArgumentException("QUIC owner cancellation token required",
                                         nameof(cancellationToken));
         cancellationToken.ThrowIfCancellationRequested();
-        var admitted = permit.Consume(actorId, actorGeneration);
+
+        // A bare actorId/generation pair is not an actor-liveness proof.
+        // Burn the single-use permit even on wrong incarnation or retirement.
+        var admitted = permit.Consume(ownerArena.ActorId, ownerArena.Incarnation);
+        if (ownerArena.IsRetired)
+            throw new SecurityException("QUIC actor arena retired before native admission");
+
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(admitted.Remaining);
-        // Important: no DNS lookup is performed here. The authorized pinned IP
-        // is copied into the provider options; TLS still verifies original SNI.
-        return await ConnectUncheckedAfterPolicyAsync(
+        // No DNS lookup is performed here. The selected IP is immutable and
+        // TLS still authenticates the original, canonical DNS identity.
+        var connection = await ConnectUncheckedAfterPolicyAsync(
             admitted.Address, admitted.DnsName, Http3Alpn,
             admitted.Remaining, deadline.Token).ConfigureAwait(false);
+
+        // A stop/retirement racing a physical handshake cannot publish a
+        // stale actor's connection. This is NOT yet a full post-return
+        // ownership fence; callers must await stream/connection retirement.
+        try
+        {
+            deadline.Token.ThrowIfCancellationRequested();
+            if (ownerArena.IsRetired)
+                throw new SecurityException("QUIC actor retired during native handshake");
+            return connection;
+        }
+        catch
+        {
+            await connection.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
     }
 
 

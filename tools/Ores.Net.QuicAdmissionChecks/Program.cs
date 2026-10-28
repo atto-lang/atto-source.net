@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Security;
 using System.Security;
 using Ores.Net.Runtime.Net;
+using Ores.Net.Runtime;
 
 static void MustReject(Action action, string label)
 {
@@ -185,12 +186,34 @@ catch (TimeoutException) { }
 if (OperatingSystem.IsLinux() || OperatingSystem.IsWindows() ||
     OperatingSystem.IsMacOS())
 {
+    // The source adapter must bind its permit to a real actor arena,
+    // rather than accepting arbitrary caller-supplied actor ID numbers.
+    using var liveOwner = new ActorArena(42, 7, 4096, 4096, 16, 16, 16);
+    using var wrongGeneration = new ActorArena(42, 8, 4096, 4096, 16, 16, 16);
+    var stalePermit = Issue();
+    MustDeny(() => NativeQuicClient.ConnectHttp3Async(
+        stalePermit, wrongGeneration, token).AsTask().GetAwaiter().GetResult(),
+        "native connect accepted foreign actor incarnation");
+    MustDeny(() => stalePermit.Consume(42, 7),
+        "wrong incarnation did not burn permit");
+
+    using var retiredOwner = new ActorArena(42, 7, 4096, 4096, 16, 16, 16);
+    retiredOwner.Retire();
+    var retiredPermit = Issue();
+    MustDeny(() => NativeQuicClient.ConnectHttp3Async(
+        retiredPermit, retiredOwner, token).AsTask().GetAwaiter().GetResult(),
+        "retired actor admitted native QUIC");
+    MustDeny(() => retiredPermit.Consume(42, 7),
+        "retirement did not burn permit");
+    if (!retiredOwner.IsReclaimed)
+        throw new InvalidOperationException("Retired test actor arena not reclaimed");
+
     using var cancelledPermitConnect = new CancellationTokenSource();
     cancelledPermitConnect.Cancel();
     try
     {
         NativeQuicClient.ConnectHttp3Async(
-            Issue(), 42, 7, cancelledPermitConnect.Token).AsTask().GetAwaiter().GetResult();
+            Issue(), liveOwner, cancelledPermitConnect.Token).AsTask().GetAwaiter().GetResult();
         throw new InvalidOperationException("Cancelled permit connect admitted");
     }
     catch (OperationCanceledException) { }
