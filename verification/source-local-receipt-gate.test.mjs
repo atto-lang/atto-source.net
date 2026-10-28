@@ -15,6 +15,8 @@ const jobName = { linux:'linux-x64-approved-source-local',windows:'self-hosted-w
 const linuxPaths = ['artifacts/compiler/linux-x64/oresnet','artifacts/apps/linux-x64/oreslang-app','artifacts/parity/linux-x64/oreslang-app','artifacts/parity-precedence/linux-x64/oreslang-app','artifacts/structured/linux-x64/oreslang-app'];
 const expectedRun = { linux:1001, windows:1002, fence:1003 };
 const workflowSha = { linux:'d'.repeat(40), windows:'e'.repeat(40), fence:'f'.repeat(40) };
+// These model independent GitHub run and workflow-file revisions.
+const dispatchSha = '9'.repeat(40);
 const ref = kind => repo+'/.github/workflows/'+path[kind]+'@refs/heads/main';
 function fixture() {
   const approval = {repository:repo,source_head,root_tree,
@@ -23,10 +25,10 @@ function fixture() {
   const receipts = {}, execution = {};
   for(const kind of Object.keys(steps)) {
     const run_id = expectedRun[kind];
-    approval.workflows[kind] = {workflow_sha:workflowSha[kind],run_id,attempt:1};
+    approval.workflows[kind] = {workflow_sha:workflowSha[kind],dispatch_head_sha:dispatchSha,run_id,attempt:1};
     execution[kind] = {
       run:{id:run_id,run_attempt:1,repository:{full_name:repo},event:'workflow_dispatch',
-        head_branch:'main',head_sha:workflowSha[kind],status:'completed',conclusion:'success',
+        head_branch:'main',head_sha:dispatchSha,status:'completed',conclusion:'success',
         path:'.github/workflows/'+path[kind]},
       jobs:{total_count:1,jobs:[{name:jobName[kind],run_id,run_attempt:1,runner_id:123,
         status:'completed',conclusion:'success',steps:steps[kind].map((name,i)=>({
@@ -57,7 +59,9 @@ deny('refuses unprotected main',x=>x.approval.protected_main_verified=false,/pro
 deny('refuses unverified runner group',x=>x.approval.restricted_runner_group_verified=false,/runner group/);
 deny('refuses cross-org run',x=>x.execution.linux.run.repository.full_name='another/repo',/source-local manual workflow/);
 deny('refuses PR execution',x=>x.execution.windows.run.event='pull_request',/source-local manual workflow/);
-deny('refuses wrong workflow revision',x=>x.execution.fence.run.head_sha='0'.repeat(40),/protected-main revision/);
+deny('refuses wrong main dispatch SHA',x=>x.execution.fence.run.head_sha='0'.repeat(40),/approved main dispatch head/);
+deny('refuses unapproved dispatch SHA',x=>x.approval.workflows.linux.dispatch_head_sha='',/invalid approved dispatch head SHA/);
+deny('refuses receipt workflow-SHA confusion',x=>x.receipts.windows.workflow_sha=dispatchSha,/receipt workflow identity mismatch/);
 deny('refuses unassigned runner',x=>x.execution.windows.jobs.jobs[0].runner_id=0,/real allocated runner/);
 deny('refuses skipped native stage',x=>x.execution.linux.jobs.jobs[0].steps[4].conclusion='skipped',/missing or unsuccessful step/);
 deny('refuses omitted stage',x=>x.execution.windows.jobs.jobs[0].steps.splice(3,1),/missing or extra executed steps/);

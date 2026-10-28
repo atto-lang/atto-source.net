@@ -27,7 +27,10 @@ and [reconciliation #214](https://github.com/ores-truffle-oreslang/oreslang-sour
   are insufficient. Never dispatch any PR-authored YAML on those runners.
 - [ ] Independently record approved #214 **commit SHA and Git root tree**.
   Record the installed \`main\` workflow SHA separately for each trusted
-  definition. A commit SHA can change after review, rebase or new code writes.
+  definition, **and** independently approve the exact default-branch commit
+  SHA at dispatch time (\`dispatch_head_sha\`). The two SHAs are separate
+  identities and must not be assumed equal. A commit SHA can change after
+  review, rebase or new code writes.
   Authorize repository variables only for those exact identities and only
   after runner-group and branch-protection gates have passed.
 - [ ] Keep private source in its origin organization; no cross-org mirror,
@@ -91,9 +94,9 @@ independently from the GitHub API (do not put secrets in the bundle):
     "protected_main_verified": false,
     "restricted_runner_group_verified": false,
     "workflows": {
-      "linux": {"workflow_sha": "<40-character protected-main workflow revision>", "run_id": 0, "attempt": 1},
-      "windows": {"workflow_sha": "<40-character protected-main workflow revision>", "run_id": 0, "attempt": 1},
-      "fence": {"workflow_sha": "<40-character protected-main workflow revision>", "run_id": 0, "attempt": 1}
+      "linux": {"workflow_sha": "<40-character protected-main workflow revision>", "dispatch_head_sha": "<40-character approved main commit at dispatch>", "run_id": 0, "attempt": 1},
+      "windows": {"workflow_sha": "<40-character protected-main workflow revision>", "dispatch_head_sha": "<40-character approved main commit at dispatch>", "run_id": 0, "attempt": 1},
+      "fence": {"workflow_sha": "<40-character protected-main workflow revision>", "dispatch_head_sha": "<40-character approved main commit at dispatch>", "run_id": 0, "attempt": 1}
     }
   },
   "receipts": {

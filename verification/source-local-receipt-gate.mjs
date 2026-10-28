@@ -131,6 +131,10 @@ export function verifySourceLocalBundle(bundle) {
     if (!expected || !run || !jobs) { errors.push(kind + ': missing independently fetched run/jobs or approval'); continue; }
     const expectedRef = repo + '/.github/workflows/' + spec.file + '@refs/heads/main';
     fail(hex40.test(expected.workflow_sha ?? ''), kind + ': invalid approved workflow SHA');
+    // The SHA recorded for a workflow definition can differ from the default
+    // branch tip that received workflow_dispatch. Authorize BOTH explicitly.
+    fail(hex40.test(expected.dispatch_head_sha ?? ''),
+      kind + ': invalid approved dispatch head SHA');
     fail(isInt(expected.run_id) && isInt(expected.attempt), kind + ': bad run identity');
     fail(!usedRuns.has(expected.run_id), kind + ': duplicate run ID across workflows');
     usedRuns.add(expected.run_id);
@@ -138,8 +142,8 @@ export function verifySourceLocalBundle(bundle) {
       kind + ': actual run ID/attempt mismatch');
     fail(run.repository?.full_name === repo && run.event === 'workflow_dispatch',
       kind + ': run not from expected source-local manual workflow');
-    fail(run.head_branch === 'main' && run.head_sha === expected.workflow_sha,
-      kind + ': run did not execute approved protected-main revision');
+    fail(run.head_branch === 'main' && run.head_sha === expected.dispatch_head_sha,
+      kind + ': run did not execute independently approved main dispatch head');
     fail(run.status === 'completed' && run.conclusion === 'success',
       kind + ': run not successful');
     fail(run.path === '.github/workflows/' + spec.file,
