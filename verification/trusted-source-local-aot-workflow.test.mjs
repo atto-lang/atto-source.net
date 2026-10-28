@@ -302,6 +302,13 @@ assert.ok(!approvedFixedHostedMatrix('other-workflow.yml', actorMemoryHosted));
 for (const name of ['async-interop-i01.yml', 'select-native-aot.yml', 'signed-remainder-native-aot.yml',
                     'source-modules-native-aot.yml', 'spin-http-native-aot.yml']) {
   const yaml = readFileSync('.github/workflows/' + name, 'utf8');
+  const exactJobName = {
+    'async-interop-i01.yml': 'host-subset',
+    'select-native-aot.yml': 'native',
+    'signed-remainder-native-aot.yml': 'native',
+    'source-modules-native-aot.yml': 'native-source-modules',
+    'spin-http-native-aot.yml': 'host-http-native-aot',
+  }[name];
   assert.ok(approvedFixedHostedMatrix(name, yaml), 'source fixed matrix changed: ' + name);
   assert.ok(!approvedFixedHostedMatrix('unknown-workflow.yml', yaml), 'unknown matrix admitted');
   for (const [mutation, changed] of [
@@ -331,8 +338,11 @@ for (const name of ['async-interop-i01.yml', 'select-native-aot.yml', 'signed-re
     ['quoted job with hosted runner', yaml +
       '\n  "unapproved":\n    runs-on: ubuntu-24.04\n    steps: []\n'],
     ['quoted replacement for the expected job', yaml.replace(
-      /^  ([a-z-]+):$/m, '  "$1":')],
+      '\n  ' + exactJobName + ':\n',
+      '\n  "' + exactJobName + '":\n')],
   ]) {
+    assert.notEqual(changed, yaml,
+      'Mutation was ineffective: ' + name + '/' + mutation);
     assert.ok(!approvedFixedHostedMatrix(name, changed),
       'Untrusted fixed-matrix mutation admitted: ' + name + '/' + mutation);
   }
