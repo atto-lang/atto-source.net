@@ -67,6 +67,10 @@ internal static class NativeQuicClient
     /// Cancellation does not prove physical retirement: caller must await
     /// DisposeAsync on the returned connection and all owned streams.
     /// </summary>
+    // CA1416 cannot prove a disjunction covering Linux, Windows and macOS.
+    // The explicit fail-closed OS guard below is authoritative; suppress
+    // the analyzer only inside this guarded native QUIC implementation.
+#pragma warning disable CA1416
     private static async ValueTask<QuicConnection> ConnectUncheckedAfterPolicyAsync(
         IPEndPoint pinnedAuthorizedAddress,
         string canonicalDnsName,
@@ -132,6 +136,8 @@ internal static class NativeQuicClient
         }
         return connection;
     }
+
+#pragma warning restore CA1416
 
     internal static void ValidateEndpoint(
         IPEndPoint pinnedAuthorizedAddress,
