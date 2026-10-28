@@ -1,4 +1,5 @@
 using Ores.Net.Compiler;
+using Ores.Net.Runtime;
 
 internal static class OresIrReferenceEvaluator
 {
@@ -21,6 +22,7 @@ internal static class OresIrReferenceEvaluator
                 IrOpcode.CheckedSubtract => checked(left - right),
                 IrOpcode.CheckedMultiply => checked(left * right),
                 IrOpcode.CheckedDivide => DivideChecked(left, right),
+                IrOpcode.StrictRem => StrictSigned64Arithmetic.Rem(left, right),
                 _ => throw new FormatException("Unverified IR opcode")
             };
         }
