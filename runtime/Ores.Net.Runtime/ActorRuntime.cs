@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Threading;
+using Ores.Net.Runtime.Net;
 
 namespace Ores.Net.Runtime;
 
@@ -69,14 +70,17 @@ public sealed class ActorContext
 {
     private readonly ActorArena _arena;
     private readonly ActorArenaTurn _turn;
+    private readonly ActorNativeQuicResources _nativeQuic;
 
     internal ActorContext(ActorRef self, ActorKind kind,
-        ActorArena arena, ActorArenaTurn turn)
+        ActorArena arena, ActorArenaTurn turn,
+        ActorNativeQuicResources nativeQuic)
     {
         Self = self;
         Kind = kind;
         _arena = arena;
         _turn = turn;
+        _nativeQuic = nativeQuic;
     }
 
     public ActorRef Self { get; }
@@ -85,6 +89,8 @@ public sealed class ActorContext
     // Only the runtime constructs ActorContext. This is an internal host
     // authority source, not a caller-constructed ActorArena identity claim.
     internal ActorArena OwnerArena => _arena;
+    internal ActorQuicOperation RegisterQuicOperation() =>
+        _nativeQuic.Register(this);
 
     public ActorArenaHandle AllocatePersistent(int bytes, int alignment = 8) =>
         _arena.AllocatePersistent(_turn, bytes, alignment);
@@ -203,6 +209,9 @@ public sealed class ActorRuntime : IDisposable
         internal ActorArena Arena { get; }
         internal ActorMessageHandler Handler { get; }
         internal ActorRef Reference { get; }
+        internal ActorNativeQuicResources NativeQuic { get; } = new();
+        internal TaskCompletionSource<bool> FinalizedSignal { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal Action DispatchAction { get; }
         internal int Scheduled;
         internal bool Stopping;
@@ -314,6 +323,34 @@ public sealed class ActorRuntime : IDisposable
 
         if (finalizeNow)
             FinalizeCell(cell);
+    }
+
+    /// <summary>
+    /// Stop admission immediately, then asynchronously wait for all
+    /// registered QUIC native resources AND the physical actor dispatch to
+    /// retire. True requires arena reclamation; false reports remaining
+    /// non-QUIC lifetime pins/loans rather than inventing a receipt.
+    /// Do not await this from an actor handler/carrier.
+    /// </summary>
+    public async Task<bool> StopAndDrainQuicAsync(
+        ActorRef actor, CancellationToken cancellationToken = default)
+    {
+        if (ReferenceEquals(s_currentRuntime, this))
+            throw new InvalidOperationException(
+                "Actor carrier must not await its own physical retirement");
+        ActorCell cell = Lookup(actor);
+        bool finalizeNow;
+        lock (cell.Gate)
+        {
+            if (!cell.Mailbox.Authorizes(actor))
+                throw new InvalidOperationException("Actor reference is stale");
+            MarkStoppingLocked(cell);
+            finalizeNow = cell.Scheduled == 0;
+        }
+        if (finalizeNow) FinalizeCell(cell);
+        await Task.WhenAll(cell.NativeQuic.Retired, cell.FinalizedSignal.Task)
+            .WaitAsync(cancellationToken).ConfigureAwait(false);
+        return cell.Arena.IsReclaimed;
     }
 
     public void Dispose()
@@ -431,7 +468,8 @@ public sealed class ActorRuntime : IDisposable
                     using (turn)
                     {
                         var context = new ActorContext(
-                            cell.Reference, cell.Kind, cell.Arena, turn);
+                            cell.Reference, cell.Kind, cell.Arena, turn,
+                            cell.NativeQuic);
                         cell.Handler(context, payload);
                     }
                     succeeded = true;
@@ -501,6 +539,7 @@ public sealed class ActorRuntime : IDisposable
             return;
 
         cell.Stopping = true;
+        cell.NativeQuic.Stop(); // publish deny and cancellation, never await carrier
         cell.Mailbox.Stop();
         cell.Arena.Retire();
     }
@@ -520,6 +559,7 @@ public sealed class ActorRuntime : IDisposable
                 ReferenceEquals(current, cell))
                 _actors.Remove(cell.Reference.Id);
         }
+        cell.FinalizedSignal.TrySetResult(true);
     }
 
     private void EnsureOpenLocked()
