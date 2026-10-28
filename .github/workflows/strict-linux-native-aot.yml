@@ -132,6 +132,20 @@ jobs:
             echo 'Native verifier accepted a managed DLL sidecar' >&2
             exit 1
           fi
+      - name: Execute compiled guest Integer.rem in Linux Native AOT
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/publish-linux.sh examples/strict-rem42.ores artifacts/strict-rem42
+          test "$(artifacts/strict-rem42/linux-x64/oreslang-app)" = 42
+          bash scripts/publish-linux.sh examples/strict-rem-min42.ores artifacts/strict-rem-min42
+          test "$(artifacts/strict-rem-min42/linux-x64/oreslang-app)" = 42
+          bash scripts/publish-linux.sh examples/strict-rem-zero.ores artifacts/strict-rem-zero
+          status=0
+          output="$(artifacts/strict-rem-zero/linux-x64/oreslang-app 2>&1)" || status=$?
+          test "$status" -eq 70
+          test "$output" = "Oreslang division by zero"
+          echo 'LINUX_NET_NATIVE_AOT_STRICT_REM_GUEST_EXECUTED_42_MIN_ZERO'
       - name: Record exact-head Native AOT execution receipt
         shell: bash
         env:
@@ -141,7 +155,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           tree="$(git rev-parse 'HEAD^{tree}')"
           mkdir -p artifacts/evidence
-          printf '{"schema":"oreslang.net.exact_head_native_aot_v1","repository":"%s","source_head_sha":"%s","tree_sha":"%s","run_id":%s,"run_attempt":%s,"runner_os":"Linux","target_rid":"linux-x64","checks":["managed-tests","native-compiler","native-app","negative-source-no-cil","source-isolation-4","canonical-precedence","structured-ssa-cil-native45","sidecar-negative"],"source_only":false,"independently_verified":false}\n' \
+          printf '{"schema":"oreslang.net.exact_head_native_aot_v1","repository":"%s","source_head_sha":"%s","tree_sha":"%s","run_id":%s,"run_attempt":%s,"runner_os":"Linux","target_rid":"linux-x64","checks":["managed-tests","native-compiler","native-app","negative-source-no-cil","source-isolation-4","canonical-precedence","structured-ssa-cil-native45","sidecar-negative","strict-rem-guest42-min-zero"],"source_only":false,"independently_verified":false}\n' \
             "$GITHUB_REPOSITORY" "$EXPECTED_HEAD" "$tree" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > artifacts/evidence/linux-native-aot.json
       - name: Upload Linux native executables and evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -149,6 +163,9 @@ jobs:
           name: oreslang-net-linux-x64-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             artifacts/evidence/linux-native-aot.json
+            artifacts/strict-rem42/linux-x64/oreslang-app
+            artifacts/strict-rem-min42/linux-x64/oreslang-app
+            artifacts/strict-rem-zero/linux-x64/oreslang-app
             artifacts/apps/linux-x64/oreslang-app
             artifacts/parity/linux-x64/oreslang-app
             artifacts/parity-precedence/linux-x64/oreslang-app
