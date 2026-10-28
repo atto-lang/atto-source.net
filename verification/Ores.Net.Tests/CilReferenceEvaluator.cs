@@ -1,5 +1,6 @@
 using Mono.Cecil;
 using Mono.Cecil.Cil;
+using Ores.Net.Runtime;
 
 // Verification-only reader/interpreter for the exact CIL bootstrap subset.
 // Does not Assembly.Load guest code or use Reflection.Emit.
@@ -55,6 +56,25 @@ internal static class CilReferenceEvaluator
                         _ => throw new FormatException("Unexpected CIL operator")
                     };
                     stack.Push(value);
+                    break;
+                }
+                case Code.Call:
+                {
+                    // Verification-only interpreter: only the exact statically
+                    // linked intrinsic signature is recognized. Not a native run.
+                    if (ins.Operand is not MethodReference method ||
+                        method.Name != "Rem" ||
+                        method.DeclaringType.FullName !=
+                            "Ores.Net.Runtime.StrictSigned64Arithmetic" ||
+                        method.DeclaringType.Scope is not AssemblyNameReference
+                            { Name: "Ores.Net.Runtime" } ||
+                        method.ReturnType.MetadataType != MetadataType.Int64 ||
+                        method.Parameters.Count != 2 ||
+                        method.Parameters.Any(p => p.ParameterType.MetadataType != MetadataType.Int64))
+                        throw new FormatException("Unverified CIL method call");
+                    long right = stack.Pop();
+                    long left = stack.Pop();
+                    stack.Push(StrictSigned64Arithmetic.Rem(left, right));
                     break;
                 }
                 case Code.Ret:
