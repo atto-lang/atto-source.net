@@ -164,6 +164,16 @@ nor reference-interpreter success prove current-head Native AOT execution.
 No release or default-CLI promotion is allowed until exact-head Windows/Linux
 Native AOT steps execute and independent compiler/security review passes.
 
+### Experimental comparison spellings
+
+On the **opt-in structured CFG/CIL path only**, integer comparisons accept the
+canonical `eq` and `neq` operators and their `==` and `!=` aliases.
+`ne` is not an operator. Comparisons are typed `int × int -> bool` and
+emit verifiable CIL (`ceq` for equality, `ceq; ldc.i4.0; ceq` for inequality).
+The production scalar compiler remains unchanged. Unimplemented bool-to-bool
+comparison, other numeric types, actor frames and ownership-sensitive lowering
+remain rejected until they have independent typed and Native AOT evidence.
+
 ## Verification
 
 ~~~powershell

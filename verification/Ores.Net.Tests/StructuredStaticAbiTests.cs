@@ -218,6 +218,12 @@ internal static class StructuredStaticAbiTests
         Check("fnc sum(int x,int y):int{return x+y;}" +
             "fnc main():int{return sum(19,23);}",
             42, 1, "argument order and typed signature");
+        Check("fnc distinct(int a,int b):bool{return a neq b;}" +
+            "fnc main():int{if distinct(1,2){return 42;}else{return 0;}}",
+            42, 1, "canonical neq in a typed private static MethodDef");
+        Check("fnc same(int a,int b):bool{return a eq b;}" +
+            "fnc main():int{if same(2,2){return 42;}else{return 0;}}",
+            42, 1, "canonical eq in a typed private static MethodDef");
         Check("fnc inc(int x):int{return x+1;}" +
             "fnc main():int{let int total=0;let int i=0;" +
             "while i<3{total=inc(total);i=i+1;}return total;}",

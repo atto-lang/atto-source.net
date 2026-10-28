@@ -17,7 +17,11 @@ define pub fnc is_ready(int total): bool {
 define pub fnc main(): int {
     let int sum = triangular(10);
     if is_ready(sum) {
-        return sum - 3;
+        if sum neq 46 {
+            return sum - 3;
+        } else {
+            return 0;
+        }
     } else {
         return 0;
     }
