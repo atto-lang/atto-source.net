@@ -88,6 +88,9 @@ public static class OresStructuredParser
         StructuralShapeAdmission.RejectUnsupportedPatterns(source);
         var lexer = new Lexer(source);
         var tokens = new List<Token>();
+        // Distinguish a forbidden local nominal declaration from an
+        // unsupported top-level class/actor before either reaches lowering.
+        int braceDepth = 0;
         while (true)
         {
             var token = lexer.Read();
@@ -111,8 +114,13 @@ public static class OresStructuredParser
                 (tokens[^1].Text == "define" ||
                  (tokens[^1].Text == "pub" && tokens.Count > 1 &&
                   tokens[^2].Text == "define")))
+            {
+                if (braceDepth > 0)
+                    throw new FormatException(
+                        $"Local class/actor declarations are not permitted at offset {token.Offset}");
                 throw new FormatException(
                     $"Nominal class/actor methods require receiver-erased method slots, type/borrow checking and Native AOT CIL lowering; unsupported in .NET structured frontend at offset {token.Offset}");
+            }
             if (token.Text is "lex" or "nlex")
             {
                 int after = token.Offset + token.Text.Length;
@@ -124,6 +132,8 @@ public static class OresStructuredParser
                         $"Lexical captures require checked closure lowering at offset {token.Offset}");
             }
             tokens.Add(token);
+            if (token.Text == "{") braceDepth++;
+            else if (token.Text == "}" && braceDepth > 0) braceDepth--;
             if (tokens.Count > MaxTokens)
                 throw new FormatException("Structured token budget exceeded");
             if (token.Text.Length == 0) break;

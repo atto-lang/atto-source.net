@@ -30,6 +30,7 @@ var options = new ActorRuntimeOptions
 using var runtime = new ActorRuntime(options);
 using var initialized = new CountdownEvent(actorCount);
 using var verified = new CountdownEvent(actorCount);
+using var survivorVerified = new AutoResetEvent(false);
 var errors = new ConcurrentQueue<Exception>();
 var handles = new ActorArenaHandle?[actorCount];
 var references = new ActorRef[actorCount];
@@ -44,7 +45,8 @@ for (int i = 0; i < actorCount; ++i)
     int index = i;
     references[i] = runtime.Spawn(kinds[i], (context, message) =>
     {
-        bool first = message.Span[0] == 0;
+        byte phase = message.Span[0];
+        bool first = phase == 0;
         try
         {
             if (first)
@@ -52,6 +54,22 @@ for (int i = 0; i < actorCount; ++i)
                 handles[index] = context.AllocatePersistent(8);
                 context.Write(handles[index]!, 0,
                     new byte[] { (byte)(11 + index), 0, 0, 0, 0, 0, 0, 0 });
+            }
+            else if (phase >= 2)
+            {
+                Require(index == 2 && (phase == 2 || phase == 3),
+                    "unexpected survivor probe phase or actor");
+                var output = new byte[8];
+                context.Read(handles[index]!, 0, output);
+                Require(output[0] == (phase == 2 ? 13 : 14),
+                    "survivor state changed during peer retirement");
+                Deny(() => context.Read(handles[1]!, 0, output));
+                Deny(() => context.Write(handles[1]!, 0, output));
+                output[0]++;
+                context.Write(handles[index]!, 0, output);
+                context.Read(handles[index]!, 0, output);
+                Require(output[0] == (phase == 2 ? 14 : 15),
+                    "survivor write failed during peer retirement");
             }
             else
             {
@@ -67,7 +85,7 @@ for (int i = 0; i < actorCount; ++i)
                 }
                 context.Read(handles[index]!, 0, output);
                 Require(output[0] == 11 + index, "foreign access changed live bytes");
-                if (index == 0)
+                if (index == 1)
                 {
                     retained = context;
                     pin = context.PinLifetime();
@@ -78,7 +96,8 @@ for (int i = 0; i < actorCount; ++i)
         finally
         {
             if (first) initialized.Signal();
-            else verified.Signal();
+            else if (phase == 1) verified.Signal();
+            else survivorVerified.Set();
         }
     });
 }
@@ -93,12 +112,36 @@ Require(SpinWait.SpinUntil(() => runtime.CompletedMessages == 2 * actorCount,
 Require(errors.IsEmpty, "actor isolation check failed");
 Require(runtime.StartedCarrierThreads == 3, "carrier pools exceeded configured bounds");
 Deny(() => retained!.AllocateScratch(8));
-foreach (var actor in references) runtime.Stop(actor);
-Require(SpinWait.SpinUntil(() => runtime.LiveActors == 0,
-    TimeSpan.FromSeconds(10)), "logical retirement did not complete");
-Require(runtime.NativeReservedBytes > 0, "lifetime pin lost physical memory");
+// Retire one SHARED actor while its same-pool peer continues taking turns.
+long allReserved = runtime.NativeReservedBytes;
+Require(allReserved > 0 && allReserved % actorCount == 0,
+    "identical actors must have equal native reservations");
+long oneReserved = allReserved / actorCount;
+runtime.Stop(references[1]);
+Require(SpinWait.SpinUntil(() => runtime.LiveActors == actorCount - 1,
+    TimeSpan.FromSeconds(10)), "pinned actor logical retirement did not complete");
+Require(runtime.NativeReservedBytes == allReserved,
+    "logical STOP must retain the pinned actor reservation");
+runtime.Send(references[2], new byte[] { 2 });
+Require(survivorVerified.WaitOne(TimeSpan.FromSeconds(10)),
+    "survivor did not execute while peer was pinned");
+Require(SpinWait.SpinUntil(() => runtime.CompletedMessages == 2 * actorCount + 1,
+    TimeSpan.FromSeconds(10)), "pinned-peer survivor turn did not finish");
+Require(errors.IsEmpty, "survivor failed while peer was pinned");
 Task.Run(() => pin!.Dispose()).GetAwaiter().GetResult();
 pin!.Dispose();
-Require(SpinWait.SpinUntil(() => runtime.NativeReservedBytes == 0,
-    TimeSpan.FromSeconds(10)), "physical actor memory was not refunded");
+Require(SpinWait.SpinUntil(() => runtime.NativeReservedBytes == allReserved - oneReserved,
+    TimeSpan.FromSeconds(10)), "physical reclaim must refund only the stopped actor");
+runtime.Send(references[2], new byte[] { 3 });
+Require(survivorVerified.WaitOne(TimeSpan.FromSeconds(10)),
+    "survivor did not execute after peer physical reclaim");
+Require(SpinWait.SpinUntil(() => runtime.CompletedMessages == 2 * actorCount + 2,
+    TimeSpan.FromSeconds(10)), "post-reclaim survivor turn did not finish");
+Require(errors.IsEmpty, "survivor failed after peer physical reclaim");
+for (int i = 0; i < actorCount; ++i)
+    if (i != 1) runtime.Stop(references[i]);
+Require(SpinWait.SpinUntil(() => runtime.LiveActors == 0 &&
+    runtime.NativeReservedBytes == 0, TimeSpan.FromSeconds(10)),
+    "remaining actors did not independently retire and refund");
+Console.WriteLine("PASS actor-memory-survivor: same-pool peer reads and writes during pinned STOP and after physical reclaim");
 Console.WriteLine("PASS actor-memory-native-probe: four private heaps (two shared-pool actors), foreign handles denied, pooled carriers, stale context denied, pinned STOP and physical reclaim");

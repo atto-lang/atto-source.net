@@ -128,6 +128,9 @@ const wp = ['Preflight authorized immutable source without checkout', 'Checkout 
  'Validate source head/tree before any compiler execution', 'Run .NET compiler and runtime regression harness']
  .map(s => trustedWindows.indexOf(s));
 assert.ok(wp.every(x => x >= 0));
+assert.match(trustedWindows, /Compile verified C# and F# source on trusted exact-head runner/);
+assert.match(trustedWindows, /\.\/verification\/assert-managed-source\.ps1/);
+assert.match(hostedWindows, /Compile verified scalar OresIR through C# and F# to managed CIL/);
 assert.ok(wp.every((x,i) => i === 0 || x > wp[i-1]), 'Windows trust stages out of order');
 
 const fenceHosted = readFileSync('.github/workflows/net-fence-smoke.yml', 'utf8');

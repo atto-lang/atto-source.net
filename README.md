@@ -39,6 +39,24 @@ dotnet publish host/Ores.Net.NativeHost/Ores.Net.NativeHost.csproj -c Release -r
 
 Windows ARM64 is a planned target: script accepts `-Rid win-arm64`, but CI coverage and compatible Windows ARM64 build infrastructure remain to be established.
 
+## Optional C# and F# source backends (experimental)
+
+The verified scalar OresIR can also be emitted as C# (`emit-csharp`) or F#
+(`emit-fsharp`) source, then compiled by Roslyn or the F# compiler into
+CIL. These commands use the **same strict parser and verifier** as the
+shipping `compile` command, preserve checked i64 operations, and never
+introduce a runtime JIT dependency into the Native AOT release path.
+
+~~~powershell
+dotnet run --project compiler/Ores.Net.Compiler -c Release -- emit-csharp examples/hello.ores --out artifacts/OresProgram.cs
+dotnet run --project compiler/Ores.Net.Compiler -c Release -- emit-fsharp examples/hello.ores --out artifacts/OresProgram.fs
+./verification/assert-managed-source.ps1
+~~~
+
+This is source-generation tooling for the one-function arithmetic subset,
+**not** full Oreslang-to-C#/F# support or a Native AOT release certificate.
+See [managed source backends](docs/MANAGED_SOURCE_BACKENDS.md).
+
 ## Current language support
 
 The compiler accepts exactly this shape with optional `define`/`pub` modifiers:
@@ -182,6 +200,32 @@ dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Releas
 ~~~
 
 Unit tests use a managed development-time test harness; this is **not part of the shipped compiler or application**. CI must publish both deliverables to native executables and execute the resulting Windows binary. The absence of a `.runtimeconfig.json` is a supplemental check; the successful Native AOT publish is the decisive proof. CI status must be checked before claiming working Windows artifacts.
+
+### Select runtime substrate
+
+The runtime now includes a source-independent `SelectArbiter` primitive for the
+future static-select lowering path. It provides exactly-one winner
+linearization, late-arm loser revocation, cancellation handles, synchronous
+conditional commit, cleanup-failure capture, and reentrancy rejection. It does
+**not** enable source `select`, `Channel<T>`, Future selection, or actor
+continuation scheduling; the compiler must continue to reject select syntax
+until those layers are implemented and verified.
+
+### Selectable i64 channel substrate
+
+Stacked on the runtime `SelectArbiter`, the .NET runtime now has a bounded
+`SelectableI64Channel` proof for the first scalar select profile. Readable and
+writable readiness subscriptions are revocable, selected reads consume only
+inside the arbiter conditional commit, selected writes publish only inside that
+same transaction, and stale captured readiness notifications revalidate their
+subscription identity before touching the buffer.
+
+Close is also a terminal readiness event: buffered values drain before EOF,
+an empty closed channel commits selectable EOF, and a selected write against a
+closed channel terminates as closed without publishing. This remains
+runtime-only. It does not enable source `Channel<T>` or `select`; generic typed
+channels, Future arms, actor-lane continuations, suspension and compiler lowering
+remain pending.
 
 **Runtime limitations:** This remains a bootstrap compiler and single-process actor runtime. .NET Native AOT still includes managed GC and CoreCLR does **not** intrinsically provide independently collected per-actor GC heaps. Oreslang now provides an explicit bounded unmanaged `ActorArena` substrate with persistent actor-private bytes, turn-scoped scratch, aggregate native-memory budgeting, suspension-safe read loans, lifetime-only pins, generation fencing, quiescent zeroize/free, and actor-owned AoS/SoA/AoSoA shards. General guest object allocation, ownership/borrow syntax, async-frame lowering, shared-domain arenas, native collections, and zero-managed-allocation steady-state execution are still pending and must fail closed. Actor references carry an internal random nonce in addition to ID/generation; these are **not authenticated distributed capabilities**. No in-process hot-code reload can rely on `Assembly.Load`; full code replacement requires process-generation rollout. See [actor arenas and layouts](docs/ACTOR_ARENAS_AND_LAYOUTS.md).
 

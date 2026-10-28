@@ -7,6 +7,7 @@ internal static class ActorArenaSelfTest
     {
         PersistentAndScratchLifetimes();
         ReadLoanFreezesAllocationAcrossTurns();
+        PairedLoanAndRetirementLeavePeerWritable();
         LifetimePinDelaysPhysicalReclaim();
         AggregateBudgetAdmissionIsNeutral();
         RuntimeBudgetsAlsoChargeProcessLimit();
@@ -117,6 +118,79 @@ internal static class ActorArenaSelfTest
         arena.Read(finalTurn, handle, 0, check);
         Require(check[0] == 55, "mutation resumes after read loan release");
         arena.ReleasePersistent(finalTurn, handle);
+    }
+
+
+    private static void PairedLoanAndRetirementLeavePeerWritable()
+    {
+        const int perArena = 192; // 128 persistent + 64 scratch, already slab-aligned.
+        var budget = new ActorArenaBudget(2 * perArena);
+        using var left = new ActorArena(9101, 1, 128, 64, 4, 2, 2, budget);
+        using var right = new ActorArena(9102, 1, 128, 64, 4, 2, 2, budget);
+        ActorArenaHandle leftHandle;
+        ActorArenaHandle rightHandle;
+        using (var turn = left.EnterTurn(9101, 1))
+        {
+            leftHandle = left.AllocatePersistent(turn, 8);
+            left.Write(turn, leftHandle, 0, new byte[] { 111 });
+        }
+        using (var turn = right.EnterTurn(9102, 1))
+        {
+            rightHandle = right.AllocatePersistent(turn, 8);
+            right.Write(turn, rightHandle, 0, new byte[] { 222 });
+        }
+        ActorArenaReadLoan loan;
+        using (var turn = left.EnterTurn(9101, 1))
+        {
+            loan = left.BorrowRead(turn, leftHandle);
+            ExpectInvalid(() => left.Write(turn, leftHandle, 0, new byte[] { 99 }),
+                "A read loan excludes A writes");
+            ExpectInvalid(() => left.ReleasePersistent(turn, leftHandle),
+                "A read loan excludes A drop");
+        }
+        try
+        {
+            using (var turn = right.EnterTurn(9102, 1))
+            {
+                ExpectInvalid(() => right.Read(turn, leftHandle, 0, new byte[1]),
+                    "live foreign A handle cannot be read through B");
+                ExpectInvalid(() => right.Write(turn, leftHandle, 0, new byte[] { 99 }),
+                    "live foreign A handle cannot be written through B");
+                right.Write(turn, rightHandle, 0, new byte[] { 223 });
+            }
+            Require(!left.Retire() && !left.IsReclaimed,
+                "A read loan prevents physical retirement");
+            Require(budget.ReservedBytes == 2 * perArena,
+                "logical retirement does not refund pinned A or live B");
+            using (var turn = right.EnterTurn(9102, 1))
+            {
+                var value = new byte[1];
+                right.Read(turn, rightHandle, 0, value);
+                Require(value[0] == 223, "B survives A retirement request");
+                right.Write(turn, rightHandle, 0, new byte[] { 224 });
+            }
+            Task.Run(loan.Dispose).GetAwaiter().GetResult();
+            loan.Dispose();
+            Require(left.IsReclaimed && budget.ReservedBytes == perArena,
+                "last A loan refunds only A exactly once");
+            ExpectInvalid(() => left.EnterTurn(9101, 1),
+                "reclaimed A cannot admit another turn");
+            using (var turn = right.EnterTurn(9102, 1))
+            {
+                var value = new byte[1];
+                right.Read(turn, rightHandle, 0, value);
+                Require(value[0] == 224, "B bytes survive A physical reclamation");
+                right.Write(turn, rightHandle, 0, new byte[] { 225 });
+                right.Read(turn, rightHandle, 0, value);
+                Require(value[0] == 225, "B remains writable after A physical reclamation");
+            }
+            Require(right.Retire() && budget.ReservedBytes == 0,
+                "B independently retires and refunds");
+        }
+        finally
+        {
+            loan.Dispose();
+        }
     }
 
     private static void LifetimePinDelaysPhysicalReclaim()
@@ -394,7 +468,7 @@ internal static class ActorArenaSelfTest
         ExpectInvalid(forgedTurn.Dispose,
             "metadata-equivalent turn cannot end the issued physical turn");
 
-        Task.Run(() =>
+        OnAnotherCarrier(() =>
         {
             ExpectInvalid(() => arena.Read(turn, persistent, 0, new byte[1]),
                 "stolen turn cannot read bytes on a second carrier");
@@ -402,7 +476,7 @@ internal static class ActorArenaSelfTest
                 "stolen turn cannot allocate scratch on a second carrier");
             ExpectInvalid(turn.Dispose,
                 "off-carrier Dispose cannot close the physical turn");
-        }).GetAwaiter().GetResult();
+        });
 
         var check = new byte[1];
         arena.Read(turn, persistent, 0, check);
@@ -412,16 +486,38 @@ internal static class ActorArenaSelfTest
 
         turn.Dispose();
         // Idempotent release of an already-closed turn is safe on other carriers.
-        Task.Run(turn.Dispose).GetAwaiter().GetResult();
+        OnAnotherCarrier(turn.Dispose);
 
-        Task.Run(() =>
+        OnAnotherCarrier(() =>
         {
             using var migrated = arena.EnterTurn(7001, 9);
             var bytes = new byte[1];
             arena.Read(migrated, persistent, 0, bytes);
             Require(bytes[0] == 0x54, "fresh physical turn can migrate carriers");
             arena.ReleasePersistent(migrated, persistent);
-        }).GetAwaiter().GetResult();
+        });
+    }
+
+    private static void OnAnotherCarrier(Action action)
+    {
+        // Task.Run followed by a synchronous wait may inline on the waiting
+        // pool thread. These checks require a genuinely different carrier.
+        int owner = Environment.CurrentManagedThreadId;
+        Exception? failure = null;
+        var worker = new Thread(() =>
+        {
+            try
+            {
+                Require(Environment.CurrentManagedThreadId != owner,
+                    "cross-carrier fixture must use a distinct physical thread");
+                action();
+            }
+            catch (Exception error) { failure = error; }
+        }) { IsBackground = true };
+        worker.Start();
+        Require(worker.Join(TimeSpan.FromSeconds(10)), "cross-carrier fixture timed out");
+        if (failure is not null)
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
     }
 
     private static void ForgedLoanAndPinCannotPrematurelyReclaim()
