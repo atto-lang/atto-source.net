@@ -15,6 +15,9 @@ concurrency:
 
 jobs:
   linux-x64-compiler-and-app:
+    # Manual source-local certification lives exclusively in trusted-source-local-linux-aot.yml.
+    # Do not schedule hosted AOT when the user manually dispatches the legacy workflow.
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:

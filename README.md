@@ -348,7 +348,7 @@ default `main` branch **before** enabling it. Set the non-secret GitHub
 Actions repository variables `ORESLANG_NET_SELFHOSTED_LINUX=enabled`,
 `ORESLANG_NET_SELFHOSTED_LINUX_SHA=<exact reviewed source commit SHA>`, and
 `ORESLANG_NET_SELFHOSTED_LINUX_TREE=<its verified 40-hex root Git tree>`.
-Run **Trusted .NET Linux Native AOT (source-local exact SHA)** manually from protected `main` via `.github/workflows/trusted-source-local-linux-aot.yml`. The PR-triggered `.github/workflows/strict-linux-native-aot.yml` has no self-hosted job. Only the three selected trusted workflows above may access the isolated runner group.
+Manual dispatch of `strict-linux-native-aot.yml` skips the hosted release job instead of consuming hosted minutes. Use the separate trusted workflow only after independent source/reviewer and runner-group approval. Run **Trusted .NET Linux Native AOT (source-local exact SHA)** manually from protected `main` via `.github/workflows/trusted-source-local-linux-aot.yml`. The PR-triggered `.github/workflows/strict-linux-native-aot.yml` has no self-hosted job. Only the three selected trusted workflows above may access the isolated runner group.
 The manually dispatched default-branch workflow first validates immutable
 SHA/tree controls, then checks out the reviewed commit from this same repo
 and validates the actual root tree **before executing source code**.

@@ -56,6 +56,10 @@ assert.match(hosted, /^  pull_request:\s*$/m);
 assert.doesNotMatch(hosted, /\bself-hosted\b/);
 assert.doesNotMatch(hosted, /oreslang-net-aot/);
 assert.doesNotMatch(hosted, /linux-x64-approved-source-local/);
+assert.match(hosted, /^    if: github\.event_name != 'workflow_dispatch'$/m,
+  'manual dispatch must not consume hosted Linux Native AOT minutes');
+assert.ok(trusted.includes('github.event_name == \'workflow_dispatch\''),
+  'manual Linux certification must still be isolated in trusted workflow');
 
 assertManualOnlyTrigger(trusted, 'Linux Native AOT');
 assert.doesNotMatch(trusted, /^  (?:push|pull_request|pull_request_target|workflow_run):/m);
