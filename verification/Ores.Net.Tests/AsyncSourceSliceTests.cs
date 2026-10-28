@@ -161,6 +161,62 @@ internal static class AsyncSourceSliceTests
                 "contended observer admission and retirement must balance");
         }
 
+        // A producer's own exit cannot be mistaken for full scope quiescence:
+        // independent forwarding continuations must also have retired. Repeat
+        // under scheduling contention to catch admit/close races.
+        for (int round = 0; round < 32; round++)
+        {
+            var scope = new OresTaskScope(1, 4);
+            var entered = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource<long>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var producer = scope.Start(async _ =>
+            {
+                entered.TrySetResult();
+                return await release.Task.ConfigureAwait(false);
+            });
+            var future = scope.FromTask(producer);
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            var views = new Task<long>[4];
+            for (int i = 0; i < views.Length; i++)
+                views[i] = future.ObserveAsync();
+            var closing = scope.DisposeAsync().AsTask();
+            Require(!closing.IsCompleted,
+                "pending producer must prevent premature scope disposal");
+            release.TrySetResult(42L);
+            await closing.WaitAsync(TimeSpan.FromSeconds(10));
+            Require(views.All(x => x.IsCompleted) &&
+                views.All(x => x.IsCompletedSuccessfully && x.Result == 42L),
+                "scope disposal returned before observer delivery retired");
+            Require(scope.ActiveProducers == 0 && scope.ActiveObservers == 0 &&
+                (await producer.Retirement).TerminalState == "succeeded",
+                "scope must join producer plus all admitted forwarding work");
+            try { _ = future.ObserveAsync(); }
+            catch (InvalidOperationException) { continue; }
+            throw new Exception("closed scope admitted observer after quiescence");
+        }
+
+        // The closing boundary must be linearizable against simultaneous
+        // Start/Observe calls. Every admitted producer has exactly one receipt;
+        // a losing admission must not consume quota or replay an old producer.
+        {
+            var scope = new OresTaskScope(64, 64);
+            var admitted = new System.Collections.Concurrent.ConcurrentBag<OresTask<long>>();
+            var closing = Task.Run(async () => await scope.DisposeAsync());
+            Parallel.For(0, 128, i =>
+            {
+                try { admitted.Add(scope.Start(_ => ValueTask.FromResult((long)i))); }
+                catch (InvalidOperationException) { }
+            });
+            await closing.WaitAsync(TimeSpan.FromSeconds(10));
+            foreach (var handle in admitted)
+                Require((await handle.Retirement).ProducerId == handle.ProducerId,
+                    "accepted producer was lost at concurrent shutdown");
+            Require(scope.ActiveProducers == 0 && scope.ActiveObservers == 0,
+                "concurrent Start/Dispose leaked owned lifecycle quota");
+        }
+
         // I-02: Concurrent disposers must join the SAME physical producer
         // drain. A producer that ignores cancellation remains live, so a
         // merely closed queue cannot count as a retirement receipt.
