@@ -13,7 +13,8 @@ bool validEmitSource = args.Length == 4 && args[2] == "--out" &&
     (args[0] == "emit-csharp" || args[0] == "emit-fsharp");
 bool validStaticFacts = args.Length == 2 &&
     (args[0] == "static-facts" || args[0] == "static-facts-structured");
-if (!validCheck && !validCompile && !validStructuredCheck && !validStructuredCompile && !validStaticFacts && !validEmitSource)
+bool moduleCommand = args.Length >= 1 && args[0] is "check-modules" or "compile-modules";
+if (!validCheck && !validCompile && !validStructuredCheck && !validStructuredCompile && !validStaticFacts && !validEmitSource && !moduleCommand)
 {
     Console.Error.WriteLine("usage: oresnet check input.ores | oresnet compile input.ores --out path/OresGenerated.dll | oresnet check-structured input.ores | oresnet compile-structured input.ores --out path/OresGenerated.dll | oresnet emit-csharp input.ores --out path/OresProgram.cs | oresnet emit-fsharp input.ores --out path/OresProgram.fs | oresnet static-facts input.ores | oresnet static-facts-structured input.ores");
     return 2;
@@ -21,6 +22,43 @@ if (!validCheck && !validCompile && !validStructuredCheck && !validStructuredCom
 
 try
 {
+    if (moduleCommand)
+    {
+        if (args.Length < 4 || args.Length % 2 != 0)
+            throw new ArgumentException("usage: oresnet check-modules INPUT --root ROOT [--dependency-root ROOT] | compile-modules INPUT --root ROOT [--dependency-root ROOT] --out OresGenerated.dll");
+        string? root = null, output = null;
+        var dependencies = new List<string>();
+        for (int i = 2; i < args.Length; i += 2)
+        {
+            if (args[i] == "--root" && root is null) root = args[i + 1];
+            else if (args[i] == "--dependency-root") dependencies.Add(args[i + 1]);
+            else if (args[i] == "--out" && output is null) output = args[i + 1];
+            else throw new ArgumentException("Unknown or duplicate module option");
+        }
+        if (root is null || (args[0] == "compile-modules") != (output is not null))
+            throw new ArgumentException("Module command requires one --root and compile-modules requires --out");
+        if (output is not null && Path.GetFileName(output) != "OresGenerated.dll")
+            throw new ArgumentException("Generated assembly must be named OresGenerated.dll");
+        var compilation = OresSourceModuleCompiler.Compile(args[1], new[] { root }.Concat(dependencies).ToArray());
+        if (output is not null) CilEmitter.EmitLibrary(compilation.Module, output);
+        using var witness = new MemoryStream();
+        using (var json = new System.Text.Json.Utf8JsonWriter(witness))
+        {
+            json.WriteStartObject();
+            json.WriteString("scope", "verified-int-bool-modules-not-full-Spin");
+            json.WriteString("graph_sha256", compilation.GraphSha256);
+            json.WriteStartArray("sources");
+            foreach (var unit in compilation.Sources)
+            {
+                json.WriteStartObject(); json.WriteString("path", unit.Path);
+                json.WriteString("sha256", unit.Sha256); json.WriteNumber("utf8_bytes", unit.Utf8Bytes);
+                json.WriteEndObject();
+            }
+            json.WriteEndArray(); json.WriteEndObject();
+        }
+        Console.WriteLine(Encoding.UTF8.GetString(witness.ToArray()));
+        return 0;
+    }
     if (validStaticFacts &&
         !string.Equals(Path.GetExtension(args[1]), ".ores", StringComparison.OrdinalIgnoreCase))
         throw new FormatException("Static-facts export requires a .ores source file");

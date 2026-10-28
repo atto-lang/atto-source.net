@@ -752,6 +752,15 @@ public unsafe sealed class ActorArena : IDisposable
             throw new InvalidOperationException("Stale actor scratch capability");
     }
 
+    internal void ValidateActiveTurn(ActorArenaTurn turn)
+    {
+        lock (_gate)
+        {
+            ValidateTurnLocked(turn);
+            EnsureAdmissionOpenLocked();
+        }
+    }
+
     private void ValidateTurnLocked(ActorArenaTurn turn)
     {
         ArgumentNullException.ThrowIfNull(turn);
