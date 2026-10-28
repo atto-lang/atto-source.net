@@ -1,11 +1,12 @@
 // Synthetic evidence-contract tests only; /bin/true is not an Oreslang AOT build.
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync, mkdirSync, writeFileSync, copyFileSync, rmSync, symlinkSync, readFileSync} from 'node:fs';
+import {mkdtempSync, mkdirSync, writeFileSync, copyFileSync, rmSync, symlinkSync, readFileSync, appendFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join, dirname} from 'node:path';
 import {execFileSync} from 'node:child_process';
-import {createReceipt, binaries, sourceRepository} from './write-linux-native-receipt.mjs';
+import {createHash} from 'node:crypto';
+import {createReceipt, binaries, sourceRepository, sha256RegularFile} from './write-linux-native-receipt.mjs';
 
 function fixture(action) {
   const root=mkdtempSync(join(tmpdir(),'ores-receipt-contract-'));
@@ -75,3 +76,17 @@ test('origin source receipt never substitutes external snapshot tree for the act
     assert.equal(receipt.execution_repository,sourceRepository);
     assert.equal(receipt.execution_head_sha,env.EXPECTED_HEAD);
   }));
+
+test('large native evidence hashes all bytes in bounded chunks',()=>fixture(({root,put})=>{
+  const relative='artifacts/test-large-native.bin';
+  const path=join(root,relative);
+  const chunk=Buffer.alloc(1024*1024,0x5a);
+  put(relative,chunk);
+  for(let i=0;i<18;i++)appendFileSync(path,chunk);
+  const expected=createHash('sha256').update(readFileSync(path)).digest('hex');
+  assert.equal(sha256RegularFile(root,relative),expected);
+}));
+test('oversized arithmetic evidence is rejected before loading',()=>fixture(({root,env,put})=>{
+  put('artifacts/evidence/linux-native-arithmetic.json',' '.repeat(65537));
+  assert.throws(()=>createReceipt(root,env),/oversized arithmetic/);
+}));

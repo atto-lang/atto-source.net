@@ -1,4 +1,4 @@
-import {readFileSync, writeFileSync, lstatSync, realpathSync} from 'node:fs';
+import {readFileSync, writeFileSync, lstatSync, realpathSync, statSync, openSync, readSync, closeSync, fstatSync, constants} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {resolve, dirname} from 'node:path';
@@ -15,6 +15,25 @@ export const binaries = [
 ];
 const sha = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value);
 const requireThat = (value, message) => { if (!value) throw Error(message); };
+// The native binaries may be large. Hash in bounded chunks rather than
+// materializing each Native AOT image on the Node heap.
+export function sha256RegularFile(root, relative) {
+  const path = resolve(root, relative);
+  requireThat(realpathSync(path) === path && lstatSync(path).isFile(),
+    'unsafe evidence path: '+relative);
+  const hash = createHash('sha256');
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    requireThat(fstatSync(fd).isFile(), 'not a regular evidence file: '+relative);
+    let length;
+    while ((length = readSync(fd, buffer, 0, buffer.length, null)) > 0)
+      hash.update(buffer.subarray(0, length));
+  } finally {
+    closeSync(fd);
+  }
+  return hash.digest('hex');
+}
 export function createReceipt(root, env) {
   const git = (...args) => execFileSync('git', ['-C', root, ...args], {encoding:'utf8'}).trim();
   requireThat(sha(env.EXPECTED_HEAD), 'invalid expected source head');
@@ -37,16 +56,18 @@ export function createReceipt(root, env) {
     requireThat(realpathSync(path) === path && lstatSync(path).isFile(), 'unsafe evidence path: '+relative);
     return readFileSync(path);
   };
-  const arithmeticBytes = regular('artifacts/evidence/linux-native-arithmetic.json');
+  const arithmeticPath = regular('artifacts/evidence/linux-native-arithmetic.json');
+  requireThat(statSync(arithmeticPath).size <= 65536,
+    'oversized arithmetic evidence');
+  const arithmeticBytes = readFileSync(arithmeticPath);
   const arithmetic = JSON.parse(arithmeticBytes);
   requireThat(arithmetic.schema === 'oreslang.net.linux_native_arithmetic_v1' &&
     arithmetic.division_rejection_exit === 1 && arithmetic.division_emitted_cil === false &&
     arithmetic.overflow_exit === 70 && arithmetic.native_application_count === 5 &&
     JSON.stringify(arithmetic.outputs) === '[14,42,40,45]', 'arithmetic proof missing or invalid');
   const hashes = Object.fromEntries(binaries.map(path => {
-    const bytes = regular(path);
     execFileSync('bash', ['verification/assert-linux-native-release.sh', path], {cwd:root, stdio:'pipe'});
-    return [path, createHash('sha256').update(bytes).digest('hex')];
+    return [path, sha256RegularFile(root, path)];
   }));
   return {
     schema:'oreslang.net.exact_head_native_aot_v2', repository:sourceRepository,
