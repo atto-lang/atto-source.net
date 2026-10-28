@@ -82,6 +82,7 @@ SourceByteBudgetTests.Run();
 StructuralPatternAdmissionTests.Run();
 NumericSeparatorParityTests.Run();
 CrossBackendCheckedI64ParityTests.Run();
+NamedBitXorSourceTests.Run();
 AsyncInteropFailClosedTests.Run();
 await HostTaskObservationTests.Run();
 
