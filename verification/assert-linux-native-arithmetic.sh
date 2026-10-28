@@ -5,6 +5,22 @@ set -Eeuo pipefail
 
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
+# Pin the exact negative and checked-overflow inputs. Otherwise a changed
+# fixture could satisfy the diagnostic/exit checks without exercising the
+# signed arithmetic boundaries this parity gate claims to prove.
+for fixture in division-by-zero division-overflow overflow; do
+  case "$fixture" in
+    division-by-zero) expected_blob=75b50969cad9f954aa103b530c095832d3b1b97d ;;
+    division-overflow) expected_blob=ce0bed589b5981c0855d9d88237245261aa28a2b ;;
+    overflow) expected_blob=b5ebfd6d354182ce9f9da568ebb2ab787db9366e ;;
+  esac
+  actual_blob="$(git hash-object -- "examples/$fixture.ores")"
+  if [[ "$actual_blob" != "$expected_blob" ]]; then
+    printf 'Arithmetic fixture drift: %s has blob %s, expected %s\n' \
+      "$fixture" "$actual_blob" "$expected_blob" >&2
+    exit 1
+  fi
+done
 compiler=artifacts/compiler/linux-x64/oresnet
 [[ -f "$compiler" && -x "$compiler" && ! -L "$compiler" ]] || {
   echo 'Native AOT compiler is missing or unsafe' >&2
@@ -22,7 +38,7 @@ for name in division-by-zero division-overflow; do
   # source parser rather than rejecting our test's --out basename first.
   denied="$case_dir/OresGenerated.dll"
   diagnostic="$case_dir/diagnostic.log"
-  if "$compiler" compile "$source_file" --out "$denied" >"$diagnostic" 2>&1; then
+  if timeout --signal=TERM --kill-after=5s 30s "$compiler" compile "$source_file" --out "$denied" >"$diagnostic" 2>&1; then
     echo "Source division unexpectedly compiled: $source_file" >&2
     exit 1
   else
@@ -69,7 +85,7 @@ for pair in \
   'artifacts/structured/linux-x64/oreslang-app:45'; do
   binary="${pair%%:*}"
   expected="${pair##*:}"
-  actual="$("$binary")"
+  actual="$(timeout --signal=TERM --kill-after=5s 30s "$binary")"
   if [[ "$actual" != "$expected" ]]; then
     printf 'Native AOT source isolation failed: %s returned %q, expected %q\n' \
       "$binary" "$actual" "$expected" >&2
