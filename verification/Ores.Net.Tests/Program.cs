@@ -82,6 +82,8 @@ SourceByteBudgetTests.Run();
 StructuralPatternAdmissionTests.Run();
 NumericSeparatorParityTests.Run();
 CrossBackendCheckedI64ParityTests.Run();
+AsyncInteropFailClosedTests.Run();
+await HostTaskObservationTests.Run();
 
 // The canonical actor negative includes a later assignment. Lex its punctuation
 // while preserving the precise unsupported top-level declaration diagnostic.
@@ -676,3 +678,4 @@ StructuredStaticAbiTests.Run();
 StaticFactsV0Tests.Run();
 ValueBoundaryTests.Run();
 Console.WriteLine("Oreslang .NET bootstrap, CFG verifier, CIL stress and structured source tests passed");
+

@@ -468,7 +468,7 @@ internal static class ActorArenaSelfTest
         ExpectInvalid(forgedTurn.Dispose,
             "metadata-equivalent turn cannot end the issued physical turn");
 
-        Task.Run(() =>
+        OnAnotherCarrier(() =>
         {
             ExpectInvalid(() => arena.Read(turn, persistent, 0, new byte[1]),
                 "stolen turn cannot read bytes on a second carrier");
@@ -476,7 +476,7 @@ internal static class ActorArenaSelfTest
                 "stolen turn cannot allocate scratch on a second carrier");
             ExpectInvalid(turn.Dispose,
                 "off-carrier Dispose cannot close the physical turn");
-        }).GetAwaiter().GetResult();
+        });
 
         var check = new byte[1];
         arena.Read(turn, persistent, 0, check);
@@ -486,16 +486,38 @@ internal static class ActorArenaSelfTest
 
         turn.Dispose();
         // Idempotent release of an already-closed turn is safe on other carriers.
-        Task.Run(turn.Dispose).GetAwaiter().GetResult();
+        OnAnotherCarrier(turn.Dispose);
 
-        Task.Run(() =>
+        OnAnotherCarrier(() =>
         {
             using var migrated = arena.EnterTurn(7001, 9);
             var bytes = new byte[1];
             arena.Read(migrated, persistent, 0, bytes);
             Require(bytes[0] == 0x54, "fresh physical turn can migrate carriers");
             arena.ReleasePersistent(migrated, persistent);
-        }).GetAwaiter().GetResult();
+        });
+    }
+
+    private static void OnAnotherCarrier(Action action)
+    {
+        // Task.Run followed by a synchronous wait may inline on the waiting
+        // pool thread. These checks require a genuinely different carrier.
+        int owner = Environment.CurrentManagedThreadId;
+        Exception? failure = null;
+        var worker = new Thread(() =>
+        {
+            try
+            {
+                Require(Environment.CurrentManagedThreadId != owner,
+                    "cross-carrier fixture must use a distinct physical thread");
+                action();
+            }
+            catch (Exception error) { failure = error; }
+        }) { IsBackground = true };
+        worker.Start();
+        Require(worker.Join(TimeSpan.FromSeconds(10)), "cross-carrier fixture timed out");
+        if (failure is not null)
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
     }
 
     private static void ForgedLoanAndPinCannotPrematurelyReclaim()
