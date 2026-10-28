@@ -124,6 +124,43 @@ internal static class AsyncSourceSliceTests
                 "fault must have faulted retirement terminal");
         }
 
+        // Exact bounded observation under simultaneous contention: each
+        // admitted view reserves one slot before source continuation attach.
+        {
+            await using var scope = new OresTaskScope(1, 4);
+            var entered = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource<long>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var producer = scope.Start(async _ =>
+            {
+                entered.TrySetResult();
+                return await release.Task.ConfigureAwait(false);
+            });
+            var future = scope.FromTask(producer);
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            var admitted = new System.Collections.Concurrent.ConcurrentBag<Task<long>>();
+            int rejected = 0;
+            Parallel.For(0, 64, _ =>
+            {
+                try { admitted.Add(future.ObserveAsync()); }
+                catch (InvalidOperationException)
+                {
+                    Interlocked.Increment(ref rejected);
+                }
+            });
+            Require(admitted.Count == 4 && rejected == 60 &&
+                scope.ActiveObservers == 4 && scope.ProducerInvocations == 1,
+                "64 contending observers must admit exactly four distinct views");
+            release.TrySetResult(42L);
+            foreach (var view in admitted)
+                Require(await view.WaitAsync(TimeSpan.FromSeconds(10)) == 42L,
+                    "contended observer got original producer result");
+            Require((await producer.Retirement).TerminalState == "succeeded" &&
+                scope.ActiveObservers == 0 && scope.ActiveProducers == 0,
+                "contended observer admission and retirement must balance");
+        }
+
         // I-02: Concurrent disposers must join the SAME physical producer
         // drain. A producer that ignores cancellation remains live, so a
         // merely closed queue cannot count as a retirement receipt.
