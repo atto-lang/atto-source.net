@@ -40,6 +40,37 @@ internal sealed class QuicLoopbackPermit
     }
 
     /// <summary>
+    /// A strictly canonical, lowercase ASCII DNS identity. Reject Unicode,
+    /// bad label boundaries and overlength labels before TLS SNI validation;
+    /// IDN callers must supply an already validated A-label (punycode).
+    /// </summary>
+    internal static bool IsCanonicalDnsName(string? name)
+    {
+        if (string.IsNullOrEmpty(name) || name.Length > 253 ||
+            name[0] == '.' || name[^1] == '.') return false;
+        var labelLength = 0;
+        char previous = '.';
+        foreach (var ch in name)
+        {
+            var letter = ch is >= 'a' and <= 'z';
+            var digit = ch is >= '0' and <= '9';
+            if (ch == '.')
+            {
+                if (labelLength == 0 || previous == '-') return false;
+                labelLength = 0;
+            }
+            else
+            {
+                if (!letter && !digit && ch != '-') return false;
+                if (labelLength == 0 && ch == '-') return false;
+                if (++labelLength > 63) return false;
+            }
+            previous = ch;
+        }
+        return labelLength != 0 && previous != '-';
+    }
+
+    /// <summary>
     /// Trusted-host-only authorization: no DNS lookup takes place in this
     /// function. The caller MUST obtain the full DNS answer set for this
     /// physical connection. This helper cannot authorize non-loopback IPs.
@@ -54,12 +85,7 @@ internal sealed class QuicLoopbackPermit
         ulong resolutionGeneration,
         TimeSpan lifetime)
     {
-        if (string.IsNullOrWhiteSpace(canonicalDnsName) ||
-            !string.Equals(canonicalDnsName, canonicalDnsName.Trim(), StringComparison.Ordinal) ||
-            !string.Equals(canonicalDnsName, canonicalDnsName.ToLowerInvariant(),
-                           StringComparison.Ordinal) ||
-            canonicalDnsName.EndsWith('.', StringComparison.Ordinal) ||
-            Uri.CheckHostName(canonicalDnsName) != UriHostNameType.Dns)
+        if (!IsCanonicalDnsName(canonicalDnsName))
             throw new SecurityException("QUIC requires a canonical DNS TLS identity");
         if (port is < 1 or > 65535)
             throw new SecurityException("QUIC port is outside 1..65535");
