@@ -16,6 +16,7 @@ internal sealed class ActorNativeQuicResources
     private readonly TaskCompletionSource<bool> _retired =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private bool _stopping;
+    private Exception? _retirementFailure;
 
     internal Task Retired => _retired.Task;
     internal int LiveOperations
@@ -65,14 +66,18 @@ internal sealed class ActorNativeQuicResources
         return _retired.Task;
     }
 
-    internal void Completed(ActorQuicOperation operation)
+    internal void Completed(ActorQuicOperation operation, Exception? failure)
     {
         lock (_gate)
         {
             if (!_operations.Remove(operation))
                 throw new InvalidOperationException("Unregistered native QUIC retirement");
+            _retirementFailure ??= failure;
             if (_stopping && _operations.Count == 0)
-                _retired.TrySetResult(true);
+            {
+                if (_retirementFailure is null) _retired.TrySetResult(true);
+                else _retired.TrySetException(_retirementFailure);
+            }
         }
     }
 }
@@ -190,7 +195,7 @@ internal sealed class ActorQuicOperation : IAsyncDisposable
                 try { _pin.Dispose(); }
                 catch (Exception error) { failure ??= error; }
                 _cancel.Dispose();
-                _owner.Completed(this);
+                _owner.Completed(this, failure);
                 if (failure is null) _completed.TrySetResult(true);
                 else _completed.TrySetException(failure);
             }
