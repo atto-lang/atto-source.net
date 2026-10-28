@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Quic;
 using System.Net.Security;
 using System.Security.Authentication;
+using System.Security;
 
 namespace Ores.Net.Runtime.Net;
 
@@ -24,7 +25,15 @@ internal static class NativeQuicClient
         IPEndPoint pinnedAuthorizedAddress,
         string canonicalDnsName,
         CancellationToken cancellationToken)
-        => ConnectAsync(pinnedAuthorizedAddress, canonicalDnsName, Http3Alpn, cancellationToken);
+    {
+        ValidateEndpoint(pinnedAuthorizedAddress, canonicalDnsName,
+                         Http3Alpn, cancellationToken);
+        // A naked IP and hostname are NOT evidence of authorized DNS/egress.
+        // No policy-bound opaque permit exists on this backend yet, so the
+        // outbound path remains closed even if MsQuic is installed.
+        return ValueTask.FromException<QuicConnection>(new SecurityException(
+            "QUIC egress policy permit unavailable; no UDP or HTTP/2 fallback"));
+    }
 
     /// <summary>
     /// QUIC transport for an explicitly selected application ALPN.
@@ -32,7 +41,7 @@ internal static class NativeQuicClient
     /// Cancellation does not prove physical retirement: caller must await
     /// DisposeAsync on the returned connection and all owned streams.
     /// </summary>
-    internal static async ValueTask<QuicConnection> ConnectAsync(
+    private static async ValueTask<QuicConnection> ConnectUncheckedAfterPolicyAsync(
         IPEndPoint pinnedAuthorizedAddress,
         string canonicalDnsName,
         SslApplicationProtocol applicationProtocol,
@@ -82,7 +91,12 @@ internal static class NativeQuicClient
                 System.Net.Sockets.AddressFamily.InterNetworkV6))
             throw new ArgumentException("QUIC requires an IPv4 or IPv6 pinned address",
                                         nameof(pinnedAuthorizedAddress));
-        if (pinnedAuthorizedAddress.Address.Equals(IPAddress.Any) ||
+        if (pinnedAuthorizedAddress.Address.IsIPv4MappedToIPv6 ||
+            pinnedAuthorizedAddress.Address.IsIPv6Multicast ||
+            (pinnedAuthorizedAddress.Address.AddressFamily ==
+                 System.Net.Sockets.AddressFamily.InterNetwork &&
+             pinnedAuthorizedAddress.Address.GetAddressBytes()[0] >= 224) ||
+            pinnedAuthorizedAddress.Address.Equals(IPAddress.Any) ||
             pinnedAuthorizedAddress.Address.Equals(IPAddress.IPv6Any) ||
             pinnedAuthorizedAddress.Address.Equals(IPAddress.None) ||
             pinnedAuthorizedAddress.Address.Equals(IPAddress.IPv6None))
