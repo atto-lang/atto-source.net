@@ -12,6 +12,11 @@ namespace Ores.Net.Runtime;
 public sealed class OresTaskScope : IAsyncDisposable
 {
     private readonly Channel<Func<ValueTask>> queue;
+    // Serializes the admit/close boundary, including work published to the
+    // queue and observer forwarders registered before shutdown.
+    private readonly object admissionGate = new();
+    private int pendingObserverForwarders;
+    private TaskCompletionSource<bool> forwardersDrained = CompletedSignal();
     private readonly CancellationTokenSource producerStop = new();
     private readonly Task pump;
     private readonly TaskCompletionSource<bool> disposed =
@@ -24,6 +29,14 @@ public sealed class OresTaskScope : IAsyncDisposable
     private int producerInvocations;
     private int closed;
     private long nextId;
+
+    private static TaskCompletionSource<bool> CompletedSignal()
+    {
+        var ready = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        ready.SetResult(true);
+        return ready;
+    }
 
     public OresTaskScope(int maxProducers = 16, int maxObservers = 32)
     {
@@ -53,28 +66,31 @@ public sealed class OresTaskScope : IAsyncDisposable
     public OresTask<T> Start<T>(Func<CancellationToken, ValueTask<T>> body)
     {
         ArgumentNullException.ThrowIfNull(body);
-        if (Volatile.Read(ref closed) != 0)
-            throw new InvalidOperationException("Oreslang Task scope closed");
-        Reserve(ref activeProducers, producerLimit, "producer");
-        try
+        lock (admissionGate)
         {
-            // Roll back admission on every allocation, identity, or queue error.
-            // Closing concurrently with this call cannot expose untracked work.
-            long id = NextProducerId();
-            var result = new TaskCompletionSource<T>(
-                TaskCreationOptions.RunContinuationsAsynchronously);
-            var retired = new TaskCompletionSource<OresProducerRetirement>(
-                TaskCreationOptions.RunContinuationsAsynchronously);
-            var handle = new OresTask<T>(this, id, result.Task, retired.Task);
-            if (!queue.Writer.TryWrite(() => Execute(body, result, retired, id)))
-                throw new InvalidOperationException(
-                    "Oreslang Task scheduler queue closed or full");
-            return handle;
-        }
-        catch
-        {
-            Interlocked.Decrement(ref activeProducers);
-            throw;
+            if (closed != 0)
+                throw new InvalidOperationException("Oreslang Task scope closed");
+            Reserve(ref activeProducers, producerLimit, "producer");
+            try
+            {
+                // The admission and queue publication precede shutdown
+                // atomically. All failures roll back producer quota.
+                long id = NextProducerId();
+                var result = new TaskCompletionSource<T>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                var retired = new TaskCompletionSource<OresProducerRetirement>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                var handle = new OresTask<T>(this, id, result.Task, retired.Task);
+                if (!queue.Writer.TryWrite(() => Execute(body, result, retired, id)))
+                    throw new InvalidOperationException(
+                        "Oreslang Task scheduler queue closed or full");
+                return handle;
+            }
+            catch
+            {
+                Interlocked.Decrement(ref activeProducers);
+                throw;
+            }
         }
     }
 
@@ -102,22 +118,39 @@ public sealed class OresTaskScope : IAsyncDisposable
 
     internal Task<T> Observe<T>(Task<T> source, CancellationToken cancellation)
     {
-        if (Volatile.Read(ref closed) != 0)
-            throw new InvalidOperationException("Oreslang Task scope closed");
-        Reserve(ref activeObservers, observerLimit, "observer");
         TaskCompletionSource<T> projected;
-        try
+        lock (admissionGate)
         {
-            projected = new TaskCompletionSource<T>(
-                TaskCreationOptions.RunContinuationsAsynchronously);
+            if (closed != 0)
+                throw new InvalidOperationException("Oreslang Task scope closed");
+            Reserve(ref activeObservers, observerLimit, "observer");
+            try
+            {
+                projected = new TaskCompletionSource<T>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                if (pendingObserverForwarders++ == 0)
+                    forwardersDrained = new TaskCompletionSource<bool>(
+                        TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+            catch
+            {
+                Interlocked.Decrement(ref activeObservers);
+                throw;
+            }
         }
-        catch
-        {
-            Interlocked.Decrement(ref activeObservers);
-            throw;
-        }
+        // Counts are reserved before the forwarding continuation is published.
+        // In particular, a concurrent DisposeAsync cannot miss the forwarder.
         _ = Forward(source, projected, cancellation);
         return projected.Task; // A distinct, cancellation-isolated observer.
+    }
+
+    private void RetireObserverForwarder()
+    {
+        lock (admissionGate)
+        {
+            if (--pendingObserverForwarders == 0)
+                forwardersDrained.TrySetResult(true);
+        }
     }
 
     private async Task Forward<T>(
@@ -145,12 +178,21 @@ public sealed class OresTaskScope : IAsyncDisposable
             // completion. A completed observer is never still counted pending.
             Interlocked.Decrement(ref activeObservers);
         }
-        if (cancelled)
-            projection.TrySetCanceled(token.IsCancellationRequested
-                ? token : new CancellationToken(canceled: true));
-        else if (causes is { Count: > 0 }) projection.TrySetException(causes);
-        else if (fault is not null) projection.TrySetException(fault);
-        else projection.TrySetResult(value);
+        try
+        {
+            if (cancelled)
+                projection.TrySetCanceled(token.IsCancellationRequested
+                    ? token : new CancellationToken(canceled: true));
+            else if (causes is { Count: > 0 }) projection.TrySetException(causes);
+            else if (fault is not null) projection.TrySetException(fault);
+            else projection.TrySetResult(value);
+        }
+        finally
+        {
+            // The observer's quota is released before publication, but the
+            // owning scope cannot retire while forwarding is still executing.
+            RetireObserverForwarder();
+        }
     }
 
     private async ValueTask Execute<T>(
@@ -219,7 +261,13 @@ public sealed class OresTaskScope : IAsyncDisposable
         if (executingOnPump.Value)
             throw new InvalidOperationException(
                 "Scope producer cannot await its own physical retirement");
-        if (Interlocked.CompareExchange(ref closed, 1, 0) == 0)
+        bool shouldStop;
+        lock (admissionGate)
+        {
+            shouldStop = closed == 0;
+            if (shouldStop) closed = 1;
+        }
+        if (shouldStop)
             _ = StopAndDrainAsync();
         // Every concurrent caller joins the SAME completion witness. A second
         // caller never reports success while a producer is still executing.
@@ -233,7 +281,17 @@ public sealed class OresTaskScope : IAsyncDisposable
         catch (Exception error) { failure = error; }
         finally { queue.Writer.TryComplete(); }
 
-        try { await pump.ConfigureAwait(false); }
+        try
+        {
+            await pump.ConfigureAwait(false);
+            // Pump completion proves producer bodies exited, not necessarily
+            // that independent observer forwarding continuations retired.
+            // Admission is closed under admissionGate, so this task's
+            // completion cannot be followed by a newly admitted forwarder.
+            Task observerDrain;
+            lock (admissionGate) observerDrain = forwardersDrained.Task;
+            await observerDrain.ConfigureAwait(false);
+        }
         catch (Exception error)
         {
             failure = failure is null ? error : new AggregateException(failure, error);
