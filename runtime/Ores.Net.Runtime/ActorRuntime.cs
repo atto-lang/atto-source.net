@@ -82,6 +82,10 @@ public sealed class ActorContext
     public ActorRef Self { get; }
     public ActorKind Kind { get; }
 
+    // Host capability providers must enforce the same physical-turn authority
+    // as actor memory access. A retained context is not a reusable credential.
+    internal void ValidateActiveTurn() => _arena.ValidateActiveTurn(_turn);
+
     public ActorArenaHandle AllocatePersistent(int bytes, int alignment = 8) =>
         _arena.AllocatePersistent(_turn, bytes, alignment);
 
@@ -203,6 +207,8 @@ public sealed class ActorRuntime : IDisposable
         internal int Scheduled;
         internal bool Stopping;
         internal int Finalized;
+        internal TaskCompletionSource Terminated { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         private void Dispatch() => _owner.RunCell(this);
     }
@@ -311,6 +317,12 @@ public sealed class ActorRuntime : IDisposable
         if (finalizeNow)
             FinalizeCell(cell);
     }
+
+    internal Task ObserveTermination(ActorRef actor) => Lookup(actor).Terminated.Task;
+
+    // Statically bound capability-provider dispatch. This is the existing
+    // bounded mailbox admission, not a socket send or asynchronous offload.
+    internal void PostHostMessage(ActorRef actor) => Send(actor, ReadOnlySpan<byte>.Empty);
 
     public void Dispose()
     {
@@ -516,6 +528,7 @@ public sealed class ActorRuntime : IDisposable
                 ReferenceEquals(current, cell))
                 _actors.Remove(cell.Reference.Id);
         }
+        cell.Terminated.TrySetResult();
     }
 
     private void EnsureOpenLocked()
