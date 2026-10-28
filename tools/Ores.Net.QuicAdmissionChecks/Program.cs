@@ -256,14 +256,14 @@ if (OperatingSystem.IsLinux() || OperatingSystem.IsWindows() ||
         () => ownerRuntime.CompletedMessages > beforeSecondTurn,
         TimeSpan.FromSeconds(10)))
         throw new InvalidOperationException("QUIC stale-turn test timed out");
-    if (staleTurnContext is null)
+    var confirmedContext = staleTurnContext ??
         throw new InvalidOperationException("QUIC stale-turn context was not captured");
     var staleTurnPermit = QuicLoopbackPermit.AuthorizeForTrustedHost(
         "origin.example", 443, new[] { IPAddress.Loopback }, 0,
-        staleTurnContext.Self.Id, staleTurnContext.Self.Generation, 9,
+        confirmedContext.Self.Id, confirmedContext.Self.Generation, 9,
         TimeSpan.FromSeconds(2));
     MustDeny(() => NativeQuicClient.ConnectHttp3Async(
-        staleTurnPermit, staleTurnContext, token).AsTask().GetAwaiter().GetResult(),
+        staleTurnPermit, confirmedContext, token).AsTask().GetAwaiter().GetResult(),
         "stale physical turn admitted native QUIC");
     MustDeny(() => staleTurnPermit.Consume(
         second.Id, second.Generation), "stale turn did not burn permit");
