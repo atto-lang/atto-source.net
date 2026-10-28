@@ -244,7 +244,7 @@ public static class ProjectRootSourceResolver
     // File.Exists and Directory.Exists both return false for some dangling
     // symlinks and inaccessible marker nodes. Nested package ownership is
     // decided by marker presence, not by successful target traversal.
-    private static bool MarkerExistsNoFollow(string path)
+    internal static bool MarkerExistsNoFollow(string path)
     {
         try
         {
