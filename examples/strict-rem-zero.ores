@@ -1,0 +1,4 @@
+// Native AOT negative execution: zero divisor is a deterministic failure.
+define pub fnc main(): int {
+    return Integer.rem(1, 0);
+}
