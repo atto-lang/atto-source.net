@@ -25,6 +25,7 @@ static class StrictSigned64ArithmeticSelfTest
     public static void Run()
     {
         CheckPortableContractFixture();
+        CheckExactFloatFixture();
         Require(StrictSigned64Arithmetic.Rem(-9, 4) == -1, "negative remainder");
         Require(StrictSigned64Arithmetic.Mod(-9, 4) == 3, "positive modulus");
         Require(StrictSigned64Arithmetic.Mod(-9, -4) == 3, "negative divisor modulus");
@@ -69,6 +70,42 @@ static class StrictSigned64ArithmeticSelfTest
                 "random signed XOR #" + i);
         }
     }
+    private static void CheckExactFloatFixture()
+    {
+        string path = Path.Combine(AppContext.BaseDirectory,
+            "strict-integer-to-float-exact-v1.json");
+        using var document = JsonDocument.Parse(File.ReadAllText(path));
+        var root = document.RootElement;
+        Require(root.GetProperty("contract").GetString() ==
+            "oreslang.strict-integer-to-float-exact.v1", "exact float contract identity");
+        var cases = root.GetProperty("cases");
+        Require(cases.GetArrayLength() == 11, "11 exact float vectors");
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var item in cases.EnumerateArray())
+        {
+            string id = item.GetProperty("id").GetString()!;
+            Require(ids.Add(id), "duplicate exact float vector id " + id);
+            Require(item.GetProperty("operation").GetString() == "toFloatExact",
+                "exact float operation identity: " + id);
+            long value = Signed(item.GetProperty("operand"));
+            var expected = item.GetProperty("expect");
+            if (expected.TryGetProperty("error", out var error))
+            {
+                Require(error.GetString() == "INEXACT_CONVERSION",
+                    "unexpected exact float error: " + id);
+                Expect<OverflowException>(
+                    () => _ = StrictSigned64Arithmetic.ToFloatExact(value), id);
+                continue;
+            }
+            string hex = expected.GetProperty("doubleBitsHex").GetString()!;
+            ulong expectedBits = ulong.Parse(hex,
+                NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture);
+            ulong actualBits = BitConverter.DoubleToUInt64Bits(
+                StrictSigned64Arithmetic.ToFloatExact(value));
+            Require(expectedBits == actualBits, "float bits mismatch: " + id);
+        }
+    }
+
     private static long Signed(JsonElement element) =>
         long.Parse(element.GetString()!, CultureInfo.InvariantCulture);
 
