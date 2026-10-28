@@ -218,6 +218,22 @@ const fixedHostedMatrixBlocks = Object.freeze({
     '          - os: windows-2022', '            rid: win-x64',
     '    runs-on: ${{ matrix.os }}',
   ],
+  'source-modules-native-aot.yml': [
+    '    strategy:', '      fail-fast: false', '      matrix:', '        include:',
+    '          - os: ubuntu-24.04', '            rid: linux-x64',
+    "            suffix: ''",
+    '          - os: windows-2022', '            rid: win-x64',
+    "            suffix: '.exe'",
+    '    runs-on: ${{ matrix.os }}',
+  ],
+  'spin-http-native-aot.yml': [
+    '    strategy:', '      fail-fast: false', '      matrix:', '        include:',
+    '          - os: ubuntu-24.04', '            rid: linux-x64',
+    '            binary: Ores.Net.HttpProbe',
+    '          - os: windows-2022', '            rid: win-x64',
+    '            binary: Ores.Net.HttpProbe.exe',
+    '    runs-on: ${{ matrix.os }}',
+  ],
 });
 function approvedFixedHostedMatrix(name, yaml) {
   const lines = fixedHostedMatrixBlocks[name];
@@ -229,6 +245,8 @@ function approvedFixedHostedMatrix(name, yaml) {
     'async-interop-i01.yml': 'host-subset',
     'select-native-aot.yml': 'native',
     'signed-remainder-native-aot.yml': 'native',
+    'source-modules-native-aot.yml': 'native-source-modules',
+    'spin-http-native-aot.yml': 'host-http-native-aot',
   }[name];
   const sections = yaml.split(/^jobs:\s*$/m);
   if (!expectedJob || sections.length !== 2) return false;
@@ -277,7 +295,8 @@ assert.ok(!approvedFixedHostedMatrix('other-workflow.yml', actorMemoryHosted));
 
 // Closed, exact Linux/Windows row definitions for new source-owned matrices.
 // No generic matrix expressions, new jobs or extra OS rows are admitted.
-for (const name of ['async-interop-i01.yml', 'select-native-aot.yml', 'signed-remainder-native-aot.yml']) {
+for (const name of ['async-interop-i01.yml', 'select-native-aot.yml', 'signed-remainder-native-aot.yml',
+                    'source-modules-native-aot.yml', 'spin-http-native-aot.yml']) {
   const yaml = readFileSync('.github/workflows/' + name, 'utf8');
   assert.ok(approvedFixedHostedMatrix(name, yaml), 'source fixed matrix changed: ' + name);
   assert.ok(!approvedFixedHostedMatrix('unknown-workflow.yml', yaml), 'unknown matrix admitted');
@@ -377,6 +396,8 @@ const watched = [
   ".github/workflows/trusted-source-local-fence-windows.yml",
   ".github/workflows/net-fence-smoke.yml",
   ".github/workflows/actor-memory-native-aot.yml",
+  ".github/workflows/source-modules-native-aot.yml",
+  ".github/workflows/spin-http-native-aot.yml",
   "verification/trusted-source-local-aot-workflow.test.mjs"
 ];
 function assertTrustedGateWired(source) {

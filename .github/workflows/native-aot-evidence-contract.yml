@@ -14,6 +14,8 @@ on:
       - '.github/workflows/trusted-source-local-fence-windows.yml'
       - '.github/workflows/net-fence-smoke.yml'
       - '.github/workflows/actor-memory-native-aot.yml'
+      - '.github/workflows/source-modules-native-aot.yml'
+      - '.github/workflows/spin-http-native-aot.yml'
       - 'verification/trusted-source-local-aot-workflow.test.mjs'
       - 'verification/trusted-bootstrap-admission.test.mjs'
   workflow_dispatch:
