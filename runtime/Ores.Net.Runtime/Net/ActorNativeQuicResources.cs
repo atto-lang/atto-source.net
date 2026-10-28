@@ -100,6 +100,7 @@ internal sealed class ActorQuicOperation : IAsyncDisposable
     private bool _pending = true;
     private bool _stopping;
     private bool _cleanupScheduled;
+    private Task _cancellation = Task.CompletedTask;
 
     internal ActorQuicOperation(ActorNativeQuicResources owner, ActorArenaLifetimePin pin)
     {
@@ -153,20 +154,16 @@ internal sealed class ActorQuicOperation : IAsyncDisposable
 
     internal void Stop()
     {
-        bool changed;
         lock (_gate)
         {
-            changed = !_stopping;
-            _stopping = true;
-        }
-        if (changed)
-        {
-            // Never invoke arbitrary cancellation callbacks on actor carriers.
-            _ = Task.Run(async () =>
+            if (!_stopping)
             {
-                try { await _cancel.CancelAsync().ConfigureAwait(false); }
-                catch (Exception) { /* cleanup still owns retirement */ }
-            });
+                _stopping = true;
+                // Cancellation callbacks must run outside actor carriers.
+                // Keep the task as part of the physical retirement barrier.
+                _cancellation = Task.Run(async () =>
+                    await _cancel.CancelAsync().ConfigureAwait(false));
+            }
         }
         ScheduleCleanup();
     }
@@ -184,12 +181,14 @@ internal sealed class ActorQuicOperation : IAsyncDisposable
         _ = Task.Run(async () =>
         {
             Exception? failure = null;
+            try { await _cancellation.ConfigureAwait(false); }
+            catch (Exception error) { failure = error; }
             try
             {
                 if (resource is not null)
                     await resource.DisposeAsync().ConfigureAwait(false);
             }
-            catch (Exception error) { failure = error; }
+            catch (Exception error) { failure ??= error; }
             finally
             {
                 try { _pin.Dispose(); }
