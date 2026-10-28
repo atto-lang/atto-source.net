@@ -1,0 +1,97 @@
+{
+  "contract": "oreslang.strict-integer-to-float-exact.v1",
+  "integer": "signed64",
+  "float": "ieee754-binary64",
+  "bits": "big-endian-hex",
+  "status": "reference vectors; guest and backend conformance not yet executed",
+  "cases": [
+    {
+      "id": "zero",
+      "operation": "toFloatExact",
+      "operand": "0",
+      "expect": {
+        "doubleBitsHex": "0000000000000000"
+      }
+    },
+    {
+      "id": "positive",
+      "operation": "toFloatExact",
+      "operand": "42",
+      "expect": {
+        "doubleBitsHex": "4045000000000000"
+      }
+    },
+    {
+      "id": "negative",
+      "operation": "toFloatExact",
+      "operand": "-42",
+      "expect": {
+        "doubleBitsHex": "c045000000000000"
+      }
+    },
+    {
+      "id": "two_to_53",
+      "operation": "toFloatExact",
+      "operand": "9007199254740992",
+      "expect": {
+        "doubleBitsHex": "4340000000000000"
+      }
+    },
+    {
+      "id": "above_exact_limit",
+      "operation": "toFloatExact",
+      "operand": "9007199254740993",
+      "expect": {
+        "error": "INEXACT_CONVERSION"
+      }
+    },
+    {
+      "id": "minimum",
+      "operation": "toFloatExact",
+      "operand": "-9223372036854775808",
+      "expect": {
+        "doubleBitsHex": "c3e0000000000000"
+      }
+    },
+    {
+      "id": "near_minimum",
+      "operation": "toFloatExact",
+      "operand": "-9223372036854775807",
+      "expect": {
+        "error": "INEXACT_CONVERSION"
+      }
+    },
+    {
+      "id": "maximum",
+      "operation": "toFloatExact",
+      "operand": "9223372036854775807",
+      "expect": {
+        "error": "INEXACT_CONVERSION"
+      }
+    },
+    {
+      "id": "two_to_62",
+      "operation": "toFloatExact",
+      "operand": "4611686018427387904",
+      "expect": {
+        "doubleBitsHex": "43d0000000000000"
+      }
+    },
+    {
+      "id": "two_to_62_plus_spacing",
+      "operation": "toFloatExact",
+      "operand": "4611686018427388928",
+      "expect": {
+        "doubleBitsHex": "43d0000000000001"
+      }
+    },
+    {
+      "id": "two_to_62_plus_one",
+      "operation": "toFloatExact",
+      "operand": "4611686018427387905",
+      "expect": {
+        "error": "INEXACT_CONVERSION"
+      }
+    }
+  ]
+}
