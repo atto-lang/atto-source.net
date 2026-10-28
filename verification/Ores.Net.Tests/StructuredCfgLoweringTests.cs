@@ -131,6 +131,24 @@ internal static class StructuredCfgLoweringTests
         CheckOverflow("fnc inc(int x):int{return x+1;}fnc main():int{return inc(9223372036854775807);}",
             "typed call overflow preserves checked CIL");
 
+        Check("fnc main():int{if 3 neq 4{return 42;}else{return 0;}}",
+            42, "canonical neq true comparison");
+        Check("fnc main():int{if 4 neq 4{return 0;}else{return 42;}}",
+            42, "canonical neq false comparison");
+        Check("fnc main():int{if -5 neq 5{return 42;}return 0;}",
+            42, "signed neq operands");
+        Check("fnc main():int{if 3 != 4{return 42;}return 0;}",
+            42, "symbolic not-equal alias");
+        Check("fnc main():int{if 4 eq 4{return 42;}return 0;}",
+            42, "canonical eq comparison");
+        Check("fnc main():int{if 4 == 4{return 42;}return 0;}",
+            42, "symbolic equality retains existing semantics");
+        Reject("fnc main():int{if 1 ne 2{return 42;}return 0;}",
+            "ne is not an Oreslang inequality operator");
+        Reject("fnc main():int{if true neq false{return 42;}return 0;}",
+            "i64 comparison must not accept bool operands");
+        Reject("fnc main():int{if 1 ! 2{return 42;}return 0;}",
+            "bare exclamation is not an admitted operator");
         Check("fnc main():int{return 2+3*4;}", 14, "arithmetic");
         Check("fnc main():int{let int i=0;while i<10 {i=i+1;}return i;}",
             10, "single loop-carried variable");

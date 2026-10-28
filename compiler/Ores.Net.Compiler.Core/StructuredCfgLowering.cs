@@ -208,6 +208,7 @@ public static class OresStructuredCfgLowering
                         StructuredOperator.Subtract => CfgOpcode.CheckedSubtract,
                         StructuredOperator.Multiply => CfgOpcode.CheckedMultiply,
                         StructuredOperator.EqualI64 => CfgOpcode.EqualI64,
+                        StructuredOperator.NotEqualI64 => CfgOpcode.NotEqualI64,
                         StructuredOperator.LessThanI64 => CfgOpcode.LessThanI64,
                         _ => throw new FormatException("Unsupported structured operation")
                     };

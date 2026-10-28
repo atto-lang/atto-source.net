@@ -20,7 +20,7 @@ public sealed record StructuredParameter(string Name, IrValueType Type);
 public sealed record StructuredFunction(string Name,
     IReadOnlyList<StructuredParameter> Parameters, IrValueType ResultType,
     StructuredExpr? ReturnValue, IReadOnlyList<StructuredStmt> Body);
-public enum StructuredOperator { Add, Subtract, Multiply, EqualI64, LessThanI64 }
+public enum StructuredOperator { Add, Subtract, Multiply, EqualI64, LessThanI64, NotEqualI64 }
 public sealed record StructuredBinary(int At, StructuredOperator Operator,
     StructuredExpr Left, StructuredExpr Right, IrValueType ResultType)
     : StructuredExpr(At, ResultType);
@@ -226,6 +226,8 @@ public static class OresStructuredParser
                 }
             }
             else if (ch == '=' && index + 1 < source.Length &&
+                     source[index + 1] == '=') index += 2;
+            else if (ch == '!' && index + 1 < source.Length &&
                      source[index + 1] == '=') index += 2;
             else if (ch == '|')
                 throw new FormatException(
@@ -484,14 +486,16 @@ public static class OresStructuredParser
         private StructuredExpr Equal(int depth)
         {
             var left = Compare(depth + 1);
-            while (Current.Text == "==")
+            while (Current.Text is "==" or "eq" or "!=" or "neq")
             {
                 int at = Current.Offset;
+                bool notEqual = Current.Text is "!=" or "neq";
                 index++;
                 var right = Compare(depth + 1);
                 Require(left, IrValueType.I64, "Equality requires int operands");
                 Require(right, IrValueType.I64, "Equality requires int operands");
-                left = CheckedBinary(at, StructuredOperator.EqualI64,
+                left = CheckedBinary(at,
+                    notEqual ? StructuredOperator.NotEqualI64 : StructuredOperator.EqualI64,
                     left, right, IrValueType.Bool);
             }
             return left;

@@ -144,6 +144,7 @@ internal static class CfgCilEmitter
                         case CfgOpcode.CheckedMultiply:
                         case CfgOpcode.CheckedDivide:
                         case CfgOpcode.EqualI64:
+                        case CfgOpcode.NotEqualI64:
                         case CfgOpcode.LessThanI64:
                             il.LoadLocal(op.Left!.Value);
                             il.LoadLocal(op.Right!.Value);
@@ -154,9 +155,18 @@ internal static class CfgCilEmitter
                                 CfgOpcode.CheckedMultiply => ILOpCode.Mul_ovf,
                                 CfgOpcode.CheckedDivide => ILOpCode.Div,
                                 CfgOpcode.EqualI64 => ILOpCode.Ceq,
+                                CfgOpcode.NotEqualI64 => ILOpCode.Ceq,
                                 CfgOpcode.LessThanI64 => ILOpCode.Clt,
                                 _ => throw new FormatException("Unverified CFG opcode")
                             });
+                            if (op.Opcode == CfgOpcode.NotEqualI64)
+                            {
+                                // ceq returns int32; compare with false to invert it.
+                                // This is deterministic, verifiable CIL without a
+                                // branch, dynamic dispatch or helper call.
+                                il.LoadConstantI4(0);
+                                il.OpCode(ILOpCode.Ceq);
+                            }
                             break;
                         default:
                             throw new FormatException("Unverified CFG instruction");
