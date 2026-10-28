@@ -14,6 +14,23 @@ stacked on PR #186 and current-main continuation-fence candidate #194.
 | Pump self-join | Producer could await disposal of its *own* serialized lane and deadlock | Task-scope `AsyncLocal` execution guard; fail closed on self-dispose before changing state | Self-join test |
 | Continuation quota races | Single-threaded test did not prove concurrent admission bound | 64 concurrent observer attempts for 4 permits; assert exactly 4 admissions and 60 rejects, no replay | New managed regression; execution pending |
 
+| Scope drain vs observer forwarding | Producer pump completion could race with still-running result projections; scope disposal was not a full adapter quiescence witness | Serialize producer/observer admission with scope close; track forwarding independently of quota; join both pump and all admitted forwarding completions | 32-round four-observer drain test, plus 128-way Start/Dispose contention test; execution pending |
+
+**Scope shutdown invariant:** once the admission lock marks the scope closed, no
+new producers or observer forwarders can be admitted. Successful disposal
+requires the producer pump to drain **and** the last admitted observer
+forwarder to publish its result and exit. This does not imply actor scheduler
+affinity or generation fencing.
+
+**Export authorization read at this revision:** source
+`.github/private-ci-approved-repositories.txt` and
+`.github/private-ci-approved-source-snapshots.txt` have **zero active entries**;
+`.github/private-ci-independent-reviewer.json` has `enabled: false`.
+Therefore the previously used test-carrier workflow **must not** be reused
+for the updated private source until an independent, source-governed
+authorization is recorded. A user instruction to test does not bypass this
+repository security policy.
+
 The old verified run 40536637344 covered source commit
 `0c7b1f54e2cf6ca10d33d79c97903bbe3ef86b02` only. It does **not** certify
 the newer head of this PR, which also contains the #194 continuation-fence
