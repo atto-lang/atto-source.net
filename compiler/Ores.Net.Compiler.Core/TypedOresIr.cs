@@ -14,7 +14,8 @@ public enum IrOpcode
     CheckedAdd,
     CheckedSubtract,
     CheckedMultiply,
-    CheckedDivide
+    CheckedDivide,
+    StrictRem
 }
 
 /// <summary>
@@ -100,7 +101,7 @@ public static class OresIrVerifier
             {
                 if (instruction.Opcode is not (IrOpcode.CheckedAdd or
                     IrOpcode.CheckedSubtract or IrOpcode.CheckedMultiply or
-                    IrOpcode.CheckedDivide))
+                    IrOpcode.CheckedDivide or IrOpcode.StrictRem))
                     throw new FormatException("Unknown IR opcode");
 
                 if (instruction.Constant.HasValue ||
@@ -214,6 +215,15 @@ public static class OresIrLowering
                         results.Push(EmitBinary(opcode, left, right));
                         break;
                     }
+                    case NamedIntegerRem:
+                    {
+                        if (results.Count < 2)
+                            throw new FormatException("IR intrinsic operand underflow");
+                        int right = results.Pop();
+                        int left = results.Pop();
+                        results.Push(EmitBinary(IrOpcode.StrictRem, left, right));
+                        break;
+                    }
                     default:
                         throw new FormatException("Invalid IR lowering finish frame");
                 }
@@ -235,6 +245,11 @@ public static class OresIrLowering
                         pending.Push(new Pending(binary, true));
                         pending.Push(new Pending(binary.Right, false));
                         pending.Push(new Pending(binary.Left, false));
+                        break;
+                    case NamedIntegerRem call:
+                        pending.Push(new Pending(call, true));
+                        pending.Push(new Pending(call.Right, false));
+                        pending.Push(new Pending(call.Left, false));
                         break;
                     default:
                         throw new FormatException("Unsupported AST node");
