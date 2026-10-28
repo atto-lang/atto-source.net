@@ -41,7 +41,7 @@ internal static class AsyncIoBoundarySelfTest
             !Forbidden.Any(r => r.Pattern.IsMatch(ReviewedMailboxCode(actor, "OtherRuntime.cs"))))
             throw new Exception("FAILED: socket boundary exception became broader than reviewed mailbox site");
         string root = FindRepositoryRoot();
-        string runtime = Path.Combine(root, "runtime", "Ores.Net.Runtime");
+        string runtime = Path.Combine(root, "runtime");
         int scanned = 0;
         foreach (string path in Directory.EnumerateFiles(runtime, "*.cs", SearchOption.AllDirectories))
         {
