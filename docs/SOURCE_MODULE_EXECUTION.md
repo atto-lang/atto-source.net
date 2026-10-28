@@ -34,6 +34,11 @@ edits, including transitive helpers, change the graph hash. Limits are 64 units,
 32 import edges of depth, 1 MiB per source, 8 MiB total and the existing 64-helper
 verified ABI bound. Unsupported source cannot publish a successful partial module.
 
+The checked-in module fixtures require LF on every platform, and CI compares
+each working-file Git object hash without filters to its committed blob before
+compilation. This prevents Windows line-ending conversion from silently changing
+the cross-platform source graph.
+
 ## Native execution
 
 `examples/modules/main.ores` imports two same-named methods in separate module
@@ -55,3 +60,9 @@ http-routing roots resolves the three-unit graph, then fails at the router's
 first nominal class declaration. This is progress beyond blanket import denial,
 not a full-framework pass. Owning classes/strings/arrays, actor/async lowering and
 HTTP intrinsic bindings remain required for the user's LLVM/.NET Spin goal.
+
+Current Java main `3210aeff07597035a4ed815ebbdf39720a3266c1` also rejects the
+unchanged module fixture's sum of declared-int imported function calls with
+`operator '+' needs numeric operands`. That is recorded as a reference inference
+gap; the fixture was not rewritten per backend, and the .NET result is not
+advertised as cross-backend parity proof.

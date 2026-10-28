@@ -45,17 +45,26 @@ jobs:
           if ((git rev-parse HEAD) -ne $env:EXPECTED_HEAD) { throw 'Checkout identity mismatch' }
           dotnet run -c Release --project verification/Ores.Net.Tests
           if ($LASTEXITCODE -ne 0) { throw 'Compiler/module regressions failed' }
+          foreach ($source in (Get-ChildItem examples/modules -Filter '*.ores')) {
+            $path = "examples/modules/$($source.Name)"
+            if ((git hash-object --no-filters -- $path) -ne (git rev-parse "HEAD:$path")) { throw "Checkout changed source bytes: $path" }
+          }
       - name: Publish native compiler and compile unchanged source graph
         shell: pwsh
         run: |
           dotnet publish compiler/Ores.Net.Compiler -c Release -r '${{ matrix.rid }}' -p:PublishAot=true -o artifacts/module-compiler -warnaserror
           if ($LASTEXITCODE -ne 0) { throw 'Native compiler publish failed' }
           $compiler = Join-Path 'artifacts/module-compiler' 'oresnet${{ matrix.suffix }}'
-          & $compiler compile-modules examples/modules/main.ores --root examples/modules --out artifacts/module-generated/OresGenerated.dll
+          $witness = & $compiler compile-modules examples/modules/main.ores --root examples/modules --out artifacts/module-generated/OresGenerated.dll
           if ($LASTEXITCODE -ne 0) { throw 'Native source graph compilation failed' }
+          New-Item artifacts/module-app -ItemType Directory -Force | Out-Null
+          $witness | Set-Content artifacts/module-app/source-graph.json
+          $witness
           $PSNativeCommandUseErrorActionPreference = $false
-          & $compiler compile-modules examples/modules/reject-class.ores --root examples/modules --out artifacts/module-rejected/OresGenerated.dll
-          if ($LASTEXITCODE -eq 0 -or (Test-Path artifacts/module-rejected/OresGenerated.dll)) { throw 'Unimplemented classes incorrectly admitted' }
+          $rejection = & $compiler compile-modules examples/modules/reject-class.ores --root examples/modules --out artifacts/module-rejected/OresGenerated.dll 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 1 -or $rejection -notmatch 'Nominal class/actor methods require' -or (Test-Path artifacts/module-rejected/OresGenerated.dll)) { throw 'Class rejection was not correctly classified' }
+          $rejection
+          $global:LASTEXITCODE = 0
       - name: Publish and execute statically linked module application
         shell: pwsh
         run: |
@@ -83,6 +92,7 @@ jobs:
           $output = & $binary 2>&1 | Out-String
           if ($LASTEXITCODE -ne 70 -or $output -notmatch 'Oreslang arithmetic overflow') { throw 'Imported arithmetic overflow semantics changed' }
           $output
+          $global:LASTEXITCODE = 0
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: source-modules-${{ matrix.rid }}

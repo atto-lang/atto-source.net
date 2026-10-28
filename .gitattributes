@@ -1,2 +1,1 @@
-# Digest-pinned scalar manifests and fixtures must retain their canonical LF bytes.
-contracts/** text eol=lf
+/examples/modules/*.ores text eol=lf
