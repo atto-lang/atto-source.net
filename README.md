@@ -344,13 +344,20 @@ repository variables have been accidentally enabled. Independently review
 and protect the source repository's
 default `main` branch **before** enabling it. Set the non-secret GitHub
 Actions repository variables `ORESLANG_NET_SELFHOSTED_LINUX=enabled`,
+`ORESLANG_NET_SELFHOSTED_LINUX_WORKFLOW_SHA=<independently approved protected-main workflow commit SHA>`,
 `ORESLANG_NET_SELFHOSTED_LINUX_SHA=<exact reviewed source commit SHA>`, and
 `ORESLANG_NET_SELFHOSTED_LINUX_TREE=<its verified 40-hex root Git tree>`.
 Then use **Run workflow** on this workflow's `main` revision. A
 `pull_request` event can never allocate this self-hosted runner:
 unreviewed PR-controlled workflow YAML must not be a runner authority.
-The manually dispatched default-branch workflow first validates immutable
-SHA/tree controls, then checks out the reviewed commit from this same repo
+The manually dispatched default-branch workflow requires that GitHub's
+`github.workflow_sha` exactly matches the independently approved workflow
+commit SHA before runner allocation, and rechecks `GITHUB_WORKFLOW_SHA` before
+checkout. This is distinct from `github.sha`, which is not a reliable stand-in
+for the workflow definition's identity. Any new workflow revision requires
+fresh independent review and reauthorization, even if the tested source tree
+is unchanged. The workflow then validates immutable source SHA/tree controls
+and checks out the reviewed commit from this same repo
 and validates the actual root tree **before executing source code**.
 
 The workflow run's GitHub `head_sha` identifies the trusted `main` workflow

@@ -379,3 +379,35 @@ test("strict Linux mandatory named stages exactly match the committed workflow",
     assert.match(linuxVerify(linuxRun,j).join(" "),/missing successful step/,stage);
   }
 });
+
+test("trusted manual Linux runner requires preapproved workflow-file SHA before allocation",()=> {
+  const local=linuxSource.split("  linux-x64-approved-source-local:\n")[1];
+  assert.ok(local,"source-local runner job exists");
+  const admission=local.split("    # This dedicated runner group")[0];
+  const precheckout=local.split("      - name: Authorize reviewed source before any checkout\n")[1]
+    ?.split("      - name: Check out approved immutable source")[0];
+  assert.ok(precheckout,"pre-checkout authorization step exists");
+  assert.ok(admission.includes("vars.ORESLANG_NET_SELFHOSTED_LINUX_WORKFLOW_SHA != ''"));
+  assert.ok(admission.includes("github.workflow_sha == vars.ORESLANG_NET_SELFHOSTED_LINUX_WORKFLOW_SHA"));
+  assert.ok(!admission.includes("github.sha == vars.ORESLANG_NET_SELFHOSTED_LINUX_WORKFLOW_SHA"));
+  assert.ok(precheckout.includes("APPROVED_WORKFLOW_SHA: ${{ vars.ORESLANG_NET_SELFHOSTED_LINUX_WORKFLOW_SHA }}"));
+  assert.ok(precheckout.includes('[[ "$APPROVED_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]'));
+  assert.ok(precheckout.includes('test "$GITHUB_WORKFLOW_SHA" = "$APPROVED_WORKFLOW_SHA"'));
+});
+test("unapproved, changed or empty workflow SHA cannot satisfy trusted admission",()=> {
+  const local=linuxSource.split("  linux-x64-approved-source-local:\n")[1];
+  const admission=local.split("    # This dedicated runner group")[0];
+  const required=["vars.ORESLANG_NET_SELFHOSTED_LINUX_WORKFLOW_SHA != ''",
+    "github.workflow_sha == vars.ORESLANG_NET_SELFHOSTED_LINUX_WORKFLOW_SHA"];
+  for (const atom of required) assert.ok(admission.includes(atom),atom);
+  const valid="a".repeat(40),changed="b".repeat(40);
+  const admitted=(run,approved)=>required.every(atom=>admission.includes(atom))
+    && /^[a-f0-9]{40}$/.test(approved) && run===approved;
+  assert.equal(admitted(valid,valid),true);
+  assert.equal(admitted(valid,""),false);
+  assert.equal(admitted(changed,valid),false);
+  assert.equal(admitted(valid,changed),false);
+  for (const atom of required)
+    assert.equal(required.every(x=>admission.replace(atom,"").includes(x)),false,
+      "deleting admission clause must fail the test: "+atom);
+});
