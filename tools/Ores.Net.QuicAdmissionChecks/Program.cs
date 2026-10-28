@@ -389,6 +389,36 @@ using (var registryRuntime = new ActorRuntime(new ActorRuntimeOptions {
     try { failing.Retired.GetAwaiter().GetResult(); }
     catch (InvalidOperationException ex) when (
         ex.Message == "injected native QUIC dispose failure") { }
+
+    // Cancellation callbacks must also finish before the retirement receipt.
+    ActorQuicOperation? cancelling = null;
+    using var cancellationRegistered = new ManualResetEventSlim(false);
+    var cancellingActor = registryRuntime.Spawn(ActorKind.Private, (context, _) =>
+    {
+        cancelling = context.RegisterQuicOperation();
+        cancellationRegistered.Set();
+    });
+    registryRuntime.Send(cancellingActor, new byte[] { 8 });
+    if (!cancellationRegistered.Wait(TimeSpan.FromSeconds(10)) ||
+        cancelling is null)
+        throw new InvalidOperationException("Cancellation fixture not registered");
+    using var enteredCancellation = new ManualResetEventSlim(false);
+    using var releaseCancellation = new ManualResetEventSlim(false);
+    using var callback = cancelling.StopToken.Register(() =>
+    {
+        enteredCancellation.Set();
+        if (!releaseCancellation.Wait(TimeSpan.FromSeconds(10)))
+            throw new InvalidOperationException("Native cancellation callback timed out");
+    });
+    var callbackDrain = registryRuntime.StopAndDrainQuicAsync(cancellingActor);
+    if (!enteredCancellation.Wait(TimeSpan.FromSeconds(10)))
+        throw new InvalidOperationException("QUIC cancellation not dispatched");
+    cancelling.FailConnect();
+    if (callbackDrain.IsCompleted)
+        throw new InvalidOperationException("QUIC drain ignored physical cancellation callback");
+    releaseCancellation.Set();
+    if (!callbackDrain.Wait(TimeSpan.FromSeconds(10)) || !callbackDrain.Result)
+        throw new InvalidOperationException("QUIC cancellation retirement failed");
 }
 
 Console.WriteLine("QUIC actor-native retirement ledger: stop/drain, B progress, pending and late handle, disposal failure checks passed");
