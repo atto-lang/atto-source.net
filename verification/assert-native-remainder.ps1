@@ -14,7 +14,14 @@ $cases = @(
     @{ Name = 'negative-dividend'; Expression = '-7%3'; Output = '-1'; Exit = 0 },
     @{ Name = 'negative-divisor'; Expression = '7%-3'; Output = '1'; Exit = 0 },
     @{ Name = 'minimum-minus-one'; Expression = '-9223372036854775808%-1'; Output = '0'; Exit = 0 },
-    @{ Name = 'overflow-before-zero'; Expression = '(9223372036854775807+1)%-1'; Output = ''; Exit = 70 }
+    @{ Name = 'overflow-before-zero'; Expression = '(9223372036854775807+1)%-1'; Output = ''; Exit = 70 },
+    # Java strict signed64 fixture blob 3f65f557f06e8cd0d34a738a0d357d6c2e477665:
+    # four independent guest-source vectors through compiled CIL and native AOT.
+    @{ Name = 'xor-zero'; Expression = 'Integer.bitXor(0,0)'; Output = '0'; Exit = 0 },
+    @{ Name = 'xor-positive'; Expression = 'Integer.bitXor(5,3)'; Output = '6'; Exit = 0 },
+    @{ Name = 'xor-negative'; Expression = 'Integer.bitXor(-1,0)'; Output = '-1'; Exit = 0 },
+    @{ Name = 'xor-min-max'; Expression = 'Integer.bitXor(-9223372036854775808,9223372036854775807)'; Output = '-1'; Exit = 0 },
+    @{ Name = 'xor-eager-overflow'; Expression = 'Integer.bitXor(9223372036854775807+1,0)'; Output = ''; Exit = 70 }
 )
 foreach ($mode in @('compile', 'emit-csharp', 'emit-fsharp')) {
     foreach ($case in $cases) {
@@ -62,16 +69,20 @@ foreach ($mode in @('compile', 'emit-csharp', 'emit-fsharp')) {
         $hash = (Get-FileHash $app -Algorithm SHA256).Hash
         Write-Output "REMAINDER_NATIVE_PASS mode=$mode case=$($case.Name) exit=$exitCode output=$actual SHA256=$hash"
     }
-    foreach ($expression in @('7%0', '7%(1+1)', '7%-9223372036854775809')) {
+    foreach ($expression in @(
+        '7%0', '7%(1+1)', '7%-9223372036854775809',
+        'Integer.bitXor(1)', 'Integer.bitXor(1,2,3)',
+        'Integer.mod(9,4)', 'Integer.bitXor(1.5,2)', '5^3'
+    )) {
         $inputFile = Join-Path $work 'rejected.ores'
         [IO.File]::WriteAllText($inputFile, "fnc main():int{return $expression;}", [Text.UTF8Encoding]::new($false))
         $extension = switch ($mode) { 'compile' { 'dll' } 'emit-csharp' { 'cs' } 'emit-fsharp' { 'fs' } }
         $outputFile = Join-Path $work "rejected/OresGenerated.$extension"
         & $compiler $mode $inputFile --out $outputFile
-        if ($LASTEXITCODE -eq 0 -or (Test-Path $outputFile)) { throw "$mode admitted unsupported divisor $expression" }
+        if ($LASTEXITCODE -eq 0 -or (Test-Path $outputFile)) { throw "$mode admitted unsupported source $expression" }
     }
 }
-Write-Output 'REMAINDER_NATIVE_SUITE_PASS: 12 native executions, 9 source denials'
+Write-Output 'REMAINDER_XOR_NATIVE_SUITE_PASS: 27 native executions, 24 source denials'
 # The last compiler invocation is an expected rejection. Publish success only
 # after every assertion, instead of leaking that command's nonzero exit status.
 exit 0
