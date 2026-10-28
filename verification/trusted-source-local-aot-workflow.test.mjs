@@ -120,15 +120,30 @@ const hostedRunnerLabel = /^(?:ubuntu|windows|macos)-(?:latest|\d+(?:\.\d+)?(?:-
 function hasUnapprovedRunnerSelector(yaml) {
   for (const line of yaml.split(/\r?\n/)) {
     if (/^\s*#/.test(line)) continue;
-    const match = line.match(/^\s*runs-on:\s*(.*?)\s*$/);
+    // Flow-style job mappings and YAML merge keys can hide runner
+    // assignments from a line-oriented plain-key inventory.
+    if (/^\s{2}[A-Za-z_][\w-]*\s*:\s*\{/.test(line) ||
+        /^\s*<<\s*:/.test(line) ||
+        /\{[^#\n]*?(?:["']runs-on["']|runs-on)\s*:/.test(line)) return true;
+    // YAML permits spaces before ':' and quoted mapping keys. Require the
+    // canonical plain key, not just a hosted-looking value.
+    const match = line.match(/^\s*(?:(["'])runs-on\1|runs-on)\s*:\s*(.*?)\s*$/);
     if (!match) continue;
-    const value = match[1].replace(/\s+#.*$/, '').trim();
+    if (!/^\s*runs-on:\s+/.test(line)) return true;
+    const value = match[2].replace(/\s+#.*$/, '').trim();
     if (!hostedRunnerLabel.test(value)) return true;
   }
   return false;
 }
 for (const selector of [
   'runs-on: [ubuntu-latest, self-hosted]',
+  'runs-on : self-hosted',
+  '"runs-on": self-hosted',
+  "'runs-on': [self-hosted, Linux]",
+  '  build: { runs-on: [self-hosted, Linux], steps: [] }',
+  '  build: { "runs-on": [self-hosted, Linux], steps: [] }',
+  '  <<: *untrusted_runner',
+  'runs-on : ubuntu-latest',
   'runs-on: [self-hosted, Linux]',
   'runs-on: { group: attacker, labels: [self-hosted] }',
   'runs-on: ${{ matrix.runner }}',
