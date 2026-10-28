@@ -72,3 +72,6 @@ foreach ($mode in @('compile', 'emit-csharp', 'emit-fsharp')) {
     }
 }
 Write-Output 'REMAINDER_NATIVE_SUITE_PASS: 12 native executions, 9 source denials'
+# The last compiler invocation is an expected rejection. Publish success only
+# after every assertion, instead of leaking that command's nonzero exit status.
+exit 0
