@@ -152,6 +152,17 @@ mutableAnswers[0] = IPAddress.Parse("8.8.8.8");
 if (!copied.Consume(42, 7).Address.Address.Equals(IPAddress.Loopback))
     throw new InvalidOperationException("Permit retained mutable DNS answer alias");
 
+// The caller can mutate IPv6 ScopeId after issuance. The native connect
+// must nevertheless use the checked scope-free byte snapshot, not this object.
+var mutableIPv6 = IPAddress.Parse("::1");
+var frozenIPv6 = QuicLoopbackPermit.AuthorizeForTrustedHost(
+    "origin.example", 443, new[] { mutableIPv6 }, 0, 42, 7, 9,
+    TimeSpan.FromSeconds(2));
+mutableIPv6.ScopeId = 42;
+var frozenPeer = frozenIPv6.Consume(42, 7).Address.Address;
+if (!frozenPeer.Equals(IPAddress.IPv6Loopback) || frozenPeer.ScopeId != 0)
+    throw new InvalidOperationException("QUIC pin retained mutable IPAddress state");
+
 var expiry = Issue(lifetime: TimeSpan.FromMilliseconds(1));
 Thread.Sleep(15);
 try
