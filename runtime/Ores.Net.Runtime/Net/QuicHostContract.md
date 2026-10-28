@@ -57,6 +57,28 @@ migration at the provider level, enforce global connection/socket buffers,
 or prove actor cleanup after shutdown. None of those guarantees may be
 inferred from an opaque permit or the provider's `IsSupported` property.
 
+## Current-source security hardening (October 28, 2026)
+
+The trusted host permit issuer no longer validates a caller-controlled
+`IReadOnlyList<IPAddress>` by enumeration and then re-indexes that same
+possibly mutable list to select a pin. It now captures a **bounded, indexed
+snapshot** of validated address bytes and selects the connection IP from the
+snapshot, not from an untrusted second read. Negative fixtures supply a DNS
+collection whose iterator claims loopback but whose indexer returns a public
+IP, and another whose indexer changes from loopback to a public IP on a second
+read. Both patterns must fail closed or preserve the first validated pin.
+Canonical TLS identities now also reject numeric IP literals.
+
+This closes a **time-of-check/time-of-use flaw in the host admission helper**.
+It does **not** prove that the caller's list came from an authoritative
+policy-owned DNS resolution; therefore general public egress is still
+disabled and a compiler/runtime CONTROL-issued lease remains required.
+
+A separate, source-free .NET 10 SDK/NativeAOT carrier probe was created in
+`canonical-cloud-test/readiness-edge-e2e` PR #38. Its first workflow
+run `40749652387` failed with zero executed steps, so this carrier did not
+demonstrate runner or SDK capacity. No Oreslang private source was mirrored.
+
 ## Exact-head acceptance gates
 
 - Compile and run `tools/Ores.Net.QuicAdmissionChecks` on .NET 10, with
