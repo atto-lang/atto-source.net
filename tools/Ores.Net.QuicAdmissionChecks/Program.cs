@@ -270,6 +270,129 @@ if (OperatingSystem.IsLinux() || OperatingSystem.IsWindows() ||
     ownerRuntime.Stop(second);
 }
 
+// Actor-local native lifetime ledger: source-free fake disposers prove
+// stop/handshake linearization and physical quiescence. No network is opened.
+using (var registryRuntime = new ActorRuntime(new ActorRuntimeOptions {
+    MaxActors = 8, ActorPersistentBytes = 4096, ActorScratchBytes = 4096,
+    ActorMaxAllocations = 16, ActorMaxLifetimePins = 16,
+    ActorMaxReadLoans = 16
+}))
+{
+    ActorQuicOperation? registered = null;
+    using var registeredEvent = new ManualResetEventSlim(false);
+    var firstActor = registryRuntime.Spawn(ActorKind.Private, (context, _) =>
+    {
+        registered = context.RegisterQuicOperation();
+        registeredEvent.Set();
+    });
+    registryRuntime.Send(firstActor, new byte[] { 3 });
+    if (!registeredEvent.Wait(TimeSpan.FromSeconds(10)))
+        throw new InvalidOperationException("QUIC registration stalled");
+    var op = registered ??
+        throw new InvalidOperationException("QUIC operation not registered");
+    var held = new HeldNativeResource();
+    op.PublishAsync(held).AsTask().GetAwaiter().GetResult();
+
+    var stopping = registryRuntime.StopAndDrainQuicAsync(firstActor);
+    if (!held.Disposing.Wait(TimeSpan.FromSeconds(10)))
+        throw new InvalidOperationException("Actor stop did not begin native retirement");
+    if (stopping.IsCompleted || op.Retired.IsCompleted)
+        throw new InvalidOperationException("Native QUIC drain completed before physical disposal");
+    if (!op.IsStopping)
+        throw new InvalidOperationException("Stopped actor retained native admission");
+
+    // B must make progress while A is asynchronously draining; neither a
+    // worker carrier nor the actor runtime shutdown path is blocked.
+    using var bRan = new ManualResetEventSlim(false);
+    var secondActor = registryRuntime.Spawn(ActorKind.Private,
+        (_, _) => bRan.Set());
+    registryRuntime.Send(secondActor, new byte[] { 4 });
+    if (!bRan.Wait(TimeSpan.FromSeconds(10)))
+        throw new InvalidOperationException("Actor B blocked behind A native retirement");
+    registryRuntime.Stop(secondActor);
+
+    held.Release();
+    if (!stopping.Wait(TimeSpan.FromSeconds(10)) || !stopping.Result)
+        throw new InvalidOperationException("Actor A was not physically reclaimed");
+    if (held.DisposalCalls != 1)
+        throw new InvalidOperationException("QUIC physical disposer ran more than once");
+
+    // An outstanding handshake is tracked *before* it receives a native
+    // resource. Stop cannot call this quiescent until the handshake settles.
+    ActorQuicOperation? pending = null;
+    using var pendingEvent = new ManualResetEventSlim(false);
+    var pendingActor = registryRuntime.Spawn(ActorKind.Private, (context, _) =>
+    {
+        pending = context.RegisterQuicOperation();
+        pendingEvent.Set();
+    });
+    registryRuntime.Send(pendingActor, new byte[] { 5 });
+    if (!pendingEvent.Wait(TimeSpan.FromSeconds(10)) || pending is null)
+        throw new InvalidOperationException("QUIC pending handshake not registered");
+    var pendingDrain = registryRuntime.StopAndDrainQuicAsync(pendingActor);
+    if (pendingDrain.IsCompleted)
+        throw new InvalidOperationException("Pending QUIC handshake disappeared at Stop");
+    pending.FailConnect();
+    if (!pendingDrain.Wait(TimeSpan.FromSeconds(10)) || !pendingDrain.Result)
+        throw new InvalidOperationException("Aborted QUIC handshake retained actor memory");
+
+    // If a handle arrives *after* Stop it must be disposed, not published.
+    ActorQuicOperation? late = null;
+    using var lateEvent = new ManualResetEventSlim(false);
+    var lateActor = registryRuntime.Spawn(ActorKind.Private, (context, _) =>
+    {
+        late = context.RegisterQuicOperation();
+        lateEvent.Set();
+    });
+    registryRuntime.Send(lateActor, new byte[] { 6 });
+    if (!lateEvent.Wait(TimeSpan.FromSeconds(10)) || late is null)
+        throw new InvalidOperationException("Late QUIC fixture not registered");
+    var lateDrain = registryRuntime.StopAndDrainQuicAsync(lateActor);
+    var lateHandle = new HeldNativeResource();
+    var latePublish = late.PublishAsync(lateHandle).AsTask();
+    if (!lateHandle.Disposing.Wait(TimeSpan.FromSeconds(10)))
+        throw new InvalidOperationException("Late QUIC handle not disposed after Stop");
+    if (latePublish.IsCompleted || lateDrain.IsCompleted)
+        throw new InvalidOperationException("Late native QUIC handle leaked a false retirement receipt");
+    lateHandle.Release();
+    try
+    {
+        latePublish.GetAwaiter().GetResult();
+        throw new InvalidOperationException("Stop-losing native handle was published");
+    }
+    catch (OperationCanceledException) { }
+    if (!lateDrain.Wait(TimeSpan.FromSeconds(10)) || !lateDrain.Result ||
+        lateHandle.DisposalCalls != 1)
+        throw new InvalidOperationException("Late QUIC native retirement failed");
+
+    // Failed physical disposal is not a successful quiescence receipt.
+    ActorQuicOperation? failing = null;
+    using var failingEvent = new ManualResetEventSlim(false);
+    var failingActor = registryRuntime.Spawn(ActorKind.Private, (context, _) =>
+    {
+        failing = context.RegisterQuicOperation();
+        failingEvent.Set();
+    });
+    registryRuntime.Send(failingActor, new byte[] { 7 });
+    if (!failingEvent.Wait(TimeSpan.FromSeconds(10)) || failing is null)
+        throw new InvalidOperationException("QUIC failure fixture not registered");
+    failing.PublishAsync(new FaultingNativeResource())
+        .AsTask().GetAwaiter().GetResult();
+    var failedDrain = registryRuntime.StopAndDrainQuicAsync(failingActor);
+    try
+    {
+        failedDrain.GetAwaiter().GetResult();
+        throw new InvalidOperationException("Faulted native disposer reported success");
+    }
+    catch (InvalidOperationException ex) when (
+        ex.Message == "injected native QUIC dispose failure") { }
+    try { failing.Retired.GetAwaiter().GetResult(); }
+    catch (InvalidOperationException ex) when (
+        ex.Message == "injected native QUIC dispose failure") { }
+}
+
+Console.WriteLine("QUIC actor-native retirement ledger: stop/drain, B progress, pending and late handle, disposal failure checks passed");
+
 // No network is opened in this admission test. It is not QUIC/HTTP3 interop.
 Console.WriteLine("QUIC host admission and single-use loopback permit checks passed; interop not asserted");
 
@@ -303,4 +426,31 @@ internal sealed class ChangingDnsSet : IReadOnlyList<IPAddress>
     }
     System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator()
         => GetEnumerator();
+}
+
+internal sealed class HeldNativeResource : IAsyncDisposable
+{
+    private readonly TaskCompletionSource<bool> _release =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly ManualResetEventSlim _disposing = new(false);
+    private int _calls;
+
+    internal ManualResetEventSlim Disposing => _disposing;
+    internal int DisposalCalls => Volatile.Read(ref _calls);
+    internal void Release() => _release.TrySetResult(true);
+
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Increment(ref _calls) != 1)
+            throw new InvalidOperationException("Double QUIC native disposal");
+        _disposing.Set();
+        await _release.Task.ConfigureAwait(false);
+    }
+}
+
+internal sealed class FaultingNativeResource : IAsyncDisposable
+{
+    public ValueTask DisposeAsync() =>
+        ValueTask.FromException(new InvalidOperationException(
+            "injected native QUIC dispose failure"));
 }

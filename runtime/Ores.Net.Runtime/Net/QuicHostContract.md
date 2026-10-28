@@ -5,22 +5,36 @@ no HTTP/3/QPACK guest framing, no general Internet egress, no proven native
 interop/AOT execution.
 
 The original naked `ConnectHttp3Async(IPEndPoint, string, CancellationToken)`
-remains **fail closed**, even if MsQuic is supported. The new overload
-`ConnectHttp3Async(QuicLoopbackPermit, ActorContext, cancellationToken)`
-can use real `QuicConnection.ConnectAsync` **only** after consuming a
-`QuicLoopbackPermit`, issued by the trusted runtime. The adapter now checks
-runtime-issued turn-scoped actor context identity and rejects already-retired
-owners, rather than trusting caller-provided numeric actor IDs or an arbitrary
-host-constructed arena. It also holds an actor-arena lifetime pin until the
-native handshake and admission checks reach physical completion. It also rechecks retirement
-and cancellation after the physical handshake and disposes on refusal.
+remains **fail closed**. The narrow host-only overload
+`ConnectHttp3Async(QuicLoopbackPermit, ActorContext, CancellationToken)`
+consumes a single-use permit, registers a pending operation in the
+**actor-local CONTROL-owned ledger before suspension**, and returns an
+opaque `ActorQuicConnectionLease` rather than an untracked
+`QuicConnection`. The `ActorContext` is issued only by `ActorRuntime`,
+and registration validates its active physical turn and takes a lifetime pin.
 
-**Still outstanding:** the lifetime pin is held during handshake only, not
-for the entire returned native connection lifetime. An actor stop occurring
-after the final retirement check can race the raw connection return. Automatic actor-stop cancellation,
-stream ownership, a lifetime pin, migration fencing, and physically witnessed
-final disposal MUST be implemented before exposing guest QUIC. The current
-change is only an admission-time reduction of stale-actor authority.
+Actor Stop seals registration synchronously and cancels the owner's pending
+native operations off the actor carrier. Publication of a handshake result
+is linearized with Stop: the losing handle must be disposed before the
+registry reports completion. Each actor admits at most 16 QUIC connections;
+each connection admits at most 32 locally tracked outgoing streams. Native
+resource teardown waits for all in-flight stream opens and disposes streams
+before the connection. `StopAndDrainQuicAsync` waits for both actor-dispatch
+finalization and native resource disposal, returning `true` only if the
+actor arena has physically reclaimed. A disposal exception faults this
+receipt rather than being reported as success. A plain synchronous `Stop`
+does **not** wait for the receipt.
+
+**Remaining blockers:** This is host-only .NET runtime scaffolding, not
+verified source-level guest lowering. It has not been compiled or run on its
+current exact source tree due to zero-step source CI. Actor `Dispose()`
+is still synchronous and does not await native QUIC retirement; callers
+requiring the physical receipt must use the explicit asynchronous drain.
+There is no complete verifier of destination path migration, actor-wide
+socket buffers, production egress DNS provenance or full QUIC/TLS peer
+interoperability through this private implementation. Stream I/O still
+requires executed stop/cancellation race tests. Hard-real-time guarantees
+are **not** claimed: cleanup uses asynchronous managed control work.
 
 ## Current, intentionally restricted issuer
 
