@@ -1,7 +1,39 @@
 # .NET Task/Future lifecycle hardening — 2026-10-28
 
+## Main integration and CI admission reconciliation
+
+On October 28, 2026, PR #192 was integrated with the newer `main` by a
+two-parent Git merge on the **draft feature branch only**, then retargeted
+from the already-merged #186 branch to `main`. This preserves current-main
+structured CLI commands, module compilation, strict NativeAOT project flags
+and every existing managed test registration. PR #194's continuation fence
+and PR #186's host observation base are already in `main`; no duplicate
+implementation was overlaid. Exactly the ten PR-specific files differ
+against the integration base; the branch must remain current with `main`
+before review.
+
+Additional native negative checks now cover `check`,
+`check-structured`, `compile-structured`, `emit-csharp` and
+`emit-fsharp` to prevent new compiler entry points from accepting
+unsupported Task/Future guest source. The workflow requires the
+`NET_ASYNC_ADDITIONAL_COMMANDS_REJECTED` trace. This expands the
+negative checks from 5 source grammar cases + 8 legacy compiler cases
+to include 5 additional command-surface rejections. The new checks
+still require an actual executed Linux and Windows runner; static
+reconciliation is not runtime validation.
+
+**Important:** The exact source commit/root tree change with every
+patch. The previous issue #220 candidate (head
+`6c358611addb901e041c5f5cd09ea0ec532f511f`,
+tree `eb77cb077f1cd6f53a9a50a2dff6698b25cc2e6d`) has been
+superseded and must not be used to authorize source transfer. The
+current proposal must be independently re-reviewed before any private
+cross-organization mirror. The in-source runner remains the preferred
+verification route.
+
+
 Scope: [source.net PR #192](https://github.com/ores-truffle-oreslang/oreslang-source.net/pull/192),
-stacked on PR #186 and current-main continuation-fence candidate #194.
+retargeted to main, with merged dependency PRs #186 and #194 preserved.
 
 ## Audit findings and repairs
 
