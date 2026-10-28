@@ -66,13 +66,14 @@ internal sealed class ActorQuicConnectionResource : IAsyncDisposable
         get { lock (_gate) return _closing || _operation.IsStopping; }
     }
 
-    internal CancellationTokenSource LinkedStop(CancellationToken cancellationToken)
+    internal CancellationTokenSource LinkedStop(
+        CancellationToken cancellationToken, CancellationToken streamClose)
     {
         if (!cancellationToken.CanBeCanceled)
             throw new ArgumentException("QUIC stream needs bounded cancellation",
                                         nameof(cancellationToken));
         return CancellationTokenSource.CreateLinkedTokenSource(
-            cancellationToken, _operation.StopToken);
+            cancellationToken, _operation.StopToken, streamClose);
     }
 
     internal async ValueTask<ActorQuicStreamLease> OpenOutboundStreamAsync(
@@ -177,7 +178,12 @@ internal sealed class ActorQuicStreamLease : IAsyncDisposable
     private readonly object _gate = new();
     private readonly ActorQuicConnectionResource _owner;
     private readonly QuicStream _stream;
+    private readonly CancellationTokenSource _close = new();
+    private readonly TaskCompletionSource<bool> _ioDrained =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
     private Task? _disposal;
+    private int _inFlight;
+    private bool _closing;
 
     internal ActorQuicStreamLease(
         ActorQuicConnectionResource owner, QuicStream stream)
@@ -186,33 +192,78 @@ internal sealed class ActorQuicStreamLease : IAsyncDisposable
         _stream = stream;
     }
 
+    private void BeginIo()
+    {
+        lock (_gate)
+        {
+            if (_closing || _owner.IsStopping)
+                throw new SecurityException("Actor QUIC stream retired");
+            // Prevent unbounded in-flight callbacks per stream.
+            if (_inFlight >= 16)
+                throw new InvalidOperationException("Actor QUIC stream I/O quota exceeded");
+            ++_inFlight;
+        }
+    }
+
+    private void EndIo()
+    {
+        lock (_gate)
+        {
+            --_inFlight;
+            if (_closing && _inFlight == 0) _ioDrained.TrySetResult(true);
+        }
+    }
+
     internal Task DisposeCoreAsync()
     {
-        lock (_gate) return _disposal ??= DisposePhysicalAsync();
+        lock (_gate)
+        {
+            if (_disposal is not null) return _disposal;
+            _closing = true;
+            if (_inFlight == 0) _ioDrained.TrySetResult(true);
+            return _disposal = DisposePhysicalAsync();
+        }
     }
 
     private async Task DisposePhysicalAsync()
     {
-        try { await _stream.DisposeAsync().ConfigureAwait(false); }
-        finally { _owner.Unregister(this); }
+        try
+        {
+            // Cancel local readers/writers, then wait for physical returns.
+            await _close.CancelAsync().ConfigureAwait(false);
+            await _ioDrained.Task.ConfigureAwait(false);
+            await _stream.DisposeAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            _close.Dispose();
+            _owner.Unregister(this);
+        }
     }
 
     internal async ValueTask<int> ReadAsync(
         Memory<byte> destination, CancellationToken cancellationToken)
     {
-        if (_owner.IsStopping || _disposal is not null)
-            throw new SecurityException("Actor QUIC stream retired");
-        using var linked = _owner.LinkedStop(cancellationToken);
-        return await _stream.ReadAsync(destination, linked.Token).ConfigureAwait(false);
+        BeginIo();
+        try
+        {
+            using var linked = _owner.LinkedStop(cancellationToken, _close.Token);
+            return await _stream.ReadAsync(destination, linked.Token)
+                .ConfigureAwait(false);
+        }
+        finally { EndIo(); }
     }
 
     internal async ValueTask WriteAsync(
         ReadOnlyMemory<byte> source, CancellationToken cancellationToken)
     {
-        if (_owner.IsStopping || _disposal is not null)
-            throw new SecurityException("Actor QUIC stream retired");
-        using var linked = _owner.LinkedStop(cancellationToken);
-        await _stream.WriteAsync(source, linked.Token).ConfigureAwait(false);
+        BeginIo();
+        try
+        {
+            using var linked = _owner.LinkedStop(cancellationToken, _close.Token);
+            await _stream.WriteAsync(source, linked.Token).ConfigureAwait(false);
+        }
+        finally { EndIo(); }
     }
 
     public ValueTask DisposeAsync() => new(DisposeCoreAsync());
