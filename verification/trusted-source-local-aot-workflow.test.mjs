@@ -295,4 +295,37 @@ assert.ok(hosted.includes('github.event_name') &&
 assert.ok(hostedWindows.includes('github.event_name') &&
   hostedWindows.includes('cancel-in-progress: false'),
   'Windows exact-head native proof must not be cancelled by a later PR update');
+// The inexpensive source-only workflow must actually run this contract,
+// including when its own test and any of the three trusted workflows change.
+const light = readFileSync('.github/workflows/native-aot-evidence-contract.yml', 'utf8');
+const watched = [
+  ".github/workflows/trusted-source-local-linux-aot.yml",
+  ".github/workflows/trusted-source-local-windows-aot.yml",
+  ".github/workflows/trusted-source-local-fence-windows.yml",
+  ".github/workflows/net-fence-smoke.yml",
+  ".github/workflows/actor-memory-native-aot.yml",
+  "verification/trusted-source-local-aot-workflow.test.mjs"
+];
+function assertTrustedGateWired(source) {
+  for (const path of watched) {
+    assert.ok(source.includes("      - '" + path + "'"),
+      'source-only evidence workflow fails to watch ' + path);
+  }
+  assert.ok(source.includes('run: node verification/trusted-source-local-aot-workflow.test.mjs'),
+    'trusted workflow contract is not executed by source-only CI');
+  const checkout = source.indexOf('uses: actions/checkout@');
+  const evidence = source.indexOf('run: node --test verification/ci-evidence-gate.test.mjs');
+  const trustedCheck = source.indexOf('run: node verification/trusted-source-local-aot-workflow.test.mjs');
+  assert.ok(checkout >= 0 && evidence > checkout && trustedCheck > evidence,
+    'trusted workflow validation missing or executed before the checkout/evidence gate');
+}
+assertTrustedGateWired(light);
+for (const path of watched) {
+  assert.throws(() => assertTrustedGateWired(light.replace("      - '" + path + "'", '')),
+    'removing monitored trusted security path must fail: ' + path);
+}
+assert.throws(() => assertTrustedGateWired(light.replace(
+  'run: node verification/trusted-source-local-aot-workflow.test.mjs',
+  'run: echo no-op')), 'replacing trusted gate with a no-op must fail');
+
 console.log('TRUSTED_SOURCE_LOCAL_AOT_WORKFLOW_CONTRACT_PASSED');
