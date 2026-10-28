@@ -20,6 +20,10 @@ internal static class NativeQuicClient
 
     internal static bool IsSupported => QuicConnection.IsSupported;
 
+    // The return type itself is OS-specific and CA1416 flags it even
+    // though the public naked-endpoint overload fails closed and the
+    // permit overload checks OS/provider support before native admission.
+#pragma warning disable CA1416
     /// <summary>HTTP/3 ALPN over QUIC/UDP; no HTTP/2 or TCP fallback.</summary>
     internal static ValueTask<QuicConnection> ConnectHttp3Async(
         IPEndPoint pinnedAuthorizedAddress,
@@ -60,6 +64,8 @@ internal static class NativeQuicClient
             admitted.Address, admitted.DnsName, Http3Alpn,
             admitted.Remaining, deadline.Token).ConfigureAwait(false);
     }
+
+#pragma warning restore CA1416
 
     /// <summary>
     /// QUIC transport for an explicitly selected application ALPN.
