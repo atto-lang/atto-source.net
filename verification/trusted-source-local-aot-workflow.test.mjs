@@ -103,6 +103,8 @@ const hostedWindows = readFileSync('.github/workflows/windows-native-aot.yml', '
 const trustedWindows = readFileSync('.github/workflows/trusted-source-local-windows-aot.yml', 'utf8');
 assert.match(hostedWindows, /^  pull_request:\s*$/m);
 assert.doesNotMatch(hostedWindows, /self-hosted-windows-static-facts/);
+assert.ok(hostedWindows.includes('Compile verified scalar OresIR through C# and F# to managed CIL'), 'source C#/F# stage lost');
+assert.ok(trustedWindows.includes('Compile verified C# and F# source on trusted exact-head runner'), 'trusted C#/F# stage lost');
 assert.doesNotMatch(hostedWindows, /^    runs-on: \[self-hosted/m);
 assertManualOnlyTrigger(trustedWindows, 'Windows Native AOT');
 assert.doesNotMatch(trustedWindows, /^  (?:push|pull_request|pull_request_target|workflow_run):/m);

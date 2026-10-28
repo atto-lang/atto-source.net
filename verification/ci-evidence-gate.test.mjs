@@ -18,6 +18,7 @@ const jobs = {total_count:2,jobs:[
       "Show Windows .NET toolchain",
       "Refuse managed or framework-dependent release settings",
       "Verify compiler and runtime source",
+      "Compile verified scalar OresIR through C# and F# to managed CIL",
       "Verify shared advisory static facts from .NET compiler and typed structured parser",
       "Reject oversized and invalid UTF-8 compiler input",
       "Publish native compiler and native application",

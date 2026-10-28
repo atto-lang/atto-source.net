@@ -9,8 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  # Keep the tested exact SHA alive through the final Native AOT receipt.
-  # Separate manual/push/PR events; queue newer commits, never cancel a runner.
+  # Preserve exact-head native proof through final receipt; isolate event/ref.
   group: native-aot-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: false
 
@@ -63,6 +62,9 @@ jobs:
       - name: Verify compiler and runtime source
         shell: pwsh
         run: dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
+      - name: Compile verified scalar OresIR through C# and F# to managed CIL
+        shell: pwsh
+        run: ./verification/assert-managed-source.ps1
       - name: Verify shared advisory static facts from .NET compiler and typed structured parser
         shell: pwsh
         run: |
@@ -619,3 +621,9 @@ jobs:
           file "$binary" | grep -q 'ELF 64-bit'
           test ! -e artifacts/structured-bindings/linux-x64/oreslang-app.runtimeconfig.json
           test ! -e artifacts/structured-bindings/linux-x64/OresGenerated.dll
+
+  # Optional budget-independent gate. Disabled unless repo owners register an
+  # isolated, trusted Windows x64 runner with the oreslang-net-aot label and set
+  # ORESLANG_NET_SELFHOSTED_WINDOWS=enabled in repository Actions variables.
+  # Never send fork PR code to a self-hosted runner; all source stays in the
+  # same private repository under its ordinary read-only GITHUB_TOKEN.
