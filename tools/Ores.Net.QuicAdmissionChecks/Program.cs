@@ -84,7 +84,7 @@ MustDeny(() => QuicLoopbackPermit.AuthorizeForTrustedHost(
 foreach (var invalidName in new[] { "BÜCHER.example", "bücher.example",
     "origin..example", "-bad.example", "bad-.example",
     new string('a', 64) + ".example", "origin.example.", "BAD.example",
-    "bad_name.example", "a b.example" })
+    "bad_name.example", "a b.example", "127.0.0.1" })
 {
     if (QuicLoopbackPermit.IsCanonicalDnsName(invalidName))
         throw new InvalidOperationException("Invalid canonical SNI accepted: " + invalidName);
@@ -96,6 +96,22 @@ foreach (var invalidName in new[] { "BÜCHER.example", "bücher.example",
 }
 if (!QuicLoopbackPermit.IsCanonicalDnsName("xn--bcher-kva.example"))
     throw new InvalidOperationException("Canonical ASCII IDN A-label rejected");
+
+// A custom collection can lie between enumeration and index lookup. The
+// issuer must reject the actual indexed value, not trust a previous iteration.
+MustDeny(() => QuicLoopbackPermit.AuthorizeForTrustedHost(
+    "origin.example", 443, new SpoofedDnsSet(), 0, 42, 7, 9,
+    TimeSpan.FromSeconds(2)), "mutable DNS enumeration/index TOCTOU");
+
+// Reading a selected IP twice would be a TOCTOU even with index-based
+// validation. Once verified, the selected pin must come from the snapshot.
+var reads = new ChangingDnsSet();
+var noAlias = QuicLoopbackPermit.AuthorizeForTrustedHost(
+    "origin.example", 443, reads, 0, 42, 7, 9,
+    TimeSpan.FromSeconds(2));
+if (reads.ReadCount != 1 ||
+    !noAlias.Consume(42, 7).Address.Address.Equals(IPAddress.Loopback))
+    throw new InvalidOperationException("Verified DNS pin was read more than once");
 
 // Parallel consumption must have exactly one winner even if calls race.
 var parallel = Issue(lifetime: TimeSpan.FromSeconds(8));
@@ -157,3 +173,35 @@ catch (OperationCanceledException) { }
 
 // No network is opened in this admission test. It is not QUIC/HTTP3 interop.
 Console.WriteLine("QUIC host admission and single-use loopback permit checks passed; interop not asserted");
+
+internal sealed class SpoofedDnsSet : IReadOnlyList<IPAddress>
+{
+    public int Count => 1;
+    public IPAddress this[int i] => IPAddress.Parse("8.8.8.8");
+    public IEnumerator<IPAddress> GetEnumerator()
+    {
+        yield return IPAddress.Loopback;
+    }
+    System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator()
+        => GetEnumerator();
+}
+
+internal sealed class ChangingDnsSet : IReadOnlyList<IPAddress>
+{
+    public int Count => 1;
+    public int ReadCount { get; private set; }
+    public IPAddress this[int i]
+    {
+        get
+        {
+            ++ReadCount;
+            return ReadCount == 1 ? IPAddress.Loopback : IPAddress.Parse("8.8.8.8");
+        }
+    }
+    public IEnumerator<IPAddress> GetEnumerator()
+    {
+        yield return IPAddress.Loopback;
+    }
+    System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator()
+        => GetEnumerator();
+}
