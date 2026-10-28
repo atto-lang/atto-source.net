@@ -92,6 +92,11 @@ export function verifyEvidence(run, response, expected) {
   const hex = /^[a-f0-9]{40}$/i;
   fail(hex.test(expected.head), "expected head must be a full 40-digit SHA");
   fail(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(expected.repo), "invalid expected repository");
+  // All supported workflows are originating-source .NET checks. Matching
+  // caller-provided expected.repo and run.repository is insufficient to
+  // authorize a private-code transfer or qualify an alternate-org canary.
+  fail(expected.repo === "ores-truffle-oreslang/oreslang-source.net",
+    "native parity evidence requires the originating source repository");
   fail(Number.isSafeInteger(expected.runId) && expected.runId > 0, "expected run ID required");
   fail(Number.isSafeInteger(expected.attempt) && expected.attempt > 0, "expected attempt required");
   fail(Object.hasOwn(requiredByWorkflow,expected.workflow),"unrecognized workflow");

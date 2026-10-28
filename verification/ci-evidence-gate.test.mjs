@@ -86,6 +86,18 @@ test('strict Linux denies unallocated runner despite fabricated success steps',(
 });
 test('strict Linux denies another workflow path',()=>assert.match(verifyEvidence({...strictRun,path:'.github/workflows/other.yml'},strictJobs,strictExpected).join(' '),/workflow path/));
 test('carrier commit is not source-org exact-head execution evidence',()=>assert.notEqual(verifyEvidence({...strictRun,repository:{full_name:'honeypot-r-us-test/hnpt-e2e'}},strictJobs,strictExpected).length,0));
+test('caller cannot relabel alternate-org Linux success as source-native evidence',()=>{
+  const foreign='honeypot-r-us-test/hnpt-e2e';
+  const errors=verifyEvidence({...strictRun,repository:{full_name:foreign}},
+    strictJobs,{...strictExpected,repo:foreign});
+  assert.match(errors.join(' '),/originating source repository/);
+});
+test('caller cannot relabel alternate-org Windows success as source-native evidence',()=>{
+  const foreign='honeypot-r-us-test/hnpt-e2e';
+  const errors=verifyEvidence({...run,repository:{full_name:foreign}},
+    jobs,{...e,repo:foreign});
+  assert.match(errors.join(' '),/originating source repository/);
+});
 test('strict Linux rejects skipped arithmetic and wrong attempt',()=>{
   const j=copy(strictJobs);j.jobs[0].steps.find(s=>s.name.includes('checked-arithmetic')).conclusion='skipped';
   assert.notEqual(verifyEvidence(strictRun,j,strictExpected).length,0);
