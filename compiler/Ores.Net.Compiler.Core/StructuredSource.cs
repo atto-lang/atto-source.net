@@ -20,7 +20,7 @@ public sealed record StructuredParameter(string Name, IrValueType Type);
 public sealed record StructuredFunction(string Name,
     IReadOnlyList<StructuredParameter> Parameters, IrValueType ResultType,
     StructuredExpr? ReturnValue, IReadOnlyList<StructuredStmt> Body);
-public enum StructuredOperator { Add, Subtract, Multiply, EqualI64, LessThanI64, NotEqualI64 }
+public enum StructuredOperator { Add, Subtract, Multiply, EqualI64, LessThanI64, GreaterThanI64, NotEqualI64 }
 public sealed record StructuredBinary(int At, StructuredOperator Operator,
     StructuredExpr Left, StructuredExpr Right, IrValueType ResultType)
     : StructuredExpr(At, ResultType);
@@ -535,6 +535,32 @@ public static class OresStructuredParser
             localTypeScopes.RemoveAt(localTypeScopes.Count - 1);
             return (Array.AsReadOnly(body.ToArray()), terminated);
         }
+        // The existing bracketed CFG path remains available. Canonical ores.core
+        // also uses 'if predicate; do ... [else ...] fi' without braces.
+        // Close lexical scopes at each arm; never turn source into rewritten C#.
+        private (IReadOnlyList<StructuredStmt> Body, bool Returns) DelimitedArm(int depth)
+        {
+            Budget(depth);
+            scopes.Add(new Dictionary<string, LocalBinding>(StringComparer.Ordinal));
+            localTypeScopes.Add(new HashSet<string>(StringComparer.Ordinal));
+            var body = new List<StructuredStmt>();
+            bool terminated = false;
+            while (Current.Text is not ("else" or "fi"))
+            {
+                if (Current.Text.Length == 0 || Current.Text == "}")
+                    throw Error("Unterminated Oreslang if/do/fi arm");
+                if (terminated) throw Error("Unreachable statement");
+                if (++statements > MaxStatements)
+                    throw Error("Structured statement budget exceeded");
+                var (statement, returns) = Statement(depth + 1);
+                body.Add(statement);
+                terminated = returns;
+            }
+            scopes.RemoveAt(scopes.Count - 1);
+            localTypeScopes.RemoveAt(localTypeScopes.Count - 1);
+            return (Array.AsReadOnly(body.ToArray()), terminated);
+        }
+
         private (StructuredStmt Statement, bool Returns) Statement(int depth)
         {
             Budget(depth);
@@ -628,10 +654,23 @@ public static class OresStructuredParser
             {
                 var condition = Expr(depth + 1);
                 Require(condition, IrValueType.Bool, "If condition must be bool");
-                var (yes, yesReturns) = Block(depth + 1);
+                bool oresDoForm = Take(";");
+                IReadOnlyList<StructuredStmt> yes;
+                bool yesReturns;
+                if (oresDoForm)
+                {
+                    Expect("do");
+                    (yes, yesReturns) = DelimitedArm(depth + 1);
+                }
+                else (yes, yesReturns) = Block(depth + 1);
                 IReadOnlyList<StructuredStmt>? no = null;
                 bool noReturns = false;
-                if (Take("else")) (no, noReturns) = Block(depth + 1);
+                if (Take("else"))
+                {
+                    if (oresDoForm) (no, noReturns) = DelimitedArm(depth + 1);
+                    else (no, noReturns) = Block(depth + 1);
+                }
+                if (oresDoForm) Expect("fi");
                 return (new StructuredIf(at, condition, yes, no),
                     yesReturns && noReturns);
             }
@@ -706,6 +745,7 @@ public static class OresStructuredParser
                         StructuredOperator.EqualI64 => left == right ? 1L : 0L,
                         StructuredOperator.NotEqualI64 => left != right ? 1L : 0L,
                         StructuredOperator.LessThanI64 => left < right ? 1L : 0L,
+                        StructuredOperator.GreaterThanI64 => left > right ? 1L : 0L,
                         _ => throw new FormatException(
                             $"Unsupported const operator at offset {binary.Offset}")
                     };
@@ -735,14 +775,17 @@ public static class OresStructuredParser
         private StructuredExpr Compare(int depth)
         {
             var left = Add(depth + 1);
-            while (Current.Text == "<")
+            while (Current.Text is "<" or ">")
             {
                 int at = Current.Offset;
-                index++;
+                bool greater = Take(">");
+                if (!greater) Expect("<");
                 var right = Add(depth + 1);
-                Require(left, IrValueType.I64, "Less-than requires int operands");
-                Require(right, IrValueType.I64, "Less-than requires int operands");
-                left = CheckedBinary(at, StructuredOperator.LessThanI64,
+                Require(left, IrValueType.I64, "Ordering requires int operands");
+                Require(right, IrValueType.I64, "Ordering requires int operands");
+                left = CheckedBinary(at, greater
+                        ? StructuredOperator.GreaterThanI64
+                        : StructuredOperator.LessThanI64,
                     left, right, IrValueType.Bool);
             }
             return left;
