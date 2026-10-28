@@ -34,7 +34,8 @@ edits, including transitive helpers, change the graph hash. Limits are 64 units,
 32 import edges of depth, 1 MiB per source, 8 MiB total and the existing 64-helper
 verified ABI bound. Unsupported source cannot publish a successful partial module.
 
-The checked-in module fixtures require LF on every platform, and CI compares
+Checked-in Oreslang sources and reviewed JSON contracts require LF on every
+platform, and CI compares
 each working-file Git object hash without filters to its committed blob before
 compilation. This prevents Windows line-ending conversion from silently changing
 the cross-platform source graph.
