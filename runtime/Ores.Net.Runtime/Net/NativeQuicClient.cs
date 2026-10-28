@@ -62,7 +62,7 @@ internal static class NativeQuicClient
     [SupportedOSPlatform("linux")]
     [SupportedOSPlatform("windows")]
     [SupportedOSPlatform("osx")]
-    internal static async ValueTask<QuicConnection> ConnectHttp3Async(
+    internal static async ValueTask<ActorQuicConnectionLease> ConnectHttp3Async(
         QuicLoopbackPermit permit,
         ActorContext ownerContext,
         CancellationToken cancellationToken)
@@ -74,49 +74,50 @@ internal static class NativeQuicClient
                                         nameof(cancellationToken));
         cancellationToken.ThrowIfCancellationRequested();
 
-        // A bare actorId/generation pair is not an actor-liveness proof.
-        // Burn the single-use permit even on wrong incarnation or retirement.
+        // Burn the permit before the first potentially suspending native call.
         var admitted = permit.Consume(
             ownerContext.Self.Id, ownerContext.Self.Generation);
         if (ownerContext.OwnerArena.IsRetired)
             throw new SecurityException("QUIC actor already retired");
-
-        // ActorContext is issued only by ActorRuntime and is valid only while
-        // its physical turn remains active. Its lifetime pin retains the
-        // arena while ConnectAsync suspends (but does not authorize a stream).
-        ActorArenaLifetimePin pin;
+        // Registration pins the arena and is a CONTROL-linearized ownership
+        // obligation even before the OS has returned a connection handle.
+        var operation = ownerContext.RegisterQuicOperation();
         try
         {
-            pin = ownerContext.PinLifetime();
-        }
-        catch (InvalidOperationException error)
-        {
-            throw new SecurityException(
-                "QUIC needs a live actor turn with pin authority", error);
-        }
-        using (pin)
-        {
-            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken, operation.StopToken);
             deadline.CancelAfter(admitted.Remaining);
+
             var connection = await ConnectUncheckedAfterPolicyAsync(
                 admitted.Address, admitted.DnsName, Http3Alpn,
                 admitted.Remaining, deadline.Token).ConfigureAwait(false);
-
+            ActorQuicConnectionResource? resource = null;
             try
             {
+                // A successful handshake can still lose to actor Stop.
                 deadline.Token.ThrowIfCancellationRequested();
-                if (ownerContext.OwnerArena.IsRetired)
-                    throw new SecurityException("QUIC actor retired during native handshake");
-                return connection;
+                if (ownerContext.OwnerArena.IsRetired || operation.IsStopping)
+                    throw new SecurityException("QUIC actor retired during handshake");
+                resource = new ActorQuicConnectionResource(connection, operation);
+                // The ledger now exclusively owns the physical connection;
+                // losing a Stop race must retire it before a lease can escape.
+                await operation.PublishAsync(resource).ConfigureAwait(false);
+                return new ActorQuicConnectionLease(operation, resource);
             }
             catch
             {
-                await connection.DisposeAsync().ConfigureAwait(false);
+                if (resource is null)
+                    await connection.DisposeAsync().ConfigureAwait(false);
                 throw;
             }
         }
+        catch
+        {
+            operation.FailConnect();
+            await operation.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
     }
-
 
     /// <summary>
     /// QUIC transport for an explicitly selected application ALPN.
