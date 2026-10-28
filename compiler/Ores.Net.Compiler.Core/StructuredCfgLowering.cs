@@ -1,8 +1,9 @@
 namespace Ores.Net.Compiler;
 
 /// <summary>
-/// Experimental, non-shipping lowering of the bounded typed structured parser
-/// into independently verified SSA CFG. No runtime execution or CLI routing.
+/// Experimental, opt-in lowering of bounded typed structured source into
+/// independently verified CFGs. Legacy Lower() inlines helper calls for
+/// differential tests; LowerModule() retains independent CIL call boundaries.
 /// A local is represented by its current SSA value, never a mutable IL slot.
 /// </summary>
 public static class OresStructuredCfgLowering
@@ -11,6 +12,26 @@ public static class OresStructuredCfgLowering
     {
         var parsed = OresStructuredParser.Parse(source);
         return new Builder().Lower(parsed);
+    }
+
+    // ABI path: helpers become independent verified CFG methods. The old
+    // Lower() method keeps the deliberately bounded inlining/reference path.
+    public static VerifiedCfgModule LowerModule(string source)
+    {
+        var program = OresStructuredParser.Parse(source);
+        var helperSignatures = new Dictionary<string, CfgCallSignature>(StringComparer.Ordinal);
+        var methods = new List<VerifiedCfgFunction>();
+        foreach (var helper in program.Functions?.Values ??
+            Enumerable.Empty<StructuredFunction>())
+        {
+            // A helper can call only earlier functions admitted into this map.
+            var verified = new Builder(emitCalls: true).LowerHelper(helper, helperSignatures);
+            methods.Add(verified);
+            helperSignatures.Add(helper.Name, new CfgCallSignature(helper.ResultType,
+                Array.AsReadOnly(helper.Parameters.Select(p => p.Type).ToArray())));
+        }
+        var main = new Builder(emitCalls: true).Lower(program, helperSignatures);
+        return new VerifiedCfgModule(main, methods.AsReadOnly());
     }
 
     private readonly record struct Binding(IrValueType Type, int ValueId);
@@ -27,25 +48,48 @@ public static class OresStructuredCfgLowering
             throw new FormatException("Unterminated structured CFG block"));
     }
 
-    private sealed class Builder
+    private sealed class Builder(bool emitCalls = false)
     {
         private readonly List<Block> blocks = new();
         private IReadOnlyDictionary<string, StructuredFunction> functions =
             new Dictionary<string, StructuredFunction>(StringComparer.Ordinal);
         private int nextValue;
+        private IReadOnlyDictionary<string, CfgCallSignature>? callSignatures;
 
-        public VerifiedCfgFunction Lower(StructuredProgram program)
+        public VerifiedCfgFunction LowerHelper(StructuredFunction helper,
+            IReadOnlyDictionary<string, CfgCallSignature> signatures)
+        {
+            functions = new Dictionary<string, StructuredFunction>(StringComparer.Ordinal);
+            callSignatures = signatures;
+            var entry = NewBlock();
+            var parameters = new Dictionary<string, Binding>(StringComparer.Ordinal);
+            for (int i = 0; i < helper.Parameters.Count; i++)
+            {
+                var p = helper.Parameters[i];
+                int id = Emit(entry, CfgOpcode.Argument, p.Type, value: i);
+                parameters.Add(p.Name, new Binding(p.Type, id));
+            }
+            entry.Terminator = new CfgReturn(Expression(helper.ReturnValue, entry, parameters));
+            return OresCfgVerifier.Verify(new CfgFunction(helper.Name, helper.ResultType,
+                entry.Name, blocks.Select(b => b.Freeze()).ToArray(),
+                helper.Parameters.Select(p => p.Type).ToArray()), signatures);
+        }
+
+        public VerifiedCfgFunction Lower(StructuredProgram program,
+            IReadOnlyDictionary<string, CfgCallSignature>? signatures = null)
         {
             if (program.Name != "main")
                 throw new FormatException("Only typed main is supported");
             functions = program.Functions ??
                 new Dictionary<string, StructuredFunction>(StringComparer.Ordinal);
+            callSignatures = signatures;
             var entry = NewBlock();
             var environment = new Dictionary<string, Binding>(StringComparer.Ordinal);
             if (EmitStatements(program.Body, entry, environment) is not null)
                 throw new FormatException("Structured CFG has an unterminated return path");
             return OresCfgVerifier.Verify(new CfgFunction(program.Name,
-                IrValueType.I64, entry.Name, blocks.Select(b => b.Freeze()).ToArray()));
+                IrValueType.I64, entry.Name, blocks.Select(b => b.Freeze()).ToArray()),
+                signatures);
         }
 
         private int NextValue()
@@ -66,11 +110,13 @@ public static class OresStructuredCfgLowering
 
         private int Emit(Block block, CfgOpcode opcode, IrValueType type,
             int? left = null, int? right = null,
-            long? value = null, bool? boolean = null)
+            long? value = null, bool? boolean = null,
+            string? target = null, IReadOnlyList<int>? arguments = null)
         {
             int id = NextValue();
             block.Instructions.Add(new CfgInstruction(id, opcode, type,
-                Left: left, Right: right, I64Constant: value, BoolConstant: boolean));
+                Left: left, Right: right, I64Constant: value, BoolConstant: boolean,
+                Target: target, Arguments: arguments));
             return id;
         }
 
@@ -92,6 +138,23 @@ public static class OresStructuredCfgLowering
                     return variable.ValueId;
                 case StructuredCall call:
                 {
+                    if (emitCalls)
+                    {
+                        if (callSignatures is null ||
+                            !callSignatures.TryGetValue(call.Name, out var signature) ||
+                            signature.ParameterTypes.Count != call.Arguments.Count ||
+                            signature.ResultType != call.Type)
+                            throw new FormatException("Unverified structured ABI call");
+                        var args = new int[call.Arguments.Count];
+                        for (int i = 0; i < args.Length; i++)
+                        {
+                            if (call.Arguments[i].Type != signature.ParameterTypes[i])
+                                throw new FormatException("Unverified structured ABI argument");
+                            args[i] = Expression(call.Arguments[i], block, variables);
+                        }
+                        return Emit(block, CfgOpcode.Call, call.Type,
+                            target: call.Name, arguments: args);
+                    }
                     if (!functions.TryGetValue(call.Name, out var function) ||
                         function.ResultType != call.Type ||
                         function.Parameters.Count != call.Arguments.Count)
