@@ -65,10 +65,11 @@ jobs:
           test "$(git rev-parse 'HEAD^{tree}')" = "$APPROVED_TREE"
           test -z "$(git status --porcelain --untracked-files=all)"
           test -z "$(git ls-files --others --exclude-standard)"
-          for tool in dotnet clang readelf file realpath sha256sum; do
+          for tool in dotnet clang readelf file realpath sha256sum node; do
             command -v "$tool" >/dev/null || { echo "Missing source-local tool: $tool" >&2; exit 1; }
           done
           [[ "$(dotnet --version)" == 10.* ]] || { echo 'Require .NET SDK 10' >&2; exit 1; }
+          [[ "$(node --version)" =~ ^v(20|22|24)\. ]] || { echo 'Require Node.js 20/22/24 for receipt verification' >&2; exit 1; }
       - name: Run source-free release gates and managed regressions
         shell: bash
         run: |
