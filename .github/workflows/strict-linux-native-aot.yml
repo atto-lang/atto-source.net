@@ -15,6 +15,9 @@ concurrency:
 
 jobs:
   linux-x64-compiler-and-app:
+    # Normal push/PR CI remains mandatory; trusted manual dispatch has
+    # its own isolated lane and must not consume unavailable hosted minutes.
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:

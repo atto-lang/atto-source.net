@@ -363,6 +363,8 @@ secrets, and unset all three variables/retire the runner after execution.
 The job checks source head/tree, runs the managed suite, publishes actual
 Native AOT compiler/app binaries, executes canonical 14/42/40 sources plus structured CFG/SSA source=45 and
 fail-closed source negatives, and retains a bounded SHA-256 receipt. The
-normal hosted jobs remain independent. A configured runner and actual
-nonzero executed job steps are required; this draft does **not** assert
-that the release has been compiled or tested.
+hosted PR/push release lane remains mandatory and independent. Trusted manual
+dispatch schedules only the protected source-local job, not the hosted Linux
+job that may have exhausted its Actions capacity. An approved runner and
+actual nonzero executed job steps are required: skipped or zero-step jobs are
+**not** certification. This draft does **not** assert a compiler run.

@@ -326,6 +326,20 @@ const linuxJobs = {total_count:2,jobs:[
     status:"completed",conclusion:"skipped"}
 ]};
 const linuxVerify = (r,j)=>verifyEvidence(r,j,linuxExpected);
+test("manual source-local dispatch skips hosted CI and requires protected workflow authority",()=> {
+  const hosted=linuxSource.split("  linux-x64-compiler-and-app:\n")[1]
+    ?.split("  linux-x64-approved-source-local:\n")[0];
+  const approved=linuxSource.split("  linux-x64-approved-source-local:\n")[1];
+  assert.ok(hosted && approved,"both Linux jobs must exist");
+  assert.match(hosted,/^    if: github\.event_name != 'workflow_dispatch'$/m);
+  assert.ok(approved.includes("github.event_name == 'workflow_dispatch'"));
+  assert.ok(approved.includes("github.ref_protected == true"));
+  assert.ok(approved.includes("github.repository_id == '1419704375'"));
+  assert.ok(approved.includes("github.workflow_ref == 'ores-truffle-oreslang/oreslang-source.net/.github/workflows/strict-linux-native-aot.yml@refs/heads/main'"));
+  assert.ok(approved.includes("group: oreslang-net-aot-trusted"));
+  assert.ok(approved.includes("persist-credentials: false"));
+});
+
 test("strict Linux exact-head hosted Native AOT passes only with all named executed stages",()=>{
   assert.equal(linuxSteps.length,10,"expected the exact ten source-owned Linux release stages");
   assert.deepEqual(linuxVerify(linuxRun,linuxJobs),[]);
