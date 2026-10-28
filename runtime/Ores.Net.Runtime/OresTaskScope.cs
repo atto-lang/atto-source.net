@@ -14,6 +14,9 @@ public sealed class OresTaskScope : IAsyncDisposable
     private readonly Channel<Func<ValueTask>> queue;
     private readonly CancellationTokenSource producerStop = new();
     private readonly Task pump;
+    private readonly TaskCompletionSource<bool> disposed =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly AsyncLocal<bool> executingOnPump = new();
     private readonly int producerLimit;
     private readonly int observerLimit;
     private int activeProducers;
@@ -36,7 +39,8 @@ public sealed class OresTaskScope : IAsyncDisposable
             FullMode = BoundedChannelFullMode.Wait,
             AllowSynchronousContinuations = false
         });
-        // Single async channel reader, resumed asynchronously by bounded channel writes.\n        // No eager worker allocation and no scheduling on conversion.
+        // One channel reader, resumed by asynchronous bounded channel writes.
+        // No eager worker allocation and no scheduling on conversion.
         // Do not claim actor-lane affinity from this host scheduling mechanism.
         pump = PumpAsync();
     }
@@ -52,18 +56,38 @@ public sealed class OresTaskScope : IAsyncDisposable
         if (Volatile.Read(ref closed) != 0)
             throw new InvalidOperationException("Oreslang Task scope closed");
         Reserve(ref activeProducers, producerLimit, "producer");
-        var id = Interlocked.Increment(ref nextId);
-        var result = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var retired = new TaskCompletionSource<OresProducerRetirement>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-        var handle = new OresTask<T>(this, id, result.Task, retired.Task);
-        // Quota is acquired BEFORE publishing any runnable work.
-        if (!queue.Writer.TryWrite(() => Execute(body, result, retired, id)))
+        try
+        {
+            // Roll back admission on every allocation, identity, or queue error.
+            // Closing concurrently with this call cannot expose untracked work.
+            long id = NextProducerId();
+            var result = new TaskCompletionSource<T>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var retired = new TaskCompletionSource<OresProducerRetirement>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var handle = new OresTask<T>(this, id, result.Task, retired.Task);
+            if (!queue.Writer.TryWrite(() => Execute(body, result, retired, id)))
+                throw new InvalidOperationException(
+                    "Oreslang Task scheduler queue closed or full");
+            return handle;
+        }
+        catch
         {
             Interlocked.Decrement(ref activeProducers);
-            throw new InvalidOperationException("Oreslang Task scheduler queue closed or full");
+            throw;
         }
-        return handle;
+    }
+
+    private long NextProducerId()
+    {
+        for (;;)
+        {
+            long before = Interlocked.Read(ref nextId);
+            if (before == long.MaxValue)
+                throw new OverflowException("Oreslang Task producer identity exhausted");
+            if (Interlocked.CompareExchange(ref nextId, before + 1, before) == before)
+                return before + 1;
+        }
     }
 
     public OresFuture<T> FromTask<T>(OresTask<T> producer)
@@ -81,8 +105,17 @@ public sealed class OresTaskScope : IAsyncDisposable
         if (Volatile.Read(ref closed) != 0)
             throw new InvalidOperationException("Oreslang Task scope closed");
         Reserve(ref activeObservers, observerLimit, "observer");
-        var projected = new TaskCompletionSource<T>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource<T> projected;
+        try
+        {
+            projected = new TaskCompletionSource<T>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+        catch
+        {
+            Interlocked.Decrement(ref activeObservers);
+            throw;
+        }
         _ = Forward(source, projected, cancellation);
         return projected.Task; // A distinct, cancellation-isolated observer.
     }
@@ -133,8 +166,12 @@ public sealed class OresTaskScope : IAsyncDisposable
             var value = await body(producerStop.Token).ConfigureAwait(false);
             result.TrySetResult(value);
         }
-        catch (OperationCanceledException) when (producerStop.IsCancellationRequested)
+        catch (OperationCanceledException error) when (
+            producerStop.IsCancellationRequested &&
+            error.CancellationToken == producerStop.Token)
         {
+            // Only the scope's actual cancellation token authenticates
+            // producer cancellation; a user-thrown OCE is a normal fault.
             terminal = "cancelled";
             result.TrySetCanceled(producerStop.Token);
         }
@@ -156,7 +193,13 @@ public sealed class OresTaskScope : IAsyncDisposable
     private async Task PumpAsync()
     {
         await foreach (var work in queue.Reader.ReadAllAsync().ConfigureAwait(false))
-            await work().ConfigureAwait(false);
+        {
+            // Disallow self-joining the pump from the currently executing
+            // producer, which otherwise deadlocks physical retirement.
+            executingOnPump.Value = true;
+            try { await work().ConfigureAwait(false); }
+            finally { executingOnPump.Value = false; }
+        }
     }
 
     private static void Reserve(ref int counter, int limit, string kind)
@@ -171,13 +214,34 @@ public sealed class OresTaskScope : IAsyncDisposable
         }
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        if (Interlocked.Exchange(ref closed, 1) != 0) return;
-        producerStop.Cancel(); // Scope owns cancellation; observers do not.
-        queue.Writer.TryComplete();
-        await pump.ConfigureAwait(false);
-        producerStop.Dispose();
+        if (executingOnPump.Value)
+            throw new InvalidOperationException(
+                "Scope producer cannot await its own physical retirement");
+        if (Interlocked.CompareExchange(ref closed, 1, 0) == 0)
+            _ = StopAndDrainAsync();
+        // Every concurrent caller joins the SAME completion witness. A second
+        // caller never reports success while a producer is still executing.
+        return new ValueTask(disposed.Task);
+    }
+
+    private async Task StopAndDrainAsync()
+    {
+        Exception? failure = null;
+        try { producerStop.Cancel(); }
+        catch (Exception error) { failure = error; }
+        finally { queue.Writer.TryComplete(); }
+
+        try { await pump.ConfigureAwait(false); }
+        catch (Exception error)
+        {
+            failure = failure is null ? error : new AggregateException(failure, error);
+        }
+        finally { producerStop.Dispose(); }
+
+        if (failure is null) disposed.TrySetResult(true);
+        else disposed.TrySetException(failure);
     }
 }
 
