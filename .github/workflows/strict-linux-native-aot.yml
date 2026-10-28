@@ -9,8 +9,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: strict-net-aot-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # A normal main push must never cancel an authorized long-running native proof.
+  group: strict-net-aot-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 jobs:
   linux-x64-compiler-and-app:
@@ -169,6 +170,7 @@ jobs:
       github.ref_protected == true &&
       github.repository == 'ores-truffle-oreslang/oreslang-source.net' &&
       github.repository_id == '1419704375' &&
+      github.workflow_ref == 'ores-truffle-oreslang/oreslang-source.net/.github/workflows/strict-linux-native-aot.yml@refs/heads/main' &&
       vars.ORESLANG_NET_SELFHOSTED_LINUX == 'enabled' &&
       vars.ORESLANG_NET_SELFHOSTED_LINUX_SHA != '' &&
       vars.ORESLANG_NET_SELFHOSTED_LINUX_TREE != ''
@@ -194,6 +196,7 @@ jobs:
           test "$GITHUB_REF_PROTECTED" = true
           test "$GITHUB_REPOSITORY" = ores-truffle-oreslang/oreslang-source.net
           test "$GITHUB_REPOSITORY_ID" = 1419704375
+          test "$GITHUB_WORKFLOW_REF" = ores-truffle-oreslang/oreslang-source.net/.github/workflows/strict-linux-native-aot.yml@refs/heads/main
           [[ "$APPROVED_HEAD" =~ ^[0-9a-f]{40}$ ]]
           [[ "$APPROVED_TREE" =~ ^[0-9a-f]{40}$ ]]
       - name: Check out approved immutable source, not a PR workflow

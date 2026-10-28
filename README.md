@@ -279,6 +279,10 @@ Before registering a runner, an organization administrator must create the
 only to `ores-truffle-oreslang/oreslang-source.net`, and **Selected workflows**
 set only to
 `ores-truffle-oreslang/oreslang-source.net/.github/workflows/strict-linux-native-aot.yml@refs/heads/main`.
+The trusted workflow also verifies its own canonical `GITHUB_WORKFLOW_REF`
+against that exact path before checkout. Dispatch concurrency is isolated
+from normal push and PR runs, and a later manual dispatch cannot cancel an
+in-flight, approved Native AOT certification; it queues instead.
 Never register this worker in the default/all-workflows group. Otherwise a
 separately authored pull-request workflow could target the same self-hosted
 labels, bypassing this particular job's guard. Require an independent admin
