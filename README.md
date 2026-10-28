@@ -326,3 +326,15 @@ source code. Its receipt distinguishes the trusted workflow SHA, tested
 source SHA/tree, and native executable hashes. This workflow does not
 relax required hosted CI or independently authorize private cross-org source
 exports.
+
+### Source-local Windows continuation fence
+
+`.github/workflows/trusted-source-local-fence-windows.yml` isolates the
+Windows 16-round continuation-fence test from the PR-triggered
+`net-fence-smoke.yml`. It is **manual-only on protected main** and reuses
+independently approved `ORESLANG_NET_SELFHOSTED_WINDOWS_SHA` and
+`ORESLANG_NET_SELFHOSTED_WINDOWS_TREE` snapshot controls. Exact Git
+commit/tree and clean checkout must be verified before the .NET 10 build.
+The receipt distinguishes the trusted workflow SHA and tested source tree.
+Only allow reviewed protected-main trusted workflows access to the isolated
+Windows runner group; never expose the runner to PR-authored workflow YAML.

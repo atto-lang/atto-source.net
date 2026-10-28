@@ -1,7 +1,7 @@
 // Run: node verification/trusted-source-local-aot-workflow.test.mjs
 // Dependency-free regression for trusted-runner workflow separation.
 import { strict as assert } from 'node:assert';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 
 const hosted = readFileSync('.github/workflows/strict-linux-native-aot.yml', 'utf8');
 const trusted = readFileSync('.github/workflows/trusted-source-local-linux-aot.yml', 'utf8');
@@ -88,4 +88,39 @@ const wp = ['Preflight authorized immutable source without checkout', 'Checkout 
 assert.ok(wp.every(x => x >= 0));
 assert.ok(wp.every((x,i) => i === 0 || x > wp[i-1]), 'Windows trust stages out of order');
 
+const fenceHosted = readFileSync('.github/workflows/net-fence-smoke.yml', 'utf8');
+const fenceTrusted = readFileSync('.github/workflows/trusted-source-local-fence-windows.yml', 'utf8');
+assert.match(fenceHosted, /^  pull_request:\s*$/m);
+assert.doesNotMatch(fenceHosted, /source-local-windows-fence:/);
+assert.doesNotMatch(fenceHosted, /^    runs-on: \[self-hosted/m);
+assert.equal((fenceTrusted.match(/^on:\n((?:  [a-z_]+:\n)+)/m) ?? [])[1], '  workflow_dispatch:\n');
+assert.match(fenceTrusted, /^    runs-on: \[self-hosted, Windows, X64, oreslang-net-aot\]$/m);
+for (const s of [
+ "github.ref == 'refs/heads/main'", 'github.ref_protected == true',
+ "github.repository_id == '1419704375'",
+ "vars.ORESLANG_NET_SELFHOSTED_WINDOWS_SHA != ''",
+ "vars.ORESLANG_NET_SELFHOSTED_WINDOWS_TREE != ''",
+ 'ref: ${{ vars.ORESLANG_NET_SELFHOSTED_WINDOWS_SHA }}',
+ 'persist-credentials: false',
+ "(& git rev-parse 'HEAD^{tree}').Trim()",
+ 'tested_source_head', 'tested_root_tree', 'workflow_sha',
+ 'FENCE_REPEAT_COUNT=16',
+]) assert.ok(fenceTrusted.includes(s), 'Windows fence trust invariant missing: ' + s);
+const stagesFence = ['Authorize protected-main Windows fence snapshot before checkout',
+ 'Checkout immutable approved Windows fence commit',
+ 'Verify SHA and root tree before Windows fence build',
+ 'Execute 16 independent bounded race-stress rounds'].map(s => fenceTrusted.indexOf(s));
+assert.ok(stagesFence.every(x => x >= 0));
+assert.ok(stagesFence.every((x,i) => i === 0 || x > stagesFence[i-1]));
+// Other workflows must not allocate a self-hosted runner. Runner-group
+// administration must separately restrict access to trusted workflow paths.
+const allowed = new Set(['trusted-source-local-linux-aot.yml',
+ 'trusted-source-local-windows-aot.yml', 'trusted-source-local-fence-windows.yml']);
+for (const name of readdirSync('.github/workflows').filter(x => /\.ya?ml$/.test(x))) {
+ const yaml = readFileSync('.github/workflows/' + name, 'utf8');
+ const selectsPrivateRunner = /^\s+runs-on:\s*(?:self-hosted\b|\[\s*self-hosted\b)/m.test(yaml);
+ if (!allowed.has(name)) assert.ok(!selectsPrivateRunner, 'PR workflow allocated self-hosted runner: ' + name);
+ else assert.equal((yaml.match(/^on:\n((?:  [a-z_]+:\n)+)/m) ?? [])[1],
+                   '  workflow_dispatch:\n', 'Unsafe trusted workflow event: ' + name);
+}
 console.log('TRUSTED_SOURCE_LOCAL_AOT_WORKFLOW_CONTRACT_PASSED');
