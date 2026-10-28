@@ -318,7 +318,17 @@ public sealed class ActorRuntime : IDisposable
             FinalizeCell(cell);
     }
 
-    internal Task ObserveTermination(ActorRef actor) => Lookup(actor).Terminated.Task;
+    internal Task ObserveTermination(ActorRef actor)
+    {
+        ActorCell cell = Lookup(actor);
+        // Numeric IDs are lookup keys, not observation authority. The immutable
+        // generation + mailbox nonce must match the actual runtime-minted ref.
+        // Do not use Mailbox.Authorizes here: legitimate observers may wait
+        // after Stop has closed admission but before physical finalization.
+        if (actor != cell.Reference)
+            throw new InvalidOperationException("Actor reference is stale");
+        return cell.Terminated.Task;
+    }
 
     // Statically bound capability-provider dispatch. This is the existing
     // bounded mailbox admission, not a socket send or asynchronous offload.
