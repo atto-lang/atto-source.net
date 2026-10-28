@@ -103,6 +103,9 @@ ActorMailboxAuthorizationPrioritySelfTest.Run();
 ActorMailboxPrivateDataSelfTest.Run();
 ActorArenaSelfTest.Run();
 ActorShardColumnsSelfTest.Run();
+SelectArbiterSelfTest.Run();
+SelectableI64ChannelSelfTest.Run();
+SelectableI64FutureSelfTest.Run();
 ActorDispatchDomainsSelfTest.Run();
 ActorRuntimeSelfTest.Run();
 ProjectRootSourceTests.Run(); // host-only resolver, not linked .NET source imports
