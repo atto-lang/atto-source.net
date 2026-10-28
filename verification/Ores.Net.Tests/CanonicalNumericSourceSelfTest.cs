@@ -106,22 +106,29 @@ internal static class CanonicalNumericSourceSelfTest
                     "24-vector batch did not execute all source checks in CIL");
             }
 
-            // A one-case corrupted oracle must fail at that exact case;
-            // an accidentally skipped batch or constant-success result is red.
-            string mutant = BuildBatchSource(cases, corruptFirst: true)
-                .Replace("../../library/ores.core/numeric", "./numeric",
-                    StringComparison.Ordinal);
-            File.WriteAllText(Path.Combine(temporary, "main.ores"), mutant,
-                new UTF8Encoding(false));
-            var mutantLinked = OresSourceModuleCompiler.Compile(
-                Path.Combine(temporary, "main.ores"), new[] { temporary });
-            CilEmitter.EmitLibrary(mutantLinked.Module, batchOutput);
-            using (var mutantImage = AssemblyDefinition.ReadAssembly(batchOutput))
+            // Independently compile the checked-in negative guest fixture.
+            // This must yield -1 because only the first oracle expectation
+            // was deliberately corrupted; a constant-success gate is red.
+            string negativeBatchPath = Path.Combine(repository, "examples",
+                "canonical-numeric", "all-vectors-negative.ores");
+            Require(File.ReadAllText(negativeBatchPath) ==
+                    BuildBatchSource(cases, corruptFirst: true),
+                "negative Native AOT guest differs from precisely one oracle mutation");
+            var negativeBatch = OresSourceModuleCompiler.Compile(
+                negativeBatchPath, new[] { repository });
+            Require(negativeBatch.Sources.Count == 2 &&
+                    negativeBatch.Sources.Any(unit =>
+                        unit.Path.EndsWith("/library/ores.core/numeric.ores",
+                            StringComparison.Ordinal) &&
+                        unit.Sha256 == PinnedSourceSha256),
+                "negative Native AOT batch lacks the canonical source dependency");
+            CilEmitter.EmitLibrary(negativeBatch.Module, batchOutput);
+            using (var negativeImage = AssemblyDefinition.ReadAssembly(batchOutput))
             {
-                var entry = mutantImage.MainModule.Types.Single(t => t.Name == "OresProgram")
+                var entry = negativeImage.MainModule.Types.Single(t => t.Name == "OresProgram")
                     .Methods.Single(m => m.Name == "Run");
                 Require(CfgCilTestInterpreter.Evaluate(entry) == -1,
-                    "deliberate corrupt oracle did not fail at numeric case 1");
+                    "compiled negative Native AOT guest did not fail at case 1");
             }
             Console.WriteLine("PASS canonical 24-case .ores guest batch and negative mutation");
             
