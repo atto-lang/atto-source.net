@@ -1,0 +1,68 @@
+using System;
+using System.Buffers.Binary;
+using System.Numerics;
+using Ores.Net.Runtime;
+
+/// <summary>Reference-only arithmetic oracle, not a guest source test.</summary>
+static class StrictSigned64ArithmeticSelfTest
+{
+    private static void Require(bool condition, string explanation)
+    {
+        if (!condition) throw new Exception("FAILED: " + explanation);
+    }
+
+    private static void Expect<TFailure>(Action operation, string explanation)
+        where TFailure : Exception
+    {
+        try { operation(); }
+        catch (TFailure) { return; }
+        throw new Exception("Expected " + typeof(TFailure).Name + ": " + explanation);
+    }
+
+    public static void Run()
+    {
+        Require(StrictSigned64Arithmetic.Rem(-9, 4) == -1, "negative remainder");
+        Require(StrictSigned64Arithmetic.Mod(-9, 4) == 3, "positive modulus");
+        Require(StrictSigned64Arithmetic.Mod(-9, -4) == 3, "negative divisor modulus");
+        Require(StrictSigned64Arithmetic.Mod(-1, long.MinValue) == long.MaxValue,
+            "minimum divisor modulus");
+        Require(StrictSigned64Arithmetic.Rem(long.MinValue, -1) == 0,
+            "minimum remainder -1");
+        Require(StrictSigned64Arithmetic.Pow(0, 0) == 1, "zero to zero");
+        Require(StrictSigned64Arithmetic.Pow(-2, 63) == long.MinValue,
+            "exact signed minimum exponent");
+        Require(StrictSigned64Arithmetic.Pow(-1, long.MaxValue) == -1,
+            "odd huge exponent");
+        Require(StrictSigned64Arithmetic.BitXor(5, 3) == 6, "xor");
+        Expect<DivideByZeroException>(
+            () => StrictSigned64Arithmetic.Mod(1, 0), "zero divisor");
+        Expect<DivideByZeroException>(
+            () => StrictSigned64Arithmetic.Rem(1, 0), "zero divisor");
+        Expect<OverflowException>(
+            () => StrictSigned64Arithmetic.Pow(2, 63), "checked pow overflow");
+        Expect<ArgumentOutOfRangeException>(
+            () => StrictSigned64Arithmetic.Pow(2, -1), "negative pow exponent");
+
+        var random = new Random(0x0A51);
+        Span<byte> first = stackalloc byte[8];
+        Span<byte> second = stackalloc byte[8];
+        for (int i = 0; i < 10_000; i++)
+        {
+            random.NextBytes(first);
+            random.NextBytes(second);
+            long a = BinaryPrimitives.ReadInt64LittleEndian(first);
+            long b = BinaryPrimitives.ReadInt64LittleEndian(second);
+            if (b == 0) continue;
+            BigInteger expectedRem = (BigInteger)a % b;
+            BigInteger expectedMod = expectedRem < 0
+                ? expectedRem + BigInteger.Abs(new BigInteger(b))
+                : expectedRem;
+            Require(StrictSigned64Arithmetic.Rem(a, b) == (long)expectedRem,
+                "random signed remainder #" + i);
+            Require(StrictSigned64Arithmetic.Mod(a, b) == (long)expectedMod,
+                "random Euclidean modulus #" + i);
+            Require(StrictSigned64Arithmetic.BitXor(a, b) == (a ^ b),
+                "random signed XOR #" + i);
+        }
+    }
+}
