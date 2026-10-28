@@ -166,7 +166,9 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' &&
       github.ref == 'refs/heads/main' &&
+      github.ref_protected == true &&
       github.repository == 'ores-truffle-oreslang/oreslang-source.net' &&
+      github.repository_id == '1419704375' &&
       vars.ORESLANG_NET_SELFHOSTED_LINUX == 'enabled' &&
       vars.ORESLANG_NET_SELFHOSTED_LINUX_SHA != '' &&
       vars.ORESLANG_NET_SELFHOSTED_LINUX_TREE != ''
@@ -184,7 +186,9 @@ jobs:
           set -euo pipefail
           test "$GITHUB_EVENT_NAME" = workflow_dispatch
           test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_REF_PROTECTED" = true
           test "$GITHUB_REPOSITORY" = ores-truffle-oreslang/oreslang-source.net
+          test "$GITHUB_REPOSITORY_ID" = 1419704375
           [[ "$APPROVED_HEAD" =~ ^[0-9a-f]{40}$ ]]
           [[ "$APPROVED_TREE" =~ ^[0-9a-f]{40}$ ]]
       - name: Check out approved immutable source, not a PR workflow
@@ -201,7 +205,8 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$APPROVED_HEAD"
           test "$(git rev-parse 'HEAD^{tree}')" = "$APPROVED_TREE"
-          test -z "$(git status --porcelain --untracked-files=no)"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          test -z "$(git ls-files --others --exclude-standard)"
           for tool in dotnet clang readelf file realpath sha256sum; do
             command -v "$tool" >/dev/null || { echo "Missing source-local tool: $tool" >&2; exit 1; }
           done

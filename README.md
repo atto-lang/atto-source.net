@@ -223,7 +223,12 @@ binutils, `file`, `realpath`, and standard Unix tools. This does not require
 a cross-organization source mirror or secrets.
 
 **Never enable this runner on unreviewed code or while source-main is
-unprotected.** Independently review and protect the source repository's
+unprotected.** The job refuses allocation unless GitHub reports
+`github.ref_protected == true` on the default-branch dispatch and the exact
+immutable source repository ID `1419704375`, and it checks both values again
+before checkout. An unprotected branch cannot schedule this job even if
+repository variables have been accidentally enabled. Independently review
+and protect the source repository's
 default `main` branch **before** enabling it. Set the non-secret GitHub
 Actions repository variables `ORESLANG_NET_SELFHOSTED_LINUX=enabled`,
 `ORESLANG_NET_SELFHOSTED_LINUX_SHA=<exact reviewed source commit SHA>`, and
