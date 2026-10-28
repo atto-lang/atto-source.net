@@ -124,6 +124,113 @@ internal static class AsyncSourceSliceTests
                 "fault must have faulted retirement terminal");
         }
 
+        // I-02: Concurrent disposers must join the SAME physical producer
+        // drain. A producer that ignores cancellation remains live, so a
+        // merely closed queue cannot count as a retirement receipt.
+        {
+            var scope = new OresTaskScope(1, 2);
+            var entered = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource<long>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var producer = scope.Start(async _ =>
+            {
+                entered.TrySetResult();
+                return await release.Task.ConfigureAwait(false);
+            });
+            var observer = scope.FromTask(producer).ObserveAsync();
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Task firstDisposal = scope.DisposeAsync().AsTask();
+            Task secondDisposal = scope.DisposeAsync().AsTask();
+            Require(!firstDisposal.IsCompleted && !secondDisposal.IsCompleted &&
+                !producer.Retirement.IsCompleted && scope.ActiveProducers == 1,
+                "closed scope must not masquerade as drained producer");
+            try { _ = scope.Start(_ => ValueTask.FromResult(1L)); }
+            catch (InvalidOperationException) { goto after_close; }
+            throw new Exception("closed scope admitted a new producer");
+            after_close:;
+            release.TrySetResult(42);
+            Require(await observer == 42, "successful producer not revoked by close");
+            Require((await producer.Retirement).TerminalState == "succeeded",
+                "successful producer retirement must survive concurrent close");
+            await Task.WhenAll(firstDisposal, secondDisposal).WaitAsync(
+                TimeSpan.FromSeconds(10));
+            Require(scope.ActiveProducers == 0 && scope.ActiveObservers == 0,
+                "both concurrent disposers joined physical producer drain");
+        }
+
+        // I-07: Scope cancellation is authenticated by its exact token.
+        // A foreign cancelled token (or a tokenless user OCE) is never proof
+        // that the producer obeyed scope cancellation.
+        {
+            var scope = new OresTaskScope(1, 1);
+            var entered = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var producer = scope.Start<long>(async _ =>
+            {
+                entered.TrySetResult();
+                await release.Task.ConfigureAwait(false);
+                throw new OperationCanceledException(
+                    "foreign cancellation", new CancellationToken(canceled: true));
+            });
+            var observer = scope.FromTask(producer).ObserveAsync();
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            var draining = scope.DisposeAsync().AsTask();
+            Require(!draining.IsCompleted, "dispose cannot pre-retire live producer");
+            release.TrySetResult();
+            try { _ = await observer; }
+            catch (OperationCanceledException) when (observer.IsFaulted)
+            { goto foreign_fault; }
+            throw new Exception("foreign cancellation was laundered as scope cancellation");
+            foreign_fault:;
+            Require((await producer.Retirement).TerminalState == "faulted",
+                "foreign cancellation must produce fault retirement");
+            await draining.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+
+        // A body that does not need to call Dispose must not accidentally
+        // self-join the one serialized pump and deadlock producer retirement.
+        {
+            var scope = new OresTaskScope(1, 1);
+            var producer = scope.Start(async _ =>
+            {
+                try { await scope.DisposeAsync(); }
+                catch (InvalidOperationException) { return 42L; }
+                throw new Exception("producer incorrectly joined its own pump");
+            });
+            Require(await scope.FromTask(producer).ObserveAsync() == 42,
+                "self-disposal must fail closed, without deadlocking");
+            Require((await producer.Retirement).TerminalState == "succeeded",
+                "self-join rejection preserves retirement");
+            await scope.DisposeAsync();
+        }
+
+        // Authentic cancellation through the scope token is still terminal
+        // cancellation rather than a user fault.
+        {
+            var scope = new OresTaskScope(1, 1);
+            var entered = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var producer = scope.Start<long>(async token =>
+            {
+                entered.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, token).ConfigureAwait(false);
+                return 42L;
+            });
+            var observer = scope.FromTask(producer).ObserveAsync();
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            await scope.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+            try { _ = await observer; }
+            catch (OperationCanceledException) when (observer.IsCanceled)
+            { goto verified_scope_cancellation; }
+            throw new Exception("authenticated producer cancellation was not cancelled");
+            verified_scope_cancellation:;
+            Require((await producer.Retirement).TerminalState == "cancelled",
+                "authenticated cancellation retirement marker");
+        }
+
         await using (var left = new OresTaskScope(1, 1))
         await using (var right = new OresTaskScope(1, 1))
         {
