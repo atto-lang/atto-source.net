@@ -308,3 +308,21 @@ fail-closed source negatives, and retains a bounded SHA-256 receipt. The
 normal hosted jobs remain independent. A configured runner and actual
 nonzero executed job steps are required; this draft does **not** assert
 that the release has been compiled or tested.
+
+### Trusted source-local Windows Native AOT
+
+The optional Windows x64 runner lives only in
+`.github/workflows/trusted-source-local-windows-aot.yml`, a separate
+**manual `workflow_dispatch`-only** workflow on protected `main`. The
+pull-request-triggered `windows-native-aot.yml` never selects a self-hosted
+runner. Independent review and repository branch protection must precede
+setting `ORESLANG_NET_SELFHOSTED_WINDOWS=enabled`,
+`ORESLANG_NET_SELFHOSTED_WINDOWS_SHA=<reviewed 40-hex commit>`, and
+`ORESLANG_NET_SELFHOSTED_WINDOWS_TREE=<reviewed 40-hex root tree>`.
+Use only an isolated ephemeral Windows x64 runner labeled `oreslang-net-aot`.
+The trusted job rejects wrong repository ID, unprotected refs, mismatched
+checked-out source/tree, and dirty worktrees before compiling or executing
+source code. Its receipt distinguishes the trusted workflow SHA, tested
+source SHA/tree, and native executable hashes. This workflow does not
+relax required hosted CI or independently authorize private cross-org source
+exports.
