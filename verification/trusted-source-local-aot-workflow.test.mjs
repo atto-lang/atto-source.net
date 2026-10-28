@@ -283,5 +283,10 @@ for (const [label, source, path] of [
   assert.ok(beforeCheckout.includes(path), label + ': workflow identity not checked before checkout');
   assert.ok(source.includes('GITHUB_WORKFLOW_REF'), label + ': executor workflow identity unchecked');
 }
-assert.ok(hosted.includes('github.event_name') && hosted.includes('cancel-in-progress: ${{ github.event_name != \'workflow_dispatch\' }}'), 'source hosted concurrency changed');
+assert.ok(hosted.includes('github.event_name') &&
+  hosted.includes('cancel-in-progress: false'),
+  'Linux exact-head native proof must not be cancelled by a later PR update');
+assert.ok(hostedWindows.includes('github.event_name') &&
+  hostedWindows.includes('cancel-in-progress: false'),
+  'Windows exact-head native proof must not be cancelled by a later PR update');
 console.log('TRUSTED_SOURCE_LOCAL_AOT_WORKFLOW_CONTRACT_PASSED');
