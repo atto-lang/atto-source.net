@@ -157,36 +157,50 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  # A reviewer/maintainer opts into this trusted source-repository runner for
-  # one exact PR head. A mutable branch can never authorize source execution.
-  # No private source is sent to an external organization.
+  # TRUST BOUNDARY: never execute a pull_request-defined workflow on this
+  # self-hosted runner. Manual dispatch runs trusted workflow YAML from the
+  # protected default main branch. Exact source commit AND root tree must
+  # be independently approved as repository variables before checkout.
+  # No private source is sent to another GitHub organization.
   linux-x64-approved-source-local:
     if: >-
-      github.event_name == 'pull_request' &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'ores-truffle-oreslang/oreslang-source.net' &&
       vars.ORESLANG_NET_SELFHOSTED_LINUX == 'enabled' &&
       vars.ORESLANG_NET_SELFHOSTED_LINUX_SHA != '' &&
-      github.event.pull_request.head.sha == vars.ORESLANG_NET_SELFHOSTED_LINUX_SHA
+      vars.ORESLANG_NET_SELFHOSTED_LINUX_TREE != ''
     runs-on: [self-hosted, Linux, X64, oreslang-net-aot]
     timeout-minutes: 120
     permissions:
       contents: read
     steps:
-      - name: Check out the exact approved originating source
+      - name: Authorize reviewed source before any checkout
+        shell: bash
+        env:
+          APPROVED_HEAD: ${{ vars.ORESLANG_NET_SELFHOSTED_LINUX_SHA }}
+          APPROVED_TREE: ${{ vars.ORESLANG_NET_SELFHOSTED_LINUX_TREE }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_REPOSITORY" = ores-truffle-oreslang/oreslang-source.net
+          [[ "$APPROVED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$APPROVED_TREE" =~ ^[0-9a-f]{40}$ ]]
+      - name: Check out approved immutable source, not a PR workflow
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha }}
-      - name: Refuse unapproved source or missing Native AOT prerequisites
+          ref: ${{ vars.ORESLANG_NET_SELFHOSTED_LINUX_SHA }}
+      - name: Confirm exact Git commit, tree, and Native AOT prerequisites
         shell: bash
         env:
-          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
-          AUTHORIZED_HEAD: ${{ vars.ORESLANG_NET_SELFHOSTED_LINUX_SHA }}
+          APPROVED_HEAD: ${{ vars.ORESLANG_NET_SELFHOSTED_LINUX_SHA }}
+          APPROVED_TREE: ${{ vars.ORESLANG_NET_SELFHOSTED_LINUX_TREE }}
         run: |
           set -euo pipefail
-          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
-          test "$EXPECTED_HEAD" = "$AUTHORIZED_HEAD"
-          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git rev-parse HEAD)" = "$APPROVED_HEAD"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$APPROVED_TREE"
           test -z "$(git status --porcelain --untracked-files=no)"
           for tool in dotnet clang readelf file realpath sha256sum; do
             command -v "$tool" >/dev/null || { echo "Missing source-local tool: $tool" >&2; exit 1; }
@@ -251,15 +265,15 @@ jobs:
       - name: Record source tree and released executable SHA-256 identities
         shell: bash
         env:
-          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
-          AUTHORIZED_HEAD: ${{ vars.ORESLANG_NET_SELFHOSTED_LINUX_SHA }}
+          APPROVED_HEAD: ${{ vars.ORESLANG_NET_SELFHOSTED_LINUX_SHA }}
+          APPROVED_TREE: ${{ vars.ORESLANG_NET_SELFHOSTED_LINUX_TREE }}
         run: |
           set -euo pipefail
-          test "$EXPECTED_HEAD" = "$AUTHORIZED_HEAD"
-          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git rev-parse HEAD)" = "$APPROVED_HEAD"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$APPROVED_TREE"
           mkdir -p artifacts/evidence
           {
-            printf 'repository=%s\nsource_head=%s\nroot_tree=%s\nrun_id=%s\nrun_attempt=%s\n' "$GITHUB_REPOSITORY" "$EXPECTED_HEAD" "$(git rev-parse 'HEAD^{tree}')" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+            printf 'repository=%s\nworkflow_sha=%s\nworkflow_ref=%s\ntested_source_head=%s\ntested_root_tree=%s\nrun_id=%s\nrun_attempt=%s\ntarget_rid=linux-x64\n' "$GITHUB_REPOSITORY" "$GITHUB_SHA" "$GITHUB_REF" "$APPROVED_HEAD" "$APPROVED_TREE" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
             sha256sum artifacts/compiler/linux-x64/oresnet artifacts/apps/linux-x64/oreslang-app artifacts/parity/linux-x64/oreslang-app artifacts/parity-precedence/linux-x64/oreslang-app artifacts/structured/linux-x64/oreslang-app
           } > artifacts/evidence/source-local-linux-sha256.txt
       - name: Upload bounded source-local Native AOT receipt

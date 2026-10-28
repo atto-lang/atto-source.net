@@ -223,14 +223,24 @@ binutils, `file`, `realpath`, and standard Unix tools. This does not require
 a cross-organization source mirror or secrets.
 
 **Never enable this runner on unreviewed code or while source-main is
-unprotected.** Once protected-main governance and independent review are in
-place, set the non-secret GitHub Actions repository variables
-`ORESLANG_NET_SELFHOSTED_LINUX=enabled` and
-`ORESLANG_NET_SELFHOSTED_LINUX_SHA=<exact reviewed PR-head commit SHA>`.
-Only same-repository PRs that match the approved 40-character SHA schedule
-the opt-in job. Reauthorization is required after *every* PR-head change.
-Use an ephemeral runner, no privileged shared runners or injected secrets,
-and unset both variables/retire the runner after execution.
+unprotected.** Independently review and protect the source repository's
+default `main` branch **before** enabling it. Set the non-secret GitHub
+Actions repository variables `ORESLANG_NET_SELFHOSTED_LINUX=enabled`,
+`ORESLANG_NET_SELFHOSTED_LINUX_SHA=<exact reviewed source commit SHA>`, and
+`ORESLANG_NET_SELFHOSTED_LINUX_TREE=<its verified 40-hex root Git tree>`.
+Then use **Run workflow** on this workflow's `main` revision. A
+`pull_request` event can never allocate this self-hosted runner:
+unreviewed PR-controlled workflow YAML must not be a runner authority.
+The manually dispatched default-branch workflow first validates immutable
+SHA/tree controls, then checks out the reviewed commit from this same repo
+and validates the actual root tree **before executing source code**.
+
+The workflow run's GitHub `head_sha` identifies the trusted `main` workflow
+revision, **not** the tested feature commit; the receipt independently names
+`workflow_sha`, `tested_source_head`, and `tested_root_tree`. A changed
+feature commit or tree requires fresh independent review and reauthorization.
+Use only isolated ephemeral runners, no privileged shared runners or injected
+secrets, and unset all three variables/retire the runner after execution.
 
 The job checks source head/tree, runs the managed suite, publishes actual
 Native AOT compiler/app binaries, executes canonical 14/42/40 sources plus structured CFG/SSA source=45 and
