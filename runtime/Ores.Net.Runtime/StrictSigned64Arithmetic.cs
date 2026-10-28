@@ -45,5 +45,19 @@ public static class StrictSigned64Arithmetic
         return result;
     }
 
+    /// <summary>
+    /// Explicit, lossless conversion to IEEE754 binary64. Unlike unchecked
+    /// long casts, this rejects values rounding outside the i64 upper bound.
+    /// Oreslang source `as` is a type assertion, not a numeric conversion.
+    /// </summary>
+    public static double ToFloatExact(long value)
+    {
+        double converted = (double)value;
+        if (converted >= 9223372036854775808.0d
+            || (long)converted != value)
+            throw new OverflowException("inexact signed64 to binary64 conversion");
+        return converted;
+    }
+
     public static long BitXor(long left, long right) => left ^ right;
 }
