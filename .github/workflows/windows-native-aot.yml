@@ -291,6 +291,38 @@ jobs:
             throw "Statement-bodied helper Native AOT expected 42, got '$actual'"
           }
 
+      - name: Verify typed bindings in executed Windows Native AOT
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $source = (Resolve-Path 'examples/structured-bindings42.ores').Path
+          $compiler = (Resolve-Path './artifacts/compiler/win-x64/oresnet.exe').Path
+          $folder = Join-Path $env:RUNNER_TEMP 'ores-bindings-native'
+          New-Item -ItemType Directory -Force $folder | Out-Null
+          & $compiler check $source
+          if ($LASTEXITCODE -eq 0) { throw 'Shipping scalar accepted structured bindings' }
+          & $compiler check-structured $source
+          if ($LASTEXITCODE -ne 0) { throw 'Structured bindings source check failed' }
+          $assembly = Join-Path $folder 'OresGenerated.dll'
+          & $compiler compile-structured $source --out $assembly
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $assembly)) { throw 'Bindings CIL missing' }
+          $bad = Join-Path $folder 'bad.ores'
+          [IO.File]::WriteAllText($bad, 'fnc main():int{val int x=1;x=2;return x;}', [Text.UTF8Encoding]::new($false))
+          $denied = Join-Path $folder 'denied/OresGenerated.dll'
+          New-Item -ItemType Directory -Force (Split-Path -Parent $denied) | Out-Null
+          & $compiler compile-structured $bad --out $denied
+          if ($LASTEXITCODE -eq 0 -or (Test-Path $denied)) { throw 'val reassignment admitted' }
+          $project = 'host/Ores.Net.NativeHost/Ores.Net.NativeHost.csproj'
+          $outputDir = 'artifacts/structured-bindings/win-x64'
+          dotnet clean $project -c Release -r win-x64 "-p:GeneratedAssembly=$assembly"
+          if ($LASTEXITCODE -ne 0) { throw 'Host clean failed' }
+          dotnet publish $project -c Release -r win-x64 -o $outputDir "-p:GeneratedAssembly=$assembly" -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'Native AOT publication failed' }
+          $exe = Join-Path $outputDir 'oreslang-app.exe'
+          ./verification/assert-native-release.ps1 -Binary $exe -Rid win-x64
+          $actual = & $exe
+          if ($LASTEXITCODE -ne 0 -or ($actual | Out-String).Trim() -cne '42') { throw "Native bindings result: $actual" }
+
       - name: Execute shared five-backend native.add source in real Windows Native AOT
         shell: pwsh
         run: |
@@ -556,6 +588,35 @@ jobs:
           file "$binary" | grep -q 'ELF 64-bit'
           test ! -f artifacts/structured-function-bodies/linux-x64/oreslang-app.runtimeconfig.json
           test ! -f artifacts/structured-function-bodies/linux-x64/OresGenerated.dll
+
+      - name: Verify typed bindings in executed Linux Native AOT
+        shell: bash
+        run: |
+          set -euo pipefail
+          compiler='artifacts/structured-native/compiler-linux-x64/oresnet'
+          source_file='examples/structured-bindings42.ores'
+          test -x "$compiler"
+          if "$compiler" check "$source_file"; then echo 'Shipping scalar accepted bindings' >&2; exit 1; fi
+          "$compiler" check-structured "$source_file"
+          mkdir -p artifacts/structured-bindings/generated
+          generated="$GITHUB_WORKSPACE/artifacts/structured-bindings/generated/OresGenerated.dll"
+          "$compiler" compile-structured "$source_file" --out "$generated"
+          test -s "$generated"
+          printf '%s' 'fnc main():int{val int x=1;x=2;return x;}' > "$RUNNER_TEMP/bad-val.ores"
+          denied="$GITHUB_WORKSPACE/artifacts/structured-bindings/generated/denied/OresGenerated.dll"
+          mkdir -p "$(dirname "$denied")"
+          if "$compiler" compile-structured "$RUNNER_TEMP/bad-val.ores" --out "$denied"; then echo 'val reassignment admitted' >&2; exit 1; fi
+          test ! -e "$denied"
+          project='host/Ores.Net.NativeHost/Ores.Net.NativeHost.csproj'
+          dotnet clean "$project" -c Release -r linux-x64 "-p:GeneratedAssembly=$generated"
+          dotnet publish "$project" -c Release -r linux-x64 \
+            -o artifacts/structured-bindings/linux-x64 "-p:GeneratedAssembly=$generated" -warnaserror
+          binary='artifacts/structured-bindings/linux-x64/oreslang-app'
+          test -x "$binary"
+          test "$("$binary")" = 42
+          file "$binary" | grep -q 'ELF 64-bit'
+          test ! -e artifacts/structured-bindings/linux-x64/oreslang-app.runtimeconfig.json
+          test ! -e artifacts/structured-bindings/linux-x64/OresGenerated.dll
 
   # Optional budget-independent gate. Disabled unless repo owners register an
   # isolated, trusted Windows x64 runner with the oreslang-net-aot label and set
