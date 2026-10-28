@@ -3,6 +3,52 @@
 import { strict as assert } from 'node:assert';
 import { readFileSync, readdirSync } from 'node:fs';
 
+
+/**
+ * Require the complete YAML event stanza to be exactly workflow_dispatch.
+ * A blank line or comment must not conceal a second trigger.
+ * We deliberately accept no aliases, merge keys or dynamic YAML here.
+ */
+function assertManualOnlyTrigger(source, label) {
+  const lines = source.split(/\r?\n/);
+  const indices = lines.flatMap((line, index) =>
+    (/^(?:on\s*:|["']on["']\s*:)/.test(line) ? [index] : []));
+  assert.equal(indices.length, 1, label + ': expected exactly one on mapping');
+  const start = indices[0];
+  assert.equal(lines[start], 'on:', label + ': noncanonical on mapping');
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; ++i) {
+    if (/^[^ \t#][^:]*:/.test(lines[i])) {
+      end = i;
+      break;
+    }
+  }
+  const entries = lines.slice(start + 1, end)
+    .filter(line => line.trim() && !/^\s*#/.test(line));
+  assert.deepEqual(entries, ['  workflow_dispatch:'],
+    label + ': only a single literal manual event is allowed');
+}
+
+for (const malicious of [
+  'on:\n  workflow_dispatch:\n\n  repository_dispatch:\n',
+  'on:\n  workflow_dispatch:\n  schedule:\n',
+  'on:\n  workflow_dispatch:\n\n  push:\n',
+  'on:\n  workflow_dispatch:\n\n  workflow_run:\n',
+  'on:\n  workflow_dispatch:\n\n  pull_request_target:\n',
+  'on:\n  workflow_dispatch:\n\n  workflow_call:\n',
+  'on:\n  workflow_dispatch:\n\n  # unrelated comment\n  repository_dispatch:\n',
+  'on: [workflow_dispatch, push]\n',
+  'on: *eventAlias\n',
+  '"on":\n  workflow_dispatch:\n',
+  'on:\n  workflow_dispatch:\n\non:\n  repository_dispatch:\n',
+]) {
+  assert.throws(() => assertManualOnlyTrigger(malicious, 'mutation'),
+    'unsafe trigger mutation was accepted: ' + JSON.stringify(malicious));
+}
+assert.doesNotThrow(() => assertManualOnlyTrigger(
+  'on:\n  workflow_dispatch:\n\n# comment\npermissions:\n  contents: read\n',
+  'valid-manual'));
+
 const hosted = readFileSync('.github/workflows/strict-linux-native-aot.yml', 'utf8');
 const trusted = readFileSync('.github/workflows/trusted-source-local-linux-aot.yml', 'utf8');
 
@@ -11,9 +57,7 @@ assert.doesNotMatch(hosted, /\bself-hosted\b/);
 assert.doesNotMatch(hosted, /oreslang-net-aot/);
 assert.doesNotMatch(hosted, /linux-x64-approved-source-local/);
 
-const triggers = trusted.match(/^on:\n((?:  [a-z_]+:\n)+)/m);
-assert.ok(triggers, 'trusted workflow trigger stanza missing');
-assert.equal(triggers[1], '  workflow_dispatch:\n');
+assertManualOnlyTrigger(trusted, 'Linux Native AOT');
 assert.doesNotMatch(trusted, /^  (?:push|pull_request|pull_request_target|workflow_run):/m);
 assert.equal((trusted.match(/^  linux-x64-approved-source-local:/gm) ?? []).length, 1);
 assert.match(trusted, /^    runs-on:\n      group: oreslang-net-aot-trusted\n      labels: \[self-hosted, Linux, X64, oreslang-net-aot\]$/m);
@@ -60,9 +104,7 @@ const trustedWindows = readFileSync('.github/workflows/trusted-source-local-wind
 assert.match(hostedWindows, /^  pull_request:\s*$/m);
 assert.doesNotMatch(hostedWindows, /self-hosted-windows-static-facts/);
 assert.doesNotMatch(hostedWindows, /^    runs-on: \[self-hosted/m);
-const wt = trustedWindows.match(/^on:\n((?:  [a-z_]+:\n)+)/m);
-assert.ok(wt);
-assert.equal(wt[1], '  workflow_dispatch:\n');
+assertManualOnlyTrigger(trustedWindows, 'Windows Native AOT');
 assert.doesNotMatch(trustedWindows, /^  (?:push|pull_request|pull_request_target|workflow_run):/m);
 assert.match(trustedWindows, /^    runs-on:\n      group: oreslang-net-aot-trusted\n      labels: \[self-hosted, Windows, X64, oreslang-net-aot\]$/m);
 for (const s of [
@@ -93,7 +135,7 @@ const fenceTrusted = readFileSync('.github/workflows/trusted-source-local-fence-
 assert.match(fenceHosted, /^  pull_request:\s*$/m);
 assert.doesNotMatch(fenceHosted, /source-local-windows-fence:/);
 assert.doesNotMatch(fenceHosted, /^    runs-on: \[self-hosted/m);
-assert.equal((fenceTrusted.match(/^on:\n((?:  [a-z_]+:\n)+)/m) ?? [])[1], '  workflow_dispatch:\n');
+assertManualOnlyTrigger(fenceTrusted, 'Windows continuation fence');
 assert.match(fenceTrusted, /^    runs-on:\n      group: oreslang-net-aot-trusted\n      labels: \[self-hosted, Windows, X64, oreslang-net-aot\]$/m);
 for (const s of [
  "github.ref == 'refs/heads/main'", 'github.ref_protected == true',
@@ -135,6 +177,45 @@ function hasUnapprovedRunnerSelector(yaml) {
   }
   return false;
 }
+/**
+ * The integrated actor-memory Native AOT workflow uses two literal hosted
+ * jobs, not an expression or matrix capable of selecting an untrusted runner.
+ */
+const actorMemoryHosted = readFileSync('.github/workflows/actor-memory-native-aot.yml', 'utf8');
+assert.equal((actorMemoryHosted.match(/^    runs-on:/gm) ?? []).length, 2,
+  'actor-memory must schedule exactly two literal hosted jobs');
+for (const [job, host, rid, binary] of [
+  ['actor-memory-linux', 'ubuntu-24.04', 'linux-x64', 'Ores.Net.ActorMemoryProbe'],
+  ['actor-memory-windows', 'windows-2022', 'win-x64', 'Ores.Net.ActorMemoryProbe.exe'],
+]) {
+  const block = actorMemoryHosted.split('  ' + job + ':' + String.fromCharCode(10))[1]
+    ?.split(/^  [a-z][a-z0-9-]*:/m)[0];
+  assert.ok(block, 'missing hosted actor-memory job: ' + job);
+  for (const expected of ['    runs-on: ' + host, 'RID: ' + rid, 'BINARY: ' + binary,
+    'git rev-parse HEAD', 'dotnet run --project verification/Ores.Net.Tests/',
+    'dotnet publish verification/Ores.Net.ActorMemoryProbe/']) {
+    assert.ok(block.includes(expected), job + ' omitted: ' + expected);
+  }
+  assert.ok(!hasUnapprovedRunnerSelector(block), job + ' has unapproved runner');
+}
+assert.ok(!actorMemoryHosted.includes('runs-on: $' + '{{'),
+  'actor-memory must not select runners from expressions');
+for (const [mutation, changed] of [
+  ['self-hosted label', actorMemoryHosted.replace('runs-on: windows-2022',
+    'runs-on: [self-hosted, Windows]')],
+  ['dynamic matrix selector', actorMemoryHosted.replace('runs-on: ubuntu-24.04',
+    'runs-on: ${{ matrix.os }}')],
+  ['dynamic input selector', actorMemoryHosted.replace('runs-on: ubuntu-24.04',
+    'runs-on: ${{ github.event.inputs.runner }}')],
+  ['alias selector', actorMemoryHosted.replace('runs-on: ubuntu-24.04',
+    'runs-on: *trustedRunner')],
+  ['additional malicious job', actorMemoryHosted +
+    [ '', '  malicious:', '    runs-on: [self-hosted, Linux]', '    steps: []', ''].join(String.fromCharCode(10))],
+]) {
+  assert.ok(hasUnapprovedRunnerSelector(changed),
+    'Untrusted actor-memory runner mutation accepted: ' + mutation);
+}
+
 for (const selector of [
   'runs-on: [ubuntu-latest, self-hosted]',
   'runs-on : self-hosted',
@@ -178,8 +259,7 @@ for (const name of readdirSync('.github/workflows').filter(x => /\.ya?ml$/.test(
       'Trusted workflow has extra runner allocation: ' + name);
     assert.equal((yaml.match(/^\s+group:\s*oreslang-net-aot-trusted\s*$/gm) ?? []).length, 1,
       'Trusted workflow runner group count changed: ' + name);
-    assert.equal((yaml.match(/^on:\n((?:  [a-z_]+:\n)+)/m) ?? [])[1],
-      '  workflow_dispatch:\n', 'Unsafe trusted workflow event: ' + name);
+    assertManualOnlyTrigger(yaml, 'trusted workflow ' + name);
   }
 }
 console.log('TRUSTED_SOURCE_LOCAL_AOT_WORKFLOW_CONTRACT_PASSED');
