@@ -38,7 +38,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bash -n scripts/publish-linux.sh verification/assert-linux-native-release.sh verification/assert-linux-native-release-selftest.sh
+          bash -n scripts/publish-linux.sh verification/assert-linux-native-release.sh verification/assert-linux-native-release-selftest.sh verification/assert-linux-native-arithmetic.sh
           bash verification/assert-linux-native-release-selftest.sh
           dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
       - name: Compile native compiler and first native application
@@ -119,6 +119,11 @@ jobs:
           test "$(artifacts/parity/linux-x64/oreslang-app)" = 42
           test "$(artifacts/apps/linux-x64/oreslang-app)" = 14
           echo 'LINUX_NET_NATIVE_AOT_STRUCTURED_SSA_CIL_EXECUTED_45'
+      - name: Execute Linux Native AOT checked-arithmetic negatives
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash verification/assert-linux-native-arithmetic.sh
       - name: Negative test for managed sidecar rejection
         shell: bash
         run: |
