@@ -39,6 +39,24 @@ dotnet publish host/Ores.Net.NativeHost/Ores.Net.NativeHost.csproj -c Release -r
 
 Windows ARM64 is a planned target: script accepts `-Rid win-arm64`, but CI coverage and compatible Windows ARM64 build infrastructure remain to be established.
 
+## Optional C# and F# source backends (experimental)
+
+The verified scalar OresIR can also be emitted as C# (`emit-csharp`) or F#
+(`emit-fsharp`) source, then compiled by Roslyn or the F# compiler into
+CIL. These commands use the **same strict parser and verifier** as the
+shipping `compile` command, preserve checked i64 operations, and never
+introduce a runtime JIT dependency into the Native AOT release path.
+
+~~~powershell
+dotnet run --project compiler/Ores.Net.Compiler -c Release -- emit-csharp examples/hello.ores --out artifacts/OresProgram.cs
+dotnet run --project compiler/Ores.Net.Compiler -c Release -- emit-fsharp examples/hello.ores --out artifacts/OresProgram.fs
+./verification/assert-managed-source.ps1
+~~~
+
+This is source-generation tooling for the one-function arithmetic subset,
+**not** full Oreslang-to-C#/F# support or a Native AOT release certificate.
+See [managed source backends](docs/MANAGED_SOURCE_BACKENDS.md).
+
 ## Current language support
 
 The compiler accepts exactly this shape with optional `define`/`pub` modifiers:

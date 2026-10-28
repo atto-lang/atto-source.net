@@ -27,7 +27,7 @@ internal static class StructuredSourceTests
         catch (FormatException error)
         {
             Require(error.Message.Contains(expectedDiagnostic, StringComparison.OrdinalIgnoreCase),
-                "unsupported feature rejected for wrong reason: " + error.Message);
+                "unsupported feature rejected for wrong reason for source `" + source + "`: " + error.Message);
             Require(error.Message.Contains("offset", StringComparison.Ordinal),
                 "unsupported feature missing source position");
             return;
@@ -67,7 +67,9 @@ internal static class StructuredSourceTests
             "fnc main():int{class Local{}return 1;}",
             "fnc main():int{actor Local{}return 1;}",
             "fnc main():int{define class Local{}return 1;}",
-            "fnc main():int{define actor Local{}return 1;}"
+            "fnc main():int{define actor Local{}return 1;}",
+            "fnc main():int{let int x=1;define class Local{}return x;}",
+            "fnc main():int{if true {define actor Local{}}return 1;}"
         })
             RejectFeature(nominal, "Local class/actor declarations are not permitted");
         var tooManyFields = "fnc main():int{struct Big{" +
