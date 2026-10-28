@@ -6,6 +6,7 @@ public abstract record Expression;
 public sealed record Literal(long Value) : Expression;
 public sealed record Unary(char Operator, Expression Value) : Expression;
 public sealed record Binary(char Operator, Expression Left, Expression Right) : Expression;
+public sealed record NamedBitXor(Expression Left, Expression Right) : Expression;
 
 public static class OresParser
 {
@@ -179,7 +180,7 @@ public static class OresParser
             // Lex assignment punctuation so unsupported declarations are rejected
             // at their declaration, rather than at a later initializer. The
             // arithmetic parser still has no assignment production.
-            if ("()+-*/%{}:;.=?".IndexOf(ch) >= 0)
+            if ("()+-*/%{}:;.,=?".IndexOf(ch) >= 0)
             {
                 _i++;
                 return new Token(text[start.._i], start);
@@ -338,6 +339,19 @@ public static class OresParser
                 var inner = ParseAdd(depth + 1);
                 Expect(")");
                 return inner;
+            }
+            if (Take("Integer"))
+            {
+                // The only admitted named intrinsic in the production i64
+                // frontend. Never reinterpret arbitrary guest method calls.
+                Expect(".");
+                Expect("bitXor");
+                Expect("(");
+                var left = ParseAdd(depth + 1);
+                Expect(",");
+                var right = ParseAdd(depth + 1);
+                Expect(")");
+                return new NamedBitXor(left, right);
             }
             if (Current.Text.Length == 0 || Current.Text[0] is < '0' or > '9')
                 throw new FormatException($"Expected integer at offset {Current.Offset}");
