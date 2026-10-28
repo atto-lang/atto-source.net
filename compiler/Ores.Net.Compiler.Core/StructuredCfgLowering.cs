@@ -250,6 +250,9 @@ public static class OresStructuredCfgLowering
                     throw new FormatException("Unreachable structured CFG statement");
                 switch (stmt)
                 {
+                    case StructuredLocalTypeDecl localType:
+                        throw new FormatException(
+                            $"Local {localType.Kind.ToString().ToLowerInvariant()} '{localType.Name}' requires verified value layout and CIL lowering at offset {localType.At}");
                     case StructuredLet declaration:
                     {
                         if (variables.ContainsKey(declaration.Name))
