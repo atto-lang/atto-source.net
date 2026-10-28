@@ -105,6 +105,11 @@ ActorMailboxAuthorizationPrioritySelfTest.Run();
 ActorMailboxPrivateDataSelfTest.Run();
 ActorArenaSelfTest.Run();
 ActorShardColumnsSelfTest.Run();
+SelectArbiterSelfTest.Run();
+SelectableI64ChannelSelfTest.Run();
+SelectableI64FutureSelfTest.Run();
+ActorDispatchDomainsSelfTest.Run();
+ActorRuntimeSelfTest.Run();
 ProjectRootSourceTests.Run(); // host-only resolver, not linked .NET source imports
 
 // Import parity is deliberately not claimed for the .NET scalar compiler.
@@ -662,10 +667,14 @@ Require(await RuntimeHost.ExecuteAsync(() => throw new OverflowException()) == 7
 Require(await RuntimeHost.ExecuteAsync(() => throw new DivideByZeroException()) == 70,
     "divide zero error returned");
 
+ManagedSourceEmitterTests.Run();
 SourceI64Conformance.Run();
+SharedScalarParityConformance.Run();
 CfgVerifierTests.Run();
 CfgCilStressTests.Run();
 StructuredSourceTests.Run();
+StructuredCfgLoweringTests.Run();
+StructuredStaticAbiTests.Run();
 StaticFactsV0Tests.Run();
 ValueBoundaryTests.Run();
 Console.WriteLine("Oreslang .NET bootstrap, CFG verifier, CIL stress and structured source tests passed");

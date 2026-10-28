@@ -1,0 +1,79 @@
+{
+  "scope": "source-merge-provenance-NOT-runtime-execution",
+  "main_commit": "30e7742503f857372bd96f12e858bd71c4a2fdb6",
+  "candidate_commit": "3d014cb26ba115d86232c7f95342d7be26e6d9a4",
+  "merge_base": "9607bd2e04cb59943351f87847a110303f85f1a6",
+  "compiler_runtime_native_aot_status": "NOT_EXECUTED",
+  "files": [
+    {
+      "path": "runtime/Ores.Net.Runtime/ActorArena.cs",
+      "result_blob": "d6fb3e8966eb95999d660cefbd0d38b015b148a3",
+      "main_blob": "71ffe2c20c604105c85bdcfda32973c05ab4fd21",
+      "ancestor_blob": "71ffe2c20c604105c85bdcfda32973c05ab4fd21",
+      "candidate_blob": "d6fb3e8966eb95999d660cefbd0d38b015b148a3"
+    },
+    {
+      "path": "runtime/Ores.Net.Runtime/ActorDispatchDomains.cs",
+      "result_blob": "05908d0be11324b204b8cb96d70cbbc351e8170e",
+      "candidate_blob": "05908d0be11324b204b8cb96d70cbbc351e8170e"
+    },
+    {
+      "path": "runtime/Ores.Net.Runtime/ActorMailbox.cs",
+      "result_blob": "bed3e9ab2fb11b6cea138d0ee9c1e4637cea12bf",
+      "main_blob": "e43ca8da744cf85d8cc0e6825c21ea62fe4f7346",
+      "ancestor_blob": "e43ca8da744cf85d8cc0e6825c21ea62fe4f7346",
+      "candidate_blob": "bed3e9ab2fb11b6cea138d0ee9c1e4637cea12bf"
+    },
+    {
+      "path": "runtime/Ores.Net.Runtime/ActorRuntime.cs",
+      "result_blob": "8ac4755f893dff0bad3256b5bbf884003f2671e0",
+      "candidate_blob": "8ac4755f893dff0bad3256b5bbf884003f2671e0"
+    },
+    {
+      "path": "runtime/Ores.Net.Runtime/ActorShardColumns.cs",
+      "result_blob": "ecf9bf463f792a3e2b1441177ae3620abb31c5fe",
+      "main_blob": "893cf62aa1c7885edd7526d883a80b295b588713",
+      "ancestor_blob": "893cf62aa1c7885edd7526d883a80b295b588713",
+      "candidate_blob": "ecf9bf463f792a3e2b1441177ae3620abb31c5fe"
+    },
+    {
+      "path": "verification/Ores.Net.ActorMemoryProbe/Ores.Net.ActorMemoryProbe.csproj",
+      "result_blob": "fec0e385611a157b20b4c66371e692d4727c6d48"
+    },
+    {
+      "path": "verification/Ores.Net.ActorMemoryProbe/Program.cs",
+      "result_blob": "eea64185f6ed3d4bd9e236090c8f9afe8e3c4e8d"
+    },
+    {
+      "path": "verification/Ores.Net.Tests/ActorArenaSelfTest.cs",
+      "result_blob": "0be9f985385ccf68234529a4e516789eaf5745d6",
+      "main_blob": "9e57d9892a717e9be913791d69875ad8be3e726e",
+      "ancestor_blob": "9e57d9892a717e9be913791d69875ad8be3e726e",
+      "candidate_blob": "0be9f985385ccf68234529a4e516789eaf5745d6"
+    },
+    {
+      "path": "verification/Ores.Net.Tests/ActorDispatchDomainsSelfTest.cs",
+      "result_blob": "dc9ed91734c41c8e85cc3913f4b505a8e47a8277",
+      "candidate_blob": "dc9ed91734c41c8e85cc3913f4b505a8e47a8277"
+    },
+    {
+      "path": "verification/Ores.Net.Tests/ActorRuntimeSelfTest.cs",
+      "result_blob": "1a3c65564c2e12928ebe5dee8080ccb18e0264cb",
+      "candidate_blob": "1a3c65564c2e12928ebe5dee8080ccb18e0264cb"
+    },
+    {
+      "path": "verification/Ores.Net.Tests/ActorShardColumnsSelfTest.cs",
+      "result_blob": "46e32695175a5210c6476cca0671702f96d63d19",
+      "main_blob": "c16a722304d4c518b5fdd33f2345428580357484",
+      "ancestor_blob": "c16a722304d4c518b5fdd33f2345428580357484",
+      "candidate_blob": "46e32695175a5210c6476cca0671702f96d63d19"
+    },
+    {
+      "path": "verification/Ores.Net.Tests/Program.cs",
+      "result_blob": "b225d10d7ec610fe1dcb6b501f49af34b0b4ec20",
+      "main_blob": "a3bf1b2e29b36c8efa259e534961c9eb7cf17671",
+      "ancestor_blob": "c85b4abf7a4a4402a83a55b1fae91ee638c2e15b",
+      "candidate_blob": "49ec66a9e7387c54eb17bab08dd7c953f9e94ea4"
+    }
+  ]
+}
