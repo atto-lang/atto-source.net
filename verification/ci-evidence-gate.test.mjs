@@ -8,6 +8,7 @@ const sha = "abcdefabcdefabcdefabcdefabcdefabcdefabcd";
 const e = {repo,head:sha,runId:12345,attempt:1,workflow:"Windows Native AOT"};
 const run = {id:12345,run_attempt:1,name:"Windows Native AOT",head_sha:sha,
   status:"completed",conclusion:"success",event:"pull_request",
+  path:".github/workflows/windows-native-aot.yml",
   repository:{full_name:repo}};
 const jobs = {total_count:2,jobs:[
   {name:"windows-x64",run_id:12345,run_attempt:1,head_sha:sha,
@@ -60,6 +61,9 @@ const check=(r,j)=>verifyEvidence(r,j,e);
 test("valid exact-head, same-run, full-step evidence",()=>assert.deepEqual(check(run,jobs),[]));
 test("zero steps are never proof",()=>{const j=copy(jobs);j.jobs[0].steps=[];assert.match(check(run,j).join(" "),/zero executed/);});
 test("different repository rejected",()=>assert.match(check({...run,repository:{full_name:"other/repo"}},jobs).join(" "),/repository/));
+test("same-name workflow at wrong path rejected",()=>assert.match(
+  check({...run,path:".github/workflows/spoof-windows-native-aot.yml"},jobs).join(" "),
+  /workflow path/));
 test("wrong SHA rejected",()=>assert.match(check({...run,head_sha:"0".repeat(40)},jobs).join(" "),/head/));
 test("wrong attempt rejected",()=>assert.match(check({...run,run_attempt:2},jobs).join(" "),/attempt/));
 test("wrong run rejected",()=>assert.match(check({...run,id:44},jobs).join(" "),/run ID/));
@@ -70,7 +74,7 @@ test("pending workflow rejected",()=>assert.match(check({...run,status:"in_progr
 test("missing native execution step rejected",()=>{const j=copy(jobs);j.jobs[0].steps = j.jobs[0].steps.filter(s=>s.name!=="Execute real Windows Native AOT binary");assert.match(check(run,j).join(" "),/missing successful step/);});
 test("ambiguous duplicate job rejected",()=>{const j=copy(jobs);j.jobs.push(copy(j.jobs[0]));j.total_count=3;assert.match(check(run,j).join(" "),/duplicated/);});
 test("declaration-only evidence must not masquerade as AOT",()=>{
-  const x=copy(run);x.name="Integration declaration integrity";
+  const x=copy(run);x.name="Integration declaration integrity";x.path=".github/workflows/integration-declarations.yml";
   const p={...e,workflow:"Integration declaration integrity"};
   assert.notEqual(verifyEvidence(x,jobs,p).length,0);
 });
@@ -87,7 +91,7 @@ test("failed opt-in self-hosted fallback remains rejected",()=>{
   assert.match(check(run,j).join(" "),/not successful/);
 });
 test("Rust declaration tooling evidence is admitted and missing Rust tests rejected",()=>{
-  const p={...e,workflow:"Integration declaration integrity"};const r={...run,name:p.workflow};
+  const p={...e,workflow:"Integration declaration integrity"};const r={...run,name:p.workflow,path:".github/workflows/integration-declarations.yml"};
   const j={total_count:1,jobs:[{name:"declaration-integrity",run_id:e.runId,run_attempt:1,head_sha:sha,status:"completed",conclusion:"success",steps:[
     "Assert exact originating-source checkout","Test Rust repository policy tooling",
     "Verify declaration-only manifest (not a runtime parity claim)"
