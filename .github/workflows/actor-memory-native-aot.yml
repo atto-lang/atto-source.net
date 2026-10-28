@@ -1,0 +1,56 @@
+name: Actor memory runtime and NativeAOT
+on:
+  pull_request:
+    paths:
+      - 'runtime/Ores.Net.Runtime/**'
+      - 'verification/Ores.Net.Tests/**'
+      - 'verification/Ores.Net.ActorMemoryProbe/**'
+      - '.github/workflows/actor-memory-native-aot.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  actor-memory:
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            rid: linux-x64
+            binary: Ores.Net.ActorMemoryProbe
+          - os: windows-2022
+            rid: win-x64
+            binary: Ores.Net.ActorMemoryProbe.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.x'
+      - name: Exact source identity and existing full verification runner
+        shell: bash
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          test -z "$(git status --porcelain)"
+          git rev-parse 'HEAD^{tree}'
+          dotnet --info
+          dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
+      - name: Publish and execute actual host actor NativeAOT isolation probe
+        shell: bash
+        env:
+          RID: ${{ matrix.rid }}
+          BINARY: ${{ matrix.binary }}
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/actor-memory-aot"
+          dotnet publish verification/Ores.Net.ActorMemoryProbe/Ores.Net.ActorMemoryProbe.csproj -c Release -r "$RID" -p:PublishAot=true -p:SelfContained=true -o "$output"
+          test -f "$output/$BINARY"
+          "$output/$BINARY" | tee "$RUNNER_TEMP/actor-memory-native.log"
+          grep -Fx 'PASS actor-memory-native-probe: four private heaps (two shared-pool actors), foreign handles denied, pooled carriers, stale context denied, pinned STOP and physical reclaim' "$RUNNER_TEMP/actor-memory-native.log"

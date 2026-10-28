@@ -33,6 +33,10 @@ public sealed class ActorShardColumns
             throw new ArgumentOutOfRangeException(nameof(rows));
         if (fields <= 0)
             throw new ArgumentOutOfRangeException(nameof(fields));
+        if (layout is not (ActorDataLayout.Aos or ActorDataLayout.Soa
+            or ActorDataLayout.Aosoa))
+            throw new ArgumentOutOfRangeException(nameof(layout),
+                "Unknown actor shard layout");
 
         if (layout == ActorDataLayout.Aosoa)
         {
@@ -177,3 +181,4 @@ public sealed class ActorShardColumns
         return remainder == 0 ? rows : checked(rows + lanes - remainder);
     }
 }
+
