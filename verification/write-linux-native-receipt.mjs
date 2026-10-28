@@ -54,7 +54,7 @@ export function createReceipt(root, env) {
   const regular = relative => {
     const path = resolve(root, relative);
     requireThat(realpathSync(path) === path && lstatSync(path).isFile(), 'unsafe evidence path: '+relative);
-    return readFileSync(path);
+    return path;
   };
   const arithmeticPath = regular('artifacts/evidence/linux-native-arithmetic.json');
   requireThat(statSync(arithmeticPath).size <= 65536,
