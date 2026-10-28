@@ -7,12 +7,16 @@ using Ores.Net.Compiler;
 // the independent CIL test interpreter actually follows call MethodDef tokens.
 internal static class StructuredStaticAbiTests
 {
-    private static void Check(string source, long expected, int helperCount, string label)
+    private static void Check(string source, long expected, int helperCount,
+        string label, bool expressionOnlyReference = true)
     {
         var module = OresStructuredCfgLowering.LowerModule(source);
-        var inline = OresStructuredCfgLowering.Lower(source);
-        if (CfgReferenceEvaluator.Evaluate(inline) != expected)
-            throw new Exception("Structured inline reference disagreement: " + label);
+        if (expressionOnlyReference)
+        {
+            var inline = OresStructuredCfgLowering.Lower(source);
+            if (CfgReferenceEvaluator.Evaluate(inline) != expected)
+                throw new Exception("Structured inline reference disagreement: " + label);
+        }
         if (module.Main.Name != "main" || module.Helpers.Count != helperCount)
             throw new Exception("Unexpected verified static ABI method count: " + label);
 
@@ -70,9 +74,13 @@ internal static class StructuredStaticAbiTests
                     helper.ReturnType.MetadataType != MetadataTypeFor(expectedHelper.ResultType))
                     throw new Exception("Helper MethodDef signature mismatch: " + label);
                 for (int argument = 0; argument < helper.Parameters.Count; argument++)
+                {
                     if (helper.Parameters[argument].ParameterType.MetadataType !=
-                        MetadataTypeFor(expectedHelper.Parameters[argument]))
-                        throw new Exception("Helper parameter ABI mismatch: " + label);
+                        MetadataTypeFor(expectedHelper.Parameters[argument]) ||
+                        helper.Parameters[argument].Name != "arg" + argument ||
+                        helper.Parameters[argument].Index != argument)
+                        throw new Exception("Helper signature/ParamList ABI mismatch: " + label);
+                }
                 if (!helper.Body.Instructions.Any(i =>
                     i.OpCode.Code is Code.Ldarg_0 or Code.Ldarg_1 or Code.Ldarg_2
                         or Code.Ldarg_3 or Code.Ldarg or Code.Ldarg_S) &&
@@ -178,6 +186,20 @@ internal static class StructuredStaticAbiTests
 
     public static void Run()
     {
+        const string lexicalMethods =
+            "fnc z_helper(int n):int{return n+1;}" +
+            "fnc a_helper(int n):int{return z_helper(n)*2;}" +
+            "fnc main():int{return a_helper(20);}";
+        var declaredOrder = OresStructuredParser.Parse(lexicalMethods).FunctionOrder;
+        if (declaredOrder is null ||
+            !declaredOrder.SequenceEqual(new[] { "z_helper", "a_helper" }))
+            throw new Exception("Typed function declaration order was not preserved");
+        var emittedOrder = OresStructuredCfgLowering.LowerModule(lexicalMethods)
+            .Helpers.Select(h => h.Name).ToArray();
+        if (!emittedOrder.SequenceEqual(new[] { "z_helper", "a_helper" }))
+            throw new Exception("CIL MethodDef order diverged from source declaration order");
+        Check(lexicalMethods, 42, 2, "source-order MethodDef tokens must not sort helpers");
+
         Check("fnc main():int{return 42;}", 42, 0, "single main remains supported");
         Check("fnc inc(int x):int{return x+1;}fnc main():int{return inc(41);}",
             42, 1, "single static helper call");
@@ -284,6 +306,45 @@ internal static class StructuredStaticAbiTests
             throw new Exception("Standalone verifier admitted unresolved call target");
         }
         catch (FormatException) { }
+
+        Check("fnc calculate(int x):int{" +
+            "let int sum=0;let int i=0;" +
+            "while i<x{sum=sum+i;i=i+1;}" +
+            "return sum;}" +
+            "fnc main():int{return calculate(10);}",
+            45, 1, "statement helper loop with persistent locals", false);
+        Check("fnc select_value(int n):int{" +
+            "if n<10{return 5;}else{return 42;}}" +
+            "fnc main():int{return select_value(10);}",
+            42, 1, "statement helper both return branches", false);
+        Check("fnc plus_one(int x):int{return x+1;}" +
+            "fnc calculate(int value):int{" +
+            "let int x=value;let int i=0;" +
+            "while i<3{x=plus_one(x);i=i+1;}" +
+            "return x;}" +
+            "fnc main():int{return calculate(39);}",
+            42, 2, "loop in helper calls separate earlier method", false);
+        Check("fnc eligible(int n):bool{" +
+            "let bool ok=n<43;return ok;}" +
+            "fnc main():int{if eligible(42){return 42;}else{return 0;}}",
+            42, 1, "bool-return helper local", false);
+        Check("fnc unused(int n):int{" +
+            "let int x=n;while x<5{x=x+1;}return x;}" +
+            "fnc main():int{return 42;}",
+            42, 1, "unselected statement helper remains an emitted MethodDef", false);
+
+        Reject("fnc incomplete(int x):int{let int y=x;}" +
+            "fnc main():int{return 42;}", "helper lacks return");
+        Reject("fnc wrong(int n):bool{return n;}" +
+            "fnc main():int{return 42;}", "typed bool helper return mismatch");
+        Reject("fnc broken(int n):int{if n<1{return 1;}else{let int x=2;}}" +
+            "fnc main():int{return 42;}", "one helper branch lacks return");
+        Reject("fnc leaked(int n):int{if n<2{let int x=9;}return x;}" +
+            "fnc main():int{return 42;}", "helper block local escaped");
+        Reject("fnc bad(int x):int{let int x=1;return x;}" +
+            "fnc main():int{return bad(1);}", "helper parameter shadowed");
+        Reject("fnc bad(int n):int{return missing(n);}" +
+            "fnc main():int{return 0;}", "hidden unverified call in unused helper");
 
         Reject("fnc main():int{return missing();}", "unknown function");
         Reject("fnc first():int{return second();}fnc second():int{return 1;}" +

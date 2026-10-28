@@ -117,11 +117,23 @@ builds an independent **verified CFG for each helper** and emits a private
 static CIL MethodDef for each one. Call sites evaluate typed arguments exactly
 once, left-to-right, and emit direct `call` tokens to those MethodDefs.
 The legacy inlining/reference-evaluator path remains separately available
-for differential testing; shipping `compile` stays scalar-only. Acyclic
-expression-only calls are now genuine CIL function calls, not just inlined IR.
-Recursive calls, mutual recursion, forward references, dynamic dispatch,
-statement-bodied helpers, closures, generic helper instantiations, and full
-function/ownership ABI support remain deliberately unsupported.
+for differential testing of expression-only functions; shipping `compile`
+stays scalar-only. Acyclic typed calls are genuine CIL function calls, not
+just inlined IR.
+
+The next bounded slice extends helper bodies to checked typed locals,
+assignments, `if`/`else`, `while`, and all-path return checking (including
+`bool` returns), lowered into a *separate verified CFG/MethodDef per helper*.
+Each emitted method gets its own explicit ordered Param metadata rows.
+The pinned positive program is `examples/structured-function-bodies.ores`,
+expected to return **42** after a helper loop and boolean helper call.
+Windows/Linux workflow steps require real released Native AOT compiler and
+application execution, not merely host-unit or parser checks.
+
+Recursion, mutual recursion, forward references, dynamic dispatch, classes,
+closures, generic instantiations and full ownership/actor-safe function frames
+remain deliberately unsupported. Parser acceptance does not imply release
+parity; source-org zero-step CI must be resolved before promotion.
 
 Example (experimental only):
 

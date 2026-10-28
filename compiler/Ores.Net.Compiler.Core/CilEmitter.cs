@@ -305,6 +305,11 @@ public static class CilEmitter
         var systemObject = metadata.AddTypeReference(runtime,
             metadata.GetOrAddString("System"), metadata.GetOrAddString("Object"));
 
+        // Explicit Param rows are essential for stable method-local argument
+        // metadata. Each MethodDef.ParamList points to the first row owned by
+        // that method (or the next row for a zero-argument method). Parameter
+        // *types* remain authoritative in the already verified signature.
+        int nextParameterRow = 1;
         for (int i = 0; i < methods.Length; i++)
         {
             var handle = metadata.AddMethodDefinition(
@@ -313,9 +318,15 @@ public static class CilEmitter
                 MethodImplAttributes.IL,
                 metadata.GetOrAddString(i == 0 ? "Run" : "helper_" + methods[i].Name),
                 metadata.GetOrAddBlob(signatureBlobs[i]),
-                bodies[i].Offset, MetadataTokens.ParameterHandle(1));
+                bodies[i].Offset, MetadataTokens.ParameterHandle(nextParameterRow));
             if (handle != handles[methods[i].Name])
                 throw new FormatException("CFG method table token mismatch");
+            for (int argument = 0; argument < methods[i].Parameters.Count; argument++)
+            {
+                metadata.AddParameter(ParameterAttributes.None,
+                    metadata.GetOrAddString("arg" + argument), argument + 1);
+                nextParameterRow++;
+            }
         }
 
         var run = handles["main"];
