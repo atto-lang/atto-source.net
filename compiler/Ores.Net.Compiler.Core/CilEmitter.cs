@@ -64,11 +64,15 @@ public static class CilEmitter
         });
     }
 
-    // Experimental CFG entry point. Only VerifiedCfgFunction is accepted;
-    // the source CLI remains on verified straight-line OresIR until the
-    // CFG differential suite is proven green.
+    // Experimental CFG entry point. Only a verified function is accepted;
+    // the production scalar CLI continues to use straight-line OresIR.
     public static void EmitLibrary(VerifiedCfgFunction program, string outputFile) =>
         CfgCilEmitter.EmitLibrary(program, outputFile);
+
+    // Only parser-checked and independently verified function modules may
+    // reach the multi-method emitter; no Reflection.Emit or runtime code load.
+    public static void EmitLibrary(VerifiedCfgModule module, string outputFile) =>
+        CfgCilEmitter.EmitLibrary(module, outputFile);
 
     private static int WriteVerifiedIr(VerifiedIrFunction program, InstructionEncoder il)
     {
@@ -202,6 +206,214 @@ public static class CilEmitter
         finally
         {
             if (File.Exists(temporary)) File.Delete(temporary);
+        }
+    }
+
+    // Experimental multi-method Native AOT assembly. MethodDef handles are
+    // reserved before body emission so statically resolved calls target only
+    // verified methods in this exact module, never reflection/dynamic code.
+    internal static void EmitLibraryModuleCore(string outputFile,
+        VerifiedCfgModule module,
+        Func<VerifiedCfgFunction, MetadataBuilder, MethodBodyStreamEncoder,
+            IReadOnlyDictionary<string, MethodDefinitionHandle>,
+            (int BodyOffset, BlobBuilder Code, BlobBuilder? Locals)> buildBody)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+        ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
+        var methods = new[] { module.Main }.Concat(module.Helpers).ToArray();
+        if (methods.Length is < 1 or > 65 || methods[0].Name != "main" ||
+            methods[0].ResultType != IrValueType.I64 ||
+            methods[0].Parameters.Count != 0)
+            throw new FormatException("Invalid verified CFG module entry signature");
+
+        var handles = new Dictionary<string, MethodDefinitionHandle>(
+            StringComparer.Ordinal);
+        for (int i = 0; i < methods.Length; i++)
+        {
+            if (!handles.TryAdd(methods[i].Name, MetadataTokens.MethodDefinitionHandle(i + 1)))
+                throw new FormatException("Duplicate CFG method definition");
+        }
+
+        // Independently link-check the entire module before emitting even
+        // one method body. An individually verified CFG's call signatures
+        // could otherwise disagree with the MethodDefs actually packaged
+        // alongside it by a future front end.
+        ValidateStaticModuleLinkage(methods, handles);
+
+        var ilStream = new BlobBuilder();
+        var bodyStream = new MethodBodyStreamEncoder(ilStream);
+        var metadata = new MetadataBuilder();
+        var bodies = new List<(int Offset, BlobBuilder? Locals)>();
+        long instructions = 0;
+        foreach (var method in methods)
+        {
+            instructions += method.Blocks.Sum(b => b.Parameters.Count + b.Instructions.Count);
+            if (instructions > 100_000)
+                throw new FormatException("CFG module total instruction budget exceeded");
+            var (offset, _, locals) = buildBody(method, metadata, bodyStream, handles);
+            bodies.Add((offset, locals));
+        }
+        if (ilStream.Count > 8 * 1024 * 1024)
+            throw new FormatException("CFG module emitted CIL byte budget exceeded");
+
+        var signatureBlobs = new List<BlobBuilder>();
+        foreach (var method in methods)
+        {
+            var blob = new BlobBuilder();
+            new BlobEncoder(blob).MethodSignature().Parameters(
+                method.Parameters.Count,
+                returnType =>
+                {
+                    if (method.ResultType == IrValueType.I64) returnType.Type().Int64();
+                    else if (method.ResultType == IrValueType.Bool) returnType.Type().Boolean();
+                    else throw new FormatException("Unsupported CIL method result");
+                },
+                parameters =>
+                {
+                    foreach (var parameter in method.Parameters)
+                    {
+                        var encoded = parameters.AddParameter().Type();
+                        if (parameter == IrValueType.I64) encoded.Int64();
+                        else if (parameter == IrValueType.Bool) encoded.Boolean();
+                        else throw new FormatException("Unsupported CIL method parameter");
+                    }
+                });
+            signatureBlobs.Add(blob);
+        }
+
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        hash.AppendData(ilStream.ToArray());
+        foreach (var entry in bodies)
+            if (entry.Locals is not null) hash.AppendData(entry.Locals.ToArray());
+        foreach (var signature in signatureBlobs)
+            hash.AppendData(signature.ToArray());
+        // The MVID must also change when a method is renamed but its body
+        // and signature stay byte-for-byte identical.
+        foreach (var method in methods)
+            hash.AppendData(System.Text.Encoding.UTF8.GetBytes(method.Name + "\0"));
+        var mvid = new Guid(hash.GetHashAndReset().AsSpan(0, 16));
+        metadata.AddModule(0, metadata.GetOrAddString("OresGenerated.dll"),
+            metadata.GetOrAddGuid(mvid), default, default);
+        metadata.AddAssembly(metadata.GetOrAddString("OresGenerated"),
+            new Version(1, 0, 0, 0), default, default, default,
+            System.Reflection.AssemblyHashAlgorithm.None);
+        var runtime = metadata.AddAssemblyReference(
+            metadata.GetOrAddString("System.Runtime"),
+            new Version(10, 0, 0, 0), default,
+            metadata.GetOrAddBlob(new byte[] { 0xB0, 0x3F, 0x5F, 0x7F, 0x11, 0xD5, 0x0A, 0x3A }),
+            default, default);
+        var systemObject = metadata.AddTypeReference(runtime,
+            metadata.GetOrAddString("System"), metadata.GetOrAddString("Object"));
+
+        // Explicit Param rows are essential for stable method-local argument
+        // metadata. Each MethodDef.ParamList points to the first row owned by
+        // that method (or the next row for a zero-argument method). Parameter
+        // *types* remain authoritative in the already verified signature.
+        int nextParameterRow = 1;
+        for (int i = 0; i < methods.Length; i++)
+        {
+            var handle = metadata.AddMethodDefinition(
+                (i == 0 ? MethodAttributes.Public : MethodAttributes.Private) |
+                    MethodAttributes.Static | MethodAttributes.HideBySig,
+                MethodImplAttributes.IL,
+                metadata.GetOrAddString(i == 0 ? "Run" : "helper_" + methods[i].Name),
+                metadata.GetOrAddBlob(signatureBlobs[i]),
+                bodies[i].Offset, MetadataTokens.ParameterHandle(nextParameterRow));
+            if (handle != handles[methods[i].Name])
+                throw new FormatException("CFG method table token mismatch");
+            for (int argument = 0; argument < methods[i].Parameters.Count; argument++)
+            {
+                metadata.AddParameter(ParameterAttributes.None,
+                    metadata.GetOrAddString("arg" + argument), argument + 1);
+                nextParameterRow++;
+            }
+        }
+
+        var run = handles["main"];
+        metadata.AddTypeDefinition(default, default,
+            metadata.GetOrAddString("<Module>"), default,
+            MetadataTokens.FieldDefinitionHandle(1), run);
+        metadata.AddTypeDefinition(
+            TypeAttributes.Public | TypeAttributes.Abstract | TypeAttributes.Sealed |
+            TypeAttributes.Class | TypeAttributes.BeforeFieldInit,
+            metadata.GetOrAddString("Oreslang.Generated"),
+            metadata.GetOrAddString("OresProgram"), systemObject,
+            MetadataTokens.FieldDefinitionHandle(1), run);
+        var pe = new ManagedPEBuilder(
+            new PEHeaderBuilder(imageCharacteristics:
+                Characteristics.ExecutableImage | Characteristics.Dll),
+            new MetadataRootBuilder(metadata), ilStream,
+            strongNameSignatureSize: 0, flags: CorFlags.ILOnly,
+            deterministicIdProvider: DeterministicImageId);
+        var bytes = new BlobBuilder();
+        pe.Serialize(bytes);
+
+        string full = Path.GetFullPath(outputFile);
+        Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+        string temporary = full + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            File.WriteAllBytes(temporary, bytes.ToArray());
+            File.Move(temporary, full, overwrite: true);
+        }
+        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+    }
+
+    // This second gate cross-checks actual module member signatures after
+    // SSA verification. Calls must be intra-module, precisely typed, and
+    // acyclic; helpers may only call earlier helpers. The entry may call any
+    // helper, but helpers can never call main.
+    private static void ValidateStaticModuleLinkage(
+        IReadOnlyList<VerifiedCfgFunction> methods,
+        IReadOnlyDictionary<string, MethodDefinitionHandle> handles)
+    {
+        var positions = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (int index = 0; index < methods.Count; index++)
+            if (!positions.TryAdd(methods[index].Name, index))
+                throw new FormatException("Duplicate CFG method definition");
+
+        long definitions = 0;
+        for (int index = 0; index < methods.Count; index++)
+        {
+            var caller = methods[index];
+            int count = caller.Blocks.Sum(b => b.Parameters.Count + b.Instructions.Count);
+            definitions += count;
+            if (definitions > 100_000 || count is <= 0 or > OresCfgVerifier.MaxValues)
+                throw new FormatException("CFG module SSA budget exceeded");
+
+            // SSA IDs have already been checked for uniqueness and density
+            // by the per-function verifier. Repeat type admission here to
+            // ensure call operands match the actual packaged MethodDef.
+            var valueTypes = new IrValueType[count];
+            foreach (var block in caller.Blocks)
+            {
+                foreach (var parameter in block.Parameters)
+                    valueTypes[parameter.Id] = parameter.Type;
+                foreach (var op in block.Instructions)
+                    valueTypes[op.ResultId] = op.Type;
+            }
+
+            foreach (var op in caller.Blocks.SelectMany(b => b.Instructions))
+            {
+                if (op.Opcode != CfgOpcode.Call) continue;
+                if (op.Target is null || op.Arguments is null ||
+                    !positions.TryGetValue(op.Target, out int targetIndex) ||
+                    !handles.ContainsKey(op.Target) ||
+                    targetIndex == 0 ||
+                    (index != 0 && targetIndex >= index))
+                    throw new FormatException("Unlinked or cyclic CFG static call");
+                var callee = methods[targetIndex];
+                if (op.Type != callee.ResultType ||
+                    op.Arguments.Count != callee.Parameters.Count)
+                    throw new FormatException("CFG MethodDef call signature mismatch");
+                for (int argument = 0; argument < op.Arguments.Count; argument++)
+                {
+                    int operandId = op.Arguments[argument];
+                    if (operandId < 0 || operandId >= count ||
+                        valueTypes[operandId] != callee.Parameters[argument])
+                        throw new FormatException("CFG MethodDef argument type mismatch");
+                }
+            }
         }
     }
 

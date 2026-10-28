@@ -43,6 +43,11 @@ public static class StaticFactsV0Exporter
         ValidateSource(source);
         StructuredProgram program = OresStructuredParser.Parse(source);
         if (program.Name != "main") throw Unsupported("non-main structured program");
+        // v0 exports one main with *zero* call edges. A helper declaration,
+        // even if currently uncalled, invalidates that graph contract: never
+        // emit a misleading source-identity fact report with hidden functions.
+        if (program.Functions is { Count: > 0 })
+            throw Unsupported("typed helper functions and call graph");
         var visitor = new StructuredVisitor();
         visitor.Statements(program.Body, 1);
         return WriteFacts(source, visitor.LoopIds);

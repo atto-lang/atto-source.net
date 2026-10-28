@@ -33,6 +33,9 @@ const jobs = {total_count:2,jobs:[
       "Reject managed sidecar next to an otherwise native executable",
       "Compile verified CFG into a real Windows Native AOT executable",
       "Prove experimental structured source in real Windows Native AOT",
+      "Execute typed source helper calls in real Windows Native AOT",
+      "Execute typed statement-bodied helpers in real Windows Native AOT",
+      "Verify typed bindings in executed Windows Native AOT",
       "Execute shared five-backend native.add source in real Windows Native AOT",
       "Execute shared native.precedence in Windows Native AOT",
       "Emit exact-head Windows Native AOT run receipt",
@@ -54,6 +57,9 @@ const jobs = {total_count:2,jobs:[
       "Execute Linux Native AOT generated application",
       "Execute Linux Native AOT CFG branch and simultaneous-assignment fixture",
       "Prove experimental structured source in real Linux Native AOT",
+      "Execute typed source helper calls in real Linux Native AOT",
+      "Execute typed statement-bodied helpers in real Linux Native AOT",
+      "Verify typed bindings in executed Linux Native AOT",
     ].map((name,i)=>({name,number:i+1,status:"completed",conclusion:"success"}))},
 ]};
 const copy=x=>JSON.parse(JSON.stringify(x));
@@ -70,6 +76,16 @@ test("missing workflow ID rejected",()=>{
   const r=copy(run);delete r.workflow_id;
   assert.match(check(r,jobs).join(" "), /workflow ID/);
 });
+// Current main requires additional executable typed-source proof on both OSes.
+// No green run may omit any of these substantive Native AOT stages.
+for (const [jobIndex, stepName] of [[0,"Execute typed source helper calls in real Windows Native AOT"],[0,"Execute typed statement-bodied helpers in real Windows Native AOT"],[0,"Verify typed bindings in executed Windows Native AOT"],[1,"Execute typed source helper calls in real Linux Native AOT"],[1,"Execute typed statement-bodied helpers in real Linux Native AOT"],[1,"Verify typed bindings in executed Linux Native AOT"]]) {
+  test(`new Native AOT stage is mandatory: ${stepName}`, () => {
+    const j=copy(jobs);
+    j.jobs[jobIndex].steps=j.jobs[jobIndex].steps.filter(s=>s.name!==stepName);
+    assert.match(check(run,j).join(" "), /missing successful step/);
+  });
+}
+
 test("wrong SHA rejected",()=>assert.match(check({...run,head_sha:"0".repeat(40)},jobs).join(" "),/head/));
 test("wrong attempt rejected",()=>assert.match(check({...run,run_attempt:2},jobs).join(" "),/attempt/));
 test("wrong run rejected",()=>assert.match(check({...run,id:44},jobs).join(" "),/run ID/));

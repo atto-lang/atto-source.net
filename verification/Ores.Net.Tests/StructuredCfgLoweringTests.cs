@@ -87,6 +87,77 @@ internal static class StructuredCfgLoweringTests
             }
             """;
         Check(sum, 45, "two loop-carried SSA values sum 0..9");
+        Check(File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
+            "structured-bindings42.ores")),
+            42, "real const/val/let source through verified CFG and CIL");
+        Check("fnc main():int{const int c=40+2;return c;}",
+            42, "compile-time const typed SSA");
+        Check("fnc main():int{let int x=5;val int y=x+1;x=x+1;return y;}",
+            6, "runtime val has independent SSA identity");
+        Check("fnc main():int{const bool b=2<3;if b{return 42;}else{return 0;}}",
+            42, "compile-time boolean branch in emitted CIL");
+        // Actual typed source-call semantics are checked in the independent
+        // reference evaluator, emitted CIL interpreter and deterministic PE.
+        // This is an acyclic, expression-only helper milestone, not a
+        // general function ABI or runtime call instruction.
+        Check("fnc plus_one(int x):int{return x+1;}fnc main():int{return plus_one(41);}",
+            42, "one typed i64 helper");
+        Check("fnc twice(int x):int{return x*2;}fnc answer():int{return twice(21);}fnc main():int{return answer();}",
+            42, "chained helper functions");
+        Check("fnc sum(int x,int y):int{return x+y;}fnc main():int{return sum(19,23);}",
+            42, "two parameter bindings in source order");
+        Check("fnc is_five(int x):bool{return x==5;}fnc main():int{if is_five(5){return 42;}else{return 0;}}",
+            42, "typed boolean result controls branch");
+        Check("fnc plus_one(int x):int{return x+1;}fnc main():int{let int x=99;return plus_one(41);}",
+            42, "callee cannot capture caller local");
+        Check("fnc from_constant():int{return 42;}fnc main():int{return from_constant();}",
+            42, "zero argument call");
+        Check("fnc plus_one(int x):int{return x+1;}fnc main():int{let int result=0;let int i=0;while i<3{result=plus_one(result);i=i+1;}return result;}",
+            3, "helper calls inside loop body");
+        Check("fnc add(int x,int y):int{return x+y;}fnc main():int{return add(10,add(20,12));}",
+            42, "nested call evaluation");
+
+        // Negative tests must reject before CIL artifact creation.
+        Reject("fnc main():int{return unknown(42);}", "unknown helper");
+        Reject("fnc main():int{return plus_one(41);}fnc plus_one(int x):int{return x+1;}",
+            "forward helper calls disabled");
+        Reject("fnc recursive(int x):int{return recursive(x);}fnc main():int{return recursive(1);}",
+            "recursive helper calls disabled");
+        Reject("fnc loop(int x):int{return loop(x);}fnc main():int{return 0;}",
+            "unreachable recursive helper still denied");
+        Reject("fnc add(int x,int y):int{return x+y;}fnc main():int{return add(1);}",
+            "arity mismatch");
+        Reject("fnc is_true(bool ok):bool{return ok;}fnc main():int{if is_true(1){return 1;}return 0;}",
+            "typed argument mismatch");
+        Reject("fnc bad(int x,int x):int{return x;}fnc main():int{return 0;}",
+            "duplicate parameter");
+        Reject("fnc wrong(int x):bool{return x;}fnc main():int{return 0;}",
+            "wrong return type");
+        Reject("fnc bad(int x):int{let int y=x;return y;}fnc main():int{return bad(1);}",
+            "legacy inlining oracle rejects statement bodies (module path has real MethodDef support)");
+        Reject("fnc same():int{return 1;}fnc same():int{return 2;}fnc main():int{return 0;}",
+            "duplicate helper declarations");
+        CheckOverflow("fnc inc(int x):int{return x+1;}fnc main():int{return inc(9223372036854775807);}",
+            "typed call overflow preserves checked CIL");
+
+        Check("fnc main():int{if 3 neq 4{return 42;}else{return 0;}}",
+            42, "canonical neq true comparison");
+        Check("fnc main():int{if 4 neq 4{return 0;}else{return 42;}}",
+            42, "canonical neq false comparison");
+        Check("fnc main():int{if -5 neq 5{return 42;}return 0;}",
+            42, "signed neq operands");
+        Check("fnc main():int{if 3 != 4{return 42;}return 0;}",
+            42, "symbolic not-equal alias");
+        Check("fnc main():int{if 4 eq 4{return 42;}return 0;}",
+            42, "canonical eq comparison");
+        Check("fnc main():int{if 4 == 4{return 42;}return 0;}",
+            42, "symbolic equality retains existing semantics");
+        Reject("fnc main():int{if 1 ne 2{return 42;}return 0;}",
+            "ne is not an Oreslang inequality operator");
+        Reject("fnc main():int{if true neq false{return 42;}return 0;}",
+            "i64 comparison must not accept bool operands");
+        Reject("fnc main():int{if 1 ! 2{return 42;}return 0;}",
+            "bare exclamation is not an admitted operator");
         Check("fnc main():int{return 2+3*4;}", 14, "arithmetic");
         Check("fnc main():int{let int i=0;while i<10 {i=i+1;}return i;}",
             10, "single loop-carried variable");
@@ -132,8 +203,21 @@ internal static class StructuredCfgLoweringTests
         Reject("fnc main():int{return 1/2;}",
             "source int division requires float lowering");
 
+        Reject("fnc main():int{val int x=1;x=2;return x;}", "val reassignment");
+        Reject("fnc main():int{const int x=1;x=2;return x;}", "const reassignment");
+        Reject("fnc main():int{val int x=1;if true{x=2;}return x;}",
+            "val cannot be mutated inside nested block");
+        Reject("fnc main():int{let int x=42;const int y=x;return y;}",
+            "const cannot capture mutable binding");
+        Reject("fnc main():int{val int x=42;const int y=x;return y;}",
+            "const cannot depend on runtime val");
+        Reject("fnc main():int{const int x=9223372036854775807+1;return x;}",
+            "const overflow is rejected before CIL");
+
         CheckOverflow("fnc main():int{return -(-9223372036854775808);}",
             "checked negation");
+        CheckOverflow("fnc main():int{val int n=9223372036854775807;return n+1;}",
+            "runtime val checked overflow in emitted CIL");
         CheckOverflow("fnc main():int{return 9223372036854775807+1;}",
             "checked addition");
         CheckOverflow("fnc main():int{return 9223372036854775807*2;}",
