@@ -56,7 +56,7 @@ public static class CilEmitter
 
             var methodCode = new BlobBuilder();
             var il = new InstructionEncoder(methodCode);
-            int maxStack = WriteVerifiedIr(program, il);
+            int maxStack = WriteVerifiedIr(program, il, metadata);
             int bodyOffset = bodies.AddMethodBody(il, maxStack: maxStack,
                 localVariablesSignature: localSignature,
                 attributes: MethodBodyAttributes.InitLocals);
@@ -74,8 +74,34 @@ public static class CilEmitter
     public static void EmitLibrary(VerifiedCfgModule module, string outputFile) =>
         CfgCilEmitter.EmitLibrary(module, outputFile);
 
-    private static int WriteVerifiedIr(VerifiedIrFunction program, InstructionEncoder il)
+    // Explicit static runtime dependency: the AOT host already statically
+    // references Ores.Net.Runtime. Never use reflection or dynamic CIL loading.
+    private static MemberReferenceHandle AddStrictRemReference(MetadataBuilder metadata)
     {
+        var assembly = metadata.AddAssemblyReference(
+            metadata.GetOrAddString("Ores.Net.Runtime"),
+            new Version(1, 0, 0, 0), default, default, default, default);
+        var type = metadata.AddTypeReference(assembly,
+            metadata.GetOrAddString("Ores.Net.Runtime"),
+            metadata.GetOrAddString("StrictSigned64Arithmetic"));
+        var signature = new BlobBuilder();
+        new BlobEncoder(signature).MethodSignature().Parameters(2,
+            returnType => returnType.Type().Int64(),
+            parameters =>
+            {
+                parameters.AddParameter().Type().Int64();
+                parameters.AddParameter().Type().Int64();
+            });
+        return metadata.AddMemberReference(type,
+            metadata.GetOrAddString("Rem"), metadata.GetOrAddBlob(signature));
+    }
+
+    private static int WriteVerifiedIr(VerifiedIrFunction program, InstructionEncoder il,
+        MetadataBuilder metadata)
+    {
+        MemberReferenceHandle strictRem = default;
+        if (program.Instructions.Any(op => op.Opcode == IrOpcode.StrictRem))
+            strictRem = AddStrictRemReference(metadata);
         int maxStack = 1;
         foreach (var operation in program.Instructions)
         {
@@ -88,15 +114,19 @@ public static class CilEmitter
                 case IrOpcode.CheckedSubtract:
                 case IrOpcode.CheckedMultiply:
                 case IrOpcode.CheckedDivide:
+                case IrOpcode.StrictRem:
                     il.LoadLocal(operation.Left!.Value);
                     il.LoadLocal(operation.Right!.Value);
-                    il.OpCode(operation.Opcode switch
-                    {
-                        IrOpcode.CheckedAdd => ILOpCode.Add_ovf,
-                        IrOpcode.CheckedSubtract => ILOpCode.Sub_ovf,
-                        IrOpcode.CheckedMultiply => ILOpCode.Mul_ovf,
-                        _ => ILOpCode.Div
-                    });
+                    if (operation.Opcode == IrOpcode.StrictRem)
+                        il.Call(strictRem);
+                    else
+                        il.OpCode(operation.Opcode switch
+                        {
+                            IrOpcode.CheckedAdd => ILOpCode.Add_ovf,
+                            IrOpcode.CheckedSubtract => ILOpCode.Sub_ovf,
+                            IrOpcode.CheckedMultiply => ILOpCode.Mul_ovf,
+                            _ => ILOpCode.Div
+                        });
                     maxStack = 2;
                     break;
                 default:
