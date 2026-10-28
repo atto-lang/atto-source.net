@@ -22,7 +22,7 @@ var options = new ActorRuntimeOptions
     Dispatcher = new ActorDispatcherOptions
     {
         PrivateWorkers = 1, SharedWorkers = 1, UntrustedWorkers = 1,
-        QueueCapacityPerDomain = 3
+        QueueCapacityPerDomain = 4
     }
 };
 using var runtime = new ActorRuntime(options);
