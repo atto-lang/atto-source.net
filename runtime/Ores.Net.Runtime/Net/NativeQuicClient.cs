@@ -104,10 +104,23 @@ internal static class NativeQuicClient
         // here: TargetHost authenticates the policy-authorized original name.
         var connection = await QuicConnection.ConnectAsync(options, cancellationToken)
             .ConfigureAwait(false);
-        if (cancellationToken.IsCancellationRequested)
+        // The provider owns the QUIC/TLS protocol state. Revalidate the
+        // negotiated result before returning an open native handle. This does
+        // not by itself prove path migration is disabled for its lifetime.
+        var mismatch =
+            connection.RemoteEndPoint is not IPEndPoint remote ||
+            !remote.Address.Equals(pinnedAuthorizedAddress.Address) ||
+            remote.Port != pinnedAuthorizedAddress.Port ||
+            connection.SslProtocol != SslProtocols.Tls13 ||
+            !connection.NegotiatedApplicationProtocol.Equals(applicationProtocol) ||
+            !string.Equals(connection.TargetHostName, canonicalDnsName,
+                           StringComparison.Ordinal);
+        if (mismatch || cancellationToken.IsCancellationRequested)
         {
             await connection.DisposeAsync().ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
+            throw new SecurityException(
+                "QUIC peer pin, TLS 1.3, SNI, or negotiated ALPN mismatch");
         }
         return connection;
     }
