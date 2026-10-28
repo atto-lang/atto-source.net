@@ -115,16 +115,25 @@ internal sealed class QuicLoopbackPermit
             {
                 throw new SecurityException("QUIC DNS answer changed during admission", error);
             }
-            if (ip is null ||
-                (ip.AddressFamily != AddressFamily.InterNetwork &&
-                 ip.AddressFamily != AddressFamily.InterNetworkV6) ||
-                ip.IsIPv4MappedToIPv6 || !IPAddress.IsLoopback(ip) ||
-                (ip.AddressFamily == AddressFamily.InterNetworkV6 && ip.ScopeId != 0))
+            if (ip is null)
+                throw new SecurityException("QUIC DNS answer set contains a null address");
+
+            // IPAddress instances themselves can expose mutable legacy address/
+            // scope state. Snapshot bytes BEFORE classifying, then validate the
+            // immutable reconstructed value that will actually be connected.
+            var bytes = ip.GetAddressBytes();
+            if (bytes.Length != 4 && bytes.Length != 16)
+                throw new SecurityException("QUIC DNS returned malformed address bytes");
+            var pinned = new IPAddress(bytes);
+            if ((pinned.AddressFamily != AddressFamily.InterNetwork &&
+                 pinned.AddressFamily != AddressFamily.InterNetworkV6) ||
+                pinned.IsIPv4MappedToIPv6 || !IPAddress.IsLoopback(pinned) ||
+                (pinned.AddressFamily == AddressFamily.InterNetworkV6 && ip.ScopeId != 0))
                 throw new SecurityException("QUIC DNS answer set contains a denied address");
 
-            // Capture exactly the bytes we verified; never fetch selectedAddress
-            // from the external collection after validation is complete.
-            approvedAddressBytes[i] = ip.GetAddressBytes();
+            // This selected pin is exactly the validated byte snapshot, never
+            // a second lookup into a mutable list or address object.
+            approvedAddressBytes[i] = bytes;
         }
 
         return new QuicLoopbackPermit(
