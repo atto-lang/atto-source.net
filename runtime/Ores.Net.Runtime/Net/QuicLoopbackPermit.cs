@@ -67,7 +67,9 @@ internal sealed class QuicLoopbackPermit
             }
             previous = ch;
         }
-        return labelLength != 0 && previous != '-';
+        // A numeric address literal is not a DNS SNI identity.
+        return labelLength != 0 && previous != '-' &&
+            !IPAddress.TryParse(name, out _);
     }
 
     /// <summary>
@@ -93,25 +95,40 @@ internal sealed class QuicLoopbackPermit
             throw new SecurityException("QUIC permit requires a valid runtime actor and DNS generation");
         if (lifetime <= TimeSpan.Zero || lifetime > MaxLifetime)
             throw new SecurityException("QUIC permit lifetime must be finite and at most 10 seconds");
-        if (completeDnsAnswer is null ||
-            completeDnsAnswer.Count is < 1 or > MaxDnsAddresses ||
-            selectedAddress < 0 || selectedAddress >= completeDnsAnswer.Count)
+        // Capture a bounded snapshot. An IReadOnlyList need not be immutable;
+        // never validate one enumeration and later index into the caller's
+        // potentially mutated or adversarial DNS data.
+        var count = completeDnsAnswer?.Count ?? 0;
+        if (count is < 1 or > MaxDnsAddresses ||
+            selectedAddress < 0 || selectedAddress >= count)
             throw new SecurityException("QUIC DNS answer set or selected index is invalid");
 
-        // Full-set denial, not one-address allowlisting. Never normalize or
-        // silently discard disallowed addresses; this would permit DNS rebinding.
-        foreach (var ip in completeDnsAnswer)
+        var approvedAddressBytes = new byte[count][];
+        for (int i = 0; i < count; ++i)
         {
+            IPAddress ip;
+            try
+            {
+                ip = completeDnsAnswer![i];
+            }
+            catch (ArgumentOutOfRangeException error)
+            {
+                throw new SecurityException("QUIC DNS answer changed during admission", error);
+            }
             if (ip is null ||
                 (ip.AddressFamily != AddressFamily.InterNetwork &&
                  ip.AddressFamily != AddressFamily.InterNetworkV6) ||
                 ip.IsIPv4MappedToIPv6 || !IPAddress.IsLoopback(ip) ||
                 (ip.AddressFamily == AddressFamily.InterNetworkV6 && ip.ScopeId != 0))
                 throw new SecurityException("QUIC DNS answer set contains a denied address");
+
+            // Capture exactly the bytes we verified; never fetch selectedAddress
+            // from the external collection after validation is complete.
+            approvedAddressBytes[i] = ip.GetAddressBytes();
         }
 
         return new QuicLoopbackPermit(
-            completeDnsAnswer[selectedAddress].GetAddressBytes(),
+            approvedAddressBytes[selectedAddress],
             port, canonicalDnsName, actorId, actorGeneration,
             resolutionGeneration, lifetime);
     }
