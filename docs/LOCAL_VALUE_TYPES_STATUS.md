@@ -2,6 +2,12 @@
 
 Status: **experimental structured-frontend admission only**.
 
+The current .NET structured frontend parses `fnc` callables only. Java's
+`routine` is a distinct direct-call-only callable kind, so this slice does
+**not** treat `routine` as an alias for `fnc`. Routine-local value types
+require a follow-up that first preserves callable kind/reifiability in the
+typed AST.
+
 The .NET structured parser admits block-local value-type declarations:
 
 ```ores
