@@ -32,6 +32,9 @@ const jobs = {total_count:2,jobs:[
       "Reject managed sidecar next to an otherwise native executable",
       "Compile verified CFG into a real Windows Native AOT executable",
       "Prove experimental structured source in real Windows Native AOT",
+      "Execute typed source helper calls in real Windows Native AOT",
+      "Execute typed statement-bodied helpers in real Windows Native AOT",
+      "Verify typed bindings in executed Windows Native AOT",
       "Execute shared five-backend native.add source in real Windows Native AOT",
       "Execute shared native.precedence in Windows Native AOT",
       "Emit exact-head Windows Native AOT run receipt",
@@ -53,6 +56,9 @@ const jobs = {total_count:2,jobs:[
       "Execute Linux Native AOT generated application",
       "Execute Linux Native AOT CFG branch and simultaneous-assignment fixture",
       "Prove experimental structured source in real Linux Native AOT",
+      "Execute typed source helper calls in real Linux Native AOT",
+      "Execute typed statement-bodied helpers in real Linux Native AOT",
+      "Verify typed bindings in executed Linux Native AOT",
     ].map((name,i)=>({name,number:i+1,status:"completed",conclusion:"success"}))},
 ]};
 const copy=x=>JSON.parse(JSON.stringify(x));
