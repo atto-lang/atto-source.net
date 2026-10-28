@@ -186,37 +186,62 @@ catch (TimeoutException) { }
 if (OperatingSystem.IsLinux() || OperatingSystem.IsWindows() ||
     OperatingSystem.IsMacOS())
 {
-    // The source adapter must bind its permit to a real actor arena,
-    // rather than accepting arbitrary caller-supplied actor ID numbers.
-    using var liveOwner = new ActorArena(42, 7, 4096, 4096, 16, 16, 16);
-    using var wrongGeneration = new ActorArena(42, 8, 4096, 4096, 16, 16, 16);
-    var stalePermit = Issue();
-    MustDeny(() => NativeQuicClient.ConnectHttp3Async(
-        stalePermit, wrongGeneration, token).AsTask().GetAwaiter().GetResult(),
-        "native connect accepted foreign actor incarnation");
-    MustDeny(() => stalePermit.Consume(42, 7),
-        "wrong incarnation did not burn permit");
-
-    using var retiredOwner = new ActorArena(42, 7, 4096, 4096, 16, 16, 16);
-    retiredOwner.Retire();
-    var retiredPermit = Issue();
-    MustDeny(() => NativeQuicClient.ConnectHttp3Async(
-        retiredPermit, retiredOwner, token).AsTask().GetAwaiter().GetResult(),
-        "retired actor admitted native QUIC");
-    MustDeny(() => retiredPermit.Consume(42, 7),
-        "retirement did not burn permit");
-    if (!retiredOwner.IsReclaimed)
-        throw new InvalidOperationException("Retired test actor arena not reclaimed");
-
-    using var cancelledPermitConnect = new CancellationTokenSource();
-    cancelledPermitConnect.Cancel();
-    try
+    // Only ActorRuntime can issue ActorContext. A synthetic ActorArena
+    // with matching numeric IDs must not be able to mint this authority.
+    using var actorDone = new ManualResetEventSlim(false);
+    Exception? actorError = null;
+    using var ownerRuntime = new ActorRuntime(new ActorRuntimeOptions {
+        MaxActors = 4, ActorPersistentBytes = 4096, ActorScratchBytes = 4096,
+        ActorMaxAllocations = 16, ActorMaxLifetimePins = 16,
+        ActorMaxReadLoans = 16
+    });
+    var actor = ownerRuntime.Spawn(ActorKind.Private, (context, _) =>
     {
-        NativeQuicClient.ConnectHttp3Async(
-            Issue(), liveOwner, cancelledPermitConnect.Token).AsTask().GetAwaiter().GetResult();
-        throw new InvalidOperationException("Cancelled permit connect admitted");
-    }
-    catch (OperationCanceledException) { }
+        try
+        {
+            var wrongGeneration = QuicLoopbackPermit.AuthorizeForTrustedHost(
+                "origin.example", 443, new[] { IPAddress.Loopback }, 0,
+                context.Self.Id, checked(context.Self.Generation + 1), 9,
+                TimeSpan.FromSeconds(2));
+            MustDeny(() => NativeQuicClient.ConnectHttp3Async(
+                wrongGeneration, context, token).AsTask().GetAwaiter().GetResult(),
+                "foreign actor generation");
+            MustDeny(() => wrongGeneration.Consume(
+                context.Self.Id, checked(context.Self.Generation + 1)),
+                "foreign generation did not burn permit");
+
+            using var cancelledPermitConnect = new CancellationTokenSource();
+            cancelledPermitConnect.Cancel();
+            try
+            {
+                NativeQuicClient.ConnectHttp3Async(
+                    Issue(), context, cancelledPermitConnect.Token)
+                    .AsTask().GetAwaiter().GetResult();
+                throw new InvalidOperationException("Cancelled permit connect admitted");
+            }
+            catch (OperationCanceledException) { }
+
+            // Stop is an actor-runtime control operation. It retires the
+            // arena immediately, even while the current turn is winding down.
+            ownerRuntime.Stop(context.Self);
+            var retired = QuicLoopbackPermit.AuthorizeForTrustedHost(
+                "origin.example", 443, new[] { IPAddress.Loopback }, 0,
+                context.Self.Id, context.Self.Generation, 9, TimeSpan.FromSeconds(2));
+            MustDeny(() => NativeQuicClient.ConnectHttp3Async(
+                retired, context, token).AsTask().GetAwaiter().GetResult(),
+                "stopped actor admitted native QUIC");
+            MustDeny(() => retired.Consume(
+                context.Self.Id, context.Self.Generation),
+                "stopped actor did not burn permit");
+        }
+        catch (Exception error) { actorError = error; }
+        finally { actorDone.Set(); }
+    });
+    ownerRuntime.Send(actor, new byte[] { 1 });
+    if (!actorDone.Wait(TimeSpan.FromSeconds(10)))
+        throw new InvalidOperationException("QUIC actor ownership regression timed out");
+    if (actorError is not null)
+        throw new InvalidOperationException("QUIC actor ownership regression failed", actorError);
 }
 
 // No network is opened in this admission test. It is not QUIC/HTTP3 interop.

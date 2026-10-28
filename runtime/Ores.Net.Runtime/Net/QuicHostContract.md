@@ -6,16 +6,18 @@ interop/AOT execution.
 
 The original naked `ConnectHttp3Async(IPEndPoint, string, CancellationToken)`
 remains **fail closed**, even if MsQuic is supported. The new overload
-`ConnectHttp3Async(QuicLoopbackPermit, ActorArena, cancellationToken)`
+`ConnectHttp3Async(QuicLoopbackPermit, ActorContext, cancellationToken)`
 can use real `QuicConnection.ConnectAsync` **only** after consuming a
 `QuicLoopbackPermit`, issued by the trusted runtime. The adapter now checks
-actual arena identity/incarnation and rejects already-retired owners, rather
-than trusting caller-provided numeric actor IDs. It also rechecks retirement
+runtime-issued turn-scoped actor context identity and rejects already-retired
+owners, rather than trusting caller-provided numeric actor IDs or an arbitrary
+host-constructed arena. It also holds an actor-arena lifetime pin until the
+native handshake and admission checks reach physical completion. It also rechecks retirement
 and cancellation after the physical handshake and disposes on refusal.
 
-**Still outstanding:** a borrowed `ActorArena` reference is not a native
-connection ownership lease, and a stop occurring after the final retirement
-check can race the raw connection return. Automatic actor-stop cancellation,
+**Still outstanding:** the lifetime pin is held during handshake only, not
+for the entire returned native connection lifetime. An actor stop occurring
+after the final retirement check can race the raw connection return. Automatic actor-stop cancellation,
 stream ownership, a lifetime pin, migration fencing, and physically witnessed
 final disposal MUST be implemented before exposing guest QUIC. The current
 change is only an admission-time reduction of stale-actor authority.

@@ -56,19 +56,19 @@ internal static class NativeQuicClient
 
     /// <summary>
     /// A narrowly authorized host-only QUIC connection. The supplied opaque,
-    /// single-use permit can authorize LOOPBACK destinations only. This is
-    /// not a guest feature and must not be widened to arbitrary egress.
+    /// single-use permit can authorize LOOPBACK destinations only; the owner
+    /// context must be runtime-issued and active. Still not a guest feature.
     /// </summary>
     [SupportedOSPlatform("linux")]
     [SupportedOSPlatform("windows")]
     [SupportedOSPlatform("osx")]
     internal static async ValueTask<QuicConnection> ConnectHttp3Async(
         QuicLoopbackPermit permit,
-        ActorArena ownerArena,
+        ActorContext ownerContext,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(permit);
-        ArgumentNullException.ThrowIfNull(ownerArena);
+        ArgumentNullException.ThrowIfNull(ownerContext);
         if (!cancellationToken.CanBeCanceled)
             throw new ArgumentException("QUIC owner cancellation token required",
                                         nameof(cancellationToken));
@@ -76,32 +76,44 @@ internal static class NativeQuicClient
 
         // A bare actorId/generation pair is not an actor-liveness proof.
         // Burn the single-use permit even on wrong incarnation or retirement.
-        var admitted = permit.Consume(ownerArena.ActorId, ownerArena.Incarnation);
-        if (ownerArena.IsRetired)
-            throw new SecurityException("QUIC actor arena retired before native admission");
+        var admitted = permit.Consume(
+            ownerContext.Self.Id, ownerContext.Self.Generation);
+        if (ownerContext.OwnerArena.IsRetired)
+            throw new SecurityException("QUIC actor already retired");
 
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        deadline.CancelAfter(admitted.Remaining);
-        // No DNS lookup is performed here. The selected IP is immutable and
-        // TLS still authenticates the original, canonical DNS identity.
-        var connection = await ConnectUncheckedAfterPolicyAsync(
-            admitted.Address, admitted.DnsName, Http3Alpn,
-            admitted.Remaining, deadline.Token).ConfigureAwait(false);
-
-        // A stop/retirement racing a physical handshake cannot publish a
-        // stale actor's connection. This is NOT yet a full post-return
-        // ownership fence; callers must await stream/connection retirement.
+        // ActorContext is issued only by ActorRuntime and is valid only while
+        // its physical turn remains active. Its lifetime pin retains the
+        // arena while ConnectAsync suspends (but does not authorize a stream).
+        ActorArenaLifetimePin pin;
         try
         {
-            deadline.Token.ThrowIfCancellationRequested();
-            if (ownerArena.IsRetired)
-                throw new SecurityException("QUIC actor retired during native handshake");
-            return connection;
+            pin = ownerContext.PinLifetime();
         }
-        catch
+        catch (InvalidOperationException error)
         {
-            await connection.DisposeAsync().ConfigureAwait(false);
-            throw;
+            throw new SecurityException(
+                "QUIC needs a live actor turn with pin authority", error);
+        }
+        using (pin)
+        {
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(admitted.Remaining);
+            var connection = await ConnectUncheckedAfterPolicyAsync(
+                admitted.Address, admitted.DnsName, Http3Alpn,
+                admitted.Remaining, deadline.Token).ConfigureAwait(false);
+
+            try
+            {
+                deadline.Token.ThrowIfCancellationRequested();
+                if (ownerContext.OwnerArena.IsRetired)
+                    throw new SecurityException("QUIC actor retired during native handshake");
+                return connection;
+            }
+            catch
+            {
+                await connection.DisposeAsync().ConfigureAwait(false);
+                throw;
+            }
         }
     }
 

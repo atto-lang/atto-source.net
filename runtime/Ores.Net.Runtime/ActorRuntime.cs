@@ -82,6 +82,10 @@ public sealed class ActorContext
     public ActorRef Self { get; }
     public ActorKind Kind { get; }
 
+    // Only the runtime constructs ActorContext. This is an internal host
+    // authority source, not a caller-constructed ActorArena identity claim.
+    internal ActorArena OwnerArena => _arena;
+
     public ActorArenaHandle AllocatePersistent(int bytes, int alignment = 8) =>
         _arena.AllocatePersistent(_turn, bytes, alignment);
 
