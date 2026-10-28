@@ -26,8 +26,12 @@ compiler=artifacts/compiler/linux-x64/oresnet
   echo 'Native AOT compiler is missing or unsafe' >&2
   exit 1
 }
-work="$(mktemp -d "${TMPDIR:-/tmp}/ores-net-native-arithmetic.XXXXXXXX")"
-trap 'rm -rf -- "$work"' EXIT
+# Keep diagnostics, including failed probes, in the uploaded evidence bundle.
+evidence="$root/artifacts/evidence"
+[[ "$(realpath -m -- "$evidence")" = "$evidence" ]] || exit 1
+mkdir -p -- "$evidence"
+rm -f -- "$evidence/linux-native-arithmetic.json"
+work="$(mktemp -d "$evidence/arithmetic.XXXXXXXX")"
 
 for name in division-by-zero division-overflow; do
   source_file="examples/$name.ores"
@@ -44,6 +48,8 @@ for name in division-by-zero division-overflow; do
   else
     status=$?
   fi
+  printf '%s\n' "$status" > "$case_dir/exit-code.txt"
+  cat -- "$diagnostic"
   if [[ "$status" -ne 1 ]]; then
     printf 'Unexpected native compiler failure for %s: exit %s, expected source rejection 1\n' \
       "$source_file" "$status" >&2
@@ -59,6 +65,7 @@ for name in division-by-zero division-overflow; do
     echo "Rejected source emitted a CIL artifact: $source_file" >&2
     exit 1
   fi
+  printf 'SOURCE_REJECTION fixture=%s exit=%s emitted_cil=false\n' "$name" "$status"
 done
 echo 'LINUX_NET_NATIVE_AOT_SOURCE_DIVISION_DENIED_WITHOUT_CIL'
 
@@ -71,6 +78,9 @@ set +e
 output="$(timeout --signal=TERM --kill-after=5s 30s "$app" 2>&1)"
 status=$?
 set -e
+printf '%s\n' "$output" > "$work/overflow.log"
+printf '%s\n' "$status" > "$work/overflow-exit-code.txt"
+printf 'CHECKED_OVERFLOW exit=%s diagnostic=%s\n' "$status" "$output"
 if [[ "$status" -ne 70 ]] || ! grep -Fqi 'overflow' <<<"$output"; then
   printf 'Linux checked overflow: expected exit 70 and overflow diagnostic, got exit %s and output %q\n' \
     "$status" "$output" >&2
@@ -91,5 +101,8 @@ for pair in \
       "$binary" "$actual" "$expected" >&2
     exit 1
   fi
+  printf 'NATIVE_SOURCE_ISOLATION binary=%s output=%s\n' "$binary" "$actual"
 done
+printf '{"schema":"oreslang.net.linux_native_arithmetic_v1","division_rejection_exit":1,"division_emitted_cil":false,"overflow_exit":%s,"outputs":[14,42,40,45],"native_application_count":5}\n' \
+  "$status" > "$evidence/linux-native-arithmetic.json"
 echo 'LINUX_NET_NATIVE_AOT_CHECKED_OVERFLOW_EXIT70_AND_FIVE_SOURCE_ISOLATION'
