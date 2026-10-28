@@ -17,8 +17,10 @@ public static class OresStructuredCfgLowering
     // ABI path: helpers become independent verified CFG methods. The old
     // Lower() method keeps the deliberately bounded inlining/reference path.
     public static VerifiedCfgModule LowerModule(string source)
+        => LowerModule(OresStructuredParser.Parse(source));
+
+    internal static VerifiedCfgModule LowerModule(StructuredProgram program)
     {
-        var program = OresStructuredParser.Parse(source);
         var helperSignatures = new Dictionary<string, CfgCallSignature>(StringComparer.Ordinal);
         var methods = new List<VerifiedCfgFunction>();
         var declarations = program.Functions ??
