@@ -12,9 +12,11 @@ static void Deny(Action operation)
     throw new InvalidOperationException("foreign actor memory authority admitted");
 }
 
+// Keep all probe actor cardinalities and dispatcher admission capacity in lockstep.
+const int actorCount = 4;
 var options = new ActorRuntimeOptions
 {
-    MaxActors = 4, MessagesPerDispatch = 1,
+    MaxActors = actorCount, MessagesPerDispatch = 1,
     MailboxMessages = 4, MailboxBytes = 64,
     ActorPersistentBytes = 128, ActorScratchBytes = 64,
     ActorMaxAllocations = 8, ActorMaxReadLoans = 8,
@@ -22,21 +24,22 @@ var options = new ActorRuntimeOptions
     Dispatcher = new ActorDispatcherOptions
     {
         PrivateWorkers = 1, SharedWorkers = 1, UntrustedWorkers = 1,
-        QueueCapacityPerDomain = 4
+        QueueCapacityPerDomain = actorCount
     }
 };
 using var runtime = new ActorRuntime(options);
-using var initialized = new CountdownEvent(4);
-using var verified = new CountdownEvent(4);
+using var initialized = new CountdownEvent(actorCount);
+using var verified = new CountdownEvent(actorCount);
 var errors = new ConcurrentQueue<Exception>();
-var handles = new ActorArenaHandle?[4];
-var references = new ActorRef[4];
+var handles = new ActorArenaHandle?[actorCount];
+var references = new ActorRef[actorCount];
 ActorArenaLifetimePin? pin = null;
 ActorContext? retained = null;
 // Two SHARED actors intentionally use the same carrier pool; kind/domain
 // identity must never substitute for per-actor heap identity.
 var kinds = new[] { ActorKind.Private, ActorKind.Shared, ActorKind.Shared, ActorKind.Untrusted };
-for (int i = 0; i < 4; ++i)
+Require(kinds.Length == actorCount, "probe actor-kind count disagrees with admission capacity");
+for (int i = 0; i < actorCount; ++i)
 {
     int index = i;
     references[i] = runtime.Spawn(kinds[i], (context, message) =>
@@ -55,7 +58,7 @@ for (int i = 0; i < 4; ++i)
                 var output = new byte[8];
                 context.Read(handles[index]!, 0, output);
                 Require(output[0] == 11 + index, "persistent actor value changed");
-                for (int j = 0; j < 4; ++j)
+                for (int j = 0; j < actorCount; ++j)
                 {
                     if (j == index) continue;
                     int foreign = j;
@@ -85,7 +88,7 @@ Require(initialized.Wait(TimeSpan.FromSeconds(10)), "initialization timed out");
 Require(errors.IsEmpty, "initial actor allocation failed");
 foreach (var actor in references) runtime.Send(actor, new byte[] { 1 });
 Require(verified.Wait(TimeSpan.FromSeconds(10)), "isolation checks timed out");
-Require(SpinWait.SpinUntil(() => runtime.CompletedMessages == 8,
+Require(SpinWait.SpinUntil(() => runtime.CompletedMessages == 2 * actorCount,
     TimeSpan.FromSeconds(10)), "physical turns did not complete");
 Require(errors.IsEmpty, "actor isolation check failed");
 Require(runtime.StartedCarrierThreads == 3, "carrier pools exceeded configured bounds");
