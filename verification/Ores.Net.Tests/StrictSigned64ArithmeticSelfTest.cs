@@ -26,6 +26,7 @@ static class StrictSigned64ArithmeticSelfTest
     {
         CheckPortableContractFixture();
         CheckExactFloatFixture();
+        CheckExactFloatOracleBoundaries();
         Require(StrictSigned64Arithmetic.Rem(-9, 4) == -1, "negative remainder");
         Require(StrictSigned64Arithmetic.Mod(-9, 4) == 3, "positive modulus");
         Require(StrictSigned64Arithmetic.Mod(-9, -4) == 3, "negative divisor modulus");
@@ -104,6 +105,59 @@ static class StrictSigned64ArithmeticSelfTest
                 StrictSigned64Arithmetic.ToFloatExact(value));
             Require(expectedBits == actualBits, "float bits mismatch: " + id);
         }
+    }
+
+    /// <summary>
+    /// Independently classify exact binary64 representations with BigInteger,
+    /// rather than relying on a lossy double-to-long round trip as the oracle.
+    /// This is reference-helper evidence, not a guest compiler/Native AOT run.
+    /// </summary>
+    private static void CheckExactFloatOracleBoundaries()
+    {
+        long[] anchors =
+        {
+            long.MinValue, long.MaxValue, 0L, -1L, 1L,
+            -(1L << 53), 1L << 53, -(1L << 62), 1L << 62
+        };
+        foreach (long anchor in anchors)
+        {
+            for (int offset = -4; offset <= 4; offset++)
+            {
+                BigInteger candidate = new BigInteger(anchor) + offset;
+                if (candidate < long.MinValue || candidate > long.MaxValue)
+                    continue;
+                CheckExactFloatOracle((long)candidate);
+            }
+        }
+
+        var random = new Random(0x0F1A);
+        Span<byte> bytes = stackalloc byte[8];
+        for (int i = 0; i < 10_000; i++)
+        {
+            random.NextBytes(bytes);
+            CheckExactFloatOracle(BinaryPrimitives.ReadInt64LittleEndian(bytes));
+        }
+    }
+
+    private static void CheckExactFloatOracle(long value)
+    {
+        double reference = (double)value;
+        // BigInteger(Double) records the integer represented by the actual
+        // binary64 value, including 2^63 (outside signed64's upper bound).
+        bool exactlyRepresented = new BigInteger(reference) == new BigInteger(value);
+        if (!exactlyRepresented)
+        {
+            Expect<OverflowException>(
+                () => _ = StrictSigned64Arithmetic.ToFloatExact(value),
+                "inexact binary64 oracle: " + value.ToString(CultureInfo.InvariantCulture));
+            return;
+        }
+
+        ulong expectedBits = BitConverter.DoubleToUInt64Bits(reference);
+        ulong actualBits = BitConverter.DoubleToUInt64Bits(
+            StrictSigned64Arithmetic.ToFloatExact(value));
+        Require(actualBits == expectedBits,
+            "exact binary64 oracle bits: " + value.ToString(CultureInfo.InvariantCulture));
     }
 
     private static long Signed(JsonElement element) =>
