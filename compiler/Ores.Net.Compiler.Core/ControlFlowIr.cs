@@ -149,7 +149,7 @@ public static class OresCfgVerifier
                 throw new FormatException("Null CFG block");
             if (!Identifier(original.Name))
                 throw new FormatException("Invalid CFG block name");
-            var parameters = original.Parameters ??
+            var blockParameters = original.Parameters ??
                 throw new FormatException("Missing CFG block parameters");
             var instructions = original.Instructions ??
                 throw new FormatException("Missing CFG block instructions");
@@ -158,7 +158,7 @@ public static class OresCfgVerifier
             // Capture each caller-controlled Count exactly once. Re-reading
             // a mutable/adversarial Count after admission could bypass the
             // budget when allocating the snapshot.
-            int parameterCount = parameters.Count;
+            int parameterCount = blockParameters.Count;
             int instructionCount = instructions.Count;
             if (parameterCount < 0 || instructionCount < 0 ||
                 totalDefinitions + parameterCount + (long)instructionCount > MaxValues)
@@ -174,7 +174,7 @@ public static class OresCfgVerifier
                 _ => throw new FormatException("Unsupported CFG terminator")
             };
             blocks[i] = new CfgBlock(original.Name,
-                CopyIndexed(parameters, parameterCount),
+                CopyIndexed(blockParameters, parameterCount),
                 Array.AsReadOnly(CopyIndexed(instructions, instructionCount).Select(op =>
                 {
                     if (op is null) throw new FormatException("Null CFG instruction");
