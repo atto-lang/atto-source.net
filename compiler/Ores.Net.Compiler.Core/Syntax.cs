@@ -45,6 +45,12 @@ public static class OresParser
                 throw new FormatException("Token count exceeds bootstrap limit");
             if (token.Text.Length == 0) break;
         }
+        for (int i = 0; i + 1 < tokens.Count; i++)
+        {
+            if (tokens[i].Text == "select" &&
+                StaticSelectAdmission.IsStaticSelectFollower(tokens[i + 1].Text))
+                throw StaticSelectAdmission.Unsupported(tokens[i].Offset);
+        }
         return new Reader(tokens).ParseProgram();
     }
 
@@ -140,7 +146,8 @@ public static class OresParser
                 // a verified source graph / native AOT linker exists.
                 if (word == "import")
                     throw new FormatException("source imports require verified module graph lowering");
-                if (word is "cpu" or "gpu" or "nb")
+                if (word is "cpu" or "gpu" ||
+                    (word == "nb" && !StaticSelectAdmission.FollowedByStaticSelect(text, _i)))
                     throw new FormatException(
                         $"execution region '{word}' requires verified CPU/GPU Task lowering; no implicit CPU fallback at offset {start}");
                 if (word == "task")
@@ -152,6 +159,9 @@ public static class OresParser
                 if (word == "enum")
                     throw new FormatException(
                         $"nominal enum overloads require compiler-bound dispatch (unsupported .NET bootstrap) at offset {start}");
+                if (word is "gen" or "generator")
+                    throw new FormatException(
+                        $"generator declarations require iterator-frame and continuation lowering in .NET Native AOT backend at offset {start}");
                 return new Token(word, start);
             }
             // Recognize the contiguous operator as one token, but never
@@ -169,7 +179,7 @@ public static class OresParser
             // Lex assignment punctuation so unsupported declarations are rejected
             // at their declaration, rather than at a later initializer. The
             // arithmetic parser still has no assignment production.
-            if ("()+-*/{}:;.=?".IndexOf(ch) >= 0)
+            if ("()+-*/%{}:;.=?".IndexOf(ch) >= 0)
             {
                 _i++;
                 return new Token(text[start.._i], start);
@@ -252,7 +262,7 @@ public static class OresParser
         {
             CheckDepth(depth);
             Expression left = ParseUnary(depth + 1);
-            while (Current.Text is "*" or "/")
+            while (Current.Text is "*" or "/" or "%")
             {
                 char op = Current.Text[0];
                 // Reference Oreslang int/int has a float result. This i64-only
@@ -260,7 +270,27 @@ public static class OresParser
                 if (op == '/')
                     throw new FormatException("Division requires float result lowering; unsupported in the i64 source subset");
                 _index++;
-                left = new Binary(op, left, ParseUnary(depth + 1));
+                var rhs = ParseUnary(depth + 1);
+                if (op == '%')
+                {
+                    // Portable P0 subset: a syntactically signed nonzero
+                    // integer literal is required. No dynamic zero/error
+                    // effects or untyped CLR remainder fallbacks.
+                    long divisor = rhs switch
+                    {
+                        Literal literal => literal.Value,
+                        Unary { Operator: '+', Value: Literal literal } => literal.Value,
+                        Unary { Operator: '-', Value: Literal literal }
+                            when literal.Value != long.MinValue => -literal.Value,
+                        _ => throw new FormatException(
+                            "Remainder requires a signed integer literal divisor")
+                    };
+                    if (divisor == 0)
+                        throw new FormatException("Remainder divisor cannot be zero");
+                    left = new Binary('%', left, new Literal(divisor));
+                }
+                else
+                    left = new Binary(op, left, rhs);
             }
             return left;
         }

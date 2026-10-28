@@ -77,9 +77,11 @@ Require(OresParser.Parse(
     "fnc main():int{return 1;} /* enum Color /* enum Mode */ end */") is Literal,
     "nested block-comment enum words must not trigger overload admission");
 
+AsyncOnlyIoPolicyTests.Run();
 SourceByteBudgetTests.Run();
 StructuralPatternAdmissionTests.Run();
 NumericSeparatorParityTests.Run();
+CrossBackendCheckedI64ParityTests.Run();
 
 // The canonical actor negative includes a later assignment. Lex its punctuation
 // while preserving the precise unsupported top-level declaration diagnostic.
@@ -95,6 +97,7 @@ Reject(() => OresParser.Parse("fnc main():int { const x = 1; return x; }"), "loc
 
 ActorRefNoWireSelfTest.Run();
 ActorMailboxBoundsSelfTest.Run();
+SelectContinuationFenceSelfTest.Run();
 ActorMailboxRestartAtomicitySelfTest.Run();
 ActorMailboxAuthorizationPrioritySelfTest.Run();
 ActorMailboxPrivateDataSelfTest.Run();
@@ -103,6 +106,8 @@ ActorShardColumnsSelfTest.Run();
 SelectArbiterSelfTest.Run();
 SelectableI64ChannelSelfTest.Run();
 SelectableI64FutureSelfTest.Run();
+ActorDispatchDomainsSelfTest.Run();
+ActorRuntimeSelfTest.Run();
 ProjectRootSourceTests.Run(); // host-only resolver, not linked .NET source imports
 
 // Import parity is deliberately not claimed for the .NET scalar compiler.
@@ -653,17 +658,21 @@ Require(restartActor.QueuedMessages == 0, "restart clears pending messages");
 
 
 int count = 0;
-Require(RuntimeHost.Execute(() => { count++; return 7; }) == 0 && count == 1,
+Require(await RuntimeHost.ExecuteAsync(() => { count++; return 7; }) == 0 && count == 1,
     "runtime host invokes entry once");
-Require(RuntimeHost.Execute(() => throw new OverflowException()) == 70,
+Require(await RuntimeHost.ExecuteAsync(() => throw new OverflowException()) == 70,
     "overflow error returned");
-Require(RuntimeHost.Execute(() => throw new DivideByZeroException()) == 70,
+Require(await RuntimeHost.ExecuteAsync(() => throw new DivideByZeroException()) == 70,
     "divide zero error returned");
 
+ManagedSourceEmitterTests.Run();
 SourceI64Conformance.Run();
+SharedScalarParityConformance.Run();
 CfgVerifierTests.Run();
 CfgCilStressTests.Run();
 StructuredSourceTests.Run();
+StructuredCfgLoweringTests.Run();
+StructuredStaticAbiTests.Run();
 StaticFactsV0Tests.Run();
 ValueBoundaryTests.Run();
 Console.WriteLine("Oreslang .NET bootstrap, CFG verifier, CIL stress and structured source tests passed");
