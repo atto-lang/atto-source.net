@@ -20,6 +20,21 @@ set if **any** address is not loopback, if any address is IPv4-mapped IPv6, if
 scoped IPv6 is supplied, or if there are more than 16 answers. A selected
 address outside the set is denied; it is never modulo-wrapped.
 
+The issuer and the MsQuic entrypoint now share the same strict
+lowercase-ASCII DNS name validation: labels must be 1..63 bytes, have no
+leading/trailing hyphens, and total name length must not exceed 253 bytes.
+Unicode names must already be converted to valid canonical A-labels.
+Concurrent attempts to consume a permit have exactly one winner via
+`Interlocked.Exchange`; the standalone negative suite includes a 128-way
+race and rejects duplicate/expired permit reuse.
+
+After a successful QUIC/TLS 1.3 handshake, the host adapter rechecks the
+reported remote literal IP+port, negotiated `h3` ALPN, TLS 1.3 version and
+original TLS target hostname. Any mismatch causes physical
+`DisposeAsync` before the connection may escape. This **does not**
+enforce the remote address after handshake or disable migration, and a
+future source-level lifetime wrapper must address that separately.
+
 The permit clones its selected IP bytes, has a private constructor, binds
 the actor identity/generation, and is consumed atomically **exactly once**,
 including when the actor identity is wrong or the permit has expired. The
