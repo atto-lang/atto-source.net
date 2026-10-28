@@ -47,6 +47,31 @@ test('modified tracked source is denied',()=>fixture(({root,env,put})=>{
 test('untracked source is denied',()=>fixture(({root,env,put})=>{
   put('extra.ores','extra');assert.throws(()=>createReceipt(root,env),/untracked/);
 }));
-test('unknown carrier is denied',()=>fixture(({root,env})=>assert.throws(()=>createReceipt(root,{...env,GITHUB_REPOSITORY:'unapproved/repo'}),/unrecognized/)));
-test('carrier cannot omit immutable source tree',()=>fixture(({root,env})=>assert.throws(()=>createReceipt(root,{...env,GITHUB_REPOSITORY:'honeypot-r-us-test/hnpt-e2e'}),/source tree/)));
-test('carrier cannot claim a different subtree',()=>fixture(({root,env})=>assert.throws(()=>createReceipt(root,{...env,GITHUB_REPOSITORY:'honeypot-r-us-test/hnpt-e2e',EXPECTED_SOURCE_TREE:'c'.repeat(40)}))));
+test('unapproved carrier is denied, even with a claimed source tree',()=>fixture(({root,env})=>{
+  assert.throws(()=>createReceipt(root,{...env,GITHUB_REPOSITORY:'unapproved/repo'}),/source-local receipt/);
+  assert.throws(()=>createReceipt(root,{...env,
+    GITHUB_REPOSITORY:'honeypot-r-us-test/hnpt-e2e',
+    EXPECTED_SOURCE_TREE:'c'.repeat(40)}),/external carrier not approved/);
+}));
+test('matching copied snapshot tree does not grant private-source export approval',()=>fixture(({root,env,put})=>{
+  put('snapshot/source.ores','synthetic copy, not a private source export\\n');
+  execFileSync('git',['-C',root,'add','snapshot']);
+  execFileSync('git',['-C',root,'-c','user.name=Test','-c','user.email=test@local',
+    'commit','-qm','Synthetic carrier tree']);
+  const revision=execFileSync('git',['-C',root,'rev-parse','HEAD'],{encoding:'utf8'}).trim();
+  const sourceTree=execFileSync('git',['-C',root,'rev-parse','HEAD:snapshot'],
+    {encoding:'utf8'}).trim();
+  assert.match(sourceTree,/^[a-f0-9]{40}$/);
+  assert.throws(()=>createReceipt(root,{...env,EXPECTED_HEAD:revision,
+    GITHUB_REPOSITORY:'honeypot-r-us-test/hnpt-e2e',
+    EXPECTED_SOURCE_TREE:sourceTree}),/source-local receipt/);
+}));
+test('origin source receipt never substitutes external snapshot tree for the actual HEAD tree',
+  ()=>fixture(({root,env})=>{
+    const actualTree=execFileSync('git',['-C',root,'rev-parse','HEAD^{tree}'],
+      {encoding:'utf8'}).trim();
+    const receipt=createReceipt(root,{...env,EXPECTED_SOURCE_TREE:'c'.repeat(40)});
+    assert.equal(receipt.tree_sha,actualTree);
+    assert.equal(receipt.execution_repository,sourceRepository);
+    assert.equal(receipt.execution_head_sha,env.EXPECTED_HEAD);
+  }));

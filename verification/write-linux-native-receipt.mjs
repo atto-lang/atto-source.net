@@ -19,15 +19,14 @@ export function createReceipt(root, env) {
   const git = (...args) => execFileSync('git', ['-C', root, ...args], {encoding:'utf8'}).trim();
   requireThat(sha(env.EXPECTED_HEAD), 'invalid expected source head');
   const executionHead = git('rev-parse', 'HEAD');
-  const carrier = env.GITHUB_REPOSITORY !== sourceRepository;
-  // The separate carrier wrapper pins the source SHA/tree from the source API.
-  // Its snapshot subtree must be byte/mode identical, not merely similar files.
-  if (carrier) {
-    requireThat(env.GITHUB_REPOSITORY === 'honeypot-r-us-test/hnpt-e2e', 'unrecognized execution repository');
-    requireThat(sha(env.EXPECTED_SOURCE_TREE), 'missing carrier source tree');
-    requireThat(git('rev-parse', 'HEAD:snapshot') === env.EXPECTED_SOURCE_TREE, 'carrier source tree mismatch');
-  } else requireThat(executionHead === env.EXPECTED_HEAD, 'source head mismatch');
-  const tree = carrier ? env.EXPECTED_SOURCE_TREE : git('rev-parse', 'HEAD^{tree}');
+  // This receipt is for source-local execution, not an authorization to move
+  // private code to a funded carrier. Even a matching snapshot subtree cannot
+  // establish the separately required independent transfer approval.
+  // Only the originating repository may issue an execution receipt here.
+  requireThat(env.GITHUB_REPOSITORY === sourceRepository,
+    'source-local receipt requires originating repository; external carrier not approved');
+  requireThat(executionHead === env.EXPECTED_HEAD, 'source head mismatch');
+  const tree = git('rev-parse', 'HEAD^{tree}');
   git('diff', '--quiet', '--exit-code', 'HEAD', '--', '.');
   requireThat(git('ls-files', '--others', '--exclude-standard') === '', 'untracked source files');
   requireThat(/^[1-9][0-9]*$/.test(env.GITHUB_RUN_ID ?? ''), 'invalid run ID');
