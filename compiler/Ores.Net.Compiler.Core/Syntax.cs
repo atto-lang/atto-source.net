@@ -6,6 +6,8 @@ public abstract record Expression;
 public sealed record Literal(long Value) : Expression;
 public sealed record Unary(char Operator, Expression Value) : Expression;
 public sealed record Binary(char Operator, Expression Left, Expression Right) : Expression;
+// Exactly one admitted named intrinsic in the shipping signed-i64 bootstrap.
+public sealed record NamedIntegerRem(Expression Left, Expression Right) : Expression;
 
 public static class OresParser
 {
@@ -179,7 +181,7 @@ public static class OresParser
             // Lex assignment punctuation so unsupported declarations are rejected
             // at their declaration, rather than at a later initializer. The
             // arithmetic parser still has no assignment production.
-            if ("()+-*/{}:;.=?".IndexOf(ch) >= 0)
+            if ("(),+-*/{}:;.=?".IndexOf(ch) >= 0)
             {
                 _i++;
                 return new Token(text[start.._i], start);
@@ -318,6 +320,20 @@ public static class OresParser
                 var inner = ParseAdd(depth + 1);
                 Expect(")");
                 return inner;
+            }
+            // No generic method invocation or host interoperability is admitted here.
+            // This exact built-in has two eager, signed-i64 expression operands.
+            if (Take("Integer"))
+            {
+                Expect(".");
+                if (!Take("rem"))
+                    throw new FormatException($"Unsupported Integer intrinsic at offset {Current.Offset}");
+                Expect("(");
+                var left = ParseAdd(depth + 1);
+                Expect(",");
+                var right = ParseAdd(depth + 1);
+                Expect(")");
+                return new NamedIntegerRem(left, right);
             }
             if (Current.Text.Length == 0 || Current.Text[0] is < '0' or > '9')
                 throw new FormatException($"Expected integer at offset {Current.Offset}");
