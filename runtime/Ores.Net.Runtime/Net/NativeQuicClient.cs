@@ -116,25 +116,34 @@ internal static class NativeQuicClient
         // here: TargetHost authenticates the policy-authorized original name.
         var connection = await QuicConnection.ConnectAsync(options, cancellationToken)
             .ConfigureAwait(false);
-        // The provider owns the QUIC/TLS protocol state. Revalidate the
-        // negotiated result before returning an open native handle. This does
-        // not by itself prove path migration is disabled for its lifetime.
-        var mismatch =
-            connection.RemoteEndPoint is not IPEndPoint remote ||
-            !remote.Address.Equals(pinnedAuthorizedAddress.Address) ||
-            remote.Port != pinnedAuthorizedAddress.Port ||
-            connection.SslProtocol != SslProtocols.Tls13 ||
-            !connection.NegotiatedApplicationProtocol.Equals(applicationProtocol) ||
-            !string.Equals(connection.TargetHostName, canonicalDnsName,
-                           StringComparison.Ordinal);
-        if (mismatch || cancellationToken.IsCancellationRequested)
+        // A physical connection now exists. ANY post-handshake exception,
+        // including a failing provider property accessor or cancellation,
+        // must dispose this handle before it escapes the trusted adapter.
+        try
         {
-            await connection.DisposeAsync().ConfigureAwait(false);
+            // These are admission-time checks, NOT a substitute for pinning
+            // every later path or disabling QUIC connection migration.
+            var mismatch =
+                connection.RemoteEndPoint is not IPEndPoint remote ||
+                !remote.Address.Equals(pinnedAuthorizedAddress.Address) ||
+                remote.Port != pinnedAuthorizedAddress.Port ||
+                connection.SslProtocol != SslProtocols.Tls13 ||
+                !connection.NegotiatedApplicationProtocol.Equals(applicationProtocol) ||
+                !string.Equals(connection.TargetHostName, canonicalDnsName,
+                               StringComparison.Ordinal);
             cancellationToken.ThrowIfCancellationRequested();
-            throw new SecurityException(
-                "QUIC peer pin, TLS 1.3, SNI, or negotiated ALPN mismatch");
+            if (mismatch)
+                throw new SecurityException(
+                    "QUIC peer pin, TLS 1.3, SNI, or negotiated ALPN mismatch");
+            return connection;
         }
-        return connection;
+        catch
+        {
+            // A cancellation signal is not a physical-retirement receipt.
+            // Await the native close before propagating the original failure.
+            await connection.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
     }
 
 #pragma warning restore CA1416
