@@ -28,6 +28,11 @@ public abstract record StructuredStmt(int Offset);
 // Compile-time const, single-assignment val, and mutable let are distinct
 // source bindings; the experimental structured AST preserves that distinction.
 public enum StructuredBindingKind { Let, Val, Const }
+public enum StructuredLocalTypeKind { Struct, Record }
+public sealed record StructuredLocalField(string Name, IrValueType Type);
+public sealed record StructuredLocalTypeDecl(int At, string Name,
+    StructuredLocalTypeKind Kind, IReadOnlyList<StructuredLocalField> Fields)
+    : StructuredStmt(At);
 public sealed record StructuredLet(int At, string Name, IrValueType ValueType,
     StructuredExpr Initializer, StructuredBindingKind Kind = StructuredBindingKind.Let)
     : StructuredStmt(At);
@@ -56,6 +61,7 @@ public static class OresStructuredParser
     private const int MaxIdentifier = 128;
     private const int MaxHelpers = 64;
     private const int MaxParameters = 16;
+    private const int MaxLocalTypeFields = 64;
 
     public static StructuredProgram Parse(string source)
     {
@@ -253,6 +259,7 @@ public static class OresStructuredParser
         private sealed record LocalBinding(IrValueType Type, StructuredBindingKind Kind,
             long? ConstantValue);
         private readonly List<Dictionary<string, LocalBinding>> scopes = new();
+        private readonly List<HashSet<string>> localTypeScopes = new();
         private readonly Dictionary<string, StructuredFunction> functions =
             new(StringComparer.Ordinal);
         private readonly List<string> functionOrder = new();
@@ -392,6 +399,7 @@ public static class OresStructuredParser
             Budget(depth);
             Expect("{");
             scopes.Add(new Dictionary<string, LocalBinding>(StringComparer.Ordinal));
+            localTypeScopes.Add(new HashSet<string>(StringComparer.Ordinal));
             var body = new List<StructuredStmt>();
             bool terminated = false;
             while (Current.Text != "}")
@@ -406,12 +414,55 @@ public static class OresStructuredParser
             }
             Expect("}");
             scopes.RemoveAt(scopes.Count - 1);
+            localTypeScopes.RemoveAt(localTypeScopes.Count - 1);
             return (Array.AsReadOnly(body.ToArray()), terminated);
         }
         private (StructuredStmt Statement, bool Returns) Statement(int depth)
         {
             Budget(depth);
             int at = Current.Offset;
+            if (Current.Text is "class" or "actor" ||
+                (Current.Text == "define" && index + 1 < tokens.Count &&
+                 (tokens[index + 1].Text is "class" or "actor")))
+                throw new FormatException(
+                    $"Local class/actor declarations are not permitted; use a local struct/record value type or a top-level nominal type at offset {at}");
+            if (Current.Text is "struct" or "record")
+            {
+                var kind = Current.Text == "struct"
+                    ? StructuredLocalTypeKind.Struct
+                    : StructuredLocalTypeKind.Record;
+                index++;
+                int nameAt = Current.Offset;
+                string name = Name();
+                if (localTypeScopes.Any(scope => scope.Contains(name)))
+                    throw new FormatException(
+                        $"Duplicate local value type '{name}' at offset {nameAt}");
+                Expect("{");
+                var fields = new List<StructuredLocalField>();
+                var fieldNames = new HashSet<string>(StringComparer.Ordinal);
+                while (Current.Text != "}")
+                {
+                    if (Current.Text.Length == 0)
+                        throw Error("Unterminated local value type");
+                    if (fields.Count >= MaxLocalTypeFields)
+                        throw Error("Local value type field budget exceeded");
+                    var fieldType = Type();
+                    int fieldAt = Current.Offset;
+                    string fieldName = Name();
+                    if (!fieldNames.Add(fieldName))
+                        throw new FormatException(
+                            $"Duplicate local value-type field '{fieldName}' at offset {fieldAt}");
+                    fields.Add(new StructuredLocalField(fieldName, fieldType));
+                    if (Take(";") || Take(",")) continue;
+                    if (Current.Text != "}")
+                        throw Error("Expected ',', ';' or '}' after local value-type field");
+                }
+                Expect("}");
+                Take(";");
+                localTypeScopes[^1].Add(name);
+                return (new StructuredLocalTypeDecl(at, name, kind,
+                    Array.AsReadOnly(fields.ToArray())), false);
+            }
             if (Take("return"))
             {
                 var value = Expr(depth + 1);
@@ -501,7 +552,8 @@ public static class OresStructuredParser
                 !name.Skip(1).All(c => Alpha(c) || Digit(c) || c == '_') ||
                 name is "if" or "else" or "while" or "return" or "let"
                     or "int" or "bool" or "true" or "false"
-                    or "define" or "pub" or "fnc" or "const" or "val" or "final")
+                    or "define" or "pub" or "fnc" or "const" or "val" or "final"
+                    or "struct" or "record" or "class" or "actor")
                 throw new FormatException($"Invalid identifier at offset {at}");
             index++;
             return name;
