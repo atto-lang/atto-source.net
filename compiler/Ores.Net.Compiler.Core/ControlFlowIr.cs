@@ -1,7 +1,8 @@
 namespace Ores.Net.Compiler;
 
-// This CFG IR is deliberately separate from the current straight-line i64
-// code generator. It is verified but NOT executable or accepted by oresnet.
+// Experimental typed CFG/CIL path is exposed only through opt-in oresnet
+// check-structured / compile-structured. Production scalar CLI remains
+// independent; verified functions and call operands are never runtime JIT.
 public enum CfgOpcode
 {
     ConstantI64,
@@ -11,7 +12,10 @@ public enum CfgOpcode
     CheckedMultiply,
     CheckedDivide,
     EqualI64,
-    LessThanI64
+    LessThanI64,
+    Argument,
+    Call,
+    NotEqualI64
 }
 
 public readonly record struct CfgParameter(int Id, IrValueType Type);
@@ -19,7 +23,8 @@ public readonly record struct CfgParameter(int Id, IrValueType Type);
 public sealed record CfgInstruction(
     int ResultId, CfgOpcode Opcode, IrValueType Type,
     int? Left = null, int? Right = null,
-    long? I64Constant = null, bool? BoolConstant = null);
+    long? I64Constant = null, bool? BoolConstant = null,
+    string? Target = null, IReadOnlyList<int>? Arguments = null);
 
 public abstract record CfgTerminator;
 public sealed record CfgReturn(int ValueId) : CfgTerminator;
@@ -35,19 +40,23 @@ public sealed record CfgBlock(
 
 public sealed record CfgFunction(
     string Name, IrValueType ResultType, string Entry,
-    IReadOnlyList<CfgBlock> Blocks);
+    IReadOnlyList<CfgBlock> Blocks,
+    IReadOnlyList<IrValueType>? Parameters = null);
 
 public sealed class VerifiedCfgFunction
 {
     internal VerifiedCfgFunction(string name, IrValueType resultType,
-        string entry, IReadOnlyList<CfgBlock> blocks)
+        string entry, IReadOnlyList<CfgBlock> blocks,
+        IReadOnlyList<IrValueType>? parameters = null)
     {
         Name = name;
         ResultType = resultType;
         Entry = entry;
         Blocks = blocks;
+        Parameters = parameters ?? Array.Empty<IrValueType>();
     }
 
+    public IReadOnlyList<IrValueType> Parameters { get; }
     public string Name { get; }
     public IrValueType ResultType { get; }
     public string Entry { get; }
@@ -59,6 +68,23 @@ public sealed class VerifiedCfgFunction
 /// Blocks can loop by passing typed block parameters on each control-flow edge;
 /// no unchecked phi instructions or implicit fallthrough are allowed.
 /// </summary>
+// Verified CFG module is admitted only after each source-defined helper has
+// independently verified SSA and all call targets have exact typed signatures.
+public sealed class VerifiedCfgModule
+{
+    internal VerifiedCfgModule(VerifiedCfgFunction main,
+        IReadOnlyList<VerifiedCfgFunction> helpers)
+    {
+        Main = main;
+        Helpers = helpers;
+    }
+    public VerifiedCfgFunction Main { get; }
+    public IReadOnlyList<VerifiedCfgFunction> Helpers { get; }
+}
+
+public sealed record CfgCallSignature(IrValueType ResultType,
+    IReadOnlyList<IrValueType> ParameterTypes);
+
 public static class OresCfgVerifier
 {
     public const int MaxBlocks = 128;
@@ -69,13 +95,25 @@ public static class OresCfgVerifier
 
     private readonly record struct Definition(int Block, int Instruction, IrValueType Type);
 
-    public static VerifiedCfgFunction Verify(CfgFunction function)
+    public static VerifiedCfgFunction Verify(CfgFunction function,
+        IReadOnlyDictionary<string, CfgCallSignature>? callees = null)
     {
         ArgumentNullException.ThrowIfNull(function);
-        if (!Identifier(function.Name) || function.ResultType != IrValueType.I64 ||
+        if (!Identifier(function.Name) ||
+            function.ResultType is not (IrValueType.I64 or IrValueType.Bool) ||
             !Identifier(function.Entry))
             throw new FormatException("Invalid CFG function signature");
 
+        var parameters = function.Parameters ?? Array.Empty<IrValueType>();
+        int methodParameterCount = parameters.Count;
+        if (methodParameterCount < 0 || methodParameterCount > 16)
+            throw new FormatException("Invalid CFG method signature");
+        // Never enumerate an untrusted IReadOnlyList supplied to a verifier:
+        // its Count can be bounded while its iterator is infinite.
+        var frozenParameters = CopyIndexed(parameters, methodParameterCount);
+        for (int i = 0; i < frozenParameters.Count; i++)
+            if (frozenParameters[i] is not (IrValueType.I64 or IrValueType.Bool))
+                throw new FormatException("Invalid CFG method signature");
         var sourceBlocks = function.Blocks ??
             throw new FormatException("Missing CFG blocks");
         int blockCount = sourceBlocks.Count;
@@ -111,7 +149,7 @@ public static class OresCfgVerifier
                 throw new FormatException("Null CFG block");
             if (!Identifier(original.Name))
                 throw new FormatException("Invalid CFG block name");
-            var parameters = original.Parameters ??
+            var blockParameters = original.Parameters ??
                 throw new FormatException("Missing CFG block parameters");
             var instructions = original.Instructions ??
                 throw new FormatException("Missing CFG block instructions");
@@ -120,7 +158,7 @@ public static class OresCfgVerifier
             // Capture each caller-controlled Count exactly once. Re-reading
             // a mutable/adversarial Count after admission could bypass the
             // budget when allocating the snapshot.
-            int parameterCount = parameters.Count;
+            int parameterCount = blockParameters.Count;
             int instructionCount = instructions.Count;
             if (parameterCount < 0 || instructionCount < 0 ||
                 totalDefinitions + parameterCount + (long)instructionCount > MaxValues)
@@ -136,8 +174,15 @@ public static class OresCfgVerifier
                 _ => throw new FormatException("Unsupported CFG terminator")
             };
             blocks[i] = new CfgBlock(original.Name,
-                CopyIndexed(parameters, parameterCount),
-                CopyIndexed(instructions, instructionCount),
+                CopyIndexed(blockParameters, parameterCount),
+                Array.AsReadOnly(CopyIndexed(instructions, instructionCount).Select(op =>
+                {
+                    if (op is null) throw new FormatException("Null CFG instruction");
+                    return op with
+                    {
+                        Arguments = op.Arguments is null ? null : FreezeArguments(op.Arguments)
+                    };
+                }).ToArray()),
                 frozenTerminator);
         }
 
@@ -248,16 +293,40 @@ public static class OresCfgVerifier
                 var op = block.Instructions[opIndex];
                 switch (op.Opcode)
                 {
+                    case CfgOpcode.Argument:
+                        if (op.I64Constant is null || op.I64Constant < 0 ||
+                            op.I64Constant >= frozenParameters.Count ||
+                            op.Type != frozenParameters[(int)op.I64Constant.Value] ||
+                            op.BoolConstant is not null || op.Left is not null ||
+                            op.Right is not null || op.Target is not null ||
+                            op.Arguments is not null)
+                            throw new FormatException("Malformed CFG argument load");
+                        break;
+                    case CfgOpcode.Call:
+                    {
+                        if (op.Target is null || op.Arguments is null ||
+                            op.I64Constant is not null || op.BoolConstant is not null ||
+                            op.Left is not null || op.Right is not null ||
+                            callees is null || !callees.TryGetValue(op.Target, out var callee) ||
+                            op.Arguments.Count != callee.ParameterTypes.Count ||
+                            op.Type != callee.ResultType)
+                            throw new FormatException("Unverified CFG static call");
+                        for (int arg = 0; arg < op.Arguments.Count; arg++)
+                            Use(i, opIndex, op.Arguments[arg], callee.ParameterTypes[arg]);
+                        break;
+                    }
                     case CfgOpcode.ConstantI64:
                         RequireType(op.Type, IrValueType.I64);
                         if (op.I64Constant is null || op.BoolConstant is not null ||
-                            op.Left is not null || op.Right is not null)
+                            op.Left is not null || op.Right is not null ||
+                            op.Target is not null || op.Arguments is not null)
                             throw new FormatException("Malformed CFG i64 constant");
                         break;
                     case CfgOpcode.ConstantBool:
                         RequireType(op.Type, IrValueType.Bool);
                         if (op.BoolConstant is null || op.I64Constant is not null ||
-                            op.Left is not null || op.Right is not null)
+                            op.Left is not null || op.Right is not null ||
+                            op.Target is not null || op.Arguments is not null)
                             throw new FormatException("Malformed CFG bool constant");
                         break;
                     case CfgOpcode.CheckedAdd:
@@ -265,12 +334,14 @@ public static class OresCfgVerifier
                     case CfgOpcode.CheckedMultiply:
                     case CfgOpcode.CheckedDivide:
                     case CfgOpcode.EqualI64:
+                    case CfgOpcode.NotEqualI64:
                     case CfgOpcode.LessThanI64:
                         RequireType(op.Type,
-                            op.Opcode is CfgOpcode.EqualI64 or CfgOpcode.LessThanI64
+                            op.Opcode is CfgOpcode.EqualI64 or CfgOpcode.NotEqualI64 or CfgOpcode.LessThanI64
                                 ? IrValueType.Bool : IrValueType.I64);
                         if (op.Left is null || op.Right is null ||
-                            op.I64Constant is not null || op.BoolConstant is not null)
+                            op.I64Constant is not null || op.BoolConstant is not null ||
+                            op.Target is not null || op.Arguments is not null)
                             throw new FormatException("Malformed CFG binary operation");
                         Use(i, opIndex, op.Left.Value, IrValueType.I64);
                         Use(i, opIndex, op.Right.Value, IrValueType.I64);
@@ -298,7 +369,7 @@ public static class OresCfgVerifier
         }
 
         return new VerifiedCfgFunction(function.Name, function.ResultType,
-            function.Entry, Array.AsReadOnly(blocks));
+            function.Entry, Array.AsReadOnly(blocks), frozenParameters);
 
         void AddDefinition(int id, IrValueType type, int block, int instruction)
         {

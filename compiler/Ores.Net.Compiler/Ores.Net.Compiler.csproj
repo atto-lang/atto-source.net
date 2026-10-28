@@ -4,6 +4,8 @@
     <AssemblyName>oresnet</AssemblyName>
     <PublishAot>true</PublishAot>
     <SelfContained>true</SelfContained>
+    <IsAotCompatible>true</IsAotCompatible>
+    <PublishTrimmed>true</PublishTrimmed>
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
   <ItemGroup>

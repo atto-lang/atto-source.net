@@ -27,7 +27,7 @@ internal static class StructuredSourceTests
         catch (FormatException error)
         {
             Require(error.Message.Contains(expectedDiagnostic, StringComparison.OrdinalIgnoreCase),
-                "unsupported feature rejected for wrong reason: " + error.Message);
+                "unsupported feature rejected for wrong reason for source `" + source + "`: " + error.Message);
             Require(error.Message.Contains("offset", StringComparison.Ordinal),
                 "unsupported feature missing source position");
             return;
@@ -37,6 +37,129 @@ internal static class StructuredSourceTests
 
     public static void Run()
     {
+        // Local value types are block-local declarations on the structured
+        // frontend. They are admitted into the AST but deliberately rejected
+        // by CFG/CIL lowering until value layout and construction are verified.
+        var localTypes = OresStructuredParser.Parse("""
+            fnc main():int {
+                struct Pair { int left; int right }
+                record Status { bool ready, int code };
+                return 42;
+            }
+            """);
+        Require(localTypes.Body.Count == 3,
+            "local struct/record declarations are preserved as statements");
+        Require(localTypes.Body[0] is StructuredLocalTypeDecl {
+            Name: "Pair", Kind: StructuredLocalTypeKind.Struct, Fields.Count: 2
+        } pair && pair.Fields[0] == new StructuredLocalField("left", IrValueType.I64)
+               && pair.Fields[1] == new StructuredLocalField("right", IrValueType.I64),
+            "local struct field order and scalar types are preserved");
+        Require(localTypes.Body[1] is StructuredLocalTypeDecl {
+            Name: "Status", Kind: StructuredLocalTypeKind.Record, Fields.Count: 2
+        } status && status.Fields[0] == new StructuredLocalField("ready", IrValueType.Bool)
+                 && status.Fields[1] == new StructuredLocalField("code", IrValueType.I64),
+            "local record field order and scalar types are preserved");
+        Reject("fnc main():int{struct Pair{int x;int x}return 1;}",
+            "duplicate local value-type fields are forbidden");
+        Reject("fnc main():int{struct Pair{int x}if true{record Pair{int y}}return 1;}",
+            "nested local value types cannot shadow an active local type");
+        foreach (var nominal in new[] {
+            "fnc main():int{class Local{}return 1;}",
+            "fnc main():int{actor Local{}return 1;}",
+            "fnc main():int{define class Local{}return 1;}",
+            "fnc main():int{define actor Local{}return 1;}",
+            "fnc main():int{let int x=1;define class Local{}return x;}",
+            "fnc main():int{if true {define actor Local{}}return 1;}"
+        })
+            RejectFeature(nominal, "Local class/actor declarations are not permitted");
+        var tooManyFields = "fnc main():int{struct Big{" +
+            string.Join(";", Enumerable.Range(0, 65).Select(i => "int f" + i)) +
+            "}return 1;}";
+        Reject(tooManyFields, "local value-type field budget is bounded");
+        try
+        {
+            _ = OresStructuredCfgLowering.Lower(
+                "fnc main():int{struct Pair{int left;int right}return 42;}");
+            throw new Exception("Local value type reached CFG lowering without layout support");
+        }
+        catch (FormatException ex)
+        {
+            Require(ex.Message.Contains("requires verified value layout and CIL lowering",
+                    StringComparison.Ordinal) &&
+                    ex.Message.Contains("offset", StringComparison.Ordinal),
+                "local value types must fail at the explicit CFG/CIL capability gate");
+        }
+
+        // Java reference binding kinds: compile-time const, single-write val,
+        // and assignable let. This tests typed parser admission.
+        var bindingKinds = OresStructuredParser.Parse("""
+            fnc main():int {
+                const int answer = 6 * 7;
+                const int next = answer + 1;
+                val int retained = next - 1;
+                let int mutable = retained;
+                mutable = mutable + 0;
+                return mutable;
+            }
+            """);
+        Require(bindingKinds.Body[0] is StructuredLet {
+            Name: "answer", Kind: StructuredBindingKind.Const,
+            Initializer: StructuredInt { Value: 42 }
+        }, "const evaluation replaces the initializer with a checked typed literal");
+        Require(bindingKinds.Body[1] is StructuredLet {
+            Name: "next", Kind: StructuredBindingKind.Const,
+            Initializer: StructuredInt { Value: 43 }
+        }, "const references propagate their checked compile-time value");
+        Require(bindingKinds.Body[2] is StructuredLet {
+            Name: "retained", Kind: StructuredBindingKind.Val
+        }, "val preserves runtime single-assignment marker");
+        Require(bindingKinds.Body[3] is StructuredLet {
+            Name: "mutable", Kind: StructuredBindingKind.Let,
+            Initializer: StructuredRead { Name: "retained" }
+        }, "val remains a runtime read and let remains mutable");
+        Require(bindingKinds.Body[4] is StructuredSet { Name: "mutable" },
+            "let assignment remains supported");
+
+        var constantBool = OresStructuredParser.Parse("""
+            fnc main():int {
+                const bool enabled = 6 * 7 eq 42;
+                if enabled { return 42; } else { return 0; }
+            }
+            """);
+        Require(constantBool.Body[1] is StructuredIf {
+            Condition: StructuredBool { Value: true }
+        }, "compile-time bool may appear in typed conditionals");
+        var runtimeBool = OresStructuredParser.Parse("""
+            fnc main():int {
+                val bool enabled = true;
+                if enabled { return 42; } else { return 0; }
+            }
+            """);
+        Require(runtimeBool.Body[1] is StructuredIf {
+            Condition: StructuredRead { Name: "enabled" }
+        }, "runtime val retains a typed read");
+
+        Reject("fnc main():int{val int v=1;v=2;return v;}",
+            "val is single-assignment");
+        Reject("fnc main():int{const int v=1;v=2;return v;}",
+            "const is immutable");
+        Reject("fnc main():int{val bool v=true;if v {v=false;}return 1;}",
+            "nested blocks cannot mutate outer val");
+        Reject("fnc main():int{let int x=2;const int c=x;return c;}",
+            "mutable input cannot become compile-time constant");
+        Reject("fnc main():int{val int x=2;const int c=x;return c;}",
+            "runtime single-write val is not const");
+        Reject("fnc main():int{const int x=9223372036854775807+1;return x;}",
+            "const arithmetic must trap during admission");
+        Reject("fnc main():int{const int x=-(-9223372036854775808);return x;}",
+            "const negation overflow is rejected during admission");
+        Reject("fnc main():int{const int x=3;const int x=4;return x;}",
+            "duplicate const binding is forbidden");
+        Reject("fnc main():int{val int x=x;return x;}",
+            "self-reference cannot bypass single-assignment");
+        Reject("fnc helper(int x):int{x=2;return x;}fnc main():int{return helper(1);}",
+            "typed helper parameters are immutable runtime bindings");
+
 
         foreach (var form in new[] {
             "select { default: { return 1; } }",

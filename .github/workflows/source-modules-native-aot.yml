@@ -1,0 +1,99 @@
+name: Source module Native AOT execution
+on:
+  push:
+    branches: ['feat/spin-source-*', 'ci/spin-source-*']
+  pull_request:
+    paths:
+      - 'compiler/**'
+      - 'examples/modules/**'
+      - 'verification/Ores.Net.Tests/**'
+      - 'verification/Ores.Net.ModuleProbe/**'
+      - '.github/workflows/source-modules-native-aot.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-source-modules:
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            rid: linux-x64
+            suffix: ''
+          - os: windows-2022
+            rid: win-x64
+            suffix: '.exe'
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install Linux native toolchain
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
+      - name: Existing compiler and module-linking regressions
+        shell: pwsh
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if ((git rev-parse HEAD) -ne $env:EXPECTED_HEAD) { throw 'Checkout identity mismatch' }
+          dotnet run -c Release --project verification/Ores.Net.Tests
+          if ($LASTEXITCODE -ne 0) { throw 'Compiler/module regressions failed' }
+          foreach ($source in (Get-ChildItem examples/modules -Filter '*.ores')) {
+            $path = "examples/modules/$($source.Name)"
+            if ((git hash-object --no-filters -- $path) -ne (git rev-parse "HEAD:$path")) { throw "Checkout changed source bytes: $path" }
+          }
+      - name: Publish native compiler and compile unchanged source graph
+        shell: pwsh
+        run: |
+          dotnet publish compiler/Ores.Net.Compiler -c Release -r '${{ matrix.rid }}' -p:PublishAot=true -o artifacts/module-compiler -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'Native compiler publish failed' }
+          $compiler = Join-Path 'artifacts/module-compiler' 'oresnet${{ matrix.suffix }}'
+          $witness = & $compiler compile-modules examples/modules/main.ores --root examples/modules --out artifacts/module-generated/OresGenerated.dll
+          if ($LASTEXITCODE -ne 0) { throw 'Native source graph compilation failed' }
+          New-Item artifacts/module-app -ItemType Directory -Force | Out-Null
+          $witness | Set-Content artifacts/module-app/source-graph.json
+          $witness
+          $PSNativeCommandUseErrorActionPreference = $false
+          $rejection = & $compiler compile-modules examples/modules/reject-class.ores --root examples/modules --out artifacts/module-rejected/OresGenerated.dll 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 1 -or $rejection -notmatch 'Nominal class/actor methods require' -or (Test-Path artifacts/module-rejected/OresGenerated.dll)) { throw 'Class rejection was not correctly classified' }
+          $rejection
+          $global:LASTEXITCODE = 0
+      - name: Publish and execute statically linked module application
+        shell: pwsh
+        run: |
+          $generated = (Resolve-Path artifacts/module-generated/OresGenerated.dll).Path
+          dotnet publish host/Ores.Net.NativeHost -c Release -r '${{ matrix.rid }}' -p:PublishAot=true "-p:GeneratedAssembly=$generated" -o artifacts/module-app -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'Native module host publish failed' }
+          $binary = Join-Path 'artifacts/module-app' 'oreslang-app${{ matrix.suffix }}'
+          $output = & $binary
+          if ($LASTEXITCODE -ne 0 -or "$output".Trim() -ne '42') { throw 'Imported native methods did not produce 42' }
+          $output
+          @{scope='checked-int-bool-module-native-execution-not-full-Spin'; source_commit=(git rev-parse HEAD); source_tree=(git rev-parse 'HEAD^{tree}'); rid='${{ matrix.rid }}'; binary_sha256=(Get-FileHash $binary -Algorithm SHA256).Hash.ToLowerInvariant(); output=$output} | ConvertTo-Json | Set-Content artifacts/module-app/receipt.json
+      - name: Imported helper preserves checked overflow
+        shell: pwsh
+        run: |
+          $compiler = Join-Path 'artifacts/module-compiler' 'oresnet${{ matrix.suffix }}'
+          & $compiler compile-modules examples/modules/overflow.ores --root examples/modules --out artifacts/module-overflow-generated/OresGenerated.dll
+          if ($LASTEXITCODE -ne 0) { throw 'Overflow graph compilation failed' }
+          $generated = (Resolve-Path artifacts/module-overflow-generated/OresGenerated.dll).Path
+          dotnet clean host/Ores.Net.NativeHost -c Release -r '${{ matrix.rid }}' "-p:GeneratedAssembly=$generated"
+          if ($LASTEXITCODE -ne 0) { throw 'Native host clean failed' }
+          dotnet publish host/Ores.Net.NativeHost -c Release -r '${{ matrix.rid }}' -p:PublishAot=true "-p:GeneratedAssembly=$generated" -o artifacts/module-overflow-app -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'Overflow host publish failed' }
+          $PSNativeCommandUseErrorActionPreference = $false
+          $binary = Join-Path 'artifacts/module-overflow-app' 'oreslang-app${{ matrix.suffix }}'
+          $output = & $binary 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 70 -or $output -notmatch 'Oreslang arithmetic overflow') { throw 'Imported arithmetic overflow semantics changed' }
+          $output
+          $global:LASTEXITCODE = 0
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: source-modules-${{ matrix.rid }}
+          path: artifacts/module-app/

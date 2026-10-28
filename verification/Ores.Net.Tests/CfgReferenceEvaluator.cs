@@ -33,6 +33,7 @@ internal static class CfgReferenceEvaluator
                     CfgOpcode.CheckedMultiply => checked(Left() * Right()),
                     CfgOpcode.CheckedDivide => DivideChecked(Left(), Right()),
                     CfgOpcode.EqualI64 => Left() == Right(),
+                    CfgOpcode.NotEqualI64 => Left() != Right(),
                     CfgOpcode.LessThanI64 => Left() < Right(),
                     _ => throw new InvalidOperationException("Unexpected CFG opcode")
                 };
