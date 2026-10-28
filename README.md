@@ -110,19 +110,69 @@ oresnet compile-structured examples/structured-sum45.ores --out artifacts/genera
 
 The commands route the restricted typed `int`/`bool` structured AST through
 `OresStructuredCfgLowering`, `OresCfgVerifier`, and deterministic CIL.
+An additional bounded slice admits **previously declared, expression-only
+typed helper functions** with static calls, at most 64 helpers and 16
+parameters per helper. The experimental `compile-structured` path now
+builds an independent **verified CFG for each helper** and emits a private
+static CIL MethodDef for each one. Call sites evaluate typed arguments exactly
+once, left-to-right, and emit direct `call` tokens to those MethodDefs.
+The legacy inlining/reference-evaluator path remains separately available
+for differential testing of expression-only functions; shipping `compile`
+stays scalar-only. Acyclic typed calls are genuine CIL function calls, not
+just inlined IR.
+
+The next bounded slice extends helper bodies to checked typed locals,
+assignments, `if`/`else`, `while`, and all-path return checking (including
+`bool` returns), lowered into a *separate verified CFG/MethodDef per helper*.
+Each emitted method gets its own explicit ordered Param metadata rows.
+The pinned positive program is `examples/structured-function-bodies.ores`,
+expected to return **42** after a helper loop and boolean helper call.
+Windows/Linux workflow steps require real released Native AOT compiler and
+application execution, not merely host-unit or parser checks.
+
+Recursion, mutual recursion, forward references, dynamic dispatch, classes,
+closures, generic instantiations and full ownership/actor-safe function frames
+remain deliberately unsupported. Parser acceptance does not imply release
+parity; source-org zero-step CI must be resolved before promotion.
+
+Example (experimental only):
+
+```ores
+define pub fnc double(int value): int { return value * 2; }
+define pub fnc main(): int { return double(21); }
+```
+
+```sh
+oresnet check-structured examples/structured-functions.ores
+oresnet compile-structured examples/structured-functions.ores --out artifacts/generated/OresGenerated.dll
+```
+
 They **do not** enable source actors, dynamic dispatch, imports, async I/O,
-`select`, ownership syntax, floats or general functions. Normal `check` /
-`compile` remain scalar-only and reject structured source.
+`select`, ownership syntax, floats or general function ABI support.
+Normal `check` / `compile` remain scalar-only and reject structured source.
 
 Windows and Linux workflows include a negative shipping-parser check and
-a real native application smoke test returning 45 from a loop-carried sum.
-The C# verification harness additionally checks that reachable overflows trap
-in emitted CIL, while unselected branches never run their traps.
+real native application smoke tests returning 45 from a loop-carried sum and
+42 from nested typed helper calls.
+The C# verification harness additionally checks actual helper MethodDef
+metadata, direct `call` and `ldarg` opcodes, deterministic assemblies, call
+execution in a bounded verification-only CIL interpreter, and overflow traps
+in the legacy verified SSA path. No runtime interpreter ships with Native AOT.
 
 **Status: unverified draft.** Neither source-org zero-step GitHub Actions failures
 nor reference-interpreter success prove current-head Native AOT execution.
 No release or default-CLI promotion is allowed until exact-head Windows/Linux
 Native AOT steps execute and independent compiler/security review passes.
+
+### Experimental comparison spellings
+
+On the **opt-in structured CFG/CIL path only**, integer comparisons accept the
+canonical `eq` and `neq` operators and their `==` and `!=` aliases.
+`ne` is not an operator. Comparisons are typed `int × int -> bool` and
+emit verifiable CIL (`ceq` for equality, `ceq; ldc.i4.0; ceq` for inequality).
+The production scalar compiler remains unchanged. Unimplemented bool-to-bool
+comparison, other numeric types, actor frames and ownership-sensitive lowering
+remain rejected until they have independent typed and Native AOT evidence.
 
 ## Verification
 

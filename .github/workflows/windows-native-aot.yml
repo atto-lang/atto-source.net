@@ -231,6 +231,66 @@ jobs:
             throw "Structured Native AOT expected 45, got '$output'"
           }
 
+      - name: Execute typed source helper calls in real Windows Native AOT
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $source = (Resolve-Path 'examples/structured-functions.ores').Path
+          $compiler = (Resolve-Path './artifacts/compiler/win-x64/oresnet.exe').Path
+          & $compiler check $source
+          if ($LASTEXITCODE -eq 0) { throw 'Shipping scalar compiler admitted typed helpers' }
+          & $compiler check-structured $source
+          if ($LASTEXITCODE -ne 0) { throw 'Typed helpers rejected by experimental checker' }
+          $folder = Join-Path $env:RUNNER_TEMP 'ores-helper-calls'
+          New-Item -ItemType Directory -Path $folder -Force | Out-Null
+          $generated = Join-Path $folder 'OresGenerated.dll'
+          & $compiler compile-structured $source --out $generated
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $generated)) {
+            throw 'Typed helpers did not emit CIL'
+          }
+          $hostProject = 'host/Ores.Net.NativeHost/Ores.Net.NativeHost.csproj'
+          $publishOut = 'artifacts/structured-functions/win-x64'
+          dotnet clean $hostProject -c Release -r win-x64 "-p:GeneratedAssembly=$generated"
+          if ($LASTEXITCODE -ne 0) { throw 'Typed helper host clean failed' }
+          dotnet publish $hostProject -c Release -r win-x64 -o $publishOut "-p:GeneratedAssembly=$generated" -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'Typed helper Native AOT publish failed' }
+          $binary = Join-Path $publishOut 'oreslang-app.exe'
+          ./verification/assert-native-release.ps1 -Binary $binary -Rid win-x64
+          $actual = & $binary
+          if ($LASTEXITCODE -ne 0 -or ($actual | Out-String).Trim() -ne '42') {
+            throw "Typed helper Native AOT expected 42, got '$actual'"
+          }
+
+      - name: Execute typed statement-bodied helpers in real Windows Native AOT
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $source = (Resolve-Path 'examples/structured-function-bodies.ores').Path
+          $compiler = (Resolve-Path './artifacts/compiler/win-x64/oresnet.exe').Path
+          & $compiler check $source
+          if ($LASTEXITCODE -eq 0) { throw 'Production scalar compiler admitted helper bodies' }
+          & $compiler check-structured $source
+          if ($LASTEXITCODE -ne 0) { throw 'Structured helper bodies failed verification' }
+          $folder = Join-Path $env:RUNNER_TEMP 'ores-helper-bodies'
+          New-Item -ItemType Directory -Path $folder -Force | Out-Null
+          $generated = Join-Path $folder 'OresGenerated.dll'
+          & $compiler compile-structured $source --out $generated
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $generated)) {
+            throw 'Statement-bodied helper CIL emission failed'
+          }
+          $hostProject = 'host/Ores.Net.NativeHost/Ores.Net.NativeHost.csproj'
+          $out = 'artifacts/structured-function-bodies/win-x64'
+          dotnet clean $hostProject -c Release -r win-x64 "-p:GeneratedAssembly=$generated"
+          if ($LASTEXITCODE -ne 0) { throw 'Statement-bodied helper host clean failed' }
+          dotnet publish $hostProject -c Release -r win-x64 -o $out "-p:GeneratedAssembly=$generated" -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'Statement-bodied helper Native AOT publish failed' }
+          $binary = Join-Path $out 'oreslang-app.exe'
+          ./verification/assert-native-release.ps1 -Binary $binary -Rid win-x64
+          $actual = & $binary
+          if ($LASTEXITCODE -ne 0 -or ($actual | Out-String).Trim() -ne '42') {
+            throw "Statement-bodied helper Native AOT expected 42, got '$actual'"
+          }
+
       - name: Execute shared five-backend native.add source in real Windows Native AOT
         shell: pwsh
         run: |
@@ -442,6 +502,60 @@ jobs:
           file "$binary" | grep -q 'ELF 64-bit'
           test ! -f artifacts/structured-native/linux-x64/oreslang-app.runtimeconfig.json
           test ! -f artifacts/structured-native/linux-x64/OresGenerated.dll
+
+      - name: Execute typed source helper calls in real Linux Native AOT
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_file='examples/structured-functions.ores'
+          compiler='artifacts/structured-native/compiler-linux-x64/oresnet'
+          test -x "$compiler"
+          if "$compiler" check "$source_file"; then
+            echo 'Shipping scalar compiler admitted typed helpers' >&2
+            exit 1
+          fi
+          "$compiler" check-structured "$source_file"
+          mkdir -p artifacts/structured-functions/generated
+          generated="$GITHUB_WORKSPACE/artifacts/structured-functions/generated/OresGenerated.dll"
+          "$compiler" compile-structured "$source_file" --out "$generated"
+          test -s "$generated"
+          host='host/Ores.Net.NativeHost/Ores.Net.NativeHost.csproj'
+          dotnet clean "$host" -c Release -r linux-x64 "-p:GeneratedAssembly=$generated"
+          dotnet publish "$host" -c Release -r linux-x64 \
+            -o artifacts/structured-functions/linux-x64 "-p:GeneratedAssembly=$generated" -warnaserror
+          binary='artifacts/structured-functions/linux-x64/oreslang-app'
+          test -x "$binary"
+          test "$("$binary")" = 42
+          file "$binary" | grep -q 'ELF 64-bit'
+          test ! -f artifacts/structured-functions/linux-x64/oreslang-app.runtimeconfig.json
+          test ! -f artifacts/structured-functions/linux-x64/OresGenerated.dll
+
+      - name: Execute typed statement-bodied helpers in real Linux Native AOT
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_file='examples/structured-function-bodies.ores'
+          compiler='artifacts/structured-native/compiler-linux-x64/oresnet'
+          test -x "$compiler"
+          if "$compiler" check "$source_file"; then
+            echo 'Production scalar compiler admitted helper bodies' >&2
+            exit 1
+          fi
+          "$compiler" check-structured "$source_file"
+          mkdir -p artifacts/structured-function-bodies/generated
+          generated="$GITHUB_WORKSPACE/artifacts/structured-function-bodies/generated/OresGenerated.dll"
+          "$compiler" compile-structured "$source_file" --out "$generated"
+          test -s "$generated"
+          host='host/Ores.Net.NativeHost/Ores.Net.NativeHost.csproj'
+          dotnet clean "$host" -c Release -r linux-x64 "-p:GeneratedAssembly=$generated"
+          dotnet publish "$host" -c Release -r linux-x64 \
+            -o artifacts/structured-function-bodies/linux-x64 "-p:GeneratedAssembly=$generated" -warnaserror
+          binary='artifacts/structured-function-bodies/linux-x64/oreslang-app'
+          test -x "$binary"
+          test "$("$binary")" = 42
+          file "$binary" | grep -q 'ELF 64-bit'
+          test ! -f artifacts/structured-function-bodies/linux-x64/oreslang-app.runtimeconfig.json
+          test ! -f artifacts/structured-function-bodies/linux-x64/OresGenerated.dll
 
   # Optional budget-independent gate. Disabled unless repo owners register an
   # isolated, trusted Windows x64 runner with the oreslang-net-aot label and set

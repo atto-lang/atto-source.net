@@ -37,7 +37,7 @@ try
     {
         // Experimental typed source -> verified CFG -> deterministic CIL.
         // Never enter the shipping scalar path or accept unsupported effects.
-        var verifiedCfg = OresStructuredCfgLowering.Lower(source);
+        var verifiedCfg = OresStructuredCfgLowering.LowerModule(source);
         if (validStructuredCompile)
         {
             if (!string.Equals(Path.GetFileName(args[3]), "OresGenerated.dll",

@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Security;
+using System.Security;
 using Ores.Net.Runtime.Net;
 
 static void MustReject(Action action, string label)
@@ -24,6 +25,12 @@ MustReject(() => NativeQuicClient.ValidateEndpoint(new IPEndPoint(IPAddress.Any,
     "origin.example", h3, token), "wildcard remote");
 MustReject(() => NativeQuicClient.ValidateEndpoint(endpoint, "origin.example",
     default, token), "no ALPN");
+MustReject(() => NativeQuicClient.ValidateEndpoint(
+    new IPEndPoint(IPAddress.Parse("239.2.3.4"), 443),
+    "origin.example", h3, token), "IPv4 multicast");
+MustReject(() => NativeQuicClient.ValidateEndpoint(
+    new IPEndPoint(IPAddress.Parse("ff02::1"), 443),
+    "origin.example", h3, token), "IPv6 multicast");
 
 using var cancelled = new CancellationTokenSource();
 cancelled.Cancel();
@@ -33,6 +40,15 @@ try
     throw new Exception("Accepted a pre-cancelled QUIC connection");
 }
 catch (OperationCanceledException) { }
+
+// No network is opened: naked inputs MUST NOT bypass missing egress permits.
+try
+{
+    NativeQuicClient.ConnectHttp3Async(endpoint, "origin.example", token)
+        .AsTask().GetAwaiter().GetResult();
+    throw new Exception("Missing egress permit bypassed");
+}
+catch (SecurityException) { }
 
 // No network is opened in this admission test. It is not QUIC/HTTP3 interop.
 Console.WriteLine("QUIC host admission negative checks passed; interop not asserted");
