@@ -662,6 +662,7 @@ Require(await RuntimeHost.ExecuteAsync(() => throw new OverflowException()) == 7
 Require(await RuntimeHost.ExecuteAsync(() => throw new DivideByZeroException()) == 70,
     "divide zero error returned");
 
+ManagedSourceEmitterTests.Run();
 SourceI64Conformance.Run();
 SharedScalarParityConformance.Run();
 CfgVerifierTests.Run();
