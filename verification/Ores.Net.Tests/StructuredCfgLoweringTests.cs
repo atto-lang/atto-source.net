@@ -87,6 +87,15 @@ internal static class StructuredCfgLoweringTests
             }
             """;
         Check(sum, 45, "two loop-carried SSA values sum 0..9");
+        Check(File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
+            "structured-bindings42.ores")),
+            42, "real const/val/let source through verified CFG and CIL");
+        Check("fnc main():int{const int c=40+2;return c;}",
+            42, "compile-time const typed SSA");
+        Check("fnc main():int{let int x=5;val int y=x+1;x=x+1;return y;}",
+            6, "runtime val has independent SSA identity");
+        Check("fnc main():int{const bool b=2<3;if b{return 42;}else{return 0;}}",
+            42, "compile-time boolean branch in emitted CIL");
         // Actual typed source-call semantics are checked in the independent
         // reference evaluator, emitted CIL interpreter and deterministic PE.
         // This is an acyclic, expression-only helper milestone, not a
@@ -194,8 +203,21 @@ internal static class StructuredCfgLoweringTests
         Reject("fnc main():int{return 1/2;}",
             "source int division requires float lowering");
 
+        Reject("fnc main():int{val int x=1;x=2;return x;}", "val reassignment");
+        Reject("fnc main():int{const int x=1;x=2;return x;}", "const reassignment");
+        Reject("fnc main():int{val int x=1;if true{x=2;}return x;}",
+            "val cannot be mutated inside nested block");
+        Reject("fnc main():int{let int x=42;const int y=x;return y;}",
+            "const cannot capture mutable binding");
+        Reject("fnc main():int{val int x=42;const int y=x;return y;}",
+            "const cannot depend on runtime val");
+        Reject("fnc main():int{const int x=9223372036854775807+1;return x;}",
+            "const overflow is rejected before CIL");
+
         CheckOverflow("fnc main():int{return -(-9223372036854775808);}",
             "checked negation");
+        CheckOverflow("fnc main():int{val int n=9223372036854775807;return n+1;}",
+            "runtime val checked overflow in emitted CIL");
         CheckOverflow("fnc main():int{return 9223372036854775807+1;}",
             "checked addition");
         CheckOverflow("fnc main():int{return 9223372036854775807*2;}",
