@@ -98,6 +98,7 @@ public static class CilEmitter
                         maxStack = 2;
                     }
                     break;
+                case IrOpcode.NamedBitXor:
                 case IrOpcode.CheckedAdd:
                 case IrOpcode.CheckedSubtract:
                 case IrOpcode.CheckedMultiply:
@@ -109,6 +110,7 @@ public static class CilEmitter
                         IrOpcode.CheckedAdd => ILOpCode.Add_ovf,
                         IrOpcode.CheckedSubtract => ILOpCode.Sub_ovf,
                         IrOpcode.CheckedMultiply => ILOpCode.Mul_ovf,
+                        IrOpcode.NamedBitXor => ILOpCode.Xor,
                         _ => ILOpCode.Div
                     });
                     maxStack = 2;
@@ -469,6 +471,7 @@ public static class CilEmitter
                     Binary { Operator: '-' } => ILOpCode.Sub_ovf,
                     Binary { Operator: '*' } => ILOpCode.Mul_ovf,
                     Binary { Operator: '/' } => ILOpCode.Div,
+                    NamedBitXor => ILOpCode.Xor,
                     _ => throw new FormatException("Invalid CIL operator")
                 };
                 il.OpCode(opcode);
@@ -493,6 +496,11 @@ public static class CilEmitter
                         evaluationDepth++;
                         pending.Push(new Pending(unary, true));
                         pending.Push(new Pending(unary.Value, false));
+                        break;
+                    case NamedBitXor named:
+                        pending.Push(new Pending(named, true));
+                        pending.Push(new Pending(named.Right, false));
+                        pending.Push(new Pending(named.Left, false));
                         break;
                     case Binary binary when binary.Operator is '+' or '-' or '*' or '/':
                         pending.Push(new Pending(binary, true));
