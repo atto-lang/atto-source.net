@@ -1,0 +1,4 @@
+// Native AOT guest-path contract: rem(-9, 4) = -1; plus 43 yields 42.
+define pub fnc main(): int {
+    return Integer.rem(-9, 4) + 43;
+}
