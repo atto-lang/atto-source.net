@@ -12,6 +12,9 @@
     <None Include="../../contracts/v1/strict-named-integer-arithmetic-v1.json"
           Link="strict-named-integer-arithmetic-v1.json"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/v1/strict-integer-to-float-exact-v1.json"
+          Link="strict-integer-to-float-exact-v1.json"
+          CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../examples/structured-bindings42.ores" Link="structured-bindings42.ores"
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/scalar/v1/**/*"
