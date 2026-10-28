@@ -72,6 +72,12 @@ const requiredPathByWorkflow = {
   "Windows Native AOT": ".github/workflows/windows-native-aot.yml",
   "Integration declaration integrity": ".github/workflows/integration-declarations.yml"
 };
+// Stable IDs verified against the source repository's actual Actions runs.
+// A same-name or same-path spoof cannot replace the originating workflow.
+const requiredWorkflowIdByWorkflow = {
+  "Windows Native AOT": 384715065,
+  "Integration declaration integrity": 388530125
+};
 export function verifyEvidence(run, response, expected) {
   const errors = [];
   const fail = (condition, explanation) => { if (!condition) errors.push(explanation); };
@@ -91,6 +97,7 @@ export function verifyEvidence(run, response, expected) {
   fail(run.head_sha === expected.head, "run head is not the reviewed commit");
   fail(run.name === expected.workflow, "wrong workflow");
   fail(run.path === requiredPathByWorkflow[expected.workflow], "wrong workflow path");
+  fail(run.workflow_id === requiredWorkflowIdByWorkflow[expected.workflow], "wrong workflow ID");
   fail(run.status === "completed" && run.conclusion === "success", "workflow has not passed");
   fail(["pull_request","workflow_dispatch","push"].includes(run.event), "unsupported workflow event");
   if (response === null || typeof response !== "object" || Array.isArray(response)) {
