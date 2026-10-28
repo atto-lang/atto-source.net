@@ -177,6 +177,55 @@ function hasUnapprovedRunnerSelector(yaml) {
   }
   return false;
 }
+/**
+ * The actor-memory job runs a closed, source-defined Linux/Windows two-row
+ * matrix. Never allow generic dynamic runners or caller-controlled values.
+ */
+function approvedActorMemoryHostedMatrix(name, yaml) {
+  if (name !== 'actor-memory-native-aot.yml') return false;
+  const fixedMatrix = [
+    '    strategy:',
+    '      fail-fast: false',
+    '      matrix:',
+    '        include:',
+    '          - os: ubuntu-24.04',
+    '            rid: linux-x64',
+    '            binary: Ores.Net.ActorMemoryProbe',
+    '          - os: windows-2022',
+    '            rid: win-x64',
+    '            binary: Ores.Net.ActorMemoryProbe.exe',
+    '    runs-on: ${{ matrix.os }}',
+  ].join('\n');
+  if (yaml.split(fixedMatrix).length !== 2) return false;
+  const dynamicRunner = '    runs-on: ${{ matrix.os }}';
+  if (yaml.split(dynamicRunner).length !== 2) return false;
+  // Normalize only this audited fixed matrix. All other unsafe runner
+  // selectors, hidden groups, aliases and expressions remain rejected.
+  return !hasUnapprovedRunnerSelector(yaml.replace(dynamicRunner,
+    '    runs-on: ubuntu-24.04'));
+}
+
+const actorMemoryHosted = readFileSync('.github/workflows/actor-memory-native-aot.yml', 'utf8');
+assert.ok(approvedActorMemoryHostedMatrix('actor-memory-native-aot.yml', actorMemoryHosted),
+  'Expected fixed Linux/Windows hosted actor-memory matrix');
+for (const [mutation, changed] of [
+  ['self-hosted row', actorMemoryHosted.replace('windows-2022', 'self-hosted')],
+  ['dynamic row', actorMemoryHosted.replace('windows-2022', '${{ vars.RUNNER }}')],
+  ['extra row', actorMemoryHosted.replace(
+    '    runs-on: ${{ matrix.os }}',
+    '          - os: self-hosted\n            rid: linux-x64\n            binary: probe\n    runs-on: ${{ matrix.os }}')],
+  ['dynamic runner', actorMemoryHosted.replace(
+    'runs-on: ${{ matrix.os }}', 'runs-on: ${{ github.event.inputs.runner }}')],
+  ['extra job', actorMemoryHosted +
+    '\n  attacker:\n    runs-on: [self-hosted, Linux]\n    steps: []\n'],
+  ['variable matrix', actorMemoryHosted.replace(
+    '        include:', '        os: [ubuntu-latest, self-hosted]\n        include:')],
+]) {
+  assert.ok(!approvedActorMemoryHostedMatrix('actor-memory-native-aot.yml', changed),
+    'Untrusted actor-memory runner mutation admitted: ' + mutation);
+}
+assert.ok(!approvedActorMemoryHostedMatrix('other-workflow.yml', actorMemoryHosted));
+
 for (const selector of [
   'runs-on: [ubuntu-latest, self-hosted]',
   'runs-on : self-hosted',
@@ -213,7 +262,8 @@ const allowed = new Set(['trusted-source-local-linux-aot.yml',
 for (const name of readdirSync('.github/workflows').filter(x => /\.ya?ml$/.test(x))) {
   const yaml = readFileSync('.github/workflows/' + name, 'utf8');
   if (!allowed.has(name)) {
-    assert.ok(!hasUnapprovedRunnerSelector(yaml),
+    assert.ok(!hasUnapprovedRunnerSelector(yaml) ||
+      approvedActorMemoryHostedMatrix(name, yaml),
       'Nontrusted workflow has unproven runner selector: ' + name);
   } else {
     assert.equal((yaml.match(/^\s+runs-on:/gm) ?? []).length, 1,
