@@ -79,6 +79,34 @@ A separate, source-free .NET 10 SDK/NativeAOT carrier probe was created in
 run `40749652387` failed with zero executed steps, so this carrier did not
 demonstrate runner or SDK capacity. No Oreslang private source was mirrored.
 
+### Verified source-free .NET toolchain, remaining QUIC provider failure
+
+On 2026-10-28 the **independent, source-free** probe in
+`beamscale/bmscl-compiler` PR #63 executed .NET 10 compilation and Linux
+x64 Native AOT publish/run successfully on the same exact public API surface.
+Run `40750819089` completed successfully with **six executed steps**.
+However both managed and Native AOT probes printed
+`MSQUIC_UNAVAILABLE` from `QuicConnection.IsSupported`. Per official .NET
+documentation Linux requires the separate `libmsquic` native package (and
+TLS 1.3 support). A green Native AOT compile does **not** prove a
+QUIC/TLS handshake. Install/review the native dependency from an approved
+source before attempting real peer interoperability.
+
+The source-owned issuer was additionally hardened to snapshot IP address
+**bytes before classification**. This prevents mutable legacy `IPAddress`
+address/scope values from changing the authorization between validation and
+connection. Adversarial tests cover iterator/index disagreement, changed
+IP address values, scoped IPv6 mutations and single-use consumption.
+The native .NET adapter uses an explicit Linux/Windows/macOS fail-closed
+runtime guard and a **narrow** CA1416 suppression only within the guarded
+MsQuic implementation; the .NET 10 source-free probe verified that an
+unannotated OS-disjunction guard does not, by itself, suppress all analyzer
+warnings in a warnings-as-errors build.
+
+None of these source changes have been built or executed on their own exact
+PR tree; source org Actions remain zero-step and the Beamscale destination
+is unprotected/unapproved for private-source transfer.
+
 ## Exact-head acceptance gates
 
 - Compile and run `tools/Ores.Net.QuicAdmissionChecks` on .NET 10, with
