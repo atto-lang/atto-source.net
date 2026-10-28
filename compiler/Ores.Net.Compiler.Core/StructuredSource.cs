@@ -25,8 +25,12 @@ public sealed record StructuredBinary(int At, StructuredOperator Operator,
     StructuredExpr Left, StructuredExpr Right, IrValueType ResultType)
     : StructuredExpr(At, ResultType);
 public abstract record StructuredStmt(int Offset);
+// Compile-time const, single-assignment val, and mutable let are distinct
+// source bindings; the experimental structured AST preserves that distinction.
+public enum StructuredBindingKind { Let, Val, Const }
 public sealed record StructuredLet(int At, string Name, IrValueType ValueType,
-    StructuredExpr Initializer) : StructuredStmt(At);
+    StructuredExpr Initializer, StructuredBindingKind Kind = StructuredBindingKind.Let)
+    : StructuredStmt(At);
 public sealed record StructuredSet(int At, string Name, StructuredExpr Value)
     : StructuredStmt(At);
 public sealed record StructuredReturn(int At, StructuredExpr Value) : StructuredStmt(At);
@@ -246,7 +250,9 @@ public static class OresStructuredParser
 
     private sealed class Reader(List<Token> tokens)
     {
-        private readonly List<Dictionary<string, IrValueType>> scopes = new();
+        private sealed record LocalBinding(IrValueType Type, StructuredBindingKind Kind,
+            long? ConstantValue);
+        private readonly List<Dictionary<string, LocalBinding>> scopes = new();
         private readonly Dictionary<string, StructuredFunction> functions =
             new(StringComparer.Ordinal);
         private readonly List<string> functionOrder = new();
@@ -326,7 +332,7 @@ public static class OresStructuredParser
                 if (Current.Text == "(")
                     throw Error("Tuple-v2 shorthand parameter requires typed tuple ownership/ABI lowering");
                 var parameters = new List<StructuredParameter>();
-                var parameterTypes = new Dictionary<string, IrValueType>(StringComparer.Ordinal);
+                var parameterTypes = new Dictionary<string, LocalBinding>(StringComparer.Ordinal);
                 if (Current.Text != ")")
                 {
                     do
@@ -335,7 +341,8 @@ public static class OresStructuredParser
                             throw Error("Typed helper parameter budget exceeded");
                         IrValueType type = Type();
                         string parameter = Name();
-                        if (!parameterTypes.TryAdd(parameter, type))
+                        if (!parameterTypes.TryAdd(parameter,
+                            new LocalBinding(type, StructuredBindingKind.Val, null)))
                             throw Error("Duplicate typed helper parameter");
                         parameters.Add(new StructuredParameter(parameter, type));
                     }
@@ -384,7 +391,7 @@ public static class OresStructuredParser
         {
             Budget(depth);
             Expect("{");
-            scopes.Add(new Dictionary<string, IrValueType>(StringComparer.Ordinal));
+            scopes.Add(new Dictionary<string, LocalBinding>(StringComparer.Ordinal));
             var body = new List<StructuredStmt>();
             bool terminated = false;
             while (Current.Text != "}")
@@ -413,8 +420,15 @@ public static class OresStructuredParser
                 Expect(";");
                 return (new StructuredReturn(at, value), true);
             }
-            if (Take("let"))
+            if (Current.Text is "let" or "val" or "const")
             {
+                StructuredBindingKind kind = Current.Text switch
+                {
+                    "let" => StructuredBindingKind.Let,
+                    "val" => StructuredBindingKind.Val,
+                    _ => StructuredBindingKind.Const
+                };
+                index++;
                 var type = Type();
                 int nameAt = Current.Offset;
                 string name = Name();
@@ -423,10 +437,23 @@ public static class OresStructuredParser
                 Expect("=");
                 var initializer = Expr(depth + 1);
                 Require(initializer, type, "Local initializer has wrong type");
+                long? constantValue = null;
+                if (kind == StructuredBindingKind.Const)
+                {
+                    try { constantValue = ConstantValue(initializer); }
+                    catch (OverflowException)
+                    {
+                        throw new FormatException(
+                            $"Compile-time const overflow at offset {initializer.Offset}");
+                    }
+                    initializer = type == IrValueType.Bool
+                        ? new StructuredBool(initializer.Offset, constantValue.Value != 0)
+                        : new StructuredInt(initializer.Offset, constantValue.Value);
+                }
                 Expect(";");
                 // Bind only after checking initializer (no self-reference).
-                scopes[^1].Add(name, type);
-                return (new StructuredLet(at, name, type, initializer), false);
+                scopes[^1].Add(name, new LocalBinding(type, kind, constantValue));
+                return (new StructuredLet(at, name, type, initializer, kind), false);
             }
             if (Take("if"))
             {
@@ -449,10 +476,13 @@ public static class OresStructuredParser
             }
             int variableAt = Current.Offset;
             string variable = Name();
-            var typeOfVariable = Lookup(variable, variableAt);
+            var binding = Lookup(variable, variableAt);
+            if (binding.Kind != StructuredBindingKind.Let)
+                throw new FormatException(
+                    $"Cannot reassign {binding.Kind.ToString().ToLowerInvariant()} binding '{variable}' at offset {variableAt}");
             Expect("=");
             var assigned = Expr(depth + 1);
-            Require(assigned, typeOfVariable, "Assignment has wrong type");
+            Require(assigned, binding.Type, "Assignment has wrong type");
             Expect(";");
             return (new StructuredSet(at, variable, assigned), false);
         }
@@ -471,16 +501,46 @@ public static class OresStructuredParser
                 !name.Skip(1).All(c => Alpha(c) || Digit(c) || c == '_') ||
                 name is "if" or "else" or "while" or "return" or "let"
                     or "int" or "bool" or "true" or "false"
-                    or "define" or "pub" or "fnc" or "const" or "final")
+                    or "define" or "pub" or "fnc" or "const" or "val" or "final")
                 throw new FormatException($"Invalid identifier at offset {at}");
             index++;
             return name;
         }
-        private IrValueType Lookup(string name, int at)
+        private LocalBinding Lookup(string name, int at)
         {
             for (int i = scopes.Count - 1; i >= 0; i--)
-                if (scopes[i].TryGetValue(name, out var type)) return type;
+                if (scopes[i].TryGetValue(name, out var binding)) return binding;
             throw new FormatException($"Undefined local '{name}' at offset {at}");
+        }
+
+        // This closed scalar subset evaluates const initializers at admission
+        // time with checked i64 semantics. Calls and runtime locals fail closed.
+        private static long ConstantValue(StructuredExpr expression)
+        {
+            switch (expression)
+            {
+                case StructuredInt intLiteral: return intLiteral.Value;
+                case StructuredBool boolLiteral: return boolLiteral.Value ? 1L : 0L;
+                case StructuredNegate negate:
+                    return checked(-ConstantValue(negate.Value));
+                case StructuredBinary binary:
+                    long left = ConstantValue(binary.Left);
+                    long right = ConstantValue(binary.Right);
+                    return binary.Operator switch
+                    {
+                        StructuredOperator.Add => checked(left + right),
+                        StructuredOperator.Subtract => checked(left - right),
+                        StructuredOperator.Multiply => checked(left * right),
+                        StructuredOperator.EqualI64 => left == right ? 1L : 0L,
+                        StructuredOperator.NotEqualI64 => left != right ? 1L : 0L,
+                        StructuredOperator.LessThanI64 => left < right ? 1L : 0L,
+                        _ => throw new FormatException(
+                            $"Unsupported const operator at offset {binary.Offset}")
+                    };
+                default:
+                    throw new FormatException(
+                        $"const initializer must be a compile-time scalar at offset {expression.Offset}");
+            }
         }
         private StructuredExpr Expr(int depth) => Equal(depth + 1);
         private StructuredExpr Equal(int depth)
@@ -643,7 +703,15 @@ public static class OresStructuredParser
                 expressionHeights.Add(node, height);
                 return node;
             }
-            return new StructuredRead(offset, name, Lookup(name, offset));
+            var binding = Lookup(name, offset);
+            if (binding.Kind == StructuredBindingKind.Const)
+            {
+                long constant = binding.ConstantValue!.Value;
+                return binding.Type == IrValueType.Bool
+                    ? new StructuredBool(offset, constant != 0)
+                    : new StructuredInt(offset, constant);
+            }
+            return new StructuredRead(offset, name, binding.Type);
         }
         private static void Require(StructuredExpr expression,
             IrValueType expected, string reason)
