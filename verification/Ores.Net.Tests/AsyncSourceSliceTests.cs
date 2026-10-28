@@ -203,13 +203,25 @@ internal static class AsyncSourceSliceTests
         {
             var scope = new OresTaskScope(64, 64);
             var admitted = new System.Collections.Concurrent.ConcurrentBag<OresTask<long>>();
+            var started = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource<long>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            admitted.Add(scope.Start(async _ =>
+            {
+                started.TrySetResult();
+                return await release.Task.ConfigureAwait(false);
+            }));
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(10));
             var closing = Task.Run(async () => await scope.DisposeAsync());
             Parallel.For(0, 128, i =>
             {
                 try { admitted.Add(scope.Start(_ => ValueTask.FromResult((long)i))); }
                 catch (InvalidOperationException) { }
             });
+            release.TrySetResult(42L);
             await closing.WaitAsync(TimeSpan.FromSeconds(10));
+            Require(admitted.Count >= 1, "admission/close test must include live work");
             foreach (var handle in admitted)
                 Require((await handle.Retirement).ProducerId == handle.ProducerId,
                     "accepted producer was lost at concurrent shutdown");
