@@ -380,6 +380,15 @@ test("strict Linux mandatory named stages exactly match the committed workflow",
   }
 });
 
+test("trusted source-local receipt records workflow SHA and ref, not triggering SHA",()=> {
+  const record=linuxSource.split("      - name: Record source tree and released executable SHA-256 identities\n")[1]
+    ?.split("      - name: Upload bounded source-local Native AOT receipt")[0];
+  assert.ok(record,"source-local receipt step must exist");
+  assert.ok(record.includes("workflow_sha=%s\\nworkflow_ref=%s"));
+  assert.ok(record.includes('"$GITHUB_REPOSITORY" "$GITHUB_WORKFLOW_SHA" "$GITHUB_WORKFLOW_REF"'));
+  assert.ok(!record.includes('"$GITHUB_REPOSITORY" "$GITHUB_SHA" "$GITHUB_REF"'));
+});
+
 test("trusted manual Linux runner requires preapproved workflow-file SHA before allocation",()=> {
   const local=linuxSource.split("  linux-x64-approved-source-local:\n")[1];
   assert.ok(local,"source-local runner job exists");

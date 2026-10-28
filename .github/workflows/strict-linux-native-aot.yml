@@ -294,7 +294,7 @@ jobs:
           test "$(git rev-parse 'HEAD^{tree}')" = "$APPROVED_TREE"
           mkdir -p artifacts/evidence
           {
-            printf 'repository=%s\nworkflow_sha=%s\nworkflow_ref=%s\ntested_source_head=%s\ntested_root_tree=%s\nrun_id=%s\nrun_attempt=%s\ntarget_rid=linux-x64\n' "$GITHUB_REPOSITORY" "$GITHUB_SHA" "$GITHUB_REF" "$APPROVED_HEAD" "$APPROVED_TREE" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+            printf 'repository=%s\nworkflow_sha=%s\nworkflow_ref=%s\ntested_source_head=%s\ntested_root_tree=%s\nrun_id=%s\nrun_attempt=%s\ntarget_rid=linux-x64\n' "$GITHUB_REPOSITORY" "$GITHUB_WORKFLOW_SHA" "$GITHUB_WORKFLOW_REF" "$APPROVED_HEAD" "$APPROVED_TREE" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
             sha256sum artifacts/compiler/linux-x64/oresnet artifacts/apps/linux-x64/oreslang-app artifacts/parity/linux-x64/oreslang-app artifacts/parity-precedence/linux-x64/oreslang-app artifacts/structured/linux-x64/oreslang-app
           } > artifacts/evidence/source-local-linux-sha256.txt
       - name: Upload bounded source-local Native AOT receipt
