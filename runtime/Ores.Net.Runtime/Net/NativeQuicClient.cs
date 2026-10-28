@@ -3,6 +3,7 @@ using System.Net.Quic;
 using System.Net.Security;
 using System.Security.Authentication;
 using System.Security;
+using System.Runtime.Versioning;
 
 namespace Ores.Net.Runtime.Net;
 
@@ -18,13 +19,26 @@ internal static class NativeQuicClient
     private const int MaxInboundUniStreams = 8;
     private static readonly SslApplicationProtocol Http3Alpn = new("h3");
 
-    internal static bool IsSupported => QuicConnection.IsSupported;
+    internal static bool IsSupported
+    {
+        get
+        {
+            // Query the native provider only inside an OS recognized by the
+            // platform analyzer. Other platforms fail closed.
+            if (OperatingSystem.IsLinux()) return QuicConnection.IsSupported;
+            if (OperatingSystem.IsWindows()) return QuicConnection.IsSupported;
+            if (OperatingSystem.IsMacOS()) return QuicConnection.IsSupported;
+            return false;
+        }
+    }
 
     // The return type itself is OS-specific and CA1416 flags it even
     // though the public naked-endpoint overload fails closed and the
     // permit overload checks OS/provider support before native admission.
-#pragma warning disable CA1416
     /// <summary>HTTP/3 ALPN over QUIC/UDP; no HTTP/2 or TCP fallback.</summary>
+    [SupportedOSPlatform("linux")]
+    [SupportedOSPlatform("windows")]
+    [SupportedOSPlatform("osx")]
     internal static ValueTask<QuicConnection> ConnectHttp3Async(
         IPEndPoint pinnedAuthorizedAddress,
         string canonicalDnsName,
@@ -44,6 +58,9 @@ internal static class NativeQuicClient
     /// single-use permit can authorize LOOPBACK destinations only. This is
     /// not a guest feature and must not be widened to arbitrary egress.
     /// </summary>
+    [SupportedOSPlatform("linux")]
+    [SupportedOSPlatform("windows")]
+    [SupportedOSPlatform("osx")]
     internal static async ValueTask<QuicConnection> ConnectHttp3Async(
         QuicLoopbackPermit permit,
         ulong actorId,
@@ -65,7 +82,6 @@ internal static class NativeQuicClient
             admitted.Remaining, deadline.Token).ConfigureAwait(false);
     }
 
-#pragma warning restore CA1416
 
     /// <summary>
     /// QUIC transport for an explicitly selected application ALPN.
@@ -76,7 +92,9 @@ internal static class NativeQuicClient
     // CA1416 cannot prove a disjunction covering Linux, Windows and macOS.
     // The explicit fail-closed OS guard below is authoritative; suppress
     // the analyzer only inside this guarded native QUIC implementation.
-#pragma warning disable CA1416
+    [SupportedOSPlatform("linux")]
+    [SupportedOSPlatform("windows")]
+    [SupportedOSPlatform("osx")]
     private static async ValueTask<QuicConnection> ConnectUncheckedAfterPolicyAsync(
         IPEndPoint pinnedAuthorizedAddress,
         string canonicalDnsName,
@@ -152,7 +170,6 @@ internal static class NativeQuicClient
         }
     }
 
-#pragma warning restore CA1416
 
     internal static void ValidateEndpoint(
         IPEndPoint pinnedAuthorizedAddress,

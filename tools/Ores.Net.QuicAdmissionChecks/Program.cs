@@ -42,13 +42,23 @@ try
 catch (OperationCanceledException) { }
 
 // No network is opened: naked inputs MUST NOT bypass missing egress permits.
-try
+// The QUIC entrypoint is annotated for Linux/Windows/macOS; guard its caller
+// too, so CA1416 remains a warnings-as-errors gate on all target RIDs.
+if (OperatingSystem.IsLinux() || OperatingSystem.IsWindows() ||
+    OperatingSystem.IsMacOS())
 {
-    NativeQuicClient.ConnectHttp3Async(endpoint, "origin.example", token)
-        .AsTask().GetAwaiter().GetResult();
-    throw new Exception("Missing egress permit bypassed");
+    try
+    {
+        NativeQuicClient.ConnectHttp3Async(endpoint, "origin.example", token)
+            .AsTask().GetAwaiter().GetResult();
+        throw new Exception("Missing egress permit bypassed");
+    }
+    catch (SecurityException) { }
 }
-catch (SecurityException) { }
+else if (NativeQuicClient.IsSupported)
+{
+    throw new Exception("Unsupported OS unexpectedly advertises native QUIC");
+}
 
 
 static void MustDeny(Action action, string label)
@@ -172,15 +182,19 @@ try
 }
 catch (TimeoutException) { }
 
-using var cancelledPermitConnect = new CancellationTokenSource();
-cancelledPermitConnect.Cancel();
-try
+if (OperatingSystem.IsLinux() || OperatingSystem.IsWindows() ||
+    OperatingSystem.IsMacOS())
 {
-    NativeQuicClient.ConnectHttp3Async(
-        Issue(), 42, 7, cancelledPermitConnect.Token).AsTask().GetAwaiter().GetResult();
-    throw new InvalidOperationException("Cancelled permit connect admitted");
+    using var cancelledPermitConnect = new CancellationTokenSource();
+    cancelledPermitConnect.Cancel();
+    try
+    {
+        NativeQuicClient.ConnectHttp3Async(
+            Issue(), 42, 7, cancelledPermitConnect.Token).AsTask().GetAwaiter().GetResult();
+        throw new InvalidOperationException("Cancelled permit connect admitted");
+    }
+    catch (OperationCanceledException) { }
 }
-catch (OperationCanceledException) { }
 
 // No network is opened in this admission test. It is not QUIC/HTTP3 interop.
 Console.WriteLine("QUIC host admission and single-use loopback permit checks passed; interop not asserted");
