@@ -1,5 +1,8 @@
 using System;
 using System.Buffers.Binary;
+using System.Globalization;
+using System.IO;
+using System.Text.Json;
 using System.Numerics;
 using Ores.Net.Runtime;
 
@@ -21,6 +24,7 @@ static class StrictSigned64ArithmeticSelfTest
 
     public static void Run()
     {
+        CheckPortableContractFixture();
         Require(StrictSigned64Arithmetic.Rem(-9, 4) == -1, "negative remainder");
         Require(StrictSigned64Arithmetic.Mod(-9, 4) == 3, "positive modulus");
         Require(StrictSigned64Arithmetic.Mod(-9, -4) == 3, "negative divisor modulus");
@@ -65,4 +69,58 @@ static class StrictSigned64ArithmeticSelfTest
                 "random signed XOR #" + i);
         }
     }
+    private static long Signed(JsonElement element) =>
+        long.Parse(element.GetString()!, CultureInfo.InvariantCulture);
+
+    private static void CheckPortableContractFixture()
+    {
+        string path = Path.Combine(AppContext.BaseDirectory,
+            "strict-named-integer-arithmetic-v1.json");
+        using var document = JsonDocument.Parse(File.ReadAllText(path));
+        JsonElement root = document.RootElement;
+        Require(root.GetProperty("contract").GetString() ==
+            "oreslang.strict-named-integer-arithmetic.v1", "contract identity");
+        var cases = root.GetProperty("cases");
+        Require(cases.GetArrayLength() == 26, "26 contract vectors");
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        foreach (JsonElement item in cases.EnumerateArray())
+        {
+            string id = item.GetProperty("id").GetString()!;
+            Require(ids.Add(id), "duplicate vector id: " + id);
+            long a = Signed(item.GetProperty("left"));
+            long b = Signed(item.GetProperty("right"));
+            string operation = item.GetProperty("operation").GetString()!;
+            JsonElement expected = item.GetProperty("expect");
+            Func<long> execute = operation switch
+            {
+                "rem" => () => StrictSigned64Arithmetic.Rem(a, b),
+                "mod" => () => StrictSigned64Arithmetic.Mod(a, b),
+                "pow" => () => StrictSigned64Arithmetic.Pow(a, b),
+                "bit_xor" => () => StrictSigned64Arithmetic.BitXor(a, b),
+                _ => throw new Exception("unknown signed64 operation: " + operation)
+            };
+
+            if (!expected.TryGetProperty("error", out var error))
+            {
+                Require(execute() == Signed(expected.GetProperty("value")),
+                    "incorrect signed64 result: " + id);
+                continue;
+            }
+            switch (error.GetString())
+            {
+                case "DIVISOR_ZERO":
+                    Expect<DivideByZeroException>(() => _ = execute(), id);
+                    break;
+                case "OVERFLOW":
+                    Expect<OverflowException>(() => _ = execute(), id);
+                    break;
+                case "NEGATIVE_EXPONENT":
+                    Expect<ArgumentOutOfRangeException>(() => _ = execute(), id);
+                    break;
+                default:
+                    throw new Exception("unrecognized signed64 failure contract " + id);
+            }
+        }
+    }
+
 }
