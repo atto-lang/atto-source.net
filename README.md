@@ -283,9 +283,14 @@ default `main` branch **before** enabling it. Set the non-secret GitHub
 Actions repository variables `ORESLANG_NET_SELFHOSTED_LINUX=enabled`,
 `ORESLANG_NET_SELFHOSTED_LINUX_SHA=<exact reviewed source commit SHA>`, and
 `ORESLANG_NET_SELFHOSTED_LINUX_TREE=<its verified 40-hex root Git tree>`.
-Then use **Run workflow** on this workflow's `main` revision. A
-`pull_request` event can never allocate this self-hosted runner:
-unreviewed PR-controlled workflow YAML must not be a runner authority.
+Then select **Trusted .NET Linux Native AOT (source-local exact SHA)**
+in Actions and use **Run workflow** on the protected `main` revision.
+The trusted runner is defined in the separate
+`.github/workflows/trusted-source-local-linux-aot.yml`, which has only a
+`workflow_dispatch` trigger. The ordinary `strict-linux-native-aot.yml`
+workflow still accepts `pull_request` events but has **no self-hosted job**;
+a pull request can neither edit that trusted runner's dispatched main
+workflow nor schedule the private runner directly.
 The manually dispatched default-branch workflow first validates immutable
 SHA/tree controls, then checks out the reviewed commit from this same repo
 and validates the actual root tree **before executing source code**.
