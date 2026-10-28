@@ -9,8 +9,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: native-aot-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Keep the tested exact SHA alive through the final Native AOT receipt.
+  # Separate manual/push/PR events; queue newer commits, never cancel a runner.
+  group: native-aot-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   windows-x64:
