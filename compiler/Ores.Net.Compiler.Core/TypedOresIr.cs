@@ -15,7 +15,8 @@ public enum IrOpcode
     CheckedSubtract,
     CheckedMultiply,
     CheckedDivide,
-    SignedRemainderLiteral
+    SignedRemainderLiteral,
+    NamedBitXor
 }
 
 /// <summary>
@@ -101,7 +102,8 @@ public static class OresIrVerifier
             {
                 if (instruction.Opcode is not (IrOpcode.CheckedAdd or
                     IrOpcode.CheckedSubtract or IrOpcode.CheckedMultiply or
-                    IrOpcode.CheckedDivide or IrOpcode.SignedRemainderLiteral))
+                    IrOpcode.CheckedDivide or IrOpcode.SignedRemainderLiteral or
+                    IrOpcode.NamedBitXor))
                     throw new FormatException("Unknown IR opcode");
 
                 if (instruction.Constant.HasValue ||
@@ -203,6 +205,15 @@ public static class OresIrLowering
                             Constant(0), operand));
                         break;
                     }
+                    case NamedBitXor:
+                    {
+                        if (results.Count < 2)
+                            throw new FormatException("IR named XOR operand underflow");
+                        int right = results.Pop();
+                        int left = results.Pop();
+                        results.Push(EmitBinary(IrOpcode.NamedBitXor, left, right));
+                        break;
+                    }
                     case Binary binary:
                     {
                         if (results.Count < 2)
@@ -237,6 +248,11 @@ public static class OresIrLowering
                     case Unary { Operator: '+' or '-' } unary:
                         pending.Push(new Pending(node, true));
                         pending.Push(new Pending(unary.Value, false));
+                        break;
+                    case NamedBitXor named:
+                        pending.Push(new Pending(named, true));
+                        pending.Push(new Pending(named.Right, false));
+                        pending.Push(new Pending(named.Left, false));
                         break;
                     case Binary binary when binary.Operator is '+' or '-' or '*' or '/' or '%':
                         pending.Push(new Pending(binary, true));
