@@ -112,18 +112,59 @@ const stagesFence = ['Authorize protected-main Windows fence snapshot before che
  'Execute 16 independent bounded race-stress rounds'].map(s => fenceTrusted.indexOf(s));
 assert.ok(stagesFence.every(x => x >= 0));
 assert.ok(stagesFence.every((x,i) => i === 0 || x > stagesFence[i-1]));
-// Other workflows must not allocate a self-hosted runner. Runner-group
-// administration must separately restrict access to trusted workflow paths.
+// Every ordinary workflow must use a literal GitHub-hosted runner label.
+// The previous scanner missed mixed inline lists (e.g. [ubuntu-latest,
+// self-hosted]) and expression-based selectors that could resolve at runtime.
+// Reject all unproven selectors, not only a few self-hosted spellings.
+const hostedRunnerLabel = /^(?:ubuntu|windows|macos)-(?:latest|\d+(?:\.\d+)?(?:-arm)?)$/;
+function hasUnapprovedRunnerSelector(yaml) {
+  for (const line of yaml.split(/\r?\n/)) {
+    if (/^\s*#/.test(line)) continue;
+    const match = line.match(/^\s*runs-on:\s*(.*?)\s*$/);
+    if (!match) continue;
+    const value = match[1].replace(/\s+#.*$/, '').trim();
+    if (!hostedRunnerLabel.test(value)) return true;
+  }
+  return false;
+}
+for (const selector of [
+  'runs-on: [ubuntu-latest, self-hosted]',
+  'runs-on: [self-hosted, Linux]',
+  'runs-on: { group: attacker, labels: [self-hosted] }',
+  'runs-on: ${{ matrix.runner }}',
+  'runs-on: ${{ fromJSON(inputs.runner) }}',
+  'runs-on: self-hosted',
+  'runs-on:\n      group: attacker\n      labels: [self-hosted, Linux]',
+]) {
+  assert.equal(hasUnapprovedRunnerSelector(selector), true,
+    'unsafe runner selector bypassed inventory: ' + selector);
+}
+for (const selector of [
+  'runs-on: ubuntu-24.04',
+  'runs-on: ubuntu-latest',
+  'runs-on: windows-2022',
+  'runs-on: macos-latest',
+  'runs-on: ubuntu-latest # hosted runner',
+]) {
+  assert.equal(hasUnapprovedRunnerSelector(selector), false,
+    'literal hosted runner incorrectly rejected: ' + selector);
+}
+// Runner-group administration must separately restrict access to these exact
+// reviewed workflow paths at @refs/heads/main. Static tests cannot replace it.
 const allowed = new Set(['trusted-source-local-linux-aot.yml',
- 'trusted-source-local-windows-aot.yml', 'trusted-source-local-fence-windows.yml']);
+  'trusted-source-local-windows-aot.yml', 'trusted-source-local-fence-windows.yml']);
 for (const name of readdirSync('.github/workflows').filter(x => /\.ya?ml$/.test(x))) {
- const yaml = readFileSync('.github/workflows/' + name, 'utf8');
- const selectsPrivateRunner =
-   /^\s+runs-on:\s*(?:self-hosted\b|\[\s*self-hosted\b)/m.test(yaml) ||
-   /^\s+group:\s*oreslang-net-aot-trusted\s*$/m.test(yaml) ||
-   /^\s+labels:\s*\[\s*self-hosted\b/m.test(yaml);
- if (!allowed.has(name)) assert.ok(!selectsPrivateRunner, 'PR workflow allocated self-hosted runner: ' + name);
- else assert.equal((yaml.match(/^on:\n((?:  [a-z_]+:\n)+)/m) ?? [])[1],
-                   '  workflow_dispatch:\n', 'Unsafe trusted workflow event: ' + name);
+  const yaml = readFileSync('.github/workflows/' + name, 'utf8');
+  if (!allowed.has(name)) {
+    assert.ok(!hasUnapprovedRunnerSelector(yaml),
+      'Nontrusted workflow has unproven runner selector: ' + name);
+  } else {
+    assert.equal((yaml.match(/^\s+runs-on:/gm) ?? []).length, 1,
+      'Trusted workflow has extra runner allocation: ' + name);
+    assert.equal((yaml.match(/^\s+group:\s*oreslang-net-aot-trusted\s*$/gm) ?? []).length, 1,
+      'Trusted workflow runner group count changed: ' + name);
+    assert.equal((yaml.match(/^on:\n((?:  [a-z_]+:\n)+)/m) ?? [])[1],
+      '  workflow_dispatch:\n', 'Unsafe trusted workflow event: ' + name);
+  }
 }
 console.log('TRUSTED_SOURCE_LOCAL_AOT_WORKFLOW_CONTRACT_PASSED');
