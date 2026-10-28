@@ -77,6 +77,14 @@ internal static class NativeQuicClient
         ValidateEndpoint(pinnedAuthorizedAddress, canonicalDnsName,
                          applicationProtocol, cancellationToken);
 
+        // .NET QUIC is supported on these OS families only. Keep this guard
+        // explicit for the platform-compatibility analyzer (CA1416) as well
+        // as for runtime safety; IsSupported alone is not an OS predicate.
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsWindows() &&
+            !OperatingSystem.IsMacOS())
+            throw new PlatformNotSupportedException(
+                "QUIC requires supported Linux, Windows, or macOS native runtime");
+
         if (!IsSupported)
             throw new PlatformNotSupportedException(
                 "Native QUIC provider unavailable; HTTP/2 fallback is forbidden");
