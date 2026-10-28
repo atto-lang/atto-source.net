@@ -26,6 +26,31 @@ try {
     }
     Write-Output 'NET_ASYNC_CIL_REJECTED; exit=1; assembly_exists=false'
 
+    # The updated main branch also exposes experimental structured and source
+    # emission commands. None may bypass the Task/Future fail-closed gate.
+    $modes = @('check', 'check-structured', 'compile-structured', 'emit-csharp', 'emit-fsharp')
+    foreach ($mode in $modes) {
+        $outFile = switch ($mode) {
+            'compile-structured' { Join-Path $root 'OresGenerated.dll' }
+            'emit-csharp' { Join-Path $root 'OresProgram.cs' }
+            'emit-fsharp' { Join-Path $root 'OresProgram.fs' }
+            default { $null }
+        }
+        $cmdArgs = if ($null -eq $outFile) {
+            @($mode, $file)
+        } else {
+            @($mode, $file, '--out', $outFile)
+        }
+        $rejection = & $Compiler @cmdArgs 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 1 -or
+            $rejection -cnotmatch 'oresnet:' -or
+            ($null -ne $outFile -and (Test-Path -LiteralPath $outFile))) {
+            throw "Unverified async source admitted through $mode: exit=$LASTEXITCODE output=$rejection"
+        }
+    }
+    Write-Output 'NET_ASYNC_ADDITIONAL_COMMANDS_REJECTED; cases=5; artifacts=false'
+
+
     # Negative grammar/effect checks must reject instead of executing an
     # unsupported alias, type mismatch, expression, or actor callback.
     foreach ($invalid in @(
