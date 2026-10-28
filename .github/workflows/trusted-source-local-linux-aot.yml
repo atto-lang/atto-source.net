@@ -25,9 +25,13 @@ jobs:
       github.ref_protected == true &&
       github.repository == 'ores-truffle-oreslang/oreslang-source.net' &&
       github.repository_id == '1419704375' &&
+      github.workflow_ref == 'ores-truffle-oreslang/oreslang-source.net/.github/workflows/trusted-source-local-linux-aot.yml@refs/heads/main' &&
       vars.ORESLANG_NET_SELFHOSTED_LINUX == 'enabled' &&
       vars.ORESLANG_NET_SELFHOSTED_LINUX_SHA != '' &&
       vars.ORESLANG_NET_SELFHOSTED_LINUX_TREE != ''
+    # This dedicated runner group MUST be administrator-restricted to the
+    # three approved source-local workflows at refs/heads/main; a label alone is not a
+    # security boundary against another workflow targeting the runner.
     runs-on:
       group: oreslang-net-aot-trusted
       labels: [self-hosted, Linux, X64, oreslang-net-aot]
@@ -47,6 +51,7 @@ jobs:
           test "$GITHUB_REF_PROTECTED" = true
           test "$GITHUB_REPOSITORY" = ores-truffle-oreslang/oreslang-source.net
           test "$GITHUB_REPOSITORY_ID" = 1419704375
+          test "$GITHUB_WORKFLOW_REF" = ores-truffle-oreslang/oreslang-source.net/.github/workflows/trusted-source-local-linux-aot.yml@refs/heads/main
           [[ "$APPROVED_HEAD" =~ ^[0-9a-f]{40}$ ]]
           [[ "$APPROVED_TREE" =~ ^[0-9a-f]{40}$ ]]
       - name: Check out approved immutable source, not a PR workflow

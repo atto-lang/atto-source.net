@@ -19,6 +19,7 @@ jobs:
       github.ref_protected == true &&
       github.repository == 'ores-truffle-oreslang/oreslang-source.net' &&
       github.repository_id == '1419704375' &&
+      github.workflow_ref == 'ores-truffle-oreslang/oreslang-source.net/.github/workflows/trusted-source-local-windows-aot.yml@refs/heads/main' &&
       vars.ORESLANG_NET_SELFHOSTED_WINDOWS == 'enabled' &&
       vars.ORESLANG_NET_SELFHOSTED_WINDOWS_SHA != '' &&
       vars.ORESLANG_NET_SELFHOSTED_WINDOWS_TREE != ''
@@ -40,7 +41,8 @@ jobs:
               $env:GITHUB_REF -cne 'refs/heads/main' -or
               $env:GITHUB_REF_PROTECTED -cne 'true' -or
               $env:GITHUB_REPOSITORY -cne 'ores-truffle-oreslang/oreslang-source.net' -or
-              $env:GITHUB_REPOSITORY_ID -cne '1419704375') {
+              $env:GITHUB_REPOSITORY_ID -cne '1419704375' -or
+              $env:GITHUB_WORKFLOW_REF -cne 'ores-truffle-oreslang/oreslang-source.net/.github/workflows/trusted-source-local-windows-aot.yml@refs/heads/main' {
             throw 'Untrusted Windows Native AOT workflow'
           }
           if ($env:APPROVED_HEAD -cnotmatch '^[0-9a-f]{40}$' -or

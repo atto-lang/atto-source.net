@@ -281,6 +281,10 @@ set only to
 `ores-truffle-oreslang/oreslang-source.net/.github/workflows/trusted-source-local-linux-aot.yml@refs/heads/main`,
 `ores-truffle-oreslang/oreslang-source.net/.github/workflows/trusted-source-local-windows-aot.yml@refs/heads/main`, and
 `ores-truffle-oreslang/oreslang-source.net/.github/workflows/trusted-source-local-fence-windows.yml@refs/heads/main`.
+The trusted workflow also verifies its own canonical `GITHUB_WORKFLOW_REF`
+against that exact path before checkout. Dispatch concurrency is isolated
+from normal push and PR runs, and a later manual dispatch cannot cancel an
+in-flight, approved Native AOT certification; it queues instead.
 Never register this worker in the default/all-workflows group. Otherwise a
 separately authored pull-request workflow could target the same self-hosted
 labels, bypassing this particular job's guard. Require an independent admin
@@ -300,7 +304,7 @@ default `main` branch **before** enabling it. Set the non-secret GitHub
 Actions repository variables `ORESLANG_NET_SELFHOSTED_LINUX=enabled`,
 `ORESLANG_NET_SELFHOSTED_LINUX_SHA=<exact reviewed source commit SHA>`, and
 `ORESLANG_NET_SELFHOSTED_LINUX_TREE=<its verified 40-hex root Git tree>`.
-Run **Trusted .NET Linux Native AOT (source-local exact SHA)** from protected `main` in Actions. The trusted workflow is `.github/workflows/trusted-source-local-linux-aot.yml` and has **only** a manual `workflow_dispatch` trigger. The ordinary PR workflow has no self-hosted job; only the three protected-main workflows above may access the isolated runner group.
+Run **Trusted .NET Linux Native AOT (source-local exact SHA)** manually from protected `main` via `.github/workflows/trusted-source-local-linux-aot.yml`. The PR-triggered `.github/workflows/strict-linux-native-aot.yml` has no self-hosted job. Only the three selected trusted workflows above may access the isolated runner group.
 The manually dispatched default-branch workflow first validates immutable
 SHA/tree controls, then checks out the reviewed commit from this same repo
 and validates the actual root tree **before executing source code**.

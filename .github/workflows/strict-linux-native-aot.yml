@@ -9,8 +9,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: strict-net-aot-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # A normal main push must never cancel an authorized long-running native proof.
+  group: strict-net-aot-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 jobs:
   linux-x64-compiler-and-app:

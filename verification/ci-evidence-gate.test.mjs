@@ -278,3 +278,59 @@ test('DOP CPU region CI checks out exact source and does not persist credentials
   assert.ok(source.includes("git diff --quiet --exit-code HEAD --"));
   assert.ok(source.includes("git ls-files --others --exclude-standard"));
 });
+
+
+const linuxWorkflow = "Strict .NET Linux x64 Native AOT";
+const linuxExpected = {...e,workflow:linuxWorkflow};
+const linuxSource = readFileSync(new URL("../.github/workflows/strict-linux-native-aot.yml",import.meta.url),"utf8");
+const linuxHosted = linuxSource.split("  linux-x64-compiler-and-app:\n")[1]?.split("  # TRUST BOUNDARY")[0];
+const linuxSteps = [...linuxHosted.matchAll(/^      - name: (.+)$/gm)].map(x=>x[1]);
+const linuxRun = {...run,name:linuxWorkflow};
+const linuxJobs = {total_count:2,jobs:[
+  {name:"linux-x64-compiler-and-app",run_id:e.runId,run_attempt:e.attempt,head_sha:sha,
+    status:"completed",conclusion:"success",steps:linuxSteps.map((name,i)=>({
+      name,number:i+1,status:"completed",conclusion:"success"
+    }))},
+  {name:"linux-x64-approved-source-local",run_id:e.runId,run_attempt:e.attempt,head_sha:sha,
+    status:"completed",conclusion:"skipped"}
+]};
+const linuxVerify = (r,j)=>verifyEvidence(r,j,linuxExpected);
+test("strict Linux exact-head hosted Native AOT passes only with all named executed stages",()=>{
+  assert.equal(linuxSteps.length,10,"expected the exact ten source-owned Linux release stages");
+  assert.deepEqual(linuxVerify(linuxRun,linuxJobs),[]);
+});
+test("strict Linux zero-step runner failure is not certification",()=>{
+  const j=copy(linuxJobs);j.jobs[0].steps=[];
+  assert.match(linuxVerify(linuxRun,j).join(" "),/zero executed steps/);
+});
+test("strict Linux native execution stage cannot be omitted",()=>{
+  const j=copy(linuxJobs);
+  j.jobs[0].steps=j.jobs[0].steps.filter(s=>s.name!=="Execute opt-in structured CFG as linked Linux Native AOT");
+  assert.match(linuxVerify(linuxRun,j).join(" "),/missing successful step/);
+});
+test("strict Linux exact-source receipt stage cannot be omitted",()=>{
+  const j=copy(linuxJobs);
+  j.jobs[0].steps=j.jobs[0].steps.filter(s=>s.name!=="Record exact-head Native AOT execution receipt");
+  assert.match(linuxVerify(linuxRun,j).join(" "),/missing successful step/);
+});
+test("strict Linux skipped optional source-local job cannot disguise missing hosted execution",()=>{
+  const j=copy(linuxJobs);j.jobs.shift();j.total_count=1;
+  assert.match(linuxVerify(linuxRun,j).join(" "),/missing or duplicated/);
+});
+test("strict Linux source-local success needs separate trusted source-tree receipt",()=>{
+  const j=copy(linuxJobs);j.jobs[1].conclusion="success";
+  j.jobs[1].steps=[{name:"Run native tests",number:1,status:"completed",conclusion:"success"}];
+  assert.match(linuxVerify(linuxRun,j).join(" "),/separate independently verified tested-source receipt/);
+});
+test("strict Linux optional skip is bound to the run and attempt",()=>{
+  const j=copy(linuxJobs);j.jobs[1].run_attempt=2;
+  assert.match(linuxVerify(linuxRun,j).join(" "),/different attempt/);
+});
+test("strict Linux mandatory named stages exactly match the committed workflow",()=>{
+  assert.ok(linuxHosted,"source Linux hosted job must exist");
+  assert.equal(linuxSteps.length,10);
+  for(const stage of linuxSteps){
+    const j=copy(linuxJobs);j.jobs[0].steps=j.jobs[0].steps.filter(x=>x.name!==stage);
+    assert.match(linuxVerify(linuxRun,j).join(" "),/missing successful step/,stage);
+  }
+});

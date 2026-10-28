@@ -273,4 +273,15 @@ for (const name of readdirSync('.github/workflows').filter(x => /\.ya?ml$/.test(
     assertManualOnlyTrigger(yaml, 'trusted workflow ' + name);
   }
 }
+for (const [label, source, path] of [
+  ['Linux AOT', trusted, 'ores-truffle-oreslang/oreslang-source.net/.github/workflows/trusted-source-local-linux-aot.yml@refs/heads/main'],
+  ['Windows AOT', trustedWindows, 'ores-truffle-oreslang/oreslang-source.net/.github/workflows/trusted-source-local-windows-aot.yml@refs/heads/main'],
+  ['Windows fence', fenceTrusted, 'ores-truffle-oreslang/oreslang-source.net/.github/workflows/trusted-source-local-fence-windows.yml@refs/heads/main'],
+]) {
+  assert.ok(source.includes("github.workflow_ref == '" + path + "'"), label + ": job-level workflow identity missing");
+  const beforeCheckout = source.slice(0, source.indexOf('uses: actions/checkout@'));
+  assert.ok(beforeCheckout.includes(path), label + ': workflow identity not checked before checkout');
+  assert.ok(source.includes('GITHUB_WORKFLOW_REF'), label + ': executor workflow identity unchecked');
+}
+assert.ok(hosted.includes('github.event_name') && hosted.includes('cancel-in-progress: ${{ github.event_name != \'workflow_dispatch\' }}'), 'source hosted concurrency changed');
 console.log('TRUSTED_SOURCE_LOCAL_AOT_WORKFLOW_CONTRACT_PASSED');

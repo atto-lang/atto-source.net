@@ -5,6 +5,20 @@ import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const requiredByWorkflow = {
+  "Strict .NET Linux x64 Native AOT": {
+    "linux-x64-compiler-and-app": [
+      "Verify exact source checkout",
+      "Install Native AOT toolchain",
+      "Check source scripts and managed compiler regressions",
+      "Compile native compiler and first native application",
+      "Prove second generated source gets its own Native AOT executable",
+      "Execute shared native.precedence and prove three-source isolation",
+      "Execute opt-in structured CFG as linked Linux Native AOT",
+      "Negative test for managed sidecar rejection",
+      "Record exact-head Native AOT execution receipt",
+      "Upload Linux native executables and evidence"
+    ]
+  },
   "Windows Native AOT": {
     "windows-x64": [
       "Assert exact originating-source checkout (Windows)",
@@ -99,8 +113,9 @@ export function verifyEvidence(run, response, expected) {
   fail(Number.isInteger(response.total_count) && response.total_count === jobs.length && jobs.length > 0,
     "jobs list incomplete, empty or paginated");
   const requirements = requiredByWorkflow[expected.workflow] || {};
-  const disabledOptional = job => expected.workflow === "Windows Native AOT" &&
-    job.name === "self-hosted-windows-static-facts" &&
+  const disabledOptional = job =>
+    (expected.workflow === "Windows Native AOT" && job.name === "self-hosted-windows-static-facts" ||
+     expected.workflow === "Strict .NET Linux x64 Native AOT" && job.name === "linux-x64-approved-source-local") &&
     job.status === "completed" && job.conclusion === "skipped";
   const jobNames = new Set();
   for (const job of jobs) {
@@ -154,6 +169,14 @@ export function verifyEvidence(run, response, expected) {
       // This source-local fallback is opt-in; its disabled state must not
       // invalidate successful mandatory hosted Windows and Linux evidence.
       if (disabledOptional(job)) continue;
+      // workflow_dispatch reports the trusted main workflow SHA, not the
+      // separately authorized private source SHA. Its successful isolated
+      // worker must have an independently verified source/tree receipt.
+      if (expected.workflow === "Strict .NET Linux x64 Native AOT" &&
+          job.name === "linux-x64-approved-source-local") {
+        errors.push("source-local dispatch requires a separate independently verified tested-source receipt");
+        continue;
+      }
       fail(job.status==="completed" && job.conclusion==="success",
         `extra job ${job.name} is not successful`);
     }
