@@ -204,13 +204,6 @@ public static class OresStructuredCfgLowering
                 {
                     int left = Expression(binary.Left, block, variables);
                     int right = Expression(binary.Right, block, variables);
-                    // Evaluate the left expression first (including all calls),
-                    // then right; only reverse the already-evaluated SSA IDs.
-                    // This preserves Oreslang eager left-to-right evaluation
-                    // without adding a backend-specific greater-than operator.
-                    if (binary.Operator == StructuredOperator.GreaterThanI64)
-                        return Emit(block, CfgOpcode.LessThanI64, IrValueType.Bool,
-                            left: right, right: left);
                     var opcode = binary.Operator switch
                     {
                         StructuredOperator.Add => CfgOpcode.CheckedAdd,
@@ -219,6 +212,7 @@ public static class OresStructuredCfgLowering
                         StructuredOperator.EqualI64 => CfgOpcode.EqualI64,
                         StructuredOperator.NotEqualI64 => CfgOpcode.NotEqualI64,
                         StructuredOperator.LessThanI64 => CfgOpcode.LessThanI64,
+                        StructuredOperator.GreaterThanI64 => CfgOpcode.GreaterThanI64,
                         _ => throw new FormatException("Unsupported structured operation")
                     };
                     return Emit(block, opcode, binary.Type, left: left, right: right);

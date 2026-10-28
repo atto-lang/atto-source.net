@@ -6,6 +6,7 @@ on:
     paths:
       - 'compiler/**'
       - 'examples/modules/**'
+      - 'library/ores.core/**'
       - 'verification/Ores.Net.Tests/**'
       - 'verification/Ores.Net.ModuleProbe/**'
       - '.github/workflows/source-modules-native-aot.yml'
@@ -97,3 +98,29 @@ jobs:
         with:
           name: source-modules-${{ matrix.rid }}
           path: artifacts/module-app/
+
+      - name: Compile canonical Oreslang core and execute Native AOT
+        shell: pwsh
+        run: |
+          $expected = '3d1d7b77068dd02b3d60b30b72f29a4537a933134ca79e1e81df096dc56f5f33'
+          $actual = (Get-FileHash library/ores.core/numeric.ores -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw 'Canonical core source drift' }
+          if ((git hash-object --no-filters -- library/ores.core/numeric.ores) -ne (git rev-parse 'HEAD:library/ores.core/numeric.ores')) { throw 'Committed core source changed in checkout' }
+          $compiler = Join-Path 'artifacts/module-compiler' 'oresnet${{ matrix.suffix }}'
+          & $compiler compile-modules examples/modules/core-numeric.ores --root examples/modules --out artifacts/native-core-generated/OresGenerated.dll
+          if ($LASTEXITCODE -ne 0) { throw 'Canonical .ores core typed CIL compilation failed' }
+          $generated = (Resolve-Path artifacts/native-core-generated/OresGenerated.dll).Path
+          dotnet clean host/Ores.Net.NativeHost -c Release -r '${{ matrix.rid }}' "-p:GeneratedAssembly=$generated"
+          if ($LASTEXITCODE -ne 0) { throw 'Native host clean failed' }
+          dotnet publish host/Ores.Net.NativeHost -c Release -r '${{ matrix.rid }}' -p:PublishAot=true "-p:GeneratedAssembly=$generated" -o artifacts/native-core-app -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'Native core host publish failed' }
+          $binary = Join-Path 'artifacts/native-core-app' 'oreslang-app${{ matrix.suffix }}'
+          $output = & $binary
+          if ($LASTEXITCODE -ne 0 -or "$output".Trim() -ne '42') { throw 'Canonical native Oreslang module produced wrong output' }
+          @{scope='native-ores-core-numeric-v1'; source_sha256=$actual; source_commit=(git rev-parse HEAD); source_tree=(git rev-parse 'HEAD^{tree}'); rid='${{ matrix.rid }}'; binary_sha256=(Get-FileHash $binary -Algorithm SHA256).Hash.ToLowerInvariant(); output=$output} | ConvertTo-Json | Set-Content artifacts/native-core-app/core-receipt.json
+          $output
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-core-v1-${{ matrix.rid }}
+          path: artifacts/native-core-app/core-receipt.json

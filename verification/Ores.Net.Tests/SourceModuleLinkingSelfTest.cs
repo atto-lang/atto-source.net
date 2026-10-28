@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
 using Mono.Cecil;
 using Ores.Net.Compiler;
 
@@ -37,6 +38,126 @@ internal static class SourceModuleLinkingSelfTest
                 Require(CfgCilTestInterpreter.Evaluate(program.Methods.Single(m => m.Name == "Run")) == 42, "linked CIL executes imported helpers");
                 Require(program.Methods.Count == 5, "CIL has main and independent imported methods");
             }
+            // Link the exact canonical .ores bytes, not a C# core-library rewrite.
+            // First test the identical source through the original relative
+            // linker, then independently through the compiler-owned registry.
+            string canonicalPath = Path.GetFullPath("library/ores.core/numeric.ores");
+            byte[] coreBytes = File.ReadAllBytes(canonicalPath);
+            Require(Convert.ToHexStringLower(SHA256.HashData(coreBytes)) ==
+                "3d1d7b77068dd02b3d60b30b72f29a4537a933134ca79e1e81df096dc56f5f33",
+                "canonical numeric source matches common-source v1");
+            File.WriteAllBytes(Path.Combine(root, "numeric.ores"), coreBytes);
+            Write("main.ores", "import module numeric from \"./numeric\"; pub fnc main():int { " +
+                "return numeric.clamp_int(100, 0, 20) + numeric.max_int(11, 7) + numeric.min_int(11, 17); }");
+            var nativeCore = Compile();
+            Require(nativeCore.Sources.Count == 2, "native core is in executable source graph");
+            Require(nativeCore.Sources.Single(u => u.Path == "0/numeric.ores").Sha256 ==
+                "3d1d7b77068dd02b3d60b30b72f29a4537a933134ca79e1e81df096dc56f5f33",
+                "native .ores digest is in graph witness");
+            Require(nativeCore.Module.Helpers.Count == 3,
+                "numeric functions have three independent compiled CIL methods");
+            string coreAssembly = Path.Combine(root, "NativeCoreGenerated.dll");
+            CilEmitter.EmitLibrary(nativeCore.Module, coreAssembly);
+            using (var image = AssemblyDefinition.ReadAssembly(coreAssembly))
+            {
+                var program = image.MainModule.Types.Single(t => t.Name == "OresProgram");
+                Require(CfgCilTestInterpreter.Evaluate(program.Methods.Single(m => m.Name == "Run")) == 42,
+                    "unmodified canonical numeric Oreslang executes as linked CIL");
+            }
+            Write("main.ores", "import module numeric from \"./numeric\"; pub fnc main():int { " +
+                "return numeric.max_int(-11, 7); }");
+            var signedCore = Compile();
+            CilEmitter.EmitLibrary(signedCore.Module, coreAssembly);
+            using (var image = AssemblyDefinition.ReadAssembly(coreAssembly))
+                Require(CfgCilTestInterpreter.Evaluate(image.MainModule.Types.Single(t => t.Name == "OresProgram")
+                    .Methods.Single(m => m.Name == "Run")) == 7,
+                    "signed greater-than uses signed CIL comparison");
+            // The compiler-owned virtual module must resolve without a
+            // dependency root or any writable project-owned source file.
+            Directory.CreateDirectory(Path.Combine(root, "ores.core"));
+            Write("ores.core/numeric.ores", "define module numeric as " +
+                "pub fnc min_int(int a, int b):int { return 999; } end");
+            Write("main.ores", "import module numeric from \"ores.core/numeric\"; " +
+                "pub fnc main():int { return numeric.clamp_int(100, 0, 20) + " +
+                "numeric.max_int(11, 7) + numeric.min_int(11, 17); }");
+            var builtinCore = Compile();
+            Require(builtinCore.Sources.Count == 2, "compiler-owned library enters graph once");
+            Require(builtinCore.Sources.Single(u => u.Path == "@ores.core/numeric.ores").Sha256 ==
+                "3d1d7b77068dd02b3d60b30b72f29a4537a933134ca79e1e81df096dc56f5f33",
+                "closed core registry always supplies exact packaged Oreslang bytes");
+            CilEmitter.EmitLibrary(builtinCore.Module, coreAssembly);
+            byte[] canonicalAssemblyBytes = File.ReadAllBytes(coreAssembly);
+            using (var image = AssemblyDefinition.ReadAssembly(coreAssembly))
+                Require(CfgCilTestInterpreter.Evaluate(image.MainModule.Types.Single(t => t.Name == "OresProgram")
+                    .Methods.Single(m => m.Name == "Run")) == 42,
+                    "project-owned same-name file cannot shadow compiler-owned module");
+
+            // An identical canonical import in another absolute project path
+            // must keep the same graph witness and deterministic static CIL.
+            // An attacker-controlled local file with the module's name in
+            // either root must not alter the compiler-owned import.
+            string relocatedCore = Path.Combine(root, "canonical-relocated");
+            Directory.CreateDirectory(Path.Combine(relocatedCore, "ores.core"));
+            File.WriteAllText(Path.Combine(relocatedCore, "main.ores"),
+                File.ReadAllText(Path.Combine(root, "main.ores")));
+            File.WriteAllText(Path.Combine(relocatedCore, "ores.core", "numeric.ores"),
+                "define module numeric as pub fnc clamp_int(int a, int b, int c):int " +
+                "{ return 999; } end");
+            var sameCore = OresSourceModuleCompiler.Compile(
+                Path.Combine(relocatedCore, "main.ores"), new[] { relocatedCore });
+            Require(sameCore.GraphSha256 == builtinCore.GraphSha256,
+                "compiler-owned numeric graph identity is independent of project root and shadow files");
+            string relocatedCoreAssembly = Path.Combine(relocatedCore, "NativeCoreGenerated.dll");
+            CilEmitter.EmitLibrary(sameCore.Module, relocatedCoreAssembly);
+            Require(canonicalAssemblyBytes.AsSpan().SequenceEqual(
+                File.ReadAllBytes(relocatedCoreAssembly)),
+                "canonical module emits byte-identical CIL across physical project roots");
+            Write("main.ores", "import module numeric from \"ores.core/numeric\"; " +
+                "pub fnc main():int { return numeric.min_int(-9223372036854775808, 9223372036854775807); }");
+            var minBound = Compile();
+            CilEmitter.EmitLibrary(minBound.Module, coreAssembly);
+            using (var image = AssemblyDefinition.ReadAssembly(coreAssembly))
+                Require(CfgCilTestInterpreter.Evaluate(image.MainModule.Types.Single(t => t.Name == "OresProgram")
+                    .Methods.Single(m => m.Name == "Run")) == long.MinValue,
+                    "compiler-owned core preserves signed int64 minimum");
+            Write("main.ores", "import module numeric from \"ores.core/numeric\"; " +
+                "pub fnc main():int { return numeric.max_int(9007199254740993, 9007199254740992); }");
+            var precision = Compile();
+            CilEmitter.EmitLibrary(precision.Module, coreAssembly);
+            using (var image = AssemblyDefinition.ReadAssembly(coreAssembly))
+                Require(CfgCilTestInterpreter.Evaluate(image.MainModule.Types.Single(t => t.Name == "OresProgram")
+                    .Methods.Single(m => m.Name == "Run")) == 9007199254740993L,
+                    "canonical core preserves integer precision above 2^53");
+            // Canonical Oreslang comparison semantics must be the same in
+            // compile-time constants and typed runtime CFG/CIL lowering.
+            Write("main.ores", "import module numeric from \"ores.core/numeric\"; " +
+                "pub fnc main():int { const bool greater = 7 > -11; " +
+                "if greater; do return numeric.max_int(-11, 7); fi return 0; }");
+            var foldedGreater = Compile();
+            CilEmitter.EmitLibrary(foldedGreater.Module, coreAssembly);
+            using (var image = AssemblyDefinition.ReadAssembly(coreAssembly))
+                Require(CfgCilTestInterpreter.Evaluate(image.MainModule.Types.Single(t => t.Name == "OresProgram")
+                    .Methods.Single(m => m.Name == "Run")) == 7,
+                    "signed greater-than constant folding agrees with native .ores CIL");
+            Write("main.ores", "import module numeric from \"ores.core/numeric\"; " +
+                "pub fnc main():int { if 2 > 5; do return 999; fi " +
+                "return numeric.min_int(-11, 7); }");
+            var runtimeGreaterFalse = Compile();
+            CilEmitter.EmitLibrary(runtimeGreaterFalse.Module, coreAssembly);
+            using (var image = AssemblyDefinition.ReadAssembly(coreAssembly))
+                Require(CfgCilTestInterpreter.Evaluate(image.MainModule.Types.Single(t => t.Name == "OresProgram")
+                    .Methods.Single(m => m.Name == "Run")) == -11,
+                    "false signed greater-than branch and fallthrough execute correctly");
+            Write("main.ores", "import module numeric from \"ores.core/missing\"; fnc main():int { return 1; }");
+            Reject(Compile, "unknown compiler-owned library fails closed", "Unknown compiler-owned");
+            Write("main.ores", "import module numeric from \"ores.core/numeric.ores\"; fnc main():int { return 1; }");
+            Reject(Compile, "alternate canonical core alias fails closed", "Unknown compiler-owned");
+            Write("main.ores", "import module numeric from \"ores.core/numeric\"; " +
+                "import module numeric from \"ores.core/numeric\"; fnc main():int { return 1; }");
+            Reject(Compile, "duplicate compiler-owned binding fails closed", "Duplicate import binding");
+            File.Delete(Path.Combine(root, "numeric.ores"));
+            Write("main.ores", "import module left from \"./left\"; import module right from \"./right\"; " +
+                "pub fnc main():int { return left.value(10) + right.value(11); }");
             string hash = compiled.GraphSha256;
             Write("base.ores", "pub fnc twice(int n):int { return n * 2; } // changed source bytes");
             Require(Compile().GraphSha256 != hash, "transitive source bytes affect graph identity");

@@ -2,6 +2,12 @@
   <PropertyGroup>
     <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
+  <!-- One fixed native .ores source, not C# library policy. The resource
+       travels in the statically linked compiler including Native AOT. -->
+  <ItemGroup>
+    <EmbeddedResource Include="../../library/ores.core/numeric.ores"
+                      LogicalName="Ores.Net.Compiler.Core.CanonicalNumeric.ores" />
+  </ItemGroup>
   <!-- The production Native AOT compiler uses System.Reflection.Metadata only.
        Mono.Cecil remains a verification-only dependency, not a published runtime. -->
 </Project>

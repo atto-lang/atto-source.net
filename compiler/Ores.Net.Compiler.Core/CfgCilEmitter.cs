@@ -146,6 +146,7 @@ internal static class CfgCilEmitter
                         case CfgOpcode.EqualI64:
                         case CfgOpcode.NotEqualI64:
                         case CfgOpcode.LessThanI64:
+                        case CfgOpcode.GreaterThanI64:
                             il.LoadLocal(op.Left!.Value);
                             il.LoadLocal(op.Right!.Value);
                             il.OpCode(op.Opcode switch
@@ -157,6 +158,7 @@ internal static class CfgCilEmitter
                                 CfgOpcode.EqualI64 => ILOpCode.Ceq,
                                 CfgOpcode.NotEqualI64 => ILOpCode.Ceq,
                                 CfgOpcode.LessThanI64 => ILOpCode.Clt,
+                                CfgOpcode.GreaterThanI64 => ILOpCode.Cgt,
                                 _ => throw new FormatException("Unverified CFG opcode")
                             });
                             if (op.Opcode == CfgOpcode.NotEqualI64)

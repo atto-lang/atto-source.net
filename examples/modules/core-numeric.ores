@@ -1,0 +1,4 @@
+import module numeric from "ores.core/numeric";
+pub fnc main():int {
+  return numeric.clamp_int(100, 0, 20) + numeric.max_int(11, 7) + numeric.min_int(11, 17);
+}

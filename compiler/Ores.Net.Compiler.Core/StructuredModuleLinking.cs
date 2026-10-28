@@ -37,6 +37,14 @@ public static class OresSourceModuleCompiler
 {
     private const int MaxUnits = 64, MaxDepth = 32, MaxFileBytes = 1_048_576;
     private const int MaxGraphBytes = 8 * MaxFileBytes;
+    // Closed compiler-owned v1 stdlib registry. Do not use the caller's
+    // source roots, working directory, PATH, classpath or CLR type identity
+    // to resolve a privileged Oreslang library import.
+    private const string CanonicalNumericKey = "@ores.core/numeric.ores";
+    private const string CanonicalNumericSpecifier = "ores.core/numeric";
+    private const string CanonicalNumericResource = "Ores.Net.Compiler.Core.CanonicalNumeric.ores";
+    private const string CanonicalNumericSha256 =
+        "3d1d7b77068dd02b3d60b30b72f29a4537a933134ca79e1e81df096dc56f5f33";
     private static readonly UTF8Encoding Utf8 = new(false, true);
 
     private sealed record Unit(string PhysicalPath, string Identity, string Source,
@@ -138,6 +146,13 @@ public static class OresSourceModuleCompiler
 
         string Resolve(string importer, string specifier)
         {
+            // The import name itself is a closed canonical key. No ambient
+            // source path may shadow it, even with a matching module name.
+            if (specifier == CanonicalNumericSpecifier) return CanonicalNumericKey;
+            if (specifier.StartsWith("ores.", StringComparison.Ordinal))
+                throw new FormatException("Unknown compiler-owned Oreslang library module");
+            if (importer == CanonicalNumericKey)
+                throw new FormatException("Canonical core cannot import project or hosted modules");
             if (!(specifier.StartsWith("./", StringComparison.Ordinal) || specifier.StartsWith("../", StringComparison.Ordinal)) ||
                 specifier.Length > 4096 || specifier.EndsWith('/') || specifier.Contains("//", StringComparison.Ordinal) ||
                 specifier.Any(c => char.IsControl(c) || c is '\\' or ':'))
@@ -180,6 +195,7 @@ public static class OresSourceModuleCompiler
 
         string Identity(string path)
         {
+            if (path == CanonicalNumericKey) return CanonicalNumericKey;
             int owner = RootIndex(path);
             return owner.ToString(System.Globalization.CultureInfo.InvariantCulture) + "/" +
                 Path.GetRelativePath(roots[owner], path).Replace('\\', '/');
@@ -194,7 +210,14 @@ public static class OresSourceModuleCompiler
 
     private static byte[] ReadBounded(string path)
     {
-        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        // Load the real .ores source embedded at build time into the AOT
+        // compiler. The runtime never executes a C# replacement of this API.
+        // Exact hash admission catches package/resource mismatch before any
+        // parse, typing or CIL emission, including during Native AOT use.
+        using Stream stream = path == CanonicalNumericKey
+            ? typeof(OresSourceModuleCompiler).Assembly.GetManifestResourceStream(CanonicalNumericResource)
+                ?? throw new FormatException("Pinned canonical Oreslang library resource is missing")
+            : new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
         byte[] bytes = new byte[MaxFileBytes + 1];
         int count = 0;
         while (count < bytes.Length)
@@ -204,6 +227,11 @@ public static class OresSourceModuleCompiler
             count += read;
         }
         if (count > MaxFileBytes) throw new FormatException("Source exceeds 1 MiB UTF-8 parser limit");
-        return bytes.AsSpan(0, count).ToArray();
+        byte[] source = bytes.AsSpan(0, count).ToArray();
+        if (path == CanonicalNumericKey &&
+            !string.Equals(Convert.ToHexStringLower(SHA256.HashData(source)),
+                CanonicalNumericSha256, StringComparison.Ordinal))
+            throw new FormatException("Pinned canonical Oreslang core source digest mismatch");
+        return source;
     }
 }
