@@ -172,7 +172,12 @@ jobs:
       vars.ORESLANG_NET_SELFHOSTED_LINUX == 'enabled' &&
       vars.ORESLANG_NET_SELFHOSTED_LINUX_SHA != '' &&
       vars.ORESLANG_NET_SELFHOSTED_LINUX_TREE != ''
-    runs-on: [self-hosted, Linux, X64, oreslang-net-aot]
+    # This dedicated runner group MUST be administrator-restricted to the
+    # one trusted workflow at refs/heads/main; a label alone is not a
+    # security boundary against another workflow targeting the runner.
+    runs-on:
+      group: oreslang-net-aot-trusted
+      labels: [self-hosted, Linux, X64, oreslang-net-aot]
     timeout-minutes: 120
     permissions:
       contents: read
