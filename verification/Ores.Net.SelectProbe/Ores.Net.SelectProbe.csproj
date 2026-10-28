@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <PublishAot>true</PublishAot>
+    <SelfContained>true</SelfContained>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../runtime/Ores.Net.Runtime/Ores.Net.Runtime.csproj" />
+    <Compile Include="../Ores.Net.Tests/SelectArbiterSelfTest.cs" Link="SelectArbiterSelfTest.cs" />
+    <Compile Include="../Ores.Net.Tests/SelectableI64ChannelSelfTest.cs" Link="SelectableI64ChannelSelfTest.cs" />
+    <Compile Include="../Ores.Net.Tests/SelectableI64FutureSelfTest.cs" Link="SelectableI64FutureSelfTest.cs" />
+  </ItemGroup>
+  <Import Project="../../build/StrictNativeAot.targets" />
+</Project>

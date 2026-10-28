@@ -287,6 +287,30 @@ test('DOP CPU region CI checks out exact source and does not persist credentials
 });
 
 
+test("Windows C# and F# managed-source backend execution is mandatory evidence",()=>{
+  const changed=copy(jobs);
+  changed.jobs[0].steps=changed.jobs[0].steps.filter(s=>
+    s.name!=="Compile verified scalar OresIR through C# and F# to managed CIL");
+  assert.match(check(run,changed).join(" "),/missing successful step/);
+});
+
+test("typed Windows and Linux Native AOT execution stages cannot be omitted",()=>{
+  for(const [jobIndex,labels] of [
+    [0,["Execute typed source helper calls in real Windows Native AOT",
+        "Execute typed statement-bodied helpers in real Windows Native AOT",
+        "Verify typed bindings in executed Windows Native AOT"]],
+    [1,["Execute typed source helper calls in real Linux Native AOT",
+        "Execute typed statement-bodied helpers in real Linux Native AOT",
+        "Verify typed bindings in executed Linux Native AOT"]]
+  ]) {
+    for(const label of labels) {
+      const changed=copy(jobs);
+      changed.jobs[jobIndex].steps=changed.jobs[jobIndex].steps.filter(s=>s.name!==label);
+      assert.match(check(run,changed).join(" "),/missing successful step/,label);
+    }
+  }
+});
+
 const linuxWorkflow = "Strict .NET Linux x64 Native AOT";
 const linuxExpected = {...e,workflow:linuxWorkflow};
 const linuxSource = readFileSync(new URL("../.github/workflows/strict-linux-native-aot.yml",import.meta.url),"utf8");

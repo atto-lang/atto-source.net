@@ -1,0 +1,41 @@
+name: Select runtime Native AOT
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            rid: linux-x64
+            suffix: ''
+          - os: windows-2022
+            rid: win-x64
+            suffix: .exe
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: 10.0.x
+      - name: Publish and execute native select regressions
+        run: |
+          dotnet publish verification/Ores.Net.SelectProbe/Ores.Net.SelectProbe.csproj -c Release -r '${{ matrix.rid }}' -o artifacts/select-native -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'Native select publish failed' }
+          $app = './artifacts/select-native/Ores.Net.SelectProbe${{ matrix.suffix }}'
+          $result = (& $app | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or $result -ne 'DOTNET_SELECT_NATIVE_PASS') { throw "Native select tests failed: $result" }
+          Get-FileHash $app -Algorithm SHA256
