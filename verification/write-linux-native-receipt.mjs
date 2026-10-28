@@ -66,8 +66,11 @@ export function createReceipt(root, env) {
     arithmetic.overflow_exit === 70 && arithmetic.native_application_count === 5 &&
     JSON.stringify(arithmetic.outputs) === '[14,42,40,45]', 'arithmetic proof missing or invalid');
   const hashes = Object.fromEntries(binaries.map(path => {
+    // Reject symlinks and unsafe evidence paths before running external
+    // release-layout validation; preserve the original error classification.
+    const digest = sha256RegularFile(root, path);
     execFileSync('bash', ['verification/assert-linux-native-release.sh', path], {cwd:root, stdio:'pipe'});
-    return [path, sha256RegularFile(root, path)];
+    return [path, digest];
   }));
   return {
     schema:'oreslang.net.exact_head_native_aot_v2', repository:sourceRepository,
