@@ -18,6 +18,7 @@ const jobs = {total_count:2,jobs:[
       "Show Windows .NET toolchain",
       "Refuse managed or framework-dependent release settings",
       "Verify compiler and runtime source",
+      "Compile verified scalar OresIR through C# and F# to managed CIL",
       "Verify shared advisory static facts from .NET compiler and typed structured parser",
       "Reject oversized and invalid UTF-8 compiler input",
       "Publish native compiler and native application",
@@ -285,6 +286,13 @@ test('DOP CPU region CI checks out exact source and does not persist credentials
   assert.ok(source.includes("git ls-files --others --exclude-standard"));
 });
 
+
+test("Windows C# and F# managed-source backend execution is mandatory evidence",()=>{
+  const changed=copy(jobs);
+  changed.jobs[0].steps=changed.jobs[0].steps.filter(s=>
+    s.name!=="Compile verified scalar OresIR through C# and F# to managed CIL");
+  assert.match(check(run,changed).join(" "),/missing successful step/);
+});
 
 test("typed Windows and Linux Native AOT execution stages cannot be omitted",()=>{
   for(const [jobIndex,labels] of [
