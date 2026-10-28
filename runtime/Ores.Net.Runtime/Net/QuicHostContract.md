@@ -18,8 +18,8 @@ native operations off the actor carrier. Publication of a handshake result
 is linearized with Stop: the losing handle must be disposed before the
 registry reports completion. Each actor admits at most 16 QUIC connections;
 each connection admits at most 32 locally tracked outgoing streams. Native
-resource teardown waits for all in-flight stream opens and disposes streams
-before the connection. `StopAndDrainQuicAsync` waits for both actor-dispatch
+resource teardown waits for all in-flight stream opens **and active reads/writes**;
+each stream is cancelled and disposed before the connection. `StopAndDrainQuicAsync` waits for both actor-dispatch
 finalization and native resource disposal, returning `true` only if the
 actor arena has physically reclaimed. A disposal exception faults this
 receipt rather than being reported as success. A plain synchronous `Stop`
@@ -72,15 +72,18 @@ token and `HandshakeTimeout`, and disallows HTTP/2 fallback.
 
 The existing 3-argument client entrypoint cannot be used to evade this
 boundary. A newly connected `QuicConnection` is disposed if the handshake
-returns after cancellation. Callers still must close and dispose the
-connection and all streams to obtain real physical retirement evidence.
+returns after cancellation. The opaque owner lease and actor-local ledger dispose connections and
+streams on stop. Callers requesting a physical retirement receipt await
+`StopAndDrainQuicAsync`, not merely a cancellation notification.
 
 **Important limitation:** this issuer does not itself perform DNS and cannot
 prove a caller supplied the complete DNS response. It is only suitable for a
 trusted runtime-host injection/test path and cannot authorize public egress.
-It does not yet bind to the Oreslang CONTROL-verified actor lease, prevent
-migration at the provider level, enforce global connection/socket buffers,
-or prove actor cleanup after shutdown. None of those guarantees may be
+It binds to host-runtime `ActorContext` and actor-local CONTROL stop, but
+not yet to a compiled guest `ActorRef` or a production CONTROL-issued egress
+capability. It cannot prevent native provider migration, enforce complete
+global socket/stream-buffer quotas, or prove shutdown completion without
+executed exact-head tests. None of those guarantees may be
 inferred from an opaque permit or the provider's `IsSupported` property.
 
 ## Current-source security hardening (October 28, 2026)
@@ -105,29 +108,30 @@ A separate, source-free .NET 10 SDK/NativeAOT carrier probe was created in
 run `40749652387` failed with zero executed steps, so this carrier did not
 demonstrate runner or SDK capacity. No Oreslang private source was mirrored.
 
-### Verified source-free .NET toolchain, remaining QUIC provider failure
+### Independent source-free .NET toolchain and Native AOT handshake
 
-On 2026-10-28 the **independent, source-free** probe in
-`beamscale/bmscl-compiler` PR #63 executed .NET 10 compilation and Linux
-x64 Native AOT publish/run successfully on the same exact public API surface.
-Run `40750819089` completed successfully with **six executed steps**.
-However both managed and Native AOT probes printed
-`MSQUIC_UNAVAILABLE` from `QuicConnection.IsSupported`. Per official .NET
-documentation Linux requires the separate `libmsquic` native package (and
-TLS 1.3 support). A green Native AOT compile does **not** prove a
-QUIC/TLS handshake. Install/review the native dependency from an approved
-source before attempting real peer interoperability.
+The public-only .NET 10 probe in `beamscale/bmscl-compiler` PR #63 was
+extended after its initial `MSQUIC_UNAVAILABLE` run. On Ubuntu 24.04 it
+installed the version-pinned Microsoft-signed `libmsquic=2.5.12` package.
+[Run 40770468363](https://github.com/beamscale/bmscl-compiler/actions/runs/40770468363)
+completed **nine executed steps**, and its logs contain both
+`SOURCE_FREE_QUIC_TLS13_STREAM_PASS` and
+`SOURCE_FREE_NATIVE_AOT_QUIC_TLS13_STREAM_PASS`. It demonstrated real
+TLS 1.3, test-only pinned certificate/SNI/ALPN and bidirectional stream
+exchange in **both managed .NET and Linux Native AOT**. It did **not**
+compile the private Oreslang runtime or prove production PKI, HTTP/3 or
+actor lifecycle parity. No private Oreslang source was transferred.
+
 
 The source-owned issuer was additionally hardened to snapshot IP address
 **bytes before classification**. This prevents mutable legacy `IPAddress`
 address/scope values from changing the authorization between validation and
 connection. Adversarial tests cover iterator/index disagreement, changed
 IP address values, scoped IPv6 mutations and single-use consumption.
-The native .NET adapter uses an explicit Linux/Windows/macOS fail-closed
-runtime guard and a **narrow** CA1416 suppression only within the guarded
-MsQuic implementation; the .NET 10 source-free probe verified that an
-unannotated OS-disjunction guard does not, by itself, suppress all analyzer
-warnings in a warnings-as-errors build.
+The native .NET adapter uses Linux/Windows/macOS fail-closed guards and
+explicit supported-platform annotations on OS-specific methods, retaining
+warnings-as-errors analysis. The source-free fixture verified the platform
+analyzer requires these explicit callsite guards or annotations.
 
 None of these source changes have been built or executed on their own exact
 PR tree; source org Actions remain zero-step and the Beamscale destination
@@ -151,5 +155,5 @@ is unprotected/unapproved for private-source transfer.
 
 As of October 28, 2026 this environment has no .NET SDK and the
 authorized funded cross-org private-source carrier remains blocked on
-protected-main and independent review. The C# source/test changes are
-**authored but uncompiled**.
+protected-main and independent review. The C# actor-native ledger, connection/stream lease, cancellation and
+retirement regression changes are **authored but uncompiled**.
