@@ -227,18 +227,25 @@ internal sealed class ActorQuicStreamLease : IAsyncDisposable
 
     private async Task DisposePhysicalAsync()
     {
+        Exception? failure = null;
         try
         {
-            // Cancel local readers/writers, then wait for physical returns.
-            await _close.CancelAsync().ConfigureAwait(false);
+            // Even an exceptional cancellation callback MUST NOT skip
+            // physical native stream disposal. Preserve the failure.
+            try { await _close.CancelAsync().ConfigureAwait(false); }
+            catch (Exception error) { failure = error; }
             await _ioDrained.Task.ConfigureAwait(false);
-            await _stream.DisposeAsync().ConfigureAwait(false);
+            try { await _stream.DisposeAsync().ConfigureAwait(false); }
+            catch (Exception error) { failure ??= error; }
         }
         finally
         {
             _close.Dispose();
             _owner.Unregister(this);
         }
+        if (failure is not null)
+            throw new InvalidOperationException(
+                "Native QUIC stream retirement incomplete", failure);
     }
 
     internal async ValueTask<int> ReadAsync(
