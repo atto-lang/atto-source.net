@@ -9,9 +9,11 @@ static class Program {
     static AgentHostDispatchGate Gate()=>new("tenant","worker",7,9,new string('a',40),100);
     static void Check(bool good){if(!good)throw new Exception("agent host contract failed");}
     static TrustedHost Host(Func<Scope,bool>? current=null,Func<Scope,bool>? authorize=null,
-         Func<Scope,bool>? claim=null,Func<Scope,bool>? send=null)=>new() {
+         Func<Scope,bool>? claim=null,Func<Scope,bool>? send=null,
+         Func<long>? now=null)=>new() {
         IsCurrent=current??(_=>true),Authorize=authorize??(_=>true),
-        ClaimOnce=claim??(_=>true),SubmitDataOnly=send??(_=>true)
+        ClaimOnce=claim??(_=>true),SubmitDataOnly=send??(_=>true),
+        NowMs=now??(()=>9000)
     };
     static async Task Main() {
         int sent=0, claims=0;
@@ -45,6 +47,11 @@ static class Program {
         h=Host(send:_=>{sent++;throw new Exception("uncertain outcome");});
         Check(!gate.Dispatch(Req(),h,9000) && !gate.Dispatch(Req(),h,9000));
         Check(sent==1);
+        long now=9000; sent=0; int claimed=0;
+        Check(!Gate().Dispatch(Req(),Host(claim:_=>{claimed++;now=10000;return true;},
+            send:_=>{sent++;return true;},now:()=>now),9000));
+        Check(claimed==1 && sent==0);
+        Check(!Gate().Dispatch(Req(),Host(now:()=>10000),9000));
         Console.WriteLine("AGENT_HOST_DISPATCH_CONTRACT PASS host-only NativeAOT target");
     }
 }
