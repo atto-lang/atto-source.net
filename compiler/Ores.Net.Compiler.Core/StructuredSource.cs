@@ -392,6 +392,9 @@ public static class OresStructuredParser
                 string quoted = Current.Text;
                 if (quoted.Length < 3 || quoted[0] != '"' || quoted[^1] != '"' || quoted.Contains('\\'))
                     throw Error("Import requires an unescaped local source string");
+                // Reject before physical lookup and graph linking, independently
+                // of the standalone scalar parser's generic import denial.
+                UnsafeStdlibImportAdmission.RequireGuestSafe(quoted[1..^1]);
                 index++;
                 Expect(";");
                 if (imports.Count >= 64) throw Error("Import declaration budget exceeded");
