@@ -12,6 +12,11 @@ internal static class VmIsolateHostTests
     public static void Run()
     {
         var host = new OresVmHost(maxTenants: 2);
+        // Fail closed: NativeAOT and separate host dictionaries do not imply
+        // OS sandboxing or a separate GC-managed heap for hostile tenants.
+        ExpectFailure(() => host.CreateIsolate("hostile",
+            isolation: OresVmHost.IsolationMode.SandboxedProcess),
+            "unsupported process sandbox must reject before admission");
         var a = host.CreateIsolate("tenant-a", maxActors: 1, maxResourcePins: 1);
         var b = host.CreateIsolate("tenant-b", maxActors: 1);
         ExpectFailure(() => host.CreateIsolate("tenant-c"), "host limit");
