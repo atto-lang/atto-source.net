@@ -235,6 +235,9 @@ public static class OresStructuredParser
             int offset = index;
             if (index == source.Length) return new Token("", index);
             char ch = source[index];
+            if (ch == '@')
+                throw new FormatException(
+                    $"Annotations require typed target validation and Native AOT lowering; unsupported in .NET structured compiler at offset {offset}");
             if (moduleMode && ch == '"')
             {
                 index++;
