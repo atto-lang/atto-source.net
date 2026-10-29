@@ -17,6 +17,23 @@ internal static class VmIsolateHostTests
         ExpectFailure(() => host.CreateIsolate("tenant-c"), "host limit");
         ExpectFailure(() => host.CreateIsolate("tenant-a"), "duplicate tenant");
         host.Start(a); host.Start(b);
+        // Two tenants execute the same statically typed entry but keep their
+        // host-owned scalar state independent. This is NOT generated .ores
+        // actor state; the production Native AOT host tests real emitted CIL.
+        if (host.InvokeGeneratedScalar(a, () => -1) != -1 ||
+            host.InvokeGeneratedScalar(a, () => -2) != -3 ||
+            host.InvokeGeneratedScalar(b, () => 100) != 100 ||
+            host.GuestSnapshot(a).Scalar != -3 ||
+            host.GuestSnapshot(b).Scalar != 100)
+            throw new Exception("tenant state isolation failed");
+        ExpectFailure(() => host.InvokeGeneratedScalar(a, () =>
+            host.InvokeGeneratedScalar(a, () => 1)), "nested guest entry");
+        if (host.GuestSnapshot(a).GuestCalls != 0)
+            throw new Exception("guest execution pin leaked after error");
+        try { host.InvokeGeneratedScalar(a, () => throw new OverflowException()); }
+        catch (OverflowException) { }
+        if (host.GuestSnapshot(a).Scalar != -3)
+            throw new Exception("failed guest mutated tenant state");
         var actorA = host.RegisterActor(a, 3);
         var actorB = host.RegisterActor(b, 3);
         var refA = actorA.Mailbox.CurrentRef;
@@ -28,6 +45,8 @@ internal static class VmIsolateHostTests
         ExpectFailure(() => host.RetireResource(b, actorB, pin), "foreign tenant pin");
         ExpectFailure(() => host.RetireActor(a, actorA), "actor lifetime pin");
         host.BeginShutdown(a);
+        ExpectFailure(() => host.InvokeGeneratedScalar(a, () => 1),
+            "guest admission must close at quiescence");
         ExpectFailure(() => host.PinResource(a, actorA), "quiescent admission");
         ExpectFailure(() => host.CompleteShutdown(a), "drain outstanding actor");
         host.RetireResource(a, actorA, pin);
