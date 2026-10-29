@@ -12,6 +12,7 @@ public sealed class TrustedHost {
     // Must implement an external durable unique constraint/atomic CAS, not an in-memory bool.
     public required Func<Scope,bool> ClaimOnce {get; init;}
     public required Func<Scope,bool> SubmitDataOnly {get; init;}
+    public required Func<long> NowMs {get; init;} // trusted host clock
 }
 public sealed class AgentHostDispatchGate {
     private readonly string tenant, actor, revision;
@@ -46,10 +47,16 @@ public sealed class AgentHostDispatchGate {
             s.MeasuredTokens<=0 || s.MeasuredTokens>16384 ||
             tokenCap<=0 || s.MeasuredTokens>tokenCap ||
             h.IsCurrent is null || h.Authorize is null ||
-            h.ClaimOnce is null || h.SubmitDataOnly is null) return false;
+            h.ClaimOnce is null || h.SubmitDataOnly is null ||
+            h.NowMs is null) return false;
         try {
-            return h.IsCurrent(s) && h.Authorize(s) && h.ClaimOnce(s) &&
-                   h.IsCurrent(s) && h.Authorize(s) && h.SubmitDataOnly(s);
+            var admittedAt=h.NowMs();
+            if (admittedAt<0 || s.ExpiresAtMs<=admittedAt) return false;
+            if (!h.IsCurrent(s) || !h.Authorize(s) || !h.ClaimOnce(s) ||
+                !h.IsCurrent(s) || !h.Authorize(s)) return false;
+            var beforeSubmit=h.NowMs();
+            return beforeSubmit>=admittedAt && s.ExpiresAtMs>beforeSubmit &&
+                   h.SubmitDataOnly(s);
         } catch(Exception) {return false;}
     }
 }
