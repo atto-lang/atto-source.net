@@ -25,11 +25,28 @@ actor arena has physically reclaimed. A disposal exception faults this
 receipt rather than being reported as success. A plain synchronous `Stop`
 does **not** wait for the receipt.
 
+`StopWithReceipt(actor)` preserves the prior void `Stop(actor)` API but
+returns a durable `ActorRetirementReceipt`. Callers may await
+`receipt.WaitAsync()` or `StopAndDrainQuicAsync(receipt)` **after** the
+actor was removed from the live dictionary; no stale actor lookup is needed.
+A bare `StopAndDrainQuicAsync(actorRef)` is appropriate when stopping an
+*as-yet-live* actor atomically, not when re-reading an already stopped actor.
+The runtime itself only retains finalized actor cells whose native
+retirement is still incomplete, instead of retaining unbounded tombstones.
+
+`ActorRuntime.DisposeAsync()` revokes all live actors and waits for both
+active and already-finalized native QUIC cleanup, and for carrier joining.
+Legacy synchronous `Dispose()` also waits on this same completion task
+from a non-actor thread. Multiple concurrent or repeated disposal calls
+join the same task. Native retirement failure remains observable even if
+the actor was removed from the live registry; physical reclamation must
+be observed before successful shutdown. These are **soft-real-time host
+control APIs** and may wait indefinitely if a native operation cannot
+physically retire.
+
 **Remaining blockers:** This is host-only .NET runtime scaffolding, not
 verified source-level guest lowering. It has not been compiled or run on its
-current exact source tree due to zero-step source CI. Actor `Dispose()`
-is still synchronous and does not await native QUIC retirement; callers
-requiring the physical receipt must use the explicit asynchronous drain.
+current exact source tree due to zero-step source CI.
 There is no complete verifier of destination path migration, actor-wide
 socket buffers, production egress DNS provenance or full QUIC/TLS peer
 interoperability through this private implementation. Stream I/O still
