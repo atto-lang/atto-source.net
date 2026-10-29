@@ -18,6 +18,25 @@ public static class UnsafeStdlibImportAdmission
     {
         if (specifier is null) return false;
         var path = specifier.Replace('\\', '/');
+        // Canonicalize stdlib components before matching reserved names.
+        // The typed source linker must not see std/./unsafe as an ordinary
+        // local package that it then normalizes into a native stdlib import.
+        if (path.StartsWith("std/", StringComparison.Ordinal) ||
+            path.StartsWith("ores.std/", StringComparison.Ordinal))
+        {
+            var parts = new System.Collections.Generic.List<string>();
+            foreach (var part in path.Split('/'))
+            {
+                if (part.Length == 0 || part == ".") continue;
+                if (part == "..")
+                {
+                    if (parts.Count <= 1) return true; // Reject std root escape.
+                    parts.RemoveAt(parts.Count - 1);
+                }
+                else parts.Add(part);
+            }
+            path = string.Join("/", parts);
+        }
         foreach (string root in ReservedRoots)
         {
             if (path == root || path.StartsWith(root + "/", StringComparison.Ordinal)
