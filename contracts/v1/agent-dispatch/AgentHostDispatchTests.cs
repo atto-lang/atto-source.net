@@ -52,6 +52,10 @@ static class Program {
             send:_=>{sent++;return true;},now:()=>now),9000));
         Check(claimed==1 && sent==0);
         Check(!Gate().Dispatch(Req(),Host(now:()=>10000),9000));
+        Check(!Gate().Dispatch(Req(),Host(now:()=>0),9000));
+        long[] reversed={9000,8999}; int i=0;
+        Check(!Gate().Dispatch(Req(),Host(now:()=>reversed[Math.Min(i++,1)],
+            send:_=>throw new Exception("clock rollback submitted")),9000));
         Console.WriteLine("AGENT_HOST_DISPATCH_CONTRACT PASS host-only NativeAOT target");
     }
 }
