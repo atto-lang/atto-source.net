@@ -280,6 +280,11 @@ public static class OresStructuredParser
                 do { index++; } while (index < source.Length &&
                     (Alpha(source[index]) || Digit(source[index]) || source[index] == '_'));
                 string word = source[offset..index];
+                // The linked-module lexer also enforces the unsafe keyword
+                // reservation before typed module binding and CIL emission.
+                if (word == "unsafe")
+                    throw new FormatException(
+                        $"unsafe boundary requires checked effects, native grants and Native AOT lowering at offset {offset}");
                 if (word is "cpu" or "gpu" ||
                     (word == "nb" && !StaticSelectAdmission.FollowedByStaticSelect(source, index)))
                     throw new FormatException(
