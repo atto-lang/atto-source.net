@@ -64,6 +64,32 @@ public static class OresStructuredParser
     private const int MaxLocalTypeFields = 64;
 
     public static StructuredProgram Parse(string source)
+        => ParseCore(source, null).Program;
+
+    internal static StructuredLinkedUnit ParseLinked(string source, LinkedModuleContext linking)
+        => ParseCore(source, linking);
+
+    internal static IReadOnlyList<SourceImport> ReadLinkedImports(string source)
+    {
+        var reader = new Reader(LexLinked(source));
+        return reader.ReadImports();
+    }
+
+    private static List<Token> LexLinked(string source)
+    {
+        if (source.Length > MaxChars || System.Text.Encoding.UTF8.GetByteCount(source) > MaxChars)
+            throw new FormatException("Source exceeds 1 MiB UTF-8 parser limit");
+        var lexer = new Lexer(source, true);
+        var tokens = new List<Token>();
+        do
+        {
+            tokens.Add(lexer.Read());
+            if (tokens.Count > MaxTokens) throw new FormatException("Structured token budget exceeded");
+        } while (tokens[^1].Text.Length != 0);
+        return tokens;
+    }
+
+    private static StructuredLinkedUnit ParseCore(string source, LinkedModuleContext? linking)
     {
         ArgumentNullException.ThrowIfNull(source);
         if (source.Length > MaxChars)
@@ -86,7 +112,7 @@ public static class OresStructuredParser
             throw new FormatException("Source exceeds 1 MiB UTF-8 parser limit");
         // No structural match lowering or readonly shape metadata in scalar CIL yet.
         StructuralShapeAdmission.RejectUnsupportedPatterns(source);
-        var lexer = new Lexer(source);
+        var lexer = new Lexer(source, linking is not null);
         var tokens = new List<Token>();
         // Distinguish a forbidden local nominal declaration from an
         // unsupported top-level class/actor before either reaches lowering.
@@ -152,11 +178,14 @@ public static class OresStructuredParser
                 throw new FormatException(
                     $"Tuple-v2 explicit spread requires single-evaluation checked lowering at offset {tokens[i].Offset}");
         }
-        return new Reader(tokens).ReadProgram();
+        var reader = new Reader(tokens, linking);
+        return linking is null
+            ? new StructuredLinkedUnit(reader.ReadProgram(), null, new Dictionary<string, StructuredFunction>())
+            : reader.ReadLinkedUnit();
     }
 
     private readonly record struct Token(string Text, int Offset);
-    private sealed class Lexer(string source)
+    private sealed class Lexer(string source, bool moduleMode = false)
     {
         private int index;
         public Token Read()
@@ -206,6 +235,23 @@ public static class OresStructuredParser
             int offset = index;
             if (index == source.Length) return new Token("", index);
             char ch = source[index];
+            if (moduleMode && ch == '"')
+            {
+                index++;
+                while (index < source.Length && source[index] != '"')
+                {
+                    if (source[index] is '\r' or '\n' or '\0')
+                        throw new FormatException($"Invalid string literal at offset {offset}");
+                    if (source[index++] == '\\')
+                    {
+                        if (index == source.Length) break;
+                        index++;
+                    }
+                }
+                if (index == source.Length) throw new FormatException($"Unterminated string at offset {offset}");
+                index++;
+                return new Token(source[offset..index], offset);
+            }
             if (Digit(ch))
             {
                 index++;
@@ -249,13 +295,16 @@ public static class OresStructuredParser
                      source[index + 1] == '=') index += 2;
             else if (ch == '!' && index + 1 < source.Length &&
                      source[index + 1] == '=') index += 2;
-            else if (ch == '|')
+            else if (moduleMode && index + 1 < source.Length &&
+                (source.Substring(index, 2) is "->" or "&&" or "||" or ">=" or "<=")) index += 2;
+            else if (ch == '|' && !moduleMode)
                 throw new FormatException(
                     $"Lexical captures require checked closure lowering at offset {offset}");
-            else if ("()+-*{}:;=<.,?".IndexOf(ch) >= 0) index++;
+            else if ("()+-*{}:;=<.,?".IndexOf(ch) >= 0 ||
+                (moduleMode && "[]/>!|&".IndexOf(ch) >= 0)) index++;
             else throw new FormatException($"Invalid character at offset {offset}");
             var tokenText = source[offset..index];
-            if (tokenText == "import")
+            if (tokenText == "import" && !moduleMode)
                 throw new FormatException("source imports require verified module graph lowering");
             if (tokenText == "enum")
                 throw new FormatException(
@@ -264,15 +313,19 @@ public static class OresStructuredParser
         }
     }
 
-    private sealed class Reader(List<Token> tokens)
+    private sealed class Reader(List<Token> tokens, LinkedModuleContext? linking = null)
     {
         private sealed record LocalBinding(IrValueType Type, StructuredBindingKind Kind,
             long? ConstantValue);
         private readonly List<Dictionary<string, LocalBinding>> scopes = new();
         private readonly List<HashSet<string>> localTypeScopes = new();
-        private readonly Dictionary<string, StructuredFunction> functions =
-            new(StringComparer.Ordinal);
-        private readonly List<string> functionOrder = new();
+        private readonly Dictionary<string, StructuredFunction> functions = linking is null
+            ? new(StringComparer.Ordinal) : new(linking.Methods, StringComparer.Ordinal);
+        private readonly Dictionary<string, StructuredFunction> visible = linking is null
+            ? new(StringComparer.Ordinal) : new(linking.Bindings, StringComparer.Ordinal);
+        private readonly Dictionary<string, StructuredFunction> exports = new(StringComparer.Ordinal);
+        private readonly List<string> functionOrder = linking is null ? new() : new(linking.MethodOrder);
+        private string? declaredModule;
         private int index, statements;
         private IrValueType activeReturnType = IrValueType.I64;
         // Track actual AST height, not just grammar recursion depth. A flat
@@ -318,13 +371,63 @@ public static class OresStructuredParser
         {
             if (depth > MaxDepth) throw Error("Structured syntax nesting exceeds limit");
         }
-        public StructuredProgram ReadProgram()
+        public StructuredProgram ReadProgram() => ReadDeclarations(true);
+
+        internal IReadOnlyList<SourceImport> ReadImports()
+        {
+            var imports = new List<SourceImport>();
+            while (Take("import"))
+            {
+                int offset = Current.Offset;
+                string kind = Current.Text;
+                if (kind is not ("fnc" or "module")) throw Error("Linked source supports fnc and module imports");
+                index++;
+                string name = Name();
+                Expect("from");
+                string quoted = Current.Text;
+                if (quoted.Length < 3 || quoted[0] != '"' || quoted[^1] != '"' || quoted.Contains('\\'))
+                    throw Error("Import requires an unescaped local source string");
+                index++;
+                Expect(";");
+                if (imports.Count >= 64) throw Error("Import declaration budget exceeded");
+                imports.Add(new SourceImport(kind, name, quoted[1..^1], offset));
+            }
+            return imports.AsReadOnly();
+        }
+
+        internal StructuredLinkedUnit ReadLinkedUnit()
+        {
+            _ = ReadImports();
+            if (Current.Text == "define" && index + 1 < tokens.Count && tokens[index + 1].Text == "module")
+            {
+                index += 2;
+                declaredModule = Name();
+                Expect("as");
+            }
+            var program = ReadDeclarations(linking!.Entry);
+            return new StructuredLinkedUnit(program, declaredModule,
+                new System.Collections.ObjectModel.ReadOnlyDictionary<string, StructuredFunction>(exports));
+        }
+
+        private StructuredProgram Finish(string name, IReadOnlyList<StructuredStmt> body)
+        {
+            if (declaredModule is not null) Expect("end");
+            if (Current.Text.Length != 0) throw Error("Unexpected trailing token");
+            return new StructuredProgram(name, body,
+                new System.Collections.ObjectModel.ReadOnlyDictionary<string, StructuredFunction>(
+                    new Dictionary<string, StructuredFunction>(functions, StringComparer.Ordinal)),
+                Array.AsReadOnly(functionOrder.ToArray()));
+        }
+
+        private StructuredProgram ReadDeclarations(bool entry)
         {
             // Acyclic helper declarations must precede main. The declaration
             // registry only contains *fully typechecked* earlier functions:
             // recursion, mutual recursion and forward references fail closed.
             while (true)
             {
+                if (!entry && (Current.Text.Length == 0 || Current.Text == "end"))
+                    return Finish("library", Array.Empty<StructuredStmt>());
                 bool defined = false, exposed = false;
                 while (Current.Text is "define" or "pub")
                 {
@@ -366,24 +469,25 @@ public static class OresStructuredParser
                     while (Take(","));
                 }
                 Expect(")");
-                Expect(":");
+                if (!Take(":"))
+                {
+                    if (linking is null) Expect(":");
+                    else Expect("->");
+                }
                 if (Current.Text == "(")
                     throw Error("Tuple-v2 shorthand return requires typed tuple ownership/ABI lowering");
                 IrValueType resultType = Type();
-                if (name == "main")
+                if (name == "main" && entry)
                 {
+                    if (visible.ContainsKey(name)) throw Error("Entry main conflicts with an imported callable");
                     activeReturnType = IrValueType.I64;
                     if (parameters.Count != 0 || resultType != IrValueType.I64)
                         throw new FormatException($"main must have signature ():int at offset {at}");
                     var (body, returns) = Block(0);
                     if (!returns) throw Error("Not every path returns int");
-                    if (Current.Text.Length != 0) throw Error("Unexpected trailing token");
-                    return new StructuredProgram("main", body,
-                        new System.Collections.ObjectModel.ReadOnlyDictionary<string, StructuredFunction>(
-                            new Dictionary<string, StructuredFunction>(functions, StringComparer.Ordinal)),
-                        Array.AsReadOnly(functionOrder.ToArray()));
+                    return Finish("main", body);
                 }
-                if (functions.ContainsKey(name))
+                if (visible.ContainsKey(name))
                     throw new FormatException($"Duplicate typed helper at offset {at}");
                 if (functions.Count >= MaxHelpers)
                     throw Error("Typed helper declaration budget exceeded");
@@ -398,10 +502,14 @@ public static class OresStructuredParser
                 StructuredExpr? inlineReturn =
                     helperBody.Count == 1 && helperBody[0] is StructuredReturn only
                         ? only.Value : null;
-                functions.Add(name, new StructuredFunction(name,
+                string methodName = linking?.CanonicalName(name) ?? name;
+                var declaration = new StructuredFunction(methodName,
                     Array.AsReadOnly(parameters.ToArray()), resultType,
-                    inlineReturn, helperBody));
-                functionOrder.Add(name);
+                    inlineReturn, helperBody);
+                functions.Add(methodName, declaration);
+                visible.Add(name, declaration);
+                if (exposed) exports.Add(name, declaration);
+                functionOrder.Add(methodName);
             }
         }
         private (IReadOnlyList<StructuredStmt> Body, bool Returns) Block(int depth)
@@ -563,7 +671,9 @@ public static class OresStructuredParser
                 name is "if" or "else" or "while" or "return" or "let"
                     or "int" or "bool" or "true" or "false"
                     or "define" or "pub" or "fnc" or "const" or "val" or "final"
-                    or "struct" or "record" or "class" or "actor")
+                    or "struct" or "record" or "class" or "actor"
+                    or "module" or "import" or "from" or "as" or "end"
+                    or "routine" or "async" or "isoactor")
                 throw new FormatException($"Invalid identifier at offset {at}");
             index++;
             return name;
@@ -735,9 +845,17 @@ public static class OresStructuredParser
                 return new StructuredInt(offset, n);
             }
             var name = Name();
+            bool localBinding = scopes.Any(scope => scope.ContainsKey(name));
+            if (linking is not null)
+                while (Take("."))
+                {
+                    if (localBinding) throw Error("Qualified access on local values requires nominal type lowering");
+                    name += "." + Name();
+                }
             if (Take("("))
             {
-                if (!functions.TryGetValue(name, out var target))
+                if (localBinding) throw Error("Local value is not a statically bound callable");
+                if (!visible.TryGetValue(name, out var target))
                     throw new FormatException(
                         $"Undefined, recursive or forward typed helper call at offset {offset}");
                 var args = new List<StructuredExpr>();
@@ -760,7 +878,7 @@ public static class OresStructuredParser
                 foreach (var arg in args) height = Math.Max(height, Height(arg) + 1);
                 if (height > MaxDepth)
                     throw new FormatException($"Typed helper call AST depth exceeds limit at offset {offset}");
-                var node = new StructuredCall(offset, name,
+                var node = new StructuredCall(offset, target.Name,
                     Array.AsReadOnly(args.ToArray()), target.ResultType);
                 expressionHeights.Add(node, height);
                 return node;
