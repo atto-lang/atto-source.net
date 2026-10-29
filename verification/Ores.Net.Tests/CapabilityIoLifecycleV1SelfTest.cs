@@ -39,6 +39,22 @@ internal static class CapabilityIoLifecycleV1SelfTest
         Require(gate.RevokeActor(43, 1), "revocation-budget exhaustion not handled");
         Require(gate.Reserve(true, true, true, 44, 1, 55) is null,
             "exhausted revocation ledger failed open");
+        var draining = new HostCapabilityIoLifecycleV1(2, 2);
+        var started = draining.Reserve(true, true, true, 77, 1, 88)
+            ?? throw new Exception("FAILED: host startup reservation");
+        var queued = draining.Reserve(true, true, true, 78, 1, 89)
+            ?? throw new Exception("FAILED: queued reservation");
+        Require(draining.Dispatch(started, 77, 1, 88), "host dispatch denied");
+        Require(draining.Shutdown(), "shutdown not accepted");
+        Require(!draining.Shutdown(), "shutdown not idempotent");
+        Require(draining.InFlight == 2, "shutdown dropped physical credits");
+        Require(!draining.Dispatch(queued, 78, 1, 89), "dispatch after shutdown");
+        Require(draining.Reserve(true, true, true, 79, 1, 90) is null, "admitted during shutdown");
+        Require(!draining.Retire(started, 77, 1, false), "retired without host quiescence");
+        Require(draining.Complete(started, 77, 1), "completion after shutdown lost");
+        Require(draining.Retire(started, 77, 1, true), "completed close not retired");
+        Require(draining.Retire(queued, 78, 1, true), "cancelled close not retired");
+        Require(draining.InFlight == 0, "shutdown leaked physical credits");
     }
 
     private static void Require(bool condition, string why)
