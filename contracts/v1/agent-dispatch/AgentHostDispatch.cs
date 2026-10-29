@@ -51,7 +51,7 @@ public sealed class AgentHostDispatchGate {
             h.NowMs is null) return false;
         try {
             var admittedAt=h.NowMs();
-            if (admittedAt<0 || s.ExpiresAtMs<=admittedAt) return false;
+            if (admittedAt<=0 || s.ExpiresAtMs<=admittedAt) return false;
             if (!h.IsCurrent(s) || !h.Authorize(s) || !h.ClaimOnce(s) ||
                 !h.IsCurrent(s) || !h.Authorize(s)) return false;
             var beforeSubmit=h.NowMs();
