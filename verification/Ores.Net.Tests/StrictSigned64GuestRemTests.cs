@@ -128,12 +128,18 @@ internal static class StrictSigned64GuestRemTests
                 ("Integer.rem(-9223372036854775808, -1)", 0L),
                 ("Integer.rem(-9223372036854775808, 9223372036854775807)", -1L),
                 ("Integer.rem(Integer.rem(9, 4), 2)", 1L),
-                ("Integer.rem(-9, 4) + 43", 42L)
+                ("Integer.rem(-9, 4) + 43", 42L),
+                ("Integer.rem(-9, 4) + (9 % -4)", 0L),
+                ("Integer.rem(9 % 4, Integer.rem(10, 3))", 0L),
+                ("Integer.rem(-9223372036854775808, -1) + (11 % 6)", 5L)
             })
             {
                 var ir = CompileSource(expression);
                 Require(ir.Instructions.Any(op => op.Opcode == IrOpcode.StrictRem),
                     "source must reach verified intrinsic opcode: " + expression);
+                if (expression.Contains('%'))
+                    Require(ir.Instructions.Any(op => op.Opcode == IrOpcode.SignedRemainderLiteral),
+                        "merged literal % and named remainder must remain distinct SSA operations");
                 Require(OresIrReferenceEvaluator.Evaluate(ir) == expected,
                     "SSA reference value: " + expression);
                 string emitted = Path.Combine(folder, "OresGenerated.dll");
@@ -145,6 +151,9 @@ internal static class StrictSigned64GuestRemTests
                 var calls = entry.Body.Instructions.Where(ins =>
                     ins.OpCode.Code == Code.Call).ToArray();
                 Require(calls.Length > 0, "emitted CIL must contain static call");
+                if (expression.Contains('%'))
+                    Require(entry.Body.Instructions.Any(ins => ins.OpCode.Code == Code.Rem),
+                        "literal % must survive alongside named rem static CIL call");
                 Require(calls.All(ins => ins.Operand is MethodReference method &&
                     method.Name == "Rem" &&
                     !method.HasThis && !method.ExplicitThis &&
@@ -199,7 +208,9 @@ internal static class StrictSigned64GuestRemTests
                 "Integer.rem(1.5, 2)", "Integer.rem(1, false)",
                 "Integer.rem(1, 2.0)", "Integer.rem(left=1, 2)",
                 "Integer.rem<int>(1, 2)", "Integer.mod(1, 2)",
-                "Other.rem(1, 2)", "Integer.rem(1, 2).x"
+                "Other.rem(1, 2)", "Integer.rem(1, 2).x",
+                "Integer.rem(1, 2) % 0",
+                "Integer.rem(1, 2) % Integer.rem(1, 2)"
             })
                 Reject(invalid);
 
