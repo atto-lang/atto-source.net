@@ -91,7 +91,12 @@ internal static class StrictSigned64GuestRemTests
                 method.CallingConvention == MethodCallingConvention.Default &&
                 method.Name == "Rem" &&
                 method.DeclaringType.FullName ==
-                    "Ores.Net.Runtime.StrictSigned64Arithmetic"),
+                    "Ores.Net.Runtime.StrictSigned64Arithmetic" &&
+                method.DeclaringType.Scope is AssemblyNameReference
+                    { Name: "Ores.Net.Runtime", Version: { Major: 1, Minor: 0, Build: 0, Revision: 0 } } &&
+                method.ReturnType.MetadataType == MetadataType.Int64 &&
+                method.Parameters.Count == 2 &&
+                method.Parameters.All(p => p.ParameterType.MetadataType == MetadataType.Int64)),
                 "portable rem emitted CIL static call " + id);
             if (expected.TryGetProperty("error", out var error))
             {
@@ -162,7 +167,7 @@ internal static class StrictSigned64GuestRemTests
                     method.DeclaringType.FullName ==
                         "Ores.Net.Runtime.StrictSigned64Arithmetic" &&
                     method.DeclaringType.Scope is AssemblyNameReference
-                        { Name: "Ores.Net.Runtime" } &&
+                        { Name: "Ores.Net.Runtime", Version: { Major: 1, Minor: 0, Build: 0, Revision: 0 } } &&
                     method.ReturnType.MetadataType == MetadataType.Int64 &&
                     method.Parameters.Count == 2 &&
                     method.Parameters.All(p =>
@@ -193,6 +198,11 @@ internal static class StrictSigned64GuestRemTests
                     RejectForgedRemCall(entry,
                         m => m.DeclaringType = entry.Module.TypeSystem.Object,
                         "wrong runtime type");
+                    RejectForgedRemCall(entry,
+                        m => m.DeclaringType = new Mono.Cecil.TypeReference(
+                            "Ores.Net.Runtime", "StrictSigned64Arithmetic", entry.Module,
+                            new AssemblyNameReference("Ores.Net.Runtime", new Version(2, 0, 0, 0))),
+                        "wrong runtime assembly version");
                 }
                 string reproducible = Path.Combine(folder, "OresGenerated.repro.dll");
                 CilEmitter.EmitLibrary(ir, reproducible);
