@@ -35,6 +35,31 @@ verification route.
 Scope: [source.net PR #192](https://github.com/ores-truffle-oreslang/oreslang-source.net/pull/192),
 retargeted to main, with merged dependency PRs #186 and #194 preserved.
 
+## Second audit: forwarding tails and identity exhaustion
+
+`ActiveObservers` deliberately frees an observer permit just before
+publishing its projected result. Since the forwarding coroutine has not yet
+finished at that instant, admissions previously checked only
+`ActiveObservers` and could overlap arbitrarily many unretired forwarding
+tails under contention. The production admission lock now independently
+enforces `pendingObserverForwarders < observerLimit` before reserving an
+active observer. This bounds both the waiting phase and completion tail,
+including their combined count, without advancing the close boundary.
+
+Managed regression code uses narrowly scoped private-field fault injection
+to hold a synthetic unfinished forwarding tail with zero active observers.
+It expects further admission to fail without consuming a permit, then
+restores state before disposing the scope. An additional regression
+forces `nextId = long.MaxValue` to prove overflow rejects and rolls back
+reserved producer quota; it then admits the last valid ID exactly once
+and rejects the next attempt without wrapping identity or replaying work.
+
+**Execution status:** fault-injection regressions and source changes have
+not run under a C# compiler/JIT or NativeAOT on this head. Git source
+comparison and textual checks are not execution evidence. Do not silently
+release the draft merge hold, infer actor continuation affinity or classify
+zero-step CI runs as tests.
+
 ## Follow-up hardening: admission caps and failed allocations
 
 The bounded scheduler now rejects producer or observer capacities outside
