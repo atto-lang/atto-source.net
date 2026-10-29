@@ -138,6 +138,11 @@ public static class OresParser
                     (text[_i] is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_'))
                     _i++;
                 var word = text[start.._i];
+                // G0: unsupported unsafe source must not become a normal
+                // identifier, callable, member or intrinsic in scalar CIL.
+                if (word == "unsafe")
+                    throw new FormatException(
+                        $"unsafe boundary requires checked effects, native grants and Native AOT lowering at offset {start}");
                 if (word is "any" or "unknown" or "Any" or "Unknown")
                     throw new FormatException(
                         "any/unknown requires tagged opaque-value ABI and Native AOT runtime descriptors");
