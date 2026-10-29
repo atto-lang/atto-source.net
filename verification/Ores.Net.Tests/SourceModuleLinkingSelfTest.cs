@@ -218,6 +218,17 @@ internal static class SourceModuleLinkingSelfTest
                 Reject(() => OresSourceModuleCompiler.Compile(controlName, new[] { root }),
                     "newline filename cannot break source graph witness framing",
                     "Unsupported source path identity character");
+                // A case-sensitive filesystem can contain both files, but
+                // mapping the graph onto Windows would alias their identities.
+                Write("Upper.ores", "define module upper as pub fnc value():int { return 10; } end");
+                Write("upper.ores", "define module lower as pub fnc value():int { return 32; } end");
+                Write("case-map.ores", "import module upper from \"./Upper\"; " +
+                    "import module lower from \"./upper\"; pub fnc main():int { " +
+                    "return upper.value() + lower.value(); }");
+                Reject(() => OresSourceModuleCompiler.Compile(
+                    Path.Combine(root, "case-map.ores"), new[] { root }),
+                    "case-folded reachable files have nonportable source identities",
+                    "Case-insensitive source identity collision");
 
                 // A real leaf directory below a symlinked parent must not be
                 // accepted as an explicit source root. Checking only the

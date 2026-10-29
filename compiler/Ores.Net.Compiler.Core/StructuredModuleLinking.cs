@@ -67,6 +67,9 @@ public static class OresSourceModuleCompiler
         }
         var units = new Dictionary<string, Unit>(comparer);
         var states = new Dictionary<string, int>(comparer);
+        // A single graph must be portable between case-sensitive and
+        // case-insensitive target filesystems; fail closed on aliasing.
+        var portableIdentities = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var ordered = new List<Unit>();
         int totalBytes = 0;
         string entry = AdmitPath(Path.GetFullPath(entrypoint));
@@ -128,6 +131,9 @@ public static class OresSourceModuleCompiler
                 return;
             }
             if (units.Count >= MaxUnits) throw new FormatException("Source graph exceeds 64 units");
+            string identity = Identity(path);
+            if (!portableIdentities.Add(identity))
+                throw new FormatException("Case-insensitive source identity collision");
             byte[] bytes = ReadBounded(path);
             totalBytes = checked(totalBytes + bytes.Length);
             if (totalBytes > MaxGraphBytes) throw new FormatException("Source graph exceeds 8 MiB");
@@ -135,7 +141,6 @@ public static class OresSourceModuleCompiler
             try { source = Utf8.GetString(bytes); }
             catch (DecoderFallbackException failure) { throw new FormatException("Source is not strict UTF-8", failure); }
             if (source.Contains('\0') || source.StartsWith('\uFEFF')) throw new FormatException("Source NUL/BOM is not admitted");
-            string identity = Identity(path);
             var unit = new Unit(path, identity, source,
                 new SourceUnitIdentity(identity, Convert.ToHexStringLower(SHA256.HashData(bytes)), bytes.Length),
                 OresStructuredParser.ReadLinkedImports(source));
