@@ -198,6 +198,18 @@ internal static class SourceModuleLinkingSelfTest
                 new[] { root, Path.Combine(root, "dependency") }).Sources.Count == 2, "explicit dependency root admitted");
             if (!OperatingSystem.IsWindows())
             {
+                // A real leaf directory below a symlinked parent must not be
+                // accepted as an explicit source root. Checking only the
+                // leaf's ReparsePoint attribute would miss this alias.
+                Directory.CreateDirectory(Path.Combine(root, "safe-root", "inner"));
+                Write("safe-root/inner/entry.ores", "pub fnc main():int { return 42; }");
+                Directory.CreateSymbolicLink(Path.Combine(root, "aliased-parent"),
+                    Path.Combine(root, "safe-root"));
+                string aliasedRoot = Path.Combine(root, "aliased-parent", "inner");
+                Reject(() => OresSourceModuleCompiler.Compile(
+                    Path.Combine(aliasedRoot, "entry.ores"), new[] { aliasedRoot }),
+                    "symlinked ancestor of an explicit source root", "Symlink/reparse");
+
                 File.Delete(Path.Combine(root, "dependency/.oreslangc.cfg.toml"));
                 File.CreateSymbolicLink(Path.Combine(root, "dependency/.oreslangc.cfg.toml"), Path.Combine(root, "dependency/missing.cfg"));
                 Reject(Compile, "dangling package marker retains dependency boundary", "explicit dependency source root");

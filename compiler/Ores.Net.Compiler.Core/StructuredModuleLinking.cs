@@ -61,7 +61,9 @@ public static class OresSourceModuleCompiler
         foreach (string root in roots)
         {
             if (!Directory.Exists(root)) throw new FormatException("Source root does not exist");
-            RejectReparse(root);
+            // The final root directory may be real while an ancestor is a
+            // symlink/junction. Admission must walk the entire supplied path.
+            RejectReparseAncestors(root);
         }
         var units = new Dictionary<string, Unit>(comparer);
         var states = new Dictionary<string, int>(comparer);
@@ -206,6 +208,16 @@ public static class OresSourceModuleCompiler
     {
         if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
             throw new FormatException("Symlink/reparse source paths are not admitted");
+    }
+
+    private static void RejectReparseAncestors(string path)
+    {
+        // Reject an alias in any ancestor of the configured source root, not
+        // only a reparse point on the root itself. Never resolve a symlink
+        // and silently replace the caller's declared authority boundary.
+        for (string? cursor = Path.GetFullPath(path); cursor is not null;
+             cursor = Path.GetDirectoryName(cursor))
+            RejectReparse(cursor);
     }
 
     private static byte[] ReadBounded(string path)
