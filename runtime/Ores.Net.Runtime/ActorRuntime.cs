@@ -168,7 +168,7 @@ public sealed class ActorContext
 /// actor cell's control state and the already-scheduled actor-domain token
 /// performs finalization after the current physical turn.
 /// </summary>
-public sealed class ActorRuntime : IDisposable
+public sealed class ActorRuntime : IDisposable, IAsyncDisposable
 {
     [ThreadStatic]
     private static ActorRuntime? s_currentRuntime;
@@ -178,6 +178,12 @@ public sealed class ActorRuntime : IDisposable
     // not merely observe the _closed admission flag and return prematurely.
     private readonly object _disposeGate = new();
     private readonly Dictionary<ulong, ActorCell> _actors = new();
+    // Only actors whose native retirement is still incomplete are retained.
+    // Finalized actors with pending native disposal must not disappear from
+    // Runtime.Dispose/DisposeAsync's physical shutdown barrier.
+    private readonly HashSet<ActorCell> _retiringCells = new();
+    private Exception? _priorNativeRetirementFailure;
+    private Task? _shutdownTask;
     private readonly ActorRuntimeOptions _options;
     private readonly ActorArenaBudget _nativeBudget;
     private readonly ActorDispatchDomains _domains;
@@ -307,37 +313,49 @@ public sealed class ActorRuntime : IDisposable
         }
     }
 
-    public void Stop(ActorRef actor)
+    /// <summary>
+    /// Durable shutdown receipt. A stopped actor may leave the live registry
+    /// immediately, but a holder of this receipt can still await its physical
+    /// actor-turn AND QUIC resource retirement without a stale lookup.
+    /// Retaining receipts is the caller's responsibility, rather than an
+    /// unbounded runtime-wide tombstone table.
+    /// </summary>
+    public sealed class ActorRetirementReceipt
     {
-        ActorCell cell = Lookup(actor);
-        bool finalizeNow;
+        private readonly ActorRuntime _runtime;
+        private readonly ActorArena _arena;
+        private readonly Task _physicalRetirement;
 
-        lock (cell.Gate)
+        internal ActorRetirementReceipt(ActorRuntime runtime, ActorArena arena,
+            Task nativeRetirement, Task dispatchFinalized)
         {
-            if (!cell.Mailbox.Authorizes(actor))
-                throw new InvalidOperationException("Actor reference is stale");
-
-            MarkStoppingLocked(cell);
-            finalizeNow = cell.Scheduled == 0;
+            _runtime = runtime;
+            _arena = arena;
+            _physicalRetirement = Task.WhenAll(nativeRetirement, dispatchFinalized);
         }
 
-        if (finalizeNow)
-            FinalizeCell(cell);
+        internal ActorRuntime Owner => _runtime;
+
+        public async Task<bool> WaitAsync(
+            CancellationToken cancellationToken = default)
+        {
+            if (ReferenceEquals(s_currentRuntime, _runtime))
+                throw new InvalidOperationException(
+                    "An actor carrier cannot wait for its own physical retirement");
+            await _physicalRetirement.WaitAsync(cancellationToken)
+                .ConfigureAwait(false);
+            return _arena.IsReclaimed;
+        }
     }
 
     /// <summary>
-    /// Stop admission immediately, then asynchronously wait for all
-    /// registered QUIC native resources AND the physical actor dispatch to
-    /// retire. True requires arena reclamation; false reports remaining
-    /// non-QUIC lifetime pins/loans rather than inventing a receipt.
-    /// Do not await this from an actor handler/carrier.
+    /// Synchronously revoke admission, then return a durable physical
+    /// retirement receipt. The call itself does not block on native I/O.
+    /// Its return value can be ignored by legacy callers, or retained and
+    /// awaited after the actor has disappeared from the live registry.
     /// </summary>
-    public async Task<bool> StopAndDrainQuicAsync(
-        ActorRef actor, CancellationToken cancellationToken = default)
+    public ActorRetirementReceipt Stop(ActorRef actor)
     {
-        if (ReferenceEquals(s_currentRuntime, this))
-            throw new InvalidOperationException(
-                "Actor carrier must not await its own physical retirement");
         ActorCell cell = Lookup(actor);
         bool finalizeNow;
         lock (cell.Gate)
@@ -347,30 +365,59 @@ public sealed class ActorRuntime : IDisposable
             MarkStoppingLocked(cell);
             finalizeNow = cell.Scheduled == 0;
         }
+        var receipt = new ActorRetirementReceipt(this, cell.Arena,
+            cell.NativeQuic.Retired, cell.FinalizedSignal.Task);
         if (finalizeNow) FinalizeCell(cell);
-        await Task.WhenAll(cell.NativeQuic.Retired, cell.FinalizedSignal.Task)
-            .WaitAsync(cancellationToken).ConfigureAwait(false);
-        return cell.Arena.IsReclaimed;
+        return receipt;
     }
 
-    public void Dispose()
+    public Task<bool> StopAndDrainQuicAsync(ActorRef actor,
+        CancellationToken cancellationToken = default)
     {
         if (ReferenceEquals(s_currentRuntime, this))
             throw new InvalidOperationException(
-                "ActorRuntime.Dispose cannot run from one of its actor carriers");
+                "An actor carrier cannot wait for its own physical retirement");
+        return Stop(actor).WaitAsync(cancellationToken);
+    }
 
-        // Hold across joins and final reclamation, not just the _closed check.
+    /// <summary>
+    /// Await a receipt captured when Stop ran, even if its actor is already
+    /// removed from the live registry. The source runtime verifies ownership.
+    /// </summary>
+    public Task<bool> StopAndDrainQuicAsync(
+        ActorRetirementReceipt receipt,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(receipt);
+        if (!ReferenceEquals(receipt.Owner, this))
+            throw new InvalidOperationException("Foreign actor retirement receipt");
+        return receipt.WaitAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Runtime-wide asynchronous physical shutdown. A successfully completed
+    /// task proves all captured actors have finished dispatch and native QUIC
+    /// disposal; a disposal fault is propagated, never reported as success.
+    /// This is soft-RT host control work, not an actor-carrier operation.
+    /// </summary>
+    public ValueTask DisposeAsync()
+    {
+        if (ReferenceEquals(s_currentRuntime, this))
+            throw new InvalidOperationException(
+                "Actor carrier cannot await runtime shutdown");
         lock (_disposeGate)
         {
+            if (_shutdownTask is not null)
+                return new ValueTask(_shutdownTask);
+
             ActorCell[] cells;
             lock (_gate)
             {
-                if (_closed)
-                    return;
                 _closed = true;
-                cells = _actors.Values.ToArray();
+                // Include finalized actors while their QUIC resources still
+                // retire; only live _actors would omit pending native handles.
+                cells = _actors.Values.Concat(_retiringCells).Distinct().ToArray();
             }
-
             foreach (ActorCell cell in cells)
             {
                 bool finalizeNow;
@@ -379,17 +426,51 @@ public sealed class ActorRuntime : IDisposable
                     MarkStoppingLocked(cell);
                     finalizeNow = cell.Scheduled == 0;
                 }
-                if (finalizeNow)
-                    FinalizeCell(cell);
+                if (finalizeNow) FinalizeCell(cell);
             }
 
-            _domains.Dispose();
+            _shutdownTask = Task.Run(async () =>
+            {
+                Exception? carrierFailure = null;
+                try { _domains.Dispose(); }
+                catch (Exception error) { carrierFailure = error; }
+                finally
+                {
+                    foreach (ActorCell cell in cells)
+                        FinalizeCell(cell);
+                }
 
-            // All queued/running dispatch tokens have returned at this point.
-            foreach (ActorCell cell in cells)
-                FinalizeCell(cell);
+                // Even if a carrier fails during join, native retirement must
+                // still finish or fault before the shutdown task completes.
+                await Task.WhenAll(cells.Select(cell =>
+                    Task.WhenAll(cell.NativeQuic.Retired,
+                                 cell.FinalizedSignal.Task)))
+                    .ConfigureAwait(false);
+
+                if (carrierFailure is not null)
+                    throw new InvalidOperationException(
+                        "Actor carriers did not physically join", carrierFailure);
+
+                lock (_gate)
+                {
+                    if (_priorNativeRetirementFailure is not null)
+                        throw new InvalidOperationException(
+                            "Prior native QUIC actor retirement failed",
+                            _priorNativeRetirementFailure);
+                }
+
+                if (cells.Any(cell => !cell.Arena.IsReclaimed))
+                    throw new InvalidOperationException(
+                        "Runtime shutdown finished without physical actor reclamation");
+            });
+            return new ValueTask(_shutdownTask);
         }
     }
+
+    // Legacy synchronous Dispose cannot silently claim shutdown before
+    // native QUIC retirement. It blocks the external caller, never a carrier.
+    public void Dispose() =>
+        DisposeAsync().AsTask().GetAwaiter().GetResult();
 
     private ActorCell Lookup(ActorRef actor)
     {
@@ -558,6 +639,30 @@ public sealed class ActorRuntime : IDisposable
             if (_actors.TryGetValue(cell.Reference.Id, out ActorCell? current) &&
                 ReferenceEquals(current, cell))
                 _actors.Remove(cell.Reference.Id);
+
+            if (!cell.NativeQuic.Retired.IsCompleted)
+            {
+                _retiringCells.Add(cell);
+                // Do not keep every finished actor forever. Record a prior
+                // failure first, then release the temporary native ledger.
+                _ = cell.NativeQuic.Retired.ContinueWith(completed =>
+                {
+                    lock (_gate)
+                    {
+                        if (completed.IsFaulted)
+                            _priorNativeRetirementFailure ??=
+                                completed.Exception?.GetBaseException();
+                        _retiringCells.Remove(cell);
+                    }
+                }, CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            }
+            else if (cell.NativeQuic.Retired.IsFaulted)
+            {
+                _priorNativeRetirementFailure ??=
+                    cell.NativeQuic.Retired.Exception?.GetBaseException();
+            }
         }
         cell.FinalizedSignal.TrySetResult(true);
     }
