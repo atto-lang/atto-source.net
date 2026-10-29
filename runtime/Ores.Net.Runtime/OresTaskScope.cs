@@ -11,6 +11,10 @@ namespace Ores.Net.Runtime;
 /// </summary>
 public sealed class OresTaskScope : IAsyncDisposable
 {
+    // Host-only bootstrap limits. Do not allow caller-selected int.MaxValue
+    // capacities to turn a bounded implementation into an exhaustion primitive.
+    private const int MaxProducers = 4096;
+    private const int MaxObservers = 4096;
     private readonly Channel<Func<ValueTask>> queue;
     // Serializes the admit/close boundary, including work published to the
     // queue and observer forwarders registered before shutdown.
@@ -40,9 +44,12 @@ public sealed class OresTaskScope : IAsyncDisposable
 
     public OresTaskScope(int maxProducers = 16, int maxObservers = 32)
     {
-        if (maxProducers <= 0 || maxObservers <= 0)
+        if (maxProducers <= 0 || maxProducers > MaxProducers)
             throw new ArgumentOutOfRangeException(nameof(maxProducers),
-                "Task scope limits must be positive");
+                "Task producer capacity must be within 1..4096");
+        if (maxObservers <= 0 || maxObservers > MaxObservers)
+            throw new ArgumentOutOfRangeException(nameof(maxObservers),
+                "Task observer capacity must be within 1..4096");
         producerLimit = maxProducers;
         observerLimit = maxObservers;
         queue = Channel.CreateBounded<Func<ValueTask>>(new BoundedChannelOptions(maxProducers)
@@ -111,9 +118,14 @@ public sealed class OresTaskScope : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(producer);
         if (!ReferenceEquals(producer.Scope, this))
             throw new InvalidOperationException("Cross-scope Task observation is not admitted");
-        if (Volatile.Read(ref closed) != 0)
-            throw new InvalidOperationException("Oreslang Task scope closed");
-        return new OresFuture<T>(this, producer.ProducerId, producer.Completion);
+        lock (admissionGate)
+        {
+            if (closed != 0)
+                throw new InvalidOperationException("Oreslang Task scope closed");
+            // Conversion is admitted atomically against scope close.
+            // This does not reserve an observer until ObserveAsync is called.
+            return new OresFuture<T>(this, producer.ProducerId, producer.Completion);
+        }
     }
 
     internal Task<T> Observe<T>(Task<T> source, CancellationToken cancellation)
@@ -128,9 +140,16 @@ public sealed class OresTaskScope : IAsyncDisposable
             {
                 projected = new TaskCompletionSource<T>(
                     TaskCreationOptions.RunContinuationsAsynchronously);
-                if (pendingObserverForwarders++ == 0)
-                    forwardersDrained = new TaskCompletionSource<bool>(
+                // Allocate before mutating forwarding counters so OOM or
+                // constructor failure cannot strand the disposal drain.
+                TaskCompletionSource<bool>? nextDrain = null;
+                if (pendingObserverForwarders == 0)
+                    nextDrain = new TaskCompletionSource<bool>(
                         TaskCreationOptions.RunContinuationsAsynchronously);
+                if (pendingObserverForwarders == int.MaxValue)
+                    throw new OverflowException("Observer forwarding capacity overflow");
+                pendingObserverForwarders++;
+                if (nextDrain is not null) forwardersDrained = nextDrain;
             }
             catch
             {
