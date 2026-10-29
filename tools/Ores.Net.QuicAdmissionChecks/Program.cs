@@ -336,7 +336,7 @@ using (var registryRuntime = new ActorRuntime(new ActorRuntimeOptions {
         throw new InvalidOperationException("Durable actor did not start native disposal");
     // Wait for the actor's physical dispatch to finish and be removed while
     // its native connection remains pending. A bare ActorRef lookup is stale.
-    if (!SpinWait.SpinUntil(() => registryRuntime.LiveActors <= 1,
+    if (!SpinWait.SpinUntil(() => registryRuntime.LiveActors == 0,
                             TimeSpan.FromSeconds(10)))
         throw new InvalidOperationException("Durable stopped actor remained live");
     var laterWait = registryRuntime.StopAndDrainQuicAsync(receipt);
