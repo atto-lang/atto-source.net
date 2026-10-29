@@ -43,6 +43,38 @@ internal static class AsyncSourceSliceTests
                 "maximum bounded capacities begin with no admission");
         }
 
+        // Force producer ID exhaustion without allocating billions of
+        // producers. A failed ID allocation must roll back producer quota;
+        // the final valid long ID remains unique and the next admission
+        // must fail closed rather than wrap into a negative ID.
+        await using (var scope = new OresTaskScope(1, 1))
+        {
+            var ids = typeof(OresTaskScope).GetField(
+                "nextId", System.Reflection.BindingFlags.Instance |
+                          System.Reflection.BindingFlags.NonPublic)
+                ?? throw new Exception("Missing monotonic producer ID state");
+            ids.SetValue(scope, long.MaxValue);
+            try { _ = scope.Start(_ => ValueTask.FromResult(1L)); }
+            catch (OverflowException) { goto first_id_overflow; }
+            throw new Exception("Exhausted producer identity was reused");
+            first_id_overflow:;
+            Require(scope.ActiveProducers == 0,
+                "ID exhaustion must roll back reserved producer quota");
+            ids.SetValue(scope, long.MaxValue - 1);
+            var last = scope.Start(_ => ValueTask.FromResult(42L));
+            Require(last.ProducerId == long.MaxValue,
+                "last positive identity was not admitted");
+            Require((await last.Retirement.WaitAsync(TimeSpan.FromSeconds(10)))
+                .ProducerId == long.MaxValue,
+                "last producer retirement ID was not stable");
+            try { _ = scope.Start(_ => ValueTask.FromResult(1L)); }
+            catch (OverflowException) { goto second_id_overflow; }
+            throw new Exception("Producer identity wrapped after maximum");
+            second_id_overflow:;
+            Require(scope.ActiveProducers == 0 && scope.ProducerInvocations == 1,
+                "failed overflow admission must not execute or consume quota");
+        }
+
         // Deterministic regression for the gap between observer quota
         // release and completed forwarder retirement. Inject an incomplete
         // forwarding tail while ActiveObservers is zero: admission must
