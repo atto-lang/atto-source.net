@@ -20,6 +20,29 @@ internal static class AsyncSourceSliceTests
 
     internal static async Task Run()
     {
+        // Capacity is bounded by policy, not merely by caller-selected int
+        // values; rejecting huge limits prevents accidental unbounded resource
+        // commitments in the trusted-host scheduler.
+        foreach (var badProducers in new[] { -1, 0, 4097, int.MaxValue })
+        {
+            try { _ = new OresTaskScope(badProducers, 1); }
+            catch (ArgumentOutOfRangeException error) when
+                (error.ParamName == "maxProducers") { continue; }
+            throw new Exception("Invalid producer capacity admitted: " + badProducers);
+        }
+        foreach (var badObservers in new[] { -1, 0, 4097, int.MaxValue })
+        {
+            try { _ = new OresTaskScope(1, badObservers); }
+            catch (ArgumentOutOfRangeException error) when
+                (error.ParamName == "maxObservers") { continue; }
+            throw new Exception("Invalid observer capacity admitted: " + badObservers);
+        }
+        await using (var largest = new OresTaskScope(4096, 4096))
+        {
+            Require(largest.ActiveObservers == 0 && largest.ActiveProducers == 0,
+                "maximum bounded capacities begin with no admission");
+        }
+
         Require(OresAsyncSourceSlice.Parse(Guest).LiteralValue == 42,
             "source-literal admission");
         Require(OresAsyncSourceSlice.Parse(
@@ -250,6 +273,10 @@ internal static class AsyncSourceSliceTests
             Require(!firstDisposal.IsCompleted && !secondDisposal.IsCompleted &&
                 !producer.Retirement.IsCompleted && scope.ActiveProducers == 1,
                 "closed scope must not masquerade as drained producer");
+            try { _ = scope.FromTask(producer); }
+            catch (InvalidOperationException) { goto conversion_after_close; }
+            throw new Exception("closed scope converted a producer after shutdown");
+            conversion_after_close:;
             try { _ = scope.Start(_ => ValueTask.FromResult(1L)); }
             catch (InvalidOperationException) { goto after_close; }
             throw new Exception("closed scope admitted a new producer");
