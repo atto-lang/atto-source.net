@@ -82,25 +82,6 @@ jobs:
       - name: Publish native compiler and native application
         shell: pwsh
         run: ./scripts/publish-windows.ps1 -Source examples/hello.ores -Rid win-x64
-      - name: Execute typed Integer.rem guest in Windows Native AOT
-        shell: pwsh
-        run: |
-          $PSNativeCommandUseErrorActionPreference = $false
-          ./scripts/publish-windows.ps1 -Source examples/strict-rem42.ores -Rid win-x64 -Output artifacts/strict-rem42
-          if ($LASTEXITCODE -ne 0) { throw 'Strict rem native publish failed' }
-          $output = & ./artifacts/strict-rem42/win-x64/oreslang-app.exe
-          if ($LASTEXITCODE -ne 0 -or ($output | Out-String).Trim() -cne '42') {
-            throw "Strict rem native output mismatch: $output"
-          }
-          ./scripts/publish-windows.ps1 -Source examples/strict-rem-zero.ores -Rid win-x64 -Output artifacts/strict-rem-zero
-          if ($LASTEXITCODE -ne 0) { throw 'Strict rem zero native publish failed' }
-          $errorOutput = & ./artifacts/strict-rem-zero/win-x64/oreslang-app.exe 2>&1
-          $guestExit = $LASTEXITCODE
-          if ($guestExit -ne 70 -or ($errorOutput | Out-String).Trim() -notlike '*Oreslang division by zero*') {
-            throw "Strict rem zero guest failure mismatch: status=$guestExit output=$errorOutput"
-          }
-          $global:LASTEXITCODE = 0 # Expected guest failure must not fail this validation step
-          Write-Host 'WINDOWS_NET_NATIVE_AOT_STRICT_REM_GUEST_EXECUTED_42_ZERO'
       - name: Exercise the released Native AOT compiler CLI
         shell: pwsh
         run: ./verification/assert-native-compiler-cli.ps1 -Compiler ./artifacts/compiler/win-x64/oresnet.exe -ValidSource examples/hello.ores
@@ -403,6 +384,31 @@ jobs:
       # managed-regression and CFG-execution checks finished in this same job.
       # GitHub's successful job conclusion and nonempty step records remain
       # necessary corroborating evidence; this receipt is not a signature.
+      - name: Execute typed Integer.rem guest in Windows Native AOT
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          ./scripts/publish-windows.ps1 -Source examples/strict-rem42.ores -Rid win-x64 -Output artifacts/strict-rem42
+          if ($LASTEXITCODE -ne 0) { throw 'Strict rem native publish failed' }
+          $output = & ./artifacts/strict-rem42/win-x64/oreslang-app.exe
+          if ($LASTEXITCODE -ne 0 -or ($output | Out-String).Trim() -cne '42') {
+            throw "Strict rem native output mismatch: $output"
+          }
+          ./scripts/publish-windows.ps1 -Source examples/strict-rem-min42.ores -Rid win-x64 -Output artifacts/strict-rem-min42
+          if ($LASTEXITCODE -ne 0) { throw 'Strict rem minimum native publish failed' }
+          $minOutput = & ./artifacts/strict-rem-min42/win-x64/oreslang-app.exe
+          if ($LASTEXITCODE -ne 0 -or ($minOutput | Out-String).Trim() -cne '42') {
+            throw "Strict rem minimum native output mismatch: $minOutput"
+          }
+          ./scripts/publish-windows.ps1 -Source examples/strict-rem-zero.ores -Rid win-x64 -Output artifacts/strict-rem-zero
+          if ($LASTEXITCODE -ne 0) { throw 'Strict rem zero native publish failed' }
+          $errorOutput = & ./artifacts/strict-rem-zero/win-x64/oreslang-app.exe 2>&1
+          $guestExit = $LASTEXITCODE
+          if ($guestExit -ne 70 -or ($errorOutput | Out-String).Trim() -notlike '*Oreslang division by zero*') {
+            throw "Strict rem zero guest failure mismatch: status=$guestExit output=$errorOutput"
+          }
+          $global:LASTEXITCODE = 0 # Expected guest failure must not fail this validation step
+          Write-Host 'WINDOWS_NET_NATIVE_AOT_STRICT_REM_GUEST_EXECUTED_42_MIN_ZERO'
       - name: Emit exact-head Windows Native AOT run receipt
         shell: pwsh
         env:
@@ -426,7 +432,8 @@ jobs:
             runner_os = $env:RUNNER_OS
             target_rid = 'win-x64'
             checks = @('managed-regressions','native-compiler','native-app',
-                       'native-PE','arithmetic-negative','CFG-native-execution')
+                       'native-PE','arithmetic-negative','CFG-native-execution',
+                       'strict-rem-guest42-min-zero')
             source_only = $false
             independently_verified = $false
           }
