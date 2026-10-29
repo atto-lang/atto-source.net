@@ -29,6 +29,35 @@ try {
     # The updated main branch also exposes experimental structured and source
     # emission commands. None may bypass the Task/Future fail-closed gate.
     $modes = @('check', 'check-structured', 'compile-structured', 'emit-csharp', 'emit-fsharp')
+    # A broken/disabled CLI command must not be mistaken for a fail-closed
+    # async admission result. First prove every command accepts the known
+    # supported scalar fixture, and emits a real artifact when applicable.
+    $supported = Join-Path $root 'scalar.ores'
+    [IO.File]::WriteAllText($supported, 'fnc main():int{return 42;}', $encoding)
+    $supportedOut = Join-Path $root 'supported'
+    $null = New-Item -ItemType Directory -Path $supportedOut
+    foreach ($mode in $modes) {
+        $expectedArtifact = switch ($mode) {
+            'compile-structured' { Join-Path $supportedOut 'OresGenerated.dll' }
+            'emit-csharp' { Join-Path $supportedOut 'OresProgram.cs' }
+            'emit-fsharp' { Join-Path $supportedOut 'OresProgram.fs' }
+            default { $null }
+        }
+        $supportedArgs = if ($null -eq $expectedArtifact) {
+            @($mode, $supported)
+        } else {
+            @($mode, $supported, '--out', $expectedArtifact)
+        }
+        $supportedOutput = & $Compiler @supportedArgs 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0 -or
+            ($null -ne $expectedArtifact -and
+             -not (Test-Path -LiteralPath $expectedArtifact -PathType Leaf))) {
+            throw ('Supported scalar source was rejected by ' + $mode +
+                ': exit=' + $LASTEXITCODE + ' output=' + $supportedOutput)
+        }
+    }
+    Write-Output 'NET_ASYNC_ADDITIONAL_COMMANDS_POSITIVE_CONTROLS; cases=5; artifacts=3'
+
     foreach ($mode in $modes) {
         $outFile = switch ($mode) {
             'compile-structured' { Join-Path $root 'OresGenerated.dll' }
