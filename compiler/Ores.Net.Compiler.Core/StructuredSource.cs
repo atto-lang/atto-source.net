@@ -297,6 +297,8 @@ public static class OresStructuredParser
                      source[index + 1] == '=') index += 2;
             else if (moduleMode && index + 1 < source.Length &&
                 (source.Substring(index, 2) is "->" or "&&" or "||" or ">=" or "<=")) index += 2;
+            else if (ch == '@')
+                throw new FormatException($"Source annotations require typed compiler validation and Native AOT lowering at offset {offset}");
             else if (ch == '|' && !moduleMode)
                 throw new FormatException(
                     $"Lexical captures require checked closure lowering at offset {offset}");
