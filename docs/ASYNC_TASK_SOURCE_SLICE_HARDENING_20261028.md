@@ -35,6 +35,37 @@ verification route.
 Scope: [source.net PR #192](https://github.com/ores-truffle-oreslang/oreslang-source.net/pull/192),
 retargeted to main, with merged dependency PRs #186 and #194 preserved.
 
+## Follow-up hardening: admission caps and failed allocations
+
+The bounded scheduler now rejects producer or observer capacities outside
+`1..4096`, including `int.MaxValue`. This is an *absolute* host-side
+resource ceiling, not merely a dynamically selected caller quota.
+
+Observer forwarding registration allocates its next drain witness **before**
+incrementing `pendingObserverForwarders`, preventing allocation failure from
+stranding a nonzero count or obstructing physical shutdown. `FromTask` also
+takes the same admission lock as shutdown, so a conversion cannot succeed
+after close has linearized. New managed regressions reject illegal caps,
+accept 4096, and reject producer-to-Future conversion after closure.
+
+The static Git-blob/source assertions for these changes succeeded.
+**No C# compiler, managed runtime, or NativeAOT job has executed this updated
+head yet.** A source-free model or an earlier carrier run cannot be used as
+execution proof for these C# changes.
+
+### Alternate runner policy
+
+Private carrier `honeypot-r-us-test/hnpt-e2e`, immutable repository ID
+`1346492776`, has real executed source-free jobs (7 and 8 successful
+steps) and earlier Linux/Windows NativeAOT executions. That establishes
+runner **availability evidence**, not an org budget balance or transfer
+authorization. The authoritative Oreslang source policy still has no active
+destination/snapshot approval and an independent reviewer disabled.
+The current immutable commit/tree/destination must be separately approved
+through protected source governance before any cross-org Git-tree mirror.
+Any new commit invalidates an older candidate snapshot. Do not repurpose
+a prior receipt or transfer unapproved private source to a test repository.
+
 ## Audit findings and repairs
 
 | Finding | Risk before patch | Repair | Verification |
