@@ -134,6 +134,26 @@ node --test verification/source-local-receipt-gate.test.mjs
 node verification/source-local-receipt-gate.mjs bundle.json
 \`\`\`
 
+
+After independently downloading the **original** GitHub Actions artifacts and
+extracting them into two separate directories (do not execute the contained
+binaries), run the source-free byte verifier as a second independent gate:
+
+```bash
+node --test verification/source-local-artifact-byte-gate.test.mjs
+node verification/source-local-artifact-byte-gate.mjs bundle.json \
+  /path/to/linux-extracted /path/to/windows-extracted
+```
+
+It rejects unknown/missing files, symlinks, modified receipts, bad SHA-256,
+managed PE/CLR headers, and wrong x86-64 ELF/PE signatures. It accepts either
+the original shared `artifacts/` prefix or the GitHub upload-action's
+uniformly stripped layout, but not mixed or wildcard contents. The verifier
+requires the existing run/job/approval metadata gate to pass first. Synthetic
+test fixtures do **not** establish that any private-main protection, runner
+isolation, reviewer authorization, native compilation or actual binary
+execution occurred; those require separate independent read-back.
+
 For each run ID and attempt, independently retrieve the source-org metadata:
 
 \`\`\`bash
