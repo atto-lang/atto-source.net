@@ -354,7 +354,9 @@ public sealed class ActorRuntime : IDisposable, IAsyncDisposable
     /// Its return value can be ignored by legacy callers, or retained and
     /// awaited after the actor has disappeared from the live registry.
     /// </summary>
-    public ActorRetirementReceipt Stop(ActorRef actor)
+    public void Stop(ActorRef actor) => _ = StopWithReceipt(actor);
+
+    public ActorRetirementReceipt StopWithReceipt(ActorRef actor)
     {
         ActorCell cell = Lookup(actor);
         bool finalizeNow;
@@ -377,7 +379,7 @@ public sealed class ActorRuntime : IDisposable, IAsyncDisposable
         if (ReferenceEquals(s_currentRuntime, this))
             throw new InvalidOperationException(
                 "An actor carrier cannot wait for its own physical retirement");
-        return Stop(actor).WaitAsync(cancellationToken);
+        return StopWithReceipt(actor).WaitAsync(cancellationToken);
     }
 
     /// <summary>
