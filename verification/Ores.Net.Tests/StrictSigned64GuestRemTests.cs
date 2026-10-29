@@ -1,6 +1,8 @@
 using Mono.Cecil;
 using Mono.Cecil.Cil;
 using Ores.Net.Compiler;
+using System.Globalization;
+using System.Text.Json;
 
 // Compiled-source admission and emitted CIL inspection, not Native AOT proof.
 internal static class StrictSigned64GuestRemTests
@@ -26,6 +28,59 @@ internal static class StrictSigned64GuestRemTests
         try { action(); }
         catch (DivideByZeroException) { return; }
         throw new Exception("Expected zero-divisor trap: " + why);
+    }
+
+    // These cases are not host-oracle shortcuts: feed the contract's literal
+    // operands through the shipping guest parser and verified CIL generator.
+    private static void VerifyPortableRemContract(string folder)
+    {
+        var path = Path.Combine(AppContext.BaseDirectory,
+            "strict-named-integer-arithmetic-v1.json");
+        using var document = JsonDocument.Parse(File.ReadAllText(path));
+        var cases = document.RootElement.GetProperty("cases");
+        int admitted = 0;
+        foreach (var item in cases.EnumerateArray())
+        {
+            if (item.GetProperty("operation").GetString() != "rem") continue;
+            admitted++;
+            string id = item.GetProperty("id").GetString()!;
+            string left = item.GetProperty("left").GetString()!;
+            string right = item.GetProperty("right").GetString()!;
+            var expected = item.GetProperty("expect");
+            var ir = CompileSource("Integer.rem(" + left + ", " + right + ")");
+            Require(ir.Instructions.Any(op => op.Opcode == IrOpcode.StrictRem),
+                "canonical guest source admission " + id);
+            string emitted = Path.Combine(folder, "OresGenerated.contract.dll");
+            CilEmitter.EmitLibrary(ir, emitted);
+            using var assembly = AssemblyDefinition.ReadAssembly(emitted);
+            var entry = assembly.MainModule.Types.Single(t =>
+                t.FullName == "Oreslang.Generated.OresProgram")
+                .Methods.Single(m => m.Name == "Run");
+            Require(entry.Body.Instructions.Any(ins => ins.OpCode.Code == Code.Call &&
+                ins.Operand is MethodReference method && method.Name == "Rem" &&
+                method.DeclaringType.FullName ==
+                    "Ores.Net.Runtime.StrictSigned64Arithmetic"),
+                "portable rem emitted CIL static call " + id);
+            if (expected.TryGetProperty("error", out var error))
+            {
+                Require(error.GetString() == "DIVISOR_ZERO",
+                    "unexpected shared rem error category " + id);
+                ExpectZeroDivisor(() => _ = OresIrReferenceEvaluator.Evaluate(ir),
+                    "canonical SSA " + id);
+                ExpectZeroDivisor(() => _ = CilReferenceEvaluator.Evaluate(entry),
+                    "canonical emitted CIL " + id);
+            }
+            else
+            {
+                long value = long.Parse(expected.GetProperty("value").GetString()!,
+                    NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture);
+                Require(OresIrReferenceEvaluator.Evaluate(ir) == value,
+                    "canonical guest SSA result " + id);
+                Require(CilReferenceEvaluator.Evaluate(entry) == value,
+                    "canonical emitted guest CIL result " + id);
+            }
+        }
+        Require(admitted == 7, "all seven canonical rem vectors admitted");
     }
 
     public static void Run()
@@ -100,6 +155,8 @@ internal static class StrictSigned64GuestRemTests
                 .Methods.Single(m => m.Name == "Run");
             ExpectZeroDivisor(() => _ = CilReferenceEvaluator.Evaluate(zeroEntry),
                 "decoded CIL reference");
+
+            VerifyPortableRemContract(folder);
 
             // Deliberately forge forward-reference SSA: verifier must fail closed.
             var forged = new IrFunction("main", IrValueType.I64,
