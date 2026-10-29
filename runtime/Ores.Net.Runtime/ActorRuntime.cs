@@ -88,6 +88,9 @@ public sealed class ActorContext
 
     // Only the runtime constructs ActorContext. This is an internal host
     // authority source, not a caller-constructed ActorArena identity claim.
+    // Preserve the newer host-capability physical-turn authority contract.
+    internal void ValidateActiveTurn() => _arena.ValidateActiveTurn(_turn);
+
     internal ActorArena OwnerArena => _arena;
     internal ActorQuicOperation RegisterQuicOperation() =>
         _nativeQuic.Register(this);
@@ -217,6 +220,9 @@ public sealed class ActorRuntime : IDisposable, IAsyncDisposable
         internal ActorRef Reference { get; }
         internal ActorNativeQuicResources NativeQuic { get; } = new();
         internal TaskCompletionSource<bool> FinalizedSignal { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Host capability providers from newer main await this signal.
+        internal TaskCompletionSource Terminated { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal Action DispatchAction { get; }
         internal int Scheduled;
@@ -402,6 +408,13 @@ public sealed class ActorRuntime : IDisposable, IAsyncDisposable
     /// disposal; a disposal fault is propagated, never reported as success.
     /// This is soft-RT host control work, not an actor-carrier operation.
     /// </summary>
+    internal Task ObserveTermination(ActorRef actor) =>
+        Lookup(actor).Terminated.Task;
+
+    // Statically bound host capability dispatch from newer main.
+    internal void PostHostMessage(ActorRef actor) =>
+        Send(actor, ReadOnlySpan<byte>.Empty);
+
     public ValueTask DisposeAsync()
     {
         if (ReferenceEquals(s_currentRuntime, this))
@@ -667,6 +680,7 @@ public sealed class ActorRuntime : IDisposable, IAsyncDisposable
             }
         }
         cell.FinalizedSignal.TrySetResult(true);
+        cell.Terminated.TrySetResult();
     }
 
     private void EnsureOpenLocked()
