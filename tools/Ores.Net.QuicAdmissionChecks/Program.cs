@@ -498,11 +498,14 @@ using (var registryRuntime = new ActorRuntime(new ActorRuntimeOptions {
         throw new InvalidOperationException("Stopped actor was not removed from live registry");
     var shutdown = shutdownRuntime.DisposeAsync().AsTask();
     var duplicateShutdown = shutdownRuntime.DisposeAsync().AsTask();
-    if (shutdown.IsCompleted || duplicateShutdown.IsCompleted)
-        throw new InvalidOperationException("DisposeAsync returned before native retirement");
+    var legacyShutdown = Task.Run(() => shutdownRuntime.Dispose());
+    if (shutdown.IsCompleted || duplicateShutdown.IsCompleted ||
+        legacyShutdown.IsCompleted)
+        throw new InvalidOperationException("Runtime Dispose returned before native retirement");
     shutdownResource.Release();
     if (!shutdown.Wait(TimeSpan.FromSeconds(10)) ||
         !duplicateShutdown.Wait(TimeSpan.FromSeconds(10)) ||
+        !legacyShutdown.Wait(TimeSpan.FromSeconds(10)) ||
         !shutdownReceipt.WaitAsync().GetAwaiter().GetResult())
         throw new InvalidOperationException("Runtime shutdown missed retired actor native work");
     shutdownRuntime.Dispose(); // repeated legacy Dispose is idempotent.
