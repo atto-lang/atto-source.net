@@ -43,6 +43,45 @@ internal static class AsyncSourceSliceTests
                 "maximum bounded capacities begin with no admission");
         }
 
+        // Deterministic regression for the gap between observer quota
+        // release and completed forwarder retirement. Inject an incomplete
+        // forwarding tail while ActiveObservers is zero: admission must
+        // still reject. Never leave the private test-only state mutated.
+        await using (var scope = new OresTaskScope(1, 1))
+        {
+            var producer = scope.Start(_ => ValueTask.FromResult(42L));
+            var future = scope.FromTask(producer);
+            await producer.Retirement.WaitAsync(TimeSpan.FromSeconds(10));
+            var flags = System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic;
+            var scopeType = typeof(OresTaskScope);
+            var gate = scopeType.GetField("admissionGate", flags)?.GetValue(scope)
+                ?? throw new Exception("Missing scope admission gate");
+            var pending = scopeType.GetField("pendingObserverForwarders", flags)
+                ?? throw new Exception("Missing forwarder counter");
+            lock (gate) pending.SetValue(scope, 1);
+            try
+            {
+                Require(scope.ActiveObservers == 0,
+                    "forwarder-tail fixture must have free observer quota");
+                try { _ = future.ObserveAsync(); }
+                catch (InvalidOperationException error) when
+                    (error.Message.Contains("forwarding quota",
+                        StringComparison.Ordinal))
+                {
+                    Require(scope.ActiveObservers == 0,
+                        "forwarder-tail rejection consumed active observer quota");
+                    goto bounded_forwarding_tail;
+                }
+                throw new Exception("Unretired forwarder bypassed capacity");
+                bounded_forwarding_tail:;
+            }
+            finally
+            {
+                lock (gate) pending.SetValue(scope, 0);
+            }
+        }
+
         Require(OresAsyncSourceSlice.Parse(Guest).LiteralValue == 42,
             "source-literal admission");
         Require(OresAsyncSourceSlice.Parse(
