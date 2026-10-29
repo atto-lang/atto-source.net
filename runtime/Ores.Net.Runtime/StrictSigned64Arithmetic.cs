@@ -1,9 +1,11 @@
 namespace Ores.Net.Runtime;
 
 /// <summary>
-/// Reference signed-64 Oreslang named arithmetic semantics for the .NET
-/// backend. Does not bind guest syntax: the parser and Native AOT emitter
-/// must enable each operation only after checked type/effect admission.
+/// Independent signed-64 Oreslang arithmetic semantics for the .NET backend.
+/// The scalar compiler admits only Integer.rem through verified SSA and a
+/// static CIL call. Mod, Pow, BitXor and ToFloatExact remain host reference
+/// helpers until each receives typed guest source and Native AOT execution.
+/// CLR exceptions are not yet guest Error values; do not claim error parity.
 /// </summary>
 public static class StrictSigned64Arithmetic
 {
