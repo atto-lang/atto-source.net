@@ -62,3 +62,14 @@ scenario('rejects oversized receipt payloads',f=>{
  f.put('windows','artifacts/evidence/source-local-windows.json',
    Buffer.from(JSON.stringify(f.bundle.receipts.windows)+' '.repeat(70000)));
 },/oversized or invalid artifact receipt/);
+
+scenario('rejects duplicate Windows receipt JSON top-level property',f=>{
+ const raw=JSON.stringify(f.bundle.receipts.windows).replace(
+   '"schema":','"schema":"forged","schema":');
+ f.put('windows','artifacts/evidence/source-local-windows.json',Buffer.from(raw));
+},/duplicate receipt JSON key/);
+scenario('rejects escaped duplicate Windows receipt JSON nested property',f=>{
+ const raw=JSON.stringify(f.bundle.receipts.windows).replace(
+   '"path":',String.raw`"\u0070ath":"forged",`+'"path":');
+ f.put('windows','artifacts/evidence/source-local-windows.json',Buffer.from(raw));
+},/duplicate receipt JSON key/);

@@ -93,6 +93,59 @@ function assertFormat(header, os, path) {
       header.readUInt32LE(clr + 4) !== 0)
     throw Error('managed CLR descriptor present or PE truncated: ' + path);
 }
+// JSON.parse permits duplicate object keys. Reject duplicates (including
+// escaped-equivalent names) before trusting a native Windows receipt.
+function rejectRepeatedJsonKeys(raw) {
+  let i = 0;
+  const ws = () => { while (i < raw.length && /[\t\r\n ]/.test(raw[i])) i++; };
+  const string = () => {
+    const start = i;
+    i++;
+    let escaped = false;
+    while (i < raw.length) {
+      const ch = raw[i++];
+      if (escaped) { escaped = false; continue; }
+      if (ch === '\\') { escaped = true; continue; }
+      if (ch === '"') return JSON.parse(raw.slice(start, i));
+    }
+    throw Error('unterminated receipt JSON string');
+  };
+  const value = depth => {
+    if (depth > 32) throw Error('receipt JSON nested too deeply');
+    ws();
+    if (raw[i] === '{') {
+      i++; ws(); const keys = new Set();
+      if (raw[i] !== '}') for (;;) {
+        ws();
+        if (raw[i] !== '"') throw Error('bad receipt JSON object key');
+        const key = string();
+        if (keys.has(key)) throw Error('duplicate receipt JSON key: ' + key);
+        keys.add(key); ws();
+        if (raw[i++] !== ':') throw Error('bad receipt JSON property');
+        value(depth + 1); ws();
+        if (raw[i] === '}') break;
+        if (raw[i++] !== ',') throw Error('bad receipt JSON object');
+      }
+      i++;
+    } else if (raw[i] === '[') {
+      i++; ws();
+      if (raw[i] !== ']') for (;;) {
+        value(depth + 1); ws();
+        if (raw[i] === ']') break;
+        if (raw[i++] !== ',') throw Error('bad receipt JSON array');
+      }
+      i++;
+    } else if (raw[i] === '"') string();
+    else {
+      const m = raw.slice(i).match(/^(?:true|false|null|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)/);
+      if (!m) throw Error('bad receipt JSON scalar');
+      i += m[0].length;
+    }
+  };
+  value(0); ws();
+  if (i !== raw.length) throw Error('trailing receipt JSON content');
+}
+
 function expectedHashes(bundle, kind) {
   if (kind === 'windows') {
     const bins = bundle.receipts.windows.binaries;
@@ -129,8 +182,10 @@ export async function verifyArtifactBytes(bundle, roots) {
         throw Error('Linux artifact receipt differs from independently acquired metadata');
     } else {
       let parsed;
-      try { parsed = JSON.parse(read(receipts[kind]).toString('utf8').replace(/^\uFEFF/, '')); }
+      const raw = read(receipts[kind]).toString('utf8').replace(/^\uFEFF/, '');
+      try { parsed = JSON.parse(raw); }
       catch { throw Error('Windows artifact receipt is not valid JSON'); }
+      rejectRepeatedJsonKeys(raw);
       if (!isDeepStrictEqual(parsed, bundle.receipts.windows))
         throw Error('Windows artifact receipt differs from independently acquired metadata');
     }
