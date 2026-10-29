@@ -50,12 +50,16 @@ public sealed class OresVmHost
         internal readonly Dictionary<ulong, ActorTicket> Actors = new();
         internal readonly Dictionary<ActorTicket, int> PinsByActor = new();
         internal int ActivePins;
+        internal long ScalarState;
+        internal int ActiveGuestCalls;
+        internal readonly object GuestTurn = new();
     }
 
     private readonly object _gate = new();
     private readonly Dictionary<string, TenantState> _tenants = new(StringComparer.Ordinal);
     private readonly int _maxTenants;
     private ulong _nextGeneration = 1;
+    [ThreadStatic] private static bool _inGuestTurn;
 
     public OresVmHost(int maxTenants = 32)
     {
@@ -163,6 +167,63 @@ public sealed class OresVmHost
         }
     }
 
+    /// <summary>
+    /// Trusted Native AOT scalar bridge. Execute the statically linked
+    /// generated CIL entry once, and add its checked result to tenant state.
+    /// This does not lower .ores actor/global state into CIL or sandbox CLR
+    /// code. Source must compile to a statically linked Func<long> entry.
+    /// </summary>
+    public long InvokeGeneratedScalar(IsolateHandle handle, Func<long> generatedEntry)
+    {
+        ArgumentNullException.ThrowIfNull(generatedEntry);
+        if (_inGuestTurn) throw new InvalidOperationException("nested guest entry forbidden");
+        _inGuestTurn = true;
+        try
+        {
+            TenantState tenant;
+            lock (_gate) {
+                tenant = Check(handle);
+                if (tenant.Phase != Phase.Running)
+                    throw new InvalidOperationException("native guest admission closed");
+                if (tenant.ActiveGuestCalls >= 64)
+                    throw new InvalidOperationException("tenant guest-call limit");
+                ++tenant.ActiveGuestCalls;
+            }
+            try
+            {
+                lock (tenant.GuestTurn)
+                {
+                    lock (_gate) {
+                        if (tenant.Phase != Phase.Running)
+                            throw new InvalidOperationException("queued guest cancelled on shutdown");
+                    }
+                    // Native AOT knows the target statically; no Reflection.Emit,
+                    // dynamic assemblies, or runtime compilation. Do not hold
+                    // root host lock while executing generated code.
+                    long result = generatedEntry();
+                    lock (_gate) {
+                        if (tenant.Phase is not (Phase.Running or Phase.Quiescing))
+                            throw new InvalidOperationException("stopped tenant cannot commit");
+                        tenant.ScalarState = checked(tenant.ScalarState + result);
+                        return tenant.ScalarState;
+                    }
+                }
+            }
+            finally {
+                lock (_gate) { --tenant.ActiveGuestCalls; }
+            }
+        }
+        finally { _inGuestTurn = false; }
+    }
+
+    public (long Scalar, int GuestCalls) GuestSnapshot(IsolateHandle handle)
+    {
+        lock (_gate) {
+            var tenant = Check(handle);
+            return (tenant.ScalarState, tenant.ActiveGuestCalls);
+        }
+    }
+
     public void BeginShutdown(IsolateHandle handle)
     {
         lock (_gate) {
@@ -177,7 +238,7 @@ public sealed class OresVmHost
     {
         lock (_gate) {
             var s = Check(handle);
-            if (s.Phase != Phase.Quiescing || s.Actors.Count != 0 || s.ActivePins != 0)
+            if (s.Phase != Phase.Quiescing || s.Actors.Count != 0 || s.ActivePins != 0 || s.ActiveGuestCalls != 0)
                 throw new InvalidOperationException("actor or resource still active");
             s.Phase = Phase.Stopped;
         }
