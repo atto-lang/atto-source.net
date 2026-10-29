@@ -119,8 +119,12 @@ jobs:
             $_.sha256 -ceq $expected -and $_.utf8_bytes -eq 657
           })
           $entry = @($units | Where-Object { $_.path -ceq '0/core-numeric.ores' })
-          if ($canonical.Count -ne 1 -or $entry.Count -ne 1) {
-            throw 'Canonical core source was not compiled from pinned compiler-owned module'
+          $entryDigest = (Get-FileHash examples/modules/core-numeric.ores -Algorithm SHA256).Hash.ToLowerInvariant()
+          $entryBytes = (Get-Item examples/modules/core-numeric.ores).Length
+          if ($canonical.Count -ne 1 -or $entry.Count -ne 1 -or
+              $entry[0].sha256 -cne $entryDigest -or
+              $entry[0].utf8_bytes -ne $entryBytes) {
+            throw 'Canonical core graph does not match pinned module and unchanged guest entry bytes'
           }
           $raw | Set-Content artifacts/native-core-generated/source-graph.json
           $generated = (Resolve-Path artifacts/native-core-generated/OresGenerated.dll).Path
