@@ -62,18 +62,18 @@ internal static class CilReferenceEvaluator
                 {
                     // Verification-only interpreter: only the exact statically
                     // linked intrinsic signature is recognized. Not a native run.
-                    if (ins.Operand is not MethodReference method ||
-                        method.Name != "Rem" ||
-                        method.DeclaringType.FullName !=
+                    if (ins.Operand is not MethodReference calledMethod ||
+                        calledMethod.Name != "Rem" ||
+                        calledMethod.DeclaringType.FullName !=
                             "Ores.Net.Runtime.StrictSigned64Arithmetic" ||
-                        method.DeclaringType.Scope is not AssemblyNameReference
+                        calledMethod.DeclaringType.Scope is not AssemblyNameReference
                             { Name: "Ores.Net.Runtime" } ||
-                        method.HasThis || method.ExplicitThis ||
-                        method.GenericParameters.Count != 0 ||
-                        method.CallingConvention != MethodCallingConvention.Default ||
-                        method.ReturnType.MetadataType != MetadataType.Int64 ||
-                        method.Parameters.Count != 2 ||
-                        method.Parameters.Any(p => p.ParameterType.MetadataType != MetadataType.Int64))
+                        calledMethod.HasThis || calledMethod.ExplicitThis ||
+                        calledMethod.GenericParameters.Count != 0 ||
+                        calledMethod.CallingConvention != MethodCallingConvention.Default ||
+                        calledMethod.ReturnType.MetadataType != MetadataType.Int64 ||
+                        calledMethod.Parameters.Count != 2 ||
+                        calledMethod.Parameters.Any(p => p.ParameterType.MetadataType != MetadataType.Int64))
                         throw new FormatException("Unverified CIL method call");
                     long right = stack.Pop();
                     long left = stack.Pop();
