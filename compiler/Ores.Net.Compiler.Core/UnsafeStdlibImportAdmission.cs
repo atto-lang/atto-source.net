@@ -37,6 +37,22 @@ public static class UnsafeStdlibImportAdmission
             }
             path = string.Join("/", parts);
         }
+        else if (path.Contains('/'))
+        {
+            // Relative source imports may be normalized by a linker after
+            // admission: ./std/unsafe and pkg/../std/unsafe are still reserved.
+            var parts = new System.Collections.Generic.List<string>();
+            foreach (var part in path.Split('/'))
+            {
+                if (part.Length == 0 || part == ".") continue;
+                if (part == "..")
+                {
+                    if (parts.Count != 0) parts.RemoveAt(parts.Count - 1);
+                }
+                else parts.Add(part);
+            }
+            path = string.Join("/", parts);
+        }
         foreach (string root in ReservedRoots)
         {
             if (path == root || path.StartsWith(root + "/", StringComparison.Ordinal)
