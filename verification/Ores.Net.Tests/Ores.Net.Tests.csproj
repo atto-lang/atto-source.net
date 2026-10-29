@@ -7,6 +7,8 @@
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/v2/cpu-gpu-task-unsupported-v2.json" Link="cpu-gpu-task-unsupported-v2.json"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/v1/annotation-admission-v1.tsv" Link="annotation-admission-v1.tsv"
+          CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/v1/source-i64/portable-i64.v1.json" Link="portable-i64.v1.json"
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../examples/structured-bindings42.ores" Link="structured-bindings42.ores"
