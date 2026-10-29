@@ -103,12 +103,34 @@ internal sealed class HostCapabilityIoLifecycleV1
             return true;
         }
     }
+    /// <summary>
+    /// Forbid new host admission and dispatch, but retain active credits until
+    /// the trusted transport proves physical retirement.
+    /// </summary>
+    public bool Shutdown()
+    {
+        lock (_sync)
+        {
+            if (_closed) return false;
+            CloseAll();
+            return true;
+        }
+    }
+    private void CloseAll()
+    {
+        _closed = true;
+        foreach (var slot in _slots)
+        {
+            if (slot.Phase is Phase.Reserved or Phase.Dispatched)
+                slot.Phase = Phase.CancelRequested;
+        }
+    }
     public bool RevokeActor(ulong actor, ulong incarnation)
     {
         lock (_sync)
         {
             if (actor == 0 || incarnation == 0 || IsRevoked(actor, incarnation)) return false;
-            if (_revokedCount == _revoked.Length) _closed = true;
+            if (_revokedCount == _revoked.Length) CloseAll();
             else _revoked[_revokedCount++] = (actor, incarnation);
             foreach (var slot in _slots)
             {
