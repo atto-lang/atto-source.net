@@ -5,7 +5,7 @@ namespace Ores.Net.Runtime;
 /// to create a network connection. Trusted transport MUST authenticate actor
 /// incarnation and independently authorize both requested and selected target.
 /// </summary>
-public sealed class HostCapabilityIoLifecycleV1
+internal sealed class HostCapabilityIoLifecycleV1
 {
     public readonly record struct Ticket(int Slot, ulong Nonce);
     internal enum Phase { Free, Reserved, Dispatched, CancelRequested, Settled }
