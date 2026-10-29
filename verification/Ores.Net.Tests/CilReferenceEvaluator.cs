@@ -68,6 +68,9 @@ internal static class CilReferenceEvaluator
                             "Ores.Net.Runtime.StrictSigned64Arithmetic" ||
                         method.DeclaringType.Scope is not AssemblyNameReference
                             { Name: "Ores.Net.Runtime" } ||
+                        method.HasThis || method.ExplicitThis ||
+                        method.GenericParameters.Count != 0 ||
+                        method.CallingConvention != MethodCallingConvention.Default ||
                         method.ReturnType.MetadataType != MetadataType.Int64 ||
                         method.Parameters.Count != 2 ||
                         method.Parameters.Any(p => p.ParameterType.MetadataType != MetadataType.Int64))
