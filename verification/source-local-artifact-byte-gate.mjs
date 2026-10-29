@@ -24,6 +24,7 @@ const receipts = Object.freeze({
 });
 const hex64 = /^[0-9a-f]{64}$/;
 const limitBytes = 512 * 1024 * 1024; // per native binary; fail closed on oversized inputs
+const maxReceiptBytes = 64 * 1024; // prevent excessive untrusted receipt processing
 
 function enumerate(root) {
   const base = resolve(root);
@@ -116,7 +117,13 @@ export async function verifyArtifactBytes(bundle, roots) {
     const expected = kind === 'linux' ? linuxFiles : windowsFiles;
     const {base, found} = enumerate(roots[kind]);
     const mapPath = exactFiles(found, [...expected, receipts[kind]]);
-    const read = path => readFileSync(join(base, mapPath(path)));
+    const read = path => {
+      const receipt = join(base, mapPath(path));
+      const stat = lstatSync(receipt);
+      if (!stat.isFile() || stat.size < 1 || stat.size > maxReceiptBytes)
+        throw Error('oversized or invalid artifact receipt');
+      return readFileSync(receipt);
+    };
     if (kind === 'linux') {
       if (read(receipts[kind]).toString('utf8') !== bundle.receipts.linux)
         throw Error('Linux artifact receipt differs from independently acquired metadata');
@@ -130,6 +137,8 @@ export async function verifyArtifactBytes(bundle, roots) {
     const hashes = expectedHashes(bundle, kind);
     if (!isDeepStrictEqual([...hashes.keys()].sort(), [...expected].sort()))
       throw Error('native hash inventory mismatch: ' + kind);
+    if (new Set([...hashes.values()]).size !== expected.length)
+      throw Error('duplicate SHA-256 across independent native executables: ' + kind);
     for (const path of expected) {
       const wanted = hashes.get(path);
       if (!hex64.test(wanted)) throw Error('invalid digest in receipt: ' + path);
