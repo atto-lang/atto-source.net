@@ -18,21 +18,29 @@ const workflowSha = { linux:'d'.repeat(40), windows:'e'.repeat(40), fence:'f'.re
 // These model independent GitHub run and workflow-file revisions.
 const dispatchSha = '9'.repeat(40);
 const ref = kind => repo+'/.github/workflows/'+path[kind]+'@refs/heads/main';
+const jobsSource = (kind,run_id,attempt=1) => 'repos/'+repo+'/actions/runs/'+run_id+'/attempts/'+attempt+'/jobs?per_page=100';
 function fixture() {
   const approval = {repository:repo,source_head,root_tree,
-    independent_review_verified:true,protected_main_verified:true,restricted_runner_group_verified:true,
+    independent_review_verified:true,protected_main_verified:true,restricted_runner_group_verified:true,runner_group_id:345,
     workflows:{}};
   const receipts = {}, execution = {};
   for(const kind of Object.keys(steps)) {
     const run_id = expectedRun[kind];
     approval.workflows[kind] = {workflow_sha:workflowSha[kind],dispatch_head_sha:dispatchSha,run_id,attempt:1};
     execution[kind] = {
+      jobs_source:jobsSource(kind,run_id),
       run:{id:run_id,run_attempt:1,repository:{full_name:repo},event:'workflow_dispatch',
         head_branch:'main',head_sha:dispatchSha,status:'completed',conclusion:'success',
-        path:'.github/workflows/'+path[kind]},
-      jobs:{total_count:1,jobs:[{name:jobName[kind],run_id,run_attempt:1,runner_id:123,
-        status:'completed',conclusion:'success',steps:steps[kind].map((name,i)=>({
-          name,number:i+1,status:'completed',conclusion:'success'}))}]}
+        path:'.github/workflows/'+path[kind]+'@main'},
+      jobs:{total_count:1,jobs:[{name:jobName[kind],run_id,runner_id:123,
+        runner_group_id:345,runner_group_name:'oreslang-net-aot-trusted',
+        head_sha:dispatchSha,head_branch:'main',
+        status:'completed',conclusion:'success',steps:[
+          {name:'Set up job',number:1,status:'completed',conclusion:'success'},
+          ...steps[kind].map((name,i)=>({name,number:i+2,status:'completed',conclusion:'success'})),
+          {name:'Post actions/checkout',number:steps[kind].length+9,status:'completed',conclusion:'success'},
+          {name:'Complete job',number:steps[kind].length+10,status:'completed',conclusion:'success'}
+        ]}]}
     };
     if(kind==='linux') receipts[kind]=[
       'repository='+repo,'workflow_sha='+workflowSha[kind],'workflow_ref='+ref(kind),
@@ -63,8 +71,8 @@ deny('refuses wrong main dispatch SHA',x=>x.execution.fence.run.head_sha='0'.rep
 deny('refuses unapproved dispatch SHA',x=>x.approval.workflows.linux.dispatch_head_sha='',/invalid approved dispatch head SHA/);
 deny('refuses receipt workflow-SHA confusion',x=>x.receipts.windows.workflow_sha=dispatchSha,/receipt workflow identity mismatch/);
 deny('refuses unassigned runner',x=>x.execution.windows.jobs.jobs[0].runner_id=0,/real allocated runner/);
-deny('refuses skipped native stage',x=>x.execution.linux.jobs.jobs[0].steps[4].conclusion='skipped',/missing or unsuccessful step/);
-deny('refuses omitted stage',x=>x.execution.windows.jobs.jobs[0].steps.splice(3,1),/missing or extra executed steps/);
+deny('refuses skipped native stage',x=>x.execution.linux.jobs.jobs[0].steps[4].conclusion='skipped',/unsuccessful execution step/);
+deny('refuses omitted stage',x=>x.execution.windows.jobs.jobs[0].steps.splice(3,1),/required steps missing/);
 deny('refuses wrong source tree in receipt',x=>x.receipts.fence.tested_root_tree='0'.repeat(40),/root tree mismatch/);
 deny('refuses wrong workflow ref in receipt',x=>x.receipts.windows.workflow_ref='unsafe',/workflow identity mismatch/);
 deny('refuses duplicate Linux receipt metadata',x=>x.receipts.linux+='run_id=1001\n',/duplicate linux receipt field/);
@@ -74,4 +82,25 @@ deny('refuses unsupported Windows binary digest',x=>x.receipts.windows.binaries[
 deny('refuses insufficient fence rounds',x=>x.receipts.fence.rounds=15,/16 successful stress rounds/);
 deny('refuses duplicate run IDs',x=>x.approval.workflows.fence.run_id=x.approval.workflows.windows.run_id,/duplicate run ID/);
 deny('refuses non-successful run',x=>x.execution.linux.run.conclusion='failure',/run not successful/);
-deny('refuses zero-step job',x=>x.execution.windows.jobs.jobs[0].steps=[],/missing or extra executed steps/);
+deny('refuses zero-step job',x=>x.execution.windows.jobs.jobs[0].steps=[],/insufficient executed steps/);
+deny('refuses wrong workflow-run branch suffix',x=>x.execution.linux.run.path='.github/workflows/'+path.linux+'@feature/unsafe',/unapproved ref/);
+deny('refuses PR ref in run path',x=>x.execution.windows.run.path='.github/workflows/'+path.windows+'@refs/pull/214/merge',/unapproved ref/);
+deny('refuses bare workflow-run path',x=>x.execution.fence.run.path='.github/workflows/'+path.fence,/unapproved ref/);
+deny('refuses wrong attempt-scoped jobs endpoint',x=>x.execution.linux.jobs_source=jobsSource('linux',1001,2),/attempt-specific jobs endpoint/);
+deny('refuses wrong runner-group ID',x=>x.execution.windows.jobs.jobs[0].runner_group_id=9,/restricted runner group/);
+deny('refuses wrong runner-group name',x=>x.execution.windows.jobs.jobs[0].runner_group_name='default',/restricted runner group/);
+deny('refuses missing independently approved runner group ID',x=>x.approval.runner_group_id=0,/approved runner group ID/);
+deny('refuses wrong job source SHA',x=>x.execution.fence.jobs.jobs[0].head_sha='0'.repeat(40),/job source revision/);
+deny('refuses wrong job attempt if present',x=>x.execution.fence.jobs.jobs[0].run_attempt=2,/job identity mismatch/);
+deny('refuses renamed mandatory step',x=>x.execution.linux.jobs.jobs[0].steps[2].name='renamed',/required steps missing/);
+deny('refuses duplicate mandatory step',x=>x.execution.linux.jobs.jobs[0].steps[0].name=steps.linux[0],/duplicate required step/);
+deny('refuses reordered mandatory steps',x=>{
+  const a=x.execution.linux.jobs.jobs[0].steps; [a[2].name,a[3].name]=[a[3].name,a[2].name];
+},/required steps out of order/);
+deny('refuses failed runner-owned step',x=>x.execution.windows.jobs.jobs[0].steps[0].conclusion='failure',/unsuccessful execution step/);
+deny('refuses nonmonotonic step number',x=>x.execution.windows.jobs.jobs[0].steps[2].number=2,/non-increasing/);
+test('accepts refs heads main and matching optional job attempt',()=>{
+ const x=fixture();x.execution.linux.run.path='.github/workflows/'+path.linux+'@refs/heads/main';
+ x.execution.linux.jobs.jobs[0].run_attempt=1;
+ assert.deepEqual(verifySourceLocalBundle(x),[]);
+});

@@ -67,6 +67,10 @@ const windowsPaths = [
   'artifacts/apps/win-x64/oreslang-app.exe',
 ];
 const isInt = (value) => Number.isSafeInteger(value) && value > 0;
+const trustedRunnerGroup = 'oreslang-net-aot-trusted';
+const approvedWorkflowRunPath = (path, file) =>
+  path === '.github/workflows/' + file + '@main' ||
+  path === '.github/workflows/' + file + '@refs/heads/main';
 
 function parseLinux(text) {
   if (typeof text !== 'string') throw new Error('linux receipt must be text');
@@ -123,6 +127,7 @@ export function verifySourceLocalBundle(bundle) {
     'protected main has not been independently verified');
   fail(approval.restricted_runner_group_verified === true,
     'runner group restrictions have not been independently verified');
+  fail(isInt(approval.runner_group_id), 'missing independently approved runner group ID');
   const usedRuns = new Set();
   for (const [kind, spec] of Object.entries(jobsRequired)) {
     const expected = approval.workflows?.[kind];
@@ -130,6 +135,11 @@ export function verifySourceLocalBundle(bundle) {
     const jobs = execution[kind]?.jobs;
     if (!expected || !run || !jobs) { errors.push(kind + ': missing independently fetched run/jobs or approval'); continue; }
     const expectedRef = repo + '/.github/workflows/' + spec.file + '@refs/heads/main';
+    // Operator assertion: must be verified against the original API response.
+    const jobsSource = 'repos/' + repo + '/actions/runs/' + expected.run_id +
+      '/attempts/' + expected.attempt + '/jobs?per_page=100';
+    fail(execution[kind].jobs_source === jobsSource,
+      kind + ': attempt-specific jobs endpoint declaration mismatch');
     fail(hex40.test(expected.workflow_sha ?? ''), kind + ': invalid approved workflow SHA');
     // The SHA recorded for a workflow definition can differ from the default
     // branch tip that received workflow_dispatch. Authorize BOTH explicitly.
@@ -146,26 +156,51 @@ export function verifySourceLocalBundle(bundle) {
       kind + ': run did not execute independently approved main dispatch head');
     fail(run.status === 'completed' && run.conclusion === 'success',
       kind + ': run not successful');
-    fail(run.path === '.github/workflows/' + spec.file,
-      kind + ': unexpected workflow path');
+    fail(approvedWorkflowRunPath(run.path, spec.file),
+      kind + ': unexpected workflow path or unapproved ref');
     fail(jobs.total_count === 1 && Array.isArray(jobs.jobs) && jobs.jobs.length === 1,
       kind + ': jobs response incomplete or contains unexpected jobs');
     const job = jobs.jobs?.[0];
     if (!job) { errors.push(kind + ': missing job'); continue; }
+    // GitHub's job REST payload can omit run_attempt; record and verify the
+    // attempt-specific fetch endpoint independently. Check it if present.
     fail(job.name === spec.name && job.run_id === expected.run_id &&
-      job.run_attempt === expected.attempt, kind + ': job identity mismatch');
+      (!own(job, 'run_attempt') || job.run_attempt === expected.attempt),
+      kind + ': job identity mismatch');
+    fail(!own(job, 'head_sha') || job.head_sha === expected.dispatch_head_sha,
+      kind + ': job source revision mismatch');
+    fail(!own(job, 'head_branch') || job.head_branch === 'main',
+      kind + ': job branch mismatch');
+    fail(job.runner_group_id === approval.runner_group_id &&
+      job.runner_group_name === trustedRunnerGroup,
+      kind + ': job not in independently approved restricted runner group');
     fail(job.status === 'completed' && job.conclusion === 'success' && isInt(job.runner_id),
       kind + ': job not successful on a real allocated runner');
     const steps = job.steps;
-    fail(Array.isArray(steps) && steps.length === spec.steps.length,
-      kind + ': missing or extra executed steps');
+    // GitHub emits setup, post-action and completion steps as well as the
+    // named steps. Step numbers can have gaps; ordering must remain strict.
+    fail(Array.isArray(steps) && steps.length >= spec.steps.length,
+      kind + ': insufficient executed steps');
     if (Array.isArray(steps)) {
-      for (let i = 0; i < spec.steps.length; i++) {
-        const step = steps[i];
-        fail(step?.name === spec.steps[i] && step?.number === i + 1 &&
-          step?.status === 'completed' && step?.conclusion === 'success',
-          kind + ': missing or unsuccessful step ' + spec.steps[i]);
+      let lastNumber = 0, requiredIndex = 0;
+      const seenRequired = new Set();
+      for (const step of steps) {
+        fail(isInt(step?.number) && step.number > lastNumber,
+          kind + ': non-increasing or invalid step number');
+        if (isInt(step?.number)) lastNumber = step.number;
+        fail(step?.status === 'completed' && step?.conclusion === 'success',
+          kind + ': unsuccessful execution step ' + String(step?.name));
+        if (spec.steps.includes(step?.name)) {
+          fail(!seenRequired.has(step.name),
+            kind + ': duplicate required step ' + step.name);
+          seenRequired.add(step.name);
+          fail(step.name === spec.steps[requiredIndex],
+            kind + ': required steps out of order');
+          requiredIndex++;
+        }
       }
+      fail(requiredIndex === spec.steps.length,
+        kind + ': one or more required steps missing');
     }
     let receipt = receipts[kind];
     if (kind === 'linux') {

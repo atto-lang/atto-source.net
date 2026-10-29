@@ -60,9 +60,14 @@ and [reconciliation #214](https://github.com/ores-truffle-oreslang/oreslang-sour
   jobs and native application execution, not merely an apparently green
   matrix definition.
 - [ ] Independently fetch each trusted workflow run and attempt's **run JSON**
-  and complete **jobs JSON**, including pagination; preserve the real
-  \`run_id\`, \`run_attempt\`, \`runner_id\`, step names/statuses and recorded
-  workflow identity. Reject zero-step and unallocated jobs.
+  and complete **jobs JSON**, including pagination. Record the actual
+  \`run_id\`, \`run_attempt\`, \`runner_id\`, \`runner_group_id\`,
+  \`runner_group_name\`, workflow identity and the exact attempt-scoped jobs
+  API path. GitHub may report a workflow path suffixed with \`@main\`, while
+  job steps include automatically generated setup/post/completion stages with
+  nonconsecutive numbers. Independently verify the approved named steps occur
+  exactly once, in order, and successfully; reject any unsuccessful step.
+  The recorded API path is an operator assertion, not proof of provenance.
 - [ ] Download each corresponding original GitHub artifact and independently
   verify presence, origin run/attempt, binary file types (ELF/PE), binary
   SHA-256 digests and application outputs. A digest *printed in a receipt*
@@ -93,6 +98,7 @@ independently from the GitHub API (do not put secrets in the bundle):
     "independent_review_verified": false,
     "protected_main_verified": false,
     "restricted_runner_group_verified": false,
+    "runner_group_id": 0,
     "workflows": {
       "linux": {"workflow_sha": "<40-character protected-main workflow revision>", "dispatch_head_sha": "<40-character approved main commit at dispatch>", "run_id": 0, "attempt": 1},
       "windows": {"workflow_sha": "<40-character protected-main workflow revision>", "dispatch_head_sha": "<40-character approved main commit at dispatch>", "run_id": 0, "attempt": 1},
@@ -105,9 +111,9 @@ independently from the GitHub API (do not put secrets in the bundle):
     "fence": {"schema": "oreslang.net.windows_fence_source_local_v1"}
   },
   "execution": {
-    "linux": {"run": {}, "jobs": {}},
-    "windows": {"run": {}, "jobs": {}},
-    "fence": {"run": {}, "jobs": {}}
+    "linux": {"jobs_source": "<repos/.../actions/runs/RUN_ID/attempts/ATTEMPT/jobs?per_page=100>", "run": {}, "jobs": {}},
+    "windows": {"jobs_source": "<repos/.../actions/runs/RUN_ID/attempts/ATTEMPT/jobs?per_page=100>", "run": {}, "jobs": {}},
+    "fence": {"jobs_source": "<repos/.../actions/runs/RUN_ID/attempts/ATTEMPT/jobs?per_page=100>", "run": {}, "jobs": {}}
   }
 }
 \`\`\`
@@ -129,6 +135,11 @@ ATTEMPT=<actual-run-attempt>
 gh api "repos/$REPO/actions/runs/$RUN_ID" > run.json
 gh api "repos/$REPO/actions/runs/$RUN_ID/attempts/$ATTEMPT/jobs?per_page=100" > jobs.json
 \`\`\`
+
+Before using this metadata preflight, independently verify the numeric
+trusted-runner group ID in GitHub's administrative settings. The verifier
+compares it to each job's reported group ID and the exact trusted group name;
+never infer the approved ID solely from a job's own untrusted receipt.
 
 Check that \`total_count\` and pagination are complete. Include the unmodified
 JSON objects in \`execution.<linux|windows|fence>.run\` and \`.jobs\`; put the
