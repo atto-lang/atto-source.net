@@ -57,7 +57,10 @@ internal static class StrictSigned64GuestRemTests
                 t.FullName == "Oreslang.Generated.OresProgram")
                 .Methods.Single(m => m.Name == "Run");
             Require(entry.Body.Instructions.Any(ins => ins.OpCode.Code == Code.Call &&
-                ins.Operand is MethodReference method && method.Name == "Rem" &&
+                ins.Operand is MethodReference method && !method.HasThis &&
+                !method.ExplicitThis && method.GenericParameters.Count == 0 &&
+                method.CallingConvention == MethodCallingConvention.Default &&
+                method.Name == "Rem" &&
                 method.DeclaringType.FullName ==
                     "Ores.Net.Runtime.StrictSigned64Arithmetic"),
                 "portable rem emitted CIL static call " + id);
@@ -115,6 +118,9 @@ internal static class StrictSigned64GuestRemTests
                 Require(calls.Length > 0, "emitted CIL must contain static call");
                 Require(calls.All(ins => ins.Operand is MethodReference method &&
                     method.Name == "Rem" &&
+                    !method.HasThis && !method.ExplicitThis &&
+                    method.GenericParameters.Count == 0 &&
+                    method.CallingConvention == MethodCallingConvention.Default &&
                     method.DeclaringType.FullName ==
                         "Ores.Net.Runtime.StrictSigned64Arithmetic" &&
                     method.DeclaringType.Scope is AssemblyNameReference
