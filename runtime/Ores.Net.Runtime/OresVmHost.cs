@@ -208,7 +208,21 @@ public sealed class OresVmHost
                     // Native AOT knows the target statically; no Reflection.Emit,
                     // dynamic assemblies, or runtime compilation. Do not hold
                     // root host lock while executing generated code.
-                    long result = generatedEntry();
+                    long result;
+                    try {
+                        result = generatedEntry();
+                    } catch {
+                        // An arbitrary trusted-native guest callback can
+                        // mutate tenant state before throwing. Quarantine
+                        // this incarnation and refuse subsequent guest calls.
+                        // This does NOT isolate CLR heaps or contain native
+                        // memory corruption; OS process mode remains denied.
+                        lock (_gate) {
+                            if (tenant.Phase == Phase.Running)
+                                tenant.Phase = Phase.Quiescing;
+                        }
+                        throw;
+                    }
                     lock (_gate) {
                         if (tenant.Phase is not (Phase.Running or Phase.Quiescing))
                             throw new InvalidOperationException("stopped tenant cannot commit");
