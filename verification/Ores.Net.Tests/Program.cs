@@ -30,6 +30,51 @@ static void InvalidSend(Action action, string why)
     throw new Exception("Expected mailbox rejection: " + why);
 }
 
+// Portable annotation admission parity: parse the same immutable corpus used
+// by Java/LLVM/WASM/Forge, but assert BOTH independent .NET source frontends.
+{
+    var corpus = Path.Combine(AppContext.BaseDirectory, "annotation-admission-v1.cases");
+    var ids = new HashSet<string>(StringComparer.Ordinal);
+    int passes = 0, rejects = 0;
+    foreach (var line in File.ReadAllLines(corpus, System.Text.Encoding.UTF8))
+    {
+        if (string.IsNullOrWhiteSpace(line) || line.StartsWith('#')) continue;
+        var fields = line.Split('|');
+        Require(fields.Length == 7, "annotation corpus row width");
+        var id = fields[0];
+        Require(System.Text.RegularExpressions.Regex.IsMatch(id, @"^[a-z][a-z_0-9]*$"),
+            "invalid annotation corpus id: " + id);
+        Require(ids.Add(id), "duplicate annotation corpus id: " + id);
+        for (int index = 1; index <= 5; ++index)
+            Require(fields[index] is "pass" or "reject", "invalid annotation expectation: " + id);
+        var bytes = Convert.FromBase64String(fields[6]);
+        Require(Convert.ToBase64String(bytes) == fields[6], "noncanonical annotation source " + id);
+        var source = new System.Text.UTF8Encoding(false, true).GetString(bytes);
+        Require(System.Text.Encoding.UTF8.GetBytes(source).SequenceEqual(bytes),
+            "noncanonical UTF-8 annotation source " + id);
+        if (fields[4] == "reject")
+        {
+            rejects++;
+            RejectDiagnostic(() => OresParser.Parse(source),
+                "Source annotations require typed compiler validation",
+                "scalar annotation parity " + id);
+            RejectDiagnostic(() => OresStructuredParser.Parse(source),
+                "Source annotations require typed compiler validation",
+                "structured annotation parity " + id);
+        }
+        else
+        {
+            passes++;
+            Require(OresParser.Parse(source) is Literal,
+                "scalar annotation positive " + id);
+            Require(OresStructuredParser.Parse(source) is not null,
+                "structured annotation positive " + id);
+        }
+    }
+    Require(ids.Count == 17 && passes == 3 && rejects == 14,
+        "annotation admission corpus completeness");
+}
+
 // Annotation effects cannot be erased by either Native AOT source path.
 foreach (var annotation in new[] {
     "@Ret(int)", "@FromJson(\"id\")", "@Critical(1)",
