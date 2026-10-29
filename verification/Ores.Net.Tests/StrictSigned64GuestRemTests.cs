@@ -1,7 +1,6 @@
 using Mono.Cecil;
 using Mono.Cecil.Cil;
 using Ores.Net.Compiler;
-using Ores.Net.Runtime;
 
 // Compiled-source admission and emitted CIL inspection, not Native AOT proof.
 internal static class StrictSigned64GuestRemTests
