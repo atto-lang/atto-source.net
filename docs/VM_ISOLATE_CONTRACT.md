@@ -69,3 +69,37 @@ sandboxed worker **processes**.
 Tests: `VmIsolateHostTests.Run()` is wired into the existing
 `verification/Ores.Net.Tests/Program.cs` suite; the .NET toolchain must
 execute this in CI. No local dotnet SDK execution was available in this pass.
+
+
+## Native AOT compiled CIL tenant execution (follow-up)
+
+`OresVmHost.InvokeGeneratedScalar(handle, Func<long> entry)` now admits
+a trusted **statically linked generated-CIL entry**. It pins the
+in-flight guest call (including queued turns), serializes within one tenant,
+rechecks admission before execution, calls the generated CIL method without
+holding the root VM lock, and uses checked accumulation into tenant-local
+i64 state. Exceptions and arithmetic overflow do not commit a result.
+Quiescence blocks new entry but permits an already-running guest call to
+finish, and shutdown waits until all entry calls retire.
+
+The NativeHost has an opt-in `--isolate-smoke` mode using
+`Oreslang.Generated.OresProgram.Run` from **examples/hello.ores**, which
+returns 14. It executes the same generated CIL function for two independently
+mutable tenants, verifies restart fresh state, and ensures the neighbor can
+continue after tenant A shuts down. It runs as a **Native AOT binary**, not
+a framework-dependent dynamic assembly. Invoke either:
+
+- Windows: `./scripts/publish-windows.ps1 -Source examples/hello.ores -Rid win-x64 -TenantIsolateSmoke`
+- Linux: `ORES_NET_ISOLATE_SMOKE=1 bash scripts/publish-linux.sh examples/hello.ores`
+
+The ordinary host invocation remains unaffected. The existing C# test driver
+adds nested-entry denial, rollback on exceptions/overflow and a physical
+blocked-guest shutdown pin using a concurrent Task.
+
+**Limit:** current compiler-generated CIL has no tenant-bound parameters;
+the statically linked function returns a scalar constant which the host
+accumulates in tenant state. This proves an actual compiled source entry can
+execute under tenant isolation accounting, **not** full mutable .ores
+module globals, actor scheduling, hard realtime, or a CLR/OS security
+sandbox. Exact-head Linux and Windows Native AOT publishes have NOT
+executed locally; no .NET SDK is installed here.
