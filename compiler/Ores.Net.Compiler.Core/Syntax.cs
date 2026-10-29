@@ -102,6 +102,10 @@ public static class OresParser
             var start = _i;
             if (_i == text.Length) return new Token("", start);
             var ch = text[_i];
+            // A native-AOT compiler must not treat unknown annotations as
+            // metadata or silently erase their effect/ownership contracts.
+            if (ch == '@')
+                throw new FormatException($"Source annotations require typed compiler validation and Native AOT lowering at offset {start}");
             if (ch is >= '0' and <= '9')
             {
                 // Match the reference's decimal digit separators without
