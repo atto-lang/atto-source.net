@@ -172,6 +172,12 @@ public static class OresSourceModuleCompiler
             string cursor = roots[owner];
             foreach (string component in Path.GetRelativePath(cursor, path).Split(Path.DirectorySeparatorChar))
             {
+                // On Unix, literal backslash and control characters can be
+                // valid filenames. They cannot enter a graph identity that
+                // normalizes backslash to '/' and frames witnesses with LF.
+                if (component.Any(c => char.IsControl(c) ||
+                    (Path.DirectorySeparatorChar == '/' && c == '\\')))
+                    throw new FormatException("Unsupported source path identity character");
                 cursor = Path.Combine(cursor, component);
                 RejectReparse(cursor);
                 if (Directory.Exists(cursor) &&

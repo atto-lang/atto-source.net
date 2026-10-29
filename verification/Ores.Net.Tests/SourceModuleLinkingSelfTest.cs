@@ -198,6 +198,27 @@ internal static class SourceModuleLinkingSelfTest
                 new[] { root, Path.Combine(root, "dependency") }).Sources.Count == 2, "explicit dependency root admitted");
             if (!OperatingSystem.IsWindows())
             {
+                // Two distinct Linux filenames can produce the same identity
+                // when literal '\' is normalized to '/'.
+                Directory.CreateDirectory(Path.Combine(root, "identity"));
+                Write("identity/entry.ores", "pub fnc main():int { return 42; }");
+                Write("identity\\entry.ores", "pub fnc main():int { return 41; }");
+                string nestedName = Path.Combine(root, "identity", "entry.ores");
+                string backslashName = Path.Combine(root, "identity\\entry.ores");
+                Require(File.Exists(nestedName) && File.Exists(backslashName),
+                    "both Unix source identity collision files exist");
+                Require(Path.GetRelativePath(root, nestedName).Replace('\\', '/') ==
+                        Path.GetRelativePath(root, backslashName).Replace('\\', '/'),
+                    "identity normalization would collide without admission");
+                Reject(() => OresSourceModuleCompiler.Compile(backslashName, new[] { root }),
+                    "literal backslash filename cannot alias source identity",
+                    "Unsupported source path identity character");
+                string controlName = Path.Combine(root, "identity\ncontrol.ores");
+                File.WriteAllText(controlName, "pub fnc main():int { return 41; }");
+                Reject(() => OresSourceModuleCompiler.Compile(controlName, new[] { root }),
+                    "newline filename cannot break source graph witness framing",
+                    "Unsupported source path identity character");
+
                 // A real leaf directory below a symlinked parent must not be
                 // accepted as an explicit source root. Checking only the
                 // leaf's ReparsePoint attribute would miss this alias.
