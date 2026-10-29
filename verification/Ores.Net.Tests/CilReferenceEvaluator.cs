@@ -69,7 +69,7 @@ internal static class CilReferenceEvaluator
                         calledMethod.DeclaringType.FullName !=
                             "Ores.Net.Runtime.StrictSigned64Arithmetic" ||
                         calledMethod.DeclaringType.Scope is not AssemblyNameReference
-                            { Name: "Ores.Net.Runtime" } ||
+                            { Name: "Ores.Net.Runtime", Version: { Major: 1, Minor: 0, Build: 0, Revision: 0 } } ||
                         calledMethod.HasThis || calledMethod.ExplicitThis ||
                         calledMethod.GenericParameters.Count != 0 ||
                         calledMethod.CallingConvention != MethodCallingConvention.Default ||
