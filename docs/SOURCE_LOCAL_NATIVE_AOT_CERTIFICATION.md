@@ -70,7 +70,15 @@ and [reconciliation #214](https://github.com/ores-truffle-oreslang/oreslang-sour
   The recorded API path is an operator assertion, not proof of provenance.
 - [ ] Download each corresponding original GitHub artifact and independently
   verify presence, origin run/attempt, binary file types (ELF/PE), binary
-  SHA-256 digests and application outputs. A digest *printed in a receipt*
+  SHA-256 digests and application outputs.
+  The Linux artifact must contain the receipt plus the five exact native compiler/application
+  binaries; the Windows artifact must contain the receipt plus the two exact PE
+  binaries. Independently extract the original artifacts, map their stored paths
+  to the receipt entries (the upload action can omit the shared `artifacts/`
+  prefix), inspect real file formats, and recompute SHA-256 over the byte
+  contents. Reject any missing, unexpected or mismatched binary. The metadata
+  verifier alone cannot prove binary contents; do not count a receipt-only
+  artifact as Native AOT certification. A digest *printed in a receipt*
   alone does not establish that the binary or its source was correct.
 - [ ] Validate the actual compiled release against its exact **tested source
   commit/tree**, never a newer head or a different GitHub organization.

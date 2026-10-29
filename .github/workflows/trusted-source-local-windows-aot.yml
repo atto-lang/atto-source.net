@@ -162,6 +162,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: oreslang-net-source-local-windows-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/evidence/source-local-windows.json
+          path: |
+            artifacts/evidence/source-local-windows.json
+            artifacts/compiler/win-x64/oresnet.exe
+            artifacts/apps/win-x64/oreslang-app.exe
           if-no-files-found: error
           retention-days: 14

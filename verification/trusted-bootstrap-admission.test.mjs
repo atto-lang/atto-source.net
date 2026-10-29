@@ -79,8 +79,8 @@ test('evidence job watches and executes this bootstrap contract',()=>{
 // requires a new independently reviewed snapshot AND an explicit pin update.
 // Do not replace this with contains()/substring checks or a mutable branch ref.
 const approvedBootstrapBlobs = new Map([
- ['trusted-source-local-linux-aot.yml', '906df5dc185ab20b71d31e52ce05894ac29fb4a7'],
- ['trusted-source-local-windows-aot.yml', 'f096c6cce83b6a52e7d3cad5b7350d7cc8242787'],
+ ['trusted-source-local-linux-aot.yml', 'ba3d757bcadb60a4741a5d1aa7218c521b00bb29'],
+ ['trusted-source-local-windows-aot.yml', '768955141b49d6c95e331195f08129cb2dd828a0'],
  ['trusted-source-local-fence-windows.yml', '277a4b92f563d0db50f51e6008592b23f838ac36']
 ]);
 function gitBlobSha(source) {
