@@ -135,6 +135,13 @@ public sealed class OresTaskScope : IAsyncDisposable
         {
             if (closed != 0)
                 throw new InvalidOperationException("Oreslang Task scope closed");
+            // ActiveObservers is released before result publication. An old
+            // forwarder can still be finishing when a new observer enters.
+            // Bound BOTH counters; otherwise arbitrarily many forwarders
+            // could overlap their post-quota publication/retirement tails.
+            if (pendingObserverForwarders >= observerLimit)
+                throw new InvalidOperationException(
+                    "Oreslang Task observer forwarding quota exhausted");
             Reserve(ref activeObservers, observerLimit, "observer");
             try
             {
@@ -146,8 +153,8 @@ public sealed class OresTaskScope : IAsyncDisposable
                 if (pendingObserverForwarders == 0)
                     nextDrain = new TaskCompletionSource<bool>(
                         TaskCreationOptions.RunContinuationsAsynchronously);
-                if (pendingObserverForwarders == int.MaxValue)
-                    throw new OverflowException("Observer forwarding capacity overflow");
+                // The pre-admission forwarding check also prevents wrap:
+                // pendingObserverForwarders < observerLimit <= 4096.
                 pendingObserverForwarders++;
                 if (nextDrain is not null) forwardersDrained = nextDrain;
             }
