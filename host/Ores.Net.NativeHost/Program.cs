@@ -32,7 +32,7 @@ if (args.Length == 1 && args[0] == "--isolate-smoke")
         throw new InvalidOperationException("recreated tenant inherited stale scalar state");
     vm.BeginShutdown(next);vm.CompleteShutdown(next);vm.Destroy(next);
     vm.BeginShutdown(b);vm.CompleteShutdown(b);vm.Destroy(b);
-    Console.WriteLine("native-aot-isolate-smoke: 6 statically linked CIL guest calls passed");
+    Console.WriteLine("native-aot-isolate-smoke: 5 statically linked CIL guest calls passed");
     return 0;
 }
 if (args.Length != 0)
