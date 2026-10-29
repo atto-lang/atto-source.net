@@ -36,7 +36,7 @@ foreach (var annotation in new[] {
     "@RequiresPermission(\"ffi\")", "@UnknownMacro", "@ActorMaxThreads"
 })
 {
-    var source = annotation + "\\nfnc main(): int { return 42; }";
+    var source = annotation + "\nfnc main(): int { return 42; }";
     RejectDiagnostic(() => OresParser.Parse(source),
         "Source annotations require typed compiler validation",
         "scalar Native AOT annotation " + annotation);
