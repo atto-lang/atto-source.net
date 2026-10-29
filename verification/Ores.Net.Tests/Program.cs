@@ -291,6 +291,20 @@ Reject(() => OresParser.Parse("fnc main():int{return 3; } extra"), "trailing syn
 Reject(() => OresParser.Parse("pub pub fnc main():int{return 3;}"), "duplicate pub");
 Reject(() => OresParser.Parse("fnc main():int{return 9223372036854775808;}"), "i64 range");
 Reject(() => OresParser.Parse("fnc main():int{return 1 @ 3;}"), "illegal character");
+foreach (var annotation in new[] { "@FromJson(\"id\")", "@CallerRole(Admin)",
+                                   "@CallableBy(Admin)", "@DefaultArgVals(x=1)",
+                                   "@UnknownPolicy" })
+{
+    string source = annotation + "\nfnc main():int{return 42;}";
+    RejectDiagnostic(() => OresParser.Parse(source), "Annotations require",
+        "scalar compiler must reject " + annotation);
+    RejectDiagnostic(() => OresStructuredParser.Parse(source), "Annotations require",
+        "structured compiler must reject " + annotation);
+}
+Require(OresParser.Parse("fnc main():int{return 42;} // @CallerRole(Admin)") is Literal,
+    "annotation decoys in comments remain invisible");
+_ = OresStructuredParser.Parse("fnc main():int{return 42;} /* @DefaultArgVals(x=1) */");
+
 foreach (string real in new[] { "0.125", "1e10", "1E-10", "123.456d", "123d",
                                "1_000.5", "1_0e+2", "1_2d" })
     RejectDiagnostic(() => OresParser.Parse("fnc main():int{return " + real + ";}"),
