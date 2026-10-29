@@ -119,7 +119,16 @@ jobs:
             $_.sha256 -ceq $expected -and $_.utf8_bytes -eq 657
           })
           $entry = @($units | Where-Object { $_.path -ceq '0/core-numeric.ores' })
-          $entryDigest = (Get-FileHash examples/modules/core-numeric.ores -Algorithm SHA256).Hash.ToLowerInvariant()
+          # Revalidate the guest entry's committed blob immediately before
+          # accepting the compiler witness; previous build/test steps must not
+          # silently replace the program while preserving a plausible receipt.
+          $entryPath = 'examples/modules/core-numeric.ores'
+          $observedBlob = git hash-object --no-filters -- $entryPath
+          $committedBlob = git rev-parse "HEAD:$entryPath"
+          if ($LASTEXITCODE -ne 0 -or $observedBlob -cne $committedBlob) {
+            throw 'Canonical guest entry differs from exact checked-out Git blob'
+          }
+          $entryDigest = (Get-FileHash $entryPath -Algorithm SHA256).Hash.ToLowerInvariant()
           $entryBytes = (Get-Item examples/modules/core-numeric.ores).Length
           if ($canonical.Count -ne 1 -or $entry.Count -ne 1 -or
               $entry[0].sha256 -cne $entryDigest -or
