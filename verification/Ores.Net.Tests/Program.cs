@@ -30,6 +30,39 @@ static void InvalidSend(Action action, string why)
     throw new Exception("Expected mailbox rejection: " + why);
 }
 
+// Cross-backend namespace/lifecycle parity: the NativeAOT compiler does
+// not yet implement manifest-indexed namespace import or once-only init.
+// Unreachable files do not enter the graph, and unsupported imports fail
+// before CIL emission rather than executing an ambient package.
+{
+    string root = Path.Combine(Path.GetTempPath(), "oreslang-ns-parity-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    try
+    {
+        string main = Path.Combine(root, "main.ores");
+        string startup = Path.Combine(root, "startup.ores");
+        string unrelated = Path.Combine(root, "unrelated.ores");
+        File.WriteAllText(unrelated, "not valid ores source");
+        File.WriteAllText(main, "fnc main()->int { return 1; }");
+        Require(OresSourceModuleCompiler.Compile(main, new[] { root }).Sources.Count == 1,
+            "unreferenced namespace provider must not enter NativeAOT module graph");
+
+        File.WriteAllText(main,
+            "import namespace billing as payments from \"checkout\"; fnc main()->int { return 1; }");
+        RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
+            "manifest-verified multi-file package linker",
+            "namespace import needs exact manifest ownership");
+
+        File.WriteAllText(startup, "pub fnc init()->int { return 9; }");
+        File.WriteAllText(main,
+            "import fnc init from \"./startup.ores\"; fnc main()->int { return init(); }");
+        RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
+            "once-only reachable initialization lowering",
+            "lifecycle init cannot become an ordinary imported callable");
+    }
+    finally { Directory.Delete(root, true); }
+}
+
 // Opaque top types and value-producing conditionals are language-reserved,
  // but this i64-only bootstrap has no tagged dynamic-value ABI or typed CFG
  // lowering for them yet. Reject before OresIR/CIL emission.

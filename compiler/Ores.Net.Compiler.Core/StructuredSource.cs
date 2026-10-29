@@ -380,6 +380,11 @@ public static class OresStructuredParser
             {
                 int offset = Current.Offset;
                 string kind = Current.Text;
+                // Until the NativeAOT linker has pinned manifest-defined
+                // PackageInstanceId routing, never interpret namespace imports
+                // as a source-file wildcard or ambient search path.
+                if (kind == "namespace")
+                    throw Error("import namespace requires manifest-verified multi-file package linker");
                 if (kind is not ("fnc" or "module")) throw Error("Linked source supports fnc and module imports");
                 index++;
                 string name = Name();
@@ -448,6 +453,11 @@ public static class OresStructuredParser
                 Expect("fnc");
                 int at = Current.Offset;
                 string name = Name();
+                // This NativeAOT slice does not lower once-only initialization
+                // barriers. Do not silently compile a lifecycle hook into an
+                // ordinary public CIL method reachable through imports.
+                if (linking is not null && name == "init")
+                    throw Error("module init requires once-only reachable initialization lowering");
                 Expect("(");
                 if (Current.Text == "(")
                     throw Error("Tuple-v2 shorthand parameter requires typed tuple ownership/ABI lowering");
