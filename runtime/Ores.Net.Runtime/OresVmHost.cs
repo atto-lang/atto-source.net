@@ -9,6 +9,11 @@ public sealed class OresVmHost
 {
     public enum Phase { Created, Running, Quiescing, Stopped }
 
+    // A NativeAOT host-owned dictionary is NOT a separate tenant CLR heap.
+    // Explicit process mode refuses admission until a supervised OS sandbox
+    // and independently authenticated worker identity actually exist.
+    public enum IsolationMode { TrustedInProcess, SandboxedProcess }
+
     public sealed class IsolateHandle
     {
         internal IsolateHandle(string tenantId, ulong generation) {
@@ -84,8 +89,11 @@ public sealed class OresVmHost
             throw new InvalidOperationException("stale or foreign actor ticket");
     }
 
-    public IsolateHandle CreateIsolate(string tenantId, int maxActors = 64, int maxResourcePins = 1024)
+    public IsolateHandle CreateIsolate(string tenantId, int maxActors = 64, int maxResourcePins = 1024,
+        IsolationMode isolation = IsolationMode.TrustedInProcess)
     {
+        if (isolation != IsolationMode.TrustedInProcess)
+            throw new InvalidOperationException("sandboxed tenant process isolation not implemented");
         if (string.IsNullOrWhiteSpace(tenantId) || tenantId.Length > 128 ||
             !tenantId.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-' or '.'))
             throw new ArgumentException("invalid tenant ID", nameof(tenantId));
