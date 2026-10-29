@@ -79,6 +79,7 @@ jobs:
           if ($positive -cnotmatch 'NET_ASYNC_SOURCE_SLICE_EXECUTED; value=42;' -or
               $positive -cnotmatch 'NET_ASYNC_CIL_REJECTED; exit=1; assembly_exists=false' -or
               $positive -cnotmatch 'NET_ASYNC_SLICE_NEGATIVE_DIAGNOSTICS; cases=5;' -or
+              $positive -cnotmatch 'NET_ASYNC_ADDITIONAL_COMMANDS_POSITIVE_CONTROLS; cases=5; artifacts=3' -or
               $positive -cnotmatch 'NET_ASYNC_ADDITIONAL_COMMANDS_REJECTED; cases=5; artifacts=false') {
             throw 'Positive/negative source trace markers missing'
           }
@@ -109,6 +110,8 @@ jobs:
             source_value = 42
             negative_source_cases = 5
             additional_compiler_command_rejections = 5
+            additional_compiler_command_positive_controls = 5
+            positive_control_artifacts = 3
             legacy_cil_rejection_cases = 8
             guest_source_runner_executed = $true
             interpreter_only = $true
