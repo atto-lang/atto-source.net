@@ -30,6 +30,25 @@ static void InvalidSend(Action action, string why)
     throw new Exception("Expected mailbox rejection: " + why);
 }
 
+// Annotation effects cannot be erased by either Native AOT source path.
+foreach (var annotation in new[] {
+    "@Ret(int)", "@FromJson(\"id\")", "@Critical(1)",
+    "@RequiresPermission(\"ffi\")", "@UnknownMacro", "@ActorMaxThreads"
+})
+{
+    var source = annotation + "\\nfnc main(): int { return 42; }";
+    RejectDiagnostic(() => OresParser.Parse(source),
+        "Source annotations require typed compiler validation",
+        "scalar Native AOT annotation " + annotation);
+    RejectDiagnostic(() => OresStructuredParser.Parse(source),
+        "Source annotations require typed compiler validation",
+        "structured Native AOT annotation " + annotation);
+}
+Require(OresParser.Parse("fnc main():int{return 42;} // @Ret(int)") is Literal,
+    "annotation in scalar comment remains inert");
+Require(OresStructuredParser.Parse("fnc main():int{return 42;} // @Ret(int)") is not null,
+    "annotation in structured comment remains inert");
+
 // Opaque top types and value-producing conditionals are language-reserved,
  // but this i64-only bootstrap has no tagged dynamic-value ABI or typed CFG
  // lowering for them yet. Reject before OresIR/CIL emission.
