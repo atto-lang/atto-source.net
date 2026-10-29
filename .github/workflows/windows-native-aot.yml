@@ -434,6 +434,11 @@ jobs:
             checks = @('managed-regressions','native-compiler','native-app',
                        'native-PE','arithmetic-negative','CFG-native-execution',
                        'strict-rem-guest42-min-zero')
+            strict_rem_native_sha256 = [ordered]@{
+              normal = (Get-FileHash -LiteralPath 'artifacts/strict-rem42/win-x64/oreslang-app.exe' -Algorithm SHA256).Hash.ToLowerInvariant()
+              signed_min = (Get-FileHash -LiteralPath 'artifacts/strict-rem-min42/win-x64/oreslang-app.exe' -Algorithm SHA256).Hash.ToLowerInvariant()
+              zero_divisor = (Get-FileHash -LiteralPath 'artifacts/strict-rem-zero/win-x64/oreslang-app.exe' -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
             source_only = $false
             independently_verified = $false
           }
@@ -444,6 +449,16 @@ jobs:
         with:
           name: oreslang-net-aot-proof-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/oreslang-net-aot-receipt.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload signed64 remainder native executables
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: oreslang-net-strict-rem-win-x64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/strict-rem42/win-x64/oreslang-app.exe
+            artifacts/strict-rem-min42/win-x64/oreslang-app.exe
+            artifacts/strict-rem-zero/win-x64/oreslang-app.exe
           if-no-files-found: error
           retention-days: 14
       - name: Upload native executable
