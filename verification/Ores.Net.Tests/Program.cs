@@ -305,6 +305,34 @@ Require(OresParser.Parse("fnc main():int{return 42;} // @CallerRole(Admin)") is 
     "annotation decoys in comments remain invisible");
 _ = OresStructuredParser.Parse("fnc main():int{return 42;} /* @DefaultArgVals(x=1) */");
 
+var annotationCorpus = Path.Combine(AppContext.BaseDirectory, "annotation-admission-v1.tsv");
+Require(File.Exists(annotationCorpus), "missing five-backend annotation admission corpus");
+var annotationCaseIds = new HashSet<string>(StringComparer.Ordinal);
+foreach (string row in File.ReadAllLines(annotationCorpus))
+{
+    if (string.IsNullOrWhiteSpace(row) || row.StartsWith('#')) continue;
+    string[] fields = row.Split('\t');
+    Require(fields.Length == 3, "invalid annotation admission TSV row");
+    string kind = fields[0], id = fields[1], caseSource = fields[2].Replace("\\n", "\n", StringComparison.Ordinal);
+    Require(!string.IsNullOrWhiteSpace(id) && !string.IsNullOrWhiteSpace(caseSource) &&
+            annotationCaseIds.Add(id), "duplicate/empty annotation admission row " + id);
+    if (kind is "shared-deny" or "bootstrap-deny")
+    {
+        RejectDiagnostic(() => OresParser.Parse(caseSource), "Annotations require",
+            "scalar annotation parity " + id);
+        RejectDiagnostic(() => OresStructuredParser.Parse(caseSource), "Annotations require",
+            "structured annotation parity " + id);
+    }
+    else if (kind == "shared-allow")
+    {
+        _ = OresParser.Parse(caseSource);
+        _ = OresStructuredParser.Parse(caseSource);
+    }
+    else throw new Exception("Unknown annotation admission class " + kind);
+}
+Require(annotationCaseIds.Count >= 12, "incomplete annotation admission parity corpus");
+
+
 foreach (string real in new[] { "0.125", "1e10", "1E-10", "123.456d", "123d",
                                "1_000.5", "1_0e+2", "1_2d" })
     RejectDiagnostic(() => OresParser.Parse("fnc main():int{return " + real + ";}"),
