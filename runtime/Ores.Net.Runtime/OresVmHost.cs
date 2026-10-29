@@ -45,6 +45,7 @@ public sealed class OresVmHost
         internal required IsolateHandle Handle { get; init; }
         internal required int ActorLimit { get; init; }
         internal required int PinLimit { get; init; }
+        internal required DurableLockQueues Durable { get; init; }
         internal Phase Phase;
         internal ulong NextActorEpoch = 1;
         internal readonly Dictionary<ulong, ActorTicket> Actors = new();
@@ -97,7 +98,8 @@ public sealed class OresVmHost
             if (_nextGeneration == ulong.MaxValue) throw new InvalidOperationException("generation exhausted");
             var handle = new IsolateHandle(tenantId, _nextGeneration++);
             _tenants.Add(tenantId, new TenantState {
-                Handle = handle, ActorLimit = maxActors, PinLimit = maxResourcePins
+                Handle = handle, ActorLimit = maxActors, PinLimit = maxResourcePins,
+                Durable = new DurableLockQueues(handle.Generation)
             });
             return handle;
         }
@@ -159,7 +161,8 @@ public sealed class OresVmHost
     {
         lock (_gate) {
             var s = Check(handle); CheckActor(s, actor);
-            if (s.PinsByActor[actor] != 0)
+            if (s.PinsByActor[actor] != 0 ||
+                s.Durable.HasActor(new DurableLockQueues.ActorKey(actor.Id, actor.Epoch)))
                 throw new InvalidOperationException("actor has outstanding resources");
             actor.Mailbox.Stop(); // Erase pending private queued copies.
             s.PinsByActor.Remove(actor);
@@ -224,12 +227,66 @@ public sealed class OresVmHost
         }
     }
 
+    // Host-only API; trusted caller must pass a live actor-issued capability.
+    public DurableLockQueues.Admission EnqueueDurable(IsolateHandle handle, ActorTicket actor,
+        ulong lockId, ulong operationId, long payloadBytes)
+    {
+        lock (_gate) {
+            var s = Check(handle); CheckActor(s, actor);
+            if (s.Phase != Phase.Running) throw new InvalidOperationException("durable admission closed");
+            return s.Durable.Enqueue(new DurableLockQueues.ActorKey(actor.Id, actor.Epoch),
+                lockId, operationId, payloadBytes);
+        }
+    }
+
+    public bool ClaimDurable(IsolateHandle handle, DurableLockQueues.Ticket ticket)
+    {
+        lock (_gate) {
+            var s = Check(handle);
+            if (s.Phase != Phase.Running) throw new InvalidOperationException("durable claims closed");
+            return s.Durable.Claim(ticket);
+        }
+    }
+    public DurableLockQueues.Ticket? FinishDurable(IsolateHandle handle, DurableLockQueues.Ticket ticket)
+    {
+        lock (_gate) {
+            var s = Check(handle);
+            if (s.Phase is not (Phase.Running or Phase.Quiescing))
+                throw new InvalidOperationException("durable finish phase");
+            return s.Durable.Finish(ticket);
+        }
+    }
+    public DurableLockQueues.Ticket? CancelDurableHead(IsolateHandle handle,
+        DurableLockQueues.Ticket ticket)
+    {
+        lock (_gate) {
+            var s = Check(handle);
+            if (s.Phase is not (Phase.Running or Phase.Quiescing))
+                throw new InvalidOperationException("durable cancel phase");
+            return s.Durable.CancelHead(ticket);
+        }
+    }
+    public void CancelDurableWaiter(IsolateHandle handle, DurableLockQueues.Ticket ticket)
+    {
+        lock (_gate) {
+            var s = Check(handle);
+            if (s.Phase is not (Phase.Running or Phase.Quiescing))
+                throw new InvalidOperationException("durable cancel phase");
+            s.Durable.CancelWaiter(ticket);
+        }
+    }
+    public DurableLockQueues.Snapshot DurableSnapshot(IsolateHandle handle)
+    {
+        lock (_gate) return Check(handle).Durable.GetSnapshot();
+    }
+
     public void BeginShutdown(IsolateHandle handle)
     {
         lock (_gate) {
             var s = Check(handle);
             if (s.Phase is not (Phase.Running or Phase.Created))
                 throw new InvalidOperationException("shutdown phase");
+            s.Durable.Quiesce();
             s.Phase = Phase.Quiescing;
         }
     }
@@ -238,7 +295,7 @@ public sealed class OresVmHost
     {
         lock (_gate) {
             var s = Check(handle);
-            if (s.Phase != Phase.Quiescing || s.Actors.Count != 0 || s.ActivePins != 0 || s.ActiveGuestCalls != 0)
+            if (s.Phase != Phase.Quiescing || s.Actors.Count != 0 || s.ActivePins != 0 || s.ActiveGuestCalls != 0 || !s.Durable.Drained)
                 throw new InvalidOperationException("actor or resource still active");
             s.Phase = Phase.Stopped;
         }
