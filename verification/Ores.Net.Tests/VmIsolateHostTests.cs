@@ -31,14 +31,38 @@ internal static class VmIsolateHostTests
             host.GuestSnapshot(a).Scalar != -3 ||
             host.GuestSnapshot(b).Scalar != 100)
             throw new Exception("tenant state isolation failed");
-        ExpectFailure(() => host.InvokeGeneratedScalar(a, () =>
-            host.InvokeGeneratedScalar(a, () => 1)), "nested guest entry");
-        if (host.GuestSnapshot(a).GuestCalls != 0)
-            throw new Exception("guest execution pin leaked after error");
-        try { host.InvokeGeneratedScalar(a, () => throw new OverflowException()); }
+        // An exception from a guest delegate is distinct from a typed
+        // numeric overflow in the trusted host commit. Quarantine on guest
+        // exceptions and require a new incarnation before subsequent calls.
+        var faultHost = new OresVmHost(maxTenants: 1);
+        var fault = faultHost.CreateIsolate("fault");
+        faultHost.Start(fault);
+        if (faultHost.InvokeGeneratedScalar(fault, () => 7) != 7)
+            throw new Exception("fault fixture setup");
+        ExpectFailure(() => faultHost.InvokeGeneratedScalar(fault, () =>
+            faultHost.InvokeGeneratedScalar(fault, () => 1)), "nested guest entry");
+        if (faultHost.Snapshot(fault).Phase != OresVmHost.Phase.Quiescing ||
+            faultHost.GuestSnapshot(fault).GuestCalls != 0)
+            throw new Exception("throwing tenant was not quarantined/drained");
+        ExpectFailure(() => faultHost.InvokeGeneratedScalar(fault, () => 1),
+            "quarantined tenant must refuse new entry");
+        faultHost.CompleteShutdown(fault);
+        faultHost.Destroy(fault);
+        var recovered = faultHost.CreateIsolate("fault");
+        faultHost.Start(recovered);
+        if (faultHost.InvokeGeneratedScalar(recovered, () => 1) != 1)
+            throw new Exception("fault restart reused tenant scalar state");
+        ExpectFailure(() => faultHost.Snapshot(fault), "stale fault handle");
+        try { faultHost.InvokeGeneratedScalar(recovered, () => throw new OverflowException()); }
         catch (OverflowException) { }
+        if (faultHost.Snapshot(recovered).Phase != OresVmHost.Phase.Quiescing ||
+            faultHost.GuestSnapshot(recovered).Scalar != 1 ||
+            faultHost.GuestSnapshot(recovered).GuestCalls != 0)
+            throw new Exception("guest fault leaked a pin or mutated state");
+        faultHost.CompleteShutdown(recovered);
+        faultHost.Destroy(recovered);
         if (host.GuestSnapshot(a).Scalar != -3)
-            throw new Exception("failed guest mutated tenant state");
+            throw new Exception("foreign tenant fault changed tenant-a");
         var actorA = host.RegisterActor(a, 3);
         var actorB = host.RegisterActor(b, 3);
         var refA = actorA.Mailbox.CurrentRef;
