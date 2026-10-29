@@ -155,8 +155,14 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           tree="$(git rev-parse 'HEAD^{tree}')"
           mkdir -p artifacts/evidence
-          printf '{"schema":"oreslang.net.exact_head_native_aot_v1","repository":"%s","source_head_sha":"%s","tree_sha":"%s","run_id":%s,"run_attempt":%s,"runner_os":"Linux","target_rid":"linux-x64","checks":["managed-tests","native-compiler","native-app","negative-source-no-cil","source-isolation-4","canonical-precedence","structured-ssa-cil-native45","sidecar-negative","strict-rem-guest42-min-zero"],"source_only":false,"independently_verified":false}\n' \
-            "$GITHUB_REPOSITORY" "$EXPECTED_HEAD" "$tree" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > artifacts/evidence/linux-native-aot.json
+          sha_normal="$(sha256sum artifacts/strict-rem42/linux-x64/oreslang-app | cut -d' ' -f1)"
+          sha_min="$(sha256sum artifacts/strict-rem-min42/linux-x64/oreslang-app | cut -d' ' -f1)"
+          sha_zero="$(sha256sum artifacts/strict-rem-zero/linux-x64/oreslang-app | cut -d' ' -f1)"
+          for digest in "$sha_normal" "$sha_min" "$sha_zero"; do
+            [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || { echo 'Invalid native digest' >&2; exit 1; }
+          done
+          printf '{"schema":"oreslang.net.exact_head_native_aot_v1","repository":"%s","source_head_sha":"%s","tree_sha":"%s","run_id":%s,"run_attempt":%s,"runner_os":"Linux","target_rid":"linux-x64","checks":["managed-tests","native-compiler","native-app","negative-source-no-cil","source-isolation-4","canonical-precedence","structured-ssa-cil-native45","sidecar-negative","strict-rem-guest42-min-zero"],"source_only":false,"independently_verified":false,"strict_rem_native_sha256":{"normal":"%s","signed_min":"%s","zero_divisor":"%s"}}\n' \
+            "$GITHUB_REPOSITORY" "$EXPECTED_HEAD" "$tree" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$sha_normal" "$sha_min" "$sha_zero" > artifacts/evidence/linux-native-aot.json
       - name: Upload Linux native executables and evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
