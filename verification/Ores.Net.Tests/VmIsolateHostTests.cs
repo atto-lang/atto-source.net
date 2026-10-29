@@ -64,6 +64,47 @@ internal static class VmIsolateHostTests
         var replacement = host.RegisterActor(a2, 3);
         host.RetireActor(a2, replacement);
         host.BeginShutdown(a2); host.CompleteShutdown(a2); host.Destroy(a2);
+        // Concurrent physical guest invocation must pin the tenant until the
+        // generated host step completes, even when shutdown has begun.
+        var isolateVm = new OresVmHost(maxTenants: 1);
+        var executing = isolateVm.CreateIsolate("busy");
+        isolateVm.Start(executing);
+        using var entered = new ManualResetEventSlim();
+        using var finish = new ManualResetEventSlim();
+        var active = Task.Run(() => isolateVm.InvokeGeneratedScalar(executing, () => {
+            entered.Set();
+            if (!finish.Wait(TimeSpan.FromSeconds(10)))
+                throw new TimeoutException("native generated step did not retire");
+            return 7;
+        }));
+        if (!entered.Wait(TimeSpan.FromSeconds(10)))
+            throw new Exception("native tenant test guest never started");
+        try {
+            isolateVm.BeginShutdown(executing);
+            ExpectFailure(() => isolateVm.CompleteShutdown(executing),
+                "inflight generated guest pin must block shutdown");
+            if (isolateVm.GuestSnapshot(executing).GuestCalls != 1)
+                throw new Exception("guest execution lifetime was not pinned");
+        }
+        finally { finish.Set(); }
+        if (active.GetAwaiter().GetResult() != 7)
+            throw new Exception("running guest could not commit during quiescence");
+        isolateVm.CompleteShutdown(executing);
+        isolateVm.Destroy(executing);
+
+        var overflowVm = new OresVmHost(maxTenants: 1);
+        var over = overflowVm.CreateIsolate("overflow");
+        overflowVm.Start(over);
+        if (overflowVm.InvokeGeneratedScalar(over, () => long.MaxValue) != long.MaxValue)
+            throw new Exception("incorrect i64 max value");
+        try {
+            overflowVm.InvokeGeneratedScalar(over, () => 1);
+            throw new Exception("expected checked tenant scalar overflow");
+        } catch (OverflowException) { }
+        if (overflowVm.GuestSnapshot(over).Scalar != long.MaxValue ||
+            overflowVm.GuestSnapshot(over).GuestCalls != 0)
+            throw new Exception("overflow corrupted tenant state or left guest pinned");
+        overflowVm.BeginShutdown(over);overflowVm.CompleteShutdown(over);overflowVm.Destroy(over);
         host.RetireActor(b, actorB);
         host.BeginShutdown(b); host.CompleteShutdown(b); host.Destroy(b);
     }
