@@ -8,7 +8,7 @@ namespace Ores.Net.Runtime;
 public sealed class HostCapabilityIoLifecycleV1
 {
     public readonly record struct Ticket(int Slot, ulong Nonce);
-    private enum Phase { Free, Reserved, Dispatched, CancelRequested, Settled }
+    internal enum Phase { Free, Reserved, Dispatched, CancelRequested, Settled }
     private sealed class Slot
     {
         internal ulong Actor, Incarnation, Selected, Nonce;
