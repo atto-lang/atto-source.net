@@ -30,6 +30,35 @@ internal static class StrictSigned64GuestRemTests
         throw new Exception("Expected zero-divisor trap: " + why);
     }
 
+    // Mutate a *copy* of generated CIL metadata, not the emitted assembly or
+    // the original method reference. Every illegal call shape must fail closed.
+    private static void RejectForgedRemCall(MethodDefinition entry,
+        Action<MethodReference> mutate, string label)
+    {
+        var instruction = entry.Body.Instructions.Single(ins =>
+            ins.OpCode.Code == Code.Call);
+        if (instruction.Operand is not MethodReference original)
+            throw new Exception("Expected generated CIL method reference");
+        var forged = new MethodReference(
+            original.Name, original.ReturnType, original.DeclaringType)
+        {
+            HasThis = original.HasThis,
+            ExplicitThis = original.ExplicitThis,
+            CallingConvention = original.CallingConvention
+        };
+        foreach (var parameter in original.Parameters)
+            forged.Parameters.Add(new ParameterDefinition(parameter.ParameterType));
+        mutate(forged);
+        instruction.Operand = forged;
+        try
+        {
+            try { _ = CilReferenceEvaluator.Evaluate(entry); }
+            catch (FormatException) { return; }
+            throw new Exception("Forged CIL call was admitted: " + label);
+        }
+        finally { instruction.Operand = original; }
+    }
+
     // These cases are not host-oracle shortcuts: feed the contract's literal
     // operands through the shipping guest parser and verified CIL generator.
     private static void VerifyPortableRemContract(string folder)
@@ -132,6 +161,30 @@ internal static class StrictSigned64GuestRemTests
                     "CIL must reference exact runtime ABI");
                 Require(CilReferenceEvaluator.Evaluate(entry) == expected,
                     "decoded emitted CIL reference value: " + expression);
+                if (expression == "Integer.rem(-9, 4)")
+                {
+                    RejectForgedRemCall(entry, m => m.Name = "NotRem",
+                        "wrong intrinsic name");
+                    RejectForgedRemCall(entry, m => m.HasThis = true,
+                        "instance-call substitution");
+                    RejectForgedRemCall(entry, m => m.ExplicitThis = true,
+                        "explicit-instance call");
+                    RejectForgedRemCall(entry,
+                        m => m.CallingConvention = MethodCallingConvention.VarArg,
+                        "varargs ABI substitution");
+                    RejectForgedRemCall(entry,
+                        m => m.ReturnType = entry.Module.TypeSystem.Int32,
+                        "wrong result type");
+                    RejectForgedRemCall(entry,
+                        m => m.Parameters.RemoveAt(1),
+                        "missing signed64 operand");
+                    RejectForgedRemCall(entry,
+                        m => m.Parameters[0].ParameterType = entry.Module.TypeSystem.Int32,
+                        "wrong operand type");
+                    RejectForgedRemCall(entry,
+                        m => m.DeclaringType = entry.Module.TypeSystem.Object,
+                        "wrong runtime type");
+                }
                 string reproducible = Path.Combine(folder, "OresGenerated.repro.dll");
                 CilEmitter.EmitLibrary(ir, reproducible);
                 Require(File.ReadAllBytes(emitted).AsSpan().SequenceEqual(
