@@ -1,0 +1,5 @@
+import module left from "./left";
+define class Holder as
+  val int value;
+end
+pub fnc main(): int { return left.value(21); }

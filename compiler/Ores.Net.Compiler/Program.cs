@@ -9,16 +9,56 @@ bool validCompile = args.Length == 4 && args[0] == "compile" && args[2] == "--ou
 bool validStructuredCheck = args.Length == 2 && args[0] == "check-structured";
 bool validStructuredCompile = args.Length == 4 &&
     args[0] == "compile-structured" && args[2] == "--out";
+bool validEmitSource = args.Length == 4 && args[2] == "--out" &&
+    (args[0] == "emit-csharp" || args[0] == "emit-fsharp");
 bool validStaticFacts = args.Length == 2 &&
     (args[0] == "static-facts" || args[0] == "static-facts-structured");
-if (!validCheck && !validCompile && !validStructuredCheck && !validStructuredCompile && !validStaticFacts)
+bool moduleCommand = args.Length >= 1 && args[0] is "check-modules" or "compile-modules";
+if (!validCheck && !validCompile && !validStructuredCheck && !validStructuredCompile && !validStaticFacts && !validEmitSource && !moduleCommand)
 {
-    Console.Error.WriteLine("usage: oresnet check input.ores | oresnet compile input.ores --out path/OresGenerated.dll | oresnet check-structured input.ores | oresnet compile-structured input.ores --out path/OresGenerated.dll | oresnet static-facts input.ores | oresnet static-facts-structured input.ores");
+    Console.Error.WriteLine("usage: oresnet check input.ores | oresnet compile input.ores --out path/OresGenerated.dll | oresnet check-structured input.ores | oresnet compile-structured input.ores --out path/OresGenerated.dll | oresnet emit-csharp input.ores --out path/OresProgram.cs | oresnet emit-fsharp input.ores --out path/OresProgram.fs | oresnet static-facts input.ores | oresnet static-facts-structured input.ores");
     return 2;
 }
 
 try
 {
+    if (moduleCommand)
+    {
+        if (args.Length < 4 || args.Length % 2 != 0)
+            throw new ArgumentException("usage: oresnet check-modules INPUT --root ROOT [--dependency-root ROOT] | compile-modules INPUT --root ROOT [--dependency-root ROOT] --out OresGenerated.dll");
+        string? root = null, output = null;
+        var dependencies = new List<string>();
+        for (int i = 2; i < args.Length; i += 2)
+        {
+            if (args[i] == "--root" && root is null) root = args[i + 1];
+            else if (args[i] == "--dependency-root") dependencies.Add(args[i + 1]);
+            else if (args[i] == "--out" && output is null) output = args[i + 1];
+            else throw new ArgumentException("Unknown or duplicate module option");
+        }
+        if (root is null || (args[0] == "compile-modules") != (output is not null))
+            throw new ArgumentException("Module command requires one --root and compile-modules requires --out");
+        if (output is not null && Path.GetFileName(output) != "OresGenerated.dll")
+            throw new ArgumentException("Generated assembly must be named OresGenerated.dll");
+        var compilation = OresSourceModuleCompiler.Compile(args[1], new[] { root }.Concat(dependencies).ToArray());
+        if (output is not null) CilEmitter.EmitLibrary(compilation.Module, output);
+        using var witness = new MemoryStream();
+        using (var json = new System.Text.Json.Utf8JsonWriter(witness))
+        {
+            json.WriteStartObject();
+            json.WriteString("scope", "verified-int-bool-modules-not-full-Spin");
+            json.WriteString("graph_sha256", compilation.GraphSha256);
+            json.WriteStartArray("sources");
+            foreach (var unit in compilation.Sources)
+            {
+                json.WriteStartObject(); json.WriteString("path", unit.Path);
+                json.WriteString("sha256", unit.Sha256); json.WriteNumber("utf8_bytes", unit.Utf8Bytes);
+                json.WriteEndObject();
+            }
+            json.WriteEndArray(); json.WriteEndObject();
+        }
+        Console.WriteLine(Encoding.UTF8.GetString(witness.ToArray()));
+        return 0;
+    }
     if (validStaticFacts &&
         !string.Equals(Path.GetExtension(args[1]), ".ores", StringComparison.OrdinalIgnoreCase))
         throw new FormatException("Static-facts export requires a .ores source file");
@@ -60,6 +100,18 @@ try
             throw new ArgumentException("Generated assembly must be named OresGenerated.dll");
         CilEmitter.EmitLibrary(verified, args[3]);
         Console.WriteLine($"Emitted CIL: {Path.GetFullPath(args[3])}");
+    }
+    else if (validEmitSource)
+    {
+        var target = args[0] == "emit-csharp"
+            ? ManagedSourceTarget.CSharp : ManagedSourceTarget.FSharp;
+        var extension = target == ManagedSourceTarget.CSharp ? ".cs" : ".fs";
+        if (!string.Equals(Path.GetExtension(args[3]), extension,
+            StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException($"Managed source output requires {extension} extension");
+        var generatedSource = ManagedSourceEmitter.Emit(verified, target);
+        WriteAtomicSource(args[3], generatedSource);
+        Console.WriteLine($"Emitted {target} from verified OresIR: {Path.GetFullPath(args[3])}");
     }
     else Console.WriteLine("Oreslang subset syntax and typed OresIR: OK");
     return 0;
@@ -112,4 +164,25 @@ static string ReadBoundedSource(string path, bool rejectBom = false)
     if (rejectBom && start != 0)
         throw new FormatException("Static-facts export rejects BOM to preserve exact byte identity");
     return new UTF8Encoding(false, true).GetString(buffer, start, read - start);
+}
+
+
+// Publish a complete UTF-8 (no BOM) source file only after admission succeeds.
+// Temporary files are not discoverable as successful compiler outputs.
+static void WriteAtomicSource(string path, string content)
+{
+    if (Encoding.UTF8.GetByteCount(content) > 2 * 1024 * 1024)
+        throw new FormatException("Generated source exceeds 2 MiB limit");
+    var fullPath = Path.GetFullPath(path);
+    Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+    var tempPath = fullPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+    try
+    {
+        File.WriteAllText(tempPath, content, new UTF8Encoding(false));
+        File.Move(tempPath, fullPath, overwrite: true);
+    }
+    finally
+    {
+        if (File.Exists(tempPath)) File.Delete(tempPath);
+    }
 }

@@ -6,9 +6,10 @@ namespace Ores.Net.Runtime;
 
 /// <summary>
 /// Opaque actor-private persistent allocation capability. The offset and arena
-/// authority are intentionally not public and a default value is invalid.
+/// authority are intentionally not public. Exact reference identity is required;
+/// metadata-equivalent reconstructed objects are not issued capabilities.
 /// </summary>
-public readonly struct ActorArenaHandle
+public sealed class ActorArenaHandle
 {
     private readonly Guid _authority;
     private readonly int _slot;
@@ -39,9 +40,9 @@ public readonly struct ActorArenaHandle
 /// <summary>
 /// Turn-scoped scratch allocation. Scratch capabilities are invalidated when
 /// the physical actor turn exits, regardless of whether the next carrier is
-/// the same operating-system thread.
+/// the same operating-system thread. Only exact issued objects are accepted.
 /// </summary>
-public readonly struct ActorScratchHandle
+public sealed class ActorScratchHandle
 {
     private readonly Guid _authority;
     private readonly ulong _epoch;
@@ -87,11 +88,12 @@ public sealed class ActorArenaTurn : IDisposable
     internal ulong Epoch { get; }
     internal bool Released => Volatile.Read(ref _released) != 0;
 
-    public void Dispose()
-    {
-        if (Interlocked.Exchange(ref _released, 1) == 0)
-            Arena.ReleaseTurn(this);
-    }
+    // Physical turns must be closed by their admitting carrier. Validation and
+    // the released flag transition happen atomically under the arena gate.
+    // A stolen Dispose must not poison this token or free scratch memory.
+    public void Dispose() => Arena.ReleaseTurn(this);
+
+    internal void MarkReleased() => Volatile.Write(ref _released, 1);
 }
 
 /// <summary>
@@ -155,7 +157,7 @@ public sealed class ActorArenaLifetimePin : IDisposable
         if (Interlocked.Exchange(ref _released, 1) != 0)
             return;
         var arena = Interlocked.Exchange(ref _arena, null);
-        arena?.ReleaseLifetimePin(Authority);
+        arena?.ReleaseLifetimePin(this);
     }
 }
 
@@ -178,6 +180,7 @@ public unsafe sealed class ActorArena : IDisposable
     public const int MaxAllocationSlots = 65_536;
     public const int MaxOutstandingLifetimePins = 65_536;
     public const int MaxOutstandingReadLoans = 65_536;
+    public const int MaxScratchCapabilitiesPerTurn = 65_536;
 
     private const int SlabAlignment = 64;
 
@@ -188,6 +191,7 @@ public unsafe sealed class ActorArena : IDisposable
         internal ulong Generation;
         internal int ReadLoans;
         internal bool Live;
+        internal ActorArenaHandle? Issued;
     }
 
     private readonly object _gate = new();
@@ -204,6 +208,13 @@ public unsafe sealed class ActorArena : IDisposable
     private readonly int _budgetBytes;
     private readonly Slot[] _slots;
     private readonly int[] _freeSlots;
+    // Only exact issued objects carry authority, including lifetime-only tokens.
+    private readonly HashSet<ActorScratchHandle> _issuedScratch =
+        new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<ActorArenaReadLoan> _issuedReadLoans =
+        new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<ActorArenaLifetimePin> _issuedLifetimePins =
+        new(ReferenceEqualityComparer.Instance);
 
     private byte* _persistent;
     private byte* _scratch;
@@ -217,9 +228,12 @@ public unsafe sealed class ActorArena : IDisposable
     private int _readLoans;
     private ulong _turnEpoch;
     private bool _turnActive;
+    private ActorArenaTurn? _activeTurn;
+    private Thread? _activeCarrier;
     private bool _retired;
     private bool _reclaimed;
     private bool _budgetRefunded;
+    private bool _processBudgetReserved;
 
     public ActorArena(ulong actorId, ulong incarnation,
         int persistentBytes = 8 * 1024 * 1024,
@@ -264,6 +278,13 @@ public unsafe sealed class ActorArena : IDisposable
         _budget.Reserve(_budgetBytes);
         try
         {
+            // Runtime/tenant budgets cannot bypass the process-wide cap.
+            if (!ReferenceEquals(_budget, ActorArenaBudget.Process))
+            {
+                ActorArenaBudget.Process.Reserve(_budgetBytes);
+                _processBudgetReserved = true;
+            }
+
             _authority = Guid.NewGuid();
             if (_authority == Guid.Empty)
                 throw new InvalidOperationException(
@@ -294,6 +315,11 @@ public unsafe sealed class ActorArena : IDisposable
             {
                 NativeMemory.AlignedFree(_persistent);
                 _persistent = null;
+            }
+            if (_processBudgetReserved)
+            {
+                ActorArenaBudget.Process.Refund(_budgetBytes);
+                _processBudgetReserved = false;
             }
             _budget.Refund(_budgetBytes);
             _budgetRefunded = true;
@@ -338,8 +364,9 @@ public unsafe sealed class ActorArena : IDisposable
     }
 
     /// <summary>
-    /// Admit one physical turn. Actor identity is logical scheduler authority;
-    /// carrier thread identity is intentionally irrelevant.
+    /// Admit one physical turn. Actor identity is independent of carrier threads
+    /// across turns, but each live turn is bound to its admitting carrier.
+    /// Async suspension must end the physical turn and resume in a new turn.
     /// </summary>
     public ActorArenaTurn EnterTurn(ulong actorId, ulong incarnation)
     {
@@ -359,6 +386,8 @@ public unsafe sealed class ActorArena : IDisposable
             var admitted = new ActorArenaTurn(
                 this, _authority, _actorId, _incarnation, nextEpoch);
             _turnEpoch = nextEpoch;
+            _activeTurn = admitted;
+            _activeCarrier = Thread.CurrentThread;
             _turnActive = true;
             return admitted;
         }
@@ -389,27 +418,34 @@ public unsafe sealed class ActorArena : IDisposable
             if (_freeSlotCount == 0 && _nextSlot == _slots.Length)
                 throw new InvalidOperationException("Actor persistent allocation slots exhausted");
 
+            // Do not consume a free slot or publish a live slot before an exact
+            // issued capability has been successfully constructed.
             int slotId = _freeSlotCount != 0
-                ? _freeSlots[--_freeSlotCount]
-                : _nextSlot++;
-
+                ? _freeSlots[_freeSlotCount - 1]
+                : _nextSlot;
             ref Slot slot = ref _slots[slotId];
-            if (slot.Generation == 0)
-                slot.Generation = 1;
-            if (slot.Live)
+            if (slot.Live || slot.Issued is not null)
                 throw new InvalidOperationException("Actor arena slot accounting is corrupt");
 
+            ulong generation = slot.Generation == 0 ? 1 : slot.Generation;
+            var issued = new ActorArenaHandle(_authority, slotId, generation,
+                _actorId, _incarnation, bytes);
+            Zero(_persistent + aligned, bytes);
+
+            if (_freeSlotCount != 0)
+                _freeSlotCount--;
+            else
+                _nextSlot++;
+            slot.Generation = generation;
             slot.Offset = aligned;
             slot.Length = bytes;
             slot.ReadLoans = 0;
+            slot.Issued = issued;
             slot.Live = true;
             _persistentHighWater = checked(aligned + bytes);
             _persistentLiveBytes = checked(_persistentLiveBytes + bytes);
             _liveAllocations++;
-
-            Zero(_persistent + aligned, bytes);
-            return new ActorArenaHandle(_authority, slotId, slot.Generation,
-                _actorId, _incarnation, bytes);
+            return issued;
         }
     }
 
@@ -429,15 +465,24 @@ public unsafe sealed class ActorArena : IDisposable
             if (slot.Generation == ulong.MaxValue)
                 throw new OverflowException("Actor allocation generation exhausted");
 
+            // A last-in-first-out temporary can be reclaimed immediately
+            // without moving any earlier live allocations. This is the
+            // common persistent-root + per-message-transient actor pattern.
+            bool wasTail = slot.Offset + slot.Length == _persistentHighWater;
+            int freedOffset = slot.Offset;
             Zero(_persistent + slot.Offset, slot.Length);
             _persistentLiveBytes -= slot.Length;
             _liveAllocations--;
             slot.Live = false;
+            slot.Issued = null;
             slot.Offset = 0;
             slot.Length = 0;
             slot.Generation++;
 
             _freeSlots[_freeSlotCount++] = handle.Slot;
+
+            if (wasTail)
+                _persistentHighWater = freedOffset;
 
             if (_liveAllocations == 0)
             {
@@ -493,6 +538,8 @@ public unsafe sealed class ActorArena : IDisposable
             ref Slot slot = ref ValidateHandleLocked(handle);
             var loan = new ActorArenaReadLoan(this, _authority, handle.Slot,
                 handle.Generation, _actorId, _incarnation, handle.Length);
+            if (!_issuedReadLoans.Add(loan))
+                throw new InvalidOperationException("Duplicate read-loan issuance");
             slot.ReadLoans = checked(slot.ReadLoans + 1);
             _readLoans++;
             return loan;
@@ -512,6 +559,8 @@ public unsafe sealed class ActorArena : IDisposable
             if (_externalPins == _maxLifetimePins)
                 throw new InvalidOperationException("Actor lifetime-pin quota exhausted");
             var pin = new ActorArenaLifetimePin(this, _authority);
+            if (!_issuedLifetimePins.Add(pin))
+                throw new InvalidOperationException("Duplicate lifetime-pin issuance");
             _externalPins++;
             return pin;
         }
@@ -532,9 +581,18 @@ public unsafe sealed class ActorArena : IDisposable
             if (aligned > _scratchCapacity || bytes > _scratchCapacity - aligned)
                 throw new InvalidOperationException("Actor scratch arena capacity exhausted");
 
-            _scratchHighWater = checked(aligned + bytes);
+            if (_issuedScratch.Count >= MaxScratchCapabilitiesPerTurn)
+                throw new InvalidOperationException("Actor scratch capability quota exhausted");
+
+            // Allocate and register the exact issued object before publishing
+            // the new high-water mark. A reconstructed matching tuple is not
+            // equivalent to this capability.
+            var issued = new ActorScratchHandle(_authority, turn.Epoch, aligned, bytes);
             Zero(_scratch + aligned, bytes);
-            return new ActorScratchHandle(_authority, turn.Epoch, aligned, bytes);
+            if (!_issuedScratch.Add(issued))
+                throw new InvalidOperationException("Duplicate actor scratch issuance");
+            _scratchHighWater = checked(aligned + bytes);
+            return issued;
         }
     }
 
@@ -599,18 +657,30 @@ public unsafe sealed class ActorArena : IDisposable
 
     internal void ReleaseTurn(ActorArenaTurn turn)
     {
+        ArgumentNullException.ThrowIfNull(turn);
         lock (_gate)
         {
-            if (_reclaimed)
-                throw new InvalidOperationException("Actor turn released after arena reclamation");
-            if (!_turnActive || turn.Arena != this || turn.Authority != _authority ||
+            // Idempotent after final reclaim only for a token genuinely
+            // owned by this arena. A foreign token is never accepted.
+            if (!ReferenceEquals(turn.Arena, this))
+                throw new InvalidOperationException("Foreign actor turn release");
+            if (turn.Released)
+                return;
+            if (_reclaimed || !_turnActive ||
+                !ReferenceEquals(_activeTurn, turn) ||
+                !ReferenceEquals(_activeCarrier, Thread.CurrentThread) ||
+                turn.Arena != this || turn.Authority != _authority ||
                 turn.ActorId != _actorId || turn.Incarnation != _incarnation ||
                 turn.Epoch != _turnEpoch)
-                throw new InvalidOperationException("Stale or foreign actor turn release");
+                throw new InvalidOperationException("Stale, foreign or off-carrier actor turn release");
 
             if (_scratchHighWater != 0)
                 Zero(_scratch, _scratchHighWater);
             _scratchHighWater = 0;
+            _issuedScratch.Clear();
+            turn.MarkReleased();
+            _activeTurn = null;
+            _activeCarrier = null;
             _turnActive = false;
             TryReclaimLocked();
         }
@@ -629,8 +699,9 @@ public unsafe sealed class ActorArena : IDisposable
 
             ref Slot slot = ref _slots[loan.Slot];
             if (!slot.Live || slot.Generation != loan.Generation ||
-                slot.ReadLoans <= 0 || _readLoans <= 0)
-                throw new InvalidOperationException("Stale actor read loan release");
+                slot.ReadLoans <= 0 || _readLoans <= 0 ||
+                !_issuedReadLoans.Remove(loan))
+                throw new InvalidOperationException("Unissued or stale actor read loan release");
 
             slot.ReadLoans--;
             _readLoans--;
@@ -638,14 +709,16 @@ public unsafe sealed class ActorArena : IDisposable
         }
     }
 
-    internal void ReleaseLifetimePin(Guid authority)
+    internal void ReleaseLifetimePin(ActorArenaLifetimePin pin)
     {
+        ArgumentNullException.ThrowIfNull(pin);
         lock (_gate)
         {
             if (_reclaimed)
                 throw new InvalidOperationException("Lifetime pin outlived physical arena");
-            if (authority != _authority || _externalPins <= 0)
-                throw new InvalidOperationException("Foreign actor lifetime-pin release");
+            if (pin.Authority != _authority || _externalPins <= 0 ||
+                !_issuedLifetimePins.Remove(pin))
+                throw new InvalidOperationException("Unissued or foreign actor lifetime-pin release");
             _externalPins--;
             TryReclaimLocked();
         }
@@ -653,6 +726,7 @@ public unsafe sealed class ActorArena : IDisposable
 
     private ref Slot ValidateHandleLocked(ActorArenaHandle handle)
     {
+        ArgumentNullException.ThrowIfNull(handle);
         EnsureNotReclaimedLocked();
         if (handle.Authority != _authority || handle.ActorId != _actorId ||
             handle.Incarnation != _incarnation || handle.Slot < 0 ||
@@ -660,30 +734,43 @@ public unsafe sealed class ActorArena : IDisposable
             throw new InvalidOperationException("Foreign actor arena capability");
 
         ref Slot slot = ref _slots[handle.Slot];
-        if (!slot.Live || slot.Generation != handle.Generation ||
-            slot.Length != handle.Length)
+        if (!slot.Live || !ReferenceEquals(slot.Issued, handle) ||
+            slot.Generation != handle.Generation || slot.Length != handle.Length)
             throw new InvalidOperationException("Stale actor arena capability");
         return ref slot;
     }
 
     private void ValidateScratchLocked(ActorScratchHandle handle)
     {
+        ArgumentNullException.ThrowIfNull(handle);
         EnsureNotReclaimedLocked();
-        if (!_turnActive || handle.Authority != _authority ||
-            handle.Epoch != _turnEpoch || handle.Epoch == 0 ||
+        if (!_turnActive || !_issuedScratch.Contains(handle) ||
+            handle.Authority != _authority || handle.Epoch != _turnEpoch || handle.Epoch == 0 ||
             handle.Offset < 0 || handle.Length <= 0 ||
             handle.Offset > _scratchHighWater ||
             handle.Length > _scratchHighWater - handle.Offset)
             throw new InvalidOperationException("Stale actor scratch capability");
     }
 
+    internal void ValidateActiveTurn(ActorArenaTurn turn)
+    {
+        lock (_gate)
+        {
+            ValidateTurnLocked(turn);
+            EnsureAdmissionOpenLocked();
+        }
+    }
+
     private void ValidateTurnLocked(ActorArenaTurn turn)
     {
         ArgumentNullException.ThrowIfNull(turn);
         EnsureNotReclaimedLocked();
-        if (turn.Released || !_turnActive || turn.Arena != this ||
-            turn.Authority != _authority || turn.ActorId != _actorId ||
-            turn.Incarnation != _incarnation || turn.Epoch != _turnEpoch)
+        if (turn.Released || !_turnActive ||
+            !ReferenceEquals(_activeTurn, turn) ||
+            !ReferenceEquals(_activeCarrier, Thread.CurrentThread) ||
+            turn.Arena != this || turn.Authority != _authority ||
+            turn.ActorId != _actorId || turn.Incarnation != _incarnation ||
+            turn.Epoch != _turnEpoch)
             throw new InvalidOperationException("Stale or foreign actor turn");
     }
 
@@ -721,11 +808,21 @@ public unsafe sealed class ActorArena : IDisposable
         if (!_budgetRefunded)
         {
             _budget.Refund(_budgetBytes);
+            if (_processBudgetReserved)
+            {
+                ActorArenaBudget.Process.Refund(_budgetBytes);
+                _processBudgetReserved = false;
+            }
             _budgetRefunded = true;
         }
 
         Array.Clear(_slots, 0, _slots.Length);
         Array.Clear(_freeSlots, 0, _freeSlots.Length);
+        _issuedScratch.Clear();
+        _issuedReadLoans.Clear();
+        _issuedLifetimePins.Clear();
+        _activeTurn = null;
+        _activeCarrier = null;
         _nextSlot = 0;
         _freeSlotCount = 0;
         _liveAllocations = 0;
@@ -771,3 +868,4 @@ public unsafe sealed class ActorArena : IDisposable
         CryptographicOperations.ZeroMemory(new Span<byte>(pointer, length));
     }
 }
+

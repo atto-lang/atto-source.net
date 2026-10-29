@@ -110,6 +110,20 @@ public static class CilEmitter
                 case IrOpcode.ConstantI64:
                     il.LoadConstantI8(operation.Constant!.Value);
                     break;
+                case IrOpcode.SignedRemainderLiteral:
+                    // Prior SSA instructions (including numerator overflow
+                    // checks) have already executed. Never emit CLR rem for
+                    // long.MinValue % -1: CLR may throw OverflowException.
+                    if (program.Instructions[operation.Right!.Value].Constant == -1)
+                        il.LoadConstantI8(0);
+                    else
+                    {
+                        il.LoadLocal(operation.Left!.Value);
+                        il.LoadLocal(operation.Right.Value);
+                        il.OpCode(ILOpCode.Rem);
+                        maxStack = 2;
+                    }
+                    break;
                 case IrOpcode.CheckedAdd:
                 case IrOpcode.CheckedSubtract:
                 case IrOpcode.CheckedMultiply:

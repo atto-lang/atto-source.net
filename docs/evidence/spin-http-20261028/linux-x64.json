@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "scope": "host-provider-only-not-Oreslang-source-parity",
+  "origin_commit": "9b40c7387c2587368272b3a00e882bb5f049b615",
+  "origin_tree": "a535e720e362ffe64df49c2d18d80a2610488a11",
+  "destination_repository": "ores-dummy-org-6/contract-tests",
+  "verified_private": true,
+  "run_url": "https://github.com/ores-dummy-org-6/contract-tests/actions/runs/40761511361",
+  "job_id": 123074376341,
+  "artifact_id": 12848357746,
+  "destination_receipt": {
+    "binary_sha256": "ff4da1a3abbd3136bdbf9dc1dda58b51cc1146064a136ee4f63ee758f45401e4",
+    "source_tree": "a535e720e362ffe64df49c2d18d80a2610488a11",
+    "scope": "host-provider-only-not-Oreslang-source-parity",
+    "rid": "linux-x64",
+    "probe_output": "PASS .NET HTTP real sockets: fresh shared/private actors, transfer/claim revocation, arena body, one writer, HEAD, limits, concurrency, faults, deadlines, finalization and zero native leaks",
+    "source_commit": "c1c88f7a7035c8911b95c74dbb1ad7c5a8009a41"
+  },
+  "binary_format": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=c2af55c17f7b1fdcd6820ac47463935c9b8a8c7f, for GNU/Linux 3.2.0, stripped",
+  "artifact_binary_hash_verified": true
+}

@@ -27,7 +27,7 @@ internal static class StructuredSourceTests
         catch (FormatException error)
         {
             Require(error.Message.Contains(expectedDiagnostic, StringComparison.OrdinalIgnoreCase),
-                "unsupported feature rejected for wrong reason: " + error.Message);
+                "unsupported feature rejected for wrong reason for source `" + source + "`: " + error.Message);
             Require(error.Message.Contains("offset", StringComparison.Ordinal),
                 "unsupported feature missing source position");
             return;
@@ -37,6 +37,59 @@ internal static class StructuredSourceTests
 
     public static void Run()
     {
+        // Local value types are block-local declarations on the structured
+        // frontend. They are admitted into the AST but deliberately rejected
+        // by CFG/CIL lowering until value layout and construction are verified.
+        var localTypes = OresStructuredParser.Parse("""
+            fnc main():int {
+                struct Pair { int left; int right }
+                record Status { bool ready, int code };
+                return 42;
+            }
+            """);
+        Require(localTypes.Body.Count == 3,
+            "local struct/record declarations are preserved as statements");
+        Require(localTypes.Body[0] is StructuredLocalTypeDecl {
+            Name: "Pair", Kind: StructuredLocalTypeKind.Struct, Fields.Count: 2
+        } pair && pair.Fields[0] == new StructuredLocalField("left", IrValueType.I64)
+               && pair.Fields[1] == new StructuredLocalField("right", IrValueType.I64),
+            "local struct field order and scalar types are preserved");
+        Require(localTypes.Body[1] is StructuredLocalTypeDecl {
+            Name: "Status", Kind: StructuredLocalTypeKind.Record, Fields.Count: 2
+        } status && status.Fields[0] == new StructuredLocalField("ready", IrValueType.Bool)
+                 && status.Fields[1] == new StructuredLocalField("code", IrValueType.I64),
+            "local record field order and scalar types are preserved");
+        Reject("fnc main():int{struct Pair{int x;int x}return 1;}",
+            "duplicate local value-type fields are forbidden");
+        Reject("fnc main():int{struct Pair{int x}if true{record Pair{int y}}return 1;}",
+            "nested local value types cannot shadow an active local type");
+        foreach (var nominal in new[] {
+            "fnc main():int{class Local{}return 1;}",
+            "fnc main():int{actor Local{}return 1;}",
+            "fnc main():int{define class Local{}return 1;}",
+            "fnc main():int{define actor Local{}return 1;}",
+            "fnc main():int{let int x=1;define class Local{}return x;}",
+            "fnc main():int{if true {define actor Local{}}return 1;}"
+        })
+            RejectFeature(nominal, "Local class/actor declarations are not permitted");
+        var tooManyFields = "fnc main():int{struct Big{" +
+            string.Join(";", Enumerable.Range(0, 65).Select(i => "int f" + i)) +
+            "}return 1;}";
+        Reject(tooManyFields, "local value-type field budget is bounded");
+        try
+        {
+            _ = OresStructuredCfgLowering.Lower(
+                "fnc main():int{struct Pair{int left;int right}return 42;}");
+            throw new Exception("Local value type reached CFG lowering without layout support");
+        }
+        catch (FormatException ex)
+        {
+            Require(ex.Message.Contains("requires verified value layout and CIL lowering",
+                    StringComparison.Ordinal) &&
+                    ex.Message.Contains("offset", StringComparison.Ordinal),
+                "local value types must fail at the explicit CFG/CIL capability gate");
+        }
+
         // Java reference binding kinds: compile-time const, single-write val,
         // and assignable let. This tests typed parser admission.
         var bindingKinds = OresStructuredParser.Parse("""

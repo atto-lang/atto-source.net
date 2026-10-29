@@ -61,6 +61,9 @@ jobs:
       - name: Verify compiler and runtime source
         shell: pwsh
         run: dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
+      - name: Compile verified scalar OresIR through C# and F# to managed CIL
+        shell: pwsh
+        run: ./verification/assert-managed-source.ps1
       - name: Verify shared advisory static facts from .NET compiler and typed structured parser
         shell: pwsh
         run: |
@@ -694,6 +697,9 @@ jobs:
       - name: Run .NET compiler and runtime regression harness
         shell: pwsh
         run: dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
+      - name: Compile verified C# and F# source on trusted exact-head runner
+        shell: pwsh
+        run: ./verification/assert-managed-source.ps1
       - name: Verify real scalar and experimental structured static facts
         shell: pwsh
         run: |

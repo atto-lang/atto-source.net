@@ -1,0 +1,5 @@
+import fnc twice from "./base";
+
+define module left as
+  pub fnc value(int n) -> int { return twice(n); }
+end

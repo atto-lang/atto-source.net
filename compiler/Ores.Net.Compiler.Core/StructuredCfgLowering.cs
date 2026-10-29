@@ -17,8 +17,10 @@ public static class OresStructuredCfgLowering
     // ABI path: helpers become independent verified CFG methods. The old
     // Lower() method keeps the deliberately bounded inlining/reference path.
     public static VerifiedCfgModule LowerModule(string source)
+        => LowerModule(OresStructuredParser.Parse(source));
+
+    internal static VerifiedCfgModule LowerModule(StructuredProgram program)
     {
-        var program = OresStructuredParser.Parse(source);
         var helperSignatures = new Dictionary<string, CfgCallSignature>(StringComparer.Ordinal);
         var methods = new List<VerifiedCfgFunction>();
         var declarations = program.Functions ??
@@ -250,6 +252,9 @@ public static class OresStructuredCfgLowering
                     throw new FormatException("Unreachable structured CFG statement");
                 switch (stmt)
                 {
+                    case StructuredLocalTypeDecl localType:
+                        throw new FormatException(
+                            $"Local {localType.Kind.ToString().ToLowerInvariant()} '{localType.Name}' requires verified value layout and CIL lowering at offset {localType.At}");
                     case StructuredLet declaration:
                     {
                         if (variables.ContainsKey(declaration.Name))
