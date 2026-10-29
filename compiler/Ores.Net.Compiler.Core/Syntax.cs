@@ -102,6 +102,9 @@ public static class OresParser
             var start = _i;
             if (_i == text.Length) return new Token("", start);
             var ch = text[_i];
+            if (ch == '@')
+                throw new FormatException(
+                    $"Annotations require typed target validation and Native AOT lowering; unsupported in .NET scalar compiler at offset {start}");
             if (ch is >= '0' and <= '9')
             {
                 // Match the reference's decimal digit separators without
