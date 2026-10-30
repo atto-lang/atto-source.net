@@ -443,6 +443,8 @@ public static class OresStructuredParser
                         exposed = true;
                     }
                 }
+                if (Current.Text == "singleton")
+                    throw Error("ORES-SINGLETON-UNSUPPORTED: singleton declarations require exactly-once complete publication, cycle/failure semantics, runtime-derived actor authority for shared state, and five-backend guest execution parity");
                 if (Current.Text is "class" or "actor")
                     throw Error("Nominal class/actor methods require receiver-erased method slots, type/borrow checking and Native AOT CIL lowering; unsupported in .NET structured frontend");
                 Expect("fnc");
