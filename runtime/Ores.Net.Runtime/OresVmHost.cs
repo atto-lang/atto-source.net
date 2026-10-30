@@ -232,7 +232,7 @@ public sealed class OresVmHost
             var s = Check(handle); CheckActor(s, actor);
             var turn = actor.ActiveTurn;
             return turn is null
-                ? (false, false, 0)
+                ? (false, false, 0UL)
                 : (true, turn.Suspended, turn.Generation);
         }
     }
