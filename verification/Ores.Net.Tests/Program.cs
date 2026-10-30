@@ -52,7 +52,15 @@ foreach (var wrapperCase in new[] {
         "Nested Future remains nested; implicit Future flatten is forbidden"
     ),
     (
+        "fnc main():int{ val nested: Future<Future<Option<int>>> = value; return 1; }",
+        "Nested Future remains nested; implicit Future flatten is forbidden"
+    ),
+    (
         "fnc main():int{ val nested: Option<Option<int>> = value; return 1; }",
+        "Nested Option remains nested; implicit Option flatten is forbidden"
+    ),
+    (
+        "fnc main():int{ val nested: Option<Option<Future<int>>> = value; return 1; }",
         "Nested Option remains nested; implicit Option flatten is forbidden"
     )
 })
