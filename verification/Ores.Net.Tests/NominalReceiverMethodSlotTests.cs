@@ -47,6 +47,29 @@ internal static class NominalReceiverMethodSlotTests
             Reject(() => reversed.Declare(owner, "x", 1), "x/1");
         }
 
+        // The parser/lowerer supplies physical parameter count, including
+        // the generated self loan for instance methods. The adapter must
+        // erase exactly one receiver and preserve all explicit values.
+        var lowered = new NominalReceiverMethodSlots();
+        var instance = lowered.DeclareLowered("Foo", "x", 2,
+            explicitSelf: true, mutableSelf: true);
+        Require(instance.ValueArity == 1, "injected receiver counted as caller arity");
+        Reject(() => lowered.DeclareLowered("Foo", "x", 2), "x/1");
+        var noValues = lowered.DeclareLowered("Foo", "x", 1);
+        Require(noValues.ValueArity == 0, "injected-only receiver must be x/0");
+        Reject(() => lowered.DeclareLowered("Foo", "x", 1,
+            explicitSelf: true, mutableSelf: true), "x/0");
+
+        var staticMethod = lowered.DeclareLowered("Foo", "x", 2,
+            ReceiverMethodNamespace.Static);
+        Require(staticMethod.ValueArity == 2, "static method count was incorrectly erased");
+        Reject(() => new NominalReceiverMethodSlots().DeclareLowered("Foo", "x", 0),
+            "missing compiler-injected self");
+        Reject(() => new NominalReceiverMethodSlots().DeclareLowered("Foo", "x", -1),
+            "nonnegative");
+        Reject(() => new NominalReceiverMethodSlots().DeclareLowered("Foo", "x", 1,
+            ReceiverMethodNamespace.Static, explicitSelf: true), "static method");
+
         Reject(() => new NominalReceiverMethodSlots().Declare("", "x", 0), "nonempty");
         Reject(() => new NominalReceiverMethodSlots().Declare("Foo", "", 0), "nonempty");
         Reject(() => new NominalReceiverMethodSlots().Declare("Foo", "x", -1), "nonnegative");
