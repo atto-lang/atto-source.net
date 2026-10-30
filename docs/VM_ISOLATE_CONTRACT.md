@@ -76,7 +76,10 @@ execute this in CI. No local dotnet SDK execution was available in this pass.
 `BeginActorTurn` admits one user handler; `SuspendActorTurn` keeps that
 logical turn active while releasing any physical carrier outside this host
 bookkeeping API. A later user turn is rejected until the exact same ticket is
-resumed and completed. Foreign actor/tenant tickets, stale completed tickets,
+resumed and completed. Cancellation is also a terminal, exact-ticket
+transition: it clears actor admission once, fences that generation, and makes
+later resume/complete/cancel replay fail closed before a fresh generation may
+start. Foreign actor/tenant tickets, stale completed/cancelled tickets,
 generation replay and actor retirement with an active turn fail closed.
 
 This is intentionally a host substrate, not source-language actor lowering.
