@@ -36,7 +36,7 @@ public sealed partial class OresVmHost
             var tenant = Check(handle);
             CheckActor(tenant, actor);
             if (tenant.Phase != Phase.Running || actor.ActiveTurn is not null ||
-                actor.StateCells is not null)
+                actor.NextTurnGeneration != 1 || actor.StateCells is not null)
                 throw new InvalidOperationException("actor state layout admission closed");
             if (fields.Length is < 1 or > 16)
                 throw new InvalidOperationException("actor state requires 1 to 16 scalar fields");
