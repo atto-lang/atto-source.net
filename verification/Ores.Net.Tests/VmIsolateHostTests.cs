@@ -70,6 +70,20 @@ internal static class VmIsolateHostTests
         if (actorA.Mailbox.QueuedMessages != 1)
             throw new Exception("actor mailbox must be real, not a fake ticket");
 
+        // Native host state-loan nesting is bounded even for a trusted
+        // compiler caller. Exhaustion must not mutate actor turn admission.
+        var depthTurn = host.BeginActorTurn(b, actorB);
+        var depthLoans = new OresVmHost.ActorStateLoan[32];
+        for (var i = 0; i < depthLoans.Length; i++)
+            depthLoans[i] = host.BeginActorStateLoan(b, actorB, depthTurn);
+        ExpectFailure(() => host.BeginActorStateLoan(b, actorB, depthTurn),
+            "state loan nesting depth 33 must reject");
+        ExpectFailure(() => host.SuspendActorTurn(b, actorB, depthTurn),
+            "max-depth state loan cannot suspend");
+        for (var i = depthLoans.Length - 1; i >= 0; i--)
+            host.EndActorStateLoan(b, actorB, depthTurn, depthLoans[i]);
+        host.CompleteActorTurn(b, actorB, depthTurn);
+
         // Suspension releases no logical actor admission. The exact same turn
         // must resume; later user turns remain blocked until completion.
         var turn = host.BeginActorTurn(a, actorA);
