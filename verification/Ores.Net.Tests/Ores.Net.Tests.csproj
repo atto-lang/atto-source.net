@@ -9,6 +9,9 @@
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/v1/source-i64/portable-i64.v1.json" Link="portable-i64.v1.json"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="fixtures/execution-context-callbacks/v1/callback_sync_resolve.ores"
+          Link="fixtures/execution-context-callbacks/v1/callback_sync_resolve.ores"
+          CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../examples/structured-bindings42.ores" Link="structured-bindings42.ores"
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/scalar/v1/**/*"
