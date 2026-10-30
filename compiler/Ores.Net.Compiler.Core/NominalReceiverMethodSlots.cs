@@ -34,5 +34,22 @@ public sealed class NominalReceiverMethodSlots
         return slot;
     }
 
+    // Prefer this adapter at the compiler parser/lowering boundary. Its
+    // parameter count includes the compiler-injected self for instances;
+    // callers cannot accidentally treat that hidden parameter as arity.
+    public NominalReceiverMethodSlot DeclareLowered(
+        string owner, string name, int loweredParameterCount,
+        ReceiverMethodNamespace methodNamespace = ReceiverMethodNamespace.Instance,
+        bool explicitSelf = false, bool mutableSelf = false)
+    {
+        if (loweredParameterCount < 0)
+            throw new FormatException("Nominal lowered method parameter count must be nonnegative");
+        if (methodNamespace == ReceiverMethodNamespace.Instance && loweredParameterCount == 0)
+            throw new FormatException("Instance method missing compiler-injected self receiver");
+        int valueArity = methodNamespace == ReceiverMethodNamespace.Instance
+            ? loweredParameterCount - 1 : loweredParameterCount;
+        return Declare(owner, name, valueArity, methodNamespace, explicitSelf, mutableSelf);
+    }
+
     public bool Contains(NominalReceiverMethodSlot slot) => slots.Contains(slot);
 }
