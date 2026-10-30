@@ -4,6 +4,8 @@ using System.Globalization;
 using System.IO;
 using System.Text.Json;
 using System.Numerics;
+using System.Security.Cryptography;
+using System.Text;
 using Ores.Net.Runtime;
 
 /// <summary>Reference-only arithmetic oracle, not a guest source test.</summary>
@@ -24,6 +26,7 @@ static class StrictSigned64ArithmeticSelfTest
 
     public static void Run()
     {
+        CheckMathUnaryPrecisionFixture();
         CheckPortableContractFixture();
         CheckExactFloatFixture();
         CheckExactFloatOracleBoundaries();
@@ -96,6 +99,95 @@ static class StrictSigned64ArithmeticSelfTest
                 "random signed XOR #" + i);
         }
     }
+    private static void CheckMathUnaryPrecisionFixture()
+    {
+        string path = Path.Combine(AppContext.BaseDirectory,
+            "native-math-unary-precision-v1.json");
+        byte[] bytes = File.ReadAllBytes(path);
+        byte[] header = Encoding.ASCII.GetBytes("blob " + bytes.Length + "\0");
+        byte[] gitObject = new byte[header.Length + bytes.Length];
+        Buffer.BlockCopy(header, 0, gitObject, 0, header.Length);
+        Buffer.BlockCopy(bytes, 0, gitObject, header.Length, bytes.Length);
+        string blob = Convert.ToHexString(SHA1.HashData(gitObject)).ToLowerInvariant();
+        Require(blob == "3249d837ae6bcf6e2c2c23cac872becf92d0c8e0",
+            "native Math contract blob identity");
+
+        using var document = JsonDocument.Parse(bytes);
+        JsonElement root = document.RootElement;
+        Require(root.GetProperty("contract").GetString() ==
+            "oreslang.native-math-unary-precision.v1", "native Math contract identity");
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (JsonElement item in root.GetProperty("signed_i64_unary").EnumerateArray())
+        {
+            string id = item.GetProperty("id").GetString()!;
+            Require(seen.Add(id), "duplicate Math unary id " + id);
+            string operation = item.GetProperty("operation").GetString()!;
+            long value = Signed(item.GetProperty("operand"));
+            Func<long> execute = operation switch
+            {
+                "Math.abs" => () => StrictSigned64Arithmetic.Abs(value),
+                "Math.neg" => () => StrictSigned64Arithmetic.Neg(value),
+                _ => throw new Exception("unknown Math unary operation " + operation)
+            };
+            JsonElement expected = item.GetProperty("expect");
+            if (expected.TryGetProperty("error", out JsonElement error))
+            {
+                Require(error.GetString() == "OVERFLOW", "unexpected Math unary error " + id);
+                Expect<OverflowException>(() => _ = execute(), id);
+            }
+            else
+            {
+                Require(execute() == Signed(expected.GetProperty("value")),
+                    "Math unary value mismatch " + id);
+            }
+        }
+
+        foreach (JsonElement item in root.GetProperty("bigint_unary").EnumerateArray())
+        {
+            string id = item.GetProperty("id").GetString()!;
+            Require(seen.Add(id), "duplicate BigInt unary id " + id);
+            BigInteger value = BigInteger.Parse(item.GetProperty("operand").GetString()!,
+                CultureInfo.InvariantCulture);
+            BigInteger actual = item.GetProperty("operation").GetString() == "Math.neg"
+                ? BigInteger.Negate(value) : BigInteger.Abs(value);
+            BigInteger expected = BigInteger.Parse(item.GetProperty("expect").GetString()!,
+                CultureInfo.InvariantCulture);
+            Require(actual == expected, "BigInt unary reference mismatch " + id);
+        }
+
+        foreach (JsonElement item in root.GetProperty("decimal_unary").EnumerateArray())
+        {
+            string id = item.GetProperty("id").GetString()!;
+            Require(seen.Add(id), "duplicate Decimal unary id " + id);
+            decimal value = decimal.Parse(item.GetProperty("operand").GetString()!,
+                NumberStyles.Number, CultureInfo.InvariantCulture);
+            decimal actual = item.GetProperty("operation").GetString() == "Math.neg"
+                ? -value : Math.Abs(value);
+            decimal expected = decimal.Parse(item.GetProperty("expect").GetString()!,
+                NumberStyles.Number, CultureInfo.InvariantCulture);
+            Require(actual == expected, "Decimal unary reference mismatch " + id);
+            int scale = (decimal.GetBits(actual)[3] >> 16) & 0x7f;
+            Require(scale == item.GetProperty("scale").GetInt32(),
+                "Decimal scale mismatch " + id);
+        }
+
+        foreach (JsonElement item in root.GetProperty("binary64_unary").EnumerateArray())
+        {
+            string id = item.GetProperty("id").GetString()!;
+            Require(seen.Add(id), "duplicate binary64 unary id " + id);
+            ulong inputBits = ulong.Parse(item.GetProperty("operand_bits").GetString()!,
+                NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture);
+            double value = BitConverter.Int64BitsToDouble(unchecked((long)inputBits));
+            double actual = item.GetProperty("operation").GetString() == "Math.abs"
+                ? Math.Abs(value) : -value;
+            ulong expectedBits = ulong.Parse(item.GetProperty("expect_bits").GetString()!,
+                NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture);
+            Require(BitConverter.DoubleToUInt64Bits(actual) == expectedBits,
+                "binary64 unary bits mismatch " + id);
+        }
+    }
+
     private static void CheckExactFloatFixture()
     {
         string path = Path.Combine(AppContext.BaseDirectory,
