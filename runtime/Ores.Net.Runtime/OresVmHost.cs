@@ -378,6 +378,16 @@ public sealed partial class OresVmHost
             if (actor.ActiveTurn is not null)
                 throw new InvalidOperationException("actor has active logical turn");
             actor.Mailbox.Stop(); // Erase pending private queued copies.
+            // Clear bounded actor-local cells before removing host ownership.
+            // Managed memory may still be retained by the GC; this is logical
+            // retirement and best-effort value erasure, not physical zeroization.
+            if (actor.StateCells is { } cells) {
+                foreach (var cell in cells) {
+                    cell.Int64Value = 0;
+                    cell.BooleanValue = false;
+                }
+                actor.StateCells = null;
+            }
             s.PinsByActor.Remove(actor);
             s.Actors.Remove(actor.Id);
         }
