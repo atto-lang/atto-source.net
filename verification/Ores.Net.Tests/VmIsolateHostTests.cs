@@ -11,6 +11,7 @@ internal static class VmIsolateHostTests
 
     public static void Run()
     {
+        VmActorStateCellsTests.Run();
         var host = new OresVmHost(maxTenants: 2);
         // Fail closed: NativeAOT and separate host dictionaries do not imply
         // OS sandboxing or a separate GC-managed heap for hostile tenants.
