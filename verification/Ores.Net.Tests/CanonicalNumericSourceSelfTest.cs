@@ -16,6 +16,9 @@ internal static class CanonicalNumericSourceSelfTest
 {
     private const string PinnedSourceSha256 =
         "3d1d7b77068dd02b3d60b30b72f29a4537a933134ca79e1e81df096dc56f5f33";
+    // Identical to the reviewed core-math-i64.json blob in common-source.
+    private const string ReviewedContractBlobSha1 =
+        "58d2b64a137ede4700593f855e1f0504ff744f90";
 
     [ModuleInitializer]
     internal static void Run()
@@ -34,12 +37,25 @@ internal static class CanonicalNumericSourceSelfTest
             "canonical source has no terminal LF");
 
         string contractPath = Path.Combine(repository, "verification", "contracts", "core-math-i64.json");
-        using var json = JsonDocument.Parse(File.ReadAllBytes(contractPath));
+        byte[] contractBytes = File.ReadAllBytes(contractPath);
+        byte[] header = Encoding.ASCII.GetBytes(
+            "blob " + contractBytes.Length.ToString(CultureInfo.InvariantCulture) + "\0");
+        byte[] framed = new byte[header.Length + contractBytes.Length];
+        Buffer.BlockCopy(header, 0, framed, 0, header.Length);
+        Buffer.BlockCopy(contractBytes, 0, framed, header.Length, contractBytes.Length);
+        Require(Convert.ToHexStringLower(SHA1.HashData(framed)) == ReviewedContractBlobSha1,
+            "canonical signed-i64 reference corpus differs from reviewed common-source blob");
+        using var json = JsonDocument.Parse(contractBytes);
         var contract = json.RootElement;
         Require(contract.GetProperty("contract").GetString() == "ores-core-math-signed-i64-v1",
             "unexpected reference contract");
+        Require(contract.GetProperty("schemaVersion").GetInt32() == 1,
+            "unrecognized core math reference schema");
+        Require(contract.GetProperty("integerDomain").GetString() == "signed-i64",
+            "core math corpus has wrong integer domain");
         var cases = contract.GetProperty("cases");
         Require(cases.GetArrayLength() == 24, "canonical corpus must contain 24 independent vectors");
+        var ids = new HashSet<string>(StringComparer.Ordinal);
 
         string temporary = Path.Combine(Path.GetTempPath(),
             "ores-net-native-core-" + Guid.NewGuid().ToString("N"));
@@ -50,11 +66,17 @@ internal static class CanonicalNumericSourceSelfTest
             foreach (var vector in cases.EnumerateArray())
             {
                 string id = vector.GetProperty("id").GetString()!;
+                Require(!string.IsNullOrWhiteSpace(id) && ids.Add(id),
+                    "duplicate or invalid canonical reference ID");
                 string callable = vector.GetProperty("function").GetString()!;
                 Require(callable is "min_int" or "max_int" or "clamp_int",
                     "unrecognized canonical function: " + id);
                 string[] args = vector.GetProperty("args").EnumerateArray()
                     .Select(a => a.GetString()!).ToArray();
+                Require(args.Length == (callable == "clamp_int" ? 3 : 2) &&
+                    args.All(a => long.TryParse(a, NumberStyles.AllowLeadingSign,
+                        CultureInfo.InvariantCulture, out _)),
+                    "invalid argument arity or signed-i64 value in reference: " + id);
                 string expected = vector.GetProperty("expected").GetString()!;
                 Require(long.TryParse(expected, NumberStyles.AllowLeadingSign,
                     CultureInfo.InvariantCulture, out long expectedValue),

@@ -186,6 +186,11 @@ internal static class SourceModuleLinkingSelfTest
             Reject(Compile, "source root escape", "escapes explicit source roots");
             Write("main.ores", "fnc main():int { return 42; }");
             Reject(() => OresSourceModuleCompiler.Compile(Path.Combine(root, "main.ores"), new[] { root, root + Path.DirectorySeparatorChar }), "duplicate normalized roots");
+            if (!OperatingSystem.IsWindows())
+                Reject(() => OresSourceModuleCompiler.Compile(
+                    Path.Combine(root, "main.ores"), new[] { root, root.ToUpperInvariant() }),
+                    "case-colliding explicit roots must reject before filesystem access",
+                    "Case-insensitive source root collision");
             Write("main.ores", "import fnc twice from \"./base\"; fnc main():int { return twice(21); }");
             File.WriteAllBytes(Path.Combine(root, "base.ores"), new byte[] { 0xff, 0xfe });
             Reject(Compile, "invalid UTF-8 source cannot enter source identity graph", "strict UTF-8");

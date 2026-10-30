@@ -58,6 +58,10 @@ public static class OresSourceModuleCompiler
         var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
         var roots = sourceRoots.Select(root => Path.TrimEndingDirectorySeparator(Path.GetFullPath(root))).ToArray();
         if (roots.Distinct(comparer).Count() != roots.Length) throw new FormatException("Duplicate source root");
+        // Distinct physical roots on a case-sensitive host may alias on
+        // Windows/macOS. Reject an unportable root graph before reading files.
+        if (roots.Distinct(StringComparer.OrdinalIgnoreCase).Count() != roots.Length)
+            throw new FormatException("Case-insensitive source root collision");
         foreach (string root in roots)
         {
             if (!Directory.Exists(root)) throw new FormatException("Source root does not exist");
