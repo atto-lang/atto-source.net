@@ -15,6 +15,7 @@ public enum IrOpcode
     CheckedSubtract,
     CheckedMultiply,
     CheckedDivide,
+    CheckedAbs,
     SignedRemainderLiteral
 }
 
@@ -96,6 +97,15 @@ public static class OresIrVerifier
                 if (!instruction.Constant.HasValue ||
                     instruction.Left.HasValue || instruction.Right.HasValue)
                     throw new FormatException("Malformed IR constant");
+            }
+            else if (instruction.Opcode == IrOpcode.CheckedAbs)
+            {
+                if (instruction.Constant.HasValue || !instruction.Left.HasValue ||
+                    instruction.Right.HasValue)
+                    throw new FormatException("Malformed IR checked abs operation");
+                if (instruction.Left.Value < 0 || instruction.Left.Value >= i ||
+                    verified[instruction.Left.Value].Type != IrValueType.I64)
+                    throw new FormatException("IR checked abs requires a prior i64 operand");
             }
             else
             {
@@ -183,6 +193,16 @@ public static class OresIrLowering
             return id;
         }
 
+        int EmitUnary(IrOpcode opcode, int operand)
+        {
+            if (instructions.Count >= OresIrVerifier.MaxInstructions)
+                throw new FormatException("IR instruction budget exceeded");
+            int id = instructions.Count;
+            instructions.Add(new IrInstruction(id, opcode,
+                IrValueType.I64, Left: operand));
+            return id;
+        }
+
         while (pending.Count > 0)
         {
             var current = pending.Pop();
@@ -201,6 +221,13 @@ public static class OresIrLowering
                         int operand = results.Pop();
                         results.Push(EmitBinary(IrOpcode.CheckedSubtract,
                             Constant(0), operand));
+                        break;
+                    }
+                    case Abs:
+                    {
+                        if (results.Count < 1)
+                            throw new FormatException("IR lowering operand underflow");
+                        results.Push(EmitUnary(IrOpcode.CheckedAbs, results.Pop()));
                         break;
                     }
                     case Binary binary:
@@ -237,6 +264,10 @@ public static class OresIrLowering
                     case Unary { Operator: '+' or '-' } unary:
                         pending.Push(new Pending(node, true));
                         pending.Push(new Pending(unary.Value, false));
+                        break;
+                    case Abs abs:
+                        pending.Push(new Pending(node, true));
+                        pending.Push(new Pending(abs.Value, false));
                         break;
                     case Binary binary when binary.Operator is '+' or '-' or '*' or '/' or '%':
                         pending.Push(new Pending(binary, true));
