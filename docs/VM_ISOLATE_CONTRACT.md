@@ -70,6 +70,23 @@ Tests: `VmIsolateHostTests.Run()` is wired into the existing
 `verification/Ores.Net.Tests/Program.cs` suite; the .NET toolchain must
 execute this in CI. No local dotnet SDK execution was available in this pass.
 
+### Actor-local logical turn admission
+
+`ActorTicket` now owns at most one generation-fenced `ActorTurnTicket`.
+`BeginActorTurn` admits one user handler; `SuspendActorTurn` keeps that
+logical turn active while releasing any physical carrier outside this host
+bookkeeping API. A later user turn is rejected until the exact same ticket is
+resumed and completed. Foreign actor/tenant tickets, stale completed tickets,
+generation replay and actor retirement with an active turn fail closed.
+
+This is intentionally a host substrate, not source-language actor lowering.
+It does not hold a CLR monitor across guest suspension, does not make
+`Task`/delegate behavior Oreslang semantics, and does not yet connect
+`handle_state`, source `await`, cancellation cleanup or generated
+continuation frames. Those future paths must preserve the same rule: suspension
+may free a carrier to execute **other actors**, but it cannot admit a different
+user continuation into this actor.
+
 
 ## Native AOT compiled CIL tenant execution (follow-up)
 
