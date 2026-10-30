@@ -123,3 +123,26 @@ execute under tenant isolation accounting, **not** full mutable .ores
 module globals, actor scheduling, hard realtime, or a CLR/OS security
 sandbox. Exact-head Linux and Windows Native AOT publishes have NOT
 executed locally; no .NET SDK is installed here.
+
+## Scoped host-owned actor-state loans (2026-10-30)
+
+`ActorTurnTicket` now supports bounded (at most 32 nested) `ActorStateLoan`
+scopes. Only the active, unsuspended logical turn can mint a loan, and nested
+critical scopes temporarily fence the parent loan. The innermost loan must
+be returned in LIFO order; a released loan can never validate again. Writes
+require a writable ticket, and `ValidateActorStateLoan` checks exact actor,
+isolate, logical turn and loan identity. Future generated state operations
+must enforce this check on each access; holding a token alone is insufficient.
+
+Both `SuspendActorTurn` and `CompleteActorTurn` reject outstanding loans.
+After physical carrier suspension, a resumed continuation must request a
+fresh state loan. Terminal cancellation revokes the entire bounded nested
+loan chain before making the actor lane available for its next user turn.
+Cancellation and restart never revive old loan objects or turn tickets.
+
+This is **host admission only**, NOT executable `.ores` actor state lowering,
+a native per-actor heap, or a verified scheduler/continuation implementation.
+A source compiler must still generate and type-check actual compiler-owned
+state storage, reject escaped state capabilities, enforce effect rows,
+and connect resumption to generation-fenced scheduler continuations.
+Exact-head Windows/Linux NativeAOT builds and adversarial tests remain required.
