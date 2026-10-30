@@ -33,6 +33,19 @@ public sealed class OresVmHost
         public ulong Id { get; }
         internal ulong Epoch { get; }
         internal ActorMailbox Mailbox { get; }
+        internal ulong NextTurnGeneration { get; set; } = 1;
+        internal ActorTurnTicket? ActiveTurn { get; set; }
+    }
+
+    public sealed class ActorTurnTicket
+    {
+        internal ActorTurnTicket(ActorTicket actor, ulong generation) {
+            Actor = actor; Generation = generation;
+        }
+        internal ActorTicket Actor { get; }
+        public ulong Generation { get; }
+        internal bool Suspended { get; set; }
+        internal bool Completed { get; set; }
     }
 
     public sealed class ResourcePin
@@ -150,6 +163,80 @@ public sealed class OresVmHost
         }
     }
 
+    private static void CheckTurn(
+        TenantState state, ActorTicket actor, ActorTurnTicket turn)
+    {
+        CheckActor(state, actor);
+        if (turn is null || turn.Completed || !ReferenceEquals(turn.Actor, actor) ||
+            !ReferenceEquals(actor.ActiveTurn, turn))
+            throw new InvalidOperationException("stale or foreign actor logical turn");
+    }
+
+    /// <summary>
+    /// Admit one actor-local user turn. Suspension never clears ActiveTurn:
+    /// it releases only the physical carrier and later user turns stay denied.
+    /// </summary>
+    public ActorTurnTicket BeginActorTurn(IsolateHandle handle, ActorTicket actor)
+    {
+        lock (_gate) {
+            var s = Check(handle); CheckActor(s, actor);
+            if (s.Phase != Phase.Running)
+                throw new InvalidOperationException("tenant actor admission closed");
+            if (actor.ActiveTurn is not null)
+                throw new InvalidOperationException("actor logical turn already active");
+            if (actor.NextTurnGeneration == ulong.MaxValue)
+                throw new InvalidOperationException("actor logical turn generation exhausted");
+            var turn = new ActorTurnTicket(actor, actor.NextTurnGeneration++);
+            actor.ActiveTurn = turn;
+            return turn;
+        }
+    }
+
+    public void SuspendActorTurn(
+        IsolateHandle handle, ActorTicket actor, ActorTurnTicket turn)
+    {
+        lock (_gate) {
+            var s = Check(handle); CheckTurn(s, actor, turn);
+            if (turn.Suspended)
+                throw new InvalidOperationException("actor logical turn already suspended");
+            turn.Suspended = true;
+        }
+    }
+
+    public void ResumeActorTurn(
+        IsolateHandle handle, ActorTicket actor, ActorTurnTicket turn)
+    {
+        lock (_gate) {
+            var s = Check(handle); CheckTurn(s, actor, turn);
+            if (!turn.Suspended)
+                throw new InvalidOperationException("actor logical turn is not suspended");
+            turn.Suspended = false;
+        }
+    }
+
+    public void CompleteActorTurn(
+        IsolateHandle handle, ActorTicket actor, ActorTurnTicket turn)
+    {
+        lock (_gate) {
+            var s = Check(handle); CheckTurn(s, actor, turn);
+            turn.Completed = true;
+            turn.Suspended = false;
+            actor.ActiveTurn = null;
+        }
+    }
+
+    public (bool Active, bool Suspended, ulong Generation) ActorTurnSnapshot(
+        IsolateHandle handle, ActorTicket actor)
+    {
+        lock (_gate) {
+            var s = Check(handle); CheckActor(s, actor);
+            var turn = actor.ActiveTurn;
+            return turn is null
+                ? (false, false, 0)
+                : (true, turn.Suspended, turn.Generation);
+        }
+    }
+
     public ResourcePin PinResource(IsolateHandle handle, ActorTicket actor)
     {
         lock (_gate) {
@@ -182,6 +269,8 @@ public sealed class OresVmHost
             var s = Check(handle); CheckActor(s, actor);
             if (s.PinsByActor[actor] != 0)
                 throw new InvalidOperationException("actor has outstanding resources");
+            if (actor.ActiveTurn is not null)
+                throw new InvalidOperationException("actor has active logical turn");
             actor.Mailbox.Stop(); // Erase pending private queued copies.
             s.PinsByActor.Remove(actor);
             s.Actors.Remove(actor.Id);
