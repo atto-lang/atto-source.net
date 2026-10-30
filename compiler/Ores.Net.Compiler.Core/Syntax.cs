@@ -223,6 +223,8 @@ public static class OresParser
                     exposed = true;
                 }
             }
+            if (Current.Text == "singleton")
+                throw new FormatException("ORES-SINGLETON-UNSUPPORTED: singleton declarations require exactly-once complete publication, cycle/failure semantics, runtime-derived actor authority for shared state, and five-backend guest execution parity at offset " + Current.Offset);
             Expect("fnc");
             Expect("main");
             Expect("(");
