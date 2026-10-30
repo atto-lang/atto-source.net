@@ -1,0 +1,29 @@
+name: shared-reactor-soa-host
+on:
+  push:
+    branches: ["feat/shared-reactor-soa-*"]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: shared-reactor-soa-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  host:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: "10.0.x"
+      - name: Execute SDK10 host readiness and worker checks
+        run: dotnet run --project runtime-experiment/SharedReactorPoolCheck.csproj -c Release
+      - name: Publish and execute the same host check with Native AOT
+        run: |
+          dotnet publish runtime-experiment/SharedReactorPoolCheck.csproj -c Release -r linux-x64 -p:PublishAot=true -o /tmp/shared-reactor-aot
+          timeout 30 /tmp/shared-reactor-aot/SharedReactorPoolCheck
