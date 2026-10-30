@@ -472,6 +472,19 @@ try
     Require(ops.Contains(Code.Add_Ovf) && ops.Contains(Code.Mul_Ovf), "checked CIL operations");
     Require(ops[^1] == Code.Ret, "CIL return");
 
+    var portableGenerated = Path.Combine(folder, "OresGenerated.portable-math.dll");
+    CilEmitter.EmitLibrary(portableMath, portableGenerated);
+    using var portableAssembly = AssemblyDefinition.ReadAssembly(portableGenerated);
+    var portableEntry = portableAssembly.MainModule.Types.Single(t =>
+        t.FullName == "Oreslang.Generated.OresProgram").Methods.Single(m => m.Name == "Run");
+    Require(CilReferenceEvaluator.Evaluate(portableEntry) == 84,
+        "byte-identical portable Math guest survives verified CIL emission");
+    var portableOps = portableEntry.Body.Instructions.Select(i => i.OpCode.Code).ToArray();
+    Require(portableOps.Contains(Code.Clt) &&
+            portableOps.Count(x => x == Code.Sub_Ovf) >= 2 &&
+            portableOps.Contains(Code.Add_Ovf),
+        "portable Math guest CIL retains checked abs, neg and addition");
+
     var mathGenerated = Path.Combine(folder, "OresGenerated.math.dll");
     CilEmitter.EmitLibrary(absIr, mathGenerated);
     using var mathAssembly = AssemblyDefinition.ReadAssembly(mathGenerated);
