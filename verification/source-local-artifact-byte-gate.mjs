@@ -1,7 +1,7 @@
 // Verify byte-level content of independently downloaded and extracted GitHub
 // Actions artifacts. This is a local consistency check, NOT a release approval.
 import { createHash } from 'node:crypto';
-import { closeSync, fstatSync, lstatSync, openSync, opendirSync, readFileSync } from 'node:fs';
+import { closeSync, fstatSync, lstatSync, openSync, opendirSync, readFileSync, readSync } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
@@ -95,6 +95,21 @@ function assertStableFile(file, before, opened, maxBytes, minBytes) {
       opened.size < minBytes || opened.size > maxBytes)
     throw Error('invalid, linked, or replaced artifact file: ' + file);
 }
+// A pre-read lstat size check is insufficient if an adversary can grow a
+// regular receipt after opening it. The same fd is used for bounded reads.
+function readBoundedReceipt(fd) {
+  const buffer = Buffer.alloc(maxReceiptBytes + 1);
+  let total = 0;
+  while (total < buffer.length) {
+    const n = readSync(fd, buffer, total, buffer.length - total, null);
+    if (n === 0) break;
+    total += n;
+  }
+  if (total === 0 || total > maxReceiptBytes)
+    throw Error('artifact receipt exceeded read byte limit');
+  return buffer.subarray(0, total);
+}
+
 async function digestAndHeader(file, base) {
   assertArtifactParents(base, file);
   const before = lstatSync(file);
@@ -234,7 +249,7 @@ export async function verifyArtifactBytes(bundle, roots) {
       try {
         const opened = fstatSync(fd);
         assertStableFile(receipt, before, opened, maxReceiptBytes, 1);
-        const bytes = readFileSync(fd);
+        const bytes = readBoundedReceipt(fd);
         const after = fstatSync(fd);
         assertStableFile(receipt, before, after, maxReceiptBytes, 1);
         assertStableFile(receipt, before, lstatSync(receipt), maxReceiptBytes, 1);

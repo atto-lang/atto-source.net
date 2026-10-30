@@ -92,3 +92,10 @@ scenario('rejects symlink in executable ancestor directory',f=>{
  renameSync(original,moved);
  symlinkSync(moved,original,'dir');
 },/symlink/);
+
+scenario('rejects oversized Linux receipt payloads',f=>{
+ f.put('linux','artifacts/evidence/source-local-linux-sha256.txt',Buffer.alloc(65537,32));
+},/oversized or invalid artifact receipt/);
+scenario('rejects empty Windows receipt payloads',f=>{
+ f.put('windows','artifacts/evidence/source-local-windows.json',Buffer.alloc(0));
+},/oversized or invalid artifact receipt/);
