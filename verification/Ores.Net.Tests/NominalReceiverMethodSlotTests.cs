@@ -1,0 +1,60 @@
+using Ores.Net.Compiler;
+
+internal static class NominalReceiverMethodSlotTests
+{
+    private static void Require(bool truth, string why)
+    {
+        if (!truth) throw new Exception("Nominal receiver slot contract: " + why);
+    }
+
+    private static void Reject(Action action, string diagnostic)
+    {
+        try { action(); }
+        catch (FormatException error) when (
+            error.Message.Contains(diagnostic, StringComparison.OrdinalIgnoreCase)) { return; }
+        throw new Exception("Expected receiver slot rejection containing: " + diagnostic);
+    }
+
+    public static void Run()
+    {
+        foreach (var owner in new[] { "mod.Foo", "mod.WorkerActor" })
+        {
+            var slots = new NominalReceiverMethodSlots();
+            var first = slots.Declare(owner, "x", 0);
+            Require(first.ValueArity == 0 && slots.Contains(first), "implicit x/0");
+            Reject(() => slots.Declare(owner, "x", 0, explicitSelf: true, mutableSelf: true),
+                "x/0");
+            Reject(() => slots.Declare(owner, "x", 0, explicitSelf: true), "x/0");
+
+            var value = slots.Declare(owner, "x", 1);
+            Require(value.ValueArity == 1, "hidden receiver excluded from x/1");
+            Reject(() => slots.Declare(owner, "x", 1, explicitSelf: true, mutableSelf: true),
+                "x/1");
+            Reject(() => slots.Declare(owner, "x", 1, explicitSelf: true), "x/1");
+
+            // Different names are not overload conflicts, even with same arity.
+            var y = slots.Declare(owner, "y", 1, explicitSelf: true, mutableSelf: true);
+            Require(slots.Contains(y), "distinct method names remain distinct");
+            var stat = slots.Declare(owner, "x", 1, ReceiverMethodNamespace.Static);
+            Require(stat.Namespace == ReceiverMethodNamespace.Static, "static and instance keys differ");
+            var otherOwner = slots.Declare("other.Foo", "x", 1);
+            Require(otherOwner.Owner == "other.Foo", "owner is part of method selector");
+
+            var reversed = new NominalReceiverMethodSlots();
+            reversed.Declare(owner, "x", 0, explicitSelf: true, mutableSelf: true);
+            Reject(() => reversed.Declare(owner, "x", 0), "x/0");
+            reversed.Declare(owner, "x", 1, explicitSelf: true, mutableSelf: true);
+            Reject(() => reversed.Declare(owner, "x", 1), "x/1");
+        }
+
+        Reject(() => new NominalReceiverMethodSlots().Declare("", "x", 0), "nonempty");
+        Reject(() => new NominalReceiverMethodSlots().Declare("Foo", "", 0), "nonempty");
+        Reject(() => new NominalReceiverMethodSlots().Declare("Foo", "x", -1), "nonnegative");
+        Reject(() => new NominalReceiverMethodSlots().Declare("Foo", "x", 0,
+            ReceiverMethodNamespace.Static, explicitSelf: true), "static method");
+        Reject(() => new NominalReceiverMethodSlots().Declare("Foo", "x", 0,
+            mutableSelf: true), "explicit receiver");
+        Reject(() => new NominalReceiverMethodSlots().Declare("Foo", "x", 0,
+            (ReceiverMethodNamespace)99), "namespace");
+    }
+}
