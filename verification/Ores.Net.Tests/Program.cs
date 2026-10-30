@@ -52,7 +52,14 @@ foreach (var source in new[] {
     "define class X1 as foo():void {} end",
     "define class X2 as foo(self):void {} end",
     "define class X as foo():void {} foo(self):void {} end",
-    "define class X as foo(int x):int {return x;} foo(self,int x):int {return x;} end"
+    "define class X as foo(int x):int {return x;} foo(self,int x):int {return x;} end",
+    "define class X as x():void {} x(mut self)():void {} end",
+    "define class X as x(mut self)():void {} x():void {} end",
+    "define class X as x(int n):void {} x(mut self,int n):void {} end",
+    "define class X as x(self)(int n):void {} end",
+    "define class X as x(string a):void {} y(mut self,int x):void {} end",
+    "define actor X as x():void {} x(mut self)():void {} end",
+    "define actor X as x(int n):void {} x(mut self,int n):void {} end"
 })
     Reject(() => OresParser.Parse(source), "unimplemented class method receiver parity");
 // Nominal enum overloads require compiler-owned type identities and an
