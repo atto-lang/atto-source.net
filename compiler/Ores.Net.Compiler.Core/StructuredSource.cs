@@ -133,8 +133,18 @@ public static class OresStructuredParser
                 (tokens[^1].Text == "define" ||
                  (tokens[^1].Text == "pub" && tokens.Count > 1 &&
                   tokens[^2].Text == "define")))
+            {
+                // The structured scalar bootstrap cannot emit owner-backed
+                // inverted rows. Look ahead with the actual lexer (which skips
+                // comments) so an inverted STRUCT receives a stable diagnostic
+                // instead of being misreported as an inverted CLASS.
+                var invertedKind = lexer.Read();
+                if (invertedKind.Text == "struct")
+                    throw new FormatException(
+                        $"Inverted struct requires checked value-row, one-level packed columns and ownership lowering in the .NET backend at offset {token.Offset}");
                 throw new FormatException(
                     $"Inverted class requires checked bracket-row and ownership lowering in the .NET backend at offset {token.Offset}");
+            }
             if ((token.Text == "class" || token.Text == "actor") &&
                 tokens.Count > 0 &&
                 (tokens[^1].Text == "define" ||
