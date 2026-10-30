@@ -28,6 +28,7 @@ static class StrictSigned64ArithmeticSelfTest
     {
         CheckMathUnaryPrecisionFixture();
         CheckBigIntExactFixture();
+        CheckDecimalPrecisionContractIdentity();
         CheckPortableContractFixture();
         CheckExactFloatFixture();
         CheckExactFloatOracleBoundaries();
