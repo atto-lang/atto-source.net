@@ -211,6 +211,31 @@ internal static class ExecutionCallbackContextTests
             }
         }
 
+        bool defaultScopeRejected = false;
+        try
+        {
+            var invalidScope = OresExecutionContexts.EnterCallback(default);
+            invalidScope.Dispose();
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            defaultScopeRejected = true;
+        }
+        Require(defaultScopeRejected,
+            "default/forged callback provenance entered a callback scope");
+
+        bool traceIndexRejected = false;
+        try
+        {
+            _ = captured.TraceBoundaryAt(1);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            traceIndexRejected = true;
+        }
+        Require(traceIndexRejected,
+            "callback trace allowed an out-of-range boundary read");
+
         bool invalid = false;
         try
         {
