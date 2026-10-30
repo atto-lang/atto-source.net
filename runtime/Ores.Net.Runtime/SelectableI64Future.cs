@@ -37,6 +37,7 @@ public sealed class SelectableI64Future
         public ulong Id;
         public bool Active;
         public Action<Subscription>? Notify;
+        public OresExecutionCallbackContext? CallbackContext;
     }
 
     private readonly object _gate = new();
@@ -85,6 +86,8 @@ public sealed class SelectableI64Future
     public Subscription SubscribeReady(Action<Subscription> notify)
     {
         ArgumentNullException.ThrowIfNull(notify);
+        OresExecutionCallbackContext? callbackContext =
+            OresExecutionContexts.CaptureCallback(OresCallbackBoundary.HostCallback);
 
         Subscription subscription;
         var immediate = false;
@@ -112,6 +115,7 @@ public sealed class SelectableI64Future
             waiter.Id = id;
             waiter.Active = true;
             waiter.Notify = notify;
+            waiter.CallbackContext = callbackContext;
             immediate = _status != FutureStatus.Pending;
         }
 
@@ -119,7 +123,8 @@ public sealed class SelectableI64Future
         {
             try
             {
-                notify(subscription);
+                OresExecutionContexts.RunCallback(
+                    callbackContext, () => notify(subscription));
             }
             catch
             {
@@ -167,6 +172,7 @@ public sealed class SelectableI64Future
     {
         var callbacks = new Action<Subscription>?[_waiters.Length];
         var subscriptions = new Subscription?[_waiters.Length];
+        var callbackContexts = new OresExecutionCallbackContext?[_waiters.Length];
         var count = 0;
 
         lock (_gate)
@@ -179,6 +185,7 @@ public sealed class SelectableI64Future
                 if (!waiter.Active || waiter.Notify is null) continue;
                 callbacks[count] = waiter.Notify;
                 subscriptions[count] = new Subscription(this, i, waiter.Id);
+                callbackContexts[count] = waiter.CallbackContext;
                 count++;
             }
 
@@ -192,7 +199,10 @@ public sealed class SelectableI64Future
         {
             try
             {
-                callbacks[i]!(subscriptions[i]!);
+                int index = i;
+                OresExecutionContexts.RunCallback(
+                    callbackContexts[index],
+                    () => callbacks[index]!(subscriptions[index]!));
             }
             catch (Exception notificationError)
             {
@@ -232,6 +242,7 @@ public sealed class SelectableI64Future
     {
         waiter.Active = false;
         waiter.Notify = null;
+        waiter.CallbackContext = null;
     }
 
     public sealed class Subscription
