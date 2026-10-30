@@ -94,7 +94,20 @@ internal static class VmIsolateHostTests
         var nextTurn = host.BeginActorTurn(a, actorA);
         if (nextTurn.Generation == turn.Generation)
             throw new Exception("actor logical turn generation replay");
-        host.CompleteActorTurn(a, actorA, nextTurn);
+        host.SuspendActorTurn(a, actorA, nextTurn);
+        host.CancelActorTurn(a, actorA, nextTurn);
+        if (host.ActorTurnSnapshot(a, actorA).Active)
+            throw new Exception("cancelled actor logical turn remained active");
+        ExpectFailure(() => host.ResumeActorTurn(a, actorA, nextTurn),
+            "cancelled logical turn resumed");
+        ExpectFailure(() => host.CompleteActorTurn(a, actorA, nextTurn),
+            "cancelled logical turn completed twice");
+        ExpectFailure(() => host.CancelActorTurn(a, actorA, nextTurn),
+            "cancelled logical turn cancelled twice");
+        var postCancelTurn = host.BeginActorTurn(a, actorA);
+        if (postCancelTurn.Generation == nextTurn.Generation)
+            throw new Exception("cancelled actor logical turn generation replay");
+        host.CompleteActorTurn(a, actorA, postCancelTurn);
         if (host.ActorTurnSnapshot(a, actorA).Active)
             throw new Exception("completed actor logical turn remained active");
 
