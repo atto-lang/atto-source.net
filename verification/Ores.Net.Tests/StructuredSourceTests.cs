@@ -37,6 +37,23 @@ internal static class StructuredSourceTests
 
     public static void Run()
     {
+        // Java/LLVM receiver spellings must never be mistaken for scalar
+        // helpers or emitted as CIL while nominal method lowering is absent.
+        // These are fail-closed capability checks, NOT overload execution.
+        foreach (var source in new[] {
+            "define class Foo as x():void {} end",
+            "define class Foo as x(mut self)():void {} end",
+            "define class Foo as x(string a):void {} y(mut self, int x):void {} end",
+            "define class Foo as x(self)(int n):void {} end",
+            "define class Foo as x(self, int n):void {} end",
+            "define class Foo as x():void {} x(mut self)():void {} end",
+            "define class Foo as x(mut self)():void {} x():void {} end",
+            "define class Foo as x(int n):void {} x(mut self, int n):void {} end",
+            "define actor Foo as x():void {} x(mut self)():void {} end",
+            "define actor Foo as x(int n):void {} x(mut self, int n):void {} end"
+        })
+            RejectFeature(source, "Nominal class/actor methods require receiver-erased method slots");
+
         // Local value types are block-local declarations on the structured
         // frontend. They are admitted into the AST but deliberately rejected
         // by CFG/CIL lowering until value layout and construction are verified.
