@@ -115,9 +115,11 @@ not substitute a scalar mutation or an unprotected callback.
 * LLVM: synchronous scalar class methods and mutable receiver loans are
   implemented for a restricted native class subset. General class/actor
   inheritance, lambda capture and actor-method lowering remain incomplete.
-* .NET: scalar and structured source frontends reject class/actor methods
-  before CIL/Native AOT emission; nominal method slot contracts are not an
-  executable method implementation. Forge remains separately gated.
+* .NET: scalar and structured source frontends still reject class/actor
+  methods before CIL/Native AOT emission. A compile-time receiver-erased
+  slot registry and host-level self-tests now cover the selector identity,
+  without claiming parser integration, borrowing or executable method dispatch.
+  Forge remains separately gated.
 * Wasm: delegates source compilation to the pinned real native LLVM compiler;
   the wasm32 method/actor lowering gate remains fail-closed. There is no
   independent JavaScript source parser claiming method semantics.
