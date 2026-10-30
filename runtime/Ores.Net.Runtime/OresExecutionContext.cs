@@ -45,6 +45,8 @@ public readonly struct OresExecutionContext
 
 public readonly struct OresExecutionCallbackContext
 {
+    public const byte MaxTraceBoundaries = 8;
+
     internal OresExecutionCallbackContext(
         OresExecutionContext source,
         OresCallbackBoundary boundary)
@@ -56,6 +58,9 @@ public readonly struct OresExecutionCallbackContext
         ParentExecution = source.ParentExecution;
         Continuation = source.Continuation;
         Boundary = boundary;
+        TraceBoundariesPacked = (ulong)boundary;
+        TraceCount = 1;
+        TraceElided = 0;
     }
 
     internal OresExecutionCallbackContext(
@@ -69,6 +74,26 @@ public readonly struct OresExecutionCallbackContext
         ParentExecution = source.ParentExecution;
         Continuation = source.Continuation;
         Boundary = boundary;
+
+        if (source.TraceCount == 0 || source.TraceCount > MaxTraceBoundaries)
+            throw new ArgumentOutOfRangeException(nameof(source));
+
+        if (source.TraceCount < MaxTraceBoundaries)
+        {
+            TraceBoundariesPacked = source.TraceBoundariesPacked |
+                ((ulong)boundary << (source.TraceCount * 4));
+            TraceCount = (byte)(source.TraceCount + 1);
+            TraceElided = source.TraceElided;
+        }
+        else
+        {
+            TraceBoundariesPacked = (source.TraceBoundariesPacked >> 4) |
+                ((ulong)boundary << ((MaxTraceBoundaries - 1) * 4));
+            TraceCount = MaxTraceBoundaries;
+            TraceElided = source.TraceElided == ulong.MaxValue
+                ? ulong.MaxValue
+                : source.TraceElided + 1;
+        }
     }
 
     public ulong RuntimeDomain { get; }
@@ -78,6 +103,17 @@ public readonly struct OresExecutionCallbackContext
     public ulong ParentExecution { get; }
     public ulong Continuation { get; }
     public OresCallbackBoundary Boundary { get; }
+    public ulong TraceBoundariesPacked { get; }
+    public byte TraceCount { get; }
+    public ulong TraceElided { get; }
+
+    public OresCallbackBoundary TraceBoundaryAt(int index)
+    {
+        if ((uint)index >= TraceCount)
+            throw new ArgumentOutOfRangeException(nameof(index));
+        return (OresCallbackBoundary)(
+            (TraceBoundariesPacked >> (index * 4)) & 0xFUL);
+    }
 }
 
 /// <summary>
