@@ -150,6 +150,9 @@ public static class OresParser
                     (word == "nb" && !StaticSelectAdmission.FollowedByStaticSelect(text, _i)))
                     throw new FormatException(
                         $"execution region '{word}' requires verified CPU/GPU Task lowering; no implicit CPU fallback at offset {start}");
+                if (word is "async" or "await")
+                    throw new FormatException(
+                        $"async/Future callback source requires scheduler-aware continuation lowering at offset {start}");
                 if (word == "task")
                 {
                     if (ContextualTaskBoundary.OpensBlock(text, _i))
