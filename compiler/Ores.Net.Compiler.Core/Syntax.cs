@@ -316,7 +316,7 @@ public static class OresParser
             // Lex assignment punctuation so unsupported declarations are rejected
             // at their declaration, rather than at a later initializer. The
             // arithmetic parser still has no assignment production.
-            if ("()+-*/%{}:;.= ?|".Replace(" ", "", StringComparison.Ordinal).IndexOf(ch) >= 0)
+            if ("()+-*/%{}:;.=?|".IndexOf(ch) >= 0)
             {
                 _i++;
                 return new Token(text[start.._i], start);
