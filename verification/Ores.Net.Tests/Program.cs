@@ -117,6 +117,18 @@ RejectDiagnostic(
     "isolated actor state i64 overflow");
 RejectDiagnostic(
     () => OresParser.Parse(
+        "define isolated actor Counter as state { count: int = -9223372036854775808; } end"),
+    "Source actor state schema parsed; sealed handle_state and generation-fenced logical-turn lowering is unavailable",
+    "signed i64 minimum actor state default reaches the lowering boundary");
+var actorStateOverflowFields = string.Join(" ", Enumerable.Range(0, 17)
+    .Select(i => $"f{i}: int = 0;"));
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as state { " + actorStateOverflowFields + " } end"),
+    "Actor state schema field limit exceeded (16)",
+    "isolated actor state field count is bounded");
+RejectDiagnostic(
+    () => OresParser.Parse(
         "define isolated actor Counter as state { enabled: bool = 1; } end"),
     "Actor bool state default must be true or false",
     "isolated actor bool default");
