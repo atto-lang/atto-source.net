@@ -21,11 +21,19 @@ internal static class OresIrReferenceEvaluator
                 IrOpcode.CheckedSubtract => checked(left - right),
                 IrOpcode.CheckedMultiply => checked(left * right),
                 IrOpcode.CheckedDivide => DivideChecked(left, right),
+                IrOpcode.CheckedAbs => AbsChecked(left),
                 IrOpcode.SignedRemainderLiteral => right == -1 ? 0 : left % right,
                 _ => throw new FormatException("Unverified IR opcode")
             };
         }
         return values[verified.ReturnId];
+    }
+
+    private static long AbsChecked(long value)
+    {
+        if (value == long.MinValue)
+            throw new OverflowException("Signed abs overflow");
+        return value < 0 ? -value : value;
     }
 
     private static long DivideChecked(long left, long right)
