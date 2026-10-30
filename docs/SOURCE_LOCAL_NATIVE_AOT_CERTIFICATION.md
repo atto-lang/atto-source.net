@@ -149,7 +149,19 @@ It rejects unknown/missing files, symlinks, modified receipts, bad SHA-256,
 managed PE/CLR headers, and wrong x86-64 ELF/PE signatures. It accepts either
 the original shared `artifacts/` prefix or the GitHub upload-action's
 uniformly stripped layout, but not mixed or wildcard contents. The verifier
-requires the existing run/job/approval metadata gate to pass first. Synthetic
+requires the existing run/job/approval metadata gate to pass first.
+
+**Extract safely:** inspect each original ZIP entry *before* extraction. Reject
+absolute paths, `../` traversals, symbolic links, hardlinks and special files;
+extract to fresh, operator-owned directories that no other process can modify,
+and keep them quiescent throughout byte verification. On platforms that expose
+`O_NOFOLLOW`, the verifier opens both executable and receipt paths with
+that flag in addition to its inode/size/re-read checks; the final-component
+protection does **not** stop a hostile process from concurrently replacing an
+ancestor directory. Do not treat local path checking alone as a secure
+sandbox or as proof of real Native AOT execution.
+
+Synthetic
 test fixtures do **not** establish that any private-main protection, runner
 isolation, reviewer authorization, native compilation or actual binary
 execution occurred; those require separate independent read-back.
