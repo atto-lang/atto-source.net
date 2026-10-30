@@ -22,15 +22,11 @@ public static class CilEmitter
         ArgumentNullException.ThrowIfNull(program);
         ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
 
-        EmitLibraryCore(outputFile, (metadata, bodies) =>
-        {
-            var methodCode = new BlobBuilder();
-            var instructions = new InstructionEncoder(methodCode);
-            int maxStack = Write(program, instructions);
-            instructions.OpCode(ILOpCode.Ret);
-            int bodyOffset = bodies.AddMethodBody(instructions, maxStack: maxStack);
-            return (bodyOffset, methodCode, null);
-        });
+        // One arithmetic lowering authority: even callers holding the parsed
+        // bootstrap AST must pass through typed, verified OresIR before CIL.
+        // This prevents new AST nodes (for example CheckedAbs) from acquiring
+        // different semantics or late-failure behavior in a legacy emitter.
+        EmitLibrary(OresIrLowering.Lower(program), outputFile);
     }
 
     // Production path: only a verified OresIR function may reach the CIL
