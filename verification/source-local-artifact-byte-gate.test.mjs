@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
+import { linkSync, mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { verifyArtifactBytes } from './source-local-artifact-byte-gate.mjs';
@@ -73,3 +73,12 @@ scenario('rejects escaped duplicate Windows receipt JSON nested property',f=>{
    '"path":',String.raw`"\u0070ath":"forged",`+'"path":');
  f.put('windows','artifacts/evidence/source-local-windows.json',Buffer.from(raw));
 },/duplicate receipt JSON key/);
+
+scenario('rejects hardlinked ELF executable with alias outside artifact inventory',f=>{
+ const path=join(f.roots.linux,f.linuxFiles[0].slice(10));
+ linkSync(path,join(f.tmp,'native-binary-hardlink'));
+},/invalid, linked, or replaced artifact file/);
+scenario('rejects hardlinked receipt even if its contents match',f=>{
+ const path=join(f.roots.windows,'evidence/source-local-windows.json');
+ linkSync(path,join(f.tmp,'receipt-hardlink'));
+},/invalid, linked, or replaced artifact file/);

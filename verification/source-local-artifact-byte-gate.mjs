@@ -1,7 +1,8 @@
 // Verify byte-level content of independently downloaded and extracted GitHub
 // Actions artifacts. This is a local consistency check, NOT a release approval.
 import { createHash } from 'node:crypto';
-import { createReadStream, lstatSync, readFileSync, readdirSync } from 'node:fs';
+import { closeSync, fstatSync, lstatSync, openSync, readFileSync, readdirSync } from 'node:fs';
+import { open } from 'node:fs/promises';
 import { join, relative, resolve, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { pathToFileURL } from 'node:url';
@@ -57,17 +58,42 @@ function exactFiles(found, expected) {
   if (isDeepStrictEqual(actual, stripped)) return p => p.slice('artifacts/'.length);
   throw Error('artifact inventory differs from approved exact file allowlist');
 }
+// Bind all checks and reads to one opened file descriptor. Do not trust
+// lstat(path) followed by a fresh, independent path-based createReadStream:
+// an extracted file can be replaced between those two operations.
+function assertStableFile(file, before, opened, maxBytes, minBytes) {
+  if (!before.isFile() || !opened.isFile() ||
+      before.nlink !== 1 || opened.nlink !== 1 ||
+      opened.dev !== before.dev || opened.ino !== before.ino ||
+      opened.size !== before.size ||
+      opened.size < minBytes || opened.size > maxBytes)
+    throw Error('invalid, linked, or replaced artifact file: ' + file);
+}
 async function digestAndHeader(file) {
-  const stat = lstatSync(file);
-  if (!stat.isFile() || stat.size < 64 || stat.size > limitBytes)
-    throw Error('invalid native binary file size or type');
-  const hash = createHash('sha256');
-  let header = Buffer.alloc(0);
-  for await (const chunk of createReadStream(file, { highWaterMark: 65536 })) {
-    if (header.length < 512) header = Buffer.concat([header, chunk.subarray(0, 512 - header.length)]);
-    hash.update(chunk);
+  const before = lstatSync(file);
+  const handle = await open(file, 'r');
+  try {
+    const opened = await handle.stat();
+    assertStableFile(file, before, opened, limitBytes, 64);
+    const hash = createHash('sha256');
+    let header = Buffer.alloc(0), readBytes = 0;
+    for await (const chunk of handle.createReadStream({ highWaterMark: 65536, autoClose: false })) {
+      readBytes += chunk.length;
+      if (readBytes > limitBytes) throw Error('artifact binary exceeded byte limit: ' + file);
+      if (header.length < 512)
+        header = Buffer.concat([header, chunk.subarray(0, 512 - header.length)]);
+      hash.update(chunk);
+    }
+    const after = await handle.stat();
+    assertStableFile(file, before, after, limitBytes, 64);
+    assertStableFile(file, before, lstatSync(file), limitBytes, 64);
+    if (readBytes !== before.size ||
+        opened.mtimeMs !== after.mtimeMs || opened.ctimeMs !== after.ctimeMs)
+      throw Error('artifact binary changed during read: ' + file);
+    return { sha256: hash.digest('hex'), header };
+  } finally {
+    await handle.close();
   }
-  return { sha256: hash.digest('hex'), header };
 }
 function assertFormat(header, os, path) {
   if (os === 'linux') {
@@ -172,10 +198,24 @@ export async function verifyArtifactBytes(bundle, roots) {
     const mapPath = exactFiles(found, [...expected, receipts[kind]]);
     const read = path => {
       const receipt = join(base, mapPath(path));
-      const stat = lstatSync(receipt);
-      if (!stat.isFile() || stat.size < 1 || stat.size > maxReceiptBytes)
+      const before = lstatSync(receipt);
+      if (!before.isFile() || before.size < 1 || before.size > maxReceiptBytes)
         throw Error('oversized or invalid artifact receipt');
-      return readFileSync(receipt);
+      const fd = openSync(receipt, 'r');
+      try {
+        const opened = fstatSync(fd);
+        assertStableFile(receipt, before, opened, maxReceiptBytes, 1);
+        const bytes = readFileSync(fd);
+        const after = fstatSync(fd);
+        assertStableFile(receipt, before, after, maxReceiptBytes, 1);
+        assertStableFile(receipt, before, lstatSync(receipt), maxReceiptBytes, 1);
+        if (bytes.length !== before.size ||
+            opened.mtimeMs !== after.mtimeMs || opened.ctimeMs !== after.ctimeMs)
+          throw Error('artifact receipt changed during read');
+        return bytes;
+      } finally {
+        closeSync(fd);
+      }
     };
     if (kind === 'linux') {
       if (read(receipts[kind]).toString('utf8') !== bundle.receipts.linux)
