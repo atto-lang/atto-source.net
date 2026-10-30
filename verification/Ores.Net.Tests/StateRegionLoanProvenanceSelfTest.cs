@@ -36,8 +36,29 @@ internal static class StateRegionLoanProvenanceSelfTest
                 StateRegionLoanProvenance.LoanAction.Borrow),
             "unbound execution handle rejected");
 
+        var requirement = new StateRegionLoanRequirement(
+            "inventory",
+            StateRegionLoanRequirement.ExecutionBinding.CurrentLogicalExecution,
+            true,
+            501,
+            "inventory.stock",
+            StateRegionLoanProvenance.AccessKind.Write,
+            StateRegionLoanProvenance.LoanAction.Borrow);
+        Require(requirement.MatchesRelease(requirement.ReleaseRequirement()),
+            "symbolic compiler requirement release");
+        Expect<ArgumentException>(() => _ =
+            new StateRegionLoanRequirement(
+                "inventory",
+                StateRegionLoanRequirement.ExecutionBinding.CurrentLogicalExecution,
+                false,
+                501,
+                "inventory.stock",
+                StateRegionLoanProvenance.AccessKind.Write,
+                StateRegionLoanProvenance.LoanAction.Borrow),
+            "compiler requirement cannot disable generation fence");
+
         Console.WriteLine(
-            "PASS .NET state-region loan provenance v1 (1 positive, 9 negative vectors)");
+            "PASS .NET state-region requirement/provenance v1 (1 positive, 9 negative vectors)");
     }
 
     private static StateRegionLoanProvenance Read(JsonElement value)
