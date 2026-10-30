@@ -285,6 +285,12 @@ Require(OresParser.Parse("pub define fnc main():int {return -9223372036854775808
     { Value: long.MinValue }, "signed minimum");
 Require(OresParser.Parse("fnc main():int {return -(3 + 4);}") is Unary
     { Operator: '-' }, "parenthesized unary");
+Require(OresParser.Parse("fnc main():int{return Math.abs(-42);}") is Abs,
+    "Math.abs scalar intrinsic parse");
+Require(OresParser.Parse("fnc main():int{return Math.neg(42);}") is Unary { Operator: '-' },
+    "Math.neg scalar intrinsic parse");
+RejectDiagnostic(() => OresParser.Parse("fnc main():int{return Math.sqrt(4);}"),
+    "Unsupported Math intrinsic", "unsupported Math members fail closed");
 
 Reject(() => OresParser.Parse("fnc main():int{return foo;}"), "identifier");
 Reject(() => OresParser.Parse("fnc main():int{return 3; } extra"), "trailing syntax");
@@ -352,6 +358,16 @@ Require(unaryIr.Instructions[^1].Opcode == IrOpcode.CheckedSubtract &&
     "unary minus lowers with checked subtraction");
 Require(OresIrReferenceEvaluator.Evaluate(unaryIr) == -7,
     "typed IR checked unary negation semantics");
+var absIr = OresIrLowering.Lower(OresParser.Parse(
+    "fnc main():int{return Math.abs(-42);}"));
+Require(absIr.Instructions[^1].Opcode == IrOpcode.CheckedAbs &&
+        absIr.Instructions[^1].Left.HasValue && !absIr.Instructions[^1].Right.HasValue,
+    "Math.abs lowers to dedicated checked unary OresIR");
+Require(OresIrReferenceEvaluator.Evaluate(absIr) == 42,
+    "Math.abs checked OresIR result");
+Require(OresIrReferenceEvaluator.Evaluate(OresIrLowering.Lower(OresParser.Parse(
+    "fnc main():int{return Math.neg(-42);}"))) == 42,
+    "Math.neg checked OresIR result");
 var flatIr = OresIrLowering.Lower(OresParser.Parse(
     "fnc main():int{return " +
     string.Join("+", Enumerable.Repeat("1", 2048)) + ";}"));
@@ -382,6 +398,8 @@ RejectIrOverflow("fnc main():int{return 9223372036854775807 * 2;}", false);
 
 
 RejectIrOverflow("fnc main():int{return -(-9223372036854775808);}", false);
+RejectIrOverflow("fnc main():int{return Math.neg(-9223372036854775808);}", false);
+RejectIrOverflow("fnc main():int{return Math.abs(-9223372036854775808);}", false);
 
 // check and compile share exactly the same verifier instruction limit;
 // oversized typed SSA cannot pass check and fail only during CIL emission.
@@ -428,6 +446,16 @@ try
     var ops = entry.Body.Instructions.Select(i => i.OpCode.Code).ToArray();
     Require(ops.Contains(Code.Add_Ovf) && ops.Contains(Code.Mul_Ovf), "checked CIL operations");
     Require(ops[^1] == Code.Ret, "CIL return");
+
+    var mathGenerated = Path.Combine(folder, "OresGenerated.math.dll");
+    CilEmitter.EmitLibrary(absIr, mathGenerated);
+    using var mathAssembly = AssemblyDefinition.ReadAssembly(mathGenerated);
+    var mathEntry = mathAssembly.MainModule.Types.Single(t =>
+        t.FullName == "Oreslang.Generated.OresProgram").Methods.Single(m => m.Name == "Run");
+    var mathOps = mathEntry.Body.Instructions.Select(i => i.OpCode.Code).ToArray();
+    Require(mathOps.Contains(Code.Clt) && mathOps.Contains(Code.Brfalse) &&
+            mathOps.Contains(Code.Sub_Ovf),
+        "Math.abs CIL branches on sign and traps MIN via sub.ovf");
     Require(entry.Body.MaxStackSize is >= 2 and <= 256, "CIL stack bounds");
     // The original direct AST path remains a separate reference implementation
     // until real .NET builds confirm the new production OresIR path.
