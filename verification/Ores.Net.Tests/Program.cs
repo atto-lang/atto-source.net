@@ -85,19 +85,53 @@ CrossBackendCheckedI64ParityTests.Run();
 AsyncInteropFailClosedTests.Run();
 await HostTaskObservationTests.Run();
 
-// Source actor syntax must fail at the actor semantic boundary, not as an
-// accidental scalar-fnc parse error. That includes the canonical sealed-state
-// shape required for future source parity.
-foreach (var actorSource in new[] {
-    "define actor Worker as { pub fnc on_message(int n): int { return n; } }\n" +
-        "pub fnc main(): int { const worker = spawn Worker(); stop worker; return 43; }\n",
-    "define isolated actor Counter as state { count: int = 0; } " +
-        "pub increment(): int { return self.handle_state(critical |s| -> s.count); } end"
-})
-    RejectDiagnostic(
-        () => OresParser.Parse(actorSource),
-        "sealed state/handle_state and scheduler-owned logical continuation frames",
-        "source actor must remain fail closed until logical-turn lowering exists");
+// Source actor syntax must fail at a semantic actor boundary, never as an
+// accidental scalar-fnc parse error. Legacy actors remain rejected outright;
+// canonical isolated actors first validate a bounded sealed state schema.
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define actor Worker as { pub fnc on_message(int n): int { return n; } }"),
+    "sealed state/handle_state and scheduler-owned logical continuation frames",
+    "legacy source actor must remain fail closed");
+
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as state { count: int = 0; enabled: bool = true; } " +
+        "pub increment(): int { return self.handle_state(critical |s| -> s.count); } end"),
+    "Source actor state schema parsed; sealed handle_state and generation-fenced logical-turn lowering is unavailable",
+    "canonical isolated actor schema must reach the precise lowering boundary");
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as state { count: int = 0; count: int = 1; } end"),
+    "Duplicate actor state field 'count'",
+    "duplicate isolated actor state field");
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as state { label: float = 0; } end"),
+    "Actor state schema admits only int/bool fields",
+    "unsupported isolated actor state type");
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as state { count: int = 9223372036854775808; } end"),
+    "Actor int state default overflows signed i64",
+    "isolated actor state i64 overflow");
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as state { enabled: bool = 1; } end"),
+    "Actor bool state default must be true or false",
+    "isolated actor bool default");
+RejectDiagnostic(
+    () => OresParser.Parse("define isolated actor Counter as state { } end"),
+    "Actor state schema requires at least one field",
+    "isolated actor empty state schema");
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as let count: int = 0; end"),
+    "Isolated actor requires sealed state",
+    "isolated actor cannot fall back to legacy scalar fields");
+Require(OresParser.Parse(
+    "fnc main():int{return 1;} /* define isolated actor Ghost as state { count:int=0; } */") is Literal,
+    "actor keywords in comments remain lexically invisible");
 Reject(() => OresParser.Parse("fnc main():int { return 1=2; }"), "assignment expression");
 Reject(() => OresParser.Parse("fnc main():int { const x = 1; return x; }"), "local assignment");
 
