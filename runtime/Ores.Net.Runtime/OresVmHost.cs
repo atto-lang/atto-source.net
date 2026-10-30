@@ -32,7 +32,7 @@ public sealed class OresVmHost
         internal IsolateHandle Isolate { get; }
         public ulong Id { get; }
         internal ulong Epoch { get; }
-        public ActorMailbox Mailbox { get; }
+        internal ActorMailbox Mailbox { get; }
     }
 
     public sealed class ResourcePin
@@ -134,6 +134,19 @@ public sealed class OresVmHost
             s.Actors.Add(id, actor);
             s.PinsByActor.Add(actor, 0);
             return actor;
+        }
+    }
+
+    // Host-owned admission: caller cannot bypass the tenant phase gate or
+    // resurrect a retired mailbox through ActorTicket.
+    public void SendActor(IsolateHandle handle, ActorTicket actor, ActorRef destination,
+        ReadOnlySpan<byte> payload)
+    {
+        lock (_gate) {
+            var s = Check(handle); CheckActor(s, actor);
+            if (s.Phase != Phase.Running)
+                throw new InvalidOperationException("tenant actor admission closed");
+            actor.Mailbox.Send(destination, payload);
         }
     }
 
