@@ -25,16 +25,15 @@ static void RejectDiagnostic(Action action, string diagnostic, string why)
     throw new Exception("Expected parser rejection with diagnostic '" + diagnostic + "': " + why);
 }
 
-static readonly IReadOnlyDictionary<string, string> PortableNumericBlobSha =
-    new Dictionary<string, string>(StringComparer.Ordinal)
-    {
-        ["math-i64-ok.ores"] = "6d02ef593be9888364cc6f64c1c42224dcebbdb9",
-        ["math-i64-abs-min.ores"] = "f9064fc2ee79a2356dc062841330466c3d0df9c7",
-        ["math-i64-neg-min.ores"] = "c1d1bff1971351814d8161c36c5a5e18d5ae9e26"
-    };
-
 static string PortableNumericFixture(string name)
 {
+    string expected = name switch
+    {
+        "math-i64-ok.ores" => "6d02ef593be9888364cc6f64c1c42224dcebbdb9",
+        "math-i64-abs-min.ores" => "f9064fc2ee79a2356dc062841330466c3d0df9c7",
+        "math-i64-neg-min.ores" => "c1d1bff1971351814d8161c36c5a5e18d5ae9e26",
+        _ => throw new FormatException("Unknown portable numeric fixture " + name)
+    };
     string path = Path.Combine(AppContext.BaseDirectory, "numeric-v1", name);
     byte[] bytes = File.ReadAllBytes(path);
     byte[] header = Encoding.ASCII.GetBytes($"blob {bytes.Length}\0");
@@ -42,9 +41,7 @@ static string PortableNumericFixture(string name)
     Buffer.BlockCopy(header, 0, payload, 0, header.Length);
     Buffer.BlockCopy(bytes, 0, payload, header.Length, bytes.Length);
     string actual = Convert.ToHexString(SHA1.HashData(payload)).ToLowerInvariant();
-    Require(PortableNumericBlobSha.TryGetValue(name, out string? expected) &&
-            actual == expected,
-        "portable numeric fixture Git blob identity: " + name);
+    Require(actual == expected, "portable numeric fixture Git blob identity: " + name);
     return Encoding.UTF8.GetString(bytes);
 }
 
