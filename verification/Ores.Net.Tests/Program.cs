@@ -45,6 +45,25 @@ RejectDiagnostic(
 Require(OresParser.Parse("fnc main():int{return 1;} // any unknown ?") is Literal,
     "opaque-top and ternary tokens in comments remain lexically invisible");
 
+
+foreach (var wrapperCase in new[] {
+    (
+        "fnc main():int{ val nested: Future<Future<int>> = value; return 1; }",
+        "Nested Future remains nested; implicit Future flatten is forbidden"
+    ),
+    (
+        "fnc main():int{ val nested: Option<Option<int>> = value; return 1; }",
+        "Nested Option remains nested; implicit Option flatten is forbidden"
+    )
+})
+    RejectDiagnostic(
+        () => OresParser.Parse(wrapperCase.Item1),
+        wrapperCase.Item2,
+        "nested wrapper must fail closed without implicit canonicalization");
+Require(OresParser.Parse(
+    "fnc main():int{return 1;} // Future<Future<int>> Option<Option<int>>") is Literal,
+    "nested-wrapper tokens in comments remain lexically invisible");
+
 // Shipping scalar parser has no class-method CIL/Native AOT lowering.
  // It must reject the exact Java receiver-parity sources before emission,
  // independently of the experimental structured parser's diagnostic gate.
