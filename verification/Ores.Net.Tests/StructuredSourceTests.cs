@@ -257,6 +257,30 @@ internal static class StructuredSourceTests
             }
             throw new Exception(".NET frontend admitted unlowered inverted class source");
         }
+        foreach (var source in new[] {
+            "define inverted struct Position as float x; float y; end",
+            "define pub inverted struct Position as float x; end",
+            "pub define inverted struct Position as float x; end",
+            "define /* declaration comment */ inverted /* layout comment */ struct Position as float x; end"
+        })
+        {
+            try { _ = OresStructuredParser.Parse(source); }
+            catch (FormatException ex)
+            {
+                Require(ex.Message.Contains(
+                        "Inverted struct requires checked value-row, one-level packed columns and ownership lowering",
+                        StringComparison.Ordinal) &&
+                        ex.Message.Contains("offset", StringComparison.Ordinal),
+                    "inverted struct must fail through the dedicated backend gate: " + ex.Message);
+                continue;
+            }
+            throw new Exception(".NET frontend admitted unlowered inverted struct source");
+        }
+        // Lexical evidence only: inert comments cannot accidentally become a
+        // source layout capability or trigger the inverted declaration gate.
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{return 42;} // define inverted struct Position") is not null,
+            "inverted declaration text inside a comment must remain inert");
 
         // Canonical Java foo() == foo(self) uses one caller-visible slot.
         // The .NET bootstrap has neither nominal class AST nor CIL dispatch:
