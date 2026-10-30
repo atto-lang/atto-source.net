@@ -30,7 +30,11 @@ internal static class ExecutionCallbackSourceGateTests
         var gitObject = new byte[header.Length + bytes.Length];
         Buffer.BlockCopy(header, 0, gitObject, 0, header.Length);
         Buffer.BlockCopy(bytes, 0, gitObject, header.Length, bytes.Length);
+        // Git object identity is protocol-defined SHA-1. This is not a
+        // cryptographic authenticity or security decision.
+#pragma warning disable CA5350
         var blob = Convert.ToHexString(SHA1.HashData(gitObject)).ToLowerInvariant();
+#pragma warning restore CA5350
         Require(blob == ExpectedFixtureBlob,
             "canonical fixture Git blob drift: " + blob);
 
