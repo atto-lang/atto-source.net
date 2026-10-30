@@ -53,6 +53,17 @@ static void InvalidSend(Action action, string why)
             "manifest-verified multi-file package linker",
             "namespace import needs exact manifest ownership");
 
+        // Standalone compilation must also refuse lifecycle hooks; only
+        // checking linked dependency imports is insufficient.
+        File.WriteAllText(main, "fnc init()->int { return 9; } fnc main()->int { return 1; }");
+        RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
+            "once-only reachable initialization lowering",
+            "standalone private init cannot be compiled as an ordinary callable");
+        File.WriteAllText(main, "pub fnc init()->int { return 9; } fnc main()->int { return 1; }");
+        RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
+            "once-only reachable initialization lowering",
+            "standalone public init cannot be compiled as an ordinary callable");
+
         File.WriteAllText(startup, "pub fnc init()->int { return 9; }");
         File.WriteAllText(main,
             "import fnc init from \"./startup.ores\"; fnc main()->int { return init(); }");
