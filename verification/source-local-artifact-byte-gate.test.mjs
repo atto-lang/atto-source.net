@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { linkSync, mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
+import { linkSync, mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { verifyArtifactBytes } from './source-local-artifact-byte-gate.mjs';
@@ -82,3 +82,13 @@ scenario('rejects hardlinked receipt even if its contents match',f=>{
  const path=join(f.roots.windows,'evidence/source-local-windows.json');
  linkSync(path,join(f.tmp,'receipt-hardlink'));
 },/invalid, linked, or replaced artifact file/);
+
+scenario('rejects excessive empty directories before artifact inventory admission',f=>{
+ for(let i=0;i<130;i++) mkdirSync(join(f.roots.linux,'extra-directory-'+i));
+},/too many director(?:ies|y entries)/);
+scenario('rejects symlink in executable ancestor directory',f=>{
+ const original=join(f.roots.linux,'compiler');
+ const moved=join(f.tmp,'moved-compiler');
+ renameSync(original,moved);
+ symlinkSync(moved,original,'dir');
+},/symlink/);

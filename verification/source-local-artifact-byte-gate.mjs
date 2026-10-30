@@ -1,9 +1,9 @@
 // Verify byte-level content of independently downloaded and extracted GitHub
 // Actions artifacts. This is a local consistency check, NOT a release approval.
 import { createHash } from 'node:crypto';
-import { closeSync, fstatSync, lstatSync, openSync, readFileSync, readdirSync } from 'node:fs';
+import { closeSync, fstatSync, lstatSync, openSync, opendirSync, readFileSync } from 'node:fs';
 import { open } from 'node:fs/promises';
-import { join, relative, resolve, sep } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import { verifySourceLocalBundle } from './source-local-receipt-gate.mjs';
@@ -26,27 +26,53 @@ const receipts = Object.freeze({
 const hex64 = /^[0-9a-f]{64}$/;
 const limitBytes = 512 * 1024 * 1024; // per native binary; fail closed on oversized inputs
 const maxReceiptBytes = 64 * 1024; // prevent excessive untrusted receipt processing
+const maxArtifactEntries = 128;
+const maxArtifactDirectories = 64;
 
 function enumerate(root) {
   const base = resolve(root);
   if (!lstatSync(base).isDirectory()) throw Error('artifact root is not a real directory');
   const found = new Set();
-  const walk = (dir) => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const full = join(dir, entry.name);
-      const key = relative(base, full).split(sep).join('/');
-      if (entry.isSymbolicLink()) throw Error('artifact contains symlink: ' + key);
-      if (entry.isDirectory()) {
-        if (key.split('/').length > 8) throw Error('artifact nesting too deep');
-        walk(full);
-      } else if (entry.isFile()) {
-        if (found.size >= 32) throw Error('artifact has too many files');
-        found.add(key);
-      } else throw Error('nonregular artifact entry: ' + key);
+  let entriesVisited = 0, directoriesVisited = 0;
+  const walk = dir => {
+    const listing = opendirSync(dir);
+    try {
+      let entry;
+      while ((entry = listing.readSync()) !== null) {
+        if (++entriesVisited > maxArtifactEntries)
+          throw Error('artifact has too many directory entries');
+        const full = join(dir, entry.name);
+        const key = relative(base, full).split(sep).join('/');
+        if (entry.isSymbolicLink()) throw Error('artifact contains symlink: ' + key);
+        if (entry.isDirectory()) {
+          if (++directoriesVisited > maxArtifactDirectories)
+            throw Error('artifact has too many directories');
+          if (key.split('/').length > 8) throw Error('artifact nesting too deep');
+          walk(full);
+        } else if (entry.isFile()) {
+          if (found.size >= 32) throw Error('artifact has too many files');
+          found.add(key);
+        } else throw Error('nonregular artifact entry: ' + key);
+      }
+    } finally {
+      listing.closeSync();
     }
   };
   walk(base);
   return { base, found };
+}
+function assertArtifactParents(base, path) {
+  const rel = relative(base, resolve(path));
+  if (!rel || isAbsolute(rel) || rel === '..' || rel.startsWith('..' + sep))
+    throw Error('artifact path escaped extraction root');
+  const parts = rel.split(sep);
+  let parent = base;
+  if (!lstatSync(base).isDirectory()) throw Error('artifact root replaced');
+  for (const part of parts.slice(0, -1)) {
+    parent = join(parent, part);
+    if (!lstatSync(parent).isDirectory())
+      throw Error('artifact has non-directory or symlink ancestor: ' + parent);
+  }
 }
 function exactFiles(found, expected) {
   // upload-artifact commonly strips the leading shared artifacts/ directory.
@@ -69,7 +95,8 @@ function assertStableFile(file, before, opened, maxBytes, minBytes) {
       opened.size < minBytes || opened.size > maxBytes)
     throw Error('invalid, linked, or replaced artifact file: ' + file);
 }
-async function digestAndHeader(file) {
+async function digestAndHeader(file, base) {
+  assertArtifactParents(base, file);
   const before = lstatSync(file);
   const handle = await open(file, 'r');
   try {
@@ -87,6 +114,7 @@ async function digestAndHeader(file) {
     const after = await handle.stat();
     assertStableFile(file, before, after, limitBytes, 64);
     assertStableFile(file, before, lstatSync(file), limitBytes, 64);
+    assertArtifactParents(base, file);
     if (readBytes !== before.size ||
         opened.mtimeMs !== after.mtimeMs || opened.ctimeMs !== after.ctimeMs)
       throw Error('artifact binary changed during read: ' + file);
@@ -198,6 +226,7 @@ export async function verifyArtifactBytes(bundle, roots) {
     const mapPath = exactFiles(found, [...expected, receipts[kind]]);
     const read = path => {
       const receipt = join(base, mapPath(path));
+      assertArtifactParents(base, receipt);
       const before = lstatSync(receipt);
       if (!before.isFile() || before.size < 1 || before.size > maxReceiptBytes)
         throw Error('oversized or invalid artifact receipt');
@@ -209,6 +238,7 @@ export async function verifyArtifactBytes(bundle, roots) {
         const after = fstatSync(fd);
         assertStableFile(receipt, before, after, maxReceiptBytes, 1);
         assertStableFile(receipt, before, lstatSync(receipt), maxReceiptBytes, 1);
+        assertArtifactParents(base, receipt);
         if (bytes.length !== before.size ||
             opened.mtimeMs !== after.mtimeMs || opened.ctimeMs !== after.ctimeMs)
           throw Error('artifact receipt changed during read');
@@ -237,7 +267,7 @@ export async function verifyArtifactBytes(bundle, roots) {
     for (const path of expected) {
       const wanted = hashes.get(path);
       if (!hex64.test(wanted)) throw Error('invalid digest in receipt: ' + path);
-      const {sha256, header} = await digestAndHeader(join(base, mapPath(path)));
+      const {sha256, header} = await digestAndHeader(join(base, mapPath(path)), base);
       assertFormat(header, kind, path);
       if (sha256 !== wanted) throw Error('native binary SHA-256 mismatch: ' + path);
     }
