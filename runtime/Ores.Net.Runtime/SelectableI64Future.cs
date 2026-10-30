@@ -110,7 +110,7 @@ public sealed class SelectableI64Future
                     "Future select waiter identity exhausted");
 
             var id = _nextWaiterId++;
-            subscription = new Subscription(this, index, id);
+            subscription = new Subscription(this, index, id, callbackContext);
             var waiter = _waiters[index];
             waiter.Id = id;
             waiter.Active = true;
@@ -172,7 +172,6 @@ public sealed class SelectableI64Future
     {
         var callbacks = new Action<Subscription>?[_waiters.Length];
         var subscriptions = new Subscription?[_waiters.Length];
-        var callbackContexts = new OresExecutionCallbackContext?[_waiters.Length];
         var count = 0;
 
         lock (_gate)
@@ -184,8 +183,8 @@ public sealed class SelectableI64Future
                 var waiter = _waiters[i];
                 if (!waiter.Active || waiter.Notify is null) continue;
                 callbacks[count] = waiter.Notify;
-                subscriptions[count] = new Subscription(this, i, waiter.Id);
-                callbackContexts[count] = waiter.CallbackContext;
+                subscriptions[count] = new Subscription(
+                    this, i, waiter.Id, waiter.CallbackContext);
                 count++;
             }
 
@@ -200,9 +199,10 @@ public sealed class SelectableI64Future
             try
             {
                 int index = i;
+                Subscription subscription = subscriptions[index]!;
                 OresExecutionContexts.RunCallback(
-                    callbackContexts[index],
-                    () => callbacks[index]!(subscriptions[index]!));
+                    subscription.CallbackContext,
+                    () => callbacks[index]!(subscription));
             }
             catch (Exception notificationError)
             {
@@ -254,16 +254,19 @@ public sealed class SelectableI64Future
         internal Subscription(
             SelectableI64Future owner,
             int index,
-            ulong id)
+            ulong id,
+            OresExecutionCallbackContext? callbackContext = null)
         {
             _owner = owner;
             _index = index;
             _id = id;
+            CallbackContext = callbackContext;
         }
 
         internal SelectableI64Future Owner => _owner;
         internal int Index => _index;
         internal ulong Id => _id;
+        internal OresExecutionCallbackContext? CallbackContext { get; }
 
         public bool Active
         {
