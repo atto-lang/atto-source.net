@@ -71,8 +71,11 @@ public static class ManagedSourceEmitter
                      op.Left is int absOperand && !op.Right.HasValue &&
                      absOperand >= 0 && absOperand < i)
             {
-                // Optional source emitters preserve the same checked MIN behavior.
-                expr = $"System.Math.Abs(v{absOperand})";
+                // Keep the generated source tied to OresIR semantics,
+                // not to a host Math library contract.
+                expr = cs
+                    ? $"(v{absOperand} < 0L ? checked(0L - v{absOperand}) : v{absOperand})"
+                    : $"(if v{absOperand} < 0L then 0L - v{absOperand} else v{absOperand})";
             }
             else if (op.Opcode is IrOpcode.CheckedAdd or IrOpcode.CheckedSubtract or
                      IrOpcode.CheckedMultiply or IrOpcode.CheckedDivide or
