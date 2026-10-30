@@ -77,7 +77,28 @@ internal static class VmIsolateHostTests
         if (!turnSnapshot.Active || turnSnapshot.Suspended ||
             turnSnapshot.Generation != turn.Generation)
             throw new Exception("actor logical turn admission snapshot mismatch");
+        var writeLoan = host.BeginActorStateLoan(a, actorA, turn, writable: true);
+        host.ValidateActorStateLoan(a, actorA, turn, writeLoan, requireWrite: true);
+        var readLoan = host.BeginActorStateLoan(a, actorA, turn);
+        host.ValidateActorStateLoan(a, actorA, turn, readLoan);
+        ExpectFailure(() => host.ValidateActorStateLoan(a, actorA, turn, writeLoan),
+            "outer loan must be fenced while nested state scope is active");
+        ExpectFailure(() => host.ValidateActorStateLoan(a, actorA, turn, readLoan, requireWrite: true),
+            "read-only loan must not admit state mutation");
+        ExpectFailure(() => host.EndActorStateLoan(a, actorA, turn, writeLoan),
+            "nested scopes must unwind in LIFO order");
+        ExpectFailure(() => host.SuspendActorTurn(a, actorA, turn),
+            "suspension with live nested state loan");
+        ExpectFailure(() => host.CompleteActorTurn(a, actorA, turn),
+            "completion with live state loan");
+        host.EndActorStateLoan(a, actorA, turn, readLoan);
+        host.ValidateActorStateLoan(a, actorA, turn, writeLoan, requireWrite: true);
+        host.EndActorStateLoan(a, actorA, turn, writeLoan);
+        ExpectFailure(() => host.ValidateActorStateLoan(a, actorA, turn, writeLoan),
+            "retired state loan replay");
         host.SuspendActorTurn(a, actorA, turn);
+        ExpectFailure(() => host.BeginActorStateLoan(a, actorA, turn),
+            "suspended actor turn cannot grant state loans");
         turnSnapshot = host.ActorTurnSnapshot(a, actorA);
         if (!turnSnapshot.Active || !turnSnapshot.Suspended)
             throw new Exception("suspended actor logical turn lost ownership");
@@ -88,14 +109,25 @@ internal static class VmIsolateHostTests
         ExpectFailure(() => host.RetireActor(a, actorA),
             "actor retired with suspended logical turn");
         host.ResumeActorTurn(a, actorA, turn);
+        var resumedLoan = host.BeginActorStateLoan(a, actorA, turn);
+        if (resumedLoan.Generation == writeLoan.Generation)
+            throw new Exception("resumed actor state loan generation replay");
+        host.EndActorStateLoan(a, actorA, turn, resumedLoan);
         host.CompleteActorTurn(a, actorA, turn);
         ExpectFailure(() => host.ResumeActorTurn(a, actorA, turn),
             "completed logical turn replay");
         var nextTurn = host.BeginActorTurn(a, actorA);
         if (nextTurn.Generation == turn.Generation)
             throw new Exception("actor logical turn generation replay");
-        host.SuspendActorTurn(a, actorA, nextTurn);
+        var cancelParent = host.BeginActorStateLoan(a, actorA, nextTurn, writable: true);
+        var cancelChild = host.BeginActorStateLoan(a, actorA, nextTurn);
         host.CancelActorTurn(a, actorA, nextTurn);
+        ExpectFailure(() => host.ValidateActorStateLoan(a, actorA, nextTurn, cancelParent),
+            "cancelled parent loan survived");
+        ExpectFailure(() => host.ValidateActorStateLoan(a, actorA, nextTurn, cancelChild),
+            "cancelled child loan survived");
+        ExpectFailure(() => host.EndActorStateLoan(a, actorA, nextTurn, cancelChild),
+            "cancelled state-loan scope replay");
         if (host.ActorTurnSnapshot(a, actorA).Active)
             throw new Exception("cancelled actor logical turn remained active");
         ExpectFailure(() => host.ResumeActorTurn(a, actorA, nextTurn),
@@ -105,6 +137,10 @@ internal static class VmIsolateHostTests
         ExpectFailure(() => host.CancelActorTurn(a, actorA, nextTurn),
             "cancelled logical turn cancelled twice");
         var postCancelTurn = host.BeginActorTurn(a, actorA);
+        var postCancelLoan = host.BeginActorStateLoan(a, actorA, postCancelTurn);
+        ExpectFailure(() => host.ValidateActorStateLoan(a, actorA, postCancelTurn, cancelChild),
+            "cancelled loan crossed actor turn generations");
+        host.EndActorStateLoan(a, actorA, postCancelTurn, postCancelLoan);
         if (postCancelTurn.Generation == nextTurn.Generation)
             throw new Exception("cancelled actor logical turn generation replay");
         host.CompleteActorTurn(a, actorA, postCancelTurn);
