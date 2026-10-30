@@ -27,6 +27,7 @@ static class StrictSigned64ArithmeticSelfTest
     public static void Run()
     {
         CheckMathUnaryPrecisionFixture();
+        CheckBigIntExactFixture();
         CheckPortableContractFixture();
         CheckExactFloatFixture();
         CheckExactFloatOracleBoundaries();
@@ -185,6 +186,59 @@ static class StrictSigned64ArithmeticSelfTest
                 NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture);
             Require(BitConverter.DoubleToUInt64Bits(actual) == expectedBits,
                 "binary64 unary bits mismatch " + id);
+        }
+    }
+
+    private static void CheckBigIntExactFixture()
+    {
+        string path = Path.Combine(AppContext.BaseDirectory, "bigint-exact-v1.json");
+        byte[] bytes = File.ReadAllBytes(path);
+        byte[] header = Encoding.ASCII.GetBytes("blob " + bytes.Length + "\0");
+        byte[] gitObject = new byte[header.Length + bytes.Length];
+        Buffer.BlockCopy(header, 0, gitObject, 0, header.Length);
+        Buffer.BlockCopy(bytes, 0, gitObject, header.Length, bytes.Length);
+        string blob = Convert.ToHexString(SHA1.HashData(gitObject)).ToLowerInvariant();
+        Require(blob == "b49c7a7d9395f7298e5534c4a6e5b90d4a2a518c",
+            "exact BigInt contract blob identity");
+
+        using var document = JsonDocument.Parse(bytes);
+        JsonElement root = document.RootElement;
+        Require(root.GetProperty("contract").GetString() == "oreslang.bigint-exact.v1",
+            "exact BigInt contract identity");
+
+        foreach (JsonElement item in root.GetProperty("division_cases").EnumerateArray())
+        {
+            string id = item.GetProperty("id").GetString()!;
+            BigInteger a = BigInteger.Parse(item.GetProperty("left").GetString()!,
+                CultureInfo.InvariantCulture);
+            BigInteger b = BigInteger.Parse(item.GetProperty("right").GetString()!,
+                CultureInfo.InvariantCulture);
+            if (item.TryGetProperty("error", out JsonElement error))
+            {
+                Require(error.GetString() == "DIVISOR_ZERO" && b.IsZero,
+                    "BigInt divisor-zero reference " + id);
+                continue;
+            }
+            BigInteger q = BigInteger.DivRem(a, b, out BigInteger r);
+            Require(q.ToString(CultureInfo.InvariantCulture) ==
+                item.GetProperty("quot").GetString(), "BigInt quotient " + id);
+            Require(r.ToString(CultureInfo.InvariantCulture) ==
+                item.GetProperty("rem").GetString(), "BigInt remainder " + id);
+            Require(q * b + r == a, "BigInt div-rem identity " + id);
+        }
+
+        foreach (JsonElement item in root.GetProperty("conversion_cases").EnumerateArray())
+        {
+            string id = item.GetProperty("id").GetString()!;
+            string operation = item.GetProperty("operation").GetString()!;
+            BigInteger value = BigInteger.Parse(item.GetProperty("operand").GetString()!,
+                CultureInfo.InvariantCulture);
+            if (operation == "to_i64_checked")
+            {
+                bool overflow = value < long.MinValue || value > long.MaxValue;
+                Require(overflow == item.TryGetProperty("error", out _),
+                    "BigInt i64 conversion " + id);
+            }
         }
     }
 
