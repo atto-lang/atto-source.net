@@ -9,6 +9,20 @@ namespace Ores.Net.Runtime;
 /// </summary>
 public static class StrictSigned64Arithmetic
 {
+    public static long Neg(long value)
+    {
+        if (value == long.MinValue)
+            throw new OverflowException("integer negation overflow");
+        return -value;
+    }
+
+    public static long Abs(long value)
+    {
+        if (value == long.MinValue)
+            throw new OverflowException("integer absolute-value overflow");
+        return value < 0 ? -value : value;
+    }
+
     public static long Rem(long dividend, long divisor)
     {
         if (divisor == 0)
