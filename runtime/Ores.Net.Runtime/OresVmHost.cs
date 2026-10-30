@@ -225,6 +225,22 @@ public sealed class OresVmHost
         }
     }
 
+    /// <summary>
+    /// Cancellation owns the same terminal transition as successful completion:
+    /// it fences the exact active turn, clears actor admission once, and makes
+    /// every later resume/complete/cancel attempt stale.
+    /// </summary>
+    public void CancelActorTurn(
+        IsolateHandle handle, ActorTicket actor, ActorTurnTicket turn)
+    {
+        lock (_gate) {
+            var s = Check(handle); CheckTurn(s, actor, turn);
+            turn.Completed = true;
+            turn.Suspended = false;
+            actor.ActiveTurn = null;
+        }
+    }
+
     public (bool Active, bool Suspended, ulong Generation) ActorTurnSnapshot(
         IsolateHandle handle, ActorTicket actor)
     {
