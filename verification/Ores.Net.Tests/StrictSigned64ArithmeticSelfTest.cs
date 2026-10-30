@@ -27,6 +27,17 @@ static class StrictSigned64ArithmeticSelfTest
         CheckPortableContractFixture();
         CheckExactFloatFixture();
         CheckExactFloatOracleBoundaries();
+        Require(StrictSigned64Arithmetic.Neg(0) == 0, "zero negation");
+        Require(StrictSigned64Arithmetic.Neg(42) == -42, "positive negation");
+        Require(StrictSigned64Arithmetic.Neg(-42) == 42, "negative negation");
+        Require(StrictSigned64Arithmetic.Abs(0) == 0, "zero absolute value");
+        Require(StrictSigned64Arithmetic.Abs(-42) == 42, "negative absolute value");
+        Require(StrictSigned64Arithmetic.Abs(long.MaxValue) == long.MaxValue,
+            "maximum absolute value");
+        Expect<OverflowException>(
+            () => StrictSigned64Arithmetic.Neg(long.MinValue), "minimum negation overflow");
+        Expect<OverflowException>(
+            () => StrictSigned64Arithmetic.Abs(long.MinValue), "minimum absolute overflow");
         Require(StrictSigned64Arithmetic.Rem(-9, 4) == -1, "negative remainder");
         Require(StrictSigned64Arithmetic.Mod(-9, 4) == 3, "positive modulus");
         Require(StrictSigned64Arithmetic.Mod(-9, -4) == 3, "negative divisor modulus");
@@ -63,6 +74,20 @@ static class StrictSigned64ArithmeticSelfTest
             BigInteger expectedMod = expectedRem < 0
                 ? expectedRem + BigInteger.Abs(new BigInteger(b))
                 : expectedRem;
+            if (a == long.MinValue)
+            {
+                Expect<OverflowException>(() => StrictSigned64Arithmetic.Neg(a),
+                    "random minimum negation");
+                Expect<OverflowException>(() => StrictSigned64Arithmetic.Abs(a),
+                    "random minimum absolute");
+            }
+            else
+            {
+                Require(StrictSigned64Arithmetic.Neg(a) == -a,
+                    "random signed negation #" + i);
+                Require(StrictSigned64Arithmetic.Abs(a) == Math.Abs(a),
+                    "random signed absolute #" + i);
+            }
             Require(StrictSigned64Arithmetic.Rem(a, b) == (long)expectedRem,
                 "random signed remainder #" + i);
             Require(StrictSigned64Arithmetic.Mod(a, b) == (long)expectedMod,
