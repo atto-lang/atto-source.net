@@ -66,7 +66,7 @@ internal static class VmIsolateHostTests
         var actorA = host.RegisterActor(a, 3);
         var actorB = host.RegisterActor(b, 3);
         var refA = actorA.Mailbox.CurrentRef;
-        actorA.Mailbox.Send(refA, new byte[] { 1, 2, 3 });
+        host.SendActor(a, actorA, refA, new byte[] { 1, 2, 3 });
         if (actorA.Mailbox.QueuedMessages != 1)
             throw new Exception("actor mailbox must be real, not a fake ticket");
         var pin = host.PinResource(a, actorA);
@@ -77,13 +77,15 @@ internal static class VmIsolateHostTests
         ExpectFailure(() => host.InvokeGeneratedScalar(a, () => 1),
             "guest admission must close at quiescence");
         ExpectFailure(() => host.PinResource(a, actorA), "quiescent admission");
+        ExpectFailure(() => host.SendActor(a, actorA, refA, new byte[] { 9 }),
+            "quiescent mailbox admission");
         ExpectFailure(() => host.CompleteShutdown(a), "drain outstanding actor");
         host.RetireResource(a, actorA, pin);
         ExpectFailure(() => host.RetireResource(a, actorA, pin), "replay ticket");
         host.RetireActor(a, actorA);
         if (actorA.Mailbox.QueuedMessages != 0)
             throw new Exception("retire must drain pending mailbox-owned copies");
-        ExpectFailure(() => actorA.Mailbox.Send(refA, new byte[] { 4 }), "stale actor ref");
+        ExpectFailure(() => host.SendActor(a, actorA, refA, new byte[] { 4 }), "stale actor ref");
         host.CompleteShutdown(a); host.Destroy(a);
         ExpectFailure(() => host.Snapshot(a), "stale tenant handle");
         var a2 = host.CreateIsolate("tenant-a", maxActors: 1);
