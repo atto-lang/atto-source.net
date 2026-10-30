@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.0.0",
+  "backend": "net",
+  "contract": "oreslang.native-math-unary-precision.v1",
+  "fixture_git_blob_sha": "3249d837ae6bcf6e2c2c23cac872becf92d0c8e0",
+  "capabilities": {
+    "math_i64_unary": "implemented_unverified",
+    "binary64_unary": "unsupported_explicit",
+    "bigint_unary": "unsupported_explicit",
+    "decimal_unary": "unsupported_explicit"
+  },
+  "evidence": {
+    "math_i64_unary": "StrictSigned64Arithmetic.Abs/Neg are checked runtime primitives with long.MinValue overflow; typed guest binding and Native AOT execution are not yet proven.",
+    "binary64_unary": "No typed guest binary64 Math unary lowering in this slice.",
+    "bigint_unary": "System.Numerics.BigInteger is only an oracle in verification, not an Oreslang guest numeric representation.",
+    "decimal_unary": "No guest Decimal representation or lowering in this slice."
+  }
+}
