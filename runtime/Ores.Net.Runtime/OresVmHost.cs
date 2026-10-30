@@ -5,7 +5,7 @@ namespace Ores.Net.Runtime;
 /// Logical tenant separation only. This is NOT a CLR AppDomain, collectible
 /// AssemblyLoadContext, heap security sandbox, or process isolation.
 /// </summary>
-public sealed class OresVmHost
+public sealed partial class OresVmHost
 {
     public enum Phase { Created, Running, Quiescing, Stopped }
 
@@ -35,6 +35,8 @@ public sealed class OresVmHost
         internal ActorMailbox Mailbox { get; }
         internal ulong NextTurnGeneration { get; set; } = 1;
         internal ActorTurnTicket? ActiveTurn { get; set; }
+        // Compiler-owned, typed actor-local cells. Installed once before any turn.
+        internal ActorStateCell[]? StateCells { get; set; }
     }
 
     public sealed class ActorTurnTicket
