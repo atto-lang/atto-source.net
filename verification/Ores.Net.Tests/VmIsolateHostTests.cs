@@ -69,6 +69,35 @@ internal static class VmIsolateHostTests
         host.SendActor(a, actorA, refA, new byte[] { 1, 2, 3 });
         if (actorA.Mailbox.QueuedMessages != 1)
             throw new Exception("actor mailbox must be real, not a fake ticket");
+
+        // Suspension releases no logical actor admission. The exact same turn
+        // must resume; later user turns remain blocked until completion.
+        var turn = host.BeginActorTurn(a, actorA);
+        var turnSnapshot = host.ActorTurnSnapshot(a, actorA);
+        if (!turnSnapshot.Active || turnSnapshot.Suspended ||
+            turnSnapshot.Generation != turn.Generation)
+            throw new Exception("actor logical turn admission snapshot mismatch");
+        host.SuspendActorTurn(a, actorA, turn);
+        turnSnapshot = host.ActorTurnSnapshot(a, actorA);
+        if (!turnSnapshot.Active || !turnSnapshot.Suspended)
+            throw new Exception("suspended actor logical turn lost ownership");
+        ExpectFailure(() => host.BeginActorTurn(a, actorA),
+            "later user turn entered while predecessor suspended");
+        ExpectFailure(() => host.ResumeActorTurn(b, actorB, turn),
+            "foreign actor resumed logical turn");
+        ExpectFailure(() => host.RetireActor(a, actorA),
+            "actor retired with suspended logical turn");
+        host.ResumeActorTurn(a, actorA, turn);
+        host.CompleteActorTurn(a, actorA, turn);
+        ExpectFailure(() => host.ResumeActorTurn(a, actorA, turn),
+            "completed logical turn replay");
+        var nextTurn = host.BeginActorTurn(a, actorA);
+        if (nextTurn.Generation == turn.Generation)
+            throw new Exception("actor logical turn generation replay");
+        host.CompleteActorTurn(a, actorA, nextTurn);
+        if (host.ActorTurnSnapshot(a, actorA).Active)
+            throw new Exception("completed actor logical turn remained active");
+
         var pin = host.PinResource(a, actorA);
         ExpectFailure(() => host.PinResource(a, actorA), "pin quota");
         ExpectFailure(() => host.RetireResource(b, actorB, pin), "foreign tenant pin");
