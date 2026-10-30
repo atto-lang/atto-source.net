@@ -94,6 +94,18 @@ public static class OresExecutionContexts
     [ThreadStatic]
     private static OresExecutionCallbackContext? s_callback;
 
+    [ThreadStatic]
+    private static ulong s_activeScopeSequence;
+
+    [ThreadStatic]
+    private static ulong s_activeScopeTop;
+
+    [ThreadStatic]
+    private static ulong s_callbackScopeSequence;
+
+    [ThreadStatic]
+    private static ulong s_callbackScopeTop;
+
     public static OresExecutionContext? Active => s_active;
     public static OresExecutionCallbackContext? Callback => s_callback;
 
@@ -146,19 +158,37 @@ public static class OresExecutionContexts
     public ref struct ActiveScope
     {
         private readonly OresExecutionContext? _previous;
+        private readonly int _ownerThreadId;
+        private readonly ulong _token;
+        private readonly ulong _previousTop;
         private bool _disposed;
 
         internal ActiveScope(OresExecutionContext current)
         {
+            if (s_activeScopeSequence == ulong.MaxValue)
+                throw new InvalidOperationException("active execution scope token exhausted");
+
             _previous = s_active;
+            _ownerThreadId = Environment.CurrentManagedThreadId;
+            _previousTop = s_activeScopeTop;
+            _token = ++s_activeScopeSequence;
             _disposed = false;
             s_active = current;
+            s_activeScopeTop = _token;
         }
 
         public void Dispose()
         {
             if (_disposed) return;
+            if (Environment.CurrentManagedThreadId != _ownerThreadId)
+                throw new InvalidOperationException(
+                    "active execution scope must close on its installing carrier");
+            if (s_activeScopeTop != _token)
+                throw new InvalidOperationException(
+                    "active execution scopes must close in strict LIFO order");
+
             s_active = _previous;
+            s_activeScopeTop = _previousTop;
             _disposed = true;
         }
     }
@@ -166,20 +196,38 @@ public static class OresExecutionContexts
     public ref struct CallbackScope
     {
         private readonly OresExecutionCallbackContext? _previous;
+        private readonly int _ownerThreadId;
+        private readonly ulong _token;
+        private readonly ulong _previousTop;
         private bool _disposed;
 
         internal CallbackScope(OresExecutionCallbackContext current)
         {
             ValidateBoundary(current.Boundary);
+            if (s_callbackScopeSequence == ulong.MaxValue)
+                throw new InvalidOperationException("callback scope token exhausted");
+
             _previous = s_callback;
+            _ownerThreadId = Environment.CurrentManagedThreadId;
+            _previousTop = s_callbackScopeTop;
+            _token = ++s_callbackScopeSequence;
             _disposed = false;
             s_callback = current;
+            s_callbackScopeTop = _token;
         }
 
         public void Dispose()
         {
             if (_disposed) return;
+            if (Environment.CurrentManagedThreadId != _ownerThreadId)
+                throw new InvalidOperationException(
+                    "callback scope must close on its installing carrier");
+            if (s_callbackScopeTop != _token)
+                throw new InvalidOperationException(
+                    "callback scopes must close in strict LIFO order");
+
             s_callback = _previous;
+            s_callbackScopeTop = _previousTop;
             _disposed = true;
         }
     }
