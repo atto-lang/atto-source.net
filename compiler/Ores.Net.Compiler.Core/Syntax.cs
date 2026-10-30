@@ -45,6 +45,27 @@ public static class OresParser
                 throw new FormatException("Token count exceeds bootstrap limit");
             if (token.Text.Length == 0) break;
         }
+        // Nested wrappers are semantically distinct source types. The scalar
+        // bootstrap does not lower them yet, but it must reject them for that
+        // reason rather than recursively canonicalizing/adopting host Tasks or
+        // Options. Ordinary await/unwrap remove one layer; flatten is explicit.
+        for (int i = 0; i + 3 < tokens.Count; i++)
+        {
+            if (tokens[i].Text == "Future" &&
+                tokens[i + 1].Text == "<" &&
+                tokens[i + 2].Text == "Future" &&
+                tokens[i + 3].Text == "<")
+                throw new FormatException(
+                    $"Nested Future remains nested; implicit Future flatten is forbidden; " +
+                    $".NET source Future continuation lowering is unavailable at offset {tokens[i].Offset}");
+            if (tokens[i].Text == "Option" &&
+                tokens[i + 1].Text == "<" &&
+                tokens[i + 2].Text == "Option" &&
+                tokens[i + 3].Text == "<")
+                throw new FormatException(
+                    $"Nested Option remains nested; implicit Option flatten is forbidden; " +
+                    $".NET source Option lowering is unavailable at offset {tokens[i].Offset}");
+        }
         for (int i = 0; i + 1 < tokens.Count; i++)
         {
             if (tokens[i].Text == "select" &&
