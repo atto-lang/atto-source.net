@@ -146,3 +146,37 @@ A source compiler must still generate and type-check actual compiler-owned
 state storage, reject escaped state capabilities, enforce effect rows,
 and connect resumption to generation-fenced scheduler continuations.
 Exact-head Windows/Linux NativeAOT builds and adversarial tests remain required.
+
+## Typed actor-local scalar cells (2026-10-30)
+
+The host now supports a **bounded per-actor scalar state layout**, installed
+once via `ConfigureActorState` before the first actor turn. The permitted
+field kinds are `Int64` and `Boolean`; each instance receives separate
+typed defaults and at most 16 fields. Empty/oversized schemas, unknown kinds,
+mismatched literal kinds, duplicate installations and cross-isolate actor
+tickets are rejected. This host API takes compiler-provided field indices,
+**not** guest-controlled mutable references or dynamic key lookup.
+
+`ReadActorStateInt64`, `WriteActorStateInt64`,
+`AddActorStateInt64`, `ReadActorStateBoolean` and
+`WriteActorStateBoolean` validate the exact current actor-turn state loan
+and access the underlying cell **inside one host lock**. The checked
+`AddActorStateInt64` commits only after overflow checking succeeds.
+Read-only or retired loans cannot write; nested loans fence outer tokens;
+suspended/cancelled/completed turns cannot access cells. Actor retirement
+releases its private cells and a new isolate incarnation starts fresh.
+
+`VmActorStateCellsTests.Run()` exercises type/index rejection, defaults,
+per-actor/per-tenant isolation, checked increments and overflow rollback,
+nested scopes, suspension, cancellation, and restart. It is wired through
+`VmIsolateHostTests.Run()` in the existing verification program.
+
+**Scope and release gate:** this is a trusted **host storage primitive**
+for future generated code, not yet an executable source-level
+`self.handle_state(critical |s| -> ...)` lowering. An actual compiler must
+bind immutable source field names and types to layout indices, prove effect
+rows and nonescaping state borrows, and emit checked accesses through this
+API while maintaining scheduler-owned logical single-flight execution.
+The primitive's lock does not establish guest scheduler non-reentrancy by
+itself. No NativeAOT success claim is valid until the exact PR head compiles
+and runs on real Linux and Windows runners with nonzero executed steps.
