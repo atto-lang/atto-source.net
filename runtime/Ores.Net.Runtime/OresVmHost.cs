@@ -46,6 +46,23 @@ public sealed class OresVmHost
         public ulong Generation { get; }
         internal bool Suspended { get; set; }
         internal bool Completed { get; set; }
+        internal ulong NextStateLoanGeneration { get; set; } = 1;
+        internal int StateLoanDepth { get; set; }
+        internal ActorStateLoan? ActiveStateLoan { get; set; }
+    }
+
+    /// <summary>Ephemeral host-owned actor state access, not a reference to state storage.</summary>
+    public sealed class ActorStateLoan
+    {
+        internal ActorStateLoan(ActorTurnTicket turn, ulong generation,
+            ActorStateLoan? parent, bool writable) {
+            Turn = turn; Generation = generation; Parent = parent; Writable = writable;
+        }
+        internal ActorTurnTicket Turn { get; }
+        public ulong Generation { get; }
+        internal ActorStateLoan? Parent { get; }
+        public bool Writable { get; }
+        internal bool Released { get; set; }
     }
 
     public sealed class ResourcePin
@@ -192,6 +209,67 @@ public sealed class OresVmHost
         }
     }
 
+    /// <summary>
+    /// A state loan can only be minted for an active unsuspended actor turn.
+    /// Nested scopes fence the parent loan until the child is returned.
+    /// </summary>
+    public ActorStateLoan BeginActorStateLoan(
+        IsolateHandle handle, ActorTicket actor, ActorTurnTicket turn,
+        bool writable = false)
+    {
+        lock (_gate) {
+            var s = Check(handle); CheckTurn(s, actor, turn);
+            if (turn.Suspended)
+                throw new InvalidOperationException("actor state access while suspended");
+            if (turn.StateLoanDepth >= 32)
+                throw new InvalidOperationException("bounded actor state loan nesting exceeded");
+            if (turn.NextStateLoanGeneration == ulong.MaxValue)
+                throw new InvalidOperationException("actor state loan generation exhausted");
+            var loan = new ActorStateLoan(turn, turn.NextStateLoanGeneration++,
+                turn.ActiveStateLoan, writable);
+            turn.ActiveStateLoan = loan;
+            ++turn.StateLoanDepth;
+            return loan;
+        }
+    }
+
+    private static void CheckStateLoan(
+        TenantState state, ActorTicket actor, ActorTurnTicket turn,
+        ActorStateLoan loan, bool requireWrite)
+    {
+        CheckTurn(state, actor, turn);
+        if (turn.Suspended || loan is null || loan.Released ||
+            !ReferenceEquals(loan.Turn, turn) ||
+            !ReferenceEquals(turn.ActiveStateLoan, loan))
+            throw new InvalidOperationException("stale, nested-fenced or foreign actor state loan");
+        if (requireWrite && !loan.Writable)
+            throw new InvalidOperationException("read-only actor state loan cannot write");
+    }
+
+    /// <summary>Generated state operations must enforce this validation.</summary>
+    public void ValidateActorStateLoan(
+        IsolateHandle handle, ActorTicket actor, ActorTurnTicket turn,
+        ActorStateLoan loan, bool requireWrite = false)
+    {
+        lock (_gate) {
+            var s = Check(handle);
+            CheckStateLoan(s, actor, turn, loan, requireWrite);
+        }
+    }
+
+    public void EndActorStateLoan(
+        IsolateHandle handle, ActorTicket actor, ActorTurnTicket turn,
+        ActorStateLoan loan)
+    {
+        lock (_gate) {
+            var s = Check(handle);
+            CheckStateLoan(s, actor, turn, loan, false);
+            loan.Released = true;
+            turn.ActiveStateLoan = loan.Parent;
+            --turn.StateLoanDepth;
+        }
+    }
+
     public void SuspendActorTurn(
         IsolateHandle handle, ActorTicket actor, ActorTurnTicket turn)
     {
@@ -199,6 +277,8 @@ public sealed class OresVmHost
             var s = Check(handle); CheckTurn(s, actor, turn);
             if (turn.Suspended)
                 throw new InvalidOperationException("actor logical turn already suspended");
+            if (turn.ActiveStateLoan is not null)
+                throw new InvalidOperationException("state loan must retire before suspension");
             turn.Suspended = true;
         }
     }
@@ -219,6 +299,8 @@ public sealed class OresVmHost
     {
         lock (_gate) {
             var s = Check(handle); CheckTurn(s, actor, turn);
+            if (turn.ActiveStateLoan is not null)
+                throw new InvalidOperationException("state loan must retire before completion");
             turn.Completed = true;
             turn.Suspended = false;
             actor.ActiveTurn = null;
@@ -235,6 +317,12 @@ public sealed class OresVmHost
     {
         lock (_gate) {
             var s = Check(handle); CheckTurn(s, actor, turn);
+            // Terminal cancellation revokes all bounded nested scopes.
+            while (turn.ActiveStateLoan is { } loan) {
+                loan.Released = true;
+                turn.ActiveStateLoan = loan.Parent;
+            }
+            turn.StateLoanDepth = 0;
             turn.Completed = true;
             turn.Suspended = false;
             actor.ActiveTurn = null;
