@@ -75,7 +75,7 @@ public readonly struct OresExecutionCallbackContext
         Continuation = source.Continuation;
         Boundary = boundary;
 
-        if (source.TraceCount == 0 || source.TraceCount > MaxTraceBoundaries)
+        if (!source.HasValidTraceHistory())
             throw new ArgumentOutOfRangeException(nameof(source));
 
         if (source.TraceCount < MaxTraceBoundaries)
@@ -114,6 +114,23 @@ public readonly struct OresExecutionCallbackContext
         return (OresCallbackBoundary)(
             (TraceBoundariesPacked >> (index * 4)) & 0xFUL);
     }
+
+    internal bool HasValidTraceHistory()
+    {
+        if (RuntimeDomain == 0 || Execution == 0 || Dispatch == 0 || Generation == 0 ||
+            !BoundaryValid(Boundary) ||
+            TraceCount == 0 || TraceCount > MaxTraceBoundaries ||
+            TraceBoundaryAt(TraceCount - 1) != Boundary)
+            return false;
+
+        for (int i = 0; i < TraceCount; i++)
+            if (!BoundaryValid(TraceBoundaryAt(i))) return false;
+        return true;
+    }
+
+    private static bool BoundaryValid(OresCallbackBoundary boundary) =>
+        boundary >= OresCallbackBoundary.HostCallback &&
+        boundary <= OresCallbackBoundary.Spawn;
 }
 
 /// <summary>
@@ -240,6 +257,8 @@ public static class OresExecutionContexts
         internal CallbackScope(OresExecutionCallbackContext current)
         {
             ValidateBoundary(current.Boundary);
+            if (!current.HasValidTraceHistory())
+                throw new ArgumentOutOfRangeException(nameof(current));
             if (s_callbackScopeSequence == ulong.MaxValue)
                 throw new InvalidOperationException("callback scope token exhausted");
 
