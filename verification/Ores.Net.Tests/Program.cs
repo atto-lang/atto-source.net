@@ -23,6 +23,9 @@ static void RejectDiagnostic(Action action, string diagnostic, string why)
     throw new Exception("Expected parser rejection with diagnostic '" + diagnostic + "': " + why);
 }
 
+static string PortableNumericFixture(string name) =>
+    File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "numeric-v1", name));
+
 static void InvalidSend(Action action, string why)
 {
     try { action(); }
@@ -381,6 +384,10 @@ Require(absIr.Instructions[^1].Opcode == IrOpcode.CheckedAbs &&
     "Math.abs lowers to dedicated checked unary OresIR");
 Require(OresIrReferenceEvaluator.Evaluate(absIr) == 42,
     "Math.abs checked OresIR result");
+var portableMath = OresIrLowering.Lower(OresParser.Parse(
+    PortableNumericFixture("math-i64-ok.ores")));
+Require(OresIrReferenceEvaluator.Evaluate(portableMath) == 84,
+    "portable byte-identical Math guest evaluates to 84 in verified OresIR");
 Require(OresIrReferenceEvaluator.Evaluate(OresIrLowering.Lower(OresParser.Parse(
     "fnc main():int{return Math.neg(-42);}"))) == 42,
     "Math.neg checked OresIR result");
@@ -416,6 +423,8 @@ RejectIrOverflow("fnc main():int{return 9223372036854775807 * 2;}", false);
 RejectIrOverflow("fnc main():int{return -(-9223372036854775808);}", false);
 RejectIrOverflow("fnc main():int{return Math.neg(-9223372036854775808);}", false);
 RejectIrOverflow("fnc main():int{return Math.abs(-9223372036854775808);}", false);
+RejectIrOverflow(PortableNumericFixture("math-i64-abs-min.ores"), false);
+RejectIrOverflow(PortableNumericFixture("math-i64-neg-min.ores"), false);
 
 // check and compile share exactly the same verifier instruction limit;
 // oversized typed SSA cannot pass check and fail only during CIL emission.
