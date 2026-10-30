@@ -11,7 +11,10 @@
     "bigint_div_rem": "unsupported_explicit",
     "bigint_to_i64_checked": "unsupported_explicit",
     "bigint_to_f64_exact": "unsupported_explicit",
-    "bigint_to_f64_nearest": "unsupported_explicit"
+    "bigint_to_f64_nearest": "unsupported_explicit",
+    "decimal_round_context": "unsupported_explicit",
+    "decimal_to_f64_exact": "unsupported_explicit",
+    "decimal_to_f64_nearest": "unsupported_explicit"
   },
   "evidence": {
     "math_i64_unary": "StrictSigned64Arithmetic.Abs/Neg are checked runtime primitives with long.MinValue overflow; typed guest binding and Native AOT execution are not yet proven.",
@@ -21,7 +24,11 @@
     "bigint_div_rem": "Shared exact BigInt contract pinned; no guest arbitrary-precision representation/lowering in this slice.",
     "bigint_to_i64_checked": "No guest BigInt checked narrowing path in this slice.",
     "bigint_to_f64_exact": "No guest BigInt exact binary64 conversion path in this slice.",
-    "bigint_to_f64_nearest": "No guest BigInt explicit rounded binary64 conversion path in this slice."
+    "bigint_to_f64_nearest": "No guest BigInt explicit rounded binary64 conversion path in this slice.",
+    "decimal_round_context": "Shared Decimal precision contract pinned; no guest Decimal implementation for this operation in this slice.",
+    "decimal_to_f64_exact": "Shared Decimal precision contract pinned; no guest Decimal implementation for this operation in this slice.",
+    "decimal_to_f64_nearest": "Shared Decimal precision contract pinned; no guest Decimal implementation for this operation in this slice."
   },
-  "bigint_exact_fixture_git_blob_sha": "b49c7a7d9395f7298e5534c4a6e5b90d4a2a518c"
+  "bigint_exact_fixture_git_blob_sha": "b49c7a7d9395f7298e5534c4a6e5b90d4a2a518c",
+  "decimal_precision_fixture_git_blob_sha": "3bbb44277f3816add53da40a1e161e466ab162b1"
 }
