@@ -5,6 +5,7 @@ namespace Ores.Net.Compiler;
 public abstract record Expression;
 public sealed record Literal(long Value) : Expression;
 public sealed record Unary(char Operator, Expression Value) : Expression;
+public sealed record Abs(Expression Value) : Expression;
 public sealed record Binary(char Operator, Expression Left, Expression Right) : Expression;
 
 public static class OresParser
@@ -298,6 +299,20 @@ public static class OresParser
         private Expression ParseUnary(int depth)
         {
             CheckDepth(depth);
+            if (Current.Text == "Math")
+            {
+                int at = Current.Offset;
+                _index++;
+                Expect(".");
+                string method = Current.Text;
+                if (method is not ("abs" or "neg"))
+                    throw new FormatException($"Unsupported Math intrinsic at offset {Current.Offset}");
+                _index++;
+                Expect("(");
+                var argument = ParseAdd(depth + 1);
+                Expect(")");
+                return method == "abs" ? new Abs(argument) : new Unary('-', argument);
+            }
             if (Current.Text == "rt")
             {
                 int at = Current.Offset;
