@@ -45,6 +45,22 @@ RejectDiagnostic(
 Require(OresParser.Parse("fnc main():int{return 1;} // any unknown ?") is Literal,
     "opaque-top and ternary tokens in comments remain lexically invisible");
 
+foreach (var unsupportedNumeric in new[] { "bigint", "decimal", "f32", "f64", "float", "i32", "u64" })
+{
+    RejectDiagnostic(
+        () => OresParser.Parse("fnc main():" + unsupportedNumeric + "{return 1;}"),
+        "Expected 'int'",
+        "unsupported numeric type must fail before OresIR/CIL publication: " + unsupportedNumeric);
+}
+RejectDiagnostic(
+    () => OresParser.Parse("fnc main():int{return Math.abs(1,2);}"),
+    "Expected ')'",
+    "Math.abs arity must fail in the source parser");
+RejectDiagnostic(
+    () => OresParser.Parse("fnc main():int{return Math.neg();}"),
+    "Expected integer",
+    "Math.neg missing operand must fail in the source parser");
+
 // Shipping scalar parser has no class-method CIL/Native AOT lowering.
  // It must reject the exact Java receiver-parity sources before emission,
  // independently of the experimental structured parser's diagnostic gate.
