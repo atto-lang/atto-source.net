@@ -514,11 +514,11 @@ try
             mathOps.Contains(Code.Sub_Ovf),
         "Math.abs CIL branches on sign and traps MIN via sub.ovf");
     Require(entry.Body.MaxStackSize is >= 2 and <= 256, "CIL stack bounds");
-    // The original direct AST path remains a separate reference implementation
-    // until real .NET builds confirm the new production OresIR path.
+    // The AST convenience overload is deliberately routed through the same
+    // verified OresIR path, so there is no second arithmetic implementation.
     Require(CilReferenceEvaluator.Evaluate(entry) ==
         OresIrReferenceEvaluator.Evaluate(lowered),
-        "legacy AST CIL matches verified OresIR semantics");
+        "AST convenience emission matches verified OresIR semantics");
 
     var irGenerated = Path.Combine(folder, "OresGenerated.ir.dll");
     CilEmitter.EmitLibrary(lowered, irGenerated);
@@ -633,12 +633,12 @@ try
 
 
 
-    // Artificially assembled right-deep trees cannot demand arbitrary CIL stack.
+    // Artificially assembled ASTs cannot bypass the verified SSA/local budget.
     Expression pathological = new Literal(1);
-    for (var i = 0; i < 258; i++)
+    for (var i = 0; i < 8193; i++)
         pathological = new Binary('+', new Literal(1), pathological);
     Reject(() => CilEmitter.EmitLibrary(pathological,
-        Path.Combine(folder, "OresGenerated.pathological.dll")), "CIL stack budget");
+        Path.Combine(folder, "OresGenerated.pathological.dll")), "verified OresIR instruction budget");
 
 }
 finally
