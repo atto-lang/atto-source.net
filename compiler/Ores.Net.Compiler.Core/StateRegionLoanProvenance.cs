@@ -1,11 +1,12 @@
 namespace Ores.Net.Compiler;
 
 /// <summary>
-/// Compiler/conformance provenance for one state-region loan.
+/// Concrete runtime/materialized provenance for one state-region loan.
 ///
-/// This is a value type, not a guest-visible runtime capability. Verified
-/// lowering may erase it. Runtime authority still comes from the scheduler,
-/// actor arena generation and the matching live loan/token.
+/// Compiler IR must use StateRegionLoanRequirement instead of fabricating
+/// scheduler IDs or generations. Trusted lowering/runtime materializes this
+/// value from the live region and authenticated logical execution. This is a
+/// conformance/receipt value, not a guest-visible capability.
 /// </summary>
 public readonly record struct StateRegionLoanProvenance
 {
