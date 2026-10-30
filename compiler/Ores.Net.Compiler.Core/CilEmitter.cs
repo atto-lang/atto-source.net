@@ -55,7 +55,7 @@ public static class CilEmitter
                 metadata.GetOrAddBlob(localsBlob));
 
             var methodCode = new BlobBuilder();
-            var il = new InstructionEncoder(methodCode);
+            var il = new InstructionEncoder(methodCode, new ControlFlowBuilder());
             int maxStack = WriteVerifiedIr(program, il);
             int bodyOffset = bodies.AddMethodBody(il, maxStack: maxStack,
                 localVariablesSignature: localSignature,
@@ -98,6 +98,28 @@ public static class CilEmitter
                         maxStack = 2;
                     }
                     break;
+                case IrOpcode.CheckedAbs:
+                {
+                    // Keep abs in compiler-owned checked CIL instead of calling
+                    // System.Math.Abs as the language implementation. MIN must
+                    // overflow via sub.ovf, while all nonnegative values pass
+                    // through unchanged.
+                    var nonnegative = il.DefineLabel();
+                    var done = il.DefineLabel();
+                    il.LoadLocal(operation.Left!.Value);
+                    il.LoadConstantI8(0);
+                    il.OpCode(ILOpCode.Clt);
+                    il.Branch(ILOpCode.Brfalse, nonnegative);
+                    il.LoadConstantI8(0);
+                    il.LoadLocal(operation.Left.Value);
+                    il.OpCode(ILOpCode.Sub_ovf);
+                    il.Branch(ILOpCode.Br, done);
+                    il.MarkLabel(nonnegative);
+                    il.LoadLocal(operation.Left.Value);
+                    il.MarkLabel(done);
+                    maxStack = 2;
+                    break;
+                }
                 case IrOpcode.CheckedAdd:
                 case IrOpcode.CheckedSubtract:
                 case IrOpcode.CheckedMultiply:
