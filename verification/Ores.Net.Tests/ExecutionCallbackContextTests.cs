@@ -26,6 +26,10 @@ internal static class ExecutionCallbackContextTests
                 OresCallbackBoundary.HostCallback)!.Value;
             Require(captured.Execution == 41 && captured.Dispatch == 7,
                 "capture lost source identity");
+            Require(captured.TraceCount == 1 &&
+                captured.TraceBoundaryAt(0) == OresCallbackBoundary.HostCallback &&
+                captured.TraceElided == 0,
+                "initial callback trace boundary missing");
         }
         Require(OresExecutionContexts.Active is null,
             "active scope leaked after dispose");
@@ -70,6 +74,11 @@ internal static class ExecutionCallbackContextTests
                 "nested capture lost lineage");
             Require(inner.Boundary == OresCallbackBoundary.Timer,
                 "nested capture did not replace boundary");
+            Require(inner.TraceCount == 2 &&
+                inner.TraceBoundaryAt(0) == OresCallbackBoundary.HostCallback &&
+                inner.TraceBoundaryAt(1) == OresCallbackBoundary.Timer &&
+                inner.TraceElided == 0,
+                "nested capture did not preserve callback trace history");
             try
             {
                 OresExecutionContexts.RunCallback(inner, () =>
@@ -128,6 +137,79 @@ internal static class ExecutionCallbackContextTests
         activeOuterScope.Dispose();
         Require(OresExecutionContexts.Active is null,
             "active LIFO cleanup leaked execution authority");
+
+        var traced = captured;
+        var traceSequence = new[]
+        {
+            OresCallbackBoundary.Io,
+            OresCallbackBoundary.Timer,
+            OresCallbackBoundary.Await,
+            OresCallbackBoundary.ActorMessage,
+            OresCallbackBoundary.SupervisorControl,
+            OresCallbackBoundary.TaskJoin,
+            OresCallbackBoundary.Spawn,
+            OresCallbackBoundary.HostCallback,
+            OresCallbackBoundary.Io,
+            OresCallbackBoundary.Timer,
+            OresCallbackBoundary.Await,
+            OresCallbackBoundary.ActorMessage,
+            OresCallbackBoundary.Spawn
+        };
+        foreach (var boundary in traceSequence)
+        {
+            OresExecutionCallbackContext next = default;
+            OresExecutionContexts.RunCallback(traced, () =>
+            {
+                next = OresExecutionContexts.CaptureCallback(boundary)!.Value;
+            });
+            traced = next;
+        }
+
+        Require(traced.TraceCount == OresExecutionCallbackContext.MaxTraceBoundaries,
+            "callback trace history is not bounded");
+        Require(traced.TraceElided == 6,
+            "callback trace elision count is incorrect");
+        var expectedTrace = new[]
+        {
+            OresCallbackBoundary.TaskJoin,
+            OresCallbackBoundary.Spawn,
+            OresCallbackBoundary.HostCallback,
+            OresCallbackBoundary.Io,
+            OresCallbackBoundary.Timer,
+            OresCallbackBoundary.Await,
+            OresCallbackBoundary.ActorMessage,
+            OresCallbackBoundary.Spawn
+        };
+        for (int i = 0; i < expectedTrace.Length; i++)
+            Require(traced.TraceBoundaryAt(i) == expectedTrace[i],
+                "bounded callback trace retained the wrong boundary order");
+        Require(captured.TraceCount == 1 &&
+            captured.TraceBoundaryAt(0) == OresCallbackBoundary.HostCallback &&
+            captured.TraceElided == 0,
+            "nested trace derivation mutated its parent snapshot");
+
+        var requiredBoundaries = new[]
+        {
+            OresCallbackBoundary.Await,
+            OresCallbackBoundary.HostCallback,
+            OresCallbackBoundary.Timer,
+            OresCallbackBoundary.Io,
+            OresCallbackBoundary.ActorMessage,
+            OresCallbackBoundary.SupervisorControl,
+            OresCallbackBoundary.TaskJoin,
+            OresCallbackBoundary.Spawn
+        };
+        using (var activeScope = OresExecutionContexts.EnterActive(active))
+        {
+            foreach (var boundary in requiredBoundaries)
+            {
+                var one = OresExecutionContexts.CaptureCallback(boundary)!.Value;
+                Require(one.Boundary == boundary &&
+                    one.TraceCount == 1 &&
+                    one.TraceBoundaryAt(0) == boundary,
+                    "required callback boundary vocabulary drift");
+            }
+        }
 
         bool invalid = false;
         try
