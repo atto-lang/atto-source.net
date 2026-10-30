@@ -66,6 +66,14 @@ public static class ManagedSourceEmitter
                     ? (cs ? "long.MinValue" : "System.Int64.MinValue")
                     : number.ToString(CultureInfo.InvariantCulture) + "L";
             }
+            else if (op.Opcode == IrOpcode.CheckedAbs &&
+                     op.Constant is null &&
+                     op.Left is int absOperand && !op.Right.HasValue &&
+                     absOperand >= 0 && absOperand < i)
+            {
+                // Optional source emitters preserve the same checked MIN behavior.
+                expr = $"System.Math.Abs(v{absOperand})";
+            }
             else if (op.Opcode is IrOpcode.CheckedAdd or IrOpcode.CheckedSubtract or
                      IrOpcode.CheckedMultiply or IrOpcode.CheckedDivide or
                      IrOpcode.SignedRemainderLiteral &&
