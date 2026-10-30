@@ -45,6 +45,25 @@ public static class OresParser
                 throw new FormatException("Token count exceeds bootstrap limit");
             if (token.Text.Length == 0) break;
         }
+        // Source actors are a semantic boundary, not an alternate spelling
+        // of scalar functions. Until the .NET compiler owns sealed state,
+        // handle_state loans and generation-fenced continuation frames, reject
+        // an actor declaration before scalar parsing can misdiagnose it as fnc.
+        for (int i = 0; i < tokens.Count; i++)
+        {
+            if (tokens[i].Text != "define")
+                continue;
+            int limit = Math.Min(tokens.Count, i + 5);
+            for (int j = i + 1; j < limit; j++)
+            {
+                if (tokens[j].Text == "actor")
+                    throw new FormatException(
+                        $"Source actor lowering requires sealed state/handle_state and " +
+                        $"scheduler-owned logical continuation frames at offset {tokens[j].Offset}");
+                if (tokens[j].Text is "class" or "enum" or "fnc" or "routine")
+                    break;
+            }
+        }
         for (int i = 0; i + 1 < tokens.Count; i++)
         {
             if (tokens[i].Text == "select" &&
