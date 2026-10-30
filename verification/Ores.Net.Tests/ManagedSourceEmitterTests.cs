@@ -60,6 +60,17 @@ public static class ManagedSourceEmitterTests
                 .Contains("Operators.Checked", StringComparison.Ordinal),
             "overflow checks must never be dropped");
 
+        var abs = OresIrLowering.Lower(OresParser.Parse(
+            "fnc main():int{return Math.abs(-42);}"));
+        var absCs = ManagedSourceEmitter.Emit(abs, ManagedSourceTarget.CSharp);
+        var absFs = ManagedSourceEmitter.Emit(abs, ManagedSourceTarget.FSharp);
+        Require(absCs.Contains("? checked(0L - v", StringComparison.Ordinal) &&
+                !absCs.Contains("System.Math.Abs", StringComparison.Ordinal),
+            "C# checked abs is compiler-owned rather than a host Math call");
+        Require(absFs.Contains("then 0L - v", StringComparison.Ordinal) &&
+                !absFs.Contains("System.Math.Abs", StringComparison.Ordinal),
+            "F# checked abs is compiler-owned rather than a host Math call");
+
         Reject(() => ManagedSourceEmitter.Emit(ir, (ManagedSourceTarget)9),
             "unknown target rejected");
         var remainder = OresIrLowering.Lower(OresParser.Parse(
