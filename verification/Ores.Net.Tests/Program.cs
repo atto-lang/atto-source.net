@@ -70,6 +70,30 @@ static void InvalidSend(Action action, string why)
         RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
             "once-only reachable initialization lowering",
             "lifecycle init cannot become an ordinary imported callable");
+
+        // Rejection must reach transitive linked sources and module wrappers:
+        // a caller cannot suppress init admission by changing the import kind.
+        File.WriteAllText(startup,
+            "define module Startup as pub fnc init()->int { return 9; } end");
+        File.WriteAllText(main,
+            "import module Startup from \"./startup.ores\"; fnc main()->int { return 1; }");
+        RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
+            "once-only reachable initialization lowering",
+            "linked module-scoped init requires a verified once-only lifecycle");
+
+        File.WriteAllText(startup,
+            "import namespace billing from \"checkout\"; pub fnc helper()->int { return 2; }");
+        File.WriteAllText(main,
+            "import fnc helper from \"./startup.ores\"; fnc main()->int { return helper(); }");
+        RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
+            "manifest-verified multi-file package linker",
+            "transitively linked namespace import must reject before CIL emission");
+
+        // A failed admission must not contaminate a later independent
+        // compilation; unrelated files remain outside the reachable graph.
+        File.WriteAllText(main, "fnc main()->int { return 1; }");
+        Require(OresSourceModuleCompiler.Compile(main, new[] { root }).Sources.Count == 1,
+            "rejected import must not alter subsequent standalone compilation");
     }
     finally { Directory.Delete(root, true); }
 }
