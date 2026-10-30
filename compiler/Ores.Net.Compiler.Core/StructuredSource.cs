@@ -456,7 +456,7 @@ public static class OresStructuredParser
                 // This NativeAOT slice does not lower once-only initialization
                 // barriers. Do not silently compile a lifecycle hook into an
                 // ordinary public CIL method reachable through imports.
-                if (linking is not null && name == "init")
+                if (name == "init")
                     throw Error("module init requires once-only reachable initialization lowering");
                 Expect("(");
                 if (Current.Text == "(")
