@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { linkSync, mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, renameSync } from 'node:fs';
+import { closeSync, constants, linkSync, mkdtempSync, mkdirSync, openSync, writeFileSync, symlinkSync, rmSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { verifyArtifactBytes } from './source-local-artifact-byte-gate.mjs';
@@ -99,3 +99,21 @@ scenario('rejects oversized Linux receipt payloads',f=>{
 scenario('rejects empty Windows receipt payloads',f=>{
  f.put('windows','artifacts/evidence/source-local-windows.json',Buffer.alloc(0));
 },/oversized or invalid artifact receipt/);
+
+test('platform no-follow file opens refuse final-component symlinks',t=>{
+ if (constants.O_NOFOLLOW === undefined) return t.skip('O_NOFOLLOW unavailable on this platform');
+ const tmp=mkdtempSync(join(tmpdir(),'ores-nofollow-'));
+ try {
+  const target=join(tmp,'native-executable'),alias=join(tmp,'swapped-artifact');
+  writeFileSync(target,elf(7));
+  symlinkSync(target,alias);
+  const fd=openSync(target,constants.O_RDONLY | constants.O_NOFOLLOW);
+  closeSync(fd);
+  assert.throws(()=>{
+   const unexpected=openSync(alias,constants.O_RDONLY | constants.O_NOFOLLOW);
+   closeSync(unexpected);
+  },error=>error?.code==='ELOOP' || error?.code==='EMLINK');
+ } finally {
+  rmSync(tmp,{recursive:true,force:true});
+ }
+});
