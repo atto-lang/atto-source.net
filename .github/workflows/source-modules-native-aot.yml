@@ -82,7 +82,9 @@ jobs:
           )
           foreach ($case in $cases) {
             $source = Join-Path $root ($case.name + '.ores')
-            $output = Join-Path $root ($case.name + '.dll')
+            $outputDir = Join-Path $root ('out-' + $case.name)
+            New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
+            $output = Join-Path $outputDir 'OresGenerated.dll'
             $program = 'import module ffi from "' + $case.path + '";' + [Environment]::NewLine + 'pub fnc main():int{return 42;}'
             [System.IO.File]::WriteAllText($source, $program)
             $PSNativeCommandUseErrorActionPreference = $false
