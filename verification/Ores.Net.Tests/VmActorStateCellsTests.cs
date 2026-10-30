@@ -130,6 +130,12 @@ internal static class VmActorStateCellsTests
 
         host.RetireActor(tenantA, a1);
         host.RetireActor(tenantA, a2);
+        var lateActor = host.RegisterActor(tenantA, 13);
+        var lateTurn = host.BeginActorTurn(tenantA, lateActor);
+        host.CompleteActorTurn(tenantA, lateActor, lateTurn);
+        Deny(() => host.ConfigureActorState(tenantA, lateActor, Layout),
+            "actor layout cannot be installed after a completed turn");
+        host.RetireActor(tenantA, lateActor);
         host.RetireActor(tenantB, b1);
         host.BeginShutdown(tenantA); host.CompleteShutdown(tenantA); host.Destroy(tenantA);
         host.BeginShutdown(tenantB); host.CompleteShutdown(tenantB); host.Destroy(tenantB);
