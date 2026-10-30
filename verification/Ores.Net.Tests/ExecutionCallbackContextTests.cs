@@ -89,6 +89,46 @@ internal static class ExecutionCallbackContextTests
         Require(OresExecutionContexts.Callback is null,
             "outer scope leaked after nested failure");
 
+        var callbackOuterScope = OresExecutionContexts.EnterCallback(captured);
+        var callbackInnerScope = OresExecutionContexts.EnterCallback(captured);
+        bool callbackOutOfOrderRejected = false;
+        try
+        {
+            callbackOuterScope.Dispose();
+        }
+        catch (InvalidOperationException)
+        {
+            callbackOutOfOrderRejected = true;
+        }
+        Require(callbackOutOfOrderRejected,
+            "callback scopes admitted out-of-order disposal");
+        Require(OresExecutionContexts.Callback?.Execution == captured.Execution,
+            "failed out-of-order callback dispose corrupted current scope");
+        callbackInnerScope.Dispose();
+        callbackOuterScope.Dispose();
+        Require(OresExecutionContexts.Callback is null,
+            "callback LIFO cleanup leaked provenance");
+
+        var activeOuterScope = OresExecutionContexts.EnterActive(active);
+        var activeInnerScope = OresExecutionContexts.EnterActive(active);
+        bool activeOutOfOrderRejected = false;
+        try
+        {
+            activeOuterScope.Dispose();
+        }
+        catch (InvalidOperationException)
+        {
+            activeOutOfOrderRejected = true;
+        }
+        Require(activeOutOfOrderRejected,
+            "active scopes admitted out-of-order disposal");
+        Require(OresExecutionContexts.Active?.Execution == active.Execution,
+            "failed out-of-order active dispose corrupted current authority");
+        activeInnerScope.Dispose();
+        activeOuterScope.Dispose();
+        Require(OresExecutionContexts.Active is null,
+            "active LIFO cleanup leaked execution authority");
+
         bool invalid = false;
         try
         {
