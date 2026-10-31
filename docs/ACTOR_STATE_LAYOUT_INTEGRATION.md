@@ -108,3 +108,28 @@ no local `dotnet` SDK. The new emitter targets **static C# build
 output**, not the existing native metadata-only CIL backend. No claim
 of wider effect-system or multi-backend parity is justified by this
 narrow opt-in experimental lane.
+
+## Real NativeAOT execution gates (source committed, not yet run)
+
+An independent `verification/Ores.Net.ActorCounterProbe` project links the
+generated `Actor_Counter` C# golden and the actual `OresVmHost` runtime
+under `PublishAot=true`. The Linux and Windows exact-head workflows now:
+
+1. invoke `emit-actor-csharp` from `examples/actor-counter.ores`;
+2. compare generated text against the checked-in C# golden (CRLF normalized
+   for Windows);
+3. publish the probe to a **native** target executable, not a CLR apphost;
+4. run platform-specific native binary/sidecar validation;
+5. execute the resulting native program and demand A:1,2,3 / B:1,2,
+   independent same-tenant actor state, non-reentrant user turns,
+   cancellation recovery, checked i64 overflow and state preservation,
+   and new tenant incarnation isolation.
+
+Successful workflow labels are
+`LINUX_NET_ACTOR_COUNTER_NATIVE_AOT_GUEST_EXECUTED` and
+`WINDOWS_NET_ACTOR_COUNTER_NATIVE_AOT_GUEST_EXECUTED`. Their presence in
+workflow source **does not** prove the steps ran. A run only counts when
+GitHub reports a nonzero-step exact-head job and captured test output and
+native artifact evidence. A source-only canary must precede any private
+source transfer to an external test organization; the existing security
+incident still blocks such transfers without independent approval.
