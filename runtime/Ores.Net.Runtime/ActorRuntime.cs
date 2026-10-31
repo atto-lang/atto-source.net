@@ -180,6 +180,11 @@ public sealed class ActorRuntime : IDisposable
     [ThreadStatic]
     private static ActorRuntime? s_currentRuntime;
 
+    // A task forked by an actor handler inherits this flow marker across
+    // Task.Run and await, even when it leaves the physical carrier. It does
+    // NOT grant a guest any ability to suspend/resume an actor turn.
+    private static readonly AsyncLocal<ActorRuntime?> s_actorOriginFlow = new();
+
     private readonly object _gate = new();
     // A second Dispose caller must wait for worker joining and reclamation,
     // not merely observe the _closed admission flag and return prematurely.
@@ -333,16 +338,15 @@ public sealed class ActorRuntime : IDisposable
 
     internal Task ObserveTermination(ActorRef actor) => Lookup(actor).Terminated.Task;
 
-    // Host-only grant admission; a copied ActorRef is not authority after
-    // termination, stop or generation retirement.
-    // Any physical actor carrier is an untrusted admission context for
-    // registry administration. Only host control code off actor carriers may
-    // register, grant, revoke, start, or retire a singleton domain.
+    // Neither a physical actor carrier nor an actor-spawned async task may
+    // administer a singleton domain. This is a *negative* check, not the
+    // authority to administer: the host control plane additionally requires
+    // a private issuer credential in the current ExecutionContext.
     internal static void ValidateSingletonHostControl()
     {
-        if (s_currentRuntime is not null)
+        if (s_currentRuntime is not null || s_actorOriginFlow.Value is not null)
             throw new InvalidOperationException(
-                "ORES-SINGLETON-HOST-ONLY: registry administration denied on actor carrier");
+                "ORES-SINGLETON-HOST-ONLY: registry administration denied from actor execution");
     }
 
     internal void ValidateSingletonGrantActor(ActorRef actor)
@@ -433,7 +437,9 @@ public sealed class ActorRuntime : IDisposable
     private void RunCell(ActorCell cell)
     {
         ActorRuntime? previous = s_currentRuntime;
+        ActorRuntime? previousFlow = s_actorOriginFlow.Value;
         s_currentRuntime = this;
+        s_actorOriginFlow.Value = this;
         bool finalize = false;
 
         try
@@ -532,8 +538,9 @@ public sealed class ActorRuntime : IDisposable
             }
             finally
             {
-                // Even a failure during dispatch-token teardown must not
-                // poison a reusable carrier's thread-static runtime identity.
+                // Unwind both the physical carrier and flowed child-task
+                // provenance, even when dispatch or finalization faults.
+                s_actorOriginFlow.Value = previousFlow;
                 s_currentRuntime = previous;
             }
         }

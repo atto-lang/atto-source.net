@@ -90,9 +90,9 @@ internal static class SingletonDomainRegistryStage0Tests
     {
         using var runtime = new ActorRuntime(Options());
         using var foreignRuntime = new ActorRuntime(Options());
-        using var domain = new SingletonDomainRegistryStage0<long>(
+        using var domain = new SingletonDomainHostControlStage0<long>(
             runtime, maxDeclarations: 1, maxGrantsPerDeclaration: 1);
-        using var healthyDomain = new SingletonDomainRegistryStage0<long>(
+        using var healthyDomain = new SingletonDomainHostControlStage0<long>(
             runtime, maxDeclarations: 1, maxGrantsPerDeclaration: 1);
 
         var entered = Pending<bool>();
@@ -133,16 +133,25 @@ internal static class SingletonDomainRegistryStage0Tests
         var deniedReceipts = Receipts(3);
         var foreignReceipts = Receipts(1);
         ActorContext? capturedContext = null;
-        ActorRef allowed = Reader(runtime, domain, allowedReceipts,
+        ActorRef allowed = Reader(runtime, domain.Reader, allowedReceipts,
             context => capturedContext = context);
-        ActorRef denied = Reader(runtime, domain, deniedReceipts);
-        ActorRef foreign = Reader(foreignRuntime, domain, foreignReceipts);
+        ActorRef denied = Reader(runtime, domain.Reader, deniedReceipts);
+        ActorRef foreign = Reader(foreignRuntime, domain.Reader, foreignReceipts);
 
-        // A physical actor turn cannot reconfigure its domain by calling
-        // host-only methods, even if its C# handler holds a registry reference.
+        // Give the actor ONLY a read facade. Even if an unsafe C# host
+        // callback accidentally captures the control object itself, calls
+        // from the physical actor or its forked tasks must fail closed.
+        Require(typeof(SingletonDomainRegistryStage0<long>).GetMethods()
+                .Where(m => m.DeclaringType == typeof(SingletonDomainRegistryStage0<long>))
+                .All(m => m.Name == "TryReadPublished"),
+            "actor reader unexpectedly exposes administrative methods");
         var carrierDenials = Pending<bool>();
+        var offCarrierDenials = Pending<bool>();
+        var delayedDenials = Pending<bool>();
+        var afterTurn = Pending<bool>();
+
         ActorRef adversarial = default;
-        adversarial = runtime.Spawn(ActorKind.Untrusted, (_, _) =>
+        bool AllAdminDenied()
         {
             int deniedOperations = 0;
             void RequireHostDeny(Action action)
@@ -150,12 +159,13 @@ internal static class SingletonDomainRegistryStage0Tests
                 try { action(); }
                 catch (InvalidOperationException error) when (
                     error.Message.Contains("ORES-SINGLETON-HOST-ONLY",
+                        StringComparison.Ordinal) ||
+                    error.Message.Contains("ORES-SINGLETON-HOST-CONTROL-DENIED",
                         StringComparison.Ordinal))
                 {
                     deniedOperations++;
                 }
             }
-
             RequireHostDeny(() => domain.RegisterCompilerDeclaration(
                 "app/forged.ores", "Forged", () => ValueTask.FromResult(1L)));
             RequireHostDeny(() => domain.GrantRead(
@@ -165,11 +175,81 @@ internal static class SingletonDomainRegistryStage0Tests
             RequireHostDeny(() => { _ = domain.StartForHost(
                 "app/settings.ores", "Settings"); });
             RequireHostDeny(() => { _ = domain.Retire(); });
-            carrierDenials.TrySetResult(deniedOperations == 5);
+            return deniedOperations == 5;
+        }
+
+        static async Task CheckBoth(Task<bool> flowed, Task<bool> suppressed,
+            TaskCompletionSource<bool> result)
+        {
+            try
+            {
+                bool[] verdicts = await Task.WhenAll(flowed, suppressed)
+                    .WaitAsync(TimeSpan.FromSeconds(10));
+                result.TrySetResult(verdicts.All(x => x));
+            }
+            catch (Exception error) { result.TrySetException(error); }
+        }
+
+        adversarial = runtime.Spawn(ActorKind.Untrusted, (_, _) =>
+        {
+            // Ordinary Task.Run inherits the actor provenance marker.
+            Task<bool> flowed = Task.Run(AllAdminDenied);
+
+            // SuppressFlow discards the marker, but ALSO discards the
+            // unforgeable host issuer: controller reference alone is denied.
+            Task<bool> suppressed;
+            using (ExecutionContext.SuppressFlow())
+                suppressed = Task.Run(AllAdminDenied);
+            _ = CheckBoth(flowed, suppressed, offCarrierDenials);
+
+            Task<bool> delayedFlowed = Task.Run(async () =>
+            {
+                await afterTurn.Task.ConfigureAwait(false);
+                return AllAdminDenied();
+            });
+            Task<bool> delayedSuppressed;
+            using (ExecutionContext.SuppressFlow())
+                delayedSuppressed = Task.Run(async () =>
+                {
+                    await afterTurn.Task.ConfigureAwait(false);
+                    return AllAdminDenied();
+                });
+            _ = CheckBoth(delayedFlowed, delayedSuppressed, delayedDenials);
+            carrierDenials.TrySetResult(AllAdminDenied());
         });
         runtime.Send(adversarial, new byte[] { 1 });
         Require(await carrierDenials.Task.WaitAsync(TimeSpan.FromSeconds(10)),
-            "actor carrier was allowed to administer singleton domain");
+            "actor carrier acquired host registry administration");
+        Require(await offCarrierDenials.Task.WaitAsync(TimeSpan.FromSeconds(10)),
+            "actor-created Task.Run administered registry with a captured controller");
+        // Assert physical turn is closed before letting deferred tasks attempt
+        // post-turn administration (also without ExecutionContext flow).
+        await CompletedTurns(runtime, 1);
+        afterTurn.TrySetResult(true);
+        Require(await delayedDenials.Task.WaitAsync(TimeSpan.FromSeconds(10)),
+            "post-turn child task regained host control using a captured reference");
+        Require(domain.RegisteredDeclarations == 1,
+            "failed actor mutation corrupted host registry state");
+
+        // A detached task without a host issuer cannot acquire controller
+        // authority merely because it captured a CLR object reference.
+        Task<bool> unissuedHost;
+        using (ExecutionContext.SuppressFlow())
+            unissuedHost = Task.Run(() =>
+            {
+                try { _ = domain.RegisteredDeclarations; }
+                catch (InvalidOperationException error) when (
+                    error.Message.Contains("ORES-SINGLETON-HOST-CONTROL-DENIED",
+                        StringComparison.Ordinal)) { return true; }
+                return false;
+            });
+        Require(await unissuedHost.WaitAsync(TimeSpan.FromSeconds(10)),
+            "detached unissued host task acquired controller authority");
+
+        // An authorized host may intentionally delegate a task while its
+        // ExecutionContext carries the private issuer and no actor provenance.
+        Require(await Task.Run(() => domain.RegisteredDeclarations) == 1,
+            "legitimate host control delegation did not survive Task.Run");
 
         domain.GrantRead(allowed, "app/settings.ores", "Settings");
         domain.GrantRead(allowed, "app/settings.ores", "Settings"); // idempotent
@@ -213,7 +293,7 @@ internal static class SingletonDomainRegistryStage0Tests
         bool staleContextDenied = false;
         try
         {
-            domain.TryReadPublished(capturedContext!, "app/settings.ores",
+            domain.Reader.TryReadPublished(capturedContext!, "app/settings.ores",
                 "Settings", out _);
         }
         catch (InvalidOperationException) { staleContextDenied = true; }
@@ -234,7 +314,7 @@ internal static class SingletonDomainRegistryStage0Tests
         // A second registry with the same module/declaration key is an
         // independent domain; the first domain's grants do not carry across.
         var healthyReceipts = Receipts(2);
-        ActorRef healthyActor = Reader(runtime, healthyDomain, healthyReceipts);
+        ActorRef healthyActor = Reader(runtime, healthyDomain.Reader, healthyReceipts);
         Reading crossDomainDenied = await Send(runtime, healthyActor, healthyReceipts, 0);
         Require(crossDomainDenied.Error?.Contains("ORES-SINGLETON-ACTOR-DENIED",
             StringComparison.Ordinal) == true,
@@ -261,7 +341,7 @@ internal static class SingletonDomainRegistryStage0Tests
         catch (InvalidOperationException) { staleGrantRejected = true; }
         Require(staleGrantRejected, "stopped incarnation acquired a new grant");
 
-        using var retiringDomain = new SingletonDomainRegistryStage0<long>(runtime);
+        using var retiringDomain = new SingletonDomainHostControlStage0<long>(runtime);
         var lateEntered = Pending<bool>();
         var lateRelease = Pending<long>();
         retiringDomain.RegisterCompilerDeclaration("app/late.ores", "Late", async () =>

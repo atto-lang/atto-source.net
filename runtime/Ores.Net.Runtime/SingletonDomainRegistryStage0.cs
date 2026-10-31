@@ -1,13 +1,30 @@
 namespace Ores.Net.Runtime;
 
 /// <summary>
-/// A bounded trusted-host stage-0 application-domain registry. Object identity
-/// of the registry is the domain boundary; module/declaration strings are only
-/// compiler-resolved keys within that domain, never authentication tokens.
-/// No guest-facing lookup/registration API, cross-isolate transport, or
-/// deep-immutability guarantee is provided.
+/// Actor-facing, read-only view: its only operation requires an owning-runtime
+/// ActorContext from the current physical dispatch turn. This object contains
+/// no registration, grant, host initializer or retirement methods.
 /// </summary>
-public sealed class SingletonDomainRegistryStage0<T> : IDisposable
+public sealed class SingletonDomainRegistryStage0<T>
+{
+    private readonly SingletonDomainHostControlStage0<T> _owner;
+
+    internal SingletonDomainRegistryStage0(SingletonDomainHostControlStage0<T> owner) =>
+        _owner = owner;
+
+    public bool TryReadPublished(ActorContext context, string resolvedModule,
+        string declarationName, out T value) =>
+        _owner.TryReadPublished(context, resolvedModule, declarationName, out value);
+}
+
+/// <summary>
+/// Bounded trusted-host stage-0 application-domain controller. This object must
+/// never be passed into a guest actor closure. It requires an opaque issuer
+/// installed in the creating host's ExecutionContext; actor-originated child
+/// tasks cannot use it, even if they capture its CLR reference. A trusted host
+/// can deliberately delegate a controller: this is not a sandbox.
+/// </summary>
+public sealed class SingletonDomainHostControlStage0<T> : IDisposable
 {
     private readonly record struct Declaration(string Module, string Name);
 
@@ -23,8 +40,13 @@ public sealed class SingletonDomainRegistryStage0<T> : IDisposable
         internal HashSet<ActorRef> Readers { get; } = new();
     }
 
+    private sealed record HostIssuerScope(object Issuer, HostIssuerScope? Previous);
+
+    private static readonly AsyncLocal<HostIssuerScope?> s_hostIssuer = new();
+    private readonly object _issuer = new();
     private readonly ActorRuntime _runtime;
     private readonly object _gate = new();
+    private int _disposed;
     private readonly SingletonStage0DependencyGraph _graph;
     private readonly Dictionary<Declaration, Entry> _entries = new();
     private readonly int _maxDeclarations;
@@ -32,11 +54,12 @@ public sealed class SingletonDomainRegistryStage0<T> : IDisposable
     private readonly int _maxPendingWaiters;
     private bool _retired;
 
-    public SingletonDomainRegistryStage0(ActorRuntime runtime,
+    public SingletonDomainHostControlStage0(ActorRuntime runtime,
         int maxDeclarations = 64, int maxGrantsPerDeclaration = 256,
         int maxPendingWaiters = 128, int maxActiveInitializers = 1024,
         int maxDependencies = 4096)
     {
+        ActorRuntime.ValidateSingletonHostControl();
         ArgumentNullException.ThrowIfNull(runtime);
         if (maxDeclarations is <= 0 or > 65536)
             throw new ArgumentOutOfRangeException(nameof(maxDeclarations));
@@ -49,11 +72,22 @@ public sealed class SingletonDomainRegistryStage0<T> : IDisposable
         _maxGrantsPerDeclaration = maxGrantsPerDeclaration;
         _maxPendingWaiters = maxPendingWaiters;
         _graph = new SingletonStage0DependencyGraph(maxActiveInitializers, maxDependencies);
+        Reader = new SingletonDomainRegistryStage0<T>(this);
+        // Never expose this issuer through Reader or actor context.
+        // AsyncLocal survives legitimate host awaits; actor dispatch also
+        // carries its own independent denial marker across Task.Run.
+        s_hostIssuer.Value = new HostIssuerScope(_issuer, s_hostIssuer.Value);
     }
+
+    public SingletonDomainRegistryStage0<T> Reader { get; }
 
     public int RegisteredDeclarations
     {
-        get { lock (_gate) return _entries.Count; }
+        get
+        {
+            RequireHostControl();
+            lock (_gate) return _entries.Count;
+        }
     }
 
     /// <summary>
@@ -63,7 +97,7 @@ public sealed class SingletonDomainRegistryStage0<T> : IDisposable
     public void RegisterCompilerDeclaration(string resolvedModule, string declarationName,
         Func<ValueTask<T>> initializer)
     {
-        ActorRuntime.ValidateSingletonHostControl();
+        RequireHostControl();
         ArgumentNullException.ThrowIfNull(initializer);
         var key = Key(resolvedModule, declarationName);
         lock (_gate)
@@ -86,7 +120,7 @@ public sealed class SingletonDomainRegistryStage0<T> : IDisposable
     /// </summary>
     public void GrantRead(ActorRef actor, string resolvedModule, string declarationName)
     {
-        ActorRuntime.ValidateSingletonHostControl();
+        RequireHostControl();
         var key = Key(resolvedModule, declarationName);
         _runtime.ValidateSingletonGrantActor(actor);
         lock (_gate)
@@ -107,7 +141,7 @@ public sealed class SingletonDomainRegistryStage0<T> : IDisposable
     /// </summary>
     public bool RevokeRead(ActorRef actor, string resolvedModule, string declarationName)
     {
-        ActorRuntime.ValidateSingletonHostControl();
+        RequireHostControl();
         var key = Key(resolvedModule, declarationName);
         lock (_gate)
         {
@@ -125,7 +159,7 @@ public sealed class SingletonDomainRegistryStage0<T> : IDisposable
     public Task<T> StartForHost(string resolvedModule, string declarationName,
         CancellationToken observerCancellation = default)
     {
-        ActorRuntime.ValidateSingletonHostControl();
+        RequireHostControl();
         var key = Key(resolvedModule, declarationName);
         Entry entry;
         lock (_gate)
@@ -143,7 +177,7 @@ public sealed class SingletonDomainRegistryStage0<T> : IDisposable
     /// a reference value is not a deep-immutability guarantee; production
     /// guest publication remains disabled until the type/effect checker exists.
     /// </summary>
-    public bool TryReadPublished(ActorContext context, string resolvedModule,
+    internal bool TryReadPublished(ActorContext context, string resolvedModule,
         string declarationName, out T value)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -168,7 +202,7 @@ public sealed class SingletonDomainRegistryStage0<T> : IDisposable
     /// </summary>
     public bool Retire()
     {
-        ActorRuntime.ValidateSingletonHostControl();
+        RequireHostControl();
         lock (_gate)
         {
             if (_retired) return false;
@@ -182,7 +216,49 @@ public sealed class SingletonDomainRegistryStage0<T> : IDisposable
         }
     }
 
-    public void Dispose() => Retire();
+    public void Dispose()
+    {
+        // Idempotent after an already-completed disposal. A second caller
+        // does not acquire any new administrative authority.
+        if (Volatile.Read(ref _disposed) != 0) return;
+        RequireHostControl();
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        try { Retire(); }
+        finally
+        {
+            // Reconstruct the inherited token chain rather than mutating a
+            // shared collection that a different async child might inherit.
+            s_hostIssuer.Value = WithoutIssuer(s_hostIssuer.Value, _issuer);
+        }
+    }
+
+    private void RequireHostControl()
+    {
+        ActorRuntime.ValidateSingletonHostControl();
+        // The object reference alone is not a host authorization token.
+        // SuppressFlow loses this issuer, so a detached child cannot recover
+        // host privileges by discarding its actor-origin marker.
+        for (var scope = s_hostIssuer.Value; scope is not null; scope = scope.Previous)
+            if (ReferenceEquals(scope.Issuer, _issuer)) return;
+        throw new InvalidOperationException(
+            "ORES-SINGLETON-HOST-CONTROL-DENIED: unissued control context");
+    }
+
+    private static HostIssuerScope? WithoutIssuer(HostIssuerScope? head, object issuer)
+    {
+        var prefix = new List<object>();
+        var node = head;
+        while (node is not null && !ReferenceEquals(node.Issuer, issuer))
+        {
+            prefix.Add(node.Issuer);
+            node = node.Previous;
+        }
+        if (node is null) return head;
+        var remaining = node.Previous;
+        for (int i = prefix.Count - 1; i >= 0; i--)
+            remaining = new HostIssuerScope(prefix[i], remaining);
+        return remaining;
+    }
 
     private void EnsureOpen()
     {
