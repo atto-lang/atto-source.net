@@ -73,13 +73,10 @@ public static class ManagedSourceEmitterTests
 
         Reject(() => ManagedSourceEmitter.Emit(ir, (ManagedSourceTarget)9),
             "unknown target rejected");
-        // '%' is forbidden in guest source; the bounded internal IR remains tested.
-        Reject(() => OresParser.Parse(
-            "fnc main():int{return -9223372036854775808%-1;}"),
-            "guest source percent operator remains forbidden");
+        // SignedRemainderLiteral is internal verified IR only. Oreslang
+        // source forbids '%' and will expose a named Mod(a,b) lowering later.
         var remainder = OresIrVerifier.Verify(new IrFunction(
-            "main", IrValueType.I64, new[]
-            {
+            "main", IrValueType.I64, new[] {
                 new IrInstruction(0, IrOpcode.ConstantI64, IrValueType.I64,
                     Constant: long.MinValue),
                 new IrInstruction(1, IrOpcode.ConstantI64, IrValueType.I64,
@@ -94,6 +91,11 @@ public static class ManagedSourceEmitterTests
                 remainderFs.Contains("ignore v0", StringComparison.Ordinal) &&
                 remainderFs.Contains("ignore v1", StringComparison.Ordinal),
             "constant-zero remainder consumes already evaluated operands");
+        Reject(() => OresParser.Parse("fnc main():int{return -7 % 3;}"),
+            "removed percent operator must not reenter Oreslang source");
+        Reject(() => OresParser.Parse(
+            "fnc main():int{return -9223372036854775808%-1;}"),
+            "removed percent operator with signed minimum remains forbidden");
         Reject(() => OresParser.Parse("fnc main():int{return 3/2;}"),
             "source int/int division still rejected, not silently lowered to i64");
         Reject(() => OresParser.Parse("fnc main():int{return missing(1);}"),
