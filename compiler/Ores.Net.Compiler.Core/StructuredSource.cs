@@ -264,7 +264,7 @@ public static class OresStructuredParser
                     continue;
                 }
                 int scan = cursor + 1;
-                if (!TryReadNominalFormals(tokens, ref scan, out var first))
+                if (!TryReadNominalFormals(tokens, ref scan, out var first, owner, true))
                 {
                     member++;
                     continue;
@@ -276,7 +276,7 @@ public static class OresStructuredParser
                 if (explicitSelf && first.Count == 1 &&
                     scan < tokens.Count && tokens[scan].Text == "(")
                 {
-                    if (!TryReadNominalFormals(tokens, ref scan, out var second))
+                    if (!TryReadNominalFormals(tokens, ref scan, out var second, owner, false))
                     {
                         member++;
                         continue;
@@ -328,7 +328,8 @@ public static class OresStructuredParser
     }
 
     private static bool TryReadNominalFormals(
-        IReadOnlyList<Token> tokens, ref int scan, out List<string> parameters)
+        IReadOnlyList<Token> tokens, ref int scan, out List<string> parameters,
+        string owner, bool allowReceiver)
     {
         parameters = new List<string>();
         if (scan >= tokens.Count || tokens[scan++].Text != "(") return false;
@@ -355,18 +356,36 @@ public static class OresStructuredParser
                 parts.Add(tokens[scan++].Text);
             }
             if (parts.Count is < 1 or > 3) return false;
-            if (parts.Count == 1 && parts[0] != "self") return false;
-            // Self is a receiver marker only when it is the first formal;
-            // a later self token is malformed, never a value parameter.
-            if (parameters.Count > 0 &&
-                (parts[0] == "self" ||
-                 (parts.Count >= 2 && parts[0] == "mut" && parts[1] == "self")))
-                return false;
-            if (parts.Count == 2 && parts[0] == "mut" && parts[1] != "self")
-                return false;
-            if (parts[0] == "self" && parts.Count != 1) return false;
-            if (parts[0] == "mut" && parts.Count != 2) return false;
-            parameters.Add(string.Join(" ",parts));
+            bool bareOrTypedReadSelf = parts[0] == "self";
+            bool bareOrTypedMutSelf = parts.Count >= 2 &&
+                parts[0] == "mut" && parts[1] == "self";
+            if (bareOrTypedReadSelf || bareOrTypedMutSelf)
+            {
+                // Typed legacy receivers are declaration metadata, not values.
+                // Only accept a typed receiver matching the nominal owner;
+                // malformed or foreign receiver types stay fail-closed without
+                // manufacturing a duplicate-method error.
+                if (!allowReceiver || parameters.Count != 0) return false;
+                if (bareOrTypedReadSelf)
+                {
+                    if (parts.Count > 2 ||
+                        (parts.Count == 2 && parts[1] != owner)) return false;
+                    parameters.Add("self");
+                }
+                else
+                {
+                    if (parts.Count < 2 || parts.Count > 3 ||
+                        (parts.Count == 3 && parts[2] != owner)) return false;
+                    parameters.Add("mut self");
+                }
+            }
+            else
+            {
+                // Ordinary parameters require a type and a binding name;
+                // a lone word cannot accidentally become an argument.
+                if (parts.Count == 1 || parts[0] == "mut") return false;
+                parameters.Add(string.Join(" ", parts));
+            }
             if (scan < tokens.Count && tokens[scan].Text == ",")
             {
                 scan++;
