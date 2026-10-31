@@ -215,3 +215,48 @@ downloadable log blob. This establishes runner admission failure,
 not a compiler or language-runtime verdict; the precise billing,
 permissions or runner-capacity cause remains unverified. No private
 source was mirrored or exported to another organization.
+
+
+## Distinguish user empty messages from trusted actor controls (2026-10-31)
+
+Security audit found an admission bypass in the earlier specialized
+`TryReceiveEmptyDispatch`: it treated *any* empty byte-array at the
+mailbox FIFO head as a trusted scheduler control. A user possessing a
+legitimate `ActorRef` could call normal `SendActor` with an empty
+payload and thereby create a dispatch opportunity without the trusted
+scheduler publishing it.
+
+The mailbox now stores a private typed `Envelope(Payload, IsControl)`.
+`Send` **always** records `IsControl=false`, even for zero bytes.
+Only the internal `EnqueueTrustedDispatch` API, called by host-held
+`ActorScheduler.Enqueue`, records `IsControl=true`. Control entries
+participate in the same FIFO message-count limit as user data. The
+specialized dispatcher consumes only a typed control at the FIFO
+head, while generic `TryReceive` refuses to consume scheduler controls.
+Stop/restart zeroization acts on each owned envelope payload.
+
+Both the managed and NativeAOT `Counter` probe contain negative tests
+for a zero-byte user envelope followed by a genuine control: dispatch
+must fail and preserve both queued messages. Other tests still cover
+nonempty FIFO blocking, replay, competing carriers, canceled turns,
+cross-thread scope use and checked overflow. **These test sources
+are committed but not executed**: source-org runners still report
+zero executed steps and the container lacks a dotnet SDK.
+
+## Alternate private runner verified, export approval still blocked
+
+A private Beamscale runner has passed genuine no-checkout admission
+([run 41232720370](https://github.com/beamscale/bmscl-compiler/actions/runs/41232720370),
+3/3 executed steps), and a prior source-free public .NET 10 NativeAOT
+probe also passed ([run 40770468363](https://github.com/beamscale/bmscl-compiler/actions/runs/40770468363),
+9/9 executed steps). Both are **toolchain/capacity evidence only**.
+
+The source `.github/private-ci-approved-repositories.txt` and
+`.github/private-ci-approved-source-snapshots.txt` have no approved
+entries; independent reviewer configuration is disabled. Therefore no
+private Oreslang Git tree was mirrored to another organization.
+[Governance issue #277](https://github.com/ores-truffle-oreslang/oreslang-source.net/issues/277)
+records the destination's numeric repository ID, proposed exact
+source commit/tree, independent approval requirements and the
+ref-cleanup/ABA security hold. Source transfer must not proceed until
+these controls and destination ownership are independently approved.
