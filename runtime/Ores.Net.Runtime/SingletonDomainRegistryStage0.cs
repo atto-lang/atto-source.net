@@ -63,6 +63,7 @@ public sealed class SingletonDomainRegistryStage0<T> : IDisposable
     public void RegisterCompilerDeclaration(string resolvedModule, string declarationName,
         Func<ValueTask<T>> initializer)
     {
+        ActorRuntime.ValidateSingletonHostControl();
         ArgumentNullException.ThrowIfNull(initializer);
         var key = Key(resolvedModule, declarationName);
         lock (_gate)
@@ -85,6 +86,7 @@ public sealed class SingletonDomainRegistryStage0<T> : IDisposable
     /// </summary>
     public void GrantRead(ActorRef actor, string resolvedModule, string declarationName)
     {
+        ActorRuntime.ValidateSingletonHostControl();
         var key = Key(resolvedModule, declarationName);
         _runtime.ValidateSingletonGrantActor(actor);
         lock (_gate)
@@ -105,6 +107,7 @@ public sealed class SingletonDomainRegistryStage0<T> : IDisposable
     /// </summary>
     public bool RevokeRead(ActorRef actor, string resolvedModule, string declarationName)
     {
+        ActorRuntime.ValidateSingletonHostControl();
         var key = Key(resolvedModule, declarationName);
         lock (_gate)
         {
@@ -122,6 +125,7 @@ public sealed class SingletonDomainRegistryStage0<T> : IDisposable
     public Task<T> StartForHost(string resolvedModule, string declarationName,
         CancellationToken observerCancellation = default)
     {
+        ActorRuntime.ValidateSingletonHostControl();
         var key = Key(resolvedModule, declarationName);
         Entry entry;
         lock (_gate)
@@ -164,6 +168,7 @@ public sealed class SingletonDomainRegistryStage0<T> : IDisposable
     /// </summary>
     public bool Retire()
     {
+        ActorRuntime.ValidateSingletonHostControl();
         lock (_gate)
         {
             if (_retired) return false;

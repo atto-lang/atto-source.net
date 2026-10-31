@@ -335,6 +335,16 @@ public sealed class ActorRuntime : IDisposable
 
     // Host-only grant admission; a copied ActorRef is not authority after
     // termination, stop or generation retirement.
+    // Any physical actor carrier is an untrusted admission context for
+    // registry administration. Only host control code off actor carriers may
+    // register, grant, revoke, start, or retire a singleton domain.
+    internal static void ValidateSingletonHostControl()
+    {
+        if (s_currentRuntime is not null)
+            throw new InvalidOperationException(
+                "ORES-SINGLETON-HOST-ONLY: registry administration denied on actor carrier");
+    }
+
     internal void ValidateSingletonGrantActor(ActorRef actor)
     {
         ActorCell cell = Lookup(actor);

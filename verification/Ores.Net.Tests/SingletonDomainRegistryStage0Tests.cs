@@ -138,6 +138,39 @@ internal static class SingletonDomainRegistryStage0Tests
         ActorRef denied = Reader(runtime, domain, deniedReceipts);
         ActorRef foreign = Reader(foreignRuntime, domain, foreignReceipts);
 
+        // A physical actor turn cannot reconfigure its domain by calling
+        // host-only methods, even if its C# handler holds a registry reference.
+        var carrierDenials = Pending<bool>();
+        ActorRef adversarial = default;
+        adversarial = runtime.Spawn(ActorKind.Untrusted, (_, _) =>
+        {
+            int deniedOperations = 0;
+            void RequireHostDeny(Action action)
+            {
+                try { action(); }
+                catch (InvalidOperationException error) when (
+                    error.Message.Contains("ORES-SINGLETON-HOST-ONLY",
+                        StringComparison.Ordinal))
+                {
+                    deniedOperations++;
+                }
+            }
+
+            RequireHostDeny(() => domain.RegisterCompilerDeclaration(
+                "app/forged.ores", "Forged", () => ValueTask.FromResult(1L)));
+            RequireHostDeny(() => domain.GrantRead(
+                adversarial, "app/settings.ores", "Settings"));
+            RequireHostDeny(() => domain.RevokeRead(
+                allowed, "app/settings.ores", "Settings"));
+            RequireHostDeny(() => { _ = domain.StartForHost(
+                "app/settings.ores", "Settings"); });
+            RequireHostDeny(() => { _ = domain.Retire(); });
+            carrierDenials.TrySetResult(deniedOperations == 5);
+        });
+        runtime.Send(adversarial, new byte[] { 1 });
+        Require(await carrierDenials.Task.WaitAsync(TimeSpan.FromSeconds(10)),
+            "actor carrier was allowed to administer singleton domain");
+
         domain.GrantRead(allowed, "app/settings.ores", "Settings");
         domain.GrantRead(allowed, "app/settings.ores", "Settings"); // idempotent
         Deny(() => domain.GrantRead(denied, "app/settings.ores", "Settings"),
