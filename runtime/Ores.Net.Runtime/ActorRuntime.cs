@@ -188,8 +188,10 @@ public sealed class ActorRuntime : IDisposable
     // Host-bootstrap identity is minted once by each originating runtime,
     // and flows only through the host's ExecutionContext. A captured runtime
     // reference is insufficient to mint a singleton host controller.
+    // Weak locator: ambient host contexts must not root retired runtimes.
     private sealed record SingletonHostBootstrap(
-        ActorRuntime Runtime, object Issuer, SingletonHostBootstrap? Previous);
+        WeakReference<ActorRuntime> Runtime, object Issuer,
+        SingletonHostBootstrap? Previous);
     private static readonly AsyncLocal<SingletonHostBootstrap?> s_hostBootstraps = new();
     private readonly object _singletonBootstrapIssuer = new();
 
@@ -239,6 +241,23 @@ public sealed class ActorRuntime : IDisposable
         private void Dispatch() => _owner.RunCell(this);
     }
 
+    // Rebuild immutable ambient nodes instead of editing nodes that may have
+    // been copied to other host ExecutionContexts. Discard stale identities.
+    private static SingletonHostBootstrap? PruneSingletonHostBootstraps(
+        SingletonHostBootstrap? head)
+    {
+        var live = new List<SingletonHostBootstrap>();
+        for (var scope = head; scope is not null; scope = scope.Previous)
+            if (scope.Runtime.TryGetTarget(out ActorRuntime? runtime) &&
+                !Volatile.Read(ref runtime._closed))
+                live.Add(scope);
+
+        SingletonHostBootstrap? result = null;
+        for (int i = live.Count - 1; i >= 0; i--)
+            result = new SingletonHostBootstrap(live[i].Runtime, live[i].Issuer, result);
+        return result;
+    }
+
     public ActorRuntime(ActorRuntimeOptions? options = null)
     {
         ValidateSingletonHostControl();
@@ -250,7 +269,8 @@ public sealed class ActorRuntime : IDisposable
         // Publish only after successful runtime admission. A child task
         // started with SuppressFlow cannot borrow the issuer for THIS runtime.
         s_hostBootstraps.Value = new SingletonHostBootstrap(
-            this, _singletonBootstrapIssuer, s_hostBootstraps.Value);
+            new WeakReference<ActorRuntime>(this), _singletonBootstrapIssuer,
+            PruneSingletonHostBootstraps(s_hostBootstraps.Value));
     }
 
     /// <summary>
@@ -268,7 +288,8 @@ public sealed class ActorRuntime : IDisposable
         for (var scope = s_hostBootstraps.Value; scope is not null;
             scope = scope.Previous)
         {
-            if (ReferenceEquals(scope.Runtime, this) &&
+            if (scope.Runtime.TryGetTarget(out ActorRuntime? boundRuntime) &&
+                ReferenceEquals(boundRuntime, this) &&
                 ReferenceEquals(scope.Issuer, _singletonBootstrapIssuer))
             {
                 issued = true;
