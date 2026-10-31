@@ -60,6 +60,13 @@ internal static class StructuredSourceTests
             ("define class Foo as x(mut self, int n):void {} x(int n):void {} end", "x/1"),
             ("define class Foo as x(self):int {} x(mut self):int {} end", "x/0"),
             ("define class Foo as x(self, int n):int {} x(mut self)(int n):int {} end", "x/1"),
+            // Legacy class fnc is an instance declaration, unlike static fnc.
+            ("define class Foo as fnc x():void {} x(mut self)():void {} end", "x/0"),
+            ("define class Foo as x(mut self)():void {} fnc x():void {} end", "x/0"),
+            ("define class Foo as fnc x(int n):int {} method x(mut self, int n):int {} end", "x/1"),
+            ("define class Foo as method x(mut self, int n):int {} fnc x(int n):int {} end", "x/1"),
+            ("define actor Foo as fnc x():void {} x(mut self)():void {} end", "x/0"),
+            ("define actor Foo as x(int n):int {} fnc x(mut self, int n):int {} end", "x/1"),
             ("define actor Foo as x():void {} x(mut self)():void {} end", "x/0"),
             ("define actor Foo as x(mut self)():void {} x():void {} end", "x/0"),
             ("define actor Foo as x(int n):void {} x(mut self, int n):void {} end", "x/1"),
