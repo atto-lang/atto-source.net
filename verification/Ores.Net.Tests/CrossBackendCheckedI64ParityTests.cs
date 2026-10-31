@@ -17,6 +17,14 @@ static class CrossBackendCheckedI64ParityTests
             ("min", "-9223372036854775808", long.MinValue),
             ("zero", "0", 0L),
             ("signed multiplication", "-7 * -6", 42L),
+            ("math abs negative", "Math.abs(-42)", 42L),
+            ("math abs zero", "Math.abs(0)", 0L),
+            ("math abs positive", "Math.abs(42)", 42L),
+            ("math abs maximum", "Math.abs(9223372036854775807)", long.MaxValue),
+            ("math neg negative", "Math.neg(-42)", 42L),
+            ("math neg zero", "Math.neg(0)", 0L),
+            ("math neg positive", "Math.neg(42)", -42L),
+            ("math nested", "Math.abs(Math.neg(42))", 42L),
         })
         {
             var ast = OresParser.Parse(Header + "define pub fnc main(): int { return " + expression + "; }");
@@ -24,6 +32,8 @@ static class CrossBackendCheckedI64ParityTests
             var actual = OresIrReferenceEvaluator.Evaluate(ir);
             if (actual != expected)
                 throw new Exception($"FAILED: cross-backend checked-i64 {name}: expected {expected}, got {actual}");
+            if (name.StartsWith("math ", StringComparison.Ordinal))
+                RequireEmittedCilResult(ir, expected, name);
         }
 
         foreach (var (name, expression) in new (string, string)[]
@@ -32,6 +42,8 @@ static class CrossBackendCheckedI64ParityTests
             ("subtract overflow", "-9223372036854775808 - 1"),
             ("multiply overflow", "9223372036854775807 * 2"),
             ("unary negate minimum", "-(-9223372036854775808)"),
+            ("math abs minimum", "Math.abs(-9223372036854775808)"),
+            ("math neg minimum", "Math.neg(-9223372036854775808)"),
         })
         {
             var ast = OresParser.Parse(
@@ -68,6 +80,30 @@ static class CrossBackendCheckedI64ParityTests
             return;
         }
         throw new Exception("FAILED: int/int division was admitted without float lowering");
+    }
+
+    private static void RequireEmittedCilResult(
+        VerifiedIrFunction ir, long expected, string name)
+    {
+        var folder = Path.Combine(Path.GetTempPath(), "oresnet-math-cil-" +
+            Guid.NewGuid().ToString("N"));
+        var file = Path.Combine(folder, "OresGenerated.dll");
+        try
+        {
+            CilEmitter.EmitLibrary(ir, file);
+            using var assembly = AssemblyDefinition.ReadAssembly(file);
+            var method = assembly.MainModule.Types
+                .Single(t => t.FullName == "Oreslang.Generated.OresProgram")
+                .Methods.Single(m => m.Name == "Run");
+            var actual = CilReferenceEvaluator.Evaluate(method);
+            if (actual != expected)
+                throw new Exception(
+                    $"FAILED: {name} emitted CIL: expected {expected}, got {actual}");
+        }
+        finally
+        {
+            if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+        }
     }
 
     private static void RequireOverflowEffect(
