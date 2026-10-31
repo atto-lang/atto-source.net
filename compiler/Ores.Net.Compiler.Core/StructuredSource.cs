@@ -142,6 +142,12 @@ public static class OresStructuredParser
                 if (invertedKind.Text == "struct")
                     throw new FormatException(
                         $"Inverted struct requires checked value-row, one-level packed columns and ownership lowering in the .NET backend at offset {token.Offset}");
+                // Only a class can receive the class-specific diagnostic.
+                // A missing or unsupported kind is a malformed declaration,
+                // not evidence that inverted class lowering was requested.
+                if (invertedKind.Text != "class")
+                    throw new FormatException(
+                        $"Inverted declaration requires class or struct kind in the .NET backend at offset {invertedKind.Offset}");
                 throw new FormatException(
                     $"Inverted class requires checked bracket-row and ownership lowering in the .NET backend at offset {token.Offset}");
             }

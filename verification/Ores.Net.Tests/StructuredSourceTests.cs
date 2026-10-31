@@ -276,6 +276,28 @@ internal static class StructuredSourceTests
             }
             throw new Exception(".NET frontend admitted unlowered inverted struct source");
         }
+        // The lookahead must not label an absent or unrelated declaration
+        // kind as an inverted CLASS. These are malformed source admissions,
+        // not claims that any nominal or inverted lowering is supported.
+        foreach (var source in new[] {
+            "define inverted",
+            "define inverted actor Position as end",
+            "define pub inverted trait Position as end",
+            "pub define /* declaration comment */ inverted /* kind comment */ bogus Position as end"
+        })
+        {
+            try { _ = OresStructuredParser.Parse(source); }
+            catch (FormatException ex)
+            {
+                Require(ex.Message.Contains(
+                        "Inverted declaration requires class or struct kind",
+                        StringComparison.Ordinal) &&
+                        ex.Message.Contains("offset", StringComparison.Ordinal),
+                    "malformed inverted kind must fail through the dedicated gate: " + ex.Message);
+                continue;
+            }
+            throw new Exception(".NET frontend admitted malformed inverted declaration: " + source);
+        }
         // Lexical evidence only: inert comments cannot accidentally become a
         // source layout capability or trigger the inverted declaration gate.
         Require(OresStructuredParser.Parse(
