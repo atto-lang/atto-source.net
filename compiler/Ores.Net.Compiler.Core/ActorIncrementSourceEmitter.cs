@@ -14,6 +14,7 @@ public static class ActorIncrementSourceEmitter
     {
         ArgumentNullException.ThrowIfNull(method);
         var schema = method.Schema;
+        var layoutIdentity = ActorStateLayoutPlan.FromSchema(schema).LayoutIdentity;
         if (method.Delta != 1 ||
             method.FieldIndex < 0 || method.FieldIndex >= schema.Fields.Count ||
             schema.Fields[method.FieldIndex].Name != method.FieldName ||
@@ -27,12 +28,15 @@ public static class ActorIncrementSourceEmitter
         b.AppendLine("{");
         b.Append("    public const string ActorName = \"").Append(schema.ActorName)
             .AppendLine("\";");
+        b.Append("    public const string ActorLayoutIdentity = \"")
+            .Append(layoutIdentity).AppendLine("\";");
         b.AppendLine("    public static OresVmHost.ActorTicket Create(OresVmHost host,");
         b.AppendLine("        OresVmHost.IsolateHandle isolate, ulong actorId)");
         b.AppendLine("    {");
         b.AppendLine("        var actor = host.RegisterActor(isolate, actorId);");
         b.AppendLine("        try {");
-        b.AppendLine("            host.ConfigureNamedActorState(isolate, actor, ActorName,");
+        b.AppendLine("            host.ConfigureNamedActorState(");
+        b.AppendLine("                isolate, actor, ActorName, ActorLayoutIdentity,");
         b.AppendLine("                new OresVmHost.ActorStateField[] {");
         foreach (var field in schema.Fields)
         {
@@ -67,7 +71,7 @@ public static class ActorIncrementSourceEmitter
         b.AppendLine("        OresVmHost.ActorScheduler scheduler, OresVmHost.IsolateHandle isolate,");
         b.AppendLine("        OresVmHost.ActorTicket actor)");
         b.AppendLine("    {");
-        b.Append("        return scheduler.DispatchNext(isolate, actor, ActorName, Call_")
+        b.Append("        return scheduler.DispatchNext(isolate, actor, ActorLayoutIdentity, Call_")
             .Append(method.MethodName).AppendLine(");");
         b.AppendLine("    }");
         b.AppendLine("}");

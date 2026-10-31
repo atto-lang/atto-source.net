@@ -4,12 +4,14 @@ namespace Oreslang.Generated;
 public static class Actor_Counter
 {
     public const string ActorName = "Counter";
+    public const string ActorLayoutIdentity = "Counter|1:I";
     public static OresVmHost.ActorTicket Create(OresVmHost host,
         OresVmHost.IsolateHandle isolate, ulong actorId)
     {
         var actor = host.RegisterActor(isolate, actorId);
         try {
-            host.ConfigureNamedActorState(isolate, actor, ActorName,
+            host.ConfigureNamedActorState(
+                isolate, actor, ActorName, ActorLayoutIdentity,
                 new OresVmHost.ActorStateField[] {
                     new(OresVmHost.ActorStateScalarKind.Int64, Int64Default: 0L),
                 });
@@ -25,6 +27,7 @@ public static class Actor_Counter
         OresVmHost.ActorScheduler scheduler, OresVmHost.IsolateHandle isolate,
         OresVmHost.ActorTicket actor)
     {
-        return scheduler.DispatchNext(isolate, actor, ActorName, Call_increment);
+        return scheduler.DispatchNext(
+            isolate, actor, ActorLayoutIdentity, Call_increment);
     }
 }

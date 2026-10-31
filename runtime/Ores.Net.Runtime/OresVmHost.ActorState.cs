@@ -35,10 +35,14 @@ public sealed partial class OresVmHost
 
     public void ConfigureNamedActorState(
         IsolateHandle handle, ActorTicket actor, string actorName,
-        ReadOnlySpan<ActorStateField> fields)
+        string layoutIdentity, ReadOnlySpan<ActorStateField> fields)
     {
         ValidateActorStateName(actorName);
-        ConfigureActorStateCore(handle, actor, actorName, fields);
+        var canonicalIdentity = BuildActorStateLayoutIdentity(actorName, fields);
+        if (!string.Equals(layoutIdentity, canonicalIdentity, StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                "actor state layout identity does not match configured fields");
+        ConfigureActorStateCore(handle, actor, canonicalIdentity, fields);
     }
 
     private static void ValidateActorStateName(string actorName)
@@ -55,8 +59,25 @@ public sealed partial class OresVmHost
                 throw new ArgumentException("invalid actor state layout name", nameof(actorName));
     }
 
+    private static string BuildActorStateLayoutIdentity(
+        string actorName, ReadOnlySpan<ActorStateField> fields)
+    {
+        var b = new System.Text.StringBuilder(actorName.Length + 8 + fields.Length);
+        b.Append(actorName).Append('|')
+            .Append(fields.Length.ToString(
+                System.Globalization.CultureInfo.InvariantCulture))
+            .Append(':');
+        for (var i = 0; i < fields.Length; ++i)
+            b.Append(fields[i].Kind switch {
+                ActorStateScalarKind.Int64 => 'I',
+                ActorStateScalarKind.Boolean => 'B',
+                _ => '?'
+            });
+        return b.ToString();
+    }
+
     private void ConfigureActorStateCore(
-        IsolateHandle handle, ActorTicket actor, string? actorName,
+        IsolateHandle handle, ActorTicket actor, string? layoutIdentity,
         ReadOnlySpan<ActorStateField> fields)
     {
         lock (_gate) {
@@ -80,7 +101,7 @@ public sealed partial class OresVmHost
                 cells[i] = new ActorStateCell(field);
             }
             actor.StateCells = cells;
-            actor.StateLayoutName = actorName;
+            actor.StateLayoutIdentity = layoutIdentity;
         }
     }
 
@@ -242,9 +263,9 @@ public sealed partial class OresVmHost
         /// The host owns scheduling; the guest receives only a state scope.
         /// </summary>
         public long DispatchNext(IsolateHandle isolate, ActorTicket actor,
-            string expectedActorName, Func<ActorDispatchScope, long> generatedMethod)
+            string expectedLayoutIdentity, Func<ActorDispatchScope, long> generatedMethod)
             => Host.DispatchQueuedActor(
-                this, isolate, actor, expectedActorName, generatedMethod);
+                this, isolate, actor, expectedLayoutIdentity, generatedMethod);
     }
 
     /// <summary>
@@ -312,11 +333,14 @@ public sealed partial class OresVmHost
     }
 
     private long DispatchQueuedActor(ActorScheduler scheduler,
-        IsolateHandle handle, ActorTicket actor, string expectedActorName,
+        IsolateHandle handle, ActorTicket actor, string expectedLayoutIdentity,
         Func<ActorDispatchScope, long> generatedMethod)
     {
         ArgumentNullException.ThrowIfNull(generatedMethod);
-        ValidateActorStateName(expectedActorName);
+        if (string.IsNullOrEmpty(expectedLayoutIdentity) ||
+            expectedLayoutIdentity.Length > 256)
+            throw new ArgumentException(
+                "invalid actor state layout identity", nameof(expectedLayoutIdentity));
         if (!ReferenceEquals(scheduler.Host, this))
             throw new InvalidOperationException("foreign actor scheduler");
 
@@ -331,7 +355,7 @@ public sealed partial class OresVmHost
             // is installed; the same receipt may be retried after configuration.
             if (actor.StateCells is null)
                 throw new InvalidOperationException("actor state layout is not configured");
-            if (!string.Equals(actor.StateLayoutName, expectedActorName,
+            if (!string.Equals(actor.StateLayoutIdentity, expectedLayoutIdentity,
                     StringComparison.Ordinal))
                 throw new InvalidOperationException(
                     "generated actor method does not match configured actor layout");

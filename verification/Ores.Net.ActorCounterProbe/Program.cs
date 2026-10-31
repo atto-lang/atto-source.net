@@ -11,7 +11,7 @@ static long Deliver(OresVmHost.ActorScheduler scheduler,
     Func<OresVmHost.ActorDispatchScope, long> generatedMethod)
 {
     scheduler.Enqueue(isolate, actor);
-    return scheduler.DispatchNext(isolate, actor, Actor_Counter.ActorName, generatedMethod);
+    return scheduler.DispatchNext(isolate, actor, Actor_Counter.ActorLayoutIdentity, generatedMethod);
 }
 
 var host = new OresVmHost(maxTenants: 2);
@@ -24,7 +24,7 @@ scheduler.Enqueue(tenantA, unconfigured);
 Require(scheduler.PendingMessages(tenantA, unconfigured) == 1,
     "unconfigured actor control setup failed");
 bool unconfiguredDenied = false;
-try { _ = scheduler.DispatchNext(tenantA, unconfigured, Actor_Counter.ActorName,
+try { _ = scheduler.DispatchNext(tenantA, unconfigured, Actor_Counter.ActorLayoutIdentity,
     Actor_Counter.Call_increment); }
 catch (InvalidOperationException e) when (
     e.Message.Contains("state layout", StringComparison.Ordinal)) {
@@ -33,11 +33,11 @@ catch (InvalidOperationException e) when (
 Require(unconfiguredDenied &&
         scheduler.PendingMessages(tenantA, unconfigured) == 1,
     "unconfigured actor consumed its FIFO control receipt");
-host.ConfigureNamedActorState(tenantA, unconfigured, Actor_Counter.ActorName,
+host.ConfigureNamedActorState(tenantA, unconfigured, Actor_Counter.ActorName, Actor_Counter.ActorLayoutIdentity,
     new OresVmHost.ActorStateField[] {
         new(OresVmHost.ActorStateScalarKind.Int64, Int64Default: 0L)
     });
-Require(scheduler.DispatchNext(tenantA, unconfigured, Actor_Counter.ActorName,
+Require(scheduler.DispatchNext(tenantA, unconfigured, Actor_Counter.ActorLayoutIdentity,
             Actor_Counter.Call_increment) == 1 &&
         scheduler.PendingMessages(tenantA, unconfigured) == 0,
     "configured actor could not redeem preserved control receipt");
@@ -46,12 +46,12 @@ var a = Actor_Counter.Create(host, tenantA, 1);
 var a2 = Actor_Counter.Create(host, tenantA, 2);
 var b = Actor_Counter.Create(host, tenantB, 1);
 bool missingTickDenied = false;
-try { _ = scheduler.DispatchNext(tenantA, a, Actor_Counter.ActorName, Actor_Counter.Call_increment); }
+try { _ = scheduler.DispatchNext(tenantA, a, Actor_Counter.ActorLayoutIdentity, Actor_Counter.Call_increment); }
 catch (InvalidOperationException) { missingTickDenied = true; }
 Require(missingTickDenied, "actor turn admitted with no mailbox dequeue");
 Require(Deliver(scheduler, tenantA, a, Actor_Counter.Call_increment) == 1, "A1");
 bool reusedTickDenied = false;
-try { _ = scheduler.DispatchNext(tenantA, a, Actor_Counter.ActorName, Actor_Counter.Call_increment); }
+try { _ = scheduler.DispatchNext(tenantA, a, Actor_Counter.ActorLayoutIdentity, Actor_Counter.Call_increment); }
 catch (InvalidOperationException) { reusedTickDenied = true; }
 Require(reusedTickDenied, "single FIFO receipt reused for multiple turns");
 Require(Deliver(scheduler, tenantA, a, Actor_Counter.Call_increment) == 2, "A2");
@@ -62,7 +62,7 @@ Require(Deliver(scheduler, tenantA, a2, Actor_Counter.Call_increment) == 1, "ind
 
 bool deniedReentry = false;
 _ = Deliver(scheduler, tenantA, a, scope => {
-    try { _ = scheduler.DispatchNext(tenantA, a, Actor_Counter.ActorName, Actor_Counter.Call_increment); }
+    try { _ = scheduler.DispatchNext(tenantA, a, Actor_Counter.ActorLayoutIdentity, Actor_Counter.Call_increment); }
     catch (InvalidOperationException) { deniedReentry = true; }
     return scope.ReadInt64(0);
 });
@@ -126,7 +126,7 @@ Require(staleScopeRejected, "escaped dispatch scope survived end of turn");
 scheduler.Enqueue(tenantA, a);
 long TryCompetingDispatch()
 {
-    try { return scheduler.DispatchNext(tenantA, a, Actor_Counter.ActorName,
+    try { return scheduler.DispatchNext(tenantA, a, Actor_Counter.ActorLayoutIdentity,
         Actor_Counter.Call_increment); }
     catch (InvalidOperationException) { return -1L; }
 }
@@ -146,7 +146,7 @@ scheduler.Enqueue(tenantA, a2);
 Require(scheduler.PendingMessages(tenantA, a2) == 2,
     "invalid mixed payload/control FIFO setup");
 bool wrongHeadDenied = false;
-try { _ = scheduler.DispatchNext(tenantA, a2, Actor_Counter.ActorName, Actor_Counter.Call_increment); }
+try { _ = scheduler.DispatchNext(tenantA, a2, Actor_Counter.ActorLayoutIdentity, Actor_Counter.Call_increment); }
 catch (InvalidOperationException) { wrongHeadDenied = true; }
 Require(wrongHeadDenied && scheduler.PendingMessages(tenantA, a2) == 2,
     "specialized actor dispatcher consumed or skipped user mailbox bytes");
@@ -156,7 +156,7 @@ Require(userBytes is { Length: 1 } && userBytes[0] == 0xA5 &&
     "trusted host failed to drain FIFO-head user payload");
 Require(scheduler.DequeueUser(tenantA, a2) is null,
     "trusted user dequeue stole scheduler control");
-Require(scheduler.DispatchNext(tenantA, a2, Actor_Counter.ActorName, Actor_Counter.Call_increment) == 2 &&
+Require(scheduler.DispatchNext(tenantA, a2, Actor_Counter.ActorLayoutIdentity, Actor_Counter.Call_increment) == 2 &&
         scheduler.PendingMessages(tenantA, a2) == 0,
     "draining user bytes did not unblock original control tick");
 
@@ -169,7 +169,7 @@ scheduler.Enqueue(tenantB, b);
 Require(scheduler.PendingMessages(tenantB, b) == 2,
     "zero-byte user envelope setup failed");
 bool userEmptyDenied = false;
-try { _ = scheduler.DispatchNext(tenantB, b, Actor_Counter.ActorName,
+try { _ = scheduler.DispatchNext(tenantB, b, Actor_Counter.ActorLayoutIdentity,
     Actor_Counter.Call_increment); }
 catch (InvalidOperationException) { userEmptyDenied = true; }
 Require(userEmptyDenied && scheduler.PendingMessages(tenantB, b) == 2,
@@ -180,7 +180,7 @@ Require(zeroBytes is { Length: 0 } &&
     "zero-byte user envelope lost during trusted drain");
 Require(scheduler.DequeueUser(tenantB, b) is null,
     "trusted user drain consumed typed control");
-Require(scheduler.DispatchNext(tenantB, b, Actor_Counter.ActorName, Actor_Counter.Call_increment) == 3 &&
+Require(scheduler.DispatchNext(tenantB, b, Actor_Counter.ActorLayoutIdentity, Actor_Counter.Call_increment) == 3 &&
         scheduler.PendingMessages(tenantB, b) == 0,
     "zero-byte user drain did not unblock control");
 // Interleaved user/control/user/control must preserve every FIFO head.
@@ -193,7 +193,7 @@ scheduler.Enqueue(tenantA, a2);
 Require(scheduler.PendingMessages(tenantA, a2) == 4,
     "mixed FIFO setup lost an envelope");
 bool firstHeadBlocked = false;
-try { _ = scheduler.DispatchNext(tenantA, a2, Actor_Counter.ActorName, Actor_Counter.Call_increment); }
+try { _ = scheduler.DispatchNext(tenantA, a2, Actor_Counter.ActorLayoutIdentity, Actor_Counter.Call_increment); }
 catch (InvalidOperationException) { firstHeadBlocked = true; }
 Require(firstHeadBlocked && scheduler.PendingMessages(tenantA, a2) == 4,
     "first mixed user payload was bypassed");
@@ -203,12 +203,12 @@ Require(first is { Length: 2 } && first[0] == 0x61 &&
     "first mixed payload lost or changed");
 Require(scheduler.DequeueUser(tenantA, a2) is null,
     "mixed user drain stole first control");
-Require(scheduler.DispatchNext(tenantA, a2, Actor_Counter.ActorName,
+Require(scheduler.DispatchNext(tenantA, a2, Actor_Counter.ActorLayoutIdentity,
         Actor_Counter.Call_increment) == 3 &&
         scheduler.PendingMessages(tenantA, a2) == 2,
     "mixed first tick failed or replayed");
 bool secondHeadBlocked = false;
-try { _ = scheduler.DispatchNext(tenantA, a2, Actor_Counter.ActorName, Actor_Counter.Call_increment); }
+try { _ = scheduler.DispatchNext(tenantA, a2, Actor_Counter.ActorLayoutIdentity, Actor_Counter.Call_increment); }
 catch (InvalidOperationException) { secondHeadBlocked = true; }
 Require(secondHeadBlocked && scheduler.PendingMessages(tenantA, a2) == 2,
     "second mixed user payload was bypassed");
@@ -216,12 +216,12 @@ var second = scheduler.DequeueUser(tenantA, a2);
 Require(second is { Length: 1 } && second[0] == 0x63 &&
         scheduler.PendingMessages(tenantA, a2) == 1,
     "second mixed payload lost or changed");
-Require(scheduler.DispatchNext(tenantA, a2, Actor_Counter.ActorName,
+Require(scheduler.DispatchNext(tenantA, a2, Actor_Counter.ActorLayoutIdentity,
         Actor_Counter.Call_increment) == 4 &&
         scheduler.PendingMessages(tenantA, a2) == 0,
     "mixed second tick failed or replayed");
 bool exhaustedReceiptDenied = false;
-try { _ = scheduler.DispatchNext(tenantA, a2, Actor_Counter.ActorName, Actor_Counter.Call_increment); }
+try { _ = scheduler.DispatchNext(tenantA, a2, Actor_Counter.ActorLayoutIdentity, Actor_Counter.Call_increment); }
 catch (InvalidOperationException) { exhaustedReceiptDenied = true; }
 Require(exhaustedReceiptDenied, "mixed FIFO admitted unqueued native turn");
 
@@ -261,20 +261,20 @@ scheduler.Enqueue(rawTenant, raw);
 Require(scheduler.PendingMessages(rawTenant, raw) == 1,
     "pre-layout tick was not queued");
 bool layoutDenied = false;
-try { _ = scheduler.DispatchNext(rawTenant, raw, Actor_Counter.ActorName, Actor_Counter.Call_increment); }
+try { _ = scheduler.DispatchNext(rawTenant, raw, Actor_Counter.ActorLayoutIdentity, Actor_Counter.Call_increment); }
 catch (InvalidOperationException) { layoutDenied = true; }
 Require(layoutDenied &&
         scheduler.PendingMessages(rawTenant, raw) == 1 &&
         !host.ActorTurnSnapshot(rawTenant, raw).Active,
     "pre-layout dispatch lost tick or admitted a turn");
-host.ConfigureNamedActorState(rawTenant, raw, Actor_Counter.ActorName, new[] {
+host.ConfigureNamedActorState(rawTenant, raw, Actor_Counter.ActorName, Actor_Counter.ActorLayoutIdentity, new[] {
     new OresVmHost.ActorStateField(OresVmHost.ActorStateScalarKind.Int64)
 });
-Require(scheduler.DispatchNext(rawTenant, raw, Actor_Counter.ActorName, Actor_Counter.Call_increment) == 1 &&
+Require(scheduler.DispatchNext(rawTenant, raw, Actor_Counter.ActorLayoutIdentity, Actor_Counter.Call_increment) == 1 &&
         scheduler.PendingMessages(rawTenant, raw) == 0,
     "original pre-layout tick was not redeemed exactly once");
 bool prelayoutTickReplayDenied = false;
-try { _ = scheduler.DispatchNext(rawTenant, raw, Actor_Counter.ActorName, Actor_Counter.Call_increment); }
+try { _ = scheduler.DispatchNext(rawTenant, raw, Actor_Counter.ActorLayoutIdentity, Actor_Counter.Call_increment); }
 catch (InvalidOperationException) { prelayoutTickReplayDenied = true; }
 Require(prelayoutTickReplayDenied, "pre-layout tick was replayed");
 // A host actor's default 1024-message quota includes zero-byte user data
@@ -299,7 +299,7 @@ scheduler.Enqueue(rawTenant, raw);
 Require(scheduler.PendingMessages(rawTenant, raw) == boundedMailboxMessages,
     "control could not reuse one refunded slot");
 bool saturatedHeadDenied = false;
-try { _ = scheduler.DispatchNext(rawTenant, raw, Actor_Counter.ActorName, Actor_Counter.Call_increment); }
+try { _ = scheduler.DispatchNext(rawTenant, raw, Actor_Counter.ActorLayoutIdentity, Actor_Counter.Call_increment); }
 catch (InvalidOperationException) { saturatedHeadDenied = true; }
 Require(saturatedHeadDenied &&
         scheduler.PendingMessages(rawTenant, raw) == boundedMailboxMessages,
@@ -310,12 +310,12 @@ for (var i = 1; i < boundedMailboxMessages; i++)
 Require(scheduler.DequeueUser(rawTenant, raw) is null &&
         scheduler.PendingMessages(rawTenant, raw) == 1,
     "saturated user dequeue stole scheduler receipt");
-Require(scheduler.DispatchNext(rawTenant, raw, Actor_Counter.ActorName, Actor_Counter.Call_increment) == 2 &&
+Require(scheduler.DispatchNext(rawTenant, raw, Actor_Counter.ActorLayoutIdentity, Actor_Counter.Call_increment) == 2 &&
         scheduler.PendingMessages(rawTenant, raw) == 0,
     "saturated FIFO control recovery failed or replayed");
 
 var other = host.RegisterActor(rawTenant, 14);
-host.ConfigureNamedActorState(rawTenant, other, "OtherCounter", new[] {
+host.ConfigureNamedActorState(rawTenant, other, "OtherCounter", "OtherCounter|1:I", new[] {
     new OresVmHost.ActorStateField(OresVmHost.ActorStateScalarKind.Int64)
 });
 scheduler.Enqueue(rawTenant, other);
@@ -326,11 +326,26 @@ Require(nominalMismatchDenied &&
         scheduler.PendingMessages(rawTenant, other) == 1 &&
         !host.ActorTurnSnapshot(rawTenant, other).Active,
     "same-shaped foreign actor consumed Counter control receipt");
-Require(scheduler.DispatchNext(rawTenant, other, "OtherCounter",
+Require(scheduler.DispatchNext(rawTenant, other, "OtherCounter|1:I",
             scope => scope.AddInt64(0, 1L)) == 1 &&
         scheduler.PendingMessages(rawTenant, other) == 0,
     "nominal mismatch did not preserve foreign actor receipt");
 host.RetireActor(rawTenant, other);
+
+var wrongShape = host.RegisterActor(rawTenant, 15);
+host.ConfigureNamedActorState(rawTenant, wrongShape,
+    Actor_Counter.ActorName, "Counter|1:B", new[] {
+        new OresVmHost.ActorStateField(OresVmHost.ActorStateScalarKind.Boolean)
+    });
+scheduler.Enqueue(rawTenant, wrongShape);
+bool layoutShapeDenied = false;
+try { _ = Actor_Counter.Dispatch_increment(scheduler, rawTenant, wrongShape); }
+catch (InvalidOperationException) { layoutShapeDenied = true; }
+Require(layoutShapeDenied &&
+        scheduler.PendingMessages(rawTenant, wrongShape) == 1 &&
+        !host.ActorTurnSnapshot(rawTenant, wrongShape).Active,
+    "same-name wrong-shape actor consumed Counter control receipt");
+host.RetireActor(rawTenant, wrongShape);
 host.RetireActor(rawTenant, raw);
 host.BeginShutdown(rawTenant);
 host.CompleteShutdown(rawTenant);

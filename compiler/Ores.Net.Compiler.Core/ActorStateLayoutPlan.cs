@@ -36,9 +36,28 @@ public sealed class ActorStateLayoutPlan
                 f.Int64Default, f.BooleanDefault, f.SourceOffset);
         }
         Fields = Array.AsReadOnly(fields);
+        LayoutIdentity = BuildLayoutIdentity(ActorName, Fields);
+    }
+
+    private static string BuildLayoutIdentity(
+        string actorName, IReadOnlyList<Field> fields)
+    {
+        var b = new System.Text.StringBuilder(actorName.Length + 8 + fields.Count);
+        b.Append(actorName).Append('|')
+            .Append(fields.Count.ToString(
+                System.Globalization.CultureInfo.InvariantCulture))
+            .Append(':');
+        foreach (var field in fields)
+            b.Append(field.Kind switch {
+                ActorStateFieldKind.Int64 => 'I',
+                ActorStateFieldKind.Boolean => 'B',
+                _ => throw new InvalidOperationException("unknown actor state field kind")
+            });
+        return b.ToString();
     }
 
     public string ActorName { get; }
+    public string LayoutIdentity { get; }
     public int ActorOffset { get; }
     public int StateOffset { get; }
     public IReadOnlyList<Field> Fields { get; }
@@ -77,6 +96,7 @@ public sealed class ActorStateLayoutPlan
         OresVmHost.ActorTicket actor)
     {
         ArgumentNullException.ThrowIfNull(host);
-        host.ConfigureNamedActorState(isolate, actor, ActorName, ToHostFields());
+        host.ConfigureNamedActorState(
+            isolate, actor, ActorName, LayoutIdentity, ToHostFields());
     }
 }

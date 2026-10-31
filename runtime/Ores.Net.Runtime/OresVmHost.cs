@@ -37,7 +37,7 @@ public sealed partial class OresVmHost
         internal ActorTurnTicket? ActiveTurn { get; set; }
         // Compiler-owned, typed actor-local cells. Installed once before any turn.
         internal ActorStateCell[]? StateCells { get; set; }
-        internal string? StateLayoutName { get; set; }
+        internal string? StateLayoutIdentity { get; set; }
     }
 
     public sealed class ActorTurnTicket
@@ -389,7 +389,7 @@ public sealed partial class OresVmHost
                 }
                 actor.StateCells = null;
             }
-            actor.StateLayoutName = null;
+            actor.StateLayoutIdentity = null;
             s.PinsByActor.Remove(actor);
             s.Actors.Remove(actor.Id);
         }
