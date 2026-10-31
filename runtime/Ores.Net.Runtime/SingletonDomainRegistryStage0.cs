@@ -46,6 +46,9 @@ public sealed class SingletonDomainHostControlStage0<T> : IDisposable
     private readonly object _issuer = new();
     private readonly ActorRuntime _runtime;
     private readonly object _gate = new();
+    // Separate from the registry lock so concurrent Dispose callers wait
+    // for retirement to finish rather than observe a premature done bit.
+    private readonly object _disposeGate = new();
     private int _disposed;
     private readonly SingletonStage0DependencyGraph _graph;
     private readonly Dictionary<Declaration, Entry> _entries = new();
@@ -258,18 +261,25 @@ public sealed class SingletonDomainHostControlStage0<T> : IDisposable
 
     public void Dispose()
     {
-        // Idempotent after an already-completed disposal. A second caller
-        // does not acquire any new administrative authority.
-        if (Volatile.Read(ref _disposed) != 0) return;
-        RequireHostControl();
-        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-        try { Retire(); }
-        finally
+        // Completion is published only after retirement has revoked grants
+        // and fenced every cell. A second caller must not return early while
+        // the first caller is still waiting for the registry lock.
+        if (Volatile.Read(ref _disposed) == 0)
         {
-            // Reconstruct the inherited token chain rather than mutating a
-            // shared collection that a different async child might inherit.
-            s_hostIssuer.Value = WithoutIssuer(s_hostIssuer.Value, _issuer);
+            RequireHostControl();
+            lock (_disposeGate)
+            {
+                if (_disposed == 0)
+                {
+                    Retire();
+                    Volatile.Write(ref _disposed, 1);
+                }
+            }
         }
+
+        // Remove only this execution context's issuer. Other host contexts
+        // inherited immutable nodes and must independently unwind them.
+        s_hostIssuer.Value = WithoutIssuer(s_hostIssuer.Value, _issuer);
     }
 
     private void RequireHostControl()
