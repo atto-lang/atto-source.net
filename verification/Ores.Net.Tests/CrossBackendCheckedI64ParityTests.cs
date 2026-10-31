@@ -103,6 +103,26 @@ static class CrossBackendCheckedI64ParityTests
             transport.Status.Code != 0xFFFFFFFDu)
             throw new Exception("CLR transport failed to normalize forged guest return");
 
+        // All eight numeric guest error identities must pass through the
+        // exact typed result carrier without being renamed or caught by an
+        // unrelated handler. This is ABI evidence, not NativeAOT guest proof.
+        for (uint numericCode = 65537; numericCode <= 65544; numericCode++)
+        {
+            var original = new GuestI64EffectResult(
+                99, new GuestEffectStatus(GuestEffectKind.Throw, numericCode));
+            var forwarded = original.Forward().Forward();
+            if (forwarded.IsReturn || forwarded.Value != 0 ||
+                forwarded.Status.Kind != GuestEffectKind.Throw ||
+                forwarded.Status.Code != numericCode ||
+                !forwarded.CatchMatches(numericCode) ||
+                forwarded.CatchMatches(numericCode == 65544 ? 65537u : numericCode + 1))
+                throw new Exception("Numeric guest error ABI identity drift: " + numericCode);
+            var recovered = forwarded.Recover(numericCode, 42);
+            if (!recovered.IsReturn || recovered.Value != 42 ||
+                recovered.Status.Code != 0)
+                throw new Exception("Exact numeric error catch did not recover: " + numericCode);
+        }
+
         foreach (GuestEffectKind terminal in new[] {
             GuestEffectKind.Raise, GuestEffectKind.Panic, GuestEffectKind.Cancel,
             GuestEffectKind.Fatal, GuestEffectKind.ProcessExit
