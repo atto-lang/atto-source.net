@@ -242,7 +242,6 @@ public static class OresIrLowering
                             '-' => IrOpcode.CheckedSubtract,
                             '*' => IrOpcode.CheckedMultiply,
                             '/' => IrOpcode.CheckedDivide,
-                            '%' => IrOpcode.SignedRemainderLiteral,
                             _ => throw new FormatException("Unsupported arithmetic operator")
                         };
                         results.Push(EmitBinary(opcode, left, right));
@@ -269,7 +268,9 @@ public static class OresIrLowering
                         pending.Push(new Pending(node, true));
                         pending.Push(new Pending(abs.Value, false));
                         break;
-                    case Binary binary when binary.Operator is '+' or '-' or '*' or '/' or '%':
+                    // Internal remainder must be constructed as verified IR;
+                    // no programmatically built '%' AST may bypass source admission.
+                    case Binary binary when binary.Operator is '+' or '-' or '*' or '/':
                         pending.Push(new Pending(binary, true));
                         pending.Push(new Pending(binary.Right, false));
                         pending.Push(new Pending(binary.Left, false));
