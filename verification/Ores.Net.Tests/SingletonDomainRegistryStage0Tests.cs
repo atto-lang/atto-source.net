@@ -375,6 +375,47 @@ internal static class SingletonDomainRegistryStage0Tests
         Require(await healthyDomain.StartForHost("app/settings.ores", "Settings") == 99,
             "independent domain initialized incorrectly");
 
+        // A stopped incarnation must not permanently exhaust a bounded grant
+        // list. The controller reclaims stale slots only on a host grant
+        // request at capacity; it never transfers the old actor's authority.
+        using var reclaimDomain = runtime.CreateSingletonDomainHostControlStage0<long>(
+            maxDeclarations: 1, maxGrantsPerDeclaration: 1);
+        reclaimDomain.RegisterCompilerDeclaration("app/settings.ores", "Settings",
+            () => ValueTask.FromResult(73L));
+        var reclaimReceipts = Receipts(2);
+        ActorRef firstIncarnation = Reader(runtime, reclaimDomain.Reader, reclaimReceipts);
+        ActorRef replacementIncarnation = Reader(runtime, reclaimDomain.Reader, reclaimReceipts);
+        reclaimDomain.GrantRead(firstIncarnation, "app/settings.ores", "Settings");
+        Deny(() => reclaimDomain.GrantRead(replacementIncarnation,
+                "app/settings.ores", "Settings"),
+            "ORES-SINGLETON-GRANT-CAPACITY");
+        Require(await reclaimDomain.StartForHost("app/settings.ores", "Settings") == 73L,
+            "replacement-domain singleton initializer failed");
+        runtime.Stop(firstIncarnation);
+        bool stoppedGrantDenied = false;
+        try
+        {
+            reclaimDomain.GrantRead(firstIncarnation, "app/settings.ores", "Settings");
+        }
+        catch (InvalidOperationException) { stoppedGrantDenied = true; }
+        Require(stoppedGrantDenied, "stopped incarnation was re-authorized");
+        reclaimDomain.GrantRead(replacementIncarnation, "app/settings.ores", "Settings");
+        Reading replacedValue = await Send(runtime, replacementIncarnation, reclaimReceipts, 1);
+        Require(replacedValue.Ready && replacedValue.Value == 73L &&
+                replacedValue.Error is null,
+            "bounded stale grant was not reclaimed for a healthy incarnation");
+        Require(!reclaimDomain.RevokeRead(
+                firstIncarnation, "app/settings.ores", "Settings"),
+            "stale incarnation remained in bounded grant table after reclamation");
+        Require(reclaimDomain.RevokeRead(
+                replacementIncarnation, "app/settings.ores", "Settings"),
+            "replacement incarnation could not be explicitly revoked");
+        Reading deniedAfterRevoke = await Send(
+            runtime, replacementIncarnation, reclaimReceipts, 0);
+        Require(deniedAfterRevoke.Error?.Contains("ORES-SINGLETON-ACTOR-DENIED",
+            StringComparison.Ordinal) == true,
+            "reclaimed replacement grant remained valid after revocation");
+
         Require(domain.Retire() && !domain.Retire(),
             "domain retirement was not single-winner");
         Reading retired = await Send(runtime, denied, deniedReceipts, 2);
