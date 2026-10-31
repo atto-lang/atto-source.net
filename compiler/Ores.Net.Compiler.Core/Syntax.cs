@@ -102,6 +102,7 @@ public static class OresParser
             return tokens[index];
         }
 
+        ActorStateSchemaMetadata? discovered = null;
         for (int i = 0; i < tokens.Count; i++)
         {
             if (tokens[i].Text != "define")
@@ -218,10 +219,13 @@ public static class OresParser
                 throw new FormatException(
                     $"Actor state schema requires at least one field at offset {stateOffset}");
 
-            return new ActorStateSchemaMetadata(actorName, actorOffset,
+            if (discovered is not null)
+                throw new FormatException(
+                    $"Multiple actor declarations cannot share one isolated actor schema at offset {actorOffset}");
+            discovered = new ActorStateSchemaMetadata(actorName, actorOffset,
                 stateOffset, metadataFields);
         }
-        return null;
+        return discovered;
     }
     private readonly record struct Token(string Text, int Offset);
 
