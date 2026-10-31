@@ -117,6 +117,7 @@ public static class OresStructuredParser
         // Distinguish a forbidden local nominal declaration from an
         // unsupported top-level class/actor before either reaches lowering.
         int braceDepth = 0;
+        int firstNominalOffset = -1;
         while (true)
         {
             var token = lexer.Read();
@@ -144,8 +145,7 @@ public static class OresStructuredParser
                 if (braceDepth > 0)
                     throw new FormatException(
                         $"Local class/actor declarations are not permitted at offset {token.Offset}");
-                throw new FormatException(
-                    $"Nominal class/actor methods require receiver-erased method slots, type/borrow checking and Native AOT CIL lowering; unsupported in .NET structured frontend at offset {token.Offset}");
+                if (firstNominalOffset < 0) firstNominalOffset = token.Offset;
             }
             if (token.Text is "lex" or "nlex")
             {
@@ -163,6 +163,14 @@ public static class OresStructuredParser
             if (tokens.Count > MaxTokens)
                 throw new FormatException("Structured token budget exceeded");
             if (token.Text.Length == 0) break;
+        }
+        if (firstNominalOffset >= 0)
+        {
+            RejectDuplicateNominalMethodSlots(tokens);
+            // Duplicate declarations are diagnosed above, but valid source
+            // remains unsupported until typed owner/borrow and CIL lowering.
+            throw new FormatException(
+                $"Nominal class/actor methods require receiver-erased method slots, type/borrow checking and Native AOT CIL lowering; unsupported in .NET structured frontend at offset {firstNominalOffset}");
         }
         for (int i = 0; i + 1 < tokens.Count; i++)
         {
@@ -182,6 +190,157 @@ public static class OresStructuredParser
         return linking is null
             ? new StructuredLinkedUnit(reader.ReadProgram(), null, new Dictionary<string, StructuredFunction>())
             : reader.ReadLinkedUnit();
+    }
+
+    // Syntax-only method-slot admission over tokens produced by the *same*
+    // production lexer. This intentionally does not construct an executable
+    // class AST or allow nominal source through to CIL. Ignore malformed or
+    // richer declarations here: their ordinary capability gate stays closed.
+    private static void RejectDuplicateNominalMethodSlots(IReadOnlyList<Token> tokens)
+    {
+        for (int i = 0; i + 3 < tokens.Count; i++)
+        {
+            if (tokens[i].Text != "define") continue;
+            int head = i + 1;
+            if (tokens[head].Text == "pub") head++;
+            if (head + 3 >= tokens.Count ||
+                tokens[head].Text is not ("class" or "actor") ||
+                !IsSimpleNominalWord(tokens[head + 1].Text) ||
+                tokens[head + 2].Text != "as") continue;
+            string owner = tokens[head + 1].Text;
+            var slots = new NominalReceiverMethodSlots();
+            int member = head + 3;
+            int examined = 0;
+            while (member < tokens.Count && tokens[member].Text != "end")
+            {
+                if (++examined > MaxTokens)
+                    throw new FormatException("Nominal method admission token budget exceeded");
+                int cursor = member;
+                if (tokens[cursor].Text is "pub" or "private") cursor++;
+                if (cursor < tokens.Count && tokens[cursor].Text is "mtd" or "method")
+                    cursor++;
+                if (cursor + 1 >= tokens.Count ||
+                    !IsSimpleNominalWord(tokens[cursor].Text) ||
+                    tokens[cursor + 1].Text != "(")
+                {
+                    // Avoid interpreting an expression or field initializer
+                    // as a method declaration. Class lowering stays disabled.
+                    member++;
+                    continue;
+                }
+                string name = tokens[cursor].Text;
+                if (name is "constructor" or "fnc" or "static") {
+                    member++;
+                    continue;
+                }
+                int scan = cursor + 1;
+                if (!TryReadNominalFormals(tokens, ref scan, out var first))
+                {
+                    member++;
+                    continue;
+                }
+                bool explicitSelf = first.Count > 0 &&
+                    (first[0] is "self" ||
+                     (first.Count >= 2 && first[0] == "mut" && first[1] == "self"));
+                bool mutableSelf = first.Count >= 2 &&
+                    first[0] == "mut" && first[1] == "self";
+                int values = explicitSelf ? first.Count - 1 : first.Count;
+                if (explicitSelf && first.Count == 1 &&
+                    scan < tokens.Count && tokens[scan].Text == "(")
+                {
+                    if (!TryReadNominalFormals(tokens, ref scan, out var second))
+                    {
+                        member++;
+                        continue;
+                    }
+                    values = second.Count;
+                }
+                // Only claim declaration identity for complete, simple
+                // signatures with braced bodies, not accidental calls.
+                if (scan + 2 >= tokens.Count ||
+                    tokens[scan].Text is not (":" or "->") ||
+                    !IsSimpleNominalWord(tokens[scan + 1].Text) ||
+                    tokens[scan + 2].Text != "{")
+                {
+                    member++;
+                    continue;
+                }
+                try
+                {
+                    slots.DeclareLowered(owner, name, checked(values + 1),
+                        explicitSelf: explicitSelf, mutableSelf: mutableSelf);
+                }
+                catch (FormatException error)
+                {
+                    throw new FormatException(
+                        $"{error.Message} at offset {tokens[cursor].Offset}", error);
+                }
+                int depth = 1;
+                scan += 3;
+                while (scan < tokens.Count && depth > 0)
+                {
+                    if (tokens[scan].Text == "{") depth++;
+                    else if (tokens[scan].Text == "}") depth--;
+                    scan++;
+                }
+                if (depth != 0) return; // malformed source stays fail-closed
+                member = scan;
+            }
+            i = Math.Max(i,member);
+        }
+    }
+
+    private static bool IsSimpleNominalWord(string value)
+    {
+        if (value.Length is < 1 or > MaxIdentifier) return false;
+        if (!(value[0] is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or '_'))
+            return false;
+        return value.Skip(1).All(c =>
+            c is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' or '_');
+    }
+
+    private static bool TryReadNominalFormals(
+        IReadOnlyList<Token> tokens, ref int scan, out List<string> parameters)
+    {
+        parameters = new List<string>();
+        if (scan >= tokens.Count || tokens[scan++].Text != "(") return false;
+        bool expectValue = true;
+        while (scan < tokens.Count)
+        {
+            string next = tokens[scan].Text;
+            if (next == ")")
+            {
+                if (expectValue && parameters.Count > 0) return false;
+                scan++;
+                return true;
+            }
+            if (next == "," || next == "(" || next == "{" || next == "}")
+                return false;
+            // Parse only scalar name/type groups, with no nested generics
+            // or function type expressions in this syntax-only step.
+            var parts = new List<string>();
+            while (scan < tokens.Count &&
+                   tokens[scan].Text is not ("," or ")"))
+            {
+                if (!IsSimpleNominalWord(tokens[scan].Text) || parts.Count >= 4)
+                    return false;
+                parts.Add(tokens[scan++].Text);
+            }
+            if (parts.Count is < 1 or > 3) return false;
+            if (parts.Count == 1 && parts[0] != "self") return false;
+            if (parts.Count == 2 && parts[0] == "mut" && parts[1] != "self")
+                return false;
+            if (parts[0] == "self" && parts.Count != 1) return false;
+            if (parts[0] == "mut" && parts.Count != 2) return false;
+            parameters.Add(string.Join(" ",parts));
+            if (scan < tokens.Count && tokens[scan].Text == ",")
+            {
+                scan++;
+                expectValue=true;
+            }
+            else expectValue=false;
+        }
+        return false;
     }
 
     private readonly record struct Token(string Text, int Offset);
