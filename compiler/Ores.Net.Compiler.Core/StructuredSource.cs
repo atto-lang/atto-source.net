@@ -526,8 +526,13 @@ public static class OresStructuredParser
                      source[index + 1] == '=') index += 2;
             else if (ch == '!' && index + 1 < source.Length &&
                      source[index + 1] == '=') index += 2;
+            // Return-type arrows are nominal declaration syntax even in the
+            // single-file structured frontend. Tokenize them consistently;
+            // nominal source still fails closed before CFG/CIL lowering.
+            else if (ch == '-' && index + 1 < source.Length &&
+                     source[index + 1] == '>') index += 2;
             else if (moduleMode && index + 1 < source.Length &&
-                (source.Substring(index, 2) is "->" or "&&" or "||" or ">=" or "<=")) index += 2;
+                (source.Substring(index, 2) is "&&" or "||" or ">=" or "<=")) index += 2;
             else if (ch == '|' && !moduleMode)
                 throw new FormatException(
                     $"Lexical captures require checked closure lowering at offset {offset}");
