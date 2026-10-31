@@ -39,6 +39,12 @@ public sealed record StructuredLet(int At, string Name, IrValueType ValueType,
 public sealed record StructuredSet(int At, string Name, StructuredExpr Value)
     : StructuredStmt(At);
 public sealed record StructuredReturn(int At, StructuredExpr Value) : StructuredStmt(At);
+// First typed guest-error slice. The catch binding is intentionally opaque;
+// only the source-level nominal is-type test is represented. CLR exception
+// identity remains an internal CIL implementation detail.
+public sealed record StructuredOverflowCatchReturn(
+    int At, StructuredExpr Protected, string? TypeTest,
+    long MatchValue, long FallbackValue) : StructuredStmt(At);
 public sealed record StructuredIf(int At, StructuredExpr Condition,
     IReadOnlyList<StructuredStmt> Then, IReadOnlyList<StructuredStmt>? Else)
     : StructuredStmt(At);
@@ -628,6 +634,78 @@ public static class OresStructuredParser
                 Expect(";");
                 return (new StructuredReturn(at, value), true);
             }
+            if (Take("try"))
+            {
+                if (activeReturnType != IrValueType.I64)
+                    throw Error("Native Error catch v1 supports only int-returning functions");
+                Expect("{");
+                Expect("return");
+                var protectedValue = Expr(depth + 1);
+                Require(protectedValue, IrValueType.I64,
+                    "Protected Error catch return must be int");
+                Expect(";");
+                Expect("}");
+                Expect("catch");
+                Expect("(");
+                int bindingAt = Current.Offset;
+                string binding = Name();
+                if (scopes.Any(scope => scope.ContainsKey(binding)))
+                    throw new FormatException(
+                        $"Error catch binding '{binding}' shadows local at offset {bindingAt}");
+                Expect(")");
+                Expect("{");
+
+                string? typeTest = null;
+                long matchValue;
+                long fallbackValue;
+                if (Take("if"))
+                {
+                    if (Name() != binding)
+                        throw Error("Error type test must use catch binding");
+                    Expect("is");
+                    Expect("type");
+                    typeTest = Name();
+                    if (typeTest is not ("ArithmeticOverflowError" or "Error"))
+                        throw Error(
+                            "Error catch v1 supports only ArithmeticOverflowError or Error");
+                    Expect("{");
+                    Expect("return");
+                    var matched = Expr(depth + 1);
+                    if (matched is not StructuredInt matchedInt)
+                        throw Error("Error type-match return must be integer literal");
+                    matchValue = matchedInt.Value;
+                    Expect(";");
+                    Expect("}");
+                    Expect("else");
+                    Expect("{");
+                    Expect("return");
+                    var fallback = Expr(depth + 1);
+                    if (fallback is not StructuredInt fallbackInt)
+                        throw Error("Error type-mismatch return must be integer literal");
+                    fallbackValue = fallbackInt.Value;
+                    Expect(";");
+                    Expect("}");
+                    Expect("fi");
+                }
+                else
+                {
+                    Expect("return");
+                    var handled = Expr(depth + 1);
+                    if (handled is not StructuredInt handledInt)
+                        throw Error("Error catch v1 handler must be integer literal");
+                    matchValue = handledInt.Value;
+                    fallbackValue = handledInt.Value;
+                    Expect(";");
+                }
+                Expect("}");
+                Expect("finally");
+                Expect("{");
+                if (Current.Text != "}")
+                    throw Error("Error catch v1 requires empty finally");
+                Expect("}");
+                return (new StructuredOverflowCatchReturn(
+                    at, protectedValue, typeTest, matchValue, fallbackValue), true);
+            }
             if (Current.Text is "let" or "val" or "const")
             {
                 StructuredBindingKind kind = Current.Text switch
@@ -726,7 +804,8 @@ public static class OresStructuredParser
                     or "define" or "pub" or "fnc" or "const" or "val" or "final"
                     or "struct" or "record" or "class" or "actor"
                     or "module" or "import" or "from" or "as" or "end"
-                    or "do" or "fi"
+                    or "do" or "fi" or "try" or "catch" or "finally"
+                    or "is" or "type"
                     or "routine" or "async" or "isoactor")
                 throw new FormatException($"Invalid identifier at offset {at}");
             index++;
