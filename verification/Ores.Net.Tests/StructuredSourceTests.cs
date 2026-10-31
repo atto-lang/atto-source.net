@@ -60,6 +60,14 @@ internal static class StructuredSourceTests
             ("define class Foo as x(mut self, int n):void {} x(int n):void {} end", "x/1"),
             ("define class Foo as x(self):int {} x(mut self):int {} end", "x/0"),
             ("define class Foo as x(self, int n):int {} x(mut self)(int n):int {} end", "x/1"),
+            // Typed legacy receivers are the same caller-visible selector.
+            ("define class Foo as x():void {} x(self Foo)():void {} end", "x/0"),
+            ("define class Foo as x(self Foo)():void {} x():void {} end", "x/0"),
+            ("define class Foo as x(int n):int {} x(self Foo)(int n):int {} end", "x/1"),
+            ("define class Foo as x(self Foo)(int n):int {} x(int n):int {} end", "x/1"),
+            ("define class Foo as x(int n):int {} x(mut self Foo, int n):int {} end", "x/1"),
+            ("define class Foo as x(mut self Foo)(int n):int {} x(int n):int {} end", "x/1"),
+            ("define class Foo as x(self Foo, int n):int {} x(mut self Foo)(int n):int {} end", "x/1"),
             // Legacy class fnc is an instance declaration, unlike static fnc.
             ("define class Foo as fnc x():void {} x(mut self)():void {} end", "x/0"),
             ("define class Foo as x(mut self)():void {} fnc x():void {} end", "x/0"),
@@ -85,6 +93,12 @@ internal static class StructuredSourceTests
             "define class Foo as x():void {} constructor(){x();x();} end",
             "define class Foo as static fnc x():void {} x(mut self)():void {} end",
             "define class Foo as x():void {} static fnc x():void {} end",
+            // Unsupported malformed typed receivers must not be mistaken for
+            // valid duplicate declarations in the preliminary signature scan.
+            "define class Foo as x(int n):int {} x(self Other)(int n):int {} end",
+            "define class Foo as x(int n):int {} x(mut self Other)(int n):int {} end",
+            "define class Foo as x(int n):int {} x(self)(self):int {} end",
+            "define class Foo as x(self Foo)(int n):int {} y(mut self Foo)(int n):int {} end",
             "define actor Foo as x():void {} y(mut self)():void {} end"
         })
             RejectFeature(validButNotExecutable,
