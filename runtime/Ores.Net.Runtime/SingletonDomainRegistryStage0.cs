@@ -70,6 +70,14 @@ public sealed class SingletonDomainHostControlStage0<T> : IDisposable
             throw new ArgumentOutOfRangeException(nameof(maxGrantsPerDeclaration));
         if (maxPendingWaiters is <= 0 or > 65536)
             throw new ArgumentOutOfRangeException(nameof(maxPendingWaiters));
+        // The only checked stage-0 initializer IR returns i64. Until the
+        // guest ownership/type checker is implemented, returning an arbitrary
+        // CLR reference (or a custom value struct containing references)
+        // would allow shared mutable identity across isolated actor arenas.
+        // Do not pretend generics are a deep-immutability guarantee.
+        if (typeof(T) != typeof(long))
+            throw new NotSupportedException(
+                "ORES-SINGLETON-STAGE0-TYPE-UNSUPPORTED: only i64 publication is admitted");
         _runtime = runtime;
         _maxDeclarations = maxDeclarations;
         _maxGrantsPerDeclaration = maxGrantsPerDeclaration;
