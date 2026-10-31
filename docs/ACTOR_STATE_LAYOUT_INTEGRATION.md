@@ -86,11 +86,16 @@ parser, is used by `ActorIncrementSourceEmitter.EmitCSharp` to generate
 static C# actor construction and the single checked increment method.
 The generated actor constructor registers an actor and initializes
 separate scalar state through `OresVmHost.ConfigureActorState` with
-rollback on initialization failure. The generated increment calls
-`OresVmHost.InvokeTrustedActorStateLong`; the host owns the logical
-turn and loan, and emitted code invokes `AddActorStateInt64` while the
-state check and checked update share one host lock. Faults retire the
-loan and terminally cancel the logical turn. This is *not* a generic
+rollback on initialization failure. The generated increment accepts **only** an
+`OresVmHost.ActorDispatchScope`. The trusted host retains a
+`CreateTrustedScheduler()` capability and calls
+`scheduler.Dispatch(isolate, actor, Actor_Counter.Call_increment)`.
+The scheduler begins the logical turn and writable state loan, issues
+one transient scope, and revokes it before completion or on exception.
+The generated increment invokes `scope.AddInt64(0, 1)`, which validates
+and updates the field under one host lock. Foreign-thread use and
+post-turn/post-cancellation scope replay fail closed. Faults revoke the
+scope and terminally cancel the logical turn. This is *not* a generic
 actor AST/code generator or a custom ECMA-335 CIL emitter.
 
 `verification/Ores.Net.Tests/GeneratedCounterActor.g.cs` is a
@@ -133,3 +138,33 @@ GitHub reports a nonzero-step exact-head job and captured test output and
 native artifact evidence. A source-only canary must precede any private
 source transfer to an external test organization; the existing security
 incident still blocks such transfers without independent approval.
+
+## Trusted-host scheduler authority boundary (2026-10-31)
+
+The earlier public `InvokeTrustedActorStateLong` delegate entry has been
+removed from this integration branch. Generated `Call_increment` takes a
+single opaque `ActorDispatchScope` with an **internal constructor**;
+it cannot mint a turn, choose a tenant, choose an actor, acquire a new
+loan, or retain usable scope access after returning. An internal
+`ActorScheduler` constructor prevents simply constructing scheduler
+authority. Dispatch is explicitly initiated by a host-held scheduler,
+which grants an ephemeral state scope for one synchronous invocation.
+
+`ActorDispatchScope` checks dispatch lifetime and its physical thread
+before each operation. Operations are still checked atomically against the
+active host-owned turn and loan. Tests cover reentrancy, scope capture
+and replay on success/failure, foreign carrier execution, i64 overflow,
+isolate restart, and independent actor state.
+
+**Trust boundary limitations:** the embedding application can call
+`OresVmHost.CreateTrustedScheduler()`; this method must never be exposed
+as an untrusted guest API. The older host modeling methods
+`BeginActorTurn`/`BeginActorStateLoan` remain publicly callable by
+trusted host code for compatibility, and this is not an OS sandbox or
+a defense against arbitrary malicious CLR code with a reference to the
+whole host. The actual actor scheduler/mailbox dispatch path is not yet
+wired to this source slice. No claim of end-to-end unforgeable actor
+authority or physical actor/tenant isolation is warranted until guest
+capability confinement and independent scheduler dispatch proofs exist.
+Full integration with the production scheduler and a negative untrusted
+guest compilation test is still mandatory before promotion.
