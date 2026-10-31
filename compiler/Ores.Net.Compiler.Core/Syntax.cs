@@ -266,32 +266,19 @@ public static class OresParser
             while (Current.Text is "*" or "/" or "%")
             {
                 char op = Current.Text[0];
-                // Reference Oreslang int/int has a float result. This i64-only
-                // frontend must not silently truncate it using CIL div.
+                // Oreslang reserves remainder for a named Mod(a, b) function.
+                // Keep lexer admission to produce a precise rejection, not CIL rem.
+                if (op == '%')
+                    throw new FormatException(
+                        "The % operator is forbidden in Oreslang source; use Mod(a, b)");
+                // In the language int/int division yields float. The limited
+                // i64-only frontend must not silently truncate it using CIL div.
                 if (op == '/')
-                    throw new FormatException("Division requires float result lowering; unsupported in the i64 source subset");
+                    throw new FormatException(
+                        "Division requires float result lowering; unsupported in the i64 source subset");
                 _index++;
                 var rhs = ParseUnary(depth + 1);
-                if (op == '%')
-                {
-                    // Portable P0 subset: a syntactically signed nonzero
-                    // integer literal is required. No dynamic zero/error
-                    // effects or untyped CLR remainder fallbacks.
-                    long divisor = rhs switch
-                    {
-                        Literal literal => literal.Value,
-                        Unary { Operator: '+', Value: Literal literal } => literal.Value,
-                        Unary { Operator: '-', Value: Literal literal }
-                            when literal.Value != long.MinValue => -literal.Value,
-                        _ => throw new FormatException(
-                            "Remainder requires a signed integer literal divisor")
-                    };
-                    if (divisor == 0)
-                        throw new FormatException("Remainder divisor cannot be zero");
-                    left = new Binary('%', left, new Literal(divisor));
-                }
-                else
-                    left = new Binary(op, left, rhs);
+                left = new Binary(op, left, rhs);
             }
             return left;
         }
