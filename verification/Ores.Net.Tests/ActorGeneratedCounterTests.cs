@@ -38,6 +38,12 @@ internal static class ActorGeneratedCounterTests
             ir.FieldName == "count" && ir.FieldIndex == 0 && ir.Delta == 1,
             "source method was not lowered to typed field index");
         var generated = ActorIncrementSourceEmitter.EmitCSharp(ir);
+        // The AOT-compiled golden must match the compiler output exactly.
+        var golden = File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
+            "GeneratedCounterActor.g.cs"));
+        Require(generated.Replace("\r\n", "\n", StringComparison.Ordinal) ==
+                golden.Replace("\r\n", "\n", StringComparison.Ordinal),
+            "static compiled golden diverged from actor source emitter");
         Require(generated.Contains("public static class Actor_Counter", StringComparison.Ordinal) &&
             generated.Contains("public static long Call_increment(", StringComparison.Ordinal) &&
             generated.Contains("host.ConfigureActorState(isolate, actor,", StringComparison.Ordinal) &&
