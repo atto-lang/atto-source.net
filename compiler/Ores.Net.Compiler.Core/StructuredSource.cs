@@ -232,15 +232,27 @@ public static class OresStructuredParser
                 }
                 int cursor = member;
                 if (tokens[cursor].Text is "pub" or "private") cursor++;
-                if (cursor < tokens.Count && (tokens[cursor].Text is "mtd" or "method" or "fnc"))
-                    cursor++;
-                if (cursor < tokens.Count &&
-                    (tokens[cursor].Text is "static" or "constructor"))
+                bool staticMethod = cursor < tokens.Count &&
+                    tokens[cursor].Text == "static";
+                if (staticMethod)
                 {
-                    // Only static callables and constructors are outside
-                    // the instance namespace. Legacy class 'fnc x(...)'
-                    // is an instance method and must reserve an x/arity slot.
-                    // Skip static/constructor signatures until the body.
+                    // Static source methods use the same duplicate registry
+                    // but a disjoint namespace and NO injected receiver.
+                    cursor++;
+                    if (cursor >= tokens.Count || tokens[cursor].Text != "fnc")
+                    {
+                        member++;
+                        continue;
+                    }
+                    cursor++;
+                }
+                else if (cursor < tokens.Count &&
+                    (tokens[cursor].Text is "mtd" or "method" or "fnc"))
+                    cursor++;
+                if (cursor < tokens.Count && tokens[cursor].Text == "constructor")
+                {
+                    // Constructors do not occupy ordinary method slots.
+                    // Skip the signature and its body without counting calls.
                     member = cursor + 1;
                     while (member < tokens.Count &&
                            tokens[member].Text is not ("{" or ";" or "end"))
@@ -264,7 +276,7 @@ public static class OresStructuredParser
                     continue;
                 }
                 int scan = cursor + 1;
-                if (!TryReadNominalFormals(tokens, ref scan, out var first, owner, true))
+                if (!TryReadNominalFormals(tokens, ref scan, out var first, owner, !staticMethod))
                 {
                     member++;
                     continue;
@@ -295,7 +307,8 @@ public static class OresStructuredParser
                 }
                 try
                 {
-                    slots.DeclareLowered(owner, name, checked(values + 1),
+                    slots.DeclareLowered(owner, name, checked(values + (staticMethod ? 0 : 1)),
+                        staticMethod ? ReceiverMethodNamespace.Static : ReceiverMethodNamespace.Instance,
                         explicitSelf: explicitSelf, mutableSelf: mutableSelf);
                 }
                 catch (FormatException error)
