@@ -44,3 +44,43 @@ generation-fenced continuation before reacquiring state access.
 Do not infer source actor parity from parser admission. Managed tests plus real
 Linux/Windows NativeAOT execution of the integrated source/runtime lowering are
 release gates.
+
+
+## Typed immutable schema metadata (October 30, 2026)
+
+The compiler now exposes `OresParser.InspectActorStateSchema(source)`
+for **metadata-only** inspection of the first canonical isolated actor
+declaration in a source string. The method reuses the normal parser's source
+byte budget, UTF-16 validation, lexical treatment of comments/strings and
+bounded declaration checks. It produces an `ActorStateSchemaMetadata`
+with the nominal actor name, actor/state source offsets and immutable,
+ordered `ActorStateFieldMetadata` descriptors.
+
+Each field has a zero-based index, source name, source offset,
+`ActorStateFieldKind.Int64` or `Boolean`, and the typed literal default.
+The collection is backed by a defensive read-only copy. Signed-i64 parsing
+includes `long.MinValue`, but rejects overflow; scalar field count remains
+1–16. No field reflection, dynamic property lookup, mutable descriptor
+array or guest-write capability is returned. This is a schema inspection
+surface, **not a whole-program actor type checker**.
+
+The normal `OresParser.Parse(source)` still rejects source actors with
+the existing generation-fenced `handle_state` lowering diagnostic.
+The metadata API supplies **no** `ActorTurnTicket`, `ActorStateLoan`,
+authenticated scheduler identity or executable CIL/IR; an untrusted caller
+cannot use metadata inspection as actor execution authorization.
+
+The independent runtime draft #264 supplies host-owned scalar cells and
+atomic loan-checked state operations. Integrating these branches will require
+compiler-generated layout initialization with field kinds/defaults,
+the lexical `critical` callback and effect checker, and scheduler-issued
+turn/loan tokens bound to the generated state operation. Do not emit a
+`ValidateActorStateLoan` call followed by an unguarded CLR field access.
+
+`ActorStateSchemaAdmissionTests.Run()` is wired into the existing
+`verification/Ores.Net.Tests/Program.cs` executable and checks ordered
+fields, source offsets, immutable descriptors, min/max signed defaults,
+typed booleans, 16-field maximum, invalid/duplicate fields and continued
+fail-closed actor execution. This is test **source**, not an executed
+NativeAOT result. Linux/Windows exact-head build, guest behavior and
+independent approval remain mandatory before merging.
