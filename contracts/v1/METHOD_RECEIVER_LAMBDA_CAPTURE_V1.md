@@ -120,9 +120,11 @@ not substitute a scalar mutation or an unprotected callback.
   slot registry and host-level self-tests now cover the selector identity,
   without claiming parser integration, borrowing or executable method dispatch.
   Forge remains separately gated.
-* Wasm: delegates source compilation to the pinned real native LLVM compiler;
-  the wasm32 method/actor lowering gate remains fail-closed. There is no
-  independent JavaScript source parser claiming method semantics.
+* Wasm: delegates source compilation to a SHA-256-pinned real native LLVM
+  compiler. Restricted scalar-class receivers have a dedicated wasm32
+  compile/link/execute test matrix, but passing guest evidence is still
+  required; unsupported actor methods and lexical captures fail closed.
+  There is no independent JavaScript source parser claiming method semantics.
 
 This is a phased migration. Cross-backend parity is **NOT ACHIEVED** until
 all required positive code executes and negative cases reject as specified.
