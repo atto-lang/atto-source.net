@@ -1,6 +1,6 @@
 # Isolated actor state — compiler/runtime integration slice
 
-**Status: draft, host-layout integration only. Not executable Oreslang actor lowering.**
+**Status: draft. One opt-in, narrow synchronous Counter method emits static C# source for NativeAOT; production scalar CIL still rejects actors, and exact-head guest execution remains unverified.**
 
 This integration branch combines the following exact source stacks, as
 **separate merge parents in the same repository**, without modifying either
@@ -49,8 +49,9 @@ These are **host integration assertions**, not generated `.ores` guest tests.
    The schema inspector currently validates the state prefix, not the body.
 2. Source-level field type checking, effect rows, nonescaping state loans,
    and compile-time rejection of untrusted access.
-3. Generated CIL/NativeAOT actor construction, method lowering, scheduler
-   continuations or source-generated `handle_state` operations.
+3. General generated actor CIL/NativeAOT construction, broad typed method
+   lowering, production scheduler carrier integration, and async continuations.
+   Only a strict synchronous +1 `handle_state` C# emitter currently exists.
 4. Identical LLVM and Java/Graal guest fixtures and backend comparison.
 5. Exact-head **executed** compiler and Linux/Windows NativeAOT tests.
    Zero-step/runner-admission failures are not compiler verdicts.
