@@ -89,6 +89,41 @@ static void InvalidSend(Action action, string why)
             "manifest-verified multi-file package linker",
             "transitively linked namespace import must reject before CIL emission");
 
+        // Additional cross-backend regression #1: the same-package +/
+        // selector cannot bypass the missing manifest-owned namespace graph.
+        File.WriteAllText(main,
+            "import namespace billing from \"+/\"; fnc main()->int { return 1; }");
+        RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
+            "manifest-verified multi-file package linker",
+            "unverified same-package namespace import must fail before CIL");
+
+        // Regression #2: even a qualified scalar call cannot authorize an
+        // unpinned namespace import by satisfying a lexical name.
+        File.WriteAllText(main,
+            "import namespace billing as payments from \"checkout\"; " +
+            "fnc main()->int { return payments.answer(); }");
+        RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
+            "manifest-verified multi-file package linker",
+            "qualified namespace calls require package-authenticated providers");
+
+        // Regression #3: transitive imports with +/ are just as forbidden
+        // as direct imports until the NativeAOT namespace linker exists.
+        File.WriteAllText(startup,
+            "import namespace billing from \"+/\"; pub fnc helper()->int { return 2; }");
+        File.WriteAllText(main,
+            "import fnc helper from \"./startup.ores\"; fnc main()->int { return helper(); }");
+        RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
+            "manifest-verified multi-file package linker",
+            "transitive same-package namespace import must fail before CIL");
+
+        // Regression #4: an unreachable file containing forbidden namespace
+        // syntax must remain outside the reachable compilation closure.
+        File.WriteAllText(unrelated,
+            "import namespace billing from \"checkout\"; fnc bad()->int { return 999; }");
+        File.WriteAllText(main, "fnc main()->int { return 1; }");
+        Require(OresSourceModuleCompiler.Compile(main, new[] { root }).Sources.Count == 1,
+            "unreachable namespace source must not enter the NativeAOT linker");
+
         // A failed admission must not contaminate a later independent
         // compilation; unrelated files remain outside the reachable graph.
         File.WriteAllText(main, "fnc main()->int { return 1; }");
