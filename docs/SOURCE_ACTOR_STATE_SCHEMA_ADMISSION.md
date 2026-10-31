@@ -49,7 +49,7 @@ release gates.
 ## Typed immutable schema metadata (October 30, 2026)
 
 The compiler now exposes `OresParser.InspectActorStateSchema(source)`
-for **metadata-only** inspection of the first canonical isolated actor
+for **metadata-only** inspection of a single canonical isolated actor
 declaration in a source string. The method reuses the normal parser's source
 byte budget, UTF-16 validation, lexical treatment of comments/strings and
 bounded declaration checks. It produces an `ActorStateSchemaMetadata`
@@ -58,7 +58,8 @@ ordered `ActorStateFieldMetadata` descriptors.
 
 Each field has a zero-based index, source name, source offset,
 `ActorStateFieldKind.Int64` or `Boolean`, and the typed literal default.
-The collection is backed by a defensive read-only copy. Signed-i64 parsing
+The collection is backed by a defensive read-only copy. Multiple actor
+declarations are rejected rather than silently selecting one. Signed-i64 parsing
 includes `long.MinValue`, but rejects overflow; scalar field count remains
 1–16. No field reflection, dynamic property lookup, mutable descriptor
 array or guest-write capability is returned. This is a schema inspection
