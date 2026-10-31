@@ -153,6 +153,23 @@ internal static class ActorGeneratedCounterTests
         catch (InvalidOperationException) { replayDenied = true; }
         Require(replayDenied, "retired dispatch scope could mutate after completion");
 
+        // Two concurrent carriers must not redeem one FIFO control tick
+        // twice. The loser either sees the active logical lane or no tick.
+        scheduler.Enqueue(tenantA, a);
+        long TryCompetingDispatch()
+        {
+            try { return scheduler.DispatchNext(tenantA, a,
+                Actor_Counter.Call_increment); }
+            catch (InvalidOperationException) { return -1L; }
+        }
+        var competing = Task.WhenAll(
+            Task.Run(TryCompetingDispatch),
+            Task.Run(TryCompetingDispatch)).GetAwaiter().GetResult();
+        Require(competing.Count(x => x == 5L) == 1 &&
+                competing.Count(x => x == -1L) == 1 &&
+                scheduler.PendingMessages(tenantA, a) == 0,
+            "one mailbox tick admitted two competing actor turns");
+
         // The specialized dispatcher cannot steal arbitrary user bytes
         // from the same mailbox or skip past a nonempty FIFO head.
         vm.SendActor(tenantA, a2, scheduler.Address(tenantA, a2),
