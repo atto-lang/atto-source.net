@@ -398,7 +398,22 @@ public static class OresStructuredParser
         internal StructuredLinkedUnit ReadLinkedUnit()
         {
             _ = ReadImports();
-            if (Current.Text == "define" && index + 1 < tokens.Count && tokens[index + 1].Text == "module")
+            if (Current.Text == "define" && index + 2 < tokens.Count &&
+                tokens[index + 1].Text == "pub" && tokens[index + 2].Text == "module")
+            {
+                index += 3;
+                declaredModule = Name();
+                Expect("as");
+            }
+            else if (Current.Text == "pub" && index + 2 < tokens.Count &&
+                     tokens[index + 1].Text == "define" && tokens[index + 2].Text == "module")
+            {
+                index += 3;
+                declaredModule = Name();
+                Expect("as");
+            }
+            else if (Current.Text == "define" && index + 1 < tokens.Count &&
+                     tokens[index + 1].Text == "module")
             {
                 index += 2;
                 declaredModule = Name();
@@ -535,6 +550,30 @@ public static class OresStructuredParser
             localTypeScopes.RemoveAt(localTypeScopes.Count - 1);
             return (Array.AsReadOnly(body.ToArray()), terminated);
         }
+
+        private (IReadOnlyList<StructuredStmt> Body, bool Returns) KeywordBlock(
+            int depth, bool stopAtElse)
+        {
+            Budget(depth);
+            scopes.Add(new Dictionary<string, LocalBinding>(StringComparer.Ordinal));
+            localTypeScopes.Add(new HashSet<string>(StringComparer.Ordinal));
+            var body = new List<StructuredStmt>();
+            bool terminated = false;
+            while (Current.Text != "fi" && (!stopAtElse || Current.Text != "else"))
+            {
+                if (Current.Text.Length == 0) throw Error("Unterminated do/fi block");
+                if (terminated) throw Error("Unreachable statement");
+                if (++statements > MaxStatements)
+                    throw Error("Structured statement budget exceeded");
+                var (statement, returns) = Statement(depth + 1);
+                body.Add(statement);
+                terminated = returns;
+            }
+            scopes.RemoveAt(scopes.Count - 1);
+            localTypeScopes.RemoveAt(localTypeScopes.Count - 1);
+            return (Array.AsReadOnly(body.ToArray()), terminated);
+        }
+
         private (StructuredStmt Statement, bool Returns) Statement(int depth)
         {
             Budget(depth);
@@ -628,12 +667,26 @@ public static class OresStructuredParser
             {
                 var condition = Expr(depth + 1);
                 Require(condition, IrValueType.Bool, "If condition must be bool");
-                var (yes, yesReturns) = Block(depth + 1);
-                IReadOnlyList<StructuredStmt>? no = null;
-                bool noReturns = false;
-                if (Take("else")) (no, noReturns) = Block(depth + 1);
-                return (new StructuredIf(at, condition, yes, no),
-                    yesReturns && noReturns);
+                if (Take(";"))
+                {
+                    Expect("do");
+                    var (yes, yesReturns) = KeywordBlock(depth + 1, stopAtElse: true);
+                    IReadOnlyList<StructuredStmt>? no = null;
+                    bool noReturns = false;
+                    if (Take("else"))
+                        (no, noReturns) = KeywordBlock(depth + 1, stopAtElse: false);
+                    Expect("fi");
+                    Take(";");
+                    return (new StructuredIf(at, condition, yes, no),
+                        yesReturns && noReturns);
+                }
+
+                var (braceYes, braceYesReturns) = Block(depth + 1);
+                IReadOnlyList<StructuredStmt>? braceNo = null;
+                bool braceNoReturns = false;
+                if (Take("else")) (braceNo, braceNoReturns) = Block(depth + 1);
+                return (new StructuredIf(at, condition, braceYes, braceNo),
+                    braceYesReturns && braceNoReturns);
             }
             if (Take("while"))
             {
@@ -673,6 +726,7 @@ public static class OresStructuredParser
                     or "define" or "pub" or "fnc" or "const" or "val" or "final"
                     or "struct" or "record" or "class" or "actor"
                     or "module" or "import" or "from" or "as" or "end"
+                    or "do" or "fi"
                     or "routine" or "async" or "isoactor")
                 throw new FormatException($"Invalid identifier at offset {at}");
             index++;
