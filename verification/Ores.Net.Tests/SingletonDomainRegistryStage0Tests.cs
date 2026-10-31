@@ -23,6 +23,23 @@ internal static class SingletonDomainRegistryStage0Tests
         throw new Exception("singleton domain stage0: missing denial " + category);
     }
 
+    private static void RequireUnsupportedStage0Publication<T>(ActorRuntime runtime)
+    {
+        try
+        {
+            using var rejected = runtime.CreateSingletonDomainHostControlStage0<T>();
+        }
+        catch (NotSupportedException error) when (
+            error.Message.Contains("ORES-SINGLETON-STAGE0-TYPE-UNSUPPORTED",
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+        throw new Exception(
+            "singleton stage0 accepted arbitrary reference/custom publication type: " +
+            typeof(T).FullName);
+    }
+
     private static ActorRuntimeOptions Options() => new()
     {
         MaxActors = 8,
@@ -90,6 +107,14 @@ internal static class SingletonDomainRegistryStage0Tests
     {
         using var runtime = new ActorRuntime(Options());
         using var foreignRuntime = new ActorRuntime(Options());
+
+        // Host-only generic signatures must not permit mutable CLR object
+        // identity to escape between physically isolated actor-owned arenas.
+        // Stage-0 verified scalar initializer plans currently support i64 only.
+        RequireUnsupportedStage0Publication<object>(runtime);
+        RequireUnsupportedStage0Publication<long[]>(runtime);
+        RequireUnsupportedStage0Publication<int>(runtime);
+        RequireUnsupportedStage0Publication<DateTime>(runtime);
         using var domain = runtime.CreateSingletonDomainHostControlStage0<long>(
             maxDeclarations: 1, maxGrantsPerDeclaration: 1);
         using var healthyDomain = runtime.CreateSingletonDomainHostControlStage0<long>(
