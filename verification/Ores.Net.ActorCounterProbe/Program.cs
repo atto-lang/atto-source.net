@@ -6,6 +6,14 @@ static void Require(bool condition, string label)
     if (!condition) throw new InvalidOperationException("NativeAOT Counter: " + label);
 }
 
+static long Deliver(OresVmHost.ActorScheduler scheduler,
+    OresVmHost.IsolateHandle isolate, OresVmHost.ActorTicket actor,
+    Func<OresVmHost.ActorDispatchScope, long> generatedMethod)
+{
+    scheduler.Enqueue(isolate, actor);
+    return scheduler.DispatchNext(isolate, actor, generatedMethod);
+}
+
 var host = new OresVmHost(maxTenants: 2);
 var tenantA = host.CreateIsolate("counter-a", maxActors: 2);
 var tenantB = host.CreateIsolate("counter-b", maxActors: 1);
@@ -14,22 +22,30 @@ var scheduler = host.CreateTrustedScheduler();
 var a = Actor_Counter.Create(host, tenantA, 1);
 var a2 = Actor_Counter.Create(host, tenantA, 2);
 var b = Actor_Counter.Create(host, tenantB, 1);
-Require(scheduler.Dispatch(tenantA, a, Actor_Counter.Call_increment) == 1, "A1");
-Require(scheduler.Dispatch(tenantA, a, Actor_Counter.Call_increment) == 2, "A2");
-Require(scheduler.Dispatch(tenantB, b, Actor_Counter.Call_increment) == 1, "B1");
-Require(scheduler.Dispatch(tenantA, a, Actor_Counter.Call_increment) == 3, "A3");
-Require(scheduler.Dispatch(tenantB, b, Actor_Counter.Call_increment) == 2, "B2");
-Require(scheduler.Dispatch(tenantA, a2, Actor_Counter.Call_increment) == 1, "independent same-tenant actor");
+bool missingTickDenied = false;
+try { _ = scheduler.DispatchNext(tenantA, a, Actor_Counter.Call_increment); }
+catch (InvalidOperationException) { missingTickDenied = true; }
+Require(missingTickDenied, "actor turn admitted with no mailbox dequeue");
+Require(Deliver(scheduler, tenantA, a, Actor_Counter.Call_increment) == 1, "A1");
+bool reusedTickDenied = false;
+try { _ = scheduler.DispatchNext(tenantA, a, Actor_Counter.Call_increment); }
+catch (InvalidOperationException) { reusedTickDenied = true; }
+Require(reusedTickDenied, "single FIFO receipt reused for multiple turns");
+Require(Deliver(scheduler, tenantA, a, Actor_Counter.Call_increment) == 2, "A2");
+Require(Deliver(scheduler, tenantB, b, Actor_Counter.Call_increment) == 1, "B1");
+Require(Deliver(scheduler, tenantA, a, Actor_Counter.Call_increment) == 3, "A3");
+Require(Deliver(scheduler, tenantB, b, Actor_Counter.Call_increment) == 2, "B2");
+Require(Deliver(scheduler, tenantA, a2, Actor_Counter.Call_increment) == 1, "independent same-tenant actor");
 
 bool deniedReentry = false;
-_ = scheduler.Dispatch(tenantA, a, scope => {
-    try { _ = scheduler.Dispatch(tenantA, a, Actor_Counter.Call_increment); }
+_ = Deliver(scheduler, tenantA, a, scope => {
+    try { _ = scheduler.DispatchNext(tenantA, a, Actor_Counter.Call_increment); }
     catch (InvalidOperationException) { deniedReentry = true; }
     return scope.ReadInt64(0);
 });
 Require(deniedReentry, "reentrant actor method unexpectedly admitted");
 bool crossThreadDenied = false;
-_ = scheduler.Dispatch(tenantA, a, scope => {
+_ = Deliver(scheduler, tenantA, a, scope => {
     crossThreadDenied = Task.Run(() => {
         try { _ = scope.AddInt64(0, 1); return false; }
         catch (InvalidOperationException) { return true; }
@@ -41,7 +57,7 @@ Require(crossThreadDenied, "live dispatch scope escaped to another physical carr
 bool cancelled = false;
 OresVmHost.ActorDispatchScope? cancelledScope = null;
 try {
-    _ = scheduler.Dispatch(tenantA, a, scope => {
+    _ = Deliver(scheduler, tenantA, a, scope => {
         cancelledScope = scope;
         throw new InvalidOperationException("expected fault");
     });
@@ -52,29 +68,29 @@ bool cancellationRevoked = false;
 try { _ = cancelledScope!.ReadInt64(0); }
 catch (InvalidOperationException) { cancellationRevoked = true; }
 Require(cancelled && cancellationRevoked &&
-    scheduler.Dispatch(tenantA, a, Actor_Counter.Call_increment) == 4,
+    Deliver(scheduler, tenantA, a, Actor_Counter.Call_increment) == 4,
     "faulted logical turn not fenced and restarted");
 
 // Overflow must fail in the generated increment path without committing
 // any partial change or admitting a stale turn after cancellation.
-_ = scheduler.Dispatch(tenantA, a2, scope => {
+_ = Deliver(scheduler, tenantA, a2, scope => {
     scope.WriteInt64(0, long.MaxValue);
     return 0L;
 });
 bool overflowDenied = false;
-try { _ = scheduler.Dispatch(tenantA, a2, Actor_Counter.Call_increment); }
+try { _ = Deliver(scheduler, tenantA, a2, Actor_Counter.Call_increment); }
 catch (OverflowException) { overflowDenied = true; }
 Require(overflowDenied, "generated checked i64 overflow was admitted");
-_ = scheduler.Dispatch(tenantA, a2, scope => {
+_ = Deliver(scheduler, tenantA, a2, scope => {
     Require(scope.ReadInt64(0) == long.MaxValue, "generated overflow changed actor state");
     scope.WriteInt64(0, 0);
     return 0L;
 });
-Require(scheduler.Dispatch(tenantA, a2, Actor_Counter.Call_increment) == 1,
+Require(Deliver(scheduler, tenantA, a2, Actor_Counter.Call_increment) == 1,
     "overflow left actor lane blocked");
 
 OresVmHost.ActorDispatchScope? retained = null;
-_ = scheduler.Dispatch(tenantA, a, scope => {
+_ = Deliver(scheduler, tenantA, a, scope => {
     retained = scope;
     return scope.ReadInt64(0);
 });
@@ -91,7 +107,7 @@ host.BeginShutdown(tenantB);host.CompleteShutdown(tenantB);host.Destroy(tenantB)
 var nextTenant = host.CreateIsolate("counter-a", maxActors: 1);
 host.Start(nextTenant);
 var next = Actor_Counter.Create(host, nextTenant, 1);
-Require(scheduler.Dispatch(nextTenant, next, Actor_Counter.Call_increment) == 1,
+Require(Deliver(scheduler, nextTenant, next, Actor_Counter.Call_increment) == 1,
     "reincarnation leaked old actor state");
 host.RetireActor(nextTenant, next);
 host.BeginShutdown(nextTenant);
