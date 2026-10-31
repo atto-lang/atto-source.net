@@ -122,6 +122,7 @@ public sealed partial class OresVmHost
         private readonly ActorTicket _actor;
         private readonly ActorTurnTicket _turn;
         private readonly ActorStateLoan _loan;
+        private readonly int _ownerThreadId;
         private bool _live = true;
 
         internal ActorDispatchScope(OresVmHost host, IsolateHandle isolate,
@@ -129,12 +130,15 @@ public sealed partial class OresVmHost
         {
             _host = host; _isolate = isolate; _actor = actor;
             _turn = turn; _loan = loan;
+            _ownerThreadId = Environment.CurrentManagedThreadId;
         }
 
         private void CheckLive()
         {
             if (!_live)
                 throw new InvalidOperationException("retired actor dispatch scope");
+            if (Environment.CurrentManagedThreadId != _ownerThreadId)
+                throw new InvalidOperationException("actor dispatch scope crossed physical carrier");
         }
 
         internal void Revoke()
