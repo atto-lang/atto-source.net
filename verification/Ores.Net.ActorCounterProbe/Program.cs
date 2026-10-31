@@ -128,6 +128,21 @@ catch (InvalidOperationException) { wrongHeadDenied = true; }
 Require(wrongHeadDenied && scheduler.PendingMessages(tenantA, a2) == 2,
     "specialized actor dispatcher consumed or skipped user mailbox bytes");
 
+// Zero-byte user data has no authority to redeem a scheduler control
+// tick, even if the caller knows the live ActorRef and there is a later
+// legitimate tick in the same bounded FIFO.
+host.SendActor(tenantB, b, scheduler.Address(tenantB, b),
+    Array.Empty<byte>());
+scheduler.Enqueue(tenantB, b);
+Require(scheduler.PendingMessages(tenantB, b) == 2,
+    "zero-byte user envelope setup failed");
+bool userEmptyDenied = false;
+try { _ = scheduler.DispatchNext(tenantB, b,
+    Actor_Counter.Call_increment); }
+catch (InvalidOperationException) { userEmptyDenied = true; }
+Require(userEmptyDenied && scheduler.PendingMessages(tenantB, b) == 2,
+    "zero-byte user payload was misclassified as control authority");
+
 host.RetireActor(tenantA, a); host.RetireActor(tenantA, a2);
 host.RetireActor(tenantB, b);
 host.BeginShutdown(tenantA);host.CompleteShutdown(tenantA);host.Destroy(tenantA);
