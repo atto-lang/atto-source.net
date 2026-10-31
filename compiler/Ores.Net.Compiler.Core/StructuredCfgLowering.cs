@@ -54,10 +54,12 @@ public static class OresStructuredCfgLowering
         public List<CfgParameter> Parameters { get; } = new();
         public List<CfgInstruction> Instructions { get; } = new();
         public CfgTerminator? Terminator { get; set; }
+        public string? OverflowTarget { get; set; }
 
         public CfgBlock Freeze() => new(Name, Parameters.ToArray(),
             Instructions.ToArray(), Terminator ??
-            throw new FormatException("Unterminated structured CFG block"));
+            throw new FormatException("Unterminated structured CFG block"),
+            OverflowTarget);
     }
 
     private sealed class Builder(bool emitCalls = false)
@@ -276,6 +278,9 @@ public static class OresStructuredCfgLowering
                             Expression(returned.Value, current, variables));
                         current = null;
                         break;
+                    case StructuredOverflowCatchReturn caught:
+                        current = OverflowCatch(caught, current, variables);
+                        break;
                     case StructuredIf conditional:
                         current = If(conditional, current, variables);
                         break;
@@ -287,6 +292,44 @@ public static class OresStructuredCfgLowering
                 }
             }
             return current;
+        }
+
+        private Block? OverflowCatch(StructuredOverflowCatchReturn statement,
+            Block origin, Dictionary<string, Binding> variables)
+        {
+            if (statement.TypeTest is not null &&
+                statement.TypeTest is not ("ArithmeticOverflowError" or "Error"))
+                throw new FormatException("Unsupported structured guest Error type");
+
+            // V1 is intentionally terminal and result-only. The CLR
+            // OverflowException is an internal transport detail: only
+            // checked arithmetic overflow may enter this handler, therefore
+            // both ArithmeticOverflowError and its Error root select the
+            // source match arm. The source mismatch literal is retained in
+            // the AST for future multi-error regions but is unreachable here.
+            var protectedBlock = NewBlock();
+            var handlerBlock = NewBlock();
+            var joinBlock = NewBlock();
+            int joinValue = NextValue();
+            joinBlock.Parameters.Add(new CfgParameter(joinValue, IrValueType.I64));
+
+            origin.Terminator = new CfgJump(
+                protectedBlock.Name, Array.Empty<int>());
+            protectedBlock.OverflowTarget = handlerBlock.Name;
+
+            int protectedValue = Expression(
+                statement.Protected, protectedBlock, variables);
+            protectedBlock.Terminator = new CfgJump(
+                joinBlock.Name, new[] { protectedValue });
+
+            int handlerValue = Emit(
+                handlerBlock, CfgOpcode.ConstantI64, IrValueType.I64,
+                value: statement.MatchValue);
+            handlerBlock.Terminator = new CfgJump(
+                joinBlock.Name, new[] { handlerValue });
+
+            joinBlock.Terminator = new CfgReturn(joinValue);
+            return null;
         }
 
         private Block? If(StructuredIf statement, Block origin,
