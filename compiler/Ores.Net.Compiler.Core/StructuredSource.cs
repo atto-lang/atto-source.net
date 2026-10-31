@@ -356,6 +356,12 @@ public static class OresStructuredParser
             }
             if (parts.Count is < 1 or > 3) return false;
             if (parts.Count == 1 && parts[0] != "self") return false;
+            // Self is a receiver marker only when it is the first formal;
+            // a later self token is malformed, never a value parameter.
+            if (parameters.Count > 0 &&
+                (parts[0] == "self" ||
+                 (parts.Count >= 2 && parts[0] == "mut" && parts[1] == "self")))
+                return false;
             if (parts.Count == 2 && parts[0] == "mut" && parts[1] != "self")
                 return false;
             if (parts[0] == "self" && parts.Count != 1) return false;
