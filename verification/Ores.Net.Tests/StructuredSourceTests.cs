@@ -90,6 +90,16 @@ internal static class StructuredSourceTests
         })
             RejectFeature(source, "Duplicate nominal method slot 'Foo::Instance::" + slot + "'");
 
+        // Static callables have their own owner/name/value-arity identity:
+        // static-static duplicates reject, but static-instance pairs coexist.
+        foreach (var (source, slot) in new (string, string)[] {
+            ("define class Foo as static fnc x():void {} static fnc x()->void {} end", "x/0"),
+            ("define class Foo as static fnc x()->void {} static fnc x():void {} end", "x/0"),
+            ("define class Foo as static fnc x(int n):int {} pub static fnc x(int n)->int {} end", "x/1"),
+            ("define class Foo as pub static fnc x(int n)->int {} static fnc x(int n):int {} end", "x/1")
+        })
+            RejectFeature(source, "Duplicate nominal method slot 'Foo::Static::" + slot + "'");
+
         // Same arity under different method names is not a collision,
         // comments are not lexical declarations, and constructor body calls
         // must not create phantom method slots.
@@ -100,6 +110,8 @@ internal static class StructuredSourceTests
             "define class Foo as x():void {} constructor(){x();x();} end",
             "define class Foo as static fnc x():void {} x(mut self)():void {} end",
             "define class Foo as x():void {} static fnc x():void {} end",
+            "define class Foo as static fnc x(int n)->int {} x(mut self, int n)->int {} end",
+            "define class Foo as static fnc x():void {} static fnc y():void {} end",
             // Unsupported malformed typed receivers must not be mistaken for
             // valid duplicate declarations in the preliminary signature scan.
             "define class Foo as x(int n):int {} x(self Other)(int n):int {} end",
