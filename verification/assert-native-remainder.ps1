@@ -11,10 +11,10 @@ dotnet publish compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -r
 if ($LASTEXITCODE -ne 0) { throw 'Native compiler publish failed' }
 $compiler = Join-Path $compilerDir "oresnet$suffix"
 $cases = @(
-    @{ Name = 'negative-dividend'; Expression = '-7%3'; Output = '-1'; Exit = 0 },
-    @{ Name = 'negative-divisor'; Expression = '7%-3'; Output = '1'; Exit = 0 },
-    @{ Name = 'minimum-minus-one'; Expression = '-9223372036854775808%-1'; Output = '0'; Exit = 0 },
-    @{ Name = 'overflow-before-zero'; Expression = '(9223372036854775807+1)%-1'; Output = ''; Exit = 70 }
+    @{ Name = 'precedence'; Expression = '2+3*4'; Output = '14'; Exit = 0 },
+    @{ Name = 'signed-add'; Expression = '-7+3'; Output = '-4'; Exit = 0 },
+    @{ Name = 'minimum-plus-one'; Expression = '-9223372036854775808+1'; Output = '-9223372036854775807'; Exit = 0 },
+    @{ Name = 'checked-overflow'; Expression = '(9223372036854775807+1)'; Output = ''; Exit = 70 }
 )
 foreach ($mode in @('compile', 'emit-csharp', 'emit-fsharp')) {
     foreach ($case in $cases) {
@@ -60,18 +60,18 @@ foreach ($mode in @('compile', 'emit-csharp', 'emit-fsharp')) {
         }
         if ($case.Exit -eq 70 -and $errorText -notmatch 'arithmetic overflow') { throw 'Missing overflow diagnostic' }
         $hash = (Get-FileHash $app -Algorithm SHA256).Hash
-        Write-Output "REMAINDER_NATIVE_PASS mode=$mode case=$($case.Name) exit=$exitCode output=$actual SHA256=$hash"
+        Write-Output "NUMERIC_NATIVE_PASS mode=$mode case=$($case.Name) exit=$exitCode output=$actual SHA256=$hash"
     }
-    foreach ($expression in @('7%0', '7%(1+1)', '7%-9223372036854775809')) {
+    foreach ($expression in @('7%0', '-7%3', '7%-3', '7%(1+1)', '7%-9223372036854775809')) {
         $inputFile = Join-Path $work 'rejected.ores'
         [IO.File]::WriteAllText($inputFile, "fnc main():int{return $expression;}", [Text.UTF8Encoding]::new($false))
         $extension = switch ($mode) { 'compile' { 'dll' } 'emit-csharp' { 'cs' } 'emit-fsharp' { 'fs' } }
         $outputFile = Join-Path $work "rejected/OresGenerated.$extension"
         & $compiler $mode $inputFile --out $outputFile
-        if ($LASTEXITCODE -eq 0 -or (Test-Path $outputFile)) { throw "$mode admitted unsupported divisor $expression" }
+        if ($LASTEXITCODE -eq 0 -or (Test-Path $outputFile)) { throw "$mode admitted removed percent operator $expression" }
     }
 }
-Write-Output 'REMAINDER_NATIVE_SUITE_PASS: 12 native executions, 9 source denials'
+Write-Output 'NUMERIC_NATIVE_SUITE_PASS: 12 checked native executions, 15 percent-source denials'
 # The last compiler invocation is an expected rejection. Publish success only
 # after every assertion, instead of leaking that command's nonzero exit status.
 exit 0
