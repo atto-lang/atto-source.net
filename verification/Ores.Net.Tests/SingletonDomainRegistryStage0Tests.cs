@@ -40,6 +40,60 @@ internal static class SingletonDomainRegistryStage0Tests
             typeof(T).FullName);
     }
 
+    // This test forces the first disposer to hold _disposeGate while blocked
+    // on _gate, then verifies a second disposer cannot return prematurely.
+    // Reflection only inspects host-owned test hooks; no guest gets either lock.
+    private static void ConcurrentDisposersWaitForRetirement(ActorRuntime runtime)
+    {
+        using var controller = runtime.CreateSingletonDomainHostControlStage0<long>();
+        controller.RegisterCompilerDeclaration("app/dispose.ores", "Dispose",
+            () => ValueTask.FromResult(1L));
+
+        Type type = typeof(SingletonDomainHostControlStage0<long>);
+        object registryGate = type.GetField("_gate",
+            System.Reflection.BindingFlags.Instance |
+            System.Reflection.BindingFlags.NonPublic)!.GetValue(controller)!;
+        object disposeGate = type.GetField("_disposeGate",
+            System.Reflection.BindingFlags.Instance |
+            System.Reflection.BindingFlags.NonPublic)!.GetValue(controller)!;
+
+        Task? first = null;
+        Task? second = null;
+        using var secondStarted = new ManualResetEventSlim();
+        Monitor.Enter(registryGate);
+        try
+        {
+            first = Task.Run(() => controller.Dispose());
+
+            // Confirm the first disposer is holding the disposal lock while
+            // waiting for the registry gate that this thread deliberately owns.
+            bool firstAcquired = SpinWait.SpinUntil(() =>
+            {
+                if (!Monitor.TryEnter(disposeGate)) return true;
+                Monitor.Exit(disposeGate);
+                return false;
+            }, TimeSpan.FromSeconds(10));
+            Require(firstAcquired, "first disposer never acquired serialization gate");
+
+            second = Task.Run(() =>
+            {
+                secondStarted.Set();
+                controller.Dispose();
+            });
+            Require(secondStarted.Wait(TimeSpan.FromSeconds(10)),
+                "second disposer did not start");
+            Require(!second.Wait(TimeSpan.FromMilliseconds(100)),
+                "concurrent Dispose returned before retirement completed");
+        }
+        finally { Monitor.Exit(registryGate); }
+
+        Require(first is not null && second is not null &&
+            Task.WaitAll(new Task[] { first!, second! }, TimeSpan.FromSeconds(10)),
+            "concurrent disposal did not finish after releasing the registry lock");
+        Deny(() => { _ = controller.StartForHost("app/dispose.ores", "Dispose"); },
+            "ORES-SINGLETON-DOMAIN-RETIRED");
+    }
+
     private static ActorRuntimeOptions Options() => new()
     {
         MaxActors = 8,
@@ -107,6 +161,8 @@ internal static class SingletonDomainRegistryStage0Tests
     {
         using var runtime = new ActorRuntime(Options());
         using var foreignRuntime = new ActorRuntime(Options());
+
+        ConcurrentDisposersWaitForRetirement(runtime);
 
         // Host-only generic signatures must not permit mutable CLR object
         // identity to escape between physically isolated actor-owned arenas.
