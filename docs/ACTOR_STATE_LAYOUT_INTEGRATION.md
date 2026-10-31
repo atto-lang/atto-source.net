@@ -60,3 +60,51 @@ These are **host integration assertions**, not generated `.ores` guest tests.
 
 No source actor may be promoted or considered merge-ready on the basis of
 typed schema planning or host-side initialization alone.
+
+## First synchronous, compiler-emitted actor method slice
+
+The experimental CLI command:
+
+```sh
+dotnet run --project compiler/Ores.Net.Compiler -- \
+    emit-actor-csharp examples/actor-counter.ores \
+    --out verification/Ores.Net.Tests/GeneratedCounterActor.g.cs
+```
+
+parses one exact, bounded, synchronous `critical handle_state` callback:
+`s.count = s.count + 1; return s.count;`. It requires explicitly
+declared `using state.read, state.write`, one lexical state parameter,
+a declared `int` field, an unescaped state capability, and no extra
+statements, members, actor declarations or trailing code. Unsupported
+effects, alternate aliases, async/suspending callbacks, arbitrary
+arithmetic, and field mismatch fail closed. `OresParser.Parse` and
+the production `oresnet compile` command remain unchanged and **do
+not** admit guest actor programs into the scalar CIL emitter.
+
+The `VerifiedActorIncrement` IR, constructed only by the strict
+parser, is used by `ActorIncrementSourceEmitter.EmitCSharp` to generate
+static C# actor construction and the single checked increment method.
+The generated actor constructor registers an actor and initializes
+separate scalar state through `OresVmHost.ConfigureActorState` with
+rollback on initialization failure. The generated increment calls
+`OresVmHost.InvokeTrustedActorStateLong`; the host owns the logical
+turn and loan, and emitted code invokes `AddActorStateInt64` while the
+state check and checked update share one host lock. Faults retire the
+loan and terminally cancel the logical turn. This is *not* a generic
+actor AST/code generator or a custom ECMA-335 CIL emitter.
+
+`verification/Ores.Net.Tests/GeneratedCounterActor.g.cs` is a
+checked-in C# output golden compiled as part of the test executable.
+`ActorGeneratedCounterTests.Run()` compares the emitter output against
+the golden byte-for-byte (modulo CRLF normalization), rejects unsupported
+source forms and, **when executed on a .NET runner**, calls the compiled
+fixture to check A:1,2,3; B:1,2, independent same-tenant actors,
+nonreentrancy, fault cancellation and restart.
+
+**Not yet proven:** exact-head compilation, production NativeAOT
+publishing and real guest execution on this head. The available GitHub
+Actions runs have failed with zero executed steps, and this session has
+no local `dotnet` SDK. The new emitter targets **static C# build
+output**, not the existing native metadata-only CIL backend. No claim
+of wider effect-system or multi-backend parity is justified by this
+narrow opt-in experimental lane.
