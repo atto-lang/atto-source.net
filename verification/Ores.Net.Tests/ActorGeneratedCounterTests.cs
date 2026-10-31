@@ -31,6 +31,14 @@ internal static class ActorGeneratedCounterTests
         throw new Exception("actor source was admitted: " + message);
     }
 
+    private static long Deliver(OresVmHost.ActorScheduler scheduler,
+        OresVmHost.IsolateHandle isolate, OresVmHost.ActorTicket actor,
+        Func<OresVmHost.ActorDispatchScope, long> generatedMethod)
+    {
+        scheduler.Enqueue(isolate, actor);
+        return scheduler.DispatchNext(isolate, actor, generatedMethod);
+    }
+
     public static void Run()
     {
         var ir = OresParser.InspectSynchronousActorIncrement(CounterSource);
@@ -87,23 +95,31 @@ internal static class ActorGeneratedCounterTests
         var a = Actor_Counter.Create(vm, tenantA, 7);
         var a2 = Actor_Counter.Create(vm, tenantA, 8);
         var b = Actor_Counter.Create(vm, tenantB, 7);
-        Require(scheduler.Dispatch(tenantA, a, Actor_Counter.Call_increment) == 1, "A1");
-        Require(scheduler.Dispatch(tenantA, a, Actor_Counter.Call_increment) == 2, "A2");
-        Require(scheduler.Dispatch(tenantB, b, Actor_Counter.Call_increment) == 1, "B1");
-        Require(scheduler.Dispatch(tenantA, a, Actor_Counter.Call_increment) == 3, "A3");
-        Require(scheduler.Dispatch(tenantB, b, Actor_Counter.Call_increment) == 2, "B2");
-        Require(scheduler.Dispatch(tenantA, a2, Actor_Counter.Call_increment) == 1,
+        bool missingTickDenied = false;
+        try { _ = scheduler.DispatchNext(tenantA, a, Actor_Counter.Call_increment); }
+        catch (InvalidOperationException) { missingTickDenied = true; }
+        Require(missingTickDenied, "scheduler admitted a turn without a mailbox tick");
+        Require(Deliver(scheduler, tenantA, a, Actor_Counter.Call_increment) == 1, "A1");
+        bool replayTickDenied = false;
+        try { _ = scheduler.DispatchNext(tenantA, a, Actor_Counter.Call_increment); }
+        catch (InvalidOperationException) { replayTickDenied = true; }
+        Require(replayTickDenied, "one mailbox tick admitted multiple turns");
+        Require(Deliver(scheduler, tenantA, a, Actor_Counter.Call_increment) == 2, "A2");
+        Require(Deliver(scheduler, tenantB, b, Actor_Counter.Call_increment) == 1, "B1");
+        Require(Deliver(scheduler, tenantA, a, Actor_Counter.Call_increment) == 3, "A3");
+        Require(Deliver(scheduler, tenantB, b, Actor_Counter.Call_increment) == 2, "B2");
+        Require(Deliver(scheduler, tenantA, a2, Actor_Counter.Call_increment) == 1,
             "same-tenant actor must be independent");
 
         var deniedReentry = false;
-        _ = scheduler.Dispatch(tenantA, a, scope => {
-            try { _ = scheduler.Dispatch(tenantA, a, Actor_Counter.Call_increment); }
+        _ = Deliver(scheduler, tenantA, a, scope => {
+            try { _ = scheduler.DispatchNext(tenantA, a, Actor_Counter.Call_increment); }
             catch (InvalidOperationException) { deniedReentry = true; }
             return scope.ReadInt64(0);
         });
         Require(deniedReentry, "actor reentered inside its own state loan");
         bool foreignThreadDenied = false;
-        _ = scheduler.Dispatch(tenantA, a, scope => {
+        _ = Deliver(scheduler, tenantA, a, scope => {
             foreignThreadDenied = Task.Run(() => {
                 try { _ = scope.AddInt64(0, 1); return false; }
                 catch (InvalidOperationException) { return true; }
@@ -113,7 +129,7 @@ internal static class ActorGeneratedCounterTests
         Require(foreignThreadDenied, "scope crossed a foreign physical thread");
         OresVmHost.ActorDispatchScope? failedScope = null;
         try {
-            _ = scheduler.Dispatch(tenantA, a, scope => {
+            _ = Deliver(scheduler, tenantA, a, scope => {
                 failedScope = scope;
                 throw new InvalidOperationException("guest failure");
             });
@@ -124,11 +140,11 @@ internal static class ActorGeneratedCounterTests
         try { _ = failedScope!.AddInt64(0, 1); }
         catch (InvalidOperationException) { cancelledScopeRejected = true; }
         Require(cancelledScopeRejected, "faulted dispatch scope remained live");
-        Require(scheduler.Dispatch(tenantA, a, Actor_Counter.Call_increment) == 4,
+        Require(Deliver(scheduler, tenantA, a, Actor_Counter.Call_increment) == 4,
             "faulting actor turn was not cancelled");
 
         OresVmHost.ActorDispatchScope? escaped = null;
-        _ = scheduler.Dispatch(tenantA, a, scope => {
+        _ = Deliver(scheduler, tenantA, a, scope => {
             escaped = scope;
             return scope.ReadInt64(0);
         });
@@ -144,7 +160,7 @@ internal static class ActorGeneratedCounterTests
         var replacement = vm.CreateIsolate("counter-a", maxActors: 1);
         vm.Start(replacement);
         var again = Actor_Counter.Create(vm, replacement, 7);
-        Require(scheduler.Dispatch(replacement, again, Actor_Counter.Call_increment) == 1,
+        Require(Deliver(scheduler, replacement, again, Actor_Counter.Call_increment) == 1,
             "reincarnated actor reused stale state");
         vm.RetireActor(replacement, again);
         vm.BeginShutdown(replacement); vm.CompleteShutdown(replacement);
