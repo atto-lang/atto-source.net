@@ -73,8 +73,20 @@ public static class ManagedSourceEmitterTests
 
         Reject(() => ManagedSourceEmitter.Emit(ir, (ManagedSourceTarget)9),
             "unknown target rejected");
-        var remainder = OresIrLowering.Lower(OresParser.Parse(
-            "fnc main():int{return -9223372036854775808%-1;}"));
+        // '%' is forbidden in guest source; the bounded internal IR remains tested.
+        Reject(() => OresParser.Parse(
+            "fnc main():int{return -9223372036854775808%-1;}"),
+            "guest source percent operator remains forbidden");
+        var remainder = OresIrVerifier.Verify(new IrFunction(
+            "main", IrValueType.I64, new[]
+            {
+                new IrInstruction(0, IrOpcode.ConstantI64, IrValueType.I64,
+                    Constant: long.MinValue),
+                new IrInstruction(1, IrOpcode.ConstantI64, IrValueType.I64,
+                    Constant: -1),
+                new IrInstruction(2, IrOpcode.SignedRemainderLiteral, IrValueType.I64,
+                    Left: 0, Right: 1)
+            }, 2));
         var remainderCs = ManagedSourceEmitter.Emit(remainder, ManagedSourceTarget.CSharp);
         var remainderFs = ManagedSourceEmitter.Emit(remainder, ManagedSourceTarget.FSharp);
         Require(remainderCs.Contains("_ = v0;", StringComparison.Ordinal) &&
