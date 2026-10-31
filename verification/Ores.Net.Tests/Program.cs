@@ -32,6 +32,10 @@ static string PortableNumericFixture(string name)
         "math-i64-ok.ores" => "6d02ef593be9888364cc6f64c1c42224dcebbdb9",
         "math-i64-abs-min.ores" => "f9064fc2ee79a2356dc062841330466c3d0df9c7",
         "math-i64-neg-min.ores" => "c1d1bff1971351814d8161c36c5a5e18d5ae9e26",
+        "i64-add-overflow.ores" => "2809388a67acaf91ec33e7633bf09a49dae5f715",
+        "i64-sub-overflow.ores" => "2047d38452d9c7d7fd56b217e216f4e7523939d7",
+        "i64-mul-overflow.ores" => "2a8dede7f8af7830e2cc1eb5f19e145cf165dcd4",
+        "i64-neg-overflow.ores" => "2c3329c860faa3a3b2ae909a708b84a199929e4a",
         _ => throw new FormatException("Unknown portable numeric fixture " + name)
     };
     string path = Path.Combine(AppContext.BaseDirectory, "numeric-v1", name);
@@ -435,11 +439,12 @@ static void RejectIrOverflow(string source, bool divideByZero)
     }
     throw new Exception("Expected IR arithmetic exception: " + source);
 }
-RejectIrOverflow("fnc main():int{return 9223372036854775807 + 1;}", false);
-RejectIrOverflow("fnc main():int{return 9223372036854775807 * 2;}", false);
+RejectIrOverflow(PortableNumericFixture("i64-add-overflow.ores"), false);
+RejectIrOverflow(PortableNumericFixture("i64-sub-overflow.ores"), false);
+RejectIrOverflow(PortableNumericFixture("i64-mul-overflow.ores"), false);
 
 
-RejectIrOverflow("fnc main():int{return -(-9223372036854775808);}", false);
+RejectIrOverflow(PortableNumericFixture("i64-neg-overflow.ores"), false);
 RejectIrOverflow("fnc main():int{return Math.neg(-9223372036854775808);}", false);
 RejectIrOverflow("fnc main():int{return Math.abs(-9223372036854775808);}", false);
 RejectIrOverflow(PortableNumericFixture("math-i64-abs-min.ores"), false);
