@@ -121,7 +121,7 @@ public static partial class OresParser
         Expect("+");
         var deltaToken = At();
         if (deltaToken.Text.Length == 0 ||
-            deltaToken.Text.Any(c => c is < '0' or > '9' and not '_') ||
+            deltaToken.Text.Any(c => c != '_' && (c < '0' || c > '9')) ||
             !long.TryParse(deltaToken.Text.Replace("_", "", StringComparison.Ordinal),
                 NumberStyles.None, CultureInfo.InvariantCulture, out long delta) ||
             delta != 1)
