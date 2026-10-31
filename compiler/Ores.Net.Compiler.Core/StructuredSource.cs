@@ -232,15 +232,15 @@ public static class OresStructuredParser
                 }
                 int cursor = member;
                 if (tokens[cursor].Text is "pub" or "private") cursor++;
-                if (cursor < tokens.Count && (tokens[cursor].Text is "mtd" or "method"))
+                if (cursor < tokens.Count && (tokens[cursor].Text is "mtd" or "method" or "fnc"))
                     cursor++;
                 if (cursor < tokens.Count &&
-                    (tokens[cursor].Text is "static" or "fnc" or "constructor"))
+                    (tokens[cursor].Text is "static" or "constructor"))
                 {
-                    // Static callables and constructors occupy different
-                    // namespaces, not the instance receiver-slot registry.
-                    // Skip their signature until the ordinary brace skipper
-                    // consumes their body on the next iteration.
+                    // Only static callables and constructors are outside
+                    // the instance namespace. Legacy class 'fnc x(...)'
+                    // is an instance method and must reserve an x/arity slot.
+                    // Skip static/constructor signatures until the body.
                     member = cursor + 1;
                     while (member < tokens.Count &&
                            tokens[member].Text is not ("{" or ";" or "end"))
