@@ -416,6 +416,14 @@ public sealed class ActorRuntime : IDisposable
         if (ReferenceEquals(s_currentRuntime, this))
             throw new InvalidOperationException(
                 "ActorRuntime.Dispose cannot run from one of its actor carriers");
+        // A child Task.Run inherits actor-origin provenance even after the
+        // physical turn returns. Letting it dispose its owning runtime can
+        // join or stop carrier workers from untrusted actor-originated work.
+        // This is a host-runtime liveness fence, not a CLR/OS sandbox:
+        // deliberately suppressed ExecutionContext is outside this contract.
+        if (ReferenceEquals(s_actorOriginFlow.Value, this))
+            throw new InvalidOperationException(
+                "ORES-ACTOR-DISPOSE-ORIGIN-DENIED: actor-origin task cannot dispose its owning runtime");
 
         // Hold across joins and final reclamation, not just the _closed check.
         lock (_disposeGate)
