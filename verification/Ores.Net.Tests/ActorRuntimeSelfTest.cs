@@ -14,6 +14,7 @@ internal static class ActorRuntimeSelfTest
         RetainedContextCannotUseExpiredTurn();
         LifetimePinCanOutliveActorTurnAndStop();
         HandlerFaultRetiresOnlyThatActor();
+        ActorOriginCannotDisposeOwningRuntime();
         ConcurrentDisposersAwaitCarrierQuiescence();
         FailedTurnAdmissionScrubsDequeuedMessage();
         Console.WriteLine(
@@ -424,6 +425,61 @@ internal static class ActorRuntimeSelfTest
         {
             release.Set();
         }
+    }
+
+    // A child task inherits actor-origin provenance even when it executes
+    // after the physical dispatch turn has completed. It must not be able to
+    // shut down the runtime whose actor created it. Host-origin concurrent
+    // disposal remains independently covered below.
+    private static void ActorOriginCannotDisposeOwningRuntime()
+    {
+        using var runtime = new ActorRuntime(Options());
+        var carrierResult = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var childResult = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseChild = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var actor = runtime.Spawn(ActorKind.Shared, (_, _) =>
+        {
+            bool carrierDenied = false;
+            try { runtime.Dispose(); }
+            catch (InvalidOperationException error) when (
+                error.Message.Contains(
+                    "ActorRuntime.Dispose cannot run from one of its actor carriers",
+                    StringComparison.Ordinal))
+            {
+                carrierDenied = true;
+            }
+            carrierResult.TrySetResult(carrierDenied);
+            _ = Task.Run(async () =>
+            {
+                await releaseChild.Task.ConfigureAwait(false);
+                bool childDenied = false;
+                try { runtime.Dispose(); }
+                catch (InvalidOperationException error) when (
+                    error.Message.Contains("ORES-ACTOR-DISPOSE-ORIGIN-DENIED",
+                        StringComparison.Ordinal))
+                {
+                    childDenied = true;
+                }
+                childResult.TrySetResult(childDenied);
+            });
+        });
+
+        runtime.Send(actor, new byte[] { 1 });
+        Require(carrierResult.Task.Wait(TimeSpan.FromSeconds(5)) &&
+                carrierResult.Task.Result,
+            "physical actor carrier must not dispose its owning runtime");
+        Require(WaitUntil(() => runtime.CompletedMessages == 1),
+            "actor handler did not complete before delayed child disposal attempt");
+        releaseChild.TrySetResult(true);
+        Require(childResult.Task.Wait(TimeSpan.FromSeconds(5)) &&
+                childResult.Task.Result,
+            "post-turn actor-origin Task.Run disposed its owning runtime");
+        Require(runtime.LiveActors == 1 && runtime.FaultedTurns == 0,
+            "rejected actor-origin disposal stopped or faulted healthy actor");
+        runtime.Stop(actor);
     }
 
     private static void ConcurrentDisposersAwaitCarrierQuiescence()
