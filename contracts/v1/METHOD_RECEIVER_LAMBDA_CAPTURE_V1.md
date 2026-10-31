@@ -128,8 +128,11 @@ not substitute a scalar mutation or an unprotected callback.
   compiler-owned lexical admission for simple class/actor instance-method
   signatures, calling the receiver-erased nominal slot registry. Matching
   `x/0` and `x/1` declarations reject in either order, with source offsets.
-  This step ignores comments and skips constructor/static function bodies;
-  richer signatures are not admitted through this preliminary check.
+  Both `:` and `->` return type notation are tokenized for this check.
+  Static `fnc` declarations use a distinct static registry: duplicate
+  static `x/0` and `x/1` reject, but static and instance `x/0` coexist.
+  This step ignores comments and constructor bodies; richer signatures
+  are not admitted through this preliminary check.
   **All** nominal class/actor source still rejects before typed AST,
   borrowing, CIL and Native AOT emission. The source admission regression
   suite is not yet executed with a .NET 10 SDK and is not guest parity proof.
