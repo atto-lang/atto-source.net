@@ -61,7 +61,9 @@ public sealed class GuestEffectTransportException : Exception
         string message,
         Exception? inner = null) : base(message, inner)
     {
-        Status = status;
+        // Transport never becomes an authority to forge a successful guest
+        // return or an unknown effect discriminant.
+        Status = status.Normalize();
         GuestErrorName = guestErrorName;
     }
 
