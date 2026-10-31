@@ -90,10 +90,10 @@ internal static class SingletonDomainRegistryStage0Tests
     {
         using var runtime = new ActorRuntime(Options());
         using var foreignRuntime = new ActorRuntime(Options());
-        using var domain = new SingletonDomainHostControlStage0<long>(
-            runtime, maxDeclarations: 1, maxGrantsPerDeclaration: 1);
-        using var healthyDomain = new SingletonDomainHostControlStage0<long>(
-            runtime, maxDeclarations: 1, maxGrantsPerDeclaration: 1);
+        using var domain = runtime.CreateSingletonDomainHostControlStage0<long>(
+            maxDeclarations: 1, maxGrantsPerDeclaration: 1);
+        using var healthyDomain = runtime.CreateSingletonDomainHostControlStage0<long>(
+            maxDeclarations: 1, maxGrantsPerDeclaration: 1);
 
         var entered = Pending<bool>();
         var release = Pending<long>();
@@ -145,6 +145,10 @@ internal static class SingletonDomainRegistryStage0Tests
                 .Where(m => m.DeclaringType == typeof(SingletonDomainRegistryStage0<long>))
                 .All(m => m.Name == "TryReadPublished"),
             "actor reader unexpectedly exposes administrative methods");
+        Require(typeof(SingletonDomainHostControlStage0<long>).GetConstructors(
+                System.Reflection.BindingFlags.Public |
+                System.Reflection.BindingFlags.Instance).Length == 0,
+            "host control constructor is still publicly forgeable");
         var carrierDenials = Pending<bool>();
         var offCarrierDenials = Pending<bool>();
         var delayedDenials = Pending<bool>();
@@ -161,6 +165,8 @@ internal static class SingletonDomainRegistryStage0Tests
                     error.Message.Contains("ORES-SINGLETON-HOST-ONLY",
                         StringComparison.Ordinal) ||
                     error.Message.Contains("ORES-SINGLETON-HOST-CONTROL-DENIED",
+                        StringComparison.Ordinal) ||
+                    error.Message.Contains("ORES-SINGLETON-HOST-ISSUANCE-DENIED",
                         StringComparison.Ordinal))
                 {
                     deniedOperations++;
@@ -175,7 +181,13 @@ internal static class SingletonDomainRegistryStage0Tests
             RequireHostDeny(() => { _ = domain.StartForHost(
                 "app/settings.ores", "Settings"); });
             RequireHostDeny(() => { _ = domain.Retire(); });
-            return deniedOperations == 5;
+            // Capturing the owning runtime must not allow issuance of an
+            // entirely new host controller from a guest-created Task.Run.
+            RequireHostDeny(() =>
+            {
+                using var forged = runtime.CreateSingletonDomainHostControlStage0<long>();
+            });
+            return deniedOperations == 6;
         }
 
         static async Task CheckBoth(Task<bool> flowed, Task<bool> suppressed,
@@ -231,25 +243,40 @@ internal static class SingletonDomainRegistryStage0Tests
         Require(domain.RegisteredDeclarations == 1,
             "failed actor mutation corrupted host registry state");
 
-        // A detached task without a host issuer cannot acquire controller
-        // authority merely because it captured a CLR object reference.
-        Task<bool> unissuedHost;
+        // SuppressFlow drops the host issuer as well as the actor marker. A
+        // task with both captured controller AND runtime must remain denied.
+        Task<(bool controlDenied, bool issuanceDenied)> unissuedHost;
         using (ExecutionContext.SuppressFlow())
             unissuedHost = Task.Run(() =>
             {
+                bool controlDenied = false, issuanceDenied = false;
                 try { _ = domain.RegisteredDeclarations; }
                 catch (InvalidOperationException error) when (
                     error.Message.Contains("ORES-SINGLETON-HOST-CONTROL-DENIED",
-                        StringComparison.Ordinal)) { return true; }
-                return false;
+                        StringComparison.Ordinal)) { controlDenied = true; }
+                try
+                {
+                    using var forged = runtime.CreateSingletonDomainHostControlStage0<long>();
+                }
+                catch (InvalidOperationException error) when (
+                    error.Message.Contains("ORES-SINGLETON-HOST-ISSUANCE-DENIED",
+                        StringComparison.Ordinal)) { issuanceDenied = true; }
+                return (controlDenied, issuanceDenied);
             });
-        Require(await unissuedHost.WaitAsync(TimeSpan.FromSeconds(10)),
-            "detached unissued host task acquired controller authority");
+        var detached = await unissuedHost.WaitAsync(TimeSpan.FromSeconds(10));
+        Require(detached.controlDenied && detached.issuanceDenied,
+            "detached unissued task acquired captured controller or runtime issuance");
 
-        // An authorized host may intentionally delegate a task while its
-        // ExecutionContext carries the private issuer and no actor provenance.
+        // Deliberate host delegation is preserved across Task.Run/await.
         Require(await Task.Run(() => domain.RegisteredDeclarations) == 1,
             "legitimate host control delegation did not survive Task.Run");
+        Require(await Task.Run(() =>
+        {
+            using var ephemeral = runtime.CreateSingletonDomainHostControlStage0<long>();
+            ephemeral.RegisterCompilerDeclaration(
+                "app/healthy.ores", "Healthy", () => ValueTask.FromResult(7L));
+            return ephemeral.RegisteredDeclarations == 1;
+        }), "legitimate host-bootstrap controller issuance failed");
 
         domain.GrantRead(allowed, "app/settings.ores", "Settings");
         domain.GrantRead(allowed, "app/settings.ores", "Settings"); // idempotent
@@ -341,7 +368,7 @@ internal static class SingletonDomainRegistryStage0Tests
         catch (InvalidOperationException) { staleGrantRejected = true; }
         Require(staleGrantRejected, "stopped incarnation acquired a new grant");
 
-        using var retiringDomain = new SingletonDomainHostControlStage0<long>(runtime);
+        using var retiringDomain = runtime.CreateSingletonDomainHostControlStage0<long>();
         var lateEntered = Pending<bool>();
         var lateRelease = Pending<long>();
         retiringDomain.RegisterCompilerDeclaration("app/late.ores", "Late", async () =>

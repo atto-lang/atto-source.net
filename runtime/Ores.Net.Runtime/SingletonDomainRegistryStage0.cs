@@ -54,7 +54,10 @@ public sealed class SingletonDomainHostControlStage0<T> : IDisposable
     private readonly int _maxPendingWaiters;
     private bool _retired;
 
-    public SingletonDomainHostControlStage0(ActorRuntime runtime,
+    // Issued solely through ActorRuntime.CreateSingletonDomainHostControlStage0.
+    // A public constructor would let a suppressed-flow child task mint its
+    // own issuer for a captured runtime without host bootstrap permission.
+    internal SingletonDomainHostControlStage0(ActorRuntime runtime,
         int maxDeclarations = 64, int maxGrantsPerDeclaration = 256,
         int maxPendingWaiters = 128, int maxActiveInitializers = 1024,
         int maxDependencies = 4096)

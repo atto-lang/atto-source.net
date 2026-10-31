@@ -185,6 +185,14 @@ public sealed class ActorRuntime : IDisposable
     // NOT grant a guest any ability to suspend/resume an actor turn.
     private static readonly AsyncLocal<ActorRuntime?> s_actorOriginFlow = new();
 
+    // Host-bootstrap identity is minted once by each originating runtime,
+    // and flows only through the host's ExecutionContext. A captured runtime
+    // reference is insufficient to mint a singleton host controller.
+    private sealed record SingletonHostBootstrap(
+        ActorRuntime Runtime, object Issuer, SingletonHostBootstrap? Previous);
+    private static readonly AsyncLocal<SingletonHostBootstrap?> s_hostBootstraps = new();
+    private readonly object _singletonBootstrapIssuer = new();
+
     private readonly object _gate = new();
     // A second Dispose caller must wait for worker joining and reclamation,
     // not merely observe the _closed admission flag and return prematurely.
@@ -233,11 +241,50 @@ public sealed class ActorRuntime : IDisposable
 
     public ActorRuntime(ActorRuntimeOptions? options = null)
     {
+        ValidateSingletonHostControl();
         options ??= new ActorRuntimeOptions();
         options.Validate();
         _options = options;
         _nativeBudget = new ActorArenaBudget(options.NativeBudgetBytes);
         _domains = new ActorDispatchDomains(options.Dispatcher);
+        // Publish only after successful runtime admission. A child task
+        // started with SuppressFlow cannot borrow the issuer for THIS runtime.
+        s_hostBootstraps.Value = new SingletonHostBootstrap(
+            this, _singletonBootstrapIssuer, s_hostBootstraps.Value);
+    }
+
+    /// <summary>
+    /// Host bootstrap issuance for an explicitly scoped stage-0 singleton
+    /// registry. This does not expose the issuer secret or permit any actor
+    /// to create a controller for an already-existing ActorRuntime.
+    /// </summary>
+    public SingletonDomainHostControlStage0<T> CreateSingletonDomainHostControlStage0<T>(
+        int maxDeclarations = 64, int maxGrantsPerDeclaration = 256,
+        int maxPendingWaiters = 128, int maxActiveInitializers = 1024,
+        int maxDependencies = 4096)
+    {
+        ValidateSingletonHostControl();
+        bool issued = false;
+        for (var scope = s_hostBootstraps.Value; scope is not null;
+            scope = scope.Previous)
+        {
+            if (ReferenceEquals(scope.Runtime, this) &&
+                ReferenceEquals(scope.Issuer, _singletonBootstrapIssuer))
+            {
+                issued = true;
+                break;
+            }
+        }
+        if (!issued)
+            throw new InvalidOperationException(
+                "ORES-SINGLETON-HOST-ISSUANCE-DENIED: no issuer for owning runtime");
+        lock (_gate)
+        {
+            EnsureOpenLocked();
+            return new SingletonDomainHostControlStage0<T>(this,
+                maxDeclarations, maxGrantsPerDeclaration, maxPendingWaiters,
+                maxActiveInitializers, maxDependencies);
+        }
     }
 
     public int LiveActors
