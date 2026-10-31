@@ -240,6 +240,48 @@ internal static class ActorGeneratedCounterTests
         Require(scheduler.DispatchNext(tenantB, b, Actor_Counter.Call_increment) == 3 &&
                 scheduler.PendingMessages(tenantB, b) == 0,
             "zero-byte user drain did not restore FIFO control progress");
+        // Interleaved FIFO user/control/user/control must never skip data.
+        vm.SendActor(tenantA, a2, scheduler.Address(tenantA, a2),
+            new byte[] { 0x61, 0x62 });
+        scheduler.Enqueue(tenantA, a2);
+        vm.SendActor(tenantA, a2, scheduler.Address(tenantA, a2),
+            new byte[] { 0x63 });
+        scheduler.Enqueue(tenantA, a2);
+        Require(scheduler.PendingMessages(tenantA, a2) == 4,
+            "interleaved FIFO setup lost an envelope");
+        bool firstHeadBlocked = false;
+        try { _ = scheduler.DispatchNext(tenantA, a2, Actor_Counter.Call_increment); }
+        catch (InvalidOperationException) { firstHeadBlocked = true; }
+        Require(firstHeadBlocked && scheduler.PendingMessages(tenantA, a2) == 4,
+            "interleaved control skipped first user payload");
+        var first = scheduler.DequeueUser(tenantA, a2);
+        Require(first is { Length: 2 } && first[0] == 0x61 &&
+                first[1] == 0x62 && scheduler.PendingMessages(tenantA, a2) == 3,
+            "first user payload lost, changed or reordered");
+        Require(scheduler.DequeueUser(tenantA, a2) is null,
+            "user drain stole interleaved first control");
+        Require(scheduler.DispatchNext(tenantA, a2,
+                Actor_Counter.Call_increment) == 3 &&
+                scheduler.PendingMessages(tenantA, a2) == 2,
+            "interleaved first control lost or replayed");
+        bool secondHeadBlocked = false;
+        try { _ = scheduler.DispatchNext(tenantA, a2, Actor_Counter.Call_increment); }
+        catch (InvalidOperationException) { secondHeadBlocked = true; }
+        Require(secondHeadBlocked && scheduler.PendingMessages(tenantA, a2) == 2,
+            "interleaved control skipped second user payload");
+        var second = scheduler.DequeueUser(tenantA, a2);
+        Require(second is { Length: 1 } && second[0] == 0x63 &&
+                scheduler.PendingMessages(tenantA, a2) == 1,
+            "second user payload lost, changed or reordered");
+        Require(scheduler.DispatchNext(tenantA, a2,
+                Actor_Counter.Call_increment) == 4 &&
+                scheduler.PendingMessages(tenantA, a2) == 0,
+            "interleaved second control lost or replayed");
+        bool exhaustedReceiptDenied = false;
+        try { _ = scheduler.DispatchNext(tenantA, a2, Actor_Counter.Call_increment); }
+        catch (InvalidOperationException) { exhaustedReceiptDenied = true; }
+        Require(exhaustedReceiptDenied, "interleaved FIFO admitted an unqueued turn");
+
         bool foreignDrainDenied = false;
         try { _ = scheduler.DequeueUser(tenantA, b); }
         catch (InvalidOperationException) { foreignDrainDenied = true; }
