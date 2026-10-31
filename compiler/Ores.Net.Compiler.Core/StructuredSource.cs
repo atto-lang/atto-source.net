@@ -240,10 +240,8 @@ public static class OresStructuredParser
                     continue;
                 }
                 bool explicitSelf = first.Count > 0 &&
-                    (first[0] is "self" ||
-                     (first.Count >= 2 && first[0] == "mut" && first[1] == "self"));
-                bool mutableSelf = first.Count >= 2 &&
-                    first[0] == "mut" && first[1] == "self";
+                    first[0] is "self" or "mut self";
+                bool mutableSelf = first.Count > 0 && first[0] == "mut self";
                 int values = explicitSelf ? first.Count - 1 : first.Count;
                 if (explicitSelf && first.Count == 1 &&
                     scan < tokens.Count && tokens[scan].Text == "(")
