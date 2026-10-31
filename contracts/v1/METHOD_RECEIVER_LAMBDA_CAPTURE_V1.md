@@ -34,7 +34,10 @@ x(mut self, int n): void {}         // duplicate instance x/1
 ```
 
 Both `y(mut self, int n)` and `y(mut self)(int n)` denote one mutable
-receiver plus **one** caller-supplied value argument. In contrast,
+receiver plus **one** caller-supplied value argument. Inside a class or actor,
+legacy `fnc x(...)`, `method x(...)`, and bare `x(...)` are all instance
+declarations and reserve the same receiver-erased slot; only `static fnc`
+belongs to the separate static namespace. In contrast,
 `x(string a)` and `y(mut self, int n)` can coexist because their names
 differ. The preferred formatting is inline `y(mut self, int n)`.
 `self` always refers to the compiler-bound receiver, and any explicit
