@@ -337,6 +337,45 @@ internal static class ActorGeneratedCounterTests
             Actor_Counter.Call_increment); }
         catch (InvalidOperationException) { originalTickReplayed = true; }
         Require(originalTickReplayed, "pre-layout tick executed twice");
+        // Default host actor mailboxes cap at 1024 queued envelopes.
+        // Empty user messages consume slots despite zero byte accounting.
+        // A typed control cannot bypass that quota or preempt user data.
+        const int boundedMailboxMessages = 1024;
+        for (var i = 0; i < boundedMailboxMessages; i++)
+            vm.SendActor(rawTenant, raw, scheduler.Address(rawTenant, raw),
+                Array.Empty<byte>());
+        Require(scheduler.PendingMessages(rawTenant, raw) == boundedMailboxMessages,
+            "zero-byte user sends escaped bounded mailbox message accounting");
+        bool fullControlDenied = false;
+        try { scheduler.Enqueue(rawTenant, raw); }
+        catch (InvalidOperationException) { fullControlDenied = true; }
+        Require(fullControlDenied &&
+                scheduler.PendingMessages(rawTenant, raw) == boundedMailboxMessages,
+            "full user mailbox admitted an extra privileged control");
+        var refunded = scheduler.DequeueUser(rawTenant, raw);
+        Require(refunded is { Length: 0 } &&
+                scheduler.PendingMessages(rawTenant, raw) == boundedMailboxMessages - 1,
+            "zero-byte user dequeue did not refund message quota");
+        scheduler.Enqueue(rawTenant, raw);
+        Require(scheduler.PendingMessages(rawTenant, raw) == boundedMailboxMessages,
+            "control could not use exactly one refunded mailbox slot");
+        bool saturatedHeadDenied = false;
+        try { _ = scheduler.DispatchNext(rawTenant, raw, Actor_Counter.Call_increment); }
+        catch (InvalidOperationException) { saturatedHeadDenied = true; }
+        Require(saturatedHeadDenied &&
+                scheduler.PendingMessages(rawTenant, raw) == boundedMailboxMessages,
+            "control bypassed a saturated user-data FIFO head");
+        for (var i = 1; i < boundedMailboxMessages; i++)
+            Require(scheduler.DequeueUser(rawTenant, raw) is { Length: 0 },
+                "saturated FIFO lost or reordered zero-byte user data");
+        Require(scheduler.DequeueUser(rawTenant, raw) is null &&
+                scheduler.PendingMessages(rawTenant, raw) == 1,
+            "saturated FIFO user dequeue stole control receipt");
+        Require(scheduler.DispatchNext(rawTenant, raw,
+                Actor_Counter.Call_increment) == 2 &&
+                scheduler.PendingMessages(rawTenant, raw) == 0,
+            "saturated control ticket failed exactly-once recovery");
+
         vm.RetireActor(rawTenant, raw);
         vm.BeginShutdown(rawTenant); vm.CompleteShutdown(rawTenant);
         vm.Destroy(rawTenant);
