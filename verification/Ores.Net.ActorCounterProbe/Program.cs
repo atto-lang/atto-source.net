@@ -99,6 +99,22 @@ try { _ = retained!.AddInt64(0, 1L); }
 catch (InvalidOperationException) { staleScopeRejected = true; }
 Require(staleScopeRejected, "escaped dispatch scope survived end of turn");
 
+// One queued tick must not admit two concurrent physical carriers.
+scheduler.Enqueue(tenantA, a);
+long TryCompetingDispatch()
+{
+    try { return scheduler.DispatchNext(tenantA, a,
+        Actor_Counter.Call_increment); }
+    catch (InvalidOperationException) { return -1L; }
+}
+var competing = Task.WhenAll(
+    Task.Run(TryCompetingDispatch),
+    Task.Run(TryCompetingDispatch)).GetAwaiter().GetResult();
+Require(competing.Count(x => x == 5L) == 1 &&
+        competing.Count(x => x == -1L) == 1 &&
+        scheduler.PendingMessages(tenantA, a) == 0,
+    "single mailbox control tick started multiple logical turns");
+
 // Preserve arbitrary user bytes at the FIFO head. The specialized
 // Counter scheduler must never consume or skip this nonempty envelope.
 host.SendActor(tenantA, a2, scheduler.Address(tenantA, a2),
