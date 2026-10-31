@@ -251,4 +251,34 @@ host.RetireActor(nextTenant, next);
 host.BeginShutdown(nextTenant);
 host.CompleteShutdown(nextTenant);
 host.Destroy(nextTenant);
+
+// Pre-layout FIFO control must survive a rejected dispatch, and the same
+// tick must run once after trusted state initialization (no replacement tick).
+var rawTenant = host.CreateIsolate("raw-counter", maxActors: 1);
+host.Start(rawTenant);
+var raw = host.RegisterActor(rawTenant, 13);
+scheduler.Enqueue(rawTenant, raw);
+Require(scheduler.PendingMessages(rawTenant, raw) == 1,
+    "pre-layout tick was not queued");
+bool layoutDenied = false;
+try { _ = scheduler.DispatchNext(rawTenant, raw, Actor_Counter.Call_increment); }
+catch (InvalidOperationException) { layoutDenied = true; }
+Require(layoutDenied &&
+        scheduler.PendingMessages(rawTenant, raw) == 1 &&
+        !host.ActorTurnSnapshot(rawTenant, raw).Active,
+    "pre-layout dispatch lost tick or admitted a turn");
+host.ConfigureActorState(rawTenant, raw, new[] {
+    new OresVmHost.ActorStateField(OresVmHost.ActorStateScalarKind.Int64)
+});
+Require(scheduler.DispatchNext(rawTenant, raw, Actor_Counter.Call_increment) == 1 &&
+        scheduler.PendingMessages(rawTenant, raw) == 0,
+    "original pre-layout tick was not redeemed exactly once");
+bool prelayoutTickReplayDenied = false;
+try { _ = scheduler.DispatchNext(rawTenant, raw, Actor_Counter.Call_increment); }
+catch (InvalidOperationException) { prelayoutTickReplayDenied = true; }
+Require(prelayoutTickReplayDenied, "pre-layout tick was replayed");
+host.RetireActor(rawTenant, raw);
+host.BeginShutdown(rawTenant);
+host.CompleteShutdown(rawTenant);
+host.Destroy(rawTenant);
 Console.WriteLine("PASS actor-counter-native-aot: A=1,2,3 B=1,2 independent state, no reentrancy, cancellation and restart");
