@@ -109,6 +109,34 @@ public sealed partial class OresVmHost
         }
     }
 
+    /// <summary>
+    /// Trusted generated synchronous actor entry. The host, not the guest
+    /// method, admits the logical turn and state loan. A failure cancels
+    /// the exact turn and retires any outstanding nested loans. This is
+    /// trusted-in-process execution, NOT physical tenant isolation.
+    /// </summary>
+    public long InvokeTrustedActorStateLong(
+        IsolateHandle handle, ActorTicket actor,
+        Func<ActorTurnTicket, ActorStateLoan, long> generatedBody)
+    {
+        ArgumentNullException.ThrowIfNull(generatedBody);
+        var turn = BeginActorTurn(handle, actor);
+        try {
+            var loan = BeginActorStateLoan(handle, actor, turn, writable: true);
+            var result = generatedBody(turn, loan);
+            EndActorStateLoan(handle, actor, turn, loan);
+            CompleteActorTurn(handle, actor, turn);
+            return result;
+        }
+        catch {
+            // Preserve the original exception. Cancellation enforces the
+            // terminal generation fence and unwinds still-active loans.
+            try { CancelActorTurn(handle, actor, turn); }
+            catch (InvalidOperationException) { }
+            throw;
+        }
+    }
+
     public bool ReadActorStateBoolean(
         IsolateHandle handle, ActorTicket actor, ActorTurnTicket turn,
         ActorStateLoan loan, int index)
