@@ -30,13 +30,20 @@ _ = scheduler.Dispatch(tenantA, a, scope => {
 Require(deniedReentry, "reentrant actor method unexpectedly admitted");
 
 bool cancelled = false;
+OresVmHost.ActorDispatchScope? cancelledScope = null;
 try {
-    _ = scheduler.Dispatch(tenantA, a,
-        _ => throw new InvalidOperationException("expected fault"));
+    _ = scheduler.Dispatch(tenantA, a, scope => {
+        cancelledScope = scope;
+        throw new InvalidOperationException("expected fault");
+    });
 }
 catch (InvalidOperationException e) when (e.Message == "expected fault")
 { cancelled = true; }
-Require(cancelled && scheduler.Dispatch(tenantA, a, Actor_Counter.Call_increment) == 4,
+bool cancellationRevoked = false;
+try { _ = cancelledScope!.ReadInt64(0); }
+catch (InvalidOperationException) { cancellationRevoked = true; }
+Require(cancelled && cancellationRevoked &&
+    scheduler.Dispatch(tenantA, a, Actor_Counter.Call_increment) == 4,
     "faulted logical turn not fenced and restarted");
 
 // Overflow must fail in the generated increment path without committing
