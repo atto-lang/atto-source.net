@@ -46,13 +46,38 @@ internal static class StructuredSourceTests
             "define class Foo as x(string a):void {} y(mut self, int x):void {} end",
             "define class Foo as x(self)(int n):void {} end",
             "define class Foo as x(self, int n):void {} end",
-            "define class Foo as x():void {} x(mut self)():void {} end",
-            "define class Foo as x(mut self)():void {} x():void {} end",
-            "define class Foo as x(int n):void {} x(mut self, int n):void {} end",
-            "define actor Foo as x():void {} x(mut self)():void {} end",
-            "define actor Foo as x(int n):void {} x(mut self, int n):void {} end"
         })
             RejectFeature(source, "Nominal class/actor methods require receiver-erased method slots");
+
+        // Unlike a generic unsupported-target rejection, duplicate instance
+        // methods now fail in compiler-owned source admission before CIL.
+        // This remains only signature checking; accepted classes cannot
+        // execute until the typed owner/borrow/virtual-call pipeline exists.
+        foreach (var (source, slot) in new (string, string)[] {
+            ("define class Foo as x():void {} x(mut self)():void {} end", "x/0"),
+            ("define class Foo as x(mut self)():void {} x():void {} end", "x/0"),
+            ("define class Foo as x(int n):void {} x(mut self, int n):void {} end", "x/1"),
+            ("define class Foo as x(mut self, int n):void {} x(int n):void {} end", "x/1"),
+            ("define class Foo as x(self):int {} x(mut self):int {} end", "x/0"),
+            ("define class Foo as x(self, int n):int {} x(mut self)(int n):int {} end", "x/1"),
+            ("define actor Foo as x():void {} x(mut self)():void {} end", "x/0"),
+            ("define actor Foo as x(mut self)():void {} x():void {} end", "x/0"),
+            ("define actor Foo as x(int n):void {} x(mut self, int n):void {} end", "x/1"),
+            ("define actor Foo as x(mut self, int n):void {} x(int n):void {} end", "x/1")
+        })
+            RejectFeature(source, "Duplicate nominal method slot 'Foo::Instance::" + slot + "'");
+
+        // Same arity under different method names is not a collision,
+        // comments are not lexical declarations, and constructor body calls
+        // must not create phantom method slots.
+        foreach (var validButNotExecutable in new[] {
+            "define class Foo as x(int n):int {} y(mut self, int n):int {} end",
+            "define class Foo as x():void {} /* x(mut self)():void {} */ y():void {} end",
+            "define class Foo as x():void {} constructor(){x();x();} end",
+            "define actor Foo as x():void {} y(mut self)():void {} end"
+        })
+            RejectFeature(validButNotExecutable,
+                "Nominal class/actor methods require receiver-erased method slots");
 
         // Local value types are block-local declarations on the structured
         // frontend. They are admitted into the AST but deliberately rejected
