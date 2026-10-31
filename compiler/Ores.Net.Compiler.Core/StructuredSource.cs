@@ -503,6 +503,12 @@ public static class OresStructuredParser
                             $"execution task requires scheduler-aware Future/continuation lowering; no implicit inline execution at offset {offset}");
                 }
             }
+            // A source-level method may spell its result type with '->'.
+            // Tokenize the pair even in scalar mode so nominal declarations
+            // reach their bounded duplicate-slot check. The scalar Reader
+            // still rejects arrow syntax outside its admitted grammar.
+            else if (ch == '-' && index + 1 < source.Length &&
+                     source[index + 1] == '>') index += 2;
             else if (ch == '=' && index + 1 < source.Length &&
                      source[index + 1] == '=') index += 2;
             else if (ch == '!' && index + 1 < source.Length &&
