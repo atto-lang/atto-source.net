@@ -15,10 +15,58 @@ internal static class ActorRuntimeSelfTest
         LifetimePinCanOutliveActorTurnAndStop();
         HandlerFaultRetiresOnlyThatActor();
         ActorOriginCannotDisposeOwningRuntime();
+        DisposedHostBootstrapScopesDoNotAccumulate();
         ConcurrentDisposersAwaitCarrierQuiescence();
         FailedTurnAdmissionScrubsDequeuedMessage();
         Console.WriteLine(
             "PASS .NET integrated actor runtime mailbox, arena, domains, stop and fault isolation");
+    }
+
+    // Inspect the host-only ambient scope chain. No guest authority is read
+    // or exported; this tests the boundedness of host-owned metadata.
+    private static int AmbientBootstrapDepth()
+    {
+        var field = typeof(ActorRuntime).GetField("s_hostBootstraps",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        Require(field is not null, "missing singleton host-bootstrap scope");
+        object ambient = field!.GetValue(null)!;
+        var value = ambient.GetType().GetProperty("Value")!;
+        object? scope = value.GetValue(ambient);
+        int count = 0;
+        while (scope is not null)
+        {
+            count++;
+            Require(count < 1000, "ambient bootstrap chain grew unbounded");
+            scope = scope.GetType().GetProperty("Previous")!.GetValue(scope);
+        }
+        return count;
+    }
+
+    private static void DisposedHostBootstrapScopesDoNotAccumulate()
+    {
+        for (int i = 0; i < 40; i++)
+        {
+            using var runtime = new ActorRuntime(Options());
+            using var controller = runtime.CreateSingletonDomainHostControlStage0<long>();
+            Require(controller.RegisteredDeclarations == 0,
+                "live host runtime lost singleton controller issuance");
+            Require(AmbientBootstrapDepth() <= 2,
+                "disposed host runtimes accumulated in ambient bootstrap chain");
+        }
+
+        var retired = new ActorRuntime(Options());
+        retired.Dispose();
+        using var healthy = new ActorRuntime(Options());
+        bool rejected = false;
+        try
+        {
+            using var controller = retired.CreateSingletonDomainHostControlStage0<long>();
+        }
+        catch (InvalidOperationException) { rejected = true; }
+        Require(rejected, "disposed runtime minted a singleton controller");
+        using var liveController = healthy.CreateSingletonDomainHostControlStage0<long>();
+        Require(liveController.RegisteredDeclarations == 0,
+            "healthy runtime issuer was lost during ambient scope pruning");
     }
 
     private static void UnknownActorKindFailsBeforeNativeAllocation()
