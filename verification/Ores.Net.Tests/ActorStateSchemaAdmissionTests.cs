@@ -28,7 +28,7 @@ internal static class ActorStateSchemaAdmissionTests
         Require(schema.ActorName == "Counter", "nominal actor name");
         Require(schema.ActorOffset == source.IndexOf("actor Counter", StringComparison.Ordinal),
             "actor declaration offset");
-        Require(schema.StateOffset == source.IndexOf("state {", StringComparison.Ordinal),
+        Require(schema.StateOffset == source.IndexOf("state { count:", StringComparison.Ordinal),
             "state declaration offset");
         Require(schema.Fields.Count == 3, "field count");
         var count = schema.Fields[0];
