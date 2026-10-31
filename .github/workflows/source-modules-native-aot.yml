@@ -6,6 +6,7 @@ on:
     paths:
       - 'compiler/**'
       - 'examples/modules/**'
+      - 'stdlib/math.ores'
       - 'verification/Ores.Net.Tests/**'
       - 'verification/Ores.Net.ModuleProbe/**'
       - '.github/workflows/source-modules-native-aot.yml'
@@ -49,6 +50,11 @@ jobs:
             $path = "examples/modules/$($source.Name)"
             if ((git hash-object --no-filters -- $path) -ne (git rev-parse "HEAD:$path")) { throw "Checkout changed source bytes: $path" }
           }
+          $mathBlob = git hash-object --no-filters -- stdlib/math.ores
+          if ($mathBlob -ne '725309eb0edae4d32ffbfe159b05fc7d4091bcc1' -or
+              $mathBlob -ne (git rev-parse 'HEAD:stdlib/math.ores')) {
+            throw "Canonical stdlib/math.ores provenance mismatch: $mathBlob"
+          }
       - name: Publish native compiler and compile unchanged source graph
         shell: pwsh
         run: |
@@ -76,6 +82,39 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or "$output".Trim() -ne '42') { throw 'Imported native methods did not produce 42' }
           $output
           @{scope='checked-int-bool-module-native-execution-not-full-Spin'; source_commit=(git rev-parse HEAD); source_tree=(git rev-parse 'HEAD^{tree}'); rid='${{ matrix.rid }}'; binary_sha256=(Get-FileHash $binary -Algorithm SHA256).Hash.ToLowerInvariant(); output=$output} | ConvertTo-Json | Set-Content artifacts/module-app/receipt.json
+      - name: Compile and execute exact canonical stdlib Math
+        shell: pwsh
+        run: |
+          $compiler = Join-Path 'artifacts/module-compiler' 'oresnet${{ matrix.suffix }}'
+          $witness = & $compiler compile-modules examples/modules/math-main.ores --root examples/modules --dependency-root stdlib --out artifacts/math-generated/OresGenerated.dll
+          if ($LASTEXITCODE -ne 0) { throw 'Canonical Math graph compilation failed' }
+          $generated = (Resolve-Path artifacts/math-generated/OresGenerated.dll).Path
+          dotnet clean host/Ores.Net.NativeHost -c Release -r '${{ matrix.rid }}' "-p:GeneratedAssembly=$generated"
+          if ($LASTEXITCODE -ne 0) { throw 'Canonical Math host clean failed' }
+          dotnet publish host/Ores.Net.NativeHost -c Release -r '${{ matrix.rid }}' -p:PublishAot=true "-p:GeneratedAssembly=$generated" -o artifacts/math-app -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'Canonical Math Native AOT publish failed' }
+          $binary = Join-Path 'artifacts/math-app' 'oreslang-app${{ matrix.suffix }}'
+          $output = & $binary
+          if ($LASTEXITCODE -ne 0 -or "$output".Trim() -ne '42') { throw 'Canonical stdlib Math did not produce 42' }
+          $witness | Set-Content artifacts/math-app/source-graph.json
+          $output
+      - name: Exact canonical stdlib Math preserves signed-min overflow
+        shell: pwsh
+        run: |
+          $compiler = Join-Path 'artifacts/module-compiler' 'oresnet${{ matrix.suffix }}'
+          & $compiler compile-modules examples/modules/math-overflow.ores --root examples/modules --dependency-root stdlib --out artifacts/math-overflow-generated/OresGenerated.dll
+          if ($LASTEXITCODE -ne 0) { throw 'Canonical Math overflow graph compilation failed' }
+          $generated = (Resolve-Path artifacts/math-overflow-generated/OresGenerated.dll).Path
+          dotnet clean host/Ores.Net.NativeHost -c Release -r '${{ matrix.rid }}' "-p:GeneratedAssembly=$generated"
+          if ($LASTEXITCODE -ne 0) { throw 'Canonical Math overflow host clean failed' }
+          dotnet publish host/Ores.Net.NativeHost -c Release -r '${{ matrix.rid }}' -p:PublishAot=true "-p:GeneratedAssembly=$generated" -o artifacts/math-overflow-app -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'Canonical Math overflow Native AOT publish failed' }
+          $PSNativeCommandUseErrorActionPreference = $false
+          $binary = Join-Path 'artifacts/math-overflow-app' 'oreslang-app${{ matrix.suffix }}'
+          $output = & $binary 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 70 -or $output -notmatch 'Oreslang arithmetic overflow') { throw 'Canonical Math signed-min overflow semantics changed' }
+          $output
+          $global:LASTEXITCODE = 0
       - name: Imported helper preserves checked overflow
         shell: pwsh
         run: |
