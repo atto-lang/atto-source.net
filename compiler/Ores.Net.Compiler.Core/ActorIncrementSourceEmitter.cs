@@ -54,14 +54,12 @@ public static class ActorIncrementSourceEmitter
         b.AppendLine("        }");
         b.AppendLine("        catch { host.RetireActor(isolate, actor); throw; }");
         b.AppendLine("    }");
-        b.Append("    public static long Call_").Append(method.MethodName).AppendLine("(");
-        b.AppendLine("        OresVmHost host, OresVmHost.IsolateHandle isolate,");
-        b.AppendLine("        OresVmHost.ActorTicket actor)");
+        b.Append("    public static long Call_").Append(method.MethodName)
+            .AppendLine("(OresVmHost.ActorDispatchScope scope)");
         b.AppendLine("    {");
-        b.AppendLine("        return host.InvokeTrustedActorStateLong(isolate, actor,");
-        b.Append("            (turn, loan) => host.AddActorStateInt64(isolate, actor, turn, loan, ")
+        b.Append("        return scope.AddInt64(")
             .Append(method.FieldIndex.ToString(CultureInfo.InvariantCulture))
-            .AppendLine(", 1L));");
+            .AppendLine(", 1L);");
         b.AppendLine("    }");
         b.AppendLine("}");
         return b.ToString();
