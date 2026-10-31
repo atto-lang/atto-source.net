@@ -306,5 +306,39 @@ internal static class ActorGeneratedCounterTests
         vm.RetireActor(replacement, again);
         vm.BeginShutdown(replacement); vm.CompleteShutdown(replacement);
         vm.Destroy(replacement);
+
+        // A control tick arriving before layout installation must not be
+        // lost. Dispatch rejects the unconfigured actor without dequeue,
+        // then the original tick becomes eligible after trusted bootstrap.
+        var rawTenant = vm.CreateIsolate("raw-counter", maxActors: 1);
+        vm.Start(rawTenant);
+        var raw = vm.RegisterActor(rawTenant, 13);
+        scheduler.Enqueue(rawTenant, raw);
+        Require(scheduler.PendingMessages(rawTenant, raw) == 1,
+            "pre-layout control tick not admitted");
+        bool layoutDenied = false;
+        try { _ = scheduler.DispatchNext(rawTenant, raw,
+            Actor_Counter.Call_increment); }
+        catch (InvalidOperationException) { layoutDenied = true; }
+        Require(layoutDenied &&
+                scheduler.PendingMessages(rawTenant, raw) == 1 &&
+                !vm.ActorTurnSnapshot(rawTenant, raw).Active,
+            "unconfigured actor consumed tick or started a logical turn");
+        vm.ConfigureActorState(rawTenant, raw, new[] {
+            new OresVmHost.ActorStateField(
+                OresVmHost.ActorStateScalarKind.Int64)
+        });
+        Require(scheduler.DispatchNext(rawTenant, raw,
+                Actor_Counter.Call_increment) == 1 &&
+                scheduler.PendingMessages(rawTenant, raw) == 0,
+            "configured actor could not redeem original pending tick");
+        bool originalTickReplayed = false;
+        try { _ = scheduler.DispatchNext(rawTenant, raw,
+            Actor_Counter.Call_increment); }
+        catch (InvalidOperationException) { originalTickReplayed = true; }
+        Require(originalTickReplayed, "pre-layout tick executed twice");
+        vm.RetireActor(rawTenant, raw);
+        vm.BeginShutdown(rawTenant); vm.CompleteShutdown(rawTenant);
+        vm.Destroy(rawTenant);
     }
 }
