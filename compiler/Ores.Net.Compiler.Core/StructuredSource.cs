@@ -234,6 +234,21 @@ public static class OresStructuredParser
                 if (tokens[cursor].Text is "pub" or "private") cursor++;
                 if (cursor < tokens.Count && tokens[cursor].Text is "mtd" or "method")
                     cursor++;
+                if (cursor < tokens.Count &&
+                    tokens[cursor].Text is "static" or "fnc" or "constructor")
+                {
+                    // Static callables and constructors occupy different
+                    // namespaces, not the instance receiver-slot registry.
+                    // Skip their signature until the ordinary brace skipper
+                    // consumes their body on the next iteration.
+                    member = cursor + 1;
+                    while (member < tokens.Count &&
+                           tokens[member].Text is not ("{" or ";" or "end"))
+                        member++;
+                    if (member < tokens.Count && tokens[member].Text == ";")
+                        member++;
+                    continue;
+                }
                 if (cursor + 1 >= tokens.Count ||
                     !IsSimpleNominalWord(tokens[cursor].Text) ||
                     tokens[cursor + 1].Text != "(")
