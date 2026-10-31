@@ -81,6 +81,7 @@ VmIsolateHostTests.Run();
 AsyncOnlyIoPolicyTests.Run();
 ActorStateSchemaAdmissionTests.Run();
 ActorStateLayoutIntegrationTests.Run();
+ActorGeneratedCounterTests.Run();
 SourceByteBudgetTests.Run();
 StructuralPatternAdmissionTests.Run();
 NumericSeparatorParityTests.Run();
