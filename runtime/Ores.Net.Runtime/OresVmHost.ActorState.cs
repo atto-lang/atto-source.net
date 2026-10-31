@@ -31,6 +31,33 @@ public sealed partial class OresVmHost
     /// </summary>
     public void ConfigureActorState(
         IsolateHandle handle, ActorTicket actor, ReadOnlySpan<ActorStateField> fields)
+        => ConfigureActorStateCore(handle, actor, null, fields);
+
+    public void ConfigureNamedActorState(
+        IsolateHandle handle, ActorTicket actor, string actorName,
+        ReadOnlySpan<ActorStateField> fields)
+    {
+        ValidateActorStateName(actorName);
+        ConfigureActorStateCore(handle, actor, actorName, fields);
+    }
+
+    private static void ValidateActorStateName(string actorName)
+    {
+        if (string.IsNullOrEmpty(actorName) || actorName.Length > 128)
+            throw new ArgumentException("invalid actor state layout name", nameof(actorName));
+        static bool Start(char ch) =>
+            ch == '_' || ch is >= 'A' and <= 'Z' || ch is >= 'a' and <= 'z';
+        static bool Part(char ch) => Start(ch) || ch is >= '0' and <= '9';
+        if (!Start(actorName[0]))
+            throw new ArgumentException("invalid actor state layout name", nameof(actorName));
+        for (var i = 1; i < actorName.Length; ++i)
+            if (!Part(actorName[i]))
+                throw new ArgumentException("invalid actor state layout name", nameof(actorName));
+    }
+
+    private void ConfigureActorStateCore(
+        IsolateHandle handle, ActorTicket actor, string? actorName,
+        ReadOnlySpan<ActorStateField> fields)
     {
         lock (_gate) {
             var tenant = Check(handle);
@@ -53,6 +80,7 @@ public sealed partial class OresVmHost
                 cells[i] = new ActorStateCell(field);
             }
             actor.StateCells = cells;
+            actor.StateLayoutName = actorName;
         }
     }
 
@@ -214,8 +242,9 @@ public sealed partial class OresVmHost
         /// The host owns scheduling; the guest receives only a state scope.
         /// </summary>
         public long DispatchNext(IsolateHandle isolate, ActorTicket actor,
-            Func<ActorDispatchScope, long> generatedMethod)
-            => Host.DispatchQueuedActor(this, isolate, actor, generatedMethod);
+            string expectedActorName, Func<ActorDispatchScope, long> generatedMethod)
+            => Host.DispatchQueuedActor(
+                this, isolate, actor, expectedActorName, generatedMethod);
     }
 
     /// <summary>
@@ -283,10 +312,11 @@ public sealed partial class OresVmHost
     }
 
     private long DispatchQueuedActor(ActorScheduler scheduler,
-        IsolateHandle handle, ActorTicket actor,
+        IsolateHandle handle, ActorTicket actor, string expectedActorName,
         Func<ActorDispatchScope, long> generatedMethod)
     {
         ArgumentNullException.ThrowIfNull(generatedMethod);
+        ValidateActorStateName(expectedActorName);
         if (!ReferenceEquals(scheduler.Host, this))
             throw new InvalidOperationException("foreign actor scheduler");
 
@@ -301,6 +331,10 @@ public sealed partial class OresVmHost
             // is installed; the same receipt may be retried after configuration.
             if (actor.StateCells is null)
                 throw new InvalidOperationException("actor state layout is not configured");
+            if (!string.Equals(actor.StateLayoutName, expectedActorName,
+                    StringComparison.Ordinal))
+                throw new InvalidOperationException(
+                    "generated actor method does not match configured actor layout");
             if (actor.NextTurnGeneration == ulong.MaxValue)
                 throw new InvalidOperationException("actor logical turn generation exhausted");
             // Do not dequeue nonempty messages or start a turn without

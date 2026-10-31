@@ -77,6 +77,6 @@ public sealed class ActorStateLayoutPlan
         OresVmHost.ActorTicket actor)
     {
         ArgumentNullException.ThrowIfNull(host);
-        host.ConfigureActorState(isolate, actor, ToHostFields());
+        host.ConfigureNamedActorState(isolate, actor, ActorName, ToHostFields());
     }
 }

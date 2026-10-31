@@ -25,12 +25,14 @@ public static class ActorIncrementSourceEmitter
         b.AppendLine("namespace Oreslang.Generated;");
         b.Append("public static class Actor_").Append(schema.ActorName).AppendLine();
         b.AppendLine("{");
+        b.Append("    public const string ActorName = \"").Append(schema.ActorName)
+            .AppendLine("\";");
         b.AppendLine("    public static OresVmHost.ActorTicket Create(OresVmHost host,");
         b.AppendLine("        OresVmHost.IsolateHandle isolate, ulong actorId)");
         b.AppendLine("    {");
         b.AppendLine("        var actor = host.RegisterActor(isolate, actorId);");
         b.AppendLine("        try {");
-        b.AppendLine("            host.ConfigureActorState(isolate, actor,");
+        b.AppendLine("            host.ConfigureNamedActorState(isolate, actor, ActorName,");
         b.AppendLine("                new OresVmHost.ActorStateField[] {");
         foreach (var field in schema.Fields)
         {
@@ -60,6 +62,13 @@ public static class ActorIncrementSourceEmitter
         b.Append("        return scope.AddInt64(")
             .Append(method.FieldIndex.ToString(CultureInfo.InvariantCulture))
             .AppendLine(", 1L);");
+        b.AppendLine("    }");
+        b.Append("    public static long Dispatch_").Append(method.MethodName).AppendLine("(");
+        b.AppendLine("        OresVmHost.ActorScheduler scheduler, OresVmHost.IsolateHandle isolate,");
+        b.AppendLine("        OresVmHost.ActorTicket actor)");
+        b.AppendLine("    {");
+        b.Append("        return scheduler.DispatchNext(isolate, actor, ActorName, Call_")
+            .Append(method.MethodName).AppendLine(");");
         b.AppendLine("    }");
         b.AppendLine("}");
         return b.ToString();
