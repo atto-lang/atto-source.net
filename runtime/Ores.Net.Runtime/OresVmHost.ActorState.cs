@@ -252,9 +252,9 @@ public sealed partial class OresVmHost
             CheckActor(tenant, actor);
             if (tenant.Phase != Phase.Running)
                 throw new InvalidOperationException("tenant actor admission closed");
-            // Only the trusted host may enqueue control ticks. Send validates
-            // the live ActorRef nonce/generation under the mailbox lock.
-            actor.Mailbox.Send(actor.Mailbox.CurrentRef, ReadOnlySpan<byte>.Empty);
+            // Only the trusted host may enqueue typed control envelopes.
+            // Empty user Send() cannot forge a dispatch ticket.
+            actor.Mailbox.EnqueueTrustedDispatch(actor.Mailbox.CurrentRef);
         }
     }
 
