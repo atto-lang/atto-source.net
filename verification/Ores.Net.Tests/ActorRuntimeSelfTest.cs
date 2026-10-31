@@ -14,7 +14,7 @@ internal static class ActorRuntimeSelfTest
         RetainedContextCannotUseExpiredTurn();
         LifetimePinCanOutliveActorTurnAndStop();
         HandlerFaultRetiresOnlyThatActor();
-        ActorOriginCannotDisposeOwningRuntime();
+        ActorOriginCannotDisposeAnyRuntime();
         DisposedHostBootstrapScopesDoNotAccumulate();
         ConcurrentDisposersAwaitCarrierQuiescence();
         FailedTurnAdmissionScrubsDequeuedMessage();
@@ -475,16 +475,24 @@ internal static class ActorRuntimeSelfTest
         }
     }
 
-    // A child task inherits actor-origin provenance even when it executes
-    // after the physical dispatch turn has completed. It must not be able to
-    // shut down the runtime whose actor created it. Host-origin concurrent
-    // disposal remains independently covered below.
-    private static void ActorOriginCannotDisposeOwningRuntime()
+    // Physical and flowed actor-origin work cannot shut down its owning
+    // runtime OR a foreign runtime captured by a host C# callback. This is
+    // not a guest execution or OS sandbox proof. Host disposal remains valid.
+    private static void ActorOriginCannotDisposeAnyRuntime()
     {
         using var runtime = new ActorRuntime(Options());
+        using var foreignRuntime = new ActorRuntime(Options());
+        var foreignProgress = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var foreignActor = foreignRuntime.Spawn(ActorKind.Shared, (_, _) =>
+            foreignProgress.TrySetResult(true));
         var carrierResult = new TaskCompletionSource<bool>(
             TaskCreationOptions.RunContinuationsAsynchronously);
+        var foreignCarrierResult = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         var childResult = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var foreignChildResult = new TaskCompletionSource<bool>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseChild = new TaskCompletionSource<bool>(
             TaskCreationOptions.RunContinuationsAsynchronously);
@@ -500,6 +508,16 @@ internal static class ActorRuntimeSelfTest
                 carrierDenied = true;
             }
             carrierResult.TrySetResult(carrierDenied);
+            bool foreignCarrierDenied = false;
+            try { foreignRuntime.Dispose(); }
+            catch (InvalidOperationException error) when (
+                error.Message.Contains(
+                    "ActorRuntime.Dispose cannot run from one of its actor carriers",
+                    StringComparison.Ordinal))
+            {
+                foreignCarrierDenied = true;
+            }
+            foreignCarrierResult.TrySetResult(foreignCarrierDenied);
             _ = Task.Run(async () =>
             {
                 await releaseChild.Task.ConfigureAwait(false);
@@ -512,6 +530,15 @@ internal static class ActorRuntimeSelfTest
                     childDenied = true;
                 }
                 childResult.TrySetResult(childDenied);
+                bool foreignChildDenied = false;
+                try { foreignRuntime.Dispose(); }
+                catch (InvalidOperationException error) when (
+                    error.Message.Contains("ORES-ACTOR-DISPOSE-ORIGIN-DENIED",
+                        StringComparison.Ordinal))
+                {
+                    foreignChildDenied = true;
+                }
+                foreignChildResult.TrySetResult(foreignChildDenied);
             });
         });
 
@@ -519,15 +546,27 @@ internal static class ActorRuntimeSelfTest
         Require(carrierResult.Task.Wait(TimeSpan.FromSeconds(5)) &&
                 carrierResult.Task.Result,
             "physical actor carrier must not dispose its owning runtime");
+        Require(foreignCarrierResult.Task.Wait(TimeSpan.FromSeconds(5)) &&
+                foreignCarrierResult.Task.Result,
+            "physical actor carrier disposed a foreign runtime");
         Require(WaitUntil(() => runtime.CompletedMessages == 1),
             "actor handler did not complete before delayed child disposal attempt");
         releaseChild.TrySetResult(true);
         Require(childResult.Task.Wait(TimeSpan.FromSeconds(5)) &&
                 childResult.Task.Result,
             "post-turn actor-origin Task.Run disposed its owning runtime");
-        Require(runtime.LiveActors == 1 && runtime.FaultedTurns == 0,
-            "rejected actor-origin disposal stopped or faulted healthy actor");
+        Require(foreignChildResult.Task.Wait(TimeSpan.FromSeconds(5)) &&
+                foreignChildResult.Task.Result,
+            "post-turn actor-origin Task.Run disposed a foreign runtime");
+        foreignRuntime.Send(foreignActor, new byte[] { 1 });
+        Require(foreignProgress.Task.Wait(TimeSpan.FromSeconds(5)) &&
+                foreignProgress.Task.Result,
+            "foreign runtime made no progress after denied actor-origin disposal");
+        Require(runtime.LiveActors == 1 && runtime.FaultedTurns == 0 &&
+                foreignRuntime.LiveActors == 1 && foreignRuntime.FaultedTurns == 0,
+            "rejected actor-origin disposal stopped or faulted healthy runtime");
         runtime.Stop(actor);
+        foreignRuntime.Stop(foreignActor);
     }
 
     private static void ConcurrentDisposersAwaitCarrierQuiescence()
