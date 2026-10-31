@@ -88,6 +88,9 @@ internal static class ActorStateSchemaAdmissionTests
             "requires at least one field", "empty schema");
         Reject("define actor Counter as state { x: int = 0; } end",
             "scheduler-owned logical continuation frames", "non-isolated actor");
+        Reject("define isolated actor A as state { x: int = 0; } end " +
+                "define isolated actor B as state { y: bool = true; } end",
+            "Multiple actor declarations", "ambiguous two-actor schema");
         Reject("fnc main():int{return 1;}", "canonical isolated actor",
             "missing actor declaration");
     }
