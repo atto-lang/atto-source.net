@@ -99,6 +99,19 @@ try { _ = retained!.AddInt64(0, 1L); }
 catch (InvalidOperationException) { staleScopeRejected = true; }
 Require(staleScopeRejected, "escaped dispatch scope survived end of turn");
 
+// Preserve arbitrary user bytes at the FIFO head. The specialized
+// Counter scheduler must never consume or skip this nonempty envelope.
+host.SendActor(tenantA, a2, scheduler.Address(tenantA, a2),
+    new byte[] { 0xA5 });
+scheduler.Enqueue(tenantA, a2);
+Require(scheduler.PendingMessages(tenantA, a2) == 2,
+    "invalid mixed payload/control FIFO setup");
+bool wrongHeadDenied = false;
+try { _ = scheduler.DispatchNext(tenantA, a2, Actor_Counter.Call_increment); }
+catch (InvalidOperationException) { wrongHeadDenied = true; }
+Require(wrongHeadDenied && scheduler.PendingMessages(tenantA, a2) == 2,
+    "specialized actor dispatcher consumed or skipped user mailbox bytes");
+
 host.RetireActor(tenantA, a); host.RetireActor(tenantA, a2);
 host.RetireActor(tenantB, b);
 host.BeginShutdown(tenantA);host.CompleteShutdown(tenantA);host.Destroy(tenantA);
