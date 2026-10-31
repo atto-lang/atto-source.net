@@ -10,54 +10,62 @@ var host = new OresVmHost(maxTenants: 2);
 var tenantA = host.CreateIsolate("counter-a", maxActors: 2);
 var tenantB = host.CreateIsolate("counter-b", maxActors: 1);
 host.Start(tenantA); host.Start(tenantB);
+var scheduler = host.CreateTrustedScheduler();
 var a = Actor_Counter.Create(host, tenantA, 1);
 var a2 = Actor_Counter.Create(host, tenantA, 2);
 var b = Actor_Counter.Create(host, tenantB, 1);
-Require(Actor_Counter.Call_increment(host, tenantA, a) == 1, "A1");
-Require(Actor_Counter.Call_increment(host, tenantA, a) == 2, "A2");
-Require(Actor_Counter.Call_increment(host, tenantB, b) == 1, "B1");
-Require(Actor_Counter.Call_increment(host, tenantA, a) == 3, "A3");
-Require(Actor_Counter.Call_increment(host, tenantB, b) == 2, "B2");
-Require(Actor_Counter.Call_increment(host, tenantA, a2) == 1, "independent same-tenant actor");
+Require(scheduler.Dispatch(tenantA, a, Actor_Counter.Call_increment) == 1, "A1");
+Require(scheduler.Dispatch(tenantA, a, Actor_Counter.Call_increment) == 2, "A2");
+Require(scheduler.Dispatch(tenantB, b, Actor_Counter.Call_increment) == 1, "B1");
+Require(scheduler.Dispatch(tenantA, a, Actor_Counter.Call_increment) == 3, "A3");
+Require(scheduler.Dispatch(tenantB, b, Actor_Counter.Call_increment) == 2, "B2");
+Require(scheduler.Dispatch(tenantA, a2, Actor_Counter.Call_increment) == 1, "independent same-tenant actor");
 
 bool deniedReentry = false;
-_ = host.InvokeTrustedActorStateLong(tenantA, a, (turn, loan) => {
-    try { _ = Actor_Counter.Call_increment(host, tenantA, a); }
+_ = scheduler.Dispatch(tenantA, a, scope => {
+    try { _ = scheduler.Dispatch(tenantA, a, Actor_Counter.Call_increment); }
     catch (InvalidOperationException) { deniedReentry = true; }
-    return host.ReadActorStateInt64(tenantA, a, turn, loan, 0);
+    return scope.ReadInt64(0);
 });
 Require(deniedReentry, "reentrant actor method unexpectedly admitted");
 
 bool cancelled = false;
 try {
-    _ = host.InvokeTrustedActorStateLong(tenantA, a,
-        (_, _) => throw new InvalidOperationException("expected fault"));
+    _ = scheduler.Dispatch(tenantA, a,
+        _ => throw new InvalidOperationException("expected fault"));
 }
 catch (InvalidOperationException e) when (e.Message == "expected fault")
 { cancelled = true; }
-Require(cancelled && Actor_Counter.Call_increment(host, tenantA, a) == 4,
+Require(cancelled && scheduler.Dispatch(tenantA, a, Actor_Counter.Call_increment) == 4,
     "faulted logical turn not fenced and restarted");
 
 // Overflow must fail in the generated increment path without committing
 // any partial change or admitting a stale turn after cancellation.
-var extremeTurn = host.BeginActorTurn(tenantA, a2);
-var extremeLoan = host.BeginActorStateLoan(tenantA, a2, extremeTurn, writable: true);
-host.WriteActorStateInt64(tenantA, a2, extremeTurn, extremeLoan, 0, long.MaxValue);
-host.EndActorStateLoan(tenantA, a2, extremeTurn, extremeLoan);
-host.CompleteActorTurn(tenantA, a2, extremeTurn);
+_ = scheduler.Dispatch(tenantA, a2, scope => {
+    scope.WriteInt64(0, long.MaxValue);
+    return 0L;
+});
 bool overflowDenied = false;
-try { _ = Actor_Counter.Call_increment(host, tenantA, a2); }
+try { _ = scheduler.Dispatch(tenantA, a2, Actor_Counter.Call_increment); }
 catch (OverflowException) { overflowDenied = true; }
 Require(overflowDenied, "generated checked i64 overflow was admitted");
-var checkTurn = host.BeginActorTurn(tenantA, a2);
-var checkLoan = host.BeginActorStateLoan(tenantA, a2, checkTurn, writable: true);
-Require(host.ReadActorStateInt64(tenantA, a2, checkTurn, checkLoan, 0) == long.MaxValue,
-    "generated overflow changed actor state");
-host.WriteActorStateInt64(tenantA, a2, checkTurn, checkLoan, 0, 0);
-host.EndActorStateLoan(tenantA, a2, checkTurn, checkLoan);
-host.CompleteActorTurn(tenantA, a2, checkTurn);
-Require(Actor_Counter.Call_increment(host, tenantA, a2) == 1,
+_ = scheduler.Dispatch(tenantA, a2, scope => {
+    Require(scope.ReadInt64(0) == long.MaxValue, "generated overflow changed actor state");
+    scope.WriteInt64(0, 0);
+    return 0L;
+});
+Require(scheduler.Dispatch(tenantA, a2, Actor_Counter.Call_increment) == 1,
     "overflow left actor lane blocked");
+
+OresVmHost.ActorDispatchScope? retained = null;
+_ = scheduler.Dispatch(tenantA, a, scope => {
+    retained = scope;
+    return scope.ReadInt64(0);
+});
+bool staleScopeRejected = false;
+try { _ = retained!.AddInt64(0, 1L); }
+catch (InvalidOperationException) { staleScopeRejected = true; }
+Require(staleScopeRejected, "escaped dispatch scope survived end of turn");
 
 host.RetireActor(tenantA, a); host.RetireActor(tenantA, a2);
 host.RetireActor(tenantB, b);
@@ -67,7 +75,7 @@ host.BeginShutdown(tenantB);host.CompleteShutdown(tenantB);host.Destroy(tenantB)
 var nextTenant = host.CreateIsolate("counter-a", maxActors: 1);
 host.Start(nextTenant);
 var next = Actor_Counter.Create(host, nextTenant, 1);
-Require(Actor_Counter.Call_increment(host, nextTenant, next) == 1,
+Require(scheduler.Dispatch(nextTenant, next, Actor_Counter.Call_increment) == 1,
     "reincarnation leaked old actor state");
 host.RetireActor(nextTenant, next);
 host.BeginShutdown(nextTenant);
