@@ -102,6 +102,15 @@ internal static class ActorGeneratedCounterTests
             return scope.ReadInt64(0);
         });
         Require(deniedReentry, "actor reentered inside its own state loan");
+        bool foreignThreadDenied = false;
+        _ = scheduler.Dispatch(tenantA, a, scope => {
+            foreignThreadDenied = Task.Run(() => {
+                try { _ = scope.AddInt64(0, 1); return false; }
+                catch (InvalidOperationException) { return true; }
+            }).GetAwaiter().GetResult();
+            return scope.ReadInt64(0);
+        });
+        Require(foreignThreadDenied, "scope crossed a foreign physical thread");
         OresVmHost.ActorDispatchScope? failedScope = null;
         try {
             _ = scheduler.Dispatch(tenantA, a, scope => {
