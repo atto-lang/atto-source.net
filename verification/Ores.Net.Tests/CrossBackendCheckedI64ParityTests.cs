@@ -8,6 +8,7 @@ static class CrossBackendCheckedI64ParityTests
     public static void Run()
     {
         PercentOperatorIsRejectedAndInternalRemainderRemainsBounded();
+        NativeI64EffectResultCannotForgeSuccess();
         foreach (var (name, expression, expected) in new (string, string, long)[]
         {
             ("precedence", "2 + 3 * 4", 14L),
@@ -68,6 +69,58 @@ static class CrossBackendCheckedI64ParityTests
             return;
         }
         throw new Exception("FAILED: int/int division was admitted without float lowering");
+    }
+
+    private static void NativeI64EffectResultCannotForgeSuccess()
+    {
+        const uint overflow = (uint)NumericGuestErrorCode.ArithmeticOverflowError;
+        var thrown = GuestI64EffectResult.ArithmeticOverflow();
+        if (thrown.IsReturn || !thrown.CatchMatches(overflow) ||
+            thrown.Forward().Value != 0 ||
+            thrown.Recover(overflow, 42).Value != 42 ||
+            !thrown.Recover(overflow, 42).IsReturn)
+            throw new Exception("Guest overflow lost its exact catchable identity");
+
+        var unrelated = thrown.Recover(65538u, 42);
+        if (unrelated.IsReturn || unrelated.Value != 0 ||
+            unrelated.Status.Code != overflow)
+            throw new Exception("Wrong guest Error class swallowed overflow");
+
+        var forgedReturn = new GuestI64EffectResult(
+            42, new GuestEffectStatus(GuestEffectKind.Return, overflow));
+        if (forgedReturn.IsReturn || forgedReturn.CatchMatches(overflow))
+            throw new Exception("Return+error masqueraded as success/catchable throw");
+        var fenced = forgedReturn.Forward().Forward();
+        if (fenced.IsReturn || fenced.Value != 0 ||
+            fenced.Status.Kind != GuestEffectKind.Fatal ||
+            fenced.Status.Code != 0xFFFFFFFDu)
+            throw new Exception("Forged Return+error did not become fatal");
+
+        foreach (GuestEffectKind terminal in new[] {
+            GuestEffectKind.Raise, GuestEffectKind.Panic, GuestEffectKind.Cancel,
+            GuestEffectKind.Fatal, GuestEffectKind.ProcessExit
+        })
+        {
+            var incoming = new GuestI64EffectResult(
+                99, new GuestEffectStatus(terminal, overflow));
+            var outgoing = incoming.Recover(overflow, 42).Forward();
+            if (outgoing.IsReturn || outgoing.Value != 0 ||
+                outgoing.Status.Kind != terminal ||
+                outgoing.Status.Code != overflow)
+                throw new Exception("Terminal guest effect was swallowed: " + terminal);
+        }
+
+        for (int raw = 7; raw <= 255; raw++)
+        {
+            var forged = new GuestI64EffectResult(
+                99, new GuestEffectStatus((GuestEffectKind)raw, overflow));
+            var forwarded = forged.Forward().Forward();
+            if (forwarded.IsReturn || forwarded.Value != 0 ||
+                forwarded.Status.Kind != GuestEffectKind.Fatal ||
+                forwarded.Status.Code != 0xFFFFFFFDu ||
+                forged.CatchMatches(overflow))
+                throw new Exception("Invalid effect byte was accepted: " + raw);
+        }
     }
 
     private static void RequireOverflowEffect(
