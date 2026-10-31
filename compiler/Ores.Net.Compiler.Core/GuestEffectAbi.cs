@@ -36,6 +36,17 @@ public readonly record struct GuestEffectStatus(GuestEffectKind Kind, uint Code)
     public static GuestEffectStatus ArithmeticOverflow =>
         new(GuestEffectKind.Throw,
             (uint)NumericGuestErrorCode.ArithmeticOverflowError);
+
+    // Externally produced / native ABI status tags are untrusted. A Return
+    // carrying a nonzero guest error code must never become success; unknown
+    // discriminants are terminal even if they otherwise resemble a return.
+    public GuestEffectStatus Normalize()
+    {
+        if ((byte)Kind > (byte)GuestEffectKind.ProcessExit ||
+            (Kind == GuestEffectKind.Return && Code != 0))
+            return new GuestEffectStatus(GuestEffectKind.Fatal, 0xFFFFFFFDu);
+        return this;
+    }
 }
 
 /// <summary>
@@ -71,7 +82,22 @@ public readonly record struct GuestI64EffectResult(
     long Value,
     GuestEffectStatus Status)
 {
-    public bool IsReturn => Status.Kind == GuestEffectKind.Return;
+    public GuestEffectStatus NormalizedStatus => Status.Normalize();
+    public bool IsReturn => NormalizedStatus.Kind == GuestEffectKind.Return;
+
+    public GuestI64EffectResult Forward()
+    {
+        var effective = NormalizedStatus;
+        return effective.Kind == GuestEffectKind.Return
+            ? new GuestI64EffectResult(Value, effective)
+            : new GuestI64EffectResult(0, effective);
+    }
+
+    public bool CatchMatches(uint code) =>
+        NormalizedStatus.Kind == GuestEffectKind.Throw && NormalizedStatus.Code == code;
+
+    public GuestI64EffectResult Recover(uint code, long value) =>
+        CatchMatches(code) ? Return(value) : Forward();
 
     public static GuestI64EffectResult Return(long value) =>
         new(value, GuestEffectStatus.Return);
