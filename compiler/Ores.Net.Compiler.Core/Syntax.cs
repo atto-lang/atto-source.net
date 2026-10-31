@@ -12,7 +12,31 @@ public static class OresParser
     private const int MaxDepth = 128;
     private const int MaxTokens = 100_000;
 
+    /// <summary>
+    /// Inspect the bounded actor schema without lowering executable guest code.
+    /// The returned metadata is not scheduler admission authority.
+    /// </summary>
+    public static ActorStateSchemaMetadata InspectActorStateSchema(string source)
+    {
+        var schema = FindActorStateSchema(Tokenize(source));
+        return schema ?? throw new FormatException(
+            "Source must contain a canonical isolated actor state declaration");
+    }
+
     public static Expression Parse(string source)
+    {
+        var tokens = Tokenize(source);
+        RejectUnsupportedSourceActors(tokens);
+        for (int i = 0; i + 1 < tokens.Count; i++)
+        {
+            if (tokens[i].Text == "select" &&
+                StaticSelectAdmission.IsStaticSelectFollower(tokens[i + 1].Text))
+                throw StaticSelectAdmission.Unsupported(tokens[i].Offset);
+        }
+        return new Reader(tokens).ParseProgram();
+    }
+
+    private static List<Token> Tokenize(string source)
     {
         ArgumentNullException.ThrowIfNull(source);
         if (source.Length > 1_048_576)
@@ -45,21 +69,19 @@ public static class OresParser
                 throw new FormatException("Token count exceeds bootstrap limit");
             if (token.Text.Length == 0) break;
         }
-        // Source actors are a semantic boundary, not an alternate spelling
-        // of scalar functions. Parse the canonical isolated state schema far
-        // enough to prove its bounded metadata shape, then fail closed before
-        // any scalar OresIR/CIL lowering. Legacy actor forms remain rejected.
-        RejectUnsupportedSourceActors(tokens);
-        for (int i = 0; i + 1 < tokens.Count; i++)
-        {
-            if (tokens[i].Text == "select" &&
-                StaticSelectAdmission.IsStaticSelectFollower(tokens[i + 1].Text))
-                throw StaticSelectAdmission.Unsupported(tokens[i].Offset);
-        }
-        return new Reader(tokens).ParseProgram();
+        return tokens;
     }
 
     private static void RejectUnsupportedSourceActors(List<Token> tokens)
+    {
+        var schema = FindActorStateSchema(tokens);
+        if (schema is not null)
+            throw new FormatException(
+                $"Source actor state schema parsed; sealed handle_state and " +
+                $"generation-fenced logical-turn lowering is unavailable at offset {schema.StateOffset}");
+    }
+
+    private static ActorStateSchemaMetadata? FindActorStateSchema(List<Token> tokens)
     {
         static bool IsIdentifier(Token token)
         {
@@ -102,6 +124,7 @@ public static class OresParser
             if (!IsIdentifier(At(j)))
                 throw new FormatException(
                     $"Isolated actor requires a nominal actor name at offset {At(j).Offset}");
+            string actorName = At(j).Text;
             j++;
             if (At(j).Text != "as")
                 throw new FormatException(
@@ -122,6 +145,7 @@ public static class OresParser
             j++;
 
             var names = new HashSet<string>(StringComparer.Ordinal);
+            var metadataFields = new List<ActorStateFieldMetadata>();
             int fields = 0;
             while (At(j).Text != "}")
             {
@@ -135,6 +159,7 @@ public static class OresParser
                     throw new FormatException(
                         $"Actor state field requires an identifier at offset {At(j).Offset}");
                 string name = At(j).Text;
+                int fieldOffset = At(j).Offset;
                 if (!names.Add(name))
                     throw new FormatException(
                         $"Duplicate actor state field '{name}' at offset {At(j).Offset}");
@@ -153,6 +178,8 @@ public static class OresParser
                         $"Actor state field '{name}' requires a literal default at offset {At(j).Offset}");
                 j++;
 
+                long intDefault = 0;
+                bool booleanDefault = false;
                 if (type == "int")
                 {
                     bool negative = At(j).Text == "-";
@@ -163,7 +190,7 @@ public static class OresParser
                             $"Actor int state default must be a signed i64 literal at offset {At(j).Offset}");
                     if (negative) raw = "-" + raw;
                     if (!long.TryParse(raw, NumberStyles.AllowLeadingSign,
-                        CultureInfo.InvariantCulture, out _))
+                        CultureInfo.InvariantCulture, out intDefault))
                         throw new FormatException(
                             $"Actor int state default overflows signed i64 at offset {At(j).Offset}");
                     j++;
@@ -173,6 +200,7 @@ public static class OresParser
                     if (At(j).Text is not ("true" or "false"))
                         throw new FormatException(
                             $"Actor bool state default must be true or false at offset {At(j).Offset}");
+                    booleanDefault = At(j).Text == "true";
                     j++;
                 }
 
@@ -180,16 +208,20 @@ public static class OresParser
                     throw new FormatException(
                         $"Actor state field '{name}' requires ';' at offset {At(j).Offset}");
                 j++;
+                metadataFields.Add(new ActorStateFieldMetadata(
+                    fields, name,
+                    type == "int" ? ActorStateFieldKind.Int64 : ActorStateFieldKind.Boolean,
+                    intDefault, booleanDefault, fieldOffset));
                 fields++;
             }
             if (fields == 0)
                 throw new FormatException(
                     $"Actor state schema requires at least one field at offset {stateOffset}");
 
-            throw new FormatException(
-                $"Source actor state schema parsed; sealed handle_state and " +
-                $"generation-fenced logical-turn lowering is unavailable at offset {stateOffset}");
+            return new ActorStateSchemaMetadata(actorName, actorOffset,
+                stateOffset, metadataFields);
         }
+        return null;
     }
     private readonly record struct Token(string Text, int Offset);
 
