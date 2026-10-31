@@ -14,7 +14,11 @@ $cases = @(
     @{ Name = 'precedence'; Expression = '2+3*4'; Output = '14'; Exit = 0 },
     @{ Name = 'signed-add'; Expression = '-7+3'; Output = '-4'; Exit = 0 },
     @{ Name = 'minimum-plus-one'; Expression = '-9223372036854775808+1'; Output = '-9223372036854775807'; Exit = 0 },
-    @{ Name = 'checked-overflow'; Expression = '(9223372036854775807+1)'; Output = ''; Exit = 70 }
+    @{ Name = 'checked-overflow'; Expression = '(9223372036854775807+1)'; Output = ''; Exit = 70 },
+    @{ Name = 'math-abs-negative'; Expression = 'Math.abs(-42)'; Output = '42'; Exit = 0 },
+    @{ Name = 'math-neg-negative'; Expression = 'Math.neg(-42)'; Output = '42'; Exit = 0 },
+    @{ Name = 'math-abs-minimum'; Expression = 'Math.abs(-9223372036854775808)'; Output = ''; Exit = 70 },
+    @{ Name = 'math-neg-minimum'; Expression = 'Math.neg(-9223372036854775808)'; Output = ''; Exit = 70 }
 )
 foreach ($mode in @('compile', 'emit-csharp', 'emit-fsharp')) {
     foreach ($case in $cases) {
@@ -71,7 +75,7 @@ foreach ($mode in @('compile', 'emit-csharp', 'emit-fsharp')) {
         if ($LASTEXITCODE -eq 0 -or (Test-Path $outputFile)) { throw "$mode admitted removed percent operator $expression" }
     }
 }
-Write-Output 'NUMERIC_NATIVE_SUITE_PASS: 12 checked native executions, 15 percent-source denials'
+Write-Output 'NUMERIC_NATIVE_SUITE_PASS: 24 checked native executions, 15 percent-source denials'
 # The last compiler invocation is an expected rejection. Publish success only
 # after every assertion, instead of leaking that command's nonzero exit status.
 exit 0
