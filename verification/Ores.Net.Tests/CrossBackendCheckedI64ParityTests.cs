@@ -96,6 +96,13 @@ static class CrossBackendCheckedI64ParityTests
             fenced.Status.Code != 0xFFFFFFFDu)
             throw new Exception("Forged Return+error did not become fatal");
 
+        var transport = new GuestEffectTransportException(
+            new GuestEffectStatus(GuestEffectKind.Return, overflow),
+            "ArithmeticOverflowError", "forged Return+error");
+        if (transport.Status.Kind != GuestEffectKind.Fatal ||
+            transport.Status.Code != 0xFFFFFFFDu)
+            throw new Exception("CLR transport failed to normalize forged guest return");
+
         foreach (GuestEffectKind terminal in new[] {
             GuestEffectKind.Raise, GuestEffectKind.Panic, GuestEffectKind.Cancel,
             GuestEffectKind.Fatal, GuestEffectKind.ProcessExit
