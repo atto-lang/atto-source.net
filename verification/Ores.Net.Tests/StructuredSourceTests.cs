@@ -74,6 +74,8 @@ internal static class StructuredSourceTests
             "define class Foo as x(int n):int {} y(mut self, int n):int {} end",
             "define class Foo as x():void {} /* x(mut self)():void {} */ y():void {} end",
             "define class Foo as x():void {} constructor(){x();x();} end",
+            "define class Foo as static fnc x():void {} x(mut self)():void {} end",
+            "define class Foo as x():void {} static fnc x():void {} end",
             "define actor Foo as x():void {} y(mut self)():void {} end"
         })
             RejectFeature(validButNotExecutable,
