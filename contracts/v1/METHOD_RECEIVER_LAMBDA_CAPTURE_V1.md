@@ -115,10 +115,15 @@ not substitute a scalar mutation or an unprotected callback.
 * LLVM: synchronous scalar class methods and mutable receiver loans are
   implemented for a restricted native class subset. General class/actor
   inheritance, lambda capture and actor-method lowering remain incomplete.
-* .NET: scalar and structured source frontends still reject class/actor
-  methods before CIL/Native AOT emission. A compile-time receiver-erased
-  slot registry and host-level self-tests now cover the selector identity,
-  without claiming parser integration, borrowing or executable method dispatch.
+* .NET: the structured source frontend now performs bounded,
+  compiler-owned lexical admission for simple class/actor instance-method
+  signatures, calling the receiver-erased nominal slot registry. Matching
+  `x/0` and `x/1` declarations reject in either order, with source offsets.
+  This step ignores comments and skips constructor/static function bodies;
+  richer signatures are not admitted through this preliminary check.
+  **All** nominal class/actor source still rejects before typed AST,
+  borrowing, CIL and Native AOT emission. The source admission regression
+  suite is not yet executed with a .NET 10 SDK and is not guest parity proof.
   Forge remains separately gated.
 * Wasm: delegates source compilation to a SHA-256-pinned real native LLVM
   compiler. Restricted scalar-class receivers have a dedicated wasm32
