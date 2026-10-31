@@ -1,4 +1,4 @@
-name: Signed remainder source Native AOT
+name: Strict numeric source Native AOT
 on:
   pull_request:
   push:
@@ -28,6 +28,6 @@ jobs:
           dotnet-version: 10.0.x
       - name: Verify parser, IR and CIL contracts
         run: dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
-      - name: Execute real compiler and generated applications with Native AOT
+      - name: Execute checked arithmetic guests and deny percent syntax via Native AOT
         shell: pwsh
         run: ./verification/assert-native-remainder.ps1 -Rid '${{ matrix.rid }}'
