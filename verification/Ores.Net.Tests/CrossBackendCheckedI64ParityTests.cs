@@ -7,7 +7,7 @@ static class CrossBackendCheckedI64ParityTests
 
     public static void Run()
     {
-        SignedLiteralRemainder();
+        PercentOperatorIsRejectedAndInternalRemainderRemainsBounded();
         foreach (var (name, expression, expected) in new (string, string, long)[]
         {
             ("precedence", "2 + 3 * 4", 14L),
@@ -81,61 +81,62 @@ static class CrossBackendCheckedI64ParityTests
                 $"got {result.Status.Kind}/{result.Status.Code}");
     }
 
-    private static void SignedLiteralRemainder()
+    private static void PercentOperatorIsRejectedAndInternalRemainderRemainsBounded()
     {
-        // Exercise parser -> verified OresIR -> emitted CIL bytes -> an
-        // independent bounded CIL interpreter (not a Native AOT execution).
-        foreach (var (expression, expected) in new (string, long)[]
-        {
-            ("-7 % 3", -1),
-            ("7 % -3", 1),
-            ("-7 % -3", -1),
-            ("8 % 3 * 2", 4),
-            ("20 % 6 % 3", 2),
-            ("-9223372036854775808 % -1", 0),
-            ("-9223372036854775808 % -9223372036854775808", 0),
-            ("9223372036854775807 % -9223372036854775808", long.MaxValue)
-        })
-        {
-            var ast = OresParser.Parse(Header + "pub fnc main():int{return " + expression + ";}");
-            var verified = OresIrLowering.Lower(ast);
-            if (OresIrReferenceEvaluator.Evaluate(verified) != expected)
-                throw new Exception("Remainder managed reference mismatch: " + expression);
-            var folder = Path.Combine(Path.GetTempPath(), "oresnet-remainder-" +
-                Guid.NewGuid().ToString("N"));
-            var file = Path.Combine(folder, "OresGenerated.dll");
-            try
-            {
-                CilEmitter.EmitLibrary(verified, file);
-                using var assembly = AssemblyDefinition.ReadAssembly(file);
-                var method = assembly.MainModule.Types
-                    .Single(t => t.FullName == "Oreslang.Generated.OresProgram")
-                    .Methods.Single(f => f.Name == "Run");
-                long actual = CilReferenceEvaluator.Evaluate(method);
-                if (actual != expected)
-                    throw new Exception($"Remainder CIL mismatch: {expression}: {actual} vs {expected}");
-            }
-            finally
-            {
-                if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
-            }
-        }
-
+        // Guest source syntax never admits '%'; future named Mod(a,b) lowering
+        // may reuse the bounded internal remainder opcode, but no host/CIL
+        // remainder expression is a substitute for the language API.
         foreach (string expression in new[]
         {
+            "-7 % 3", "7 % -3", "-7 % -3", "8 % 3 * 2",
+            "20 % 6 % 3", "-9223372036854775808 % -1",
+            "-9223372036854775808 % -9223372036854775808",
+            "9223372036854775807 % -9223372036854775808",
             "7 % 0", "7 % (1+1)", "7 % -(1+1)",
             "7 % -9223372036854775809"
         })
         {
             try
             {
-                _ = OresParser.Parse(Header + "pub fnc main():int{return " + expression + ";}");
+                _ = OresParser.Parse(Header +
+                    "pub fnc main():int{return " + expression + ";}");
+                throw new Exception("Compiler admitted removed % source operator: " + expression);
             }
-            catch (FormatException)
+            catch (FormatException ex)
             {
-                continue;
+                if (!ex.Message.Contains("The % operator is forbidden", StringComparison.Ordinal))
+                    throw new Exception("Unexpected % rejection diagnostic: " + ex.Message);
             }
-            throw new Exception("Compiler admitted unsupported remainder: " + expression);
+        }
+
+        // Retain a bounded verifier/CIL regression for the internal operation,
+        // which has no Oreslang '%' source spelling and no claimed Mod API yet.
+        var internalIr = OresIrVerifier.Verify(new IrFunction(
+            "main", IrValueType.I64, new[]
+            {
+                new IrInstruction(0, IrOpcode.ConstantI64, IrValueType.I64, Constant: -7),
+                new IrInstruction(1, IrOpcode.ConstantI64, IrValueType.I64, Constant: 3),
+                new IrInstruction(2, IrOpcode.SignedRemainderLiteral, IrValueType.I64,
+                    Left: 0, Right: 1)
+            }, 2));
+        if (OresIrReferenceEvaluator.Evaluate(internalIr) != -1)
+            throw new Exception("Internal remainder reference drift");
+        var folder = Path.Combine(Path.GetTempPath(), "oresnet-internal-rem-" +
+            Guid.NewGuid().ToString("N"));
+        var file = Path.Combine(folder, "OresGenerated.dll");
+        try
+        {
+            CilEmitter.EmitLibrary(internalIr, file);
+            using var assembly = AssemblyDefinition.ReadAssembly(file);
+            var method = assembly.MainModule.Types
+                .Single(t => t.FullName == "Oreslang.Generated.OresProgram")
+                .Methods.Single(m => m.Name == "Run");
+            if (CilReferenceEvaluator.Evaluate(method) != -1)
+                throw new Exception("Internal remainder CIL drift");
+        }
+        finally
+        {
+            if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
         }
 
         // The IR is untrusted; a source parser's admission does not grant
