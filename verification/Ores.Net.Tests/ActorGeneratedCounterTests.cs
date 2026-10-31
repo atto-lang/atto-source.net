@@ -92,6 +92,29 @@ internal static class ActorGeneratedCounterTests
         var tenantB = vm.CreateIsolate("counter-b", maxActors: 1);
         vm.Start(tenantA); vm.Start(tenantB);
         var scheduler = vm.CreateTrustedScheduler();
+        var unconfigured = vm.RegisterActor(tenantA, 99);
+        scheduler.Enqueue(tenantA, unconfigured);
+        Require(scheduler.PendingMessages(tenantA, unconfigured) == 1,
+            "unconfigured actor control setup failed");
+        bool unconfiguredDenied = false;
+        try { _ = scheduler.DispatchNext(tenantA, unconfigured,
+            Actor_Counter.Call_increment); }
+        catch (InvalidOperationException e) when (
+            e.Message.Contains("state layout", StringComparison.Ordinal)) {
+            unconfiguredDenied = true;
+        }
+        Require(unconfiguredDenied &&
+                scheduler.PendingMessages(tenantA, unconfigured) == 1,
+            "unconfigured actor consumed its FIFO control receipt");
+        vm.ConfigureActorState(tenantA, unconfigured,
+            new OresVmHost.ActorStateField[] {
+                new(OresVmHost.ActorStateScalarKind.Int64, Int64Default: 0L)
+            });
+        Require(scheduler.DispatchNext(tenantA, unconfigured,
+                    Actor_Counter.Call_increment) == 1 &&
+                scheduler.PendingMessages(tenantA, unconfigured) == 0,
+            "configured actor could not redeem preserved control receipt");
+        vm.RetireActor(tenantA, unconfigured);
         var a = Actor_Counter.Create(vm, tenantA, 7);
         var a2 = Actor_Counter.Create(vm, tenantA, 8);
         var b = Actor_Counter.Create(vm, tenantB, 7);

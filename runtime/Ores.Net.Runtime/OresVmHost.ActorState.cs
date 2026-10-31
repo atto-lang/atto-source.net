@@ -296,6 +296,11 @@ public sealed partial class OresVmHost
             CheckActor(tenant, actor);
             if (tenant.Phase != Phase.Running || actor.ActiveTurn is not null)
                 throw new InvalidOperationException("actor logical turn admission closed");
+            // Fail before consuming the FIFO control receipt. A registered actor
+            // is not runnable by the generated state path until its typed layout
+            // is installed; the same receipt may be retried after configuration.
+            if (actor.StateCells is null)
+                throw new InvalidOperationException("actor state layout is not configured");
             if (actor.NextTurnGeneration == ulong.MaxValue)
                 throw new InvalidOperationException("actor logical turn generation exhausted");
             // Do not dequeue nonempty messages or start a turn without

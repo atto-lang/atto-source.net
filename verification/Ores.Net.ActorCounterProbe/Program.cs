@@ -19,6 +19,29 @@ var tenantA = host.CreateIsolate("counter-a", maxActors: 2);
 var tenantB = host.CreateIsolate("counter-b", maxActors: 1);
 host.Start(tenantA); host.Start(tenantB);
 var scheduler = host.CreateTrustedScheduler();
+var unconfigured = host.RegisterActor(tenantA, 99);
+scheduler.Enqueue(tenantA, unconfigured);
+Require(scheduler.PendingMessages(tenantA, unconfigured) == 1,
+    "unconfigured actor control setup failed");
+bool unconfiguredDenied = false;
+try { _ = scheduler.DispatchNext(tenantA, unconfigured,
+    Actor_Counter.Call_increment); }
+catch (InvalidOperationException e) when (
+    e.Message.Contains("state layout", StringComparison.Ordinal)) {
+    unconfiguredDenied = true;
+}
+Require(unconfiguredDenied &&
+        scheduler.PendingMessages(tenantA, unconfigured) == 1,
+    "unconfigured actor consumed its FIFO control receipt");
+host.ConfigureActorState(tenantA, unconfigured,
+    new OresVmHost.ActorStateField[] {
+        new(OresVmHost.ActorStateScalarKind.Int64, Int64Default: 0L)
+    });
+Require(scheduler.DispatchNext(tenantA, unconfigured,
+            Actor_Counter.Call_increment) == 1 &&
+        scheduler.PendingMessages(tenantA, unconfigured) == 0,
+    "configured actor could not redeem preserved control receipt");
+host.RetireActor(tenantA, unconfigured);
 var a = Actor_Counter.Create(host, tenantA, 1);
 var a2 = Actor_Counter.Create(host, tenantA, 2);
 var b = Actor_Counter.Create(host, tenantB, 1);
