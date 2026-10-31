@@ -37,6 +37,24 @@ internal static class SourceModuleLinkingSelfTest
                 Require(CfgCilTestInterpreter.Evaluate(program.Methods.Single(m => m.Name == "Run")) == 42, "linked CIL executes imported helpers");
                 Require(program.Methods.Count == 5, "CIL has main and independent imported methods");
             }
+            Write("math.ores",
+                "define pub module Math as " +
+                "pub fnc abs(int value):int { if value < 0; do return -value; else return value; fi } " +
+                "pub fnc neg(int value):int { return -value; } end");
+            Write("main.ores",
+                "import module Math from \"./math\"; pub fnc main():int { return Math.abs(Math.neg(-42)); }");
+            var canonicalMath = Compile();
+            string canonicalAssembly = Path.Combine(root, "CanonicalMath.dll");
+            CilEmitter.EmitLibrary(canonicalMath.Module, canonicalAssembly);
+            using (var image = AssemblyDefinition.ReadAssembly(canonicalAssembly))
+                Require(CfgCilTestInterpreter.Evaluate(
+                    image.MainModule.Types.Single(t => t.Name == "OresProgram")
+                        .Methods.Single(m => m.Name == "Run")) == 42,
+                    "canonical define pub module and do/fi Math syntax executes");
+            Write("main.ores",
+                "import module left from \"./left\"; import module right from \"./right\"; " +
+                "pub fnc main():int { return left.value(10) + right.value(11); }");
+
             string hash = compiled.GraphSha256;
             Write("base.ores", "pub fnc twice(int n):int { return n * 2; } // changed source bytes");
             Require(Compile().GraphSha256 != hash, "transitive source bytes affect graph identity");
