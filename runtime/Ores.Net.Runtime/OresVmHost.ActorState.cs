@@ -186,9 +186,17 @@ public sealed partial class OresVmHost
 
         internal ActorScheduler(OresVmHost host) { Host = host; }
 
-        public long Dispatch(IsolateHandle isolate, ActorTicket actor,
+        /// <summary>Admit one bounded empty control message for a future turn.</summary>
+        public void Enqueue(IsolateHandle isolate, ActorTicket actor)
+            => Host.EnqueueScheduledActor(this, isolate, actor);
+
+        /// <summary>
+        /// Consume an actual FIFO message before admitting a logical turn.
+        /// The host owns scheduling; the guest receives only a state scope.
+        /// </summary>
+        public long DispatchNext(IsolateHandle isolate, ActorTicket actor,
             Func<ActorDispatchScope, long> generatedMethod)
-            => Host.DispatchScheduledActor(this, isolate, actor, generatedMethod);
+            => Host.DispatchQueuedActor(this, isolate, actor, generatedMethod);
     }
 
     /// <summary>
@@ -197,14 +205,47 @@ public sealed partial class OresVmHost
     /// </summary>
     public ActorScheduler CreateTrustedScheduler() => new(this);
 
-    private long DispatchScheduledActor(ActorScheduler scheduler,
+    private void EnqueueScheduledActor(
+        ActorScheduler scheduler, IsolateHandle isolate, ActorTicket actor)
+    {
+        if (!ReferenceEquals(scheduler.Host, this))
+            throw new InvalidOperationException("foreign actor scheduler");
+        lock (_gate) {
+            var tenant = Check(isolate);
+            CheckActor(tenant, actor);
+            if (tenant.Phase != Phase.Running)
+                throw new InvalidOperationException("tenant actor admission closed");
+            // Only the trusted host may enqueue control ticks. Send validates
+            // the live ActorRef nonce/generation under the mailbox lock.
+            actor.Mailbox.Send(actor.Mailbox.CurrentRef, ReadOnlySpan<byte>.Empty);
+        }
+    }
+
+    private long DispatchQueuedActor(ActorScheduler scheduler,
         IsolateHandle handle, ActorTicket actor,
         Func<ActorDispatchScope, long> generatedMethod)
     {
         ArgumentNullException.ThrowIfNull(generatedMethod);
         if (!ReferenceEquals(scheduler.Host, this))
             throw new InvalidOperationException("foreign actor scheduler");
-        var turn = BeginActorTurn(handle, actor);
+
+        ActorTurnTicket turn;
+        lock (_gate) {
+            var tenant = Check(handle);
+            CheckActor(tenant, actor);
+            if (tenant.Phase != Phase.Running || actor.ActiveTurn is not null)
+                throw new InvalidOperationException("actor logical turn admission closed");
+            if (actor.NextTurnGeneration == ulong.MaxValue)
+                throw new InvalidOperationException("actor logical turn generation exhausted");
+            // Do not dequeue nonempty messages or start a turn without
+            // consuming exactly one admitted, FIFO-head control tick.
+            if (!actor.Mailbox.TryReceiveEmptyDispatch())
+                throw new InvalidOperationException(
+                    "actor dispatch requires queued empty control message");
+            // _gate remains held across dequeue and logical-turn admission.
+            // No other host thread may race to consume or retire the actor.
+            turn = BeginActorTurn(handle, actor);
+        }
         ActorDispatchScope? scope = null;
         try {
             var loan = BeginActorStateLoan(handle, actor, turn, writable: true);
