@@ -78,6 +78,7 @@ Require(OresParser.Parse(
     "nested block-comment enum words must not trigger overload admission");
 
 SingletonDeclarationAdmissionTests.Run();
+SingletonStage0Tests.Run();
 AsyncOnlyIoPolicyTests.Run();
 SourceByteBudgetTests.Run();
 StructuralPatternAdmissionTests.Run();
