@@ -197,6 +197,14 @@ public sealed partial class OresVmHost
         public int PendingMessages(IsolateHandle isolate, ActorTicket actor)
             => Host.CountScheduledActorMessages(this, isolate, actor);
 
+        /// <summary>
+        /// Trusted host dequeue of FIFO-head USER data only. Null means empty
+        /// queue or a control receipt at the head; an empty byte array is
+        /// a real zero-byte user message, never a scheduler receipt.
+        /// </summary>
+        public byte[]? DequeueUser(IsolateHandle isolate, ActorTicket actor)
+            => Host.DequeueScheduledActorUser(this, isolate, actor);
+
         /// <summary>Admit one bounded empty control message for a future turn.</summary>
         public void Enqueue(IsolateHandle isolate, ActorTicket actor)
             => Host.EnqueueScheduledActor(this, isolate, actor);
@@ -239,6 +247,22 @@ public sealed partial class OresVmHost
             var tenant = Check(isolate);
             CheckActor(tenant, actor);
             return actor.Mailbox.QueuedMessages;
+        }
+    }
+
+    private byte[]? DequeueScheduledActorUser(
+        ActorScheduler scheduler, IsolateHandle isolate, ActorTicket actor)
+    {
+        if (!ReferenceEquals(scheduler.Host, this))
+            throw new InvalidOperationException("foreign actor scheduler");
+        lock (_gate) {
+            var tenant = Check(isolate);
+            CheckActor(tenant, actor);
+            if (tenant.Phase != Phase.Running || actor.ActiveTurn is not null)
+                throw new InvalidOperationException("actor user dequeue admission closed");
+            // Host and mailbox gates are held in the same order as SendActor.
+            // TryReceive refuses to consume typed scheduler controls.
+            return actor.Mailbox.TryReceive(out var payload) ? payload : null;
         }
     }
 

@@ -184,6 +184,15 @@ internal static class ActorGeneratedCounterTests
         Require(wrongHeadDenied &&
                 scheduler.PendingMessages(tenantA, a2) == 2,
             "nonempty FIFO message was consumed or bypassed");
+        var userBytes = scheduler.DequeueUser(tenantA, a2);
+        Require(userBytes is { Length: 1 } && userBytes[0] == 0xA5 &&
+                scheduler.PendingMessages(tenantA, a2) == 1,
+            "trusted host failed to drain the FIFO-head user payload");
+        Require(scheduler.DequeueUser(tenantA, a2) is null,
+            "trusted user dequeue stole a scheduler control receipt");
+        Require(scheduler.DispatchNext(tenantA, a2, Actor_Counter.Call_increment) == 2 &&
+                scheduler.PendingMessages(tenantA, a2) == 0,
+            "draining user payload failed to unblock the original control tick");
 
         // An ordinary zero-byte user message must never masquerade as
         // a scheduler-issued control envelope. It also blocks later ticks.
@@ -199,6 +208,26 @@ internal static class ActorGeneratedCounterTests
         Require(emptyUserDenied &&
                 scheduler.PendingMessages(tenantB, b) == 2,
             "zero-byte user data forged dispatch or consumed queued messages");
+        var zeroBytes = scheduler.DequeueUser(tenantB, b);
+        Require(zeroBytes is { Length: 0 } &&
+                scheduler.PendingMessages(tenantB, b) == 1,
+            "zero-byte user payload was lost or misclassified");
+        Require(scheduler.DequeueUser(tenantB, b) is null,
+            "trusted user dequeue consumed a typed control receipt");
+        Require(scheduler.DispatchNext(tenantB, b, Actor_Counter.Call_increment) == 3 &&
+                scheduler.PendingMessages(tenantB, b) == 0,
+            "zero-byte user drain did not restore FIFO control progress");
+        bool foreignDrainDenied = false;
+        try { _ = scheduler.DequeueUser(tenantA, b); }
+        catch (InvalidOperationException) { foreignDrainDenied = true; }
+        Require(foreignDrainDenied, "trusted user drain crossed tenant ownership");
+        bool activeDrainDenied = false;
+        _ = Deliver(scheduler, tenantA, a, scope => {
+            try { _ = scheduler.DequeueUser(tenantA, a); }
+            catch (InvalidOperationException) { activeDrainDenied = true; }
+            return scope.ReadInt64(0);
+        });
+        Require(activeDrainDenied, "trusted user drain reentered an active actor turn");
 
         vm.RetireActor(tenantA, a); vm.RetireActor(tenantA, a2);
         vm.RetireActor(tenantB, b);

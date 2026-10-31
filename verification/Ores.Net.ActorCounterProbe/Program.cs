@@ -127,6 +127,15 @@ try { _ = scheduler.DispatchNext(tenantA, a2, Actor_Counter.Call_increment); }
 catch (InvalidOperationException) { wrongHeadDenied = true; }
 Require(wrongHeadDenied && scheduler.PendingMessages(tenantA, a2) == 2,
     "specialized actor dispatcher consumed or skipped user mailbox bytes");
+var userBytes = scheduler.DequeueUser(tenantA, a2);
+Require(userBytes is { Length: 1 } && userBytes[0] == 0xA5 &&
+        scheduler.PendingMessages(tenantA, a2) == 1,
+    "trusted host failed to drain FIFO-head user payload");
+Require(scheduler.DequeueUser(tenantA, a2) is null,
+    "trusted user dequeue stole scheduler control");
+Require(scheduler.DispatchNext(tenantA, a2, Actor_Counter.Call_increment) == 2 &&
+        scheduler.PendingMessages(tenantA, a2) == 0,
+    "draining user bytes did not unblock original control tick");
 
 // Zero-byte user data has no authority to redeem a scheduler control
 // tick, even if the caller knows the live ActorRef and there is a later
@@ -142,6 +151,26 @@ try { _ = scheduler.DispatchNext(tenantB, b,
 catch (InvalidOperationException) { userEmptyDenied = true; }
 Require(userEmptyDenied && scheduler.PendingMessages(tenantB, b) == 2,
     "zero-byte user payload was misclassified as control authority");
+var zeroBytes = scheduler.DequeueUser(tenantB, b);
+Require(zeroBytes is { Length: 0 } &&
+        scheduler.PendingMessages(tenantB, b) == 1,
+    "zero-byte user envelope lost during trusted drain");
+Require(scheduler.DequeueUser(tenantB, b) is null,
+    "trusted user drain consumed typed control");
+Require(scheduler.DispatchNext(tenantB, b, Actor_Counter.Call_increment) == 3 &&
+        scheduler.PendingMessages(tenantB, b) == 0,
+    "zero-byte user drain did not unblock control");
+bool foreignDrainDenied = false;
+try { _ = scheduler.DequeueUser(tenantA, b); }
+catch (InvalidOperationException) { foreignDrainDenied = true; }
+Require(foreignDrainDenied, "trusted user dequeue crossed tenant");
+bool activeDrainDenied = false;
+_ = Deliver(scheduler, tenantA, a, scope => {
+    try { _ = scheduler.DequeueUser(tenantA, a); }
+    catch (InvalidOperationException) { activeDrainDenied = true; }
+    return scope.ReadInt64(0);
+});
+Require(activeDrainDenied, "trusted user dequeue reentered actor turn");
 
 host.RetireActor(tenantA, a); host.RetireActor(tenantA, a2);
 host.RetireActor(tenantB, b);
