@@ -215,6 +215,21 @@ public static class OresStructuredParser
             {
                 if (++examined > MaxTokens)
                     throw new FormatException("Nominal method admission token budget exceeded");
+                // A constructor or unsupported declaration may contain a
+                // body. Never count calls inside that body as class methods.
+                if (tokens[member].Text == "{")
+                {
+                    int braces = 1;
+                    member++;
+                    while (member < tokens.Count && braces > 0)
+                    {
+                        if (tokens[member].Text == "{") braces++;
+                        else if (tokens[member].Text == "}") braces--;
+                        member++;
+                    }
+                    if (braces != 0) return; // unsupported malformed body
+                    continue;
+                }
                 int cursor = member;
                 if (tokens[cursor].Text is "pub" or "private") cursor++;
                 if (cursor < tokens.Count && tokens[cursor].Text is "mtd" or "method")
