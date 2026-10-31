@@ -34,17 +34,29 @@ static class CrossBackendCheckedI64ParityTests
             ("unary negate minimum", "-(-9223372036854775808)"),
         })
         {
+            var ast = OresParser.Parse(
+                Header + "define pub fnc main(): int { return " + expression + "; }");
+            var ir = OresIrLowering.Lower(ast);
+            RequireOverflowEffect(OresIrReferenceEvaluator.EvaluateEffect(ir),
+                name + " OresIR");
+
+            var folder = Path.Combine(Path.GetTempPath(), "oresnet-overflow-" +
+                Guid.NewGuid().ToString("N"));
+            var file = Path.Combine(folder, "OresGenerated.dll");
             try
             {
-                var ast = OresParser.Parse(Header + "define pub fnc main(): int { return " + expression + "; }");
-                var ir = OresIrLowering.Lower(ast);
-                _ = OresIrReferenceEvaluator.Evaluate(ir);
+                CilEmitter.EmitLibrary(ir, file);
+                using var assembly = AssemblyDefinition.ReadAssembly(file);
+                var method = assembly.MainModule.Types
+                    .Single(t => t.FullName == "Oreslang.Generated.OresProgram")
+                    .Methods.Single(f => f.Name == "Run");
+                RequireOverflowEffect(CilReferenceEvaluator.EvaluateEffect(method),
+                    name + " emitted CIL");
             }
-            catch (OverflowException)
+            finally
             {
-                continue;
+                if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
             }
-            throw new Exception("FAILED: cross-backend checked-i64 overflow did not trap: " + name);
         }
 
         try
@@ -56,6 +68,17 @@ static class CrossBackendCheckedI64ParityTests
             return;
         }
         throw new Exception("FAILED: int/int division was admitted without float lowering");
+    }
+
+    private static void RequireOverflowEffect(
+        GuestI64EffectResult result, string where)
+    {
+        if (result.Status.Kind != GuestEffectKind.Throw ||
+            result.Status.Code !=
+                (uint)NumericGuestErrorCode.ArithmeticOverflowError)
+            throw new Exception(
+                $"FAILED: {where}: expected Throw/ArithmeticOverflowError(65537), " +
+                $"got {result.Status.Kind}/{result.Status.Code}");
     }
 
     private static void SignedLiteralRemainder()

@@ -5,7 +5,26 @@ using Mono.Cecil.Cil;
 // Does not Assembly.Load guest code or use Reflection.Emit.
 internal static class CilReferenceEvaluator
 {
+    public static GuestI64EffectResult EvaluateEffect(MethodDefinition method)
+    {
+        try
+        {
+            return GuestI64EffectResult.Return(EvaluateCore(method));
+        }
+        catch (OverflowException)
+        {
+            return GuestI64EffectResult.ArithmeticOverflow();
+        }
+    }
+
     public static long Evaluate(MethodDefinition method)
+    {
+        var result = EvaluateEffect(method);
+        if (result.IsReturn) return result.Value;
+        throw GuestEffectTransportException.ArithmeticOverflow("emitted CIL evaluation");
+    }
+
+    private static long EvaluateCore(MethodDefinition method)
     {
         if (!method.HasBody)
             throw new FormatException("Missing CIL body");

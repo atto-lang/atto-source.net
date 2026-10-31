@@ -1,0 +1,8 @@
+pub fnc main():int{
+  try {
+    return 9223372036854775807+1;
+  } catch (err) {
+    return 42;
+  } finally {
+  }
+}
