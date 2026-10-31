@@ -186,6 +186,17 @@ public sealed partial class OresVmHost
 
         internal ActorScheduler(OresVmHost host) { Host = host; }
 
+        /// <summary>
+        /// Trusted host obtains the current local target capability. This
+        /// reference is not a serializable guest address.
+        /// </summary>
+        public ActorRef Address(IsolateHandle isolate, ActorTicket actor)
+            => Host.GetScheduledActorAddress(this, isolate, actor);
+
+        /// <summary>Read FIFO depth for host verification; no dequeue.</summary>
+        public int PendingMessages(IsolateHandle isolate, ActorTicket actor)
+            => Host.CountScheduledActorMessages(this, isolate, actor);
+
         /// <summary>Admit one bounded empty control message for a future turn.</summary>
         public void Enqueue(IsolateHandle isolate, ActorTicket actor)
             => Host.EnqueueScheduledActor(this, isolate, actor);
@@ -204,6 +215,32 @@ public sealed partial class OresVmHost
     /// never expose it to an untrusted guest or external tenant.
     /// </summary>
     public ActorScheduler CreateTrustedScheduler() => new(this);
+
+    private ActorRef GetScheduledActorAddress(
+        ActorScheduler scheduler, IsolateHandle isolate, ActorTicket actor)
+    {
+        if (!ReferenceEquals(scheduler.Host, this))
+            throw new InvalidOperationException("foreign actor scheduler");
+        lock (_gate) {
+            var tenant = Check(isolate);
+            CheckActor(tenant, actor);
+            if (tenant.Phase != Phase.Running)
+                throw new InvalidOperationException("tenant actor admission closed");
+            return actor.Mailbox.CurrentRef;
+        }
+    }
+
+    private int CountScheduledActorMessages(
+        ActorScheduler scheduler, IsolateHandle isolate, ActorTicket actor)
+    {
+        if (!ReferenceEquals(scheduler.Host, this))
+            throw new InvalidOperationException("foreign actor scheduler");
+        lock (_gate) {
+            var tenant = Check(isolate);
+            CheckActor(tenant, actor);
+            return actor.Mailbox.QueuedMessages;
+        }
+    }
 
     private void EnqueueScheduledActor(
         ActorScheduler scheduler, IsolateHandle isolate, ActorTicket actor)
