@@ -55,6 +55,12 @@ internal static class StructuredSourceTests
         // execute until the typed owner/borrow/virtual-call pipeline exists.
         foreach (var (source, slot) in new (string, string)[] {
             ("define class Foo as x():void {} x(mut self)():void {} end", "x/0"),
+            // Arrow return notation reaches the same declaration identity
+            // gate; a generic scalar lexer rejection is insufficient.
+            ("define class Foo as x()->void {} x(mut self)()->void {} end", "x/0"),
+            ("define class Foo as x(int n)->int {} x(mut self, int n):int {} end", "x/1"),
+            ("define class Foo as x(mut self)(int n)->int {} x(int n)->int {} end", "x/1"),
+            ("define actor Foo as x()->void {} x(mut self)()->void {} end", "x/0"),
             ("define class Foo as x(mut self)():void {} x():void {} end", "x/0"),
             ("define class Foo as x(int n):void {} x(mut self, int n):void {} end", "x/1"),
             ("define class Foo as x(mut self, int n):void {} x(int n):void {} end", "x/1"),
@@ -89,6 +95,7 @@ internal static class StructuredSourceTests
         // must not create phantom method slots.
         foreach (var validButNotExecutable in new[] {
             "define class Foo as x(int n):int {} y(mut self, int n):int {} end",
+            "define class Foo as x()->void {} y(mut self)()->void {} end",
             "define class Foo as x():void {} /* x(mut self)():void {} */ y():void {} end",
             "define class Foo as x():void {} constructor(){x();x();} end",
             "define class Foo as static fnc x():void {} x(mut self)():void {} end",
