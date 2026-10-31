@@ -178,13 +178,13 @@ public sealed partial class OresVmHost
     /// </summary>
     public sealed class ActorScheduler
     {
-        private readonly OresVmHost _host;
+        internal readonly OresVmHost Host;
 
-        internal ActorScheduler(OresVmHost host) { _host = host; }
+        internal ActorScheduler(OresVmHost host) { Host = host; }
 
         public long Dispatch(IsolateHandle isolate, ActorTicket actor,
             Func<ActorDispatchScope, long> generatedMethod)
-            => _host.DispatchScheduledActor(this, isolate, actor, generatedMethod);
+            => Host.DispatchScheduledActor(this, isolate, actor, generatedMethod);
     }
 
     /// <summary>
@@ -198,7 +198,7 @@ public sealed partial class OresVmHost
         Func<ActorDispatchScope, long> generatedMethod)
     {
         ArgumentNullException.ThrowIfNull(generatedMethod);
-        if (!ReferenceEquals(scheduler._host, this))
+        if (!ReferenceEquals(scheduler.Host, this))
             throw new InvalidOperationException("foreign actor scheduler");
         var turn = BeginActorTurn(handle, actor);
         ActorDispatchScope? scope = null;
