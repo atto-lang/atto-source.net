@@ -34,7 +34,13 @@ x(mut self, int n): void {}         // duplicate instance x/1
 ```
 
 Both `y(mut self, int n)` and `y(mut self)(int n)` denote one mutable
-receiver plus **one** caller-supplied value argument. Inside a class or actor,
+receiver plus **one** caller-supplied value argument.
+Legacy typed receiver markers `x(self Foo)(int n)` and
+`x(mut self Foo)(int n)` also erase the same receiver for class `Foo`;
+`Foo` is a receiver type annotation, not another caller argument. The
+preliminary .NET signature scanner checks that the annotation matches the
+simple nominal owner, and leaves richer/mismatched forms fail-closed until
+typed name resolution is available. Inside a class or actor,
 legacy `fnc x(...)`, `method x(...)`, and bare `x(...)` are all instance
 declarations and reserve the same receiver-erased slot; only `static fnc`
 belongs to the separate static namespace. In contrast,
