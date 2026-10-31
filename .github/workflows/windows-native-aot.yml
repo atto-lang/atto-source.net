@@ -61,6 +61,28 @@ jobs:
       - name: Verify compiler and runtime source
         shell: pwsh
         run: dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
+      - name: Compile and execute generated Counter as Windows NativeAOT
+        shell: pwsh
+        run: |
+          $generated = Join-Path $env:RUNNER_TEMP 'Actor_Counter.g.cs'
+          dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -- emit-actor-csharp examples/actor-counter.ores --out $generated
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $generated)) {
+            throw 'Actor Counter source emitter failed'
+          }
+          $actual = [IO.File]::ReadAllText($generated).Replace("`r`n", "`n")
+          $expected = [IO.File]::ReadAllText('verification/Ores.Net.Tests/GeneratedCounterActor.g.cs').Replace("`r`n", "`n")
+          if ($actual -cne $expected) { throw 'Generated Counter differs from compiled golden' }
+          $publishOut = 'artifacts/actor-counter/win-x64'
+          dotnet publish verification/Ores.Net.ActorCounterProbe/Ores.Net.ActorCounterProbe.csproj -c Release -r win-x64 -o $publishOut -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'Actor Counter NativeAOT publish failed' }
+          $binary = Join-Path $publishOut 'Ores.Net.ActorCounterProbe.exe'
+          ./verification/assert-native-release.ps1 -Binary $binary -Rid win-x64
+          $output = & $binary
+          if ($LASTEXITCODE -ne 0 -or ($output | Out-String).Trim() -cne 'PASS actor-counter-native-aot: A=1,2,3 B=1,2 independent state, no reentrancy, cancellation and restart') {
+            throw "Unexpected NativeAOT Counter result: $output"
+          }
+          Write-Output 'WINDOWS_NET_ACTOR_COUNTER_NATIVE_AOT_GUEST_EXECUTED'
+
       - name: Compile verified scalar OresIR through C# and F# to managed CIL
         shell: pwsh
         run: ./verification/assert-managed-source.ps1
