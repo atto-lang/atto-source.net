@@ -65,6 +65,12 @@ internal static class ActorStateSchemaAdmissionTests
                 StringComparison.Ordinal)) { blocked = true; }
         Require(blocked, "normal source parsing still fails closed");
 
+        var max = OresParser.InspectActorStateSchema(
+            "define isolated actor MaxI64 as state { limit: int = 9_223_372_036_854_775_807; } end");
+        Require(max.Fields.Count == 1 &&
+                max.Fields[0].Int64Default == long.MaxValue,
+            "canonical i64 maximum default");
+
         var sixteen = string.Join(" ", Enumerable.Range(0, 16)
             .Select(i => $"f{i}: int = {i};"));
         var full = OresParser.InspectActorStateSchema(
