@@ -16,11 +16,8 @@ public static class Actor_Counter
         }
         catch { host.RetireActor(isolate, actor); throw; }
     }
-    public static long Call_increment(
-        OresVmHost host, OresVmHost.IsolateHandle isolate,
-        OresVmHost.ActorTicket actor)
+    public static long Call_increment(OresVmHost.ActorDispatchScope scope)
     {
-        return host.InvokeTrustedActorStateLong(isolate, actor,
-            (turn, loan) => host.AddActorStateInt64(isolate, actor, turn, loan, 0, 1L));
+        return scope.AddInt64(0, 1L);
     }
 }
