@@ -168,3 +168,49 @@ authority or physical actor/tenant isolation is warranted until guest
 capability confinement and independent scheduler dispatch proofs exist.
 Full integration with the production scheduler and a negative untrusted
 guest compilation test is still mandatory before promotion.
+
+
+## FIFO-bound trusted dispatch gate and checkout-free runner diagnosis
+
+On October 31, the narrow synchronous `Actor_Counter` pathway gained
+`ActorScheduler.Enqueue` and `ActorScheduler.DispatchNext`. A host-held
+scheduler queues one **empty control envelope** using the mailbox's
+current generation/nonce-bound `ActorRef`. `DispatchNext` validates the
+tenant/actor, rejects active turns, and atomically consumes one eligible
+FIFO-head empty envelope with `BeginActorTurn` under the same host lock.
+It then issues a one-turn `ActorDispatchScope`, which is revoked after
+completion or failure. Without that receipt, a generated method does not
+run. A nonempty user envelope at the FIFO head is left untouched: this
+specialized dispatcher neither skips nor consumes arbitrary payloads.
+`ActorMailbox.TryReceiveEmptyDispatch` is runtime-internal.
+
+The managed verifier and standalone Linux/Windows NativeAOT probe now
+cover: absence of a queued tick, double redemption, independent actors,
+a competing-two-carriers/one-tick race, reentrancy, success/failure scope
+replay, foreign-thread misuse, a nonempty FIFO-head blocking dispatch,
+checked signed i64 overflow, cancellation, and restarted tenant identity.
+The expected stateful results are still A=1,2,3 and B=1,2 before
+negative/race testing. NativeAOT workflow source is wired to execute the
+probe, but no execution evidence exists yet.
+
+**Limitations:** this is only an empty-control-message dispatcher for a
+specific synchronous `+1` method. It does *not* route arbitrary mailbox
+payloads into a general actor handler, implement the production
+`ActorRuntime` carrier dispatch pipeline, protect against a fully
+privileged in-process CLR host, or prove separate tenant physical heaps.
+`CreateTrustedScheduler()` and legacy modeling APIs remain trusted
+embedding surfaces. A future production integration must bind typed
+messages and scheduler ownership to the real actor carrier queues,
+including cancellation/fault handling and no guest privilege escalation.
+
+The checkout-free `.github/workflows/source-free-runner-canary.yml`
+now triggers on draft integration pull requests (the previous
+`branches: [main]` restriction prevented this). Its exact-head
+[run 41232251789](https://github.com/ores-truffle-oreslang/oreslang-source.net/actions/runs/41232251789)
+completed with **zero executed steps**. Likewise, exact-head
+[Linux NativeAOT run 41232251812](https://github.com/ores-truffle-oreslang/oreslang-source.net/actions/runs/41232251812)
+had zero-step compiler/app admission. A job-log lookup returned no
+downloadable log blob. This establishes runner admission failure,
+not a compiler or language-runtime verdict; the precise billing,
+permissions or runner-capacity cause remains unverified. No private
+source was mirrored or exported to another organization.
