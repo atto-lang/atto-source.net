@@ -1,9 +1,10 @@
 name: Source-free runner admission canary
 
 on:
+  workflow_dispatch:
   pull_request:
-    branches:
-      - main
+    # Test draft integration stacks too; previously only PRs targeting main
+    # triggered this checkout-free diagnostic and missed #274 entirely.
     paths:
       - .github/workflows/source-free-runner-canary.yml
   push:
