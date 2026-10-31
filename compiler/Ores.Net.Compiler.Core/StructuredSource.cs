@@ -232,10 +232,10 @@ public static class OresStructuredParser
                 }
                 int cursor = member;
                 if (tokens[cursor].Text is "pub" or "private") cursor++;
-                if (cursor < tokens.Count && tokens[cursor].Text is "mtd" or "method")
+                if (cursor < tokens.Count && (tokens[cursor].Text is "mtd" or "method"))
                     cursor++;
                 if (cursor < tokens.Count &&
-                    tokens[cursor].Text is "static" or "fnc" or "constructor")
+                    (tokens[cursor].Text is "static" or "fnc" or "constructor"))
                 {
                     // Static callables and constructors occupy different
                     // namespaces, not the instance receiver-slot registry.
@@ -270,7 +270,7 @@ public static class OresStructuredParser
                     continue;
                 }
                 bool explicitSelf = first.Count > 0 &&
-                    first[0] is "self" or "mut self";
+                    (first[0] is "self" or "mut self");
                 bool mutableSelf = first.Count > 0 && first[0] == "mut self";
                 int values = explicitSelf ? first.Count - 1 : first.Count;
                 if (explicitSelf && first.Count == 1 &&
