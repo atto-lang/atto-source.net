@@ -41,6 +41,23 @@ jobs:
           bash -n scripts/publish-linux.sh verification/assert-linux-native-release.sh verification/assert-linux-native-release-selftest.sh
           bash verification/assert-linux-native-release-selftest.sh
           dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
+      - name: Compile verified Counter source and execute standalone actor NativeAOT
+        shell: bash
+        run: |
+          set -euo pipefail
+          generated="$(mktemp --suffix=.cs)"
+          trap 'rm -f -- "$generated"' EXIT
+          dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -- \
+            emit-actor-csharp examples/actor-counter.ores --out "$generated"
+          diff -u verification/Ores.Net.Tests/GeneratedCounterActor.g.cs "$generated"
+          dotnet publish verification/Ores.Net.ActorCounterProbe/Ores.Net.ActorCounterProbe.csproj \
+            -c Release -r linux-x64 -o artifacts/actor-counter/linux-x64 -warnaserror
+          binary=artifacts/actor-counter/linux-x64/Ores.Net.ActorCounterProbe
+          bash verification/assert-linux-native-release.sh "$binary"
+          test "$("$binary")" = \
+            "PASS actor-counter-native-aot: A=1,2,3 B=1,2 independent state, no reentrancy, cancellation and restart"
+          echo 'LINUX_NET_ACTOR_COUNTER_NATIVE_AOT_GUEST_EXECUTED'
+
       - name: Compile native compiler and first native application
         shell: bash
         run: |
@@ -141,7 +158,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           tree="$(git rev-parse 'HEAD^{tree}')"
           mkdir -p artifacts/evidence
-          printf '{"schema":"oreslang.net.exact_head_native_aot_v1","repository":"%s","source_head_sha":"%s","tree_sha":"%s","run_id":%s,"run_attempt":%s,"runner_os":"Linux","target_rid":"linux-x64","checks":["managed-tests","native-compiler","native-app","negative-source-no-cil","source-isolation-4","canonical-precedence","structured-ssa-cil-native45","sidecar-negative"],"source_only":false,"independently_verified":false}\n' \
+          printf '{"schema":"oreslang.net.exact_head_native_aot_v1","repository":"%s","source_head_sha":"%s","tree_sha":"%s","run_id":%s,"run_attempt":%s,"runner_os":"Linux","target_rid":"linux-x64","checks":["managed-tests","native-compiler","native-app","negative-source-no-cil","source-isolation-4","canonical-precedence","structured-ssa-cil-native45","actor-counter-native-aot","sidecar-negative"],"source_only":false,"independently_verified":false}\n' \
             "$GITHUB_REPOSITORY" "$EXPECTED_HEAD" "$tree" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > artifacts/evidence/linux-native-aot.json
       - name: Upload Linux native executables and evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -154,5 +171,6 @@ jobs:
             artifacts/parity-precedence/linux-x64/oreslang-app
             artifacts/structured/linux-x64/oreslang-app
             artifacts/compiler/linux-x64/oresnet
+            artifacts/actor-counter/linux-x64/Ores.Net.ActorCounterProbe
           if-no-files-found: error
           retention-days: 14
