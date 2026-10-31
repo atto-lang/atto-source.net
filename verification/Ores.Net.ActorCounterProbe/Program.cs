@@ -38,6 +38,27 @@ catch (InvalidOperationException e) when (e.Message == "expected fault")
 Require(cancelled && Actor_Counter.Call_increment(host, tenantA, a) == 4,
     "faulted logical turn not fenced and restarted");
 
+// Overflow must fail in the generated increment path without committing
+// any partial change or admitting a stale turn after cancellation.
+var extremeTurn = host.BeginActorTurn(tenantA, a2);
+var extremeLoan = host.BeginActorStateLoan(tenantA, a2, extremeTurn, writable: true);
+host.WriteActorStateInt64(tenantA, a2, extremeTurn, extremeLoan, 0, long.MaxValue);
+host.EndActorStateLoan(tenantA, a2, extremeTurn, extremeLoan);
+host.CompleteActorTurn(tenantA, a2, extremeTurn);
+bool overflowDenied = false;
+try { _ = Actor_Counter.Call_increment(host, tenantA, a2); }
+catch (OverflowException) { overflowDenied = true; }
+Require(overflowDenied, "generated checked i64 overflow was admitted");
+var checkTurn = host.BeginActorTurn(tenantA, a2);
+var checkLoan = host.BeginActorStateLoan(tenantA, a2, checkTurn, writable: true);
+Require(host.ReadActorStateInt64(tenantA, a2, checkTurn, checkLoan, 0) == long.MaxValue,
+    "generated overflow changed actor state");
+host.WriteActorStateInt64(tenantA, a2, checkTurn, checkLoan, 0, 0);
+host.EndActorStateLoan(tenantA, a2, checkTurn, checkLoan);
+host.CompleteActorTurn(tenantA, a2, checkTurn);
+Require(Actor_Counter.Call_increment(host, tenantA, a2) == 1,
+    "overflow left actor lane blocked");
+
 host.RetireActor(tenantA, a); host.RetireActor(tenantA, a2);
 host.RetireActor(tenantB, b);
 host.BeginShutdown(tenantA);host.CompleteShutdown(tenantA);host.Destroy(tenantA);
