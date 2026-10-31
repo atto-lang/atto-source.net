@@ -257,7 +257,9 @@ foreach (var pair in new[] { (long.MinValue, -1L), (5L, 0L) })
 {
     var divisionIr = OresIrLowering.Lower(new Binary('/', new Literal(pair.Item1), new Literal(pair.Item2)));
     try { OresIrReferenceEvaluator.Evaluate(divisionIr); }
-    catch (OverflowException) when (pair.Item2 == -1) { continue; }
+    catch (GuestEffectTransportException ex)
+        when (pair.Item2 == -1 &&
+              ex.Status == GuestEffectStatus.ArithmeticOverflow) { continue; }
     catch (DivideByZeroException) when (pair.Item2 == 0) { continue; }
     throw new Exception("Internal checked-i64 division must preserve traps");
 }
@@ -433,7 +435,9 @@ static void RejectIrOverflow(string source, bool divideByZero)
     {
         return;
     }
-    catch (OverflowException) when (!divideByZero)
+    catch (GuestEffectTransportException ex)
+        when (!divideByZero &&
+              ex.Status == GuestEffectStatus.ArithmeticOverflow)
     {
         return;
     }
@@ -591,7 +595,9 @@ try
             throw new Exception($"Expected checked arithmetic error fixture {i}");
         }
         catch (DivideByZeroException) when (divideZero) { }
-        catch (OverflowException) when (!divideZero) { }
+        catch (GuestEffectTransportException ex)
+            when (!divideZero &&
+                  ex.Status == GuestEffectStatus.ArithmeticOverflow) { }
     }
 
     var reusedIr = OresIrVerifier.Verify(new IrFunction("reuse", IrValueType.I64,
