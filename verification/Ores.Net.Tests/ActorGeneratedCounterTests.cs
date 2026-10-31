@@ -185,6 +185,21 @@ internal static class ActorGeneratedCounterTests
                 scheduler.PendingMessages(tenantA, a2) == 2,
             "nonempty FIFO message was consumed or bypassed");
 
+        // An ordinary zero-byte user message must never masquerade as
+        // a scheduler-issued control envelope. It also blocks later ticks.
+        vm.SendActor(tenantB, b, scheduler.Address(tenantB, b),
+            Array.Empty<byte>());
+        scheduler.Enqueue(tenantB, b);
+        Require(scheduler.PendingMessages(tenantB, b) == 2,
+            "zero-byte user message test setup failed");
+        bool emptyUserDenied = false;
+        try { _ = scheduler.DispatchNext(tenantB, b,
+            Actor_Counter.Call_increment); }
+        catch (InvalidOperationException) { emptyUserDenied = true; }
+        Require(emptyUserDenied &&
+                scheduler.PendingMessages(tenantB, b) == 2,
+            "zero-byte user data forged dispatch or consumed queued messages");
+
         vm.RetireActor(tenantA, a); vm.RetireActor(tenantA, a2);
         vm.RetireActor(tenantB, b);
         vm.BeginShutdown(tenantA); vm.CompleteShutdown(tenantA); vm.Destroy(tenantA);
