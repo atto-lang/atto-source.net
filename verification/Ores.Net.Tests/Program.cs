@@ -80,6 +80,7 @@ Require(OresParser.Parse(
 VmIsolateHostTests.Run();
 AsyncOnlyIoPolicyTests.Run();
 ActorStateSchemaAdmissionTests.Run();
+ActorStateLayoutIntegrationTests.Run();
 SourceByteBudgetTests.Run();
 StructuralPatternAdmissionTests.Run();
 NumericSeparatorParityTests.Run();
