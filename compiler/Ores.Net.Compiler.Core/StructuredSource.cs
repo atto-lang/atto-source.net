@@ -59,6 +59,8 @@ public static class OresStructuredParser
     private const int MaxStatements = 16_384;
     private const int MaxDepth = 128;
     private const int MaxIdentifier = 128;
+    private const string SingletonUnsupported =
+        "ORES-SINGLETON-UNSUPPORTED: singleton declarations require exactly-once complete publication, cycle/failure semantics, runtime-derived actor authority for shared state, and five-backend guest execution parity";
     private const int MaxHelpers = 64;
     private const int MaxParameters = 16;
     private const int MaxLocalTypeFields = 64;
@@ -444,7 +446,7 @@ public static class OresStructuredParser
                     }
                 }
                 if (Current.Text == "singleton")
-                    throw Error("ORES-SINGLETON-UNSUPPORTED: singleton declarations require exactly-once complete publication, cycle/failure semantics, runtime-derived actor authority for shared state, and five-backend guest execution parity");
+                    throw Error(SingletonUnsupported);
                 if (Current.Text is "class" or "actor")
                     throw Error("Nominal class/actor methods require receiver-erased method slots, type/borrow checking and Native AOT CIL lowering; unsupported in .NET structured frontend");
                 Expect("fnc");
@@ -541,6 +543,17 @@ public static class OresStructuredParser
         {
             Budget(depth);
             int at = Current.Offset;
+            // A local singleton must not degrade into an unrelated assignment
+            // error or accidentally reach a future statement lowering path.
+            // Match only declaration modifier sequences, not an identifier
+            // named singleton in an ordinary expression or binding.
+            if ((Current.Text == "define" && index + 1 < tokens.Count &&
+                 (tokens[index + 1].Text == "singleton" ||
+                  (tokens[index + 1].Text == "pub" && index + 2 < tokens.Count &&
+                   tokens[index + 2].Text == "singleton"))) ||
+                (Current.Text == "pub" && index + 2 < tokens.Count &&
+                 tokens[index + 1].Text == "define" && tokens[index + 2].Text == "singleton"))
+                throw Error(SingletonUnsupported);
             if (Current.Text is "class" or "actor" ||
                 (Current.Text == "define" && index + 1 < tokens.Count &&
                  (tokens[index + 1].Text is "class" or "actor")))
