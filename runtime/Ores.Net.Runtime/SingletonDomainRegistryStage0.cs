@@ -138,11 +138,40 @@ public sealed class SingletonDomainHostControlStage0<T> : IDisposable
         {
             EnsureOpen();
             var entry = GetEntry(key);
+            // Re-check inside the registry lock: Stop/Dispose could have
+            // invalidated this exact incarnation after the initial check.
+            _runtime.ValidateSingletonGrantActor(actor);
             if (entry.Readers.Contains(actor)) return;
+            if (entry.Readers.Count >= _maxGrantsPerDeclaration)
+                ReclaimStaleReaderGrantsLocked(entry);
             if (entry.Readers.Count >= _maxGrantsPerDeclaration)
                 throw new InvalidOperationException(
                     "ORES-SINGLETON-GRANT-CAPACITY: read-grant quota exhausted");
+            // In particular, the bounded stale-grant scan must never turn
+            // a concurrently stopped candidate into a new valid grant.
+            _runtime.ValidateSingletonGrantActor(actor);
             entry.Readers.Add(actor);
+        }
+    }
+
+    // Called only under _gate and only when a declaration is at its grant
+    // capacity. The scan is bounded by maxGrantsPerDeclaration (<= 65536),
+    // uses runtime-authenticated incarnation checks rather than numeric IDs,
+    // and never implicitly authorizes a successor or another domain.
+    private void ReclaimStaleReaderGrantsLocked(Entry entry)
+    {
+        foreach (ActorRef existing in entry.Readers.ToArray())
+        {
+            try
+            {
+                _runtime.ValidateSingletonGrantActor(existing);
+            }
+            catch (InvalidOperationException)
+            {
+                // Stopped, retired, replaced or foreign runtime references
+                // cannot be active grants; reject and reclaim their slots.
+                entry.Readers.Remove(existing);
+            }
         }
     }
 
