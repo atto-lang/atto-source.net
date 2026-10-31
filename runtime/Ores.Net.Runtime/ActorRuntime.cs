@@ -69,10 +69,12 @@ public sealed class ActorContext
 {
     private readonly ActorArena _arena;
     private readonly ActorArenaTurn _turn;
+    private readonly ActorRuntime _issuer;
 
-    internal ActorContext(ActorRef self, ActorKind kind,
+    internal ActorContext(ActorRuntime issuer, ActorRef self, ActorKind kind,
         ActorArena arena, ActorArenaTurn turn)
     {
+        _issuer = issuer;
         Self = self;
         Kind = kind;
         _arena = arena;
@@ -85,6 +87,17 @@ public sealed class ActorContext
     // Host capability providers must enforce the same physical-turn authority
     // as actor memory access. A retained context is not a reusable credential.
     internal void ValidateActiveTurn() => _arena.ValidateActiveTurn(_turn);
+
+    // The issuer is runtime-minted, never recovered from numeric ActorRef IDs.
+    // A retained context or context from another runtime cannot authenticate
+    // an application-domain singleton lookup outside its physical actor turn.
+    internal void ValidateIssuedBy(ActorRuntime expected)
+    {
+        if (!ReferenceEquals(_issuer, expected))
+            throw new InvalidOperationException(
+                "ORES-SINGLETON-FOREIGN-RUNTIME: actor context belongs to another runtime");
+        ValidateActiveTurn();
+    }
 
     public ActorArenaHandle AllocatePersistent(int bytes, int alignment = 8) =>
         _arena.AllocatePersistent(_turn, bytes, alignment);
@@ -320,6 +333,19 @@ public sealed class ActorRuntime : IDisposable
 
     internal Task ObserveTermination(ActorRef actor) => Lookup(actor).Terminated.Task;
 
+    // Host-only grant admission; a copied ActorRef is not authority after
+    // termination, stop or generation retirement.
+    internal void ValidateSingletonGrantActor(ActorRef actor)
+    {
+        ActorCell cell = Lookup(actor);
+        lock (cell.Gate)
+        {
+            if (cell.Stopping || !cell.Mailbox.Authorizes(actor))
+                throw new InvalidOperationException(
+                    "ORES-SINGLETON-STALE-ACTOR: grant recipient is stopped or stale");
+        }
+    }
+
     // Statically bound capability-provider dispatch. This is the existing
     // bounded mailbox admission, not a socket send or asynchronous offload.
     internal void PostHostMessage(ActorRef actor) => Send(actor, ReadOnlySpan<byte>.Empty);
@@ -439,7 +465,7 @@ public sealed class ActorRuntime : IDisposable
                     using (turn)
                     {
                         var context = new ActorContext(
-                            cell.Reference, cell.Kind, cell.Arena, turn);
+                            this, cell.Reference, cell.Kind, cell.Arena, turn);
                         cell.Handler(context, payload);
                     }
                     succeeded = true;

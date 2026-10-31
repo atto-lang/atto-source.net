@@ -80,6 +80,7 @@ Require(OresParser.Parse(
 SingletonDeclarationAdmissionTests.Run();
 SingletonStage0Tests.Run();
 await SingletonCellStage0Tests.Run();
+await SingletonDomainRegistryStage0Tests.Run();
 AsyncOnlyIoPolicyTests.Run();
 SourceByteBudgetTests.Run();
 StructuralPatternAdmissionTests.Run();

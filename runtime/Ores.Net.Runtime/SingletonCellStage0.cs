@@ -17,6 +17,7 @@ public sealed class SingletonCellStage0<T>
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly int _maxPendingWaiters;
     private int _pendingWaiters;
+    private T _readyValue = default!;
     private Phase _phase;
 
     public SingletonCellStage0(Func<ValueTask<T>> initializer,
@@ -35,6 +36,29 @@ public sealed class SingletonCellStage0<T>
     public int PendingWaiters
     {
         get { lock (_gate) return _pendingWaiters; }
+    }
+
+    /// <summary>
+    /// Host-only, ready-state snapshot for an already validated physical actor
+    /// turn. Never blocks a carrier, initiates an initializer, or exports a
+    /// pending Task to an actor. A domain registry must authorize the caller
+    /// before invoking this method. Reference values are NOT deep-immutable.
+    /// </summary>
+    internal bool TryReadPublished(out T value)
+    {
+        lock (_gate)
+        {
+            if (_phase == Phase.Retired)
+                throw new InvalidOperationException(
+                    "ORES-SINGLETON-RETIRED: domain retired the singleton cell");
+            if (_phase == Phase.Ready)
+            {
+                value = _readyValue;
+                return true;
+            }
+            value = default!;
+            return false;
+        }
     }
 
     /// <summary>
@@ -130,6 +154,7 @@ public sealed class SingletonCellStage0<T>
             {
                 if (_phase == Phase.Initializing)
                 {
+                    _readyValue = value;
                     _phase = Phase.Ready;
                     _outcome.TrySetResult(value);
                 }
