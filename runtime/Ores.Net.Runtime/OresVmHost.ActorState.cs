@@ -110,27 +110,111 @@ public sealed partial class OresVmHost
     }
 
     /// <summary>
-    /// Trusted generated synchronous actor entry. The host, not the guest
-    /// method, admits the logical turn and state loan. A failure cancels
-    /// the exact turn and retires any outstanding nested loans. This is
-    /// trusted-in-process execution, NOT physical tenant isolation.
+    /// Opaque, host-minted, single-dispatch state capability. Generated actor
+    /// methods receive this scope, never host/actor/turn/loan tickets.
+    /// The scope is revoked on exit (including exceptions), and every
+    /// operation is checked against the active actor loan under one lock.
     /// </summary>
-    public long InvokeTrustedActorStateLong(
-        IsolateHandle handle, ActorTicket actor,
-        Func<ActorTurnTicket, ActorStateLoan, long> generatedBody)
+    public sealed class ActorDispatchScope
     {
-        ArgumentNullException.ThrowIfNull(generatedBody);
+        private readonly OresVmHost _host;
+        private readonly IsolateHandle _isolate;
+        private readonly ActorTicket _actor;
+        private readonly ActorTurnTicket _turn;
+        private readonly ActorStateLoan _loan;
+        private bool _live = true;
+
+        internal ActorDispatchScope(OresVmHost host, IsolateHandle isolate,
+            ActorTicket actor, ActorTurnTicket turn, ActorStateLoan loan)
+        {
+            _host = host; _isolate = isolate; _actor = actor;
+            _turn = turn; _loan = loan;
+        }
+
+        private void CheckLive()
+        {
+            if (!_live)
+                throw new InvalidOperationException("retired actor dispatch scope");
+        }
+
+        internal void Revoke()
+        {
+            lock (_host._gate) { _live = false; }
+        }
+
+        public long AddInt64(int index, long delta)
+        {
+            lock (_host._gate) {
+                CheckLive();
+                return _host.AddActorStateInt64(
+                    _isolate, _actor, _turn, _loan, index, delta);
+            }
+        }
+
+        public long ReadInt64(int index)
+        {
+            lock (_host._gate) {
+                CheckLive();
+                return _host.ReadActorStateInt64(
+                    _isolate, _actor, _turn, _loan, index);
+            }
+        }
+
+        public void WriteInt64(int index, long value)
+        {
+            lock (_host._gate) {
+                CheckLive();
+                _host.WriteActorStateInt64(
+                    _isolate, _actor, _turn, _loan, index, value);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Host-retained scheduler capability. Guest actor methods cannot create
+    /// an instance or mint a dispatch scope; only the trusted host should
+    /// receive the scheduler from CreateTrustedScheduler. This does NOT
+    /// authenticate arbitrary managed code in the same process.
+    /// </summary>
+    public sealed class ActorScheduler
+    {
+        private readonly OresVmHost _host;
+
+        internal ActorScheduler(OresVmHost host) { _host = host; }
+
+        public long Dispatch(IsolateHandle isolate, ActorTicket actor,
+            Func<ActorDispatchScope, long> generatedMethod)
+            => _host.DispatchScheduledActor(this, isolate, actor, generatedMethod);
+    }
+
+    /// <summary>
+    /// Trusted embedding host obtains and retains this scheduler. It must
+    /// never expose it to an untrusted guest or external tenant.
+    /// </summary>
+    public ActorScheduler CreateTrustedScheduler() => new(this);
+
+    private long DispatchScheduledActor(ActorScheduler scheduler,
+        IsolateHandle handle, ActorTicket actor,
+        Func<ActorDispatchScope, long> generatedMethod)
+    {
+        ArgumentNullException.ThrowIfNull(generatedMethod);
+        if (!ReferenceEquals(scheduler._host, this))
+            throw new InvalidOperationException("foreign actor scheduler");
         var turn = BeginActorTurn(handle, actor);
+        ActorDispatchScope? scope = null;
         try {
             var loan = BeginActorStateLoan(handle, actor, turn, writable: true);
-            var result = generatedBody(turn, loan);
+            scope = new ActorDispatchScope(this, handle, actor, turn, loan);
+            var result = generatedMethod(scope);
+            scope.Revoke();
             EndActorStateLoan(handle, actor, turn, loan);
             CompleteActorTurn(handle, actor, turn);
             return result;
         }
         catch {
-            // Preserve the original exception. Cancellation enforces the
-            // terminal generation fence and unwinds still-active loans.
+            // Scope revocation precedes logical-lane retirement, even when
+            // the generated method retained the scope or threw mid-update.
+            scope?.Revoke();
             try { CancelActorTurn(handle, actor, turn); }
             catch (InvalidOperationException) { }
             throw;
