@@ -183,6 +183,48 @@ Require(scheduler.DequeueUser(tenantB, b) is null,
 Require(scheduler.DispatchNext(tenantB, b, Actor_Counter.Call_increment) == 3 &&
         scheduler.PendingMessages(tenantB, b) == 0,
     "zero-byte user drain did not unblock control");
+// Interleaved user/control/user/control must preserve every FIFO head.
+host.SendActor(tenantA, a2, scheduler.Address(tenantA, a2),
+    new byte[] { 0x61, 0x62 });
+scheduler.Enqueue(tenantA, a2);
+host.SendActor(tenantA, a2, scheduler.Address(tenantA, a2),
+    new byte[] { 0x63 });
+scheduler.Enqueue(tenantA, a2);
+Require(scheduler.PendingMessages(tenantA, a2) == 4,
+    "mixed FIFO setup lost an envelope");
+bool firstHeadBlocked = false;
+try { _ = scheduler.DispatchNext(tenantA, a2, Actor_Counter.Call_increment); }
+catch (InvalidOperationException) { firstHeadBlocked = true; }
+Require(firstHeadBlocked && scheduler.PendingMessages(tenantA, a2) == 4,
+    "first mixed user payload was bypassed");
+var first = scheduler.DequeueUser(tenantA, a2);
+Require(first is { Length: 2 } && first[0] == 0x61 &&
+        first[1] == 0x62 && scheduler.PendingMessages(tenantA, a2) == 3,
+    "first mixed payload lost or changed");
+Require(scheduler.DequeueUser(tenantA, a2) is null,
+    "mixed user drain stole first control");
+Require(scheduler.DispatchNext(tenantA, a2,
+        Actor_Counter.Call_increment) == 3 &&
+        scheduler.PendingMessages(tenantA, a2) == 2,
+    "mixed first tick failed or replayed");
+bool secondHeadBlocked = false;
+try { _ = scheduler.DispatchNext(tenantA, a2, Actor_Counter.Call_increment); }
+catch (InvalidOperationException) { secondHeadBlocked = true; }
+Require(secondHeadBlocked && scheduler.PendingMessages(tenantA, a2) == 2,
+    "second mixed user payload was bypassed");
+var second = scheduler.DequeueUser(tenantA, a2);
+Require(second is { Length: 1 } && second[0] == 0x63 &&
+        scheduler.PendingMessages(tenantA, a2) == 1,
+    "second mixed payload lost or changed");
+Require(scheduler.DispatchNext(tenantA, a2,
+        Actor_Counter.Call_increment) == 4 &&
+        scheduler.PendingMessages(tenantA, a2) == 0,
+    "mixed second tick failed or replayed");
+bool exhaustedReceiptDenied = false;
+try { _ = scheduler.DispatchNext(tenantA, a2, Actor_Counter.Call_increment); }
+catch (InvalidOperationException) { exhaustedReceiptDenied = true; }
+Require(exhaustedReceiptDenied, "mixed FIFO admitted unqueued native turn");
+
 bool foreignDrainDenied = false;
 try { _ = scheduler.DequeueUser(tenantA, b); }
 catch (InvalidOperationException) { foreignDrainDenied = true; }
