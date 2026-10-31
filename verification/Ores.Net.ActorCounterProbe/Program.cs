@@ -28,6 +28,15 @@ _ = scheduler.Dispatch(tenantA, a, scope => {
     return scope.ReadInt64(0);
 });
 Require(deniedReentry, "reentrant actor method unexpectedly admitted");
+bool crossThreadDenied = false;
+_ = scheduler.Dispatch(tenantA, a, scope => {
+    crossThreadDenied = Task.Run(() => {
+        try { _ = scope.AddInt64(0, 1); return false; }
+        catch (InvalidOperationException) { return true; }
+    }).GetAwaiter().GetResult();
+    return scope.ReadInt64(0);
+});
+Require(crossThreadDenied, "live dispatch scope escaped to another physical carrier");
 
 bool cancelled = false;
 OresVmHost.ActorDispatchScope? cancelledScope = null;
