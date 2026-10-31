@@ -191,6 +191,111 @@ internal static class SingletonCellStage0Tests
         Require(await compiledCell.ResolveAsync() == 42 &&
                 await compiledCell.ResolveAsync() == 42 && compiledStarts == 1,
             "compiled source stage0 initializer was not published once");
+        await CrossTaskCyclesAndWaiterBudgets();
         Console.WriteLine("singleton stage0: once-publication, sticky failure, same-flow cycles, cancellation and retirement host tests PASS (not guest or NativeAOT proof)");
     }
+
+    private static async Task CrossTaskCyclesAndWaiterBudgets()
+    {
+        // Two independently started task flows each begin their own factory.
+        // Both wait until they are initializing before establishing A -> B and
+        // B -> A. Graph registration is serialized, so one must be rejected.
+        var graph = new SingletonStage0DependencyGraph(maxActive: 16, maxDependencies: 32);
+        var enteredA = Pending<bool>();
+        var enteredB = Pending<bool>();
+        var go = Pending<bool>();
+        SingletonCellStage0<int>? a = null, b = null;
+        a = new SingletonCellStage0<int>(async () =>
+        {
+            enteredA.TrySetResult(true);
+            await go.Task.ConfigureAwait(false);
+            return await b!.ResolveAsync().ConfigureAwait(false);
+        }, graph);
+        b = new SingletonCellStage0<int>(async () =>
+        {
+            enteredB.TrySetResult(true);
+            await go.Task.ConfigureAwait(false);
+            return await a!.ResolveAsync().ConfigureAwait(false);
+        }, graph);
+        var runningA = Task.Run(async () => await a!.ResolveAsync());
+        var runningB = Task.Run(async () => await b!.ResolveAsync());
+        await Task.WhenAll(enteredA.Task, enteredB.Task).WaitAsync(TimeSpan.FromSeconds(10));
+        Require(graph.ActiveInitializers == 2, "independent initializers not admitted");
+        go.SetResult(true);
+        await ExpectDiagnostic(runningA, "ORES-SINGLETON-INIT-CYCLE");
+        await ExpectDiagnostic(runningB, "ORES-SINGLETON-INIT-CYCLE");
+        Require(graph.PendingDependencies == 0,
+            "cycle failure leaked dependency registration");
+        Require(a.PendingWaiters == 0 && b.PendingWaiters == 0,
+            "cycle failure leaked waiter registrations");
+
+        // Count registrations, not just a sampled number of live tasks.
+        // Canceling one waiter frees exactly one slot without resetting the
+        // factory or revoking another caller.
+        var slotGraph = new SingletonStage0DependencyGraph(maxActive: 4, maxDependencies: 4);
+        var started = Pending<bool>();
+        var released = Pending<int>();
+        int starts = 0;
+        var bounded = new SingletonCellStage0<int>(async () =>
+        {
+            Interlocked.Increment(ref starts);
+            started.TrySetResult(true);
+            return await released.Task.ConfigureAwait(false);
+        }, slotGraph, maxPendingWaiters: 2);
+        Task<int> first = bounded.ResolveAsync();
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        using var cancellation = new CancellationTokenSource();
+        Task<int> canceled = bounded.ResolveAsync(cancellation.Token);
+        Require(bounded.PendingWaiters == 2, "waiter slots undercounted");
+        await ExpectDiagnostic(bounded.ResolveAsync(), "ORES-SINGLETON-WAITER-CAPACITY");
+        Require(starts == 1 && bounded.PendingWaiters == 2,
+            "quota denial spawned a second factory or consumed a slot");
+        cancellation.Cancel();
+        try { _ = await canceled.WaitAsync(TimeSpan.FromSeconds(10)); }
+        catch (OperationCanceledException) when (canceled.IsCanceled) { }
+        Require(canceled.IsCanceled && bounded.PendingWaiters == 1,
+            "canceled waiter retained its quota");
+        Task<int> replacement = bounded.ResolveAsync();
+        Require(bounded.PendingWaiters == 2, "freed slot could not be re-admitted");
+        released.SetResult(57);
+        Require(await first.WaitAsync(TimeSpan.FromSeconds(10)) == 57 &&
+                await replacement.WaitAsync(TimeSpan.FromSeconds(10)) == 57 &&
+                bounded.PendingWaiters == 0 && starts == 1,
+            "bounded waiters did not observe one publication / refund slots");
+
+        // Bound the graph itself. This is not a domain authorization oracle.
+        var oneInitializerGraph = new SingletonStage0DependencyGraph(maxActive: 1, maxDependencies: 1);
+        var firstStarted = Pending<bool>();
+        var firstReleased = Pending<int>();
+        var held = new SingletonCellStage0<int>(async () =>
+        {
+            firstStarted.TrySetResult(true);
+            return await firstReleased.Task.ConfigureAwait(false);
+        }, oneInitializerGraph);
+        Task<int> heldTask = held.ResolveAsync();
+        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var deniedCell = new SingletonCellStage0<int>(
+            () => ValueTask.FromResult(3), oneInitializerGraph);
+        await ExpectDiagnostic(deniedCell.ResolveAsync(), "ORES-SINGLETON-GRAPH-CAPACITY");
+        await ExpectDiagnostic(deniedCell.ResolveAsync(), "ORES-SINGLETON-GRAPH-CAPACITY");
+        firstReleased.SetResult(17);
+        Require(await heldTask.WaitAsync(TimeSpan.FromSeconds(10)) == 17,
+            "graph capacity rejection interrupted healthy initializer");
+
+        // Separate host graphs must not silently share an initialization
+        // authority scope. Cross-graph access is explicitly rejected.
+        var foreignGraph = new SingletonStage0DependencyGraph();
+        var foreignCell = new SingletonCellStage0<int>(
+            () => ValueTask.FromResult(2), foreignGraph);
+        var crossingCell = new SingletonCellStage0<int>(async () =>
+            await foreignCell.ResolveAsync().ConfigureAwait(false),
+            new SingletonStage0DependencyGraph());
+        await ExpectDiagnostic(crossingCell.ResolveAsync(), "ORES-SINGLETON-GRAPH-BOUNDARY");
+        Require(await foreignCell.ResolveAsync() == 2, "host setup of foreign ready cell failed");
+        var readyCrossing = new SingletonCellStage0<int>(async () =>
+            await foreignCell.ResolveAsync().ConfigureAwait(false),
+            new SingletonStage0DependencyGraph());
+        await ExpectDiagnostic(readyCrossing.ResolveAsync(), "ORES-SINGLETON-GRAPH-BOUNDARY");
+    }
+
 }
