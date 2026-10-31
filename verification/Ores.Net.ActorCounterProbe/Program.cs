@@ -277,6 +277,43 @@ bool prelayoutTickReplayDenied = false;
 try { _ = scheduler.DispatchNext(rawTenant, raw, Actor_Counter.Call_increment); }
 catch (InvalidOperationException) { prelayoutTickReplayDenied = true; }
 Require(prelayoutTickReplayDenied, "pre-layout tick was replayed");
+// A host actor's default 1024-message quota includes zero-byte user data
+// and typed control ticks. A full FIFO may not admit privileged ticks, and
+// freeing one slot must not let the tick skip earlier user data.
+const int boundedMailboxMessages = 1024;
+for (var i = 0; i < boundedMailboxMessages; i++)
+    host.SendActor(rawTenant, raw, scheduler.Address(rawTenant, raw),
+        Array.Empty<byte>());
+Require(scheduler.PendingMessages(rawTenant, raw) == boundedMailboxMessages,
+    "zero-byte user data bypassed bounded mailbox count");
+bool fullControlDenied = false;
+try { scheduler.Enqueue(rawTenant, raw); }
+catch (InvalidOperationException) { fullControlDenied = true; }
+Require(fullControlDenied &&
+        scheduler.PendingMessages(rawTenant, raw) == boundedMailboxMessages,
+    "full user mailbox admitted privileged control");
+Require(scheduler.DequeueUser(rawTenant, raw) is { Length: 0 } &&
+        scheduler.PendingMessages(rawTenant, raw) == boundedMailboxMessages - 1,
+    "zero-byte dequeue did not restore one bounded slot");
+scheduler.Enqueue(rawTenant, raw);
+Require(scheduler.PendingMessages(rawTenant, raw) == boundedMailboxMessages,
+    "control could not reuse one refunded slot");
+bool saturatedHeadDenied = false;
+try { _ = scheduler.DispatchNext(rawTenant, raw, Actor_Counter.Call_increment); }
+catch (InvalidOperationException) { saturatedHeadDenied = true; }
+Require(saturatedHeadDenied &&
+        scheduler.PendingMessages(rawTenant, raw) == boundedMailboxMessages,
+    "control skipped saturated zero-byte user head");
+for (var i = 1; i < boundedMailboxMessages; i++)
+    Require(scheduler.DequeueUser(rawTenant, raw) is { Length: 0 },
+        "saturated FIFO dropped or reordered zero-byte user data");
+Require(scheduler.DequeueUser(rawTenant, raw) is null &&
+        scheduler.PendingMessages(rawTenant, raw) == 1,
+    "saturated user dequeue stole scheduler receipt");
+Require(scheduler.DispatchNext(rawTenant, raw, Actor_Counter.Call_increment) == 2 &&
+        scheduler.PendingMessages(rawTenant, raw) == 0,
+    "saturated FIFO control recovery failed or replayed");
+
 host.RetireActor(rawTenant, raw);
 host.BeginShutdown(rawTenant);
 host.CompleteShutdown(rawTenant);
