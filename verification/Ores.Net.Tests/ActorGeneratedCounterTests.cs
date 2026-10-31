@@ -102,12 +102,19 @@ internal static class ActorGeneratedCounterTests
             return scope.ReadInt64(0);
         });
         Require(deniedReentry, "actor reentered inside its own state loan");
+        OresVmHost.ActorDispatchScope? failedScope = null;
         try {
-            _ = scheduler.Dispatch(tenantA, a,
-                _ => throw new InvalidOperationException("guest failure"));
+            _ = scheduler.Dispatch(tenantA, a, scope => {
+                failedScope = scope;
+                throw new InvalidOperationException("guest failure");
+            });
             throw new Exception("expected test guest failure");
         }
         catch (InvalidOperationException e) when (e.Message == "guest failure") { }
+        bool cancelledScopeRejected = false;
+        try { _ = failedScope!.AddInt64(0, 1); }
+        catch (InvalidOperationException) { cancelledScopeRejected = true; }
+        Require(cancelledScopeRejected, "faulted dispatch scope remained live");
         Require(scheduler.Dispatch(tenantA, a, Actor_Counter.Call_increment) == 4,
             "faulting actor turn was not cancelled");
 
