@@ -148,6 +148,24 @@ public sealed class ActorMailbox
         }
     }
 
+    /// <summary>
+    /// One FIFO-backed synchronous actor tick. Only an admitted empty
+    /// control envelope can schedule the narrow generated Counter method.
+    /// A nonempty user message is never removed, consumed or reclassified
+    /// as an actor tick. Called only under the owning host admission lock.
+    /// </summary>
+    internal bool TryReceiveEmptyDispatch()
+    {
+        lock (_gate)
+        {
+            if (_closed || _messages.Count == 0 ||
+                _messages.Peek().Length != 0)
+                return false;
+            _ = _messages.Dequeue(); // Empty envelope: no user bytes to leak.
+            return true;
+        }
+    }
+
     public void Stop()
     {
         lock (_gate)
