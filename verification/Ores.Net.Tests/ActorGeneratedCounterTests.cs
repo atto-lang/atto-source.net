@@ -45,11 +45,12 @@ internal static class ActorGeneratedCounterTests
                 golden.Replace("\r\n", "\n", StringComparison.Ordinal),
             "static compiled golden diverged from actor source emitter");
         Require(generated.Contains("public static class Actor_Counter", StringComparison.Ordinal) &&
-            generated.Contains("public static long Call_increment(", StringComparison.Ordinal) &&
+            generated.Contains("public static long Call_increment(OresVmHost.ActorDispatchScope scope)", StringComparison.Ordinal) &&
             generated.Contains("host.ConfigureActorState(isolate, actor,", StringComparison.Ordinal) &&
             generated.Contains("Int64Default: 0L", StringComparison.Ordinal) &&
-            generated.Contains("host.InvokeTrustedActorStateLong(isolate, actor,", StringComparison.Ordinal) &&
-            generated.Contains("host.AddActorStateInt64(isolate, actor, turn, loan, 0, 1L)", StringComparison.Ordinal) &&
+            generated.Contains("return scope.AddInt64(0, 1L);", StringComparison.Ordinal) &&
+            !generated.Contains("BeginActorTurn(", StringComparison.Ordinal) &&
+            !generated.Contains("CreateTrustedScheduler(", StringComparison.Ordinal) &&
             !generated.Contains("ValidateActorStateLoan(", StringComparison.Ordinal),
             "generated AOT source must use the checked host turn/loan operation");
         bool scalarDenied = false;
@@ -82,32 +83,43 @@ internal static class ActorGeneratedCounterTests
         var tenantA = vm.CreateIsolate("counter-a", maxActors: 2);
         var tenantB = vm.CreateIsolate("counter-b", maxActors: 1);
         vm.Start(tenantA); vm.Start(tenantB);
+        var scheduler = vm.CreateTrustedScheduler();
         var a = Actor_Counter.Create(vm, tenantA, 7);
         var a2 = Actor_Counter.Create(vm, tenantA, 8);
         var b = Actor_Counter.Create(vm, tenantB, 7);
-        Require(Actor_Counter.Call_increment(vm, tenantA, a) == 1, "A1");
-        Require(Actor_Counter.Call_increment(vm, tenantA, a) == 2, "A2");
-        Require(Actor_Counter.Call_increment(vm, tenantB, b) == 1, "B1");
-        Require(Actor_Counter.Call_increment(vm, tenantA, a) == 3, "A3");
-        Require(Actor_Counter.Call_increment(vm, tenantB, b) == 2, "B2");
-        Require(Actor_Counter.Call_increment(vm, tenantA, a2) == 1,
+        Require(scheduler.Dispatch(tenantA, a, Actor_Counter.Call_increment) == 1, "A1");
+        Require(scheduler.Dispatch(tenantA, a, Actor_Counter.Call_increment) == 2, "A2");
+        Require(scheduler.Dispatch(tenantB, b, Actor_Counter.Call_increment) == 1, "B1");
+        Require(scheduler.Dispatch(tenantA, a, Actor_Counter.Call_increment) == 3, "A3");
+        Require(scheduler.Dispatch(tenantB, b, Actor_Counter.Call_increment) == 2, "B2");
+        Require(scheduler.Dispatch(tenantA, a2, Actor_Counter.Call_increment) == 1,
             "same-tenant actor must be independent");
 
         var deniedReentry = false;
-        _ = vm.InvokeTrustedActorStateLong(tenantA, a, (turn, loan) => {
-            try { _ = Actor_Counter.Call_increment(vm, tenantA, a); }
+        _ = scheduler.Dispatch(tenantA, a, scope => {
+            try { _ = scheduler.Dispatch(tenantA, a, Actor_Counter.Call_increment); }
             catch (InvalidOperationException) { deniedReentry = true; }
-            return vm.ReadActorStateInt64(tenantA, a, turn, loan, 0);
+            return scope.ReadInt64(0);
         });
         Require(deniedReentry, "actor reentered inside its own state loan");
         try {
-            _ = vm.InvokeTrustedActorStateLong(tenantA, a,
-                (_, _) => throw new InvalidOperationException("guest failure"));
+            _ = scheduler.Dispatch(tenantA, a,
+                _ => throw new InvalidOperationException("guest failure"));
             throw new Exception("expected test guest failure");
         }
         catch (InvalidOperationException e) when (e.Message == "guest failure") { }
-        Require(Actor_Counter.Call_increment(vm, tenantA, a) == 4,
+        Require(scheduler.Dispatch(tenantA, a, Actor_Counter.Call_increment) == 4,
             "faulting actor turn was not cancelled");
+
+        OresVmHost.ActorDispatchScope? escaped = null;
+        _ = scheduler.Dispatch(tenantA, a, scope => {
+            escaped = scope;
+            return scope.ReadInt64(0);
+        });
+        bool replayDenied = false;
+        try { _ = escaped!.AddInt64(0, 1); }
+        catch (InvalidOperationException) { replayDenied = true; }
+        Require(replayDenied, "retired dispatch scope could mutate after completion");
 
         vm.RetireActor(tenantA, a); vm.RetireActor(tenantA, a2);
         vm.RetireActor(tenantB, b);
@@ -116,7 +128,7 @@ internal static class ActorGeneratedCounterTests
         var replacement = vm.CreateIsolate("counter-a", maxActors: 1);
         vm.Start(replacement);
         var again = Actor_Counter.Create(vm, replacement, 7);
-        Require(Actor_Counter.Call_increment(vm, replacement, again) == 1,
+        Require(scheduler.Dispatch(replacement, again, Actor_Counter.Call_increment) == 1,
             "reincarnated actor reused stale state");
         vm.RetireActor(replacement, again);
         vm.BeginShutdown(replacement); vm.CompleteShutdown(replacement);
