@@ -60,6 +60,31 @@ internal static class NominalReceiverMethodSlotTests
         Reject(() => lowered.DeclareLowered("Foo", "x", 1,
             explicitSelf: true, mutableSelf: true), "x/0");
 
+        // Inline and split mutable-self syntax must lower to the exact same
+        // method selector: source spelling is not an overload dimension.
+        var splitOrInline = new NominalReceiverMethodSlots();
+        splitOrInline.DeclareLowered("Foo", "y", 2,
+            explicitSelf: true, mutableSelf: true);
+        Reject(() => splitOrInline.DeclareLowered("Foo", "y", 2,
+            explicitSelf: true, mutableSelf: true), "y/1");
+
+        // The registry is a host-only selector contract, not a claim that
+        // the structured parser accepts methods with 1,024 parameters.
+        // Sweep key uniqueness and exactly-one hidden receiver erasure.
+        var swept = new NominalReceiverMethodSlots();
+        for (int arity = 0; arity <= 1024; arity++)
+        {
+            var key = swept.DeclareLowered("Foo", "measure", arity + 1);
+            Require(key.ValueArity == arity && swept.Contains(key),
+                "receiver erasure or selector uniqueness drifted at " + arity);
+            Reject(() => swept.Declare("Foo", "measure", arity,
+                explicitSelf: true, mutableSelf: true), "measure/" + arity);
+        }
+        var maximum = new NominalReceiverMethodSlots().DeclareLowered(
+            "Foo", "edge", int.MaxValue);
+        Require(maximum.ValueArity == int.MaxValue - 1,
+            "maximum lowered arity must erase exactly one receiver");
+
         var staticMethod = lowered.DeclareLowered("Foo", "x", 2,
             ReceiverMethodNamespace.Static);
         Require(staticMethod.ValueArity == 2, "static method count was incorrectly erased");
