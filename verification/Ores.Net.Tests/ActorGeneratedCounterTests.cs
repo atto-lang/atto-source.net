@@ -153,6 +153,21 @@ internal static class ActorGeneratedCounterTests
         catch (InvalidOperationException) { replayDenied = true; }
         Require(replayDenied, "retired dispatch scope could mutate after completion");
 
+        // The specialized dispatcher cannot steal arbitrary user bytes
+        // from the same mailbox or skip past a nonempty FIFO head.
+        vm.SendActor(tenantA, a2, scheduler.Address(tenantA, a2),
+            new byte[] { 0xA5 });
+        scheduler.Enqueue(tenantA, a2);
+        Require(scheduler.PendingMessages(tenantA, a2) == 2,
+            "wrong FIFO test setup");
+        bool wrongHeadDenied = false;
+        try { _ = scheduler.DispatchNext(tenantA, a2,
+            Actor_Counter.Call_increment); }
+        catch (InvalidOperationException) { wrongHeadDenied = true; }
+        Require(wrongHeadDenied &&
+                scheduler.PendingMessages(tenantA, a2) == 2,
+            "nonempty FIFO message was consumed or bypassed");
+
         vm.RetireActor(tenantA, a); vm.RetireActor(tenantA, a2);
         vm.RetireActor(tenantB, b);
         vm.BeginShutdown(tenantA); vm.CompleteShutdown(tenantA); vm.Destroy(tenantA);
