@@ -141,7 +141,6 @@ static class CrossBackendCheckedI64ParityTests
             throw new Exception("Untrusted remainder IR escaped literal divisor gate");
         }
     }
-}
     private static void OresllmScalarIntersectionCases()
     {
         // Actual .NET parser -> OresIR -> CIL reference interpreter, NOT NativeAOT.
@@ -220,3 +219,4 @@ static class CrossBackendCheckedI64ParityTests
             throw new Exception("OresLLM unsupported expression admitted: " + expression);
         }
     }
+}
