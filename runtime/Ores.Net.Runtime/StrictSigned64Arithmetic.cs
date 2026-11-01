@@ -2,9 +2,9 @@ namespace Ores.Net.Runtime;
 
 /// <summary>
 /// Independent signed-64 Oreslang arithmetic semantics for the .NET backend.
-/// The scalar compiler admits only Integer.rem through verified SSA and a
-/// static CIL call. Mod, Pow, BitXor and ToFloatExact remain host reference
-/// helpers until each receives typed guest source and Native AOT execution.
+/// The scalar compiler admits Integer.rem and Integer.mod through verified
+/// SSA and static CIL calls. Pow, BitXor and ToFloatExact remain host reference
+/// helpers until typed guest source and Native AOT execution are verified.
 /// CLR exceptions are not yet guest Error values; do not claim error parity.
 /// </summary>
 public static class StrictSigned64Arithmetic
