@@ -155,6 +155,27 @@ jobs:
           test "$mod_status" -eq 70
           test "$mod_output" = "Oreslang division by zero"
           echo 'LINUX_NET_NATIVE_AOT_STRICT_REM_MOD_GUEST_EXECUTED_42_MIN_ZERO'
+      - name: Execute compiled guest Integer.pow and bitXor in Linux Native AOT
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/publish-linux.sh examples/strict-pow42.ores artifacts/strict-pow42
+          test "$(artifacts/strict-pow42/linux-x64/oreslang-app)" = 42
+          bash scripts/publish-linux.sh examples/strict-pow-min42.ores artifacts/strict-pow-min42
+          test "$(artifacts/strict-pow-min42/linux-x64/oreslang-app)" = 42
+          bash scripts/publish-linux.sh examples/strict-xor42.ores artifacts/strict-xor42
+          test "$(artifacts/strict-xor42/linux-x64/oreslang-app)" = 42
+          bash scripts/publish-linux.sh examples/strict-pow-overflow.ores artifacts/strict-pow-overflow
+          status=0
+          output="$(artifacts/strict-pow-overflow/linux-x64/oreslang-app 2>&1)" || status=$?
+          test "$status" -eq 70
+          test "$output" = "Oreslang arithmetic overflow"
+          bash scripts/publish-linux.sh examples/strict-pow-negative.ores artifacts/strict-pow-negative
+          status=0
+          output="$(artifacts/strict-pow-negative/linux-x64/oreslang-app 2>&1)" || status=$?
+          test "$status" -eq 70
+          test "$output" = "Oreslang negative integer exponent"
+          echo 'LINUX_NET_NATIVE_AOT_STRICT_POW_XOR_NATIVE_EXECUTED'
       - name: Record exact-head Native AOT execution receipt
         shell: bash
         env:
@@ -170,11 +191,16 @@ jobs:
           sha_mod_normal="$(sha256sum artifacts/strict-mod42/linux-x64/oreslang-app | cut -d' ' -f1)"
           sha_mod_min="$(sha256sum artifacts/strict-mod-min42/linux-x64/oreslang-app | cut -d' ' -f1)"
           sha_mod_zero="$(sha256sum artifacts/strict-mod-zero/linux-x64/oreslang-app | cut -d' ' -f1)"
-          for digest in "$sha_normal" "$sha_min" "$sha_zero" "$sha_mod_normal" "$sha_mod_min" "$sha_mod_zero"; do
+          sha_pow_normal="$(sha256sum artifacts/strict-pow42/linux-x64/oreslang-app | cut -d' ' -f1)"
+          sha_pow_min="$(sha256sum artifacts/strict-pow-min42/linux-x64/oreslang-app | cut -d' ' -f1)"
+          sha_pow_overflow="$(sha256sum artifacts/strict-pow-overflow/linux-x64/oreslang-app | cut -d' ' -f1)"
+          sha_pow_negative="$(sha256sum artifacts/strict-pow-negative/linux-x64/oreslang-app | cut -d' ' -f1)"
+          sha_xor="$(sha256sum artifacts/strict-xor42/linux-x64/oreslang-app | cut -d' ' -f1)"
+          for digest in "$sha_normal" "$sha_min" "$sha_zero" "$sha_mod_normal" "$sha_mod_min" "$sha_mod_zero" "$sha_pow_normal" "$sha_pow_min" "$sha_pow_overflow" "$sha_pow_negative" "$sha_xor"; do
             [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || { echo 'Invalid native digest' >&2; exit 1; }
           done
-          printf '{"schema":"oreslang.net.exact_head_native_aot_v1","repository":"%s","source_head_sha":"%s","tree_sha":"%s","run_id":%s,"run_attempt":%s,"runner_os":"Linux","target_rid":"linux-x64","checks":["managed-tests","native-compiler","native-app","negative-source-no-cil","source-isolation-4","canonical-precedence","structured-ssa-cil-native45","sidecar-negative","strict-rem-guest42-min-zero","strict-mod-guest42-min-zero"],"source_only":false,"independently_verified":false,"strict_rem_native_sha256":{"normal":"%s","signed_min":"%s","zero_divisor":"%s"},"strict_mod_native_sha256":{"normal":"%s","signed_min":"%s","zero_divisor":"%s"}}\n' \
-            "$GITHUB_REPOSITORY" "$EXPECTED_HEAD" "$tree" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$sha_normal" "$sha_min" "$sha_zero" "$sha_mod_normal" "$sha_mod_min" "$sha_mod_zero" > artifacts/evidence/linux-native-aot.json
+          printf '{"schema":"oreslang.net.exact_head_native_aot_v1","repository":"%s","source_head_sha":"%s","tree_sha":"%s","run_id":%s,"run_attempt":%s,"runner_os":"Linux","target_rid":"linux-x64","checks":["managed-tests","native-compiler","native-app","negative-source-no-cil","source-isolation-4","canonical-precedence","structured-ssa-cil-native45","sidecar-negative","strict-rem-guest42-min-zero","strict-mod-guest42-min-zero","strict-pow-xor-guest42-min-overflow-negative"],"source_only":false,"independently_verified":false,"strict_rem_native_sha256":{"normal":"%s","signed_min":"%s","zero_divisor":"%s"},"strict_mod_native_sha256":{"normal":"%s","signed_min":"%s","zero_divisor":"%s"},"strict_pow_xor_native_sha256":{"pow42":"%s","pow_min42":"%s","pow_overflow":"%s","pow_negative":"%s","xor42":"%s"}}\n' \
+            "$GITHUB_REPOSITORY" "$EXPECTED_HEAD" "$tree" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$sha_normal" "$sha_min" "$sha_zero" "$sha_mod_normal" "$sha_mod_min" "$sha_mod_zero" "$sha_pow_normal" "$sha_pow_min" "$sha_pow_overflow" "$sha_pow_negative" "$sha_xor" > artifacts/evidence/linux-native-aot.json
       - name: Upload Linux native executables and evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -187,6 +213,11 @@ jobs:
             artifacts/strict-mod42/linux-x64/oreslang-app
             artifacts/strict-mod-min42/linux-x64/oreslang-app
             artifacts/strict-mod-zero/linux-x64/oreslang-app
+            artifacts/strict-pow42/linux-x64/oreslang-app
+            artifacts/strict-pow-min42/linux-x64/oreslang-app
+            artifacts/strict-pow-overflow/linux-x64/oreslang-app
+            artifacts/strict-pow-negative/linux-x64/oreslang-app
+            artifacts/strict-xor42/linux-x64/oreslang-app
             artifacts/apps/linux-x64/oreslang-app
             artifacts/parity/linux-x64/oreslang-app
             artifacts/parity-precedence/linux-x64/oreslang-app
