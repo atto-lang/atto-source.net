@@ -42,10 +42,10 @@ foreach (var source in new[] {
 })
 {
     RejectDiagnostic(() => OresParser.Parse(source),
-        "rt mut share requires verified SharedMutex<T> guarded lowering",
+        "native rt mut share requires verified SharedMutex<T> capability, guarded lowering and allocation-domain proof",
         "scalar compiler must not emit unsupported shared writable alias");
     RejectDiagnostic(() => OresStructuredParser.Parse(source),
-        "rt mut share requires verified SharedMutex<T> guarded lowering",
+        "native rt mut share requires verified SharedMutex<T> capability, guarded lowering and allocation-domain proof",
         "structured frontend must not admit unsupported shared writable alias");
 }
 Require(OresParser.Parse("fnc main():int{return 42;} // rt mut share") is Literal,
