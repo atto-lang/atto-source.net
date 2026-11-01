@@ -65,7 +65,7 @@ internal static class ActorHierarchyMlAdmissionTests
         // not a success signal for .NET or Native AOT actor execution.
         var counterPath = Path.Combine(AppContext.BaseDirectory, "actor-counter-target.ores");
         var counterBytes = File.ReadAllBytes(counterPath);
-        var gitPrefix = Encoding.ASCII.GetBytes("blob " + counterBytes.Length + "\\0");
+        var gitPrefix = Encoding.ASCII.GetBytes("blob " + counterBytes.Length + "\0");
         var counterBlob = SHA1.HashData(gitPrefix.Concat(counterBytes).ToArray());
         if (!string.Equals(Convert.ToHexString(counterBlob),
                 "C49780B4B42251DB20AE9AC864EB8606BF7DA922", StringComparison.Ordinal))
