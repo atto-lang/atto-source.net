@@ -37,6 +37,32 @@ internal static class StructuredSourceTests
 
     public static void Run()
     {
+        // Native AOT has no actor hierarchy, trait/interface witness ABI,
+        // runtime-owned receive slot or actor state loan lowering yet. Every
+        // source spelling must fail at the dedicated capability boundary.
+        foreach (var actorSource in new[] {
+            "define actor A1 as end",
+            "define pub actor A1 as end",
+            "define shared actor A1 as end",
+            "define untrusted actor A1 as end",
+            "define isoactor A1 as end",
+            "define pub isoactor A1 as end",
+            "shared actor A1 { }",
+            "untrusted actor A1 { }",
+            "isoactor A1 { }",
+            "define serial http actor A1 as end",
+            "define actor A1 extends Base as end",
+            "define pub actor A1 implements Contract as end",
+            "define actor A1 impl Traced as end"
+        })
+            RejectFeature(actorSource, "receiver-erased method slots");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{/* define pub actor A1 as end */return 42;}"
+        ).Body.Count == 1, "actor declarations in comments must remain inert");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{return 42;} // define isoactor A1 as end"
+        ).Body.Count == 1, "line comment actor decoys must remain inert");
+
         // Local value types are block-local declarations on the structured
         // frontend. They are admitted into the AST but deliberately rejected
         // by CFG/CIL lowering until value layout and construction are verified.
