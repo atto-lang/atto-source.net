@@ -152,7 +152,9 @@ public static class OresStructuredParser
             bool legacyActorPrefix = actorNominal &&
                 (token.Text == "isoactor" ||
                  (tokens.Count > 0 && tokens[^1].Text is "shared" or "untrusted"));
-            if (nominalStart && (prefixedDefinition || legacyActorPrefix))
+            bool bareTopLevelActor = actorNominal && braceDepth == 0 &&
+                (tokens.Count == 0 || tokens[^1].Text is "}" or "end" or ";" or "fnc" or "routine");
+            if (nominalStart && (prefixedDefinition || legacyActorPrefix || bareTopLevelActor))
             {
                 if (braceDepth > 0)
                     throw new FormatException(
