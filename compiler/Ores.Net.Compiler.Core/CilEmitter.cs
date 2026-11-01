@@ -76,7 +76,8 @@ public static class CilEmitter
 
     // Explicit static runtime dependency: the AOT host already statically
     // references Ores.Net.Runtime. Never use reflection or dynamic CIL loading.
-    private static MemberReferenceHandle AddStrictRemReference(MetadataBuilder metadata)
+    private static MemberReferenceHandle AddStrictIntegerReference(
+        MetadataBuilder metadata, string method)
     {
         var assembly = metadata.AddAssemblyReference(
             metadata.GetOrAddString("Ores.Net.Runtime"),
@@ -93,15 +94,18 @@ public static class CilEmitter
                 parameters.AddParameter().Type().Int64();
             });
         return metadata.AddMemberReference(type,
-            metadata.GetOrAddString("Rem"), metadata.GetOrAddBlob(signature));
+            metadata.GetOrAddString(method), metadata.GetOrAddBlob(signature));
     }
 
     private static int WriteVerifiedIr(VerifiedIrFunction program, InstructionEncoder il,
         MetadataBuilder metadata)
     {
         MemberReferenceHandle strictRem = default;
+        MemberReferenceHandle strictMod = default;
         if (program.Instructions.Any(op => op.Opcode == IrOpcode.StrictRem))
-            strictRem = AddStrictRemReference(metadata);
+            strictRem = AddStrictIntegerReference(metadata, "Rem");
+        if (program.Instructions.Any(op => op.Opcode == IrOpcode.StrictMod))
+            strictMod = AddStrictIntegerReference(metadata, "Mod");
         int maxStack = 1;
         foreach (var operation in program.Instructions)
         {
@@ -129,10 +133,13 @@ public static class CilEmitter
                 case IrOpcode.CheckedMultiply:
                 case IrOpcode.CheckedDivide:
                 case IrOpcode.StrictRem:
+                case IrOpcode.StrictMod:
                     il.LoadLocal(operation.Left!.Value);
                     il.LoadLocal(operation.Right!.Value);
                     if (operation.Opcode == IrOpcode.StrictRem)
                         il.Call(strictRem);
+                    else if (operation.Opcode == IrOpcode.StrictMod)
+                        il.Call(strictMod);
                     else
                         il.OpCode(operation.Opcode switch
                         {
