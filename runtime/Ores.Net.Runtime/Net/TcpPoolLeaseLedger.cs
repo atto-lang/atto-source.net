@@ -19,6 +19,10 @@ internal sealed class TcpPoolLeaseLedger
         internal readonly ulong Epoch;
         internal readonly string Partition;
         internal bool Active;
+        // Without operation-specific completion tickets, reusing one lease
+        // for multiple physical I/O operations permits late-callback ABA.
+        // Restrict v1 to a single exchange per lease.
+        internal bool EverBegun;
         internal bool Revoked;
 
         internal Lease(TcpPoolLeaseLedger owner, int slot, ulong generation,
@@ -83,7 +87,8 @@ internal sealed class TcpPoolLeaseLedger
         if (!Monitor.TryEnter(gate)) return false;
         try
         {
-            if (stopped || !Valid(lease, actor, epoch) || lease!.Active) return false;
+            if (stopped || !Valid(lease, actor, epoch) || lease!.EverBegun) return false;
+            lease.EverBegun = true;
             lease.Active = true;
             return true;
         }
