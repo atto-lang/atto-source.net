@@ -1,0 +1,64 @@
+// Ten additional native Oreslang signed-i64 parity regressions.
+// Exact guest compiler/JIT/AOT execution remains unverified until admitted stepful CI.
+// Wasm and Cranelift execute equivalent import-free scalar sources separately.
+import class TestCase, TestSuite, TestOptions, TestOutcome, RunSummary from "ores.std/testing";
+import fnc expect_equal_int, run_suite, require_success from "ores.std/testing";
+
+fnc case_max_plus_negative_one(): TestOutcome {
+  return expect_equal_int(9223372036854775807 + (-1), 9223372036854775806, "portable scalar v2: max-plus-negative-one");
+}
+
+fnc case_min_minus_negative_one(): TestOutcome {
+  return expect_equal_int(-9223372036854775808 - (-1), -9223372036854775807, "portable scalar v2: min-minus-negative-one");
+}
+
+fnc case_large_roundtrip(): TestOutcome {
+  return expect_equal_int((9007199254740993 + 7) - 9007199254740993, 7, "portable scalar v2: large-roundtrip");
+}
+
+fnc case_large_negative_roundtrip(): TestOutcome {
+  return expect_equal_int((-9007199254740993 - 7) - (-9007199254740993), -7, "portable scalar v2: large-negative-roundtrip");
+}
+
+fnc case_right_nested_subtraction(): TestOutcome {
+  return expect_equal_int(100 - (50 - (20 - 7)), 63, "portable scalar v2: right-nested-subtraction");
+}
+
+fnc case_left_nested_subtraction(): TestOutcome {
+  return expect_equal_int(((100 - 50) - 20) - 7, 23, "portable scalar v2: left-nested-subtraction");
+}
+
+fnc case_mul_near_max(): TestOutcome {
+  return expect_equal_int(3037000499 * 3037000499, 9223372030926249001, "portable scalar v2: mul-near-max");
+}
+
+fnc case_mul_near_min(): TestOutcome {
+  return expect_equal_int((-3037000499) * 3037000499, -9223372030926249001, "portable scalar v2: mul-near-min");
+}
+
+fnc case_triple_negative(): TestOutcome {
+  return expect_equal_int(-(-(-42)), -42, "portable scalar v2: triple-negative");
+}
+
+fnc case_signed_underscore(): TestOutcome {
+  return expect_equal_int(-9_223_372_036_854_775_807 + 8, -9223372036854775799, "portable scalar v2: signed-underscore");
+}
+
+pub routine main(): void {
+  val TestSuite suite = new TestSuite("portable-scalar-v2", arr[
+    new TestCase("max-plus-negative-one", case_max_plus_negative_one, false, ""),
+    new TestCase("min-minus-negative-one", case_min_minus_negative_one, false, ""),
+    new TestCase("large-roundtrip", case_large_roundtrip, false, ""),
+    new TestCase("large-negative-roundtrip", case_large_negative_roundtrip, false, ""),
+    new TestCase("right-nested-subtraction", case_right_nested_subtraction, false, ""),
+    new TestCase("left-nested-subtraction", case_left_nested_subtraction, false, ""),
+    new TestCase("mul-near-max", case_mul_near_max, false, ""),
+    new TestCase("mul-near-min", case_mul_near_min, false, ""),
+    new TestCase("triple-negative", case_triple_negative, false, ""),
+    new TestCase("signed-underscore", case_signed_underscore, false, "")
+  ]);
+  val TestOptions options = new TestOptions("", false, true);
+  val RunSummary summary = run_suite(rt borrow suite, rt borrow options);
+  require_success(rt borrow summary);
+  return;
+}
