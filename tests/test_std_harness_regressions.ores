@@ -41,6 +41,16 @@ fnc large_signed_subtraction_exact(): TestOutcome {
   return expect_equal_int(9223372036854775807 - 9223372036854775806, 1,
     "near max i64 subtract must remain exact");
 }
+fnc large_opposite_sign_sum_is_exact(): TestOutcome {
+  return expect_equal_int(9007199254740993 + (-9007199254740992), 1,
+    "NativeAOT integer addition must not round through double");
+}
+
+fnc large_negative_opposite_sign_sum_is_exact(): TestOutcome {
+  return expect_equal_int(-9007199254740993 + 9007199254740992, -1,
+    "NativeAOT integer addition must preserve negative low bit");
+}
+
 pub routine main(): void {
   val TestSuite suite = new TestSuite("dotnet-guest-semantics", arr[
     new TestCase("min_i64_successor_is_exact", min_i64_successor_is_exact, false, ""),
@@ -52,7 +62,9 @@ pub routine main(): void {
     new TestCase("parentheses_override_precedence", parentheses_override_precedence, false, ""),
     new TestCase("subtraction_is_left_associative", subtraction_is_left_associative, false, ""),
     new TestCase("negation_cancels_exactly", negation_cancels_exactly, false, ""),
-    new TestCase("large_signed_subtraction_exact", large_signed_subtraction_exact, false, "")
+    new TestCase("large_signed_subtraction_exact", large_signed_subtraction_exact, false, ""),
+    new TestCase("large_opposite_sign_sum_is_exact", large_opposite_sign_sum_is_exact, false, ""),
+    new TestCase("large_negative_opposite_sign_sum_is_exact", large_negative_opposite_sign_sum_is_exact, false, "")
   ]);
   val TestOptions options = new TestOptions("", false, true);
   val RunSummary summary = run_suite(rt borrow suite, rt borrow options);
