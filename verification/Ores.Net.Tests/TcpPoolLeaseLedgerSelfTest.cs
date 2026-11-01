@@ -185,6 +185,50 @@ internal static class TcpPoolLeaseLedgerSelfTest
                 Require(holder.Wait(TimeSpan.FromSeconds(2)), "holder terminates");
             }
         }
+        {
+            var pool = New();
+            Require(pool.TryRevokeEpoch(8), "idle epoch revoke");
+            Require(!pool.TryAcquire(0, ActorB, Partition, 8, out _),
+                "idle preconnected socket quarantined by epoch rollover");
+            Require(!pool.TryConfirmPhysicalClose(0, 0),
+                "stale generation cannot rearm");
+            Require(pool.TryConfirmPhysicalClose(0, 1),
+                "trusted host physical close acknowledgement");
+            var ready = Acquire(pool, actor: ActorB, epoch: 8);
+            Require(pool.TryRelease(ready, ActorB, 8), "new epoch lease releases");
+        }
+        {
+            var pool = New();
+            TcpPoolLeaseLedger.Lease? last = null;
+            for (var iteration = 0; iteration < 1024; iteration++)
+            {
+                var current = Acquire(pool);
+                if (last is not null)
+                    Require(!pool.TryBegin(last, ActorA, 7),
+                        "prior generation never regains authority");
+                if ((iteration & 1) == 0)
+                {
+                    Require(pool.TryBegin(current, ActorA, 7), "recycle operation starts");
+                    Require(pool.TryRelease(current, ActorA, 7),
+                        "in-flight release revokes authority");
+                    Require(!pool.TryConfirmPhysicalClose(0, current.Generation + 1),
+                        "active reactor prevents early close acknowledgement");
+                    Require(pool.TryComplete(current),
+                        "physical completion after cancellation");
+                }
+                else
+                {
+                    Require(pool.TryRelease(current, ActorA, 7),
+                        "idle physical exchange releases");
+                }
+                Require(!pool.TryAcquire(0, ActorA, Partition, 7, out _),
+                    "quarantined slot cannot be reissued");
+                Require(pool.TryConfirmPhysicalClose(0, current.Generation + 1),
+                    "trusted close ack after quiescence");
+                last = current;
+            }
+            Require(pool.TryStop(), "table stops after repeated retirements");
+        }
         foreach (var wrong in new[] { 0, -1, 1025 })
         {
             try
