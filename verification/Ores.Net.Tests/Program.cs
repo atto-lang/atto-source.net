@@ -109,6 +109,7 @@ SelectArbiterSelfTest.Run();
 SelectableI64ChannelSelfTest.Run();
 SelectableI64FutureSelfTest.Run();
 ActorDispatchDomainsSelfTest.Run();
+CriticalGateSelfTest.Run();
 ActorRuntimeSelfTest.Run();
 ProjectRootSourceTests.Run(); // host-only resolver, not linked .NET source imports
 
