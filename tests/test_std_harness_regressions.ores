@@ -9,10 +9,50 @@ fnc i64_above_double_precision_exact(): TestOutcome {
   return expect_equal_int(9007199254740993 - 9007199254740992, 1,
     "integer expressions must remain exact beyond float64 mantissa");
 }
+fnc signed_max_predecessor_exact(): TestOutcome {
+  return expect_equal_int(9223372036854775807 - 1, 9223372036854775806,
+    "i64 max predecessor must not round or overflow");
+}
+fnc high_precision_negative_delta(): TestOutcome {
+  return expect_equal_int(-9007199254740993 - (-9007199254740992), -1,
+    "negative integers beyond binary64 precision must remain exact");
+}
+fnc negative_multiplication_exact(): TestOutcome {
+  return expect_equal_int((-7) * 6, -42,
+    "native signed multiplication must preserve sign");
+}
+fnc operator_precedence_is_exact(): TestOutcome {
+  return expect_equal_int(2 + 3 * 4, 14,
+    "multiply must bind before add");
+}
+fnc parentheses_override_precedence(): TestOutcome {
+  return expect_equal_int((2 + 3) * 4, 20,
+    "parentheses must change evaluation grouping");
+}
+fnc subtraction_is_left_associative(): TestOutcome {
+  return expect_equal_int(20 - 5 - 3, 12,
+    "subtraction associativity must be left-to-right");
+}
+fnc negation_cancels_exactly(): TestOutcome {
+  return expect_equal_int(-(-42), 42,
+    "double negation must preserve sign");
+}
+fnc large_signed_subtraction_exact(): TestOutcome {
+  return expect_equal_int(9223372036854775807 - 9223372036854775806, 1,
+    "near max i64 subtract must remain exact");
+}
 pub routine main(): void {
   val TestSuite suite = new TestSuite("dotnet-guest-semantics", arr[
     new TestCase("min_i64_successor_is_exact", min_i64_successor_is_exact, false, ""),
-    new TestCase("i64_above_double_precision_exact", i64_above_double_precision_exact, false, "")
+    new TestCase("i64_above_double_precision_exact", i64_above_double_precision_exact, false, ""),
+    new TestCase("signed_max_predecessor_exact", signed_max_predecessor_exact, false, ""),
+    new TestCase("high_precision_negative_delta", high_precision_negative_delta, false, ""),
+    new TestCase("negative_multiplication_exact", negative_multiplication_exact, false, ""),
+    new TestCase("operator_precedence_is_exact", operator_precedence_is_exact, false, ""),
+    new TestCase("parentheses_override_precedence", parentheses_override_precedence, false, ""),
+    new TestCase("subtraction_is_left_associative", subtraction_is_left_associative, false, ""),
+    new TestCase("negation_cancels_exactly", negation_cancels_exactly, false, ""),
+    new TestCase("large_signed_subtraction_exact", large_signed_subtraction_exact, false, "")
   ]);
   val TestOptions options = new TestOptions("", false, true);
   val RunSummary summary = run_suite(rt borrow suite, rt borrow options);
