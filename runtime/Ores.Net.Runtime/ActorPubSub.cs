@@ -198,8 +198,10 @@ public sealed class ActorPubSub
             group.Members.Remove(actor);
             foreach (var entry in _topics)
             {
-                if (entry.Key.GroupId == groupId)
-                    entry.Value.RemoveActor(actor);
+                if (entry.Key.GroupId == groupId &&
+                    entry.Value.RemoveActor(actor) &&
+                    actorRecord.SubscriptionCount > 0)
+                    actorRecord.SubscriptionCount--;
             }
             return true;
         }
@@ -434,18 +436,17 @@ public sealed class ActorPubSub
     private static void ValidatePayloadType<T>()
     {
         Type type = typeof(T);
-        if (type == typeof(string) || type == typeof(byte[]) ||
+        if (type == typeof(string) ||
             type == typeof(bool) || type == typeof(byte) ||
             type == typeof(short) || type == typeof(ushort) ||
             type == typeof(int) || type == typeof(uint) ||
             type == typeof(long) || type == typeof(ulong) ||
             type == typeof(float) || type == typeof(double) ||
-            type == typeof(decimal) || type == typeof(Guid) ||
-            type.IsEnum)
+            type == typeof(decimal) || type == typeof(Guid))
             return;
 
         throw new NotSupportedException(
-            $"NativeAOT pub/sub payload type {type.FullName} is not yet a proven frozen value type");
+            "NativeAOT pub/sub payload type is not yet a proven frozen scalar/string value");
     }
 
     private static T Freeze<T>(T value)
@@ -453,9 +454,6 @@ public sealed class ActorPubSub
         if (value is null)
             throw new ArgumentNullException(nameof(value),
                 "Oreslang event values use Option<T>, not null");
-
-        if (value is byte[] bytes)
-            return (T)(object)bytes.ToArray();
 
         return value;
     }
