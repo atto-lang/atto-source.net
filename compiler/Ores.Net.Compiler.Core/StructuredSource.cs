@@ -589,19 +589,24 @@ public static class OresStructuredParser
                 Expect(";");
                 return (new StructuredReturn(at, value), true);
             }
-            if (Current.Text is "let" or "val" or "const")
+            if (Current.Text is "let" or "val" or "const" or "int" or "bool")
             {
-                StructuredBindingKind kind = Current.Text switch
-                {
-                    "let" => StructuredBindingKind.Let,
-                    "val" => StructuredBindingKind.Val,
-                    _ => StructuredBindingKind.Const
-                };
-                index++;
-                // All three scalar declaration forms are admissible:
-                // const int x=e, const x:int=e, const x=e.
-                // A declaration's type is a check; it is not a cast.
-                bool annotated = Current.Text is "int" or "bool";
+                // The unqualified type-first form is a readonly runtime
+                // single-assignment local. Keep standalone 'const' a true
+                // compile-time constant, as defined by Java's language spec.
+                bool inferredReadonly = Current.Text is "int" or "bool";
+                StructuredBindingKind kind = inferredReadonly
+                    ? StructuredBindingKind.Val
+                    : Current.Text switch
+                    {
+                        "let" => StructuredBindingKind.Let,
+                        "val" => StructuredBindingKind.Val,
+                        _ => StructuredBindingKind.Const
+                    };
+                if (!inferredReadonly) index++;
+                // All explicit declaration forms are type checks, not casts.
+                // int x=e -> readonly runtime binding, const x=e -> constexpr.
+                bool annotated = inferredReadonly || Current.Text is "int" or "bool";
                 IrValueType type = IrValueType.I64;
                 string name;
                 int nameAt;
@@ -630,9 +635,11 @@ public static class OresStructuredParser
                 else
                     type = initializer.Type; // No i64 fallback for bool or unsupported types.
                 long? constantValue = null;
-                if (kind == StructuredBindingKind.Const &&
-                    IsCompileTimeScalar(initializer))
+                if (kind == StructuredBindingKind.Const)
                 {
+                    if (!IsCompileTimeScalar(initializer))
+                        throw new FormatException(
+                            $"Standalone const requires a compile-time scalar at offset {initializer.Offset}");
                     try { constantValue = ConstantValue(initializer); }
                     catch (OverflowException)
                     {
@@ -709,9 +716,9 @@ public static class OresStructuredParser
             throw new FormatException($"Undefined local '{name}' at offset {at}");
         }
 
-        // A source const is a fixed binding, not a demand for compile-time
-        // evaluation. Fold pure scalar literals, retaining runtime initializer
-        // expression and immutable binding for calls/reads. Do not mask overflow.
+        // Standalone const requires a proven compile-time scalar expression.
+        // Type-first/val readonly locals accept runtime initializers, while
+        // impure or unknown effects remain subject to the existing gates.
         private static bool IsCompileTimeScalar(StructuredExpr expression) =>
             expression switch
             {
