@@ -6,6 +6,7 @@ internal static class ActorRuntimeSelfTest
     public static void Run()
     {
         ThreeKindsUseAssignedDomainsAndActorArenas();
+        DispatcherNeverExecutesActorWorkInlineOnProducer();
         UnknownActorKindFailsBeforeNativeAllocation();
         RejectedMessagesDoNotStartCarriers();
         OneActorNeverRunsTwoHandlersConcurrently();
@@ -18,6 +19,31 @@ internal static class ActorRuntimeSelfTest
         FailedTurnAdmissionScrubsDequeuedMessage();
         Console.WriteLine(
             "PASS .NET integrated actor runtime mailbox, arena, domains, stop and fault isolation");
+    }
+
+    private static void DispatcherNeverExecutesActorWorkInlineOnProducer()
+    {
+        using var dispatcher = new ActorDispatchDomains(new ActorDispatcherOptions
+        {
+            PrivateWorkers = 2,
+            SharedWorkers = 2,
+            UntrustedWorkers = 1,
+            QueueCapacityPerDomain = 16
+        });
+        using var completed = new ManualResetEventSlim(false);
+        int submitterThreadId = Environment.CurrentManagedThreadId;
+        int executingThreadId = 0;
+        Require(dispatcher.TryDispatch(ActorKind.Shared, () =>
+        {
+            Volatile.Write(ref executingThreadId, Environment.CurrentManagedThreadId);
+            completed.Set();
+        }), "runtime accepts bounded shared-domain dispatch");
+        Require(completed.Wait(TimeSpan.FromSeconds(5)),
+            "worker executes admitted shared-domain work");
+        Require(Volatile.Read(ref executingThreadId) != submitterThreadId,
+            "producer/completion callback must not execute actor work inline");
+        Require(dispatcher.CompletedWorkItems <= 1,
+            "completed-work accounting may lag but cannot duplicate dispatch");
     }
 
     private static void UnknownActorKindFailsBeforeNativeAllocation()
