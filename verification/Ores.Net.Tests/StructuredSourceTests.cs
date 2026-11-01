@@ -56,6 +56,9 @@ internal static class StructuredSourceTests
             "untrusted actor A1 { }",
             "isoactor A1 { }",
             "define serial http actor A1 as end",
+            "define abstract actor A1 as end",
+            "define transform actor A1 as end",
+            "define pipe actor A1 as end",
             "define actor A1 extends Base as end",
             "define pub actor A1 implements Contract as end",
             "define actor A1 impl Traced as end"
