@@ -411,7 +411,27 @@ jobs:
             throw "Strict rem zero guest failure mismatch: status=$guestExit output=$errorOutput"
           }
           $global:LASTEXITCODE = 0 # Expected guest failure must not fail this validation step
-          Write-Host 'WINDOWS_NET_NATIVE_AOT_STRICT_REM_GUEST_EXECUTED_42_MIN_ZERO'
+          ./scripts/publish-windows.ps1 -Source examples/strict-mod42.ores -Rid win-x64 -Output artifacts/strict-mod42
+          if ($LASTEXITCODE -ne 0) { throw 'Strict mod native publish failed' }
+          $modOutput = & ./artifacts/strict-mod42/win-x64/oreslang-app.exe
+          if ($LASTEXITCODE -ne 0 -or ($modOutput | Out-String).Trim() -cne '42') {
+            throw "Strict mod native output mismatch: $modOutput"
+          }
+          ./scripts/publish-windows.ps1 -Source examples/strict-mod-min42.ores -Rid win-x64 -Output artifacts/strict-mod-min42
+          if ($LASTEXITCODE -ne 0) { throw 'Strict mod minimum native publish failed' }
+          $modMinOutput = & ./artifacts/strict-mod-min42/win-x64/oreslang-app.exe
+          if ($LASTEXITCODE -ne 0 -or ($modMinOutput | Out-String).Trim() -cne '42') {
+            throw "Strict mod minimum native output mismatch: $modMinOutput"
+          }
+          ./scripts/publish-windows.ps1 -Source examples/strict-mod-zero.ores -Rid win-x64 -Output artifacts/strict-mod-zero
+          if ($LASTEXITCODE -ne 0) { throw 'Strict mod zero native publish failed' }
+          $modErrorOutput = & ./artifacts/strict-mod-zero/win-x64/oreslang-app.exe 2>&1
+          $modGuestExit = $LASTEXITCODE
+          if ($modGuestExit -ne 70 -or ($modErrorOutput | Out-String).Trim() -notlike '*Oreslang division by zero*') {
+            throw "Strict mod zero guest failure mismatch: status=$modGuestExit output=$modErrorOutput"
+          }
+          $global:LASTEXITCODE = 0
+          Write-Host 'WINDOWS_NET_NATIVE_AOT_STRICT_REM_MOD_GUEST_EXECUTED_42_MIN_ZERO'
       - name: Emit exact-head Windows Native AOT run receipt
         shell: pwsh
         env:
@@ -436,11 +456,16 @@ jobs:
             target_rid = 'win-x64'
             checks = @('managed-regressions','native-compiler','native-app',
                        'native-PE','arithmetic-negative','CFG-native-execution',
-                       'strict-rem-guest42-min-zero')
+                       'strict-rem-guest42-min-zero','strict-mod-guest42-min-zero')
             strict_rem_native_sha256 = [ordered]@{
               normal = (Get-FileHash -LiteralPath 'artifacts/strict-rem42/win-x64/oreslang-app.exe' -Algorithm SHA256).Hash.ToLowerInvariant()
               signed_min = (Get-FileHash -LiteralPath 'artifacts/strict-rem-min42/win-x64/oreslang-app.exe' -Algorithm SHA256).Hash.ToLowerInvariant()
               zero_divisor = (Get-FileHash -LiteralPath 'artifacts/strict-rem-zero/win-x64/oreslang-app.exe' -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
+            strict_mod_native_sha256 = [ordered]@{
+              normal = (Get-FileHash -LiteralPath 'artifacts/strict-mod42/win-x64/oreslang-app.exe' -Algorithm SHA256).Hash.ToLowerInvariant()
+              signed_min = (Get-FileHash -LiteralPath 'artifacts/strict-mod-min42/win-x64/oreslang-app.exe' -Algorithm SHA256).Hash.ToLowerInvariant()
+              zero_divisor = (Get-FileHash -LiteralPath 'artifacts/strict-mod-zero/win-x64/oreslang-app.exe' -Algorithm SHA256).Hash.ToLowerInvariant()
             }
             source_only = $false
             independently_verified = $false
@@ -462,6 +487,9 @@ jobs:
             artifacts/strict-rem42/win-x64/oreslang-app.exe
             artifacts/strict-rem-min42/win-x64/oreslang-app.exe
             artifacts/strict-rem-zero/win-x64/oreslang-app.exe
+            artifacts/strict-mod42/win-x64/oreslang-app.exe
+            artifacts/strict-mod-min42/win-x64/oreslang-app.exe
+            artifacts/strict-mod-zero/win-x64/oreslang-app.exe
           if-no-files-found: error
           retention-days: 14
       - name: Upload native executable
