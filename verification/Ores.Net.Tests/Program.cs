@@ -82,6 +82,7 @@ SourceByteBudgetTests.Run();
 StructuralPatternAdmissionTests.Run();
 NumericSeparatorParityTests.Run();
 CrossBackendCheckedI64ParityTests.Run();
+PortableScalarV1Tests.Run(); // 16 compiler/CIL values + six forbidden source forms; no Native AOT credit
 AsyncInteropFailClosedTests.Run();
 await HostTaskObservationTests.Run();
 
