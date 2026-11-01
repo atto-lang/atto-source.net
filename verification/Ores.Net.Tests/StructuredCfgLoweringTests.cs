@@ -120,7 +120,11 @@ internal static class StructuredCfgLoweringTests
             ("fnc main():int{const a=true;const b=a;const c=b as bool;if c{return 42;}else{return 0;}}", "multi-hop bool inference"),
             ("fnc main():int{const x=(-9223372036854775808) as int;if x<0{return 42;}else{return 0;}}", "checked min-i64 identity cast"),
             ("fnc main():int{const x=9223372036854775807 as int;if 0<x{return 42;}else{return 0;}}", "checked max-i64 identity cast"),
-            ("fnc main():int{const x:bool=true as bool;if x{return 42;}else{return 0;}}", "name-first bool annotation with identity cast")
+            ("fnc main():int{const x:bool=true as bool;if x{return 42;}else{return 0;}}", "name-first bool annotation with identity cast"),
+            ("fnc main():int{return (7 as int)+(35 as int);}", "two checked identity operands"),
+            ("fnc main():int{return ((2+5) as int)*6;}", "cast binds before multiplication"),
+            ("fnc main():int{return (7 as int as int)*6;}", "chained cast binds before multiplication"),
+            ("fnc main():int{const x=7 as int;const y=x as int;return y*6;}", "checked cast through inferred constant reference")
         })
             Check(source, 42, "scalar cast/inference " + label);
         foreach (var (source, label) in new[] {
@@ -140,7 +144,11 @@ internal static class StructuredCfgLoweringTests
             ("fnc main():int{let x=true;x=7;return 0;}", "inferred bool let rejects int write"),
             ("fnc main():int{let x=7;x=false;return 0;}", "inferred int let rejects bool write"),
             ("fnc main():int{const x=true as bool as int;return 0;}", "identity chain cannot cross scalar types"),
-            ("fnc main():int{const x=7;const y=x as bool;return 0;}", "inferred int variable cannot cast to bool")
+            ("fnc main():int{const x=7;const y=x as bool;return 0;}", "inferred int variable cannot cast to bool"),
+            ("fnc main():int{return (7 as int) as bool;}", "nested int cast may not reinterpret bool"),
+            ("fnc main():int{return (false as bool) as int;}", "nested bool cast may not reinterpret int"),
+            ("fnc main():int{return (7 as int) as? int;}", "nested optional cast requires tagged Option"),
+            ("fnc main():int{return (7 as int)+true;}", "identity cast does not permit bool arithmetic")
         })
             Reject(source, "scalar cast/inference " + label);
         Check("fnc main():int{let int x=5;val int y=x+1;x=x+1;return y;}",
