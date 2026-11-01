@@ -27,7 +27,7 @@ public sealed record StructuredBinary(int At, StructuredOperator Operator,
 public abstract record StructuredStmt(int Offset);
 // Compile-time const, single-assignment val, and mutable let are distinct
 // source bindings; the experimental structured AST preserves that distinction.
-public enum StructuredBindingKind { Let, Val, Const }
+public enum StructuredBindingKind { Let, Val, Const, Readonly }
 public enum StructuredLocalTypeKind { Struct, Record }
 public sealed record StructuredLocalField(string Name, IrValueType Type);
 public sealed record StructuredLocalTypeDecl(int At, string Name,
@@ -594,14 +594,18 @@ public static class OresStructuredParser
                 // Bare scalar type-first declarations are immutable by
                 // default. Preserve the existing non-rebindable Const AST
                 // permission rather than ever creating a mutable Let slot.
-                // Full constexpr-vs-runtime immutable HIR is still pending.
+                // Preserve Const constexpr propagation separately from a
+                // readonly runtime declaration: int x = parameter + 1 must
+                // not acquire a compile-time-constant proof or mutation right.
                 bool typeFirstReadonly = Current.Text is "int" or "bool";
-                StructuredBindingKind kind = Current.Text switch
-                {
-                    "let" => StructuredBindingKind.Let,
-                    "val" => StructuredBindingKind.Val,
-                    _ => StructuredBindingKind.Const
-                };
+                StructuredBindingKind kind = typeFirstReadonly
+                    ? StructuredBindingKind.Readonly
+                    : Current.Text switch
+                    {
+                        "let" => StructuredBindingKind.Let,
+                        "val" => StructuredBindingKind.Val,
+                        _ => StructuredBindingKind.Const
+                    };
                 if (!typeFirstReadonly) index++;
                 // All three explicit scalar declaration forms are admissible:
                 // const int x=e, const x:int=e, const x=e.
