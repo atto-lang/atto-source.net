@@ -76,7 +76,7 @@ static class CrossBackendCheckedI64ParityTests
             {
                 _ = OresParser.Parse(Header + "pub fnc main():int{return " + expression + ";}");
             }
-            catch (FormatException ex) when (ex.Message.Contains("Invalid character", StringComparison.Ordinal))
+            catch (FormatException ex) when (ex.Message.Contains("noncanonical '%' source operator", StringComparison.Ordinal))
             {
                 continue;
             }
