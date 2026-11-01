@@ -11,7 +11,7 @@ verification executable and checks **16 nominal ADT source variants**, **7**
 unsupported non-enum ADT source shapes and **4** comment/trivia controls.
 It is not a compiler-backed positive guest execution suite.
 
-Target parity: 24-case versioned Oreslang source corpus in
+Target parity: 36-case versioned Oreslang source corpus in
 `oreslang-platform-conformance` PR #270. No Java/LLVM/.NET/Wasm/Forge
 backend is confirmed for that exact matrix. To claim .NET parity,
 implement compiler-owned nominal ID resolution, tag and payload type checks,
