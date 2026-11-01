@@ -54,4 +54,4 @@ jobs:
           test -f "$output/$BINARY"
           "$output/$BINARY" | tee "$RUNNER_TEMP/actor-memory-native.log"
           grep -Fx 'PASS actor-memory-survivor: same-pool peer reads and writes during pinned STOP and after physical reclaim' "$RUNNER_TEMP/actor-memory-native.log"
-          grep -Fx 'PASS actor-memory-native-probe: four private heaps (two shared-pool actors), foreign handles denied, pooled carriers, stale context denied, pinned STOP and physical reclaim' "$RUNNER_TEMP/actor-memory-native.log"
+          grep -Fx 'PASS actor-memory-native-probe: async-void denied, four private heaps (two shared-pool actors), foreign handles denied, pooled carriers, stale context denied, pinned STOP and physical reclaim' "$RUNNER_TEMP/actor-memory-native.log"
