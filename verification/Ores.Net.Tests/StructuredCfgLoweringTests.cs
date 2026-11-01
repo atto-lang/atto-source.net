@@ -142,6 +142,8 @@ internal static class StructuredCfgLoweringTests
             42, "type-first bool is immutable typed SSA");
         Check("fnc main():int{int x=(2+5) as int;return x+35;}",
             42, "type-first int with checked identity cast");
+        Check("fnc plus(int n):int{return n+1;}fnc main():int{int x=plus(41);return x;}",
+            42, "type-first immutable runtime helper result");
         Reject("fnc main():int{int x=7;x=8;return x;}",
             "type-first int binding is immutable by default");
         Reject("fnc main():int{int x=true;return 0;}",
@@ -328,10 +330,10 @@ internal static class StructuredCfgLoweringTests
         Reject("fnc main():int{const int x=1;x=2;return x;}", "const reassignment");
         Reject("fnc main():int{val int x=1;if true{x=2;}return x;}",
             "val cannot be mutated inside nested block");
-        Reject("fnc main():int{let int x=42;const int y=x;return y;}",
-            "const cannot capture mutable binding");
-        Reject("fnc main():int{val int x=42;const int y=x;return y;}",
-            "const cannot depend on runtime val");
+        Check("fnc main():int{let int x=40;const int y=x;return y+2;}",
+            42, "const eagerly snapshots current mutable binding value");
+        Check("fnc main():int{val int x=40;const int y=x;return y+2;}",
+            42, "const accepts runtime single-assignment source value");
         Reject("fnc main():int{const int x=9223372036854775807+1;return x;}",
             "const overflow is rejected before CIL");
 
@@ -339,6 +341,8 @@ internal static class StructuredCfgLoweringTests
             "checked negation");
         CheckOverflow("fnc main():int{val int n=9223372036854775807;return n+1;}",
             "runtime val checked overflow in emitted CIL");
+        CheckOverflow("fnc main():int{int unused=9223372036854775807+1;return 7;}",
+            "immutable-default unused initializer remains eager and checked");
         CheckOverflow("fnc main():int{return 9223372036854775807+1;}",
             "checked addition");
         CheckOverflow("fnc main():int{return 9223372036854775807*2;}",
