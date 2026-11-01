@@ -81,6 +81,7 @@ Require(OresParser.Parse(
 // Both public declaration orders share the same unsupported diagnostic.
 foreach (var source in new[] {
     "define model PriceEstimate() as AddTax(10) end",
+    "define model x as Identity() end",
     "define pub model PriceEstimate() as AddTax(10) end",
     "pub define model PriceEstimate() as AddTax(10) end",
     "define /* comment */ model PriceEstimate() as AddTax(10) end"
