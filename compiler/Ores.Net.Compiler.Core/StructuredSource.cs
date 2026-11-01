@@ -69,8 +69,7 @@ public static class OresStructuredParser
         {
             if (tokens[i].Text == "rt" && tokens[i + 1].Text == "mut" &&
                 tokens[i + 2].Text == "share")
-                throw new FormatException(
-                    $"native rt mut share requires verified SharedMutex<T> capability, guarded lowering and allocation-domain proof in .NET Native AOT at offset {tokens[i].Offset}");
+                throw MutableShareAdmission.Unsupported(tokens[i].Offset);
         }
     }
 
