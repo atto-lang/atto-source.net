@@ -195,6 +195,7 @@ static class CrossBackendCheckedI64ParityTests
             }
         }
         // Do not promote silent wraparound or disguised overflow as parity.
+        bool overflowRejected = false;
         try
         {
             var ir = OresIrLowering.Lower(OresParser.Parse(
@@ -203,9 +204,30 @@ static class CrossBackendCheckedI64ParityTests
         }
         catch (OverflowException)
         {
-            return;
+            overflowRejected = true;
         }
-        throw new Exception("Oreslana signed64 intermediate overflow did not trap");
+        if (!overflowRejected)
+            throw new Exception("Oreslana signed64 intermediate overflow did not trap");
+
+        // Shipping .NET is scalar-only. Never accidentally admit classes,
+        // mutable arrays or Option payloads through its scalar parser.
+        foreach (var unsupported in new[]
+        {
+            "define pub class OreslanaLedger as end",
+            "pub fnc main(): int { let mut Array<int> balances = new Array<int>(); return 0; }",
+            "pub fnc main(): int { return Some(42).unwrap(); }",
+        })
+        {
+            try
+            {
+                _ = OresParser.Parse(unsupported);
+            }
+            catch (FormatException)
+            {
+                continue;
+            }
+            throw new Exception("shipping .NET scalar compiler misadvertised Oreslana ledger support");
+        }
     }
 
     private static void SignedLiteralRemainder()
