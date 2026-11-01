@@ -37,6 +37,7 @@ internal sealed class TcpPoolLeaseLedger
     {
         internal ulong Generation = 1;
         internal Lease? Current;
+        internal bool Quarantine;
     }
 
     private readonly object gate = new();
@@ -67,7 +68,8 @@ internal sealed class TcpPoolLeaseLedger
             if (stopped || epoch != policyEpoch || requestedPartition != partition ||
                 (uint)slot >= (uint)slots.Length) return false;
             var state = slots[slot];
-            if (state.Generation == ulong.MaxValue || state.Current is not null)
+            if (state.Generation == ulong.MaxValue || state.Current is not null ||
+                state.Quarantine)
                 return false;
             lease = new Lease(this, slot, state.Generation, actor, epoch, partition);
             state.Current = lease;
@@ -151,6 +153,26 @@ internal sealed class TcpPoolLeaseLedger
         finally { Monitor.Exit(gate); }
     }
 
+    /// <summary>
+    /// Host-only fence after the old physical socket has actually closed
+    /// and all pinned buffers/reactor completions are quiescent. A guest
+    /// lease token is not proof that shutdown completed.
+    /// </summary>
+    internal bool TryConfirmPhysicalClose(int slot, ulong expectedGeneration)
+    {
+        if (!Monitor.TryEnter(gate)) return false;
+        try
+        {
+            if (stopped || (uint)slot >= (uint)slots.Length) return false;
+            var state = slots[slot];
+            if (!state.Quarantine || state.Current is not null ||
+                state.Generation != expectedGeneration) return false;
+            state.Quarantine = false;
+            return true;
+        }
+        finally { Monitor.Exit(gate); }
+    }
+
     private bool Owns(Lease? lease)
     {
         if (lease is null || !ReferenceEquals(lease.Owner, this) ||
@@ -171,6 +193,7 @@ internal sealed class TcpPoolLeaseLedger
     {
         var state = slots[lease.Slot];
         state.Current = null;
+        state.Quarantine = true; // No reuse before trusted physical close.
         lease.Revoked = true;
         // Saturation is terminal: never wrap to an earlier generation.
         if (state.Generation < ulong.MaxValue) state.Generation++;
