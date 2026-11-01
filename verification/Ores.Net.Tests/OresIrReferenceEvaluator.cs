@@ -25,6 +25,8 @@ internal static class OresIrReferenceEvaluator
                 IrOpcode.SignedRemainderLiteral => right == -1 ? 0 : left % right,
                 IrOpcode.StrictRem => StrictSigned64Arithmetic.Rem(left, right),
                 IrOpcode.StrictMod => StrictSigned64Arithmetic.Mod(left, right),
+                IrOpcode.StrictPow => StrictSigned64Arithmetic.Pow(left, right),
+                IrOpcode.StrictBitXor => StrictSigned64Arithmetic.BitXor(left, right),
                 _ => throw new FormatException("Unverified IR opcode")
             };
         }
