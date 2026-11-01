@@ -47,6 +47,10 @@ public static class OresParser
         }
         for (int i = 0; i + 1 < tokens.Count; i++)
         {
+            if (i + 2 < tokens.Count && tokens[i].Text == "rt" &&
+                tokens[i + 1].Text == "mut" && tokens[i + 2].Text == "share")
+                throw new FormatException(
+                    $"rt mut share requires verified SharedMutex<T> guarded lowering and allocation-domain proof in .NET Native AOT at offset {tokens[i].Offset}");
             if (tokens[i].Text == "select" &&
                 StaticSelectAdmission.IsStaticSelectFollower(tokens[i + 1].Text))
                 throw StaticSelectAdmission.Unsupported(tokens[i].Offset);
