@@ -223,6 +223,11 @@ public static class OresParser
                     exposed = true;
                 }
             }
+            // Scalar CIL and NativeAOT do not lower nominal ModelGraphs.
+            // 'model' is contextual, not globally reserved.
+            if (Current.Text == "model")
+                throw new FormatException(
+                    $"MODEL_LOWERING_UNSUPPORTED: .NET requires typed nominal ModelGraph lowering at offset {Current.Offset}");
             Expect("fnc");
             Expect("main");
             Expect("(");
