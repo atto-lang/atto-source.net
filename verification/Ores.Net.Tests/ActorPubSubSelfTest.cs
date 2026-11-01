@@ -103,6 +103,14 @@ internal static class ActorPubSubSelfTest
         Require(a.MemberCount == 0 && b.MemberCount == 0,
             "actor retirement leaves no group membership");
 
+        ActorPubSub cachedPubSub = runtime.PubSub;
+        runtime.Dispose();
+        bool shutdownFenced = false;
+        try { _ = cachedPubSub.CreateGroup(); }
+        catch (ObjectDisposedException) { shutdownFenced = true; }
+        Require(shutdownFenced,
+            "cached pub-sub registry cannot create groups after runtime shutdown");
+
         Console.WriteLine(
             "PASS .NET ActorGroup pub-sub bounded delivery, multi-membership and lifecycle cleanup");
     }
