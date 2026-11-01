@@ -6,6 +6,8 @@ public abstract record Expression;
 public sealed record Literal(long Value) : Expression;
 public sealed record Unary(char Operator, Expression Value) : Expression;
 public sealed record Binary(char Operator, Expression Left, Expression Right) : Expression;
+// Named intrinsic only. The '^' operator remains forbidden in Oreslang.
+public sealed record NamedBitXor(Expression Left, Expression Right) : Expression;
 
 public static class OresParser
 {
@@ -179,7 +181,7 @@ public static class OresParser
             // Lex assignment punctuation so unsupported declarations are rejected
             // at their declaration, rather than at a later initializer. The
             // arithmetic parser still has no assignment production.
-            if ("()+-*/%{}:;.=?".IndexOf(ch) >= 0)
+            if ("()+-*/%{}:;.,=?".IndexOf(ch) >= 0)
             {
                 _i++;
                 return new Token(text[start.._i], start);
@@ -321,6 +323,21 @@ public static class OresParser
 
                 throw new FormatException(
                     $"Runtime ownership operation requires typed lowering; unsupported in the .NET scalar backend at offset {at}");
+            }
+            // The scalar subset admits only this one typed Integer intrinsic.
+            // Parser-owned name resolution rejects arbitrary Integer.* calls.
+            if (Take("Integer"))
+            {
+                Expect(".");
+                if (!Take("bitXor"))
+                    throw new FormatException(
+                        $"Unsupported Integer intrinsic at offset {Current.Offset}");
+                Expect("(");
+                var left = ParseAdd(depth + 1);
+                Expect(",");
+                var right = ParseAdd(depth + 1);
+                Expect(")");
+                return new NamedBitXor(left, right);
             }
             if (Take("+")) return new Unary('+', ParseUnary(depth + 1));
             if (Take("-"))
