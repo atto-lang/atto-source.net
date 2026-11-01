@@ -1,0 +1,4 @@
+// Genuine native AOT negative path: zero denominator fails deterministically.
+define pub fnc main(): int {
+    return Integer.mod(-9, 0);
+}
