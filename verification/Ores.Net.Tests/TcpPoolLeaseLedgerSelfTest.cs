@@ -47,11 +47,19 @@ internal static class TcpPoolLeaseLedgerSelfTest
             Require(!pool.TryBegin(first, ActorA, 7), "released lease stays revoked");
             Require(pool.TryComplete(first), "reactor drains operation");
             Require(!pool.TryComplete(first), "duplicate completion rejected");
+            Require(!pool.TryAcquire(0, ActorB, Partition, 7, out _),
+                "quarantined socket cannot be reissued before physical close");
+            Require(!pool.TryConfirmPhysicalClose(0, first.Generation),
+                "stale generation cannot clear quarantine");
+            Require(pool.TryConfirmPhysicalClose(0, first.Generation + 1),
+                "trusted physical close fence clears retired slot");
             var next = Acquire(pool, actor: ActorB);
             Require(next.Generation > first.Generation,
                 "generation advances on physical retirement");
             Require(!pool.TryRelease(first, ActorA, 7),
                 "stale lease cannot revoke new connection owner");
+            Require(!pool.TryConfirmPhysicalClose(0, first.Generation + 1),
+                "close ack cannot rearm a currently leased slot");
             Require(pool.TryRelease(next, ActorB, 7),
                 "new actor can retire idle lease");
         }
@@ -90,6 +98,10 @@ internal static class TcpPoolLeaseLedgerSelfTest
             Require(!pool.TryBegin(active, ActorA, 7),
                 "stale epoch must not begin");
             Require(pool.TryComplete(active), "trusted completion after revocation");
+            Require(!pool.TryAcquire(0, ActorB, Partition, 8, out _),
+                "policy epoch change also requires physical close");
+            Require(pool.TryConfirmPhysicalClose(0, active.Generation + 1),
+                "trusted old-socket retirement");
             var fresh = Acquire(pool, actor: ActorB, epoch: 8);
             Require(!pool.TryComplete(active), "stale completion not valid");
             Require(pool.TryRelease(fresh, ActorB, 8), "new epoch release");
