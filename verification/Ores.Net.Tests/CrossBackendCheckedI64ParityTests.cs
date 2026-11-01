@@ -9,6 +9,7 @@ static class CrossBackendCheckedI64ParityTests
     {
         SignedLiteralRemainder();
         OresllmScalarIntersectionCases();
+        SupplementalScalarArithmeticCases();
         foreach (var (name, expression, expected) in new (string, string, long)[]
         {
             ("precedence", "2 + 3 * 4", 14L),
@@ -217,6 +218,41 @@ static class CrossBackendCheckedI64ParityTests
             try { _ = OresParser.Parse(Header + "pub fnc main():int{return " + expression + ";}"); }
             catch (FormatException) { continue; }
             throw new Exception("OresLLM unsupported expression admitted: " + expression);
+        }
+    }
+
+    private static void SupplementalScalarArithmeticCases()
+    {
+        // Supplemental parser -> verified IR -> emitted CIL reference checks.
+        // Not counted as NativeAOT or shared-manifest execution.
+        foreach (var (expression, expected) in new (string, long)[]
+        {
+            ("-7 * 0", 0L),
+            ("(2 + 3) * (10 - 2)", 40L),
+            ("9223372036854775807 - 9223372036854775807", 0L),
+        })
+        {
+            var ast = OresParser.Parse(Header + "pub fnc main():int{return " + expression + ";}");
+            var ir = OresIrLowering.Lower(ast);
+            if (OresIrReferenceEvaluator.Evaluate(ir) != expected)
+                throw new Exception("Supplemental OresLLM IR mismatch: " + expression);
+            var folder = Path.Combine(Path.GetTempPath(), "oresnet-supplemental-" +
+                Guid.NewGuid().ToString("N"));
+            var file = Path.Combine(folder, "OresGenerated.dll");
+            try
+            {
+                CilEmitter.EmitLibrary(ir, file);
+                using var assembly = AssemblyDefinition.ReadAssembly(file);
+                var method = assembly.MainModule.Types
+                    .Single(t => t.FullName == "Oreslang.Generated.OresProgram")
+                    .Methods.Single(f => f.Name == "Run");
+                if (CilReferenceEvaluator.Evaluate(method) != expected)
+                    throw new Exception("Supplemental OresLLM CIL mismatch: " + expression);
+            }
+            finally
+            {
+                if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+            }
         }
     }
 }
