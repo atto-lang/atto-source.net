@@ -124,7 +124,7 @@ public static class OresStructuredParser
             // namespace member access until ETS/pg isolation, ownership,
             // generational table handles and mailbox ingress exist in Native AOT.
             if (token.Text == "." && tokens.Count > 0 &&
-                tokens[^1].Text is "ets" or "pg")
+                (tokens[^1].Text is "ets" or "pg"))
                 throw new FormatException(
                     $"ETS/pg guest APIs require authenticated isolate, table and actor-mailbox lowering (unsupported .NET bootstrap) at offset {token.Offset}");
             // The scalar bootstrap does not have class/actor dispatch or
