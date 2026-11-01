@@ -30,6 +30,7 @@ static class CrossBackendCheckedI64ParityTests
     public static void Run()
     {
         SignedLiteralRemainder();
+        OreslanaPortableScalarCilBoundary();
         foreach (var (name, expression, expected) in new (string, string, long)[]
         {
             ("precedence", "2 + 3 * 4", 14L),
@@ -155,6 +156,56 @@ static class CrossBackendCheckedI64ParityTests
             return;
         }
         throw new Exception("FAILED: int/int division was admitted without float lowering");
+    }
+
+    private static void OreslanaPortableScalarCilBoundary()
+    {
+        // Shipping scalar parser + verified OresIR + emitted CIL evaluator.
+        // THIS IS NOT A Native AOT guest execution certificate, nor class/actor support.
+        foreach (var (name, expression, expected) in new (string, string, long)[]
+        {
+            ("capacity-zero", "(4096 - 64) + (32 * 2) - 4096", 0L),
+            ("nonzero-execution", "73", 73L),
+            ("i64-upper-bound", "(9223372036854775807 - 9223372036854775800) * 6", 42L),
+        })
+        {
+            var source = "pub fnc main(): int { return " + expression + "; }\\n";
+            var ir = OresIrLowering.Lower(OresParser.Parse(source));
+            long reference = OresIrReferenceEvaluator.Evaluate(ir);
+            if (reference != expected)
+                throw new Exception("Oreslana OresIR scalar mismatch: " + name);
+            var folder = Path.Combine(Path.GetTempPath(),
+                "oresnet-oreslana-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(folder);
+            try
+            {
+                var binary = Path.Combine(folder, "OresGenerated.dll");
+                CilEmitter.EmitLibrary(ir, binary);
+                using var assembly = AssemblyDefinition.ReadAssembly(binary);
+                var methodInfo = assembly.MainModule.Types
+                    .Single(t => t.FullName == "Oreslang.Generated.OresProgram")
+                    .Methods.Single(m => m.Name == "Run");
+                var actual = CilReferenceEvaluator.Evaluate(methodInfo);
+                if (actual != expected)
+                    throw new Exception("Oreslana emitted CIL scalar mismatch: " + name);
+            }
+            finally
+            {
+                Directory.Delete(folder, recursive: true);
+            }
+        }
+        // Do not promote silent wraparound or disguised overflow as parity.
+        try
+        {
+            var ir = OresIrLowering.Lower(OresParser.Parse(
+                "pub fnc main(): int { return (9223372036854775807 + 1) * 0; }"));
+            _ = OresIrReferenceEvaluator.Evaluate(ir);
+        }
+        catch (OverflowException)
+        {
+            return;
+        }
+        throw new Exception("Oreslana signed64 intermediate overflow did not trap");
     }
 
     private static void SignedLiteralRemainder()
