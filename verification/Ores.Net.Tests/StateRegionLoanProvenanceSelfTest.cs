@@ -43,6 +43,30 @@ internal static class StateRegionLoanProvenanceSelfTest
             () => _ = Read(unknownAuthority.RootElement),
             "unknown guest memory authority field must be rejected");
 
+        // WASM/Node safe-integer admission must agree with the .NET JSON
+        // conformance reader. Native ulong scheduler counters are independent.
+        string rawMax = root.GetProperty("borrow").GetRawText();
+        string originalId = "\\"executionId\\":1001";
+        Require(rawMax.Contains(originalId, StringComparison.Ordinal),
+            "exact expected canonical executionId");
+        using var safeId = JsonDocument.Parse(rawMax.Replace(
+            originalId, "\\"executionId\\":9007199254740991",
+            StringComparison.Ordinal));
+        Require(Read(safeId.RootElement).ExecutionId == MaxJsonSafeId,
+            "maximum JS-safe integer JSON ID admitted");
+        foreach (string unsafeId in new[] {
+            "9007199254740992", "18446744073709551615", "0",
+            "-1", "1.5", "\\"9007199254740991\\""
+        })
+        {
+            using var forged = JsonDocument.Parse(rawMax.Replace(
+                originalId, "\\"executionId\\":" + unsafeId,
+                StringComparison.Ordinal));
+            Expect<InvalidOperationException>(
+                () => _ = Read(forged.RootElement),
+                "JSON identity must reject unsafe value: " + unsafeId);
+        }
+
         Expect<ArgumentOutOfRangeException>(() => _ =
             new StateRegionLoanProvenance(
                 9, 3, 7, 1001, 0, 0, 501, "inventory.stock",
@@ -152,17 +176,33 @@ internal static class StateRegionLoanProvenanceSelfTest
             _ => throw new Exception("invalid state-region loan action")
         };
         return new StateRegionLoanProvenance(
-            value.GetProperty("regionId").GetUInt64(),
-            value.GetProperty("regionGeneration").GetUInt64(),
-            value.GetProperty("runtimeDomain").GetUInt64(),
-            value.GetProperty("executionId").GetUInt64(),
-            value.GetProperty("executionSlot").GetUInt64(),
-            value.GetProperty("executionGeneration").GetUInt64(),
-            value.GetProperty("loanId").GetUInt64(),
+            ReadJsonSafeId(value, "regionId"),
+            ReadJsonSafeId(value, "regionGeneration"),
+            ReadJsonSafeId(value, "runtimeDomain"),
+            ReadJsonSafeId(value, "executionId"),
+            ReadJsonSafeId(value, "executionSlot"),
+            ReadJsonSafeId(value, "executionGeneration"),
+            ReadJsonSafeId(value, "loanId"),
             value.GetProperty("place").GetString()
                 ?? throw new Exception("missing state-region place"),
             kind,
             action);
+    }
+
+    // JSON/JS interoperability contract: numeric IDs must round-trip without
+    // precision loss through WebAssembly's Number.isSafeInteger boundary.
+    // Native .NET runtime IDs remain full ulong; serialize larger IDs as
+    // reviewed decimal strings in a future explicitly versioned contract.
+    private const ulong MaxJsonSafeId = 9_007_199_254_740_991UL;
+
+    private static ulong ReadJsonSafeId(JsonElement record, string name)
+    {
+        var field = record.GetProperty(name);
+        if (field.ValueKind != JsonValueKind.Number ||
+            !field.TryGetUInt64(out var id) || id == 0 || id > MaxJsonSafeId)
+            throw new InvalidOperationException(
+                "state-region JSON identity must be a positive safe integer: " + name);
+        return id;
     }
 
     private static void Require(bool value, string why)
