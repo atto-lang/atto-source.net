@@ -65,4 +65,22 @@ if [[ "$negative_status" -ne 1 ]] || [[ -s "$tmp/negative.out" ]] ||
   exit 1
 fi
 [[ ! -e "$denied" ]] || { echo 'SG_NET_UNSAFE: denied source emitted assembly' >&2; exit 1; }
+# This is the exact canonical userland GraphState<T> source shared with all
+# five backends, not a backend-specific malformed lookalike.
+generic=contracts/stategraph-portability/shared-generic-state.ores
+[[ -f "$generic" && ! -L "$generic" ]] ||
+  { echo 'SG_NET_GENERIC_SOURCE_MISSING' >&2; exit 1; }
+git ls-files --error-unmatch -- "$generic" >/dev/null
+[[ "$(git hash-object "$generic")" = "c3a67b837a73f427a6157c446cc6e3989e9a66da" ]] ||
+  { echo 'SG_NET_GENERIC_SOURCE_DRIFT' >&2; exit 1; }
+[[ "$(git rev-parse "HEAD:$generic")" = "c3a67b837a73f427a6157c446cc6e3989e9a66da" ]]
+set +e
+timeout --kill-after=3s 45s "$compiler" check-structured "$generic" > "$tmp/shared.generic.out" 2> "$tmp/shared.generic.err"
+shared_generic_status=$?
+set -e
+if [[ "$shared_generic_status" -ne 1 || -s "$tmp/shared.generic.out" || ! -s "$tmp/shared.generic.err" ]]; then
+  echo "SG_NET_GENERIC_NOT_REJECTED_BY_COMPILER status=$shared_generic_status" >&2
+  exit 1
+fi
+echo 'SG_NET_CANONICAL_GENERIC_UNSUPPORTED (NOT parity achieved)'
 echo 'SG_NET_NATIVE_GENERIC_REJECTED (NOT full StateGraph parity)'
