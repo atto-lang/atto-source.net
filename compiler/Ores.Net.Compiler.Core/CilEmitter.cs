@@ -110,10 +110,16 @@ public static class CilEmitter
     {
         MemberReferenceHandle strictRem = default;
         MemberReferenceHandle strictMod = default;
+        MemberReferenceHandle strictPow = default;
+        MemberReferenceHandle strictBitXor = default;
         if (program.Instructions.Any(op => op.Opcode == IrOpcode.StrictRem))
             strictRem = AddStrictIntegerReference(metadata, "Rem");
         if (program.Instructions.Any(op => op.Opcode == IrOpcode.StrictMod))
             strictMod = AddStrictIntegerReference(metadata, "Mod");
+        if (program.Instructions.Any(op => op.Opcode == IrOpcode.StrictPow))
+            strictPow = AddStrictIntegerReference(metadata, "Pow");
+        if (program.Instructions.Any(op => op.Opcode == IrOpcode.StrictBitXor))
+            strictBitXor = AddStrictIntegerReference(metadata, "BitXor");
         int maxStack = 1;
         foreach (var operation in program.Instructions)
         {
@@ -142,12 +148,18 @@ public static class CilEmitter
                 case IrOpcode.CheckedDivide:
                 case IrOpcode.StrictRem:
                 case IrOpcode.StrictMod:
+                case IrOpcode.StrictPow:
+                case IrOpcode.StrictBitXor:
                     il.LoadLocal(operation.Left!.Value);
                     il.LoadLocal(operation.Right!.Value);
                     if (operation.Opcode == IrOpcode.StrictRem)
                         il.Call(strictRem);
                     else if (operation.Opcode == IrOpcode.StrictMod)
                         il.Call(strictMod);
+                    else if (operation.Opcode == IrOpcode.StrictPow)
+                        il.Call(strictPow);
+                    else if (operation.Opcode == IrOpcode.StrictBitXor)
+                        il.Call(strictBitXor);
                     else
                         il.OpCode(operation.Opcode switch
                         {
