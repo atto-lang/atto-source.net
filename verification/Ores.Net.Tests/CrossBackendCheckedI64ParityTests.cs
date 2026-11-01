@@ -7,7 +7,7 @@ static class CrossBackendCheckedI64ParityTests
 
     public static void Run()
     {
-        SignedLiteralRemainder();
+        RejectRemovedModulo();
         foreach (var (name, expression, expected) in new (string, string, long)[]
         {
             ("precedence", "2 + 3 * 4", 14L),
@@ -58,74 +58,61 @@ static class CrossBackendCheckedI64ParityTests
         throw new Exception("FAILED: int/int division was admitted without float lowering");
     }
 
-    private static void SignedLiteralRemainder()
+    private static void RejectRemovedModulo()
     {
-        // Exercise parser -> verified OresIR -> emitted CIL bytes -> an
-        // independent bounded CIL interpreter (not a Native AOT execution).
-        foreach (var (expression, expected) in new (string, long)[]
-        {
-            ("-7 % 3", -1),
-            ("7 % -3", 1),
-            ("-7 % -3", -1),
-            ("8 % 3 * 2", 4),
-            ("20 % 6 % 3", 2),
-            ("-9223372036854775808 % -1", 0),
-            ("-9223372036854775808 % -9223372036854775808", 0),
-            ("9223372036854775807 % -9223372036854775808", long.MaxValue)
-        })
-        {
-            var ast = OresParser.Parse(Header + "pub fnc main():int{return " + expression + ";}");
-            var verified = OresIrLowering.Lower(ast);
-            if (OresIrReferenceEvaluator.Evaluate(verified) != expected)
-                throw new Exception("Remainder managed reference mismatch: " + expression);
-            var folder = Path.Combine(Path.GetTempPath(), "oresnet-remainder-" +
-                Guid.NewGuid().ToString("N"));
-            var file = Path.Combine(folder, "OresGenerated.dll");
-            try
-            {
-                CilEmitter.EmitLibrary(verified, file);
-                using var assembly = AssemblyDefinition.ReadAssembly(file);
-                var method = assembly.MainModule.Types
-                    .Single(t => t.FullName == "Oreslang.Generated.OresProgram")
-                    .Methods.Single(f => f.Name == "Run");
-                long actual = CilReferenceEvaluator.Evaluate(method);
-                if (actual != expected)
-                    throw new Exception($"Remainder CIL mismatch: {expression}: {actual} vs {expected}");
-            }
-            finally
-            {
-                if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
-            }
-        }
-
+        // All backends must reject a binary '%' token at the source boundary,
+        // not reinterpret it as a backend-specific scalar remainder. These
+        // cases used to be accepted in the .NET bootstrap.
         foreach (string expression in new[]
         {
+            "-7 % 3", "7 % -3", "-7 % -3", "8 % 3 * 2",
+            "20 % 6 % 3", "-9223372036854775808 % -1",
+            "-9223372036854775808 % -9223372036854775808",
+            "9223372036854775807 % -9223372036854775808",
             "7 % 0", "7 % (1+1)", "7 % -(1+1)",
-            "7 % -9223372036854775809"
+            "7 % -9223372036854775809", "7 %% 2", "7 % 2 % 0"
         })
         {
             try
             {
                 _ = OresParser.Parse(Header + "pub fnc main():int{return " + expression + ";}");
             }
-            catch (FormatException)
+            catch (FormatException ex) when (
+                ex.Message.Contains("Removed Oreslang operator '%'", StringComparison.Ordinal))
             {
                 continue;
             }
-            throw new Exception("Compiler admitted unsupported remainder: " + expression);
+            throw new Exception("Removed modulo source was admitted: " + expression);
         }
 
-        // The IR is untrusted; a source parser's admission does not grant
-        // externally constructed IR the right to use arbitrary divisors.
-        foreach (long divisor in new long[] { 0, -1 })
+        // Operators inside comments remain lexically invisible.
+        if (OresParser.Parse(Header + "fnc main():int{return 7;} // 7 % 2") is not Literal { Value: 7 })
+            throw new Exception("Modulo token in comment affected source semantics");
+        if (OresParser.Parse(Header + "fnc main():int{return 7 /* % */ + 2;}") is not Binary { Operator: '+' })
+            throw new Exception("Modulo token in block comment affected source semantics");
+
+        // The public IR lowering path must reject a synthetic '%' AST too.
+        bool syntheticRejected = false;
+        try
+        {
+            _ = OresIrLowering.Lower(new Binary('%', new Literal(7), new Literal(3)));
+        }
+        catch (FormatException)
+        {
+            syntheticRejected = true;
+        }
+        if (!syntheticRejected)
+            throw new Exception("Removed modulo synthetic AST escaped source admission");
+
+        // Keep the legacy enum discriminant reserved rather than repurposed,
+        // but every forged SignedRemainderLiteral must be denied even with
+        // a constant nonzero divisor, before CIL/NativeAOT emission.
+        foreach (long divisor in new long[] { 0, 3, -1 })
         {
             var operations = new[]
             {
                 new IrInstruction(0, IrOpcode.ConstantI64, IrValueType.I64, Constant: 7),
-                divisor == 0
-                    ? new IrInstruction(1, IrOpcode.ConstantI64, IrValueType.I64, Constant: 0)
-                    : new IrInstruction(1, IrOpcode.CheckedSubtract, IrValueType.I64,
-                        Left: 0, Right: 0),
+                new IrInstruction(1, IrOpcode.ConstantI64, IrValueType.I64, Constant: divisor),
                 new IrInstruction(2, IrOpcode.SignedRemainderLiteral, IrValueType.I64,
                     Left: 0, Right: 1)
             };
@@ -133,11 +120,12 @@ static class CrossBackendCheckedI64ParityTests
             {
                 _ = OresIrVerifier.Verify(new IrFunction("main", IrValueType.I64, operations, 2));
             }
-            catch (FormatException)
+            catch (FormatException ex) when (
+                ex.Message.Contains("Removed Oreslang operator '%'", StringComparison.Ordinal))
             {
                 continue;
             }
-            throw new Exception("Untrusted remainder IR escaped literal divisor gate");
+            throw new Exception("Forged removed modulo IR escaped verifier gate");
         }
     }
 }

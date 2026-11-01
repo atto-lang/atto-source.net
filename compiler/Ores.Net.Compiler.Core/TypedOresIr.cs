@@ -99,9 +99,14 @@ public static class OresIrVerifier
             }
             else
             {
+                // A forged IR must not recover source operators retired from
+                // the canonical language. The old enum value is reserved
+                // solely for backward decoding of untrusted IR.
+                if (instruction.Opcode == IrOpcode.SignedRemainderLiteral)
+                    throw new FormatException("Removed Oreslang operator '%' is not valid verified IR");
                 if (instruction.Opcode is not (IrOpcode.CheckedAdd or
                     IrOpcode.CheckedSubtract or IrOpcode.CheckedMultiply or
-                    IrOpcode.CheckedDivide or IrOpcode.SignedRemainderLiteral))
+                    IrOpcode.CheckedDivide))
                     throw new FormatException("Unknown IR opcode");
 
                 if (instruction.Constant.HasValue ||
@@ -113,11 +118,6 @@ public static class OresIrVerifier
                 if (verified[instruction.Left.Value].Type != IrValueType.I64 ||
                     verified[instruction.Right.Value].Type != IrValueType.I64)
                     throw new FormatException("IR arithmetic requires i64 operands");
-                if (instruction.Opcode == IrOpcode.SignedRemainderLiteral &&
-                    (verified[instruction.Right.Value].Opcode != IrOpcode.ConstantI64 ||
-                     verified[instruction.Right.Value].Constant is not long divisor || divisor == 0))
-                    throw new FormatException(
-                        "Verified remainder requires a nonzero literal i64 divisor");
             }
             verified[i] = instruction;
         }
@@ -215,7 +215,6 @@ public static class OresIrLowering
                             '-' => IrOpcode.CheckedSubtract,
                             '*' => IrOpcode.CheckedMultiply,
                             '/' => IrOpcode.CheckedDivide,
-                            '%' => IrOpcode.SignedRemainderLiteral,
                             _ => throw new FormatException("Unsupported arithmetic operator")
                         };
                         results.Push(EmitBinary(opcode, left, right));
@@ -238,7 +237,7 @@ public static class OresIrLowering
                         pending.Push(new Pending(node, true));
                         pending.Push(new Pending(unary.Value, false));
                         break;
-                    case Binary binary when binary.Operator is '+' or '-' or '*' or '/' or '%':
+                    case Binary binary when binary.Operator is '+' or '-' or '*' or '/':
                         pending.Push(new Pending(binary, true));
                         pending.Push(new Pending(binary.Right, false));
                         pending.Push(new Pending(binary.Left, false));

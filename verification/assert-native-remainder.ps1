@@ -1,20 +1,32 @@
+# Historical filename retained for existing workflow callers. This now checks
+# source rejection of the retired modulo operator and supported NativeAOT arithmetic.
 param([Parameter(Mandatory = $true)][ValidateSet('linux-x64', 'win-x64')][string]$Rid)
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 $suffix = if ($Rid -eq 'win-x64') { '.exe' } else { '' }
-$work = Join-Path $root ('artifacts/remainder-native-' + [Guid]::NewGuid().ToString('N'))
+$work = Join-Path $root ('artifacts/removed-modulo-native-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $work | Out-Null
 $compilerDir = Join-Path $work 'compiler'
 dotnet publish compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -r $Rid -o $compilerDir -warnaserror
 if ($LASTEXITCODE -ne 0) { throw 'Native compiler publish failed' }
 $compiler = Join-Path $compilerDir "oresnet$suffix"
+# Supported arithmetic remains executable with NativeAOT; retired '%' does not.
 $cases = @(
-    @{ Name = 'negative-dividend'; Expression = '-7%3'; Output = '-1'; Exit = 0 },
-    @{ Name = 'negative-divisor'; Expression = '7%-3'; Output = '1'; Exit = 0 },
-    @{ Name = 'minimum-minus-one'; Expression = '-9223372036854775808%-1'; Output = '0'; Exit = 0 },
-    @{ Name = 'overflow-before-zero'; Expression = '(9223372036854775807+1)%-1'; Output = ''; Exit = 70 }
+    @{ Name = 'addition'; Expression = '7+3'; Output = '10'; Exit = 0 },
+    @{ Name = 'signed-multiplication'; Expression = '-7*3'; Output = '-21'; Exit = 0 },
+    @{ Name = 'bounded-multiplication'; Expression = '999999*100'; Output = '99999900'; Exit = 0 },
+    @{ Name = 'checked-overflow'; Expression = '9223372036854775807+1'; Output = ''; Exit = 70 }
+)
+# Every former positive '%' case must now reject; no emitted file is accepted.
+$rejected = @(
+    '-7%3', '7%-3', '-7%-3', '8%3*2', '20%6%3',
+    '-9223372036854775808%-1',
+    '-9223372036854775808%-9223372036854775808',
+    '9223372036854775807%-9223372036854775808',
+    '7%0', '7%(1+1)', '7%-(1+1)', '7%-9223372036854775809',
+    '7%%2', '7%2%0'
 )
 foreach ($mode in @('compile', 'emit-csharp', 'emit-fsharp')) {
     foreach ($case in $cases) {
@@ -60,18 +72,29 @@ foreach ($mode in @('compile', 'emit-csharp', 'emit-fsharp')) {
         }
         if ($case.Exit -eq 70 -and $errorText -notmatch 'arithmetic overflow') { throw 'Missing overflow diagnostic' }
         $hash = (Get-FileHash $app -Algorithm SHA256).Hash
-        Write-Output "REMAINDER_NATIVE_PASS mode=$mode case=$($case.Name) exit=$exitCode output=$actual SHA256=$hash"
+        Write-Output "OPERATOR_NATIVE_PASS mode=$mode case=$($case.Name) exit=$exitCode output=$actual SHA256=$hash"
     }
-    foreach ($expression in @('7%0', '7%(1+1)', '7%-9223372036854775809')) {
-        $inputFile = Join-Path $work 'rejected.ores'
+    $caseIndex = 0
+    foreach ($expression in $rejected) {
+        $caseIndex++
+        $caseDir = Join-Path $work "$mode/rejected-$caseIndex"
+        New-Item -ItemType Directory -Path $caseDir -Force | Out-Null
+        $inputFile = Join-Path $caseDir 'rejected.ores'
         [IO.File]::WriteAllText($inputFile, "fnc main():int{return $expression;}", [Text.UTF8Encoding]::new($false))
         $extension = switch ($mode) { 'compile' { 'dll' } 'emit-csharp' { 'cs' } 'emit-fsharp' { 'fs' } }
-        $outputFile = Join-Path $work "rejected/OresGenerated.$extension"
-        & $compiler $mode $inputFile --out $outputFile
-        if ($LASTEXITCODE -eq 0 -or (Test-Path $outputFile)) { throw "$mode admitted unsupported divisor $expression" }
+        $outputFile = Join-Path $caseDir "OresGenerated.$extension"
+        $diagnostic = & $compiler $mode $inputFile --out $outputFile 2>&1 | Out-String
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -eq 0 -or (Test-Path $outputFile)) {
+            throw "$mode admitted retired modulo source: $expression"
+        }
+        if ($diagnostic -notmatch "Removed Oreslang operator") {
+            throw "$mode rejected source without expected operator diagnostic: $expression $diagnostic"
+        }
+        Write-Output "MODULO_SOURCE_REJECTED mode=$mode case=$caseIndex"
     }
 }
-Write-Output 'REMAINDER_NATIVE_SUITE_PASS: 12 native executions, 9 source denials'
+Write-Output 'OPERATOR_NATIVE_SUITE_PASS: 12 NativeAOT executions, 42 source denials'
 # The last compiler invocation is an expected rejection. Publish success only
 # after every assertion, instead of leaking that command's nonzero exit status.
 exit 0
