@@ -37,6 +37,29 @@ internal static class StructuredSourceTests
 
     public static void Run()
     {
+        // All .NET compilation routes must fail closed on nominal ModelGraphs.
+        // The structured parser backs CFG/CIL and linked-module compilation,
+        // not only the shipping scalar expression parser.
+        foreach (var source in new[] {
+            "define model x as Identity() end",
+            "define model PriceEstimate() as Identity() end",
+            "define pub model x as Identity() end",
+            "pub define model x as Identity() end",
+            "define /* inert */ model x as Identity() end",
+            "fnc main():int{return 42;} define model x as Identity() end",
+            "fnc main():int{define model Local as Identity() end return 42;}"
+        })
+            RejectFeature(source, "MODEL_LOWERING_UNSUPPORTED");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{let int model=41;return model+1;}").Body.Count == 2,
+            "contextual model remains a valid scalar local identifier");
+        Require(OresStructuredParser.Parse(
+            "/* define model Fake as Identity() end */ fnc main():int{return 42;}").Body.Count == 1,
+            "commented-out model declarations are lexically inert");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{return 42;} // define model Fake as Identity() end").Body.Count == 1,
+            "line comment model syntax is lexically inert");
+
         // Local value types are block-local declarations on the structured
         // frontend. They are admitted into the AST but deliberately rejected
         // by CFG/CIL lowering until value layout and construction are verified.
