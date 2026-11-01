@@ -376,6 +376,8 @@ public sealed class ActorRuntime : IDisposable
             // All queued/running dispatch tokens have returned at this point.
             foreach (ActorCell cell in cells)
                 FinalizeCell(cell);
+
+            _pubSub.Close();
         }
     }
 
