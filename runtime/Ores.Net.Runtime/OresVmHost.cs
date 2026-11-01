@@ -33,6 +33,11 @@ public sealed partial class OresVmHost
         public ulong Id { get; }
         internal ulong Epoch { get; }
         internal ActorMailbox Mailbox { get; }
+        // Read-only actor-local observations; never expose the mutable mailbox.
+        // The caller must still hold the host-issued ActorTicket/IsolateHandle
+        // for SendActor admission; retirement closes this capability.
+        public ActorRef CurrentRef => Mailbox.CurrentRef;
+        public int QueuedMessages => Mailbox.QueuedMessages;
         internal ulong NextTurnGeneration { get; set; } = 1;
         internal ActorTurnTicket? ActiveTurn { get; set; }
         // Compiler-owned, typed actor-local cells. Installed once before any turn.
