@@ -598,16 +598,40 @@ public static class OresStructuredParser
                     _ => StructuredBindingKind.Const
                 };
                 index++;
-                var type = Type();
-                int nameAt = Current.Offset;
-                string name = Name();
+                // All three scalar declaration forms are admissible:
+                // const int x=e, const x:int=e, const x=e.
+                // A declaration's type is a check; it is not a cast.
+                bool annotated = Current.Text is "int" or "bool";
+                IrValueType type = IrValueType.I64;
+                string name;
+                int nameAt;
+                if (annotated)
+                {
+                    type = Type();
+                    nameAt = Current.Offset;
+                    name = Name();
+                }
+                else
+                {
+                    nameAt = Current.Offset;
+                    name = Name();
+                    if (Take(":"))
+                    {
+                        type = Type();
+                        annotated = true;
+                    }
+                }
                 if (scopes.Any(scope => scope.ContainsKey(name)))
                     throw new FormatException($"Duplicate local binding at offset {nameAt}");
                 Expect("=");
                 var initializer = Expr(depth + 1);
-                Require(initializer, type, "Local initializer has wrong type");
+                if (annotated)
+                    Require(initializer, type, "Local initializer has wrong type");
+                else
+                    type = initializer.Type; // No i64 fallback for bool or unsupported types.
                 long? constantValue = null;
-                if (kind == StructuredBindingKind.Const)
+                if (kind == StructuredBindingKind.Const &&
+                    IsCompileTimeScalar(initializer))
                 {
                     try { constantValue = ConstantValue(initializer); }
                     catch (OverflowException)
@@ -685,8 +709,19 @@ public static class OresStructuredParser
             throw new FormatException($"Undefined local '{name}' at offset {at}");
         }
 
-        // This closed scalar subset evaluates const initializers at admission
-        // time with checked i64 semantics. Calls and runtime locals fail closed.
+        // A source const is a fixed binding, not a demand for compile-time
+        // evaluation. Fold pure scalar literals, retaining runtime initializer
+        // expression and immutable binding for calls/reads. Do not mask overflow.
+        private static bool IsCompileTimeScalar(StructuredExpr expression) =>
+            expression switch
+            {
+                StructuredInt or StructuredBool => true,
+                StructuredNegate unary => IsCompileTimeScalar(unary.Value),
+                StructuredBinary binary => IsCompileTimeScalar(binary.Left)
+                                           && IsCompileTimeScalar(binary.Right),
+                _ => false
+            };
+
         private static long ConstantValue(StructuredExpr expression)
         {
             switch (expression)
@@ -735,14 +770,35 @@ public static class OresStructuredParser
         private StructuredExpr Compare(int depth)
         {
             var left = Add(depth + 1);
-            while (Current.Text == "<")
+            while (true)
             {
-                int at = Current.Offset;
+                if (Current.Text == "as")
+                {
+                    int at = Current.Offset;
+                    index++;
+                    if (Take("?"))
+                        throw new FormatException(
+                            $"Optional cast as? requires verified Option<T> lowering at offset {at}");
+                    if (Current.Text is not ("int" or "bool"))
+                        throw new FormatException(
+                            $"Checked cast requires a reifiable supported scalar target at offset {at}");
+                    IrValueType target = Type();
+                    // .NET scalar bootstrap has no tagged dynamic value:
+                    // checked identity is the only provable cast. Do not bitcast.
+                    if (left.Type != target)
+                        throw new FormatException(
+                            $"Impossible checked scalar cast at offset {at}");
+                    // Static checked identity: deliberately retain the operand,
+                    // once evaluated, rather than add a conversion node.
+                    continue;
+                }
+                if (Current.Text != "<") break;
+                int compareAt = Current.Offset;
                 index++;
                 var right = Add(depth + 1);
                 Require(left, IrValueType.I64, "Less-than requires int operands");
                 Require(right, IrValueType.I64, "Less-than requires int operands");
-                left = CheckedBinary(at, StructuredOperator.LessThanI64,
+                left = CheckedBinary(compareAt, StructuredOperator.LessThanI64,
                     left, right, IrValueType.Bool);
             }
             return left;
@@ -884,9 +940,9 @@ public static class OresStructuredParser
                 return node;
             }
             var binding = Lookup(name, offset);
-            if (binding.Kind == StructuredBindingKind.Const)
+            if (binding.Kind == StructuredBindingKind.Const && binding.ConstantValue.HasValue)
             {
-                long constant = binding.ConstantValue!.Value;
+                long constant = binding.ConstantValue.Value;
                 return binding.Type == IrValueType.Bool
                     ? new StructuredBool(offset, constant != 0)
                     : new StructuredInt(offset, constant);
