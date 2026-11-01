@@ -38,12 +38,20 @@ foreach ($mode in @('check', 'compile', 'emit-csharp', 'emit-fsharp')) {
             default { 'txt' }
         }
         $outputFile = Join-Path $caseDir "OresGenerated.$extension"
+        $caseStdout = Join-Path $caseDir 'compiler-stdout.txt'
+        $caseStderr = Join-Path $caseDir 'compiler-stderr.txt'
         if ($mode -eq 'check') {
-            & $compiler check $inputFile
+            & $compiler check $inputFile > $caseStdout 2> $caseStderr
         } else {
-            & $compiler $mode $inputFile --out $outputFile
+            & $compiler $mode $inputFile --out $outputFile > $caseStdout 2> $caseStderr
         }
-        if ($LASTEXITCODE -eq 0) { throw "$mode accepted removed operator: $expression" }
+        $compilerExit = $LASTEXITCODE
+        $diagnostic = [IO.File]::ReadAllText($caseStderr)
+        if ($compilerExit -ne 1) { throw "$mode must exit 1 on removed operator: $expression; exit=$compilerExit" }
+        if ($diagnostic -notmatch 'Removed Oreslang operator') {
+            throw "$mode rejection did not come from removed-operator admission: $expression; $diagnostic"
+        }
+        if ([IO.File]::ReadAllText($caseStdout) -ne '') { throw "$mode wrote unexpected stdout for denied source: $expression" }
         if (Test-Path -LiteralPath $outputFile) { throw "$mode emitted artifact for forbidden source: $expression" }
         $rejections++
         $index++
