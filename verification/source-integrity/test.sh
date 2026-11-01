@@ -50,8 +50,30 @@ printf 'hidden changed bytes\n' > tracked.txt
 reject 'skip-worktree hidden content mutation'
 git update-index --no-skip-worktree tracked.txt
 git reset -q --hard HEAD
+original="$head"
+head="not-a-commit"
+reject 'malformed expected commit'
+head="$original"
+ln -s tracked.txt untracked-alias
+reject 'untracked symlink'
+rm untracked-alias
 rm tracked.txt
 reject 'missing tracked file'
+git reset -q --hard HEAD
+printf 'tracked.txt filter=normalize\n' > .gitattributes
+git config filter.normalize.clean "sed 's/ *$//'"
+git add .gitattributes
+git commit -qm 'normalize-filter trap'
+head="$(git rev-parse HEAD)"
+printf 'tracked   \n' > tracked.txt
+reject 'clean-filter physical-byte laundering'
+git reset -q --hard HEAD
+chmod +x tracked.txt
+git add tracked.txt
+git commit -qm 'executable fixture'
+head="$(git rev-parse HEAD)"
+chmod -x tracked.txt
+reject 'missing tracked executable bit'
 git reset -q --hard HEAD
 ln -s tracked.txt alias.txt
 git add alias.txt
