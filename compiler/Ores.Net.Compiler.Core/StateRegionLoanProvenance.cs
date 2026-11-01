@@ -10,6 +10,10 @@ namespace Ores.Net.Compiler;
 /// </summary>
 public readonly record struct StateRegionLoanProvenance
 {
+    // The canonical v1 JSON/WASM identity domain is IEEE-754 exact integer.
+    // Native ulong scheduler IDs outside this range must NOT be serialized as v1.
+    public const ulong MaxJsonSafeIdentity = 9_007_199_254_740_991UL;
+
     public enum AccessKind { Read, Write }
     public enum LoanAction { Borrow, Release }
 
@@ -39,7 +43,14 @@ public readonly record struct StateRegionLoanProvenance
         if (regionId == 0 || regionGeneration == 0 ||
             runtimeDomain == 0 || executionId == 0 ||
             executionSlot == 0 || executionGeneration == 0 ||
-            loanId == 0)
+            loanId == 0 ||
+            regionId > MaxJsonSafeIdentity ||
+            regionGeneration > MaxJsonSafeIdentity ||
+            runtimeDomain > MaxJsonSafeIdentity ||
+            executionId > MaxJsonSafeIdentity ||
+            executionSlot > MaxJsonSafeIdentity ||
+            executionGeneration > MaxJsonSafeIdentity ||
+            loanId > MaxJsonSafeIdentity)
             throw new ArgumentOutOfRangeException(
                 nameof(regionId),
                 "state-region provenance identity components must be nonzero");
@@ -71,7 +82,12 @@ public readonly record struct StateRegionLoanProvenance
     private bool IsValid =>
         RegionId != 0 && RegionGeneration != 0 && RuntimeDomain != 0 &&
         ExecutionId != 0 && ExecutionSlot != 0 && ExecutionGeneration != 0 &&
-        LoanId != 0 && !string.IsNullOrWhiteSpace(Place) &&
+        LoanId != 0 &&
+        RegionId <= MaxJsonSafeIdentity && RegionGeneration <= MaxJsonSafeIdentity &&
+        RuntimeDomain <= MaxJsonSafeIdentity && ExecutionId <= MaxJsonSafeIdentity &&
+        ExecutionSlot <= MaxJsonSafeIdentity && ExecutionGeneration <= MaxJsonSafeIdentity &&
+        LoanId <= MaxJsonSafeIdentity &&
+        !string.IsNullOrWhiteSpace(Place) &&
         (Kind == AccessKind.Read || Kind == AccessKind.Write) &&
         (Action == LoanAction.Borrow || Action == LoanAction.Release);
 
