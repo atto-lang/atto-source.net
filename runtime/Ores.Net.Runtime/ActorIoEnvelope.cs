@@ -25,6 +25,7 @@ public sealed class ActorIoEnvelope
     public const int MaxMetadataBytes = 8 * 1024;
 
     private readonly ActorMailbox _mailbox;
+    private readonly ActorRef _boundActor;
     private readonly object _gate = new();
     private readonly Queue<byte[]> _input = new();
     private readonly Queue<byte[]> _output = new();
@@ -41,6 +42,10 @@ public sealed class ActorIoEnvelope
     public ActorIoEnvelope(ActorMailbox mailbox)
     {
         _mailbox = mailbox ?? throw new ArgumentNullException(nameof(mailbox));
+        _boundActor = _mailbox.CurrentRef;
+        if (!_mailbox.Authorizes(_boundActor))
+            throw new InvalidOperationException(
+                "Actor I/O envelope requires a live actor generation");
     }
 
     public bool TryFeedInput(ActorRef actor, ReadOnlySpan<byte> data)
@@ -176,9 +181,12 @@ public sealed class ActorIoEnvelope
 
     private void RequireCurrent(ActorRef actor)
     {
-        if (!_mailbox.Authorizes(actor))
+        // An envelope belongs to exactly one actor incarnation. Even a fresh,
+        // valid ActorRef after mailbox restart cannot reopen records retained
+        // by an older generation; the supervisor must construct a new envelope.
+        if (actor != _boundActor || !_mailbox.Authorizes(actor))
             throw new InvalidOperationException(
-                "Actor I/O capability is stale, foreign, or retired");
+                "Actor I/O capability is stale, foreign, retired, or belongs to another generation");
     }
 
     private static bool TryEnqueueBytes(
