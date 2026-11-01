@@ -127,8 +127,6 @@ public static class OresStructuredParser
                 throw new FormatException($"'async' modifier removed; use suspends at offset {token.Offset}");
             if (token.Text is "suspends" or "suspend")
                 throw new FormatException($"suspends requires verified continuation lowering at offset {token.Offset}");
-            if (token.Text == "critical")
-                throw new FormatException($"critical requires scheduler-owned guard lowering at offset {token.Offset}");
             // The scalar bootstrap does not have class/actor dispatch or
             // ownership-aware lexical closures. Refuse these at source admission
             // with a stable capability diagnostic, not an accidental parse error.
@@ -175,6 +173,17 @@ public static class OresStructuredParser
         }
         for (int i = 0; i + 1 < tokens.Count; i++)
         {
+            // 'critical' is contextual, not a universally forbidden identifier:
+            // do not reject a scalar local or literal merely for this spelling.
+            // Source blocks and callable declarations still fail closed.
+            if (tokens[i].Text == "critical" &&
+                (tokens[i + 1].Text is "{" or "fnc" or "routine" or "method"
+                    or "suspends" or "suspend" ||
+                 (i > 0 && tokens[i - 1].Text is "try" or "suspends" or "suspend") ||
+                 (i + 2 < tokens.Count && tokens[i + 2].Text == "(" &&
+                    i > 0 && tokens[i - 1].Text is "pub" or "private")))
+                throw new FormatException(
+                    $"critical requires scheduler-owned guard lowering at offset {tokens[i].Offset}");
             if (tokens[i].Text == "select" &&
                 StaticSelectAdmission.IsStaticSelectFollower(tokens[i + 1].Text))
                 throw StaticSelectAdmission.Unsupported(tokens[i].Offset);
