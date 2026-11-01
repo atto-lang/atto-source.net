@@ -9,6 +9,7 @@ static class CrossBackendCheckedI64ParityTests
     {
         SignedLiteralRemainder();
         OresllmScalarIntersectionCases();
+        OresllmBudgetExtensionTests.Run();
         SupplementalScalarArithmeticCases();
         foreach (var (name, expression, expected) in new (string, string, long)[]
         {
