@@ -7,8 +7,9 @@ public sealed record Literal(long Value) : Expression;
 public sealed record Unary(char Operator, Expression Value) : Expression;
 public sealed record Binary(char Operator, Expression Left, Expression Right) : Expression;
 
-// Exactly one admitted named intrinsic in the shipping signed-i64 bootstrap.
+// Explicitly admitted named intrinsics in the shipping signed-i64 bootstrap.
 public sealed record NamedIntegerRem(Expression Left, Expression Right) : Expression;
+public sealed record NamedIntegerMod(Expression Left, Expression Right) : Expression;
 
 public static class OresParser
 {
@@ -347,14 +348,18 @@ public static class OresParser
             if (Take("Integer"))
             {
                 Expect(".");
-                if (!Take("rem"))
+                string operation = Current.Text;
+                if (operation is not ("rem" or "mod"))
                     throw new FormatException($"Unsupported Integer intrinsic at offset {Current.Offset}");
+                _index++;
                 Expect("(");
                 var left = ParseAdd(depth + 1);
                 Expect(",");
                 var right = ParseAdd(depth + 1);
                 Expect(")");
-                return new NamedIntegerRem(left, right);
+                return operation == "rem"
+                    ? new NamedIntegerRem(left, right)
+                    : new NamedIntegerMod(left, right);
             }
             if (Current.Text.Length == 0 || Current.Text[0] is < '0' or > '9')
                 throw new FormatException($"Expected integer at offset {Current.Offset}");
