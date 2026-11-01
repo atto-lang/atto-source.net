@@ -79,6 +79,7 @@ Require(OresParser.Parse(
 
 AsyncOnlyIoPolicyTests.Run();
 SourceByteBudgetTests.Run();
+HeapContainerSourceBoundaryTests.Run(); // actual scalar compiler fail-closed heap/container checks
 StructuralPatternAdmissionTests.Run();
 NumericSeparatorParityTests.Run();
 CrossBackendCheckedI64ParityTests.Run();
