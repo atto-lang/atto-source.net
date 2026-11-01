@@ -70,6 +70,29 @@ internal static class SupervisorStopLedgerSelfTest
             "forged supervisor domain");
         Require(!permit.ToString().Contains(permit.Nonce.ToString(),
             StringComparison.OrdinalIgnoreCase), "STOP nonce leaked through ToString");
-        Console.WriteLine("NET_SUPERVISOR_STOP_LEDGER=PASS cases=2");
+        // Competing host CONTROL callbacks must linearize through one
+        // invocation claim. Every loser sees the exact same reserved ticket
+        // but cannot call the host effect a second time.
+        var competing = new SupervisorStopLedger(supervisor, Guid.NewGuid(), 1);
+        var competingActor = new ActorMailbox(711).CurrentRef;
+        var competingChild = competing.Register(competingActor);
+        competing.AssertPhysicallyFinalized(competingChild, competingActor);
+        var competingTicket = competing.ReserveStop(competingChild, competingActor);
+        int winners = 0;
+        Parallel.For(0, 64, _ =>
+        {
+            try
+            {
+                competing.ClaimHostInvocation(competingTicket);
+                Interlocked.Increment(ref winners);
+            }
+            catch (InvalidOperationException) { }
+        });
+        Require(winners == 1, "concurrent callers claimed duplicate host STOP");
+        competing.MarkUncertain(competingTicket);
+        competing.ReconcileVerifiedStop(competingTicket);
+        Require(competing.Snapshot(competingChild, competingActor)
+                == SupervisorStopLedger.Phase.Stopped, "contended STOP did not reconcile");
+        Console.WriteLine("NET_SUPERVISOR_STOP_LEDGER=PASS cases=3");
     }
 }
