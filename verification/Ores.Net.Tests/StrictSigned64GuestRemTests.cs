@@ -30,6 +30,13 @@ internal static class StrictSigned64GuestRemTests
         throw new Exception("Expected zero-divisor trap: " + why);
     }
 
+    private static void ExpectOverflow(Action action, string why)
+    {
+        try { action(); }
+        catch (OverflowException) { return; }
+        throw new Exception("Expected checked signed64 overflow: " + why);
+    }
+
     // Mutate a *copy* of generated CIL metadata, not the emitted assembly or
     // the original method reference. Every illegal call shape must fail closed.
     private static void RejectForgedRemCall(MethodDefinition entry,
@@ -235,6 +242,31 @@ internal static class StrictSigned64GuestRemTests
                 .Methods.Single(m => m.Name == "Run");
             ExpectZeroDivisor(() => _ = CilReferenceEvaluator.Evaluate(zeroEntry),
                 "decoded CIL reference");
+
+            // Eager left-to-right checked arithmetic must win over a later
+            // divisor-zero trap; neither SSA nor decoded CIL may reorder the
+            // operands or constant-fold away the overflowing expression.
+            foreach (string overflowFirst in new[]
+            {
+                "Integer.rem(9223372036854775807 + 1, 0)",
+                "Integer.rem(-9223372036854775808 - 1, 0)",
+                "Integer.rem(1, 9223372036854775807 + 1)"
+            })
+            {
+                var verified = CompileSource(overflowFirst);
+                Require(verified.Instructions.Any(op => op.Opcode == IrOpcode.StrictRem),
+                    "typed named rem preserved despite checked overflow");
+                ExpectOverflow(() => _ = OresIrReferenceEvaluator.Evaluate(verified),
+                    "verified SSA eager order: " + overflowFirst);
+                string emittedOverflow = Path.Combine(folder, "OresGenerated.overflow.dll");
+                CilEmitter.EmitLibrary(verified, emittedOverflow);
+                using var overflowAssembly = AssemblyDefinition.ReadAssembly(emittedOverflow);
+                var overflowEntry = overflowAssembly.MainModule.Types.Single(t =>
+                    t.FullName == "Oreslang.Generated.OresProgram")
+                    .Methods.Single(m => m.Name == "Run");
+                ExpectOverflow(() => _ = CilReferenceEvaluator.Evaluate(overflowEntry),
+                    "decoded CIL eager order: " + overflowFirst);
+            }
 
             VerifyPortableRemContract(folder);
 
