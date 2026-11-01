@@ -15,6 +15,7 @@ internal static class CriticalGateSelfTest
         ForeignTicketRejected();
         RetireFencesOldGeneration();
         WaiterBudgetIsBounded();
+        CancellationRacesWithOwnerHandoff();
         CrossCarrierHandoffIsLogical();
         Console.WriteLine("PASS .NET critical gate host-only tickets/FIFO/cancellation/retirement");
     }
@@ -112,6 +113,26 @@ internal static class CriticalGateSelfTest
             "cancellation returns quota");
         gate.Retire();
         Require(gate.Waiting == 0, "retirement reclaims queue");
+    }
+
+    private static void CancellationRacesWithOwnerHandoff()
+    {
+        for (int i = 0; i < 128; i++)
+        {
+            var gate = new CriticalGate();
+            var owner = gate.Request();
+            var cancelled = gate.Request();
+            var survivor = gate.Request();
+            var releaser = new Thread(() => gate.Release(owner.Ticket));
+            var canceller = new Thread(() => gate.Release(cancelled.Ticket));
+            releaser.Start();
+            canceller.Start();
+            Require(releaser.Join(TimeSpan.FromSeconds(5)), "releaser finished");
+            Require(canceller.Join(TimeSpan.FromSeconds(5)), "canceller finished");
+            Require(!gate.Holds(cancelled.Ticket) && gate.Holds(survivor.Ticket),
+                "cancel versus handoff lost live waiter");
+            gate.Release(survivor.Ticket);
+        }
     }
 
     private static void CrossCarrierHandoffIsLogical()
