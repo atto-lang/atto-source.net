@@ -48,11 +48,25 @@ internal static class StructuredSourceTests
             "@StateContainer()\ndefine singleton S as\nend\n",
             "@Inject(SessionState)\nfnc main():int{return 7;}"
         })
-            RejectFeature(source, "STATE_INJECTION_UNSUPPORTED");
+        {
+            string annotation = source.StartsWith("@Inject", StringComparison.Ordinal)
+                ? "Inject"
+                : source.StartsWith("@StateBacked", StringComparison.Ordinal)
+                    ? "StateBacked"
+                    : source.StartsWith("@MutableStateContainer", StringComparison.Ordinal)
+                        ? "MutableStateContainer"
+                        : "StateContainer";
+            RejectFeature(source, "STATE_INJECTION_UNSUPPORTED: @" + annotation);
+        }
         var commentOnlyInjection = OresStructuredParser.Parse(
             "// @Inject(MutableStateContainer()) is a comment\nfnc main():int{return 7;}");
         Require(commentOnlyInjection is not null,
             "injection spelling inside a comment is not executable syntax");
+        var leadingComment = OresStructuredParser.Parse(
+            "// nested annotation @StateBacked(MutableStateContainer(scope = #instance)) is inert\\n"
+            + "fnc main():int{return 7;}");
+        Require(leadingComment is not null,
+            "state backing in a comment must not trigger a false-positive capability denial");
 
         // Local value types are block-local declarations on the structured
         // frontend. They are admitted into the AST but deliberately rejected
