@@ -83,6 +83,7 @@ StructuralPatternAdmissionTests.Run();
 NumericSeparatorParityTests.Run();
 CrossBackendCheckedI64ParityTests.Run();
 AsyncInteropFailClosedTests.Run();
+EtsPgFailClosedTests.Run();
 await HostTaskObservationTests.Run();
 
 // The canonical actor negative includes a later assignment. Lex its punctuation
