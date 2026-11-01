@@ -39,6 +39,7 @@ public sealed class ActorPubSub
     private readonly Dictionary<ulong, GroupRecord> _groups = new();
     private readonly Dictionary<TopicKey, ITopicState> _topics = new();
     private ulong _nextGroupId;
+    private bool _closed;
 
     internal ActorPubSub(
         int maxGroups,
@@ -93,6 +94,8 @@ public sealed class ActorPubSub
 
         lock (_gate)
         {
+            if (_closed)
+                throw new ObjectDisposedException(nameof(ActorPubSub));
             if (_groups.Count >= _maxGroups)
                 throw new InvalidOperationException("ActorGroup capacity exceeded");
             if (_nextGroupId == ulong.MaxValue)
@@ -461,6 +464,18 @@ public sealed class ActorPubSub
                 "Oreslang event values use Option<T>, not null");
 
         return value;
+    }
+
+    internal void Close()
+    {
+        lock (_gate)
+        {
+            if (_closed) return;
+            _closed = true;
+            _topics.Clear();
+            _groups.Clear();
+            _actors.Clear();
+        }
     }
 
     private sealed class ActorRecord
