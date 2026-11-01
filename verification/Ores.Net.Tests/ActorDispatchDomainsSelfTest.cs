@@ -171,11 +171,31 @@ internal static class ActorDispatchDomainsSelfTest
             Require(!first.IsCompleted && !exited.IsSet,
                 "first Dispose and carrier must still be active: " + kind);
 
+            // A burst of independent shutdown callers must all observe
+            // physical quiescence, not just the first and second caller.
+            const int burstSize = 4;
+            using var burstStarted = new CountdownEvent(burstSize);
+            var burst = new Task[burstSize];
+            for (int i = 0; i < burst.Length; ++i)
+            {
+                burst[i] = Task.Factory.StartNew(() =>
+                {
+                    burstStarted.Signal();
+                    domains.Dispose();
+                }, CancellationToken.None, TaskCreationOptions.LongRunning,
+                   TaskScheduler.Default);
+            }
+            Require(burstStarted.Wait(TimeSpan.FromSeconds(5)),
+                "all concurrent Dispose callers have started: " + kind);
+            Require(!Task.WhenAll(burst).Wait(TimeSpan.FromMilliseconds(75)),
+                "parallel Dispose callers must wait for carrier join: " + kind);
+
             release.Set();
             Require(first.Wait(TimeSpan.FromSeconds(5)) &&
                     second.Wait(TimeSpan.FromSeconds(5)) &&
+                    Task.WhenAll(burst).Wait(TimeSpan.FromSeconds(5)) &&
                     exited.IsSet && carrierSelfDisposeRejected,
-                "both callers join and carrier rejects self-Dispose: " + kind);
+                "all callers join and carrier rejects self-Dispose: " + kind);
             Require(!domains.TryDispatch(kind, static () => { }),
                 "no dispatch admission after completed Dispose: " + kind);
             // Repeated shutdown must also be safe on the caller thread.
