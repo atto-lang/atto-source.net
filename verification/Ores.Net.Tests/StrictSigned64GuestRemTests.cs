@@ -127,6 +127,94 @@ internal static class StrictSigned64GuestRemTests
         Require(admitted == 7, "all seven canonical rem vectors admitted");
     }
 
+    private static void VerifyPortableModContract(string folder)
+    {
+        // This is real source -> verified SSA -> emitted static CIL, verified
+        // independently with two readers. It is NOT a Native AOT execution.
+        var path = Path.Combine(AppContext.BaseDirectory,
+            "strict-named-integer-arithmetic-v1.json");
+        using var document = JsonDocument.Parse(File.ReadAllText(path));
+        int admitted = 0;
+        foreach (var item in document.RootElement.GetProperty("cases").EnumerateArray())
+        {
+            if (item.GetProperty("operation").GetString() != "mod") continue;
+            admitted++;
+            string id = item.GetProperty("id").GetString()!;
+            string left = item.GetProperty("left").GetString()!;
+            string right = item.GetProperty("right").GetString()!;
+            var ir = CompileSource("Integer.mod(" + left + ", " + right + ")");
+            Require(ir.Instructions.Any(op => op.Opcode == IrOpcode.StrictMod),
+                "mod guest source reaches dedicated verified opcode: " + id);
+            string emitted = Path.Combine(folder, "OresGenerated.mod.dll");
+            CilEmitter.EmitLibrary(ir, emitted);
+            using var assembly = AssemblyDefinition.ReadAssembly(emitted);
+            var entry = assembly.MainModule.Types.Single(t =>
+                t.FullName == "Oreslang.Generated.OresProgram")
+                .Methods.Single(m => m.Name == "Run");
+            Require(entry.Body.Instructions.Any(ins => ins.OpCode.Code == Code.Call &&
+                ins.Operand is MethodReference method && !method.HasThis &&
+                !method.ExplicitThis && method.GenericParameters.Count == 0 &&
+                method.CallingConvention == MethodCallingConvention.Default &&
+                method.Name == "Mod" &&
+                method.DeclaringType.FullName ==
+                    "Ores.Net.Runtime.StrictSigned64Arithmetic" &&
+                method.DeclaringType.Scope is AssemblyNameReference
+                    { Name: "Ores.Net.Runtime", Version: { Major: 1, Minor: 0, Build: 0, Revision: 0 } } &&
+                method.ReturnType.MetadataType == MetadataType.Int64 &&
+                method.Parameters.Count == 2 &&
+                method.Parameters.All(p => p.ParameterType.MetadataType == MetadataType.Int64)),
+                "mod static CIL MemberRef ABI: " + id);
+            var expected = item.GetProperty("expect");
+            if (expected.TryGetProperty("error", out var failure))
+            {
+                Require(failure.GetString() == "DIVISOR_ZERO",
+                    "expected modulus error class: " + id);
+                ExpectZeroDivisor(() => _ = OresIrReferenceEvaluator.Evaluate(ir),
+                    "mod SSA: " + id);
+                ExpectZeroDivisor(() => _ = CilReferenceEvaluator.Evaluate(entry),
+                    "mod decoded CIL: " + id);
+            }
+            else
+            {
+                long wanted = long.Parse(expected.GetProperty("value").GetString()!,
+                    NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture);
+                Require(OresIrReferenceEvaluator.Evaluate(ir) == wanted,
+                    "mod SSA reference: " + id);
+                Require(CilReferenceEvaluator.Evaluate(entry) == wanted,
+                    "mod decoded CIL reference: " + id);
+            }
+            // A forged intrinsic name or ABI must fail before invocation.
+            RejectForgedRemCall(entry, method => method.Name = "NotMod",
+                "forged mod intrinsic name: " + id);
+            RejectForgedRemCall(entry, method =>
+                method.Parameters[0].ParameterType = entry.Module.TypeSystem.Int32,
+                "forged mod parameter type: " + id);
+        }
+        Require(admitted == 8, "all eight shared signed64 modulus vectors admitted");
+
+        foreach (var (expression, wanted) in new (string, long)[]
+        {
+            ("Integer.mod(-9, 4) + 39", 42),
+            ("Integer.mod(-1, -9223372036854775808)", long.MaxValue),
+            ("Integer.mod(-9223372036854775808, 9223372036854775807)",
+                long.MaxValue - 1),
+            ("Integer.mod(Integer.rem(-9, 4), -4)", 3),
+            ("Integer.rem(Integer.mod(-9, 4), 2)", 1)
+        })
+        {
+            var ir = CompileSource(expression);
+            string emitted = Path.Combine(folder, "OresGenerated.mod.nested.dll");
+            CilEmitter.EmitLibrary(ir, emitted);
+            using var assembly = AssemblyDefinition.ReadAssembly(emitted);
+            var entry = assembly.MainModule.Types.Single(t =>
+                t.FullName == "Oreslang.Generated.OresProgram")
+                .Methods.Single(m => m.Name == "Run");
+            Require(OresIrReferenceEvaluator.Evaluate(ir) == wanted &&
+                    CilReferenceEvaluator.Evaluate(entry) == wanted,
+                "nested strict numeric call exact result: " + expression);
+        }
+    }
+
     public static void Run()
     {
         string folder = Path.Combine(Path.GetTempPath(),
@@ -224,7 +312,9 @@ internal static class StrictSigned64GuestRemTests
                 "Integer.rem()", "Integer.rem(true, 1)",
                 "Integer.rem(1.5, 2)", "Integer.rem(1, false)",
                 "Integer.rem(1, 2.0)", "Integer.rem(left=1, 2)",
-                "Integer.rem<int>(1, 2)", "Integer.mod(1, 2)",
+                "Integer.rem<int>(1, 2)", "Integer.mod(1)",
+                "Integer.mod(1, 2, 3)", "Integer.mod(true, 2)",
+                "Integer.mod(1, false)", "Integer.pow(1, 2)",
                 "Other.rem(1, 2)", "Integer.rem(1, 2).x",
                 "Integer.rem(1, 2) % 0",
                 "Integer.rem(1, 2) % Integer.rem(1, 2)"
@@ -269,6 +359,7 @@ internal static class StrictSigned64GuestRemTests
             }
 
             VerifyPortableRemContract(folder);
+            VerifyPortableModContract(folder);
 
             // Deliberately forge forward-reference SSA: verifier must fail closed.
             var forged = new IrFunction("main", IrValueType.I64,
