@@ -47,6 +47,16 @@ public static class OresParser
         }
         for (int i = 0; i + 1 < tokens.Count; i++)
         {
+            // Both shipped scalar and structured frontends must reject a
+            // nominal supervisor BEFORE source/IR lowering. Check tokens,
+            // not substrings: nested comments and lookalike identifiers do
+            // not mint supervisor CONTROL authority.
+            if (tokens[i].Text == "supervisor" &&
+                (i > 0 && tokens[i - 1].Text == "define" ||
+                 i > 1 && tokens[i - 1].Text == "pub" &&
+                 tokens[i - 2].Text == "define"))
+                throw new FormatException(
+                    $"Source supervisors require typed Failure, owned CONTROL dispatch and Native AOT lowering; unsupported in .NET scalar frontend at offset {tokens[i].Offset}");
             if (tokens[i].Text == "select" &&
                 StaticSelectAdmission.IsStaticSelectFollower(tokens[i + 1].Text))
                 throw StaticSelectAdmission.Unsupported(tokens[i].Offset);
