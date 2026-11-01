@@ -14,6 +14,12 @@
     <None Include="../../contracts/scalar/v1/**/*"
           Link="contracts/scalar/v1/%(RecursiveDir)%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/v1/fixtures/actor-pubsub*.ores"
+          Link="contracts/v1/fixtures/%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/v1/actor-pubsub-v1-cases.json"
+          Link="contracts/v1/actor-pubsub-v1-cases.json"
+          CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="../../compiler/Ores.Net.Compiler.Core/Ores.Net.Compiler.Core.csproj" />
     <ProjectReference Include="../../runtime/Ores.Net.Runtime/Ores.Net.Runtime.csproj" />
     <!-- Independent metadata inspection runs only in the test process. -->
