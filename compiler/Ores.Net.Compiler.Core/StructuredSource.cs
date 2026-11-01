@@ -122,6 +122,14 @@ public static class OresStructuredParser
         while (true)
         {
             var token = lexer.Read();
+            // This frontend also lexes eagerly: deny contextual singleton
+            // declarations before future trait/generic or @Inject tokens.
+            // A local declaration gets the same compiler-owned diagnostic.
+            if (token.Text == "singleton" &&
+                (tokens.Count > 0 && tokens[^1].Text == "define" ||
+                 tokens.Count > 1 && tokens[^1].Text == "pub" &&
+                 tokens[^2].Text == "define"))
+                throw new FormatException(SingletonUnsupported + " at offset " + token.Offset);
             // The scalar bootstrap does not have class/actor dispatch or
             // ownership-aware lexical closures. Refuse these at source admission
             // with a stable capability diagnostic, not an accidental parse error.
