@@ -432,6 +432,33 @@ jobs:
           }
           $global:LASTEXITCODE = 0
           Write-Host 'WINDOWS_NET_NATIVE_AOT_STRICT_REM_MOD_GUEST_EXECUTED_42_MIN_ZERO'
+      - name: Execute checked Integer.pow and bitXor in Windows Native AOT
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          foreach ($name in @('strict-pow42','strict-pow-min42','strict-xor42')) {
+            ./scripts/publish-windows.ps1 -Source "examples/$name.ores" -Rid win-x64 -Output "artifacts/$name"
+            if ($LASTEXITCODE -ne 0) { throw "Native publish failed: $name" }
+            $guestOutput = & "./artifacts/$name/win-x64/oreslang-app.exe"
+            if ($LASTEXITCODE -ne 0 -or ($guestOutput | Out-String).Trim() -cne '42') {
+              throw "Native guest expected 42: $name output=$guestOutput"
+            }
+          }
+          foreach ($negative in @(
+            @{ name = 'strict-pow-overflow'; diagnostic = 'Oreslang arithmetic overflow' },
+            @{ name = 'strict-pow-negative'; diagnostic = 'Oreslang negative integer exponent' }
+          )) {
+            $name = $negative.name
+            ./scripts/publish-windows.ps1 -Source "examples/$name.ores" -Rid win-x64 -Output "artifacts/$name"
+            if ($LASTEXITCODE -ne 0) { throw "Native publish failed: $name" }
+            $guestOutput = & "./artifacts/$name/win-x64/oreslang-app.exe" 2>&1
+            $guestCode = $LASTEXITCODE
+            if ($guestCode -ne 70 -or ($guestOutput | Out-String).Trim() -cne $negative.diagnostic) {
+              throw "Unexpected native failure: $name code=$guestCode output=$guestOutput"
+            }
+            $global:LASTEXITCODE = 0
+          }
+          Write-Host 'WINDOWS_NET_NATIVE_AOT_STRICT_POW_XOR_NATIVE_EXECUTED'
       - name: Emit exact-head Windows Native AOT run receipt
         shell: pwsh
         env:
@@ -456,7 +483,8 @@ jobs:
             target_rid = 'win-x64'
             checks = @('managed-regressions','native-compiler','native-app',
                        'native-PE','arithmetic-negative','CFG-native-execution',
-                       'strict-rem-guest42-min-zero','strict-mod-guest42-min-zero')
+                       'strict-rem-guest42-min-zero','strict-mod-guest42-min-zero',
+                       'strict-pow-xor-guest42-min-overflow-negative')
             strict_rem_native_sha256 = [ordered]@{
               normal = (Get-FileHash -LiteralPath 'artifacts/strict-rem42/win-x64/oreslang-app.exe' -Algorithm SHA256).Hash.ToLowerInvariant()
               signed_min = (Get-FileHash -LiteralPath 'artifacts/strict-rem-min42/win-x64/oreslang-app.exe' -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -466,6 +494,13 @@ jobs:
               normal = (Get-FileHash -LiteralPath 'artifacts/strict-mod42/win-x64/oreslang-app.exe' -Algorithm SHA256).Hash.ToLowerInvariant()
               signed_min = (Get-FileHash -LiteralPath 'artifacts/strict-mod-min42/win-x64/oreslang-app.exe' -Algorithm SHA256).Hash.ToLowerInvariant()
               zero_divisor = (Get-FileHash -LiteralPath 'artifacts/strict-mod-zero/win-x64/oreslang-app.exe' -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
+            strict_pow_xor_native_sha256 = [ordered]@{
+              pow42 = (Get-FileHash -LiteralPath 'artifacts/strict-pow42/win-x64/oreslang-app.exe' -Algorithm SHA256).Hash.ToLowerInvariant()
+              pow_min42 = (Get-FileHash -LiteralPath 'artifacts/strict-pow-min42/win-x64/oreslang-app.exe' -Algorithm SHA256).Hash.ToLowerInvariant()
+              pow_overflow = (Get-FileHash -LiteralPath 'artifacts/strict-pow-overflow/win-x64/oreslang-app.exe' -Algorithm SHA256).Hash.ToLowerInvariant()
+              pow_negative = (Get-FileHash -LiteralPath 'artifacts/strict-pow-negative/win-x64/oreslang-app.exe' -Algorithm SHA256).Hash.ToLowerInvariant()
+              xor42 = (Get-FileHash -LiteralPath 'artifacts/strict-xor42/win-x64/oreslang-app.exe' -Algorithm SHA256).Hash.ToLowerInvariant()
             }
             source_only = $false
             independently_verified = $false
@@ -490,6 +525,11 @@ jobs:
             artifacts/strict-mod42/win-x64/oreslang-app.exe
             artifacts/strict-mod-min42/win-x64/oreslang-app.exe
             artifacts/strict-mod-zero/win-x64/oreslang-app.exe
+            artifacts/strict-pow42/win-x64/oreslang-app.exe
+            artifacts/strict-pow-min42/win-x64/oreslang-app.exe
+            artifacts/strict-pow-overflow/win-x64/oreslang-app.exe
+            artifacts/strict-pow-negative/win-x64/oreslang-app.exe
+            artifacts/strict-xor42/win-x64/oreslang-app.exe
           if-no-files-found: error
           retention-days: 14
       - name: Upload native executable
