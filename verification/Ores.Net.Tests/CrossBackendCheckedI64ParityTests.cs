@@ -7,7 +7,7 @@ static class CrossBackendCheckedI64ParityTests
 
     public static void Run()
     {
-        SignedLiteralRemainder();
+        RemovedRemainderSourceAndInternalIrValidation();
         foreach (var (name, expression, expected) in new (string, string, long)[]
         {
             ("precedence", "2 + 3 * 4", 14L),
@@ -58,44 +58,26 @@ static class CrossBackendCheckedI64ParityTests
         throw new Exception("FAILED: int/int division was admitted without float lowering");
     }
 
-    private static void SignedLiteralRemainder()
+    private static void RemovedRemainderSourceAndInternalIrValidation()
     {
-        // Exercise parser -> verified OresIR -> emitted CIL bytes -> an
-        // independent bounded CIL interpreter (not a Native AOT execution).
-        foreach (var (expression, expected) in new (string, long)[]
-        {
-            ("-7 % 3", -1),
-            ("7 % -3", 1),
-            ("-7 % -3", -1),
-            ("8 % 3 * 2", 4),
-            ("20 % 6 % 3", 2),
-            ("-9223372036854775808 % -1", 0),
-            ("-9223372036854775808 % -9223372036854775808", 0),
-            ("9223372036854775807 % -9223372036854775808", long.MaxValue)
+        // The explicit language contract removed %, ^ and ^^ from source.
+        // Internal SignedRemainderLiteral IR remains a separate verifier
+        // primitive but must not be reachable by the source parser.
+        foreach (string expression in new[] {
+            "-7 % 3", "7 % -3", "-7 % -3", "8 % 3 * 2",
+            "20 % 6 % 3", "-9223372036854775808 % -1",
+            "-9223372036854775808 % -9223372036854775808",
+            "9223372036854775807 % -9223372036854775808",
+            "7 ^ 3", "7 ^^ 3"
         })
         {
-            var ast = OresParser.Parse(Header + "pub fnc main():int{return " + expression + ";}");
-            var verified = OresIrLowering.Lower(ast);
-            if (OresIrReferenceEvaluator.Evaluate(verified) != expected)
-                throw new Exception("Remainder managed reference mismatch: " + expression);
-            var folder = Path.Combine(Path.GetTempPath(), "oresnet-remainder-" +
-                Guid.NewGuid().ToString("N"));
-            var file = Path.Combine(folder, "OresGenerated.dll");
-            try
+            try { _ = OresParser.Parse(Header + "pub fnc main():int{return " + expression + ";}"); }
+            catch (FormatException ex) when (
+                ex.Message.Contains("Removed Oreslang operator", StringComparison.Ordinal))
             {
-                CilEmitter.EmitLibrary(verified, file);
-                using var assembly = AssemblyDefinition.ReadAssembly(file);
-                var method = assembly.MainModule.Types
-                    .Single(t => t.FullName == "Oreslang.Generated.OresProgram")
-                    .Methods.Single(f => f.Name == "Run");
-                long actual = CilReferenceEvaluator.Evaluate(method);
-                if (actual != expected)
-                    throw new Exception($"Remainder CIL mismatch: {expression}: {actual} vs {expected}");
+                continue;
             }
-            finally
-            {
-                if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
-            }
+            throw new Exception("Removed operator admitted in source: " + expression);
         }
 
         foreach (string expression in new[]
