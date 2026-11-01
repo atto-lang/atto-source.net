@@ -90,6 +90,7 @@ internal static class ActorDispatchDomainsSelfTest
             selfDisposeRejected,
             "carrier self-dispose is rejected instead of self-joining");
 
+        ConcurrentDisposeWithoutStartedCarriers();
         // Each physical actor domain must participate in the same join fence.
         foreach (var kind in new[] {
             ActorKind.Private, ActorKind.Shared, ActorKind.Untrusted
@@ -98,6 +99,53 @@ internal static class ActorDispatchDomainsSelfTest
 
         Console.WriteLine(
             "PASS .NET three lazy actor dispatch domains with no per-actor pools");
+    }
+
+    private static void ConcurrentDisposeWithoutStartedCarriers()
+    {
+        // Empty pools must resolve all simultaneous shutdown callers without
+        // creating a background thread or leaving a waiter parked forever.
+        using var domains = new ActorDispatchDomains(new ActorDispatcherOptions
+        {
+            PrivateWorkers = 1,
+            SharedWorkers = 1,
+            UntrustedWorkers = 1,
+            QueueCapacityPerDomain = 4
+        });
+        const int callers = 8;
+        using var start = new ManualResetEventSlim();
+        using var begun = new CountdownEvent(callers);
+        var tasks = new Task[callers];
+        for (int i = 0; i < tasks.Length; ++i)
+        {
+            tasks[i] = Task.Factory.StartNew(() =>
+            {
+                begun.Signal();
+                if (!start.Wait(TimeSpan.FromSeconds(5)))
+                    throw new Exception("zero-worker shutdown start gate timed out");
+                domains.Dispose();
+            }, CancellationToken.None, TaskCreationOptions.LongRunning,
+               TaskScheduler.Default);
+        }
+        try
+        {
+            Require(begun.Wait(TimeSpan.FromSeconds(5)),
+                "all zero-worker disposal callers are scheduled");
+        }
+        finally
+        {
+            start.Set();
+        }
+        Require(Task.WhenAll(tasks).Wait(TimeSpan.FromSeconds(5)),
+            "all zero-worker disposers must complete");
+        Require(domains.TotalStartedWorkers == 0,
+            "Dispose must not start idle carriers");
+        foreach (var kind in new[] {
+            ActorKind.Private, ActorKind.Shared, ActorKind.Untrusted
+        })
+            Require(!domains.TryDispatch(kind, static () => { }),
+                "zero-worker disposed domain rejects late work: " + kind);
+        domains.Dispose();
     }
 
     private static void ConcurrentDisposeWaitsForCarrierJoin(ActorKind kind)
