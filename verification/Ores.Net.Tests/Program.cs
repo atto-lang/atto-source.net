@@ -101,6 +101,7 @@ ActorRefNoWireSelfTest.Run();
 ActorMailboxBoundsSelfTest.Run();
 SelectContinuationFenceSelfTest.Run();
 ActorMailboxRestartAtomicitySelfTest.Run();
+ActorFinalizationV1SelfTest.Run();
 ActorMailboxAuthorizationPrioritySelfTest.Run();
 ActorMailboxPrivateDataSelfTest.Run();
 ActorArenaSelfTest.Run();
