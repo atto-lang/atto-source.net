@@ -17,6 +17,14 @@ static class CrossBackendCheckedI64ParityTests
             ("min", "-9223372036854775808", long.MinValue),
             ("zero", "0", 0L),
             ("signed multiplication", "-7 * -6", 42L),
+            ("wave/grouped precedence", "(2 + 3) * 8 + 2", 42L),
+            ("wave/double negation", "-(-42)", 42L),
+            ("wave/left associative subtraction", "(100 - 16) - 42", 42L),
+            ("wave/signed multiplication", "-7 * -6", 42L),
+            ("wave/negative multiplication chain", "(7 - 14) * -6", 42L),
+            ("wave/i64 max minus large", "9223372036854775807 - 9223372036854775765", 42L),
+            ("wave/i64 min plus max", "-9223372036854775808 + 9223372036854775807 + 43", 42L),
+            ("wave/nested grouping", "2 * (3 + 4) * 3", 42L),
         })
         {
             var ast = OresParser.Parse(Header + "define pub fnc main(): int { return " + expression + "; }");
