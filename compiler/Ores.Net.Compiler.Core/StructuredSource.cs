@@ -63,6 +63,17 @@ public static class OresStructuredParser
     private const int MaxParameters = 16;
     private const int MaxLocalTypeFields = 64;
 
+    private static void RejectUnsupportedMutableSharing(IReadOnlyList<Token> tokens)
+    {
+        for (int i = 0; i + 2 < tokens.Count; i++)
+        {
+            if (tokens[i].Text == "rt" && tokens[i + 1].Text == "mut" &&
+                tokens[i + 2].Text == "share")
+                throw new FormatException(
+                    $"rt mut share requires verified SharedMutex<T> guarded lowering and allocation-domain proof in .NET Native AOT at offset {tokens[i].Offset}");
+        }
+    }
+
     public static StructuredProgram Parse(string source)
         => ParseCore(source, null).Program;
 
@@ -86,6 +97,7 @@ public static class OresStructuredParser
             tokens.Add(lexer.Read());
             if (tokens.Count > MaxTokens) throw new FormatException("Structured token budget exceeded");
         } while (tokens[^1].Text.Length != 0);
+        RejectUnsupportedMutableSharing(tokens);
         return tokens;
     }
 
@@ -164,6 +176,7 @@ public static class OresStructuredParser
                 throw new FormatException("Structured token budget exceeded");
             if (token.Text.Length == 0) break;
         }
+        RejectUnsupportedMutableSharing(tokens);
         for (int i = 0; i + 1 < tokens.Count; i++)
         {
             if (tokens[i].Text == "select" &&
