@@ -687,8 +687,23 @@ static byte[] PendingOwnedBuffer(ActorMailbox actor)
 {
     var field = typeof(ActorMailbox).GetField("_messages",
         System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-    Require(field is not null, "mailbox test can inspect private queue");
-    return ((Queue<byte[]>)field!.GetValue(actor)!).Peek();
+    var messages = field?.GetValue(actor) as System.Collections.IEnumerable;
+    Require(messages is not null && actor.QueuedMessages == 1,
+        "mailbox test can inspect exactly one pending envelope");
+    var iterator = messages!.GetEnumerator();
+    Require(iterator.MoveNext(), "mailbox test has a pending envelope");
+    var envelope = iterator.Current;
+    Require(envelope is not null && !iterator.MoveNext(),
+        "mailbox test has exactly one pending envelope");
+    var envelopeType = envelope!.GetType();
+    var flags = System.Reflection.BindingFlags.Instance |
+        System.Reflection.BindingFlags.Public;
+    var isControl = envelopeType.GetProperty("IsControl", flags)?.GetValue(envelope);
+    Require(isControl is bool control && !control,
+        "mailbox test inspects a USER envelope, never scheduler control");
+    var owned = envelopeType.GetProperty("Payload", flags)?.GetValue(envelope) as byte[];
+    Require(owned is not null, "mailbox test captures owned USER payload");
+    return owned!;
 }
 
 var originalInput = new byte[] { 9, 8, 7, 6 };
