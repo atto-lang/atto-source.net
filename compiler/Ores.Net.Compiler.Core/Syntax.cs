@@ -51,6 +51,29 @@ public static class OresParser
                 StaticSelectAdmission.IsStaticSelectFollower(tokens[i + 1].Text))
                 throw StaticSelectAdmission.Unsupported(tokens[i].Offset);
         }
+        // The shipping i64 frontend has no coroutine frames, bounded FIFO
+        // critical admission, or authenticated guard owner. Reject with an
+        // explicit compiler-owned capability diagnostic, not a generic parser
+        // error that could be misreported as feature parity. Lexer-produced
+        // tokens keep these words in strings/comments lexically invisible.
+        for (int i = 0; i + 1 < tokens.Count; i++)
+        {
+            string word = tokens[i].Text;
+            string next = tokens[i + 1].Text;
+            if (word == "async" && next == "fnc")
+                throw new FormatException(
+                    $"E_CALLABLE_MODIFIERS: async fnc is removed; use suspends at offset {tokens[i].Offset}");
+            if ((word == "critical" && next == "suspends") ||
+                (word == "suspends" && next == "critical"))
+                throw new FormatException(
+                    $"E_CALLABLE_MODIFIERS: critical suspends fnc is forbidden at offset {tokens[i].Offset}");
+            if (word == "critical")
+                throw new FormatException(
+                    $"E_CRITICAL_UNSUPPORTED: guarded admission and non-suspending body effect checks require verified .NET lowering at offset {tokens[i].Offset}");
+            if (word is "suspends" or "await")
+                throw new FormatException(
+                    $"E_SUSPENDS_UNSUPPORTED: suspension requires .NET continuation/effect lowering at offset {tokens[i].Offset}");
+        }
         return new Reader(tokens).ParseProgram();
     }
 
