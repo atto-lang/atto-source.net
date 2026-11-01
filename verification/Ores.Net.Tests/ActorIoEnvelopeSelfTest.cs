@@ -56,7 +56,11 @@ internal static class ActorIoEnvelopeSelfTest
         var fresh = mailbox.Restart();
         ExpectStale(() => io.TryWriteOutput(stale, new byte[] { 7 }), "stale output");
         ExpectStale(() => io.Metadata(stale), "stale metadata");
-        Require(io.TryWriteOutput(fresh, new byte[] { 8 }), "fresh generation output");
+        ExpectStale(() => io.TryWriteOutput(fresh, new byte[] { 8 }),
+            "fresh ActorRef must not reopen the retired generation envelope");
+        var freshIo = new ActorIoEnvelope(mailbox);
+        Require(freshIo.TryWriteOutput(fresh, new byte[] { 8 }),
+            "fresh generation receives a fresh logical envelope");
 
         var foreignMailbox = new ActorMailbox(91001);
         var foreign = foreignMailbox.CurrentRef;
