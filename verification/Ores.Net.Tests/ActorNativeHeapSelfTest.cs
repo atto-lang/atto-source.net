@@ -108,6 +108,35 @@ internal static class ActorNativeHeapSelfTest
         pending!.Dispose();
         Require(heapA.Retired && heapA.LiveAllocations == 0, "final lease frees native heap exactly once");
         Require(heapA.Retire(alice), "idempotent retirement");
+        // Per-actor NativeAOT heap identity must survive an unrelated actor's
+        // physical reclaim and reject handles from its previous incarnation.
+        // These checks are unmanaged host heap tests, not compiled .ores actors.
+        var stillLiveB = heapB.Allocate(bob, 8);
+        Require(stillLiveB.HasValue, "independent B native allocation");
+        Require(heapB.Write(bob, stillLiveB.Value, new byte[] { 44, 55, 66, 77 }),
+            "write B while A is fully retired");
+        using (var replacementA = new ActorNativeHeap(alice, 256, 4))
+        {
+            var replacementRoot = replacementA.Allocate(alice, 8);
+            Require(replacementRoot.HasValue, "fresh A incarnation allocation");
+            Require(!replacementA.Read(alice, root.Value, buffer),
+                "stale A handle must not be accepted by replacement heap");
+            Require(!heapB.Read(bob, replacementRoot.Value, buffer),
+                "fresh A handle cannot read B heap");
+            Require(replacementA.Read(alice, replacementRoot.Value, buffer)
+                    && buffer.SequenceEqual(new byte[4]),
+                "new actor incarnation must start with zeroed native storage");
+            Require(replacementA.Write(alice, replacementRoot.Value,
+                    new byte[] { 1, 1, 1, 1 }), "replacement actor writes its own heap");
+            Require(heapB.Read(bob, stillLiveB.Value, buffer)
+                    && buffer.SequenceEqual(new byte[] { 44, 55, 66, 77 }),
+                "B must survive replacement A's write");
+        }
+        Require(heapB.Read(bob, stillLiveB.Value, buffer)
+                && buffer.SequenceEqual(new byte[] { 44, 55, 66, 77 }),
+            "A replacement heap reclaim must not change B native memory");
+        Require(heapB.Remove(bob, stillLiveB.Value), "B independent cleanup");
+
 
         var solo = new ActorNativeHeap(bob, 32, 1);
         using (var lease = solo.AcquireLifetimeLease(bob))
