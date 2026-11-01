@@ -229,6 +229,81 @@ internal static class TcpPoolLeaseLedgerSelfTest
             }
             Require(pool.TryStop(), "table stops after repeated retirements");
         }
+
+        {
+            // Real host loopback proof: this does NOT attach sockets to the
+            // ledger or establish a guest-accessible physical connection pool.
+            // It exercises quarantine and explicit post-close acknowledgement
+            // around actual managed TCP socket open/read/write/dispose.
+            var pool = New();
+            var listener = new System.Net.Sockets.TcpListener(
+                System.Net.IPAddress.Loopback, 0);
+            listener.Start();
+            try
+            {
+                int port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+                var first = Acquire(pool);
+                using (var sender = new System.Net.Sockets.TcpClient())
+                {
+                    sender.Connect(System.Net.IPAddress.Loopback, port);
+                    using (var receiver = listener.AcceptTcpClient())
+                    {
+                        sender.SendTimeout = 3000;
+                        receiver.ReceiveTimeout = 3000;
+                        Require(pool.TryBegin(first, ActorA, 7),
+                            "real TCP loopback first operation admitted");
+                        var outgoing = new byte[] { 11, 22, 33, 44 };
+                        sender.GetStream().Write(outgoing);
+                        var incoming = new byte[4];
+                        receiver.GetStream().ReadExactly(incoming);
+                        Require(outgoing.SequenceEqual(incoming),
+                            "real TCP socket transferred exact payload");
+                        Require(pool.TryRelease(first, ActorA, 7),
+                            "release while socket I/O exists revokes lease");
+                        Require(!pool.TryAcquire(0, ActorB, Partition, 7, out _),
+                            "foreign actor refused while old socket remains");
+                        Require(!pool.TryConfirmPhysicalClose(0, first.Generation + 1),
+                            "in-flight operation blocks early rearm");
+                        Require(pool.TryComplete(first),
+                            "trusted reactor completion observed");
+                        Require(!pool.TryAcquire(0, ActorB, Partition, 7, out _),
+                            "logical completion is not physical socket close");
+                    }
+                }
+                Require(pool.TryConfirmPhysicalClose(0, first.Generation + 1),
+                    "trusted close acknowledgement after actual Dispose");
+                var second = Acquire(pool, actor: ActorB);
+                Require(second.Generation > first.Generation,
+                    "physical replacement increments generation");
+                using (var sender = new System.Net.Sockets.TcpClient())
+                {
+                    sender.Connect(System.Net.IPAddress.Loopback, port);
+                    using (var receiver = listener.AcceptTcpClient())
+                    {
+                        sender.SendTimeout = 3000;
+                        receiver.ReceiveTimeout = 3000;
+                        Require(pool.TryBegin(second, ActorB, 7),
+                            "new actor can submit to replacement socket");
+                        sender.GetStream().Write(new byte[] { 55, 66 });
+                        var incoming = new byte[2];
+                        receiver.GetStream().ReadExactly(incoming);
+                        Require(incoming[0] == 55 && incoming[1] == 66,
+                            "replacement wire roundtrip");
+                        Require(!pool.TryBegin(first, ActorA, 7),
+                            "stale actor lease rejected after replacement");
+                        Require(pool.TryComplete(second),
+                            "replacement completion");
+                        Require(pool.TryRelease(second, ActorB, 7),
+                            "replacement release");
+                    }
+                }
+                Require(pool.TryConfirmPhysicalClose(0, second.Generation + 1),
+                    "replacement is physically retired before another rearm");
+                Require(pool.TryStop(), "loopback pool terminal stop");
+            }
+            finally { listener.Stop(); }
+        }
+
         foreach (var wrong in new[] { 0, -1, 1025 })
         {
             try
