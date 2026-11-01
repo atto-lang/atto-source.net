@@ -16,6 +16,14 @@ static class CrossBackendCheckedI64ParityTests
         "d1fa2dc614cd61c442ab1bfa5683fac50cc9d72139e0dcdf0a67b3610d427bd6",
         "0322dc2a7d48fed12d917aaaf2a50c025b77402a2b21fdbb87224fece59b44b0",
         "3483cb15d4b2f2c24f90ba65e55e886b59eaea2190aa9c18f8ed10badba04e76",
+        "939b28fccd280d8a3690ebd4d874f263a9ddfe0c87d420d93b9bd684ffe34074",
+        "873112bfda242442d29a8b2ba9f74bc494db44e4e66ac51484ad886786bb525b",
+        "2ee8ae2204d348d177a995e1086543fbc9fcff3d66c80827d40468f2953a9157",
+        "171928949cd43a61f2072f311f94e27f697968848d07b1b90affc9e061d3c41e",
+        "61cf977237ae559e2a759efde340e31b62f95a244702b94f8641ff24931ebecf",
+        "a1da8a0e27b1a72a6371447868cd75d192f3b0da18122c53ac48cfc848f2320f",
+        "ea84b5d71bbb8a7356fe87b70c04a0518da28c53fb2e271d2b6429bbe6a44581",
+        "ba3cd5f0d90f7b6f9c4776561f5b7149dfd2c7d420492fe98df3f249a3fb9922",
     };
 
 
@@ -39,6 +47,14 @@ static class CrossBackendCheckedI64ParityTests
             ("wave/i64 max minus large", "9223372036854775807 - 9223372036854775765", 42L),
             ("wave/i64 min plus max", "-9223372036854775808 + 9223372036854775807 + 43", 42L),
             ("wave/nested grouping", "2 * (3 + 4) * 3", 42L),
+            ("wave/left associative product", "2 * 3 * 7", 42L),
+            ("wave/paired negative differences", "(0 - 7) * (0 - 6)", 42L),
+            ("wave/grouped zero difference", "(21 + 21) + (0 - 0)", 42L),
+            ("wave/six times seven", "6 * 7", 42L),
+            ("wave/parenthesized negative product", "(-7) * (-6)", 42L),
+            ("wave/max self cancellation", "9223372036854775807 - 9223372036854775807 + 42", 42L),
+            ("wave/min self cancellation", "-9223372036854775808 - (-9223372036854775808) + 42", 42L),
+            ("wave/unit multiplication group", "(100 - 58) * (0 + 1)", 42L),
         })
         {
             string source;
@@ -54,6 +70,14 @@ static class CrossBackendCheckedI64ParityTests
                     "wave/i64 max minus large" => 39,
                     "wave/i64 min plus max" => 40,
                     "wave/nested grouping" => 41,
+                    "wave/left associative product" => 50,
+                    "wave/paired negative differences" => 51,
+                    "wave/grouped zero difference" => 52,
+                    "wave/six times seven" => 53,
+                    "wave/parenthesized negative product" => 54,
+                    "wave/max self cancellation" => 55,
+                    "wave/min self cancellation" => 56,
+                    "wave/unit multiplication group" => 57,
                     _ => throw new InvalidOperationException("unknown wave scalar case")
                 };
                 source = "// " + id +
@@ -62,7 +86,7 @@ static class CrossBackendCheckedI64ParityTests
                     "pub fnc main(): int { return " + expression + "; }\n";
                 var actualSha = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(source)))
                     .ToLowerInvariant();
-                if (actualSha != WaveSourceSha256[id - 34])
+                if (actualSha != WaveSourceSha256[id >= 50 ? id - 42 : id - 34])
                     throw new Exception("FAIL: Oreslang source bytes differ from shared parity case " + id);
             }
             else
