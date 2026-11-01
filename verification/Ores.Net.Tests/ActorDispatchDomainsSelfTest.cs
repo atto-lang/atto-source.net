@@ -90,65 +90,94 @@ internal static class ActorDispatchDomainsSelfTest
             selfDisposeRejected,
             "carrier self-dispose is rejected instead of self-joining");
 
-        ConcurrentDisposeWaitsForCarrierJoin();
+        // Each physical actor domain must participate in the same join fence.
+        foreach (var kind in new[] {
+            ActorKind.Private, ActorKind.Shared, ActorKind.Untrusted
+        })
+            ConcurrentDisposeWaitsForCarrierJoin(kind);
 
         Console.WriteLine(
             "PASS .NET three lazy actor dispatch domains with no per-actor pools");
     }
 
-    private static void ConcurrentDisposeWaitsForCarrierJoin()
+    private static void ConcurrentDisposeWaitsForCarrierJoin(ActorKind kind)
     {
-        // A first disposer must join an active carrier before *either* call
-        // returns. This detects a false "closed means fully disposed" result
-        // from the second caller without requiring private-state reflection.
+        // No reflection and no production instrumentation: the public
+        // TryDispatch boundary proves that the first disposer has actually
+        // closed admission while an admitted carrier is still running.
         using var domains = new ActorDispatchDomains(new ActorDispatcherOptions
         {
             PrivateWorkers = 1,
             SharedWorkers = 1,
             UntrustedWorkers = 1,
-            QueueCapacityPerDomain = 65_536
+            QueueCapacityPerDomain = 1024
         });
         using var entered = new ManualResetEventSlim();
         using var release = new ManualResetEventSlim();
+        using var exited = new ManualResetEventSlim();
+        using var firstEntered = new ManualResetEventSlim();
         using var secondEntered = new ManualResetEventSlim();
-        Require(domains.TryDispatch(ActorKind.Private, () =>
+        Require(domains.TryDispatch(kind, () =>
         {
             entered.Set();
-            if (!release.Wait(TimeSpan.FromSeconds(10)))
-                throw new Exception("blocked carrier exceeded shutdown test budget");
-        }), "blocked carrier is admitted");
+            try
+            {
+                if (!release.Wait(TimeSpan.FromSeconds(10)))
+                    throw new Exception("blocked carrier exceeded shutdown test budget");
+            }
+            finally
+            {
+                exited.Set();
+            }
+        }), "blocked carrier is admitted: " + kind);
         Require(entered.Wait(TimeSpan.FromSeconds(5)),
-            "blocked carrier reaches the physical turn");
+            "blocked carrier reaches the physical turn: " + kind);
 
-        Task first = Task.Run(domains.Dispose);
+        Task first = Task.Factory.StartNew(() =>
+        {
+            firstEntered.Set();
+            domains.Dispose();
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
         try
         {
-            // The queue has a very large bound; a rejected admission here
-            // identifies the public disposal/closed transition, not capacity.
-            Require(SpinWait.SpinUntil(
-                () => !domains.TryDispatch(ActorKind.Private, static () => { }),
-                TimeSpan.FromSeconds(5)),
-                "first disposer closes new dispatch admission");
+            Require(firstEntered.Wait(TimeSpan.FromSeconds(5)),
+                "first disposer has started: " + kind);
+            bool closed = false;
+            // Poll at a bounded rate. The capacity is 1024, so at most 500
+            // accepted no-op items cannot themselves exhaust the queue and
+            // create a false-positive "closed" observation.
+            for (int attempt = 0; attempt < 500 && !closed; ++attempt)
+            {
+                closed = !domains.TryDispatch(kind, static () => { });
+                if (!closed) Thread.Sleep(1);
+            }
+            Require(closed, "first disposer closes admission: " + kind);
 
-            Task second = Task.Run(() =>
+            Task second = Task.Factory.StartNew(() =>
             {
                 secondEntered.Set();
                 domains.Dispose();
-            });
+            }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
             Require(secondEntered.Wait(TimeSpan.FromSeconds(5)),
-                "concurrent second disposer entered");
+                "concurrent second disposer entered: " + kind);
             Require(!second.Wait(TimeSpan.FromMilliseconds(75)),
-                "second Dispose returned before carrier join completed");
+                "second Dispose returned before carrier join: " + kind);
+            Require(!first.IsCompleted && !exited.IsSet,
+                "first Dispose and carrier must still be active: " + kind);
+
             release.Set();
             Require(first.Wait(TimeSpan.FromSeconds(5)) &&
-                    second.Wait(TimeSpan.FromSeconds(5)),
-                "both Dispose callers complete after the carrier retires");
-            // Post-join calls are idempotent, not another shutdown cycle.
+                    second.Wait(TimeSpan.FromSeconds(5)) &&
+                    exited.IsSet,
+                "all Dispose callers complete after carrier exits: " + kind);
+            Require(!domains.TryDispatch(kind, static () => { }),
+                "no dispatch admission after completed Dispose: " + kind);
+            // Repeated shutdown must also be safe on the caller thread.
             domains.Dispose();
         }
         finally
         {
-            // Always free the carrier, even when an assertion fails.
+            // Always release the carrier, including on assertion failure.
             release.Set();
         }
     }
