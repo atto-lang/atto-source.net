@@ -23,6 +23,7 @@ public readonly record struct ActorPublishReceipt(
 /// NativeAOT-safe, in-process ActorGroup/pub-sub admission substrate.
 ///
 /// This is runtime infrastructure, not source-level Topic&lt;T&gt; lowering.
+/// General topic handles cannot impersonate host/supervisor publication.
 /// Group membership is cooperation state only and never grants stop/cancel
 /// authority. ActorRef's full local capability (ID, generation and nonce) is
 /// retained as the incarnation fence.
@@ -164,9 +165,6 @@ public sealed class ActorPubSub
 
         public ActorPublishReceipt Publish(ActorRef publisher, T value) =>
             _owner.Publish(GroupId, Name, publisher, value);
-
-        public ActorPublishReceipt PublishSystem(T value) =>
-            _owner.PublishSystem(GroupId, Name, value);
 
         public bool TryRead(ActorRef subscriber, out T value) =>
             _owner.TryRead(GroupId, Name, subscriber, out value);
@@ -327,20 +325,6 @@ public sealed class ActorPubSub
                 throw new InvalidOperationException(
                     "Publication requires live ActorGroup membership");
 
-            TopicState<T> topic = RequireTopicLocked<T>(groupId, name);
-            PruneStaleLocked(groupId, topic);
-            return topic.Publish(Freeze(value));
-        }
-    }
-
-    private ActorPublishReceipt PublishSystem<T>(
-        ulong groupId,
-        string name,
-        T value)
-    {
-        lock (_gate)
-        {
-            _ = RequireGroupLocked(groupId);
             TopicState<T> topic = RequireTopicLocked<T>(groupId, name);
             PruneStaleLocked(groupId, topic);
             return topic.Publish(Freeze(value));
