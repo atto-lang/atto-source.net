@@ -65,7 +65,7 @@ internal static class CilReferenceEvaluator
                     // Verification-only interpreter: only the exact statically
                     // linked intrinsic signature is recognized. Not a native run.
                     if (ins.Operand is not MethodReference calledMethod ||
-                        calledMethod.Name != "Rem" ||
+                        calledMethod.Name is not ("Rem" or "Mod") ||
                         calledMethod.DeclaringType.FullName !=
                             "Ores.Net.Runtime.StrictSigned64Arithmetic" ||
                         calledMethod.DeclaringType.Scope is not AssemblyNameReference
@@ -79,7 +79,9 @@ internal static class CilReferenceEvaluator
                         throw new FormatException("Unverified CIL method call");
                     long right = stack.Pop();
                     long left = stack.Pop();
-                    stack.Push(StrictSigned64Arithmetic.Rem(left, right));
+                    stack.Push(calledMethod.Name == "Rem"
+                        ? StrictSigned64Arithmetic.Rem(left, right)
+                        : StrictSigned64Arithmetic.Mod(left, right));
                     break;
                 }
                 case Code.Ret:
