@@ -120,6 +120,15 @@ public static class OresStructuredParser
         while (true)
         {
             var token = lexer.Read();
+            // This checked scalar subset cannot lower suspensions or critical
+            // guards. Reject by lexed token, never by raw substrings in comments
+            // or strings; do not emit unprotected CIL for guarded source.
+            if (token.Text == "async")
+                throw new FormatException($"'async' modifier removed; use suspends at offset {token.Offset}");
+            if (token.Text is "suspends" or "suspend")
+                throw new FormatException($"suspends requires verified continuation lowering at offset {token.Offset}");
+            if (token.Text == "critical")
+                throw new FormatException($"critical requires scheduler-owned guard lowering at offset {token.Offset}");
             // The scalar bootstrap does not have class/actor dispatch or
             // ownership-aware lexical closures. Refuse these at source admission
             // with a stable capability diagnostic, not an accidental parse error.
