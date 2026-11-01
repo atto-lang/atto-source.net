@@ -169,7 +169,7 @@ static class CrossBackendCheckedI64ParityTests
             ("i64-upper-bound", "(9223372036854775807 - 9223372036854775800) * 6", 42L),
         })
         {
-            var source = "pub fnc main(): int { return " + expression + "; }\\n";
+            var source = "pub fnc main(): int { return " + expression + "; }\n";
             var ir = OresIrLowering.Lower(OresParser.Parse(source));
             long reference = OresIrReferenceEvaluator.Evaluate(ir);
             if (reference != expected)
