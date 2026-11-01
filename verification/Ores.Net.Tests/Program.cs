@@ -82,7 +82,8 @@ SourceByteBudgetTests.Run();
 StructuralPatternAdmissionTests.Run();
 NumericSeparatorParityTests.Run();
 CrossBackendCheckedI64ParityTests.Run();
-PortableScalarV1Tests.Run(); // 16 compiler/CIL values + six forbidden source forms; no Native AOT credit
+PortableScalarV1Tests.Run();
+NativeScalarZeroTests.Run(); // 5 pinned .ores zero assertions: typed IR + emitted CIL, not NativeAOT // 16 compiler/CIL values + six forbidden source forms; no Native AOT credit
 AsyncInteropFailClosedTests.Run();
 await HostTaskObservationTests.Run();
 
