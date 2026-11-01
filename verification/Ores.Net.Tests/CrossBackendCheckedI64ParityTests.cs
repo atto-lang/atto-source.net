@@ -8,6 +8,7 @@ static class CrossBackendCheckedI64ParityTests
     public static void Run()
     {
         SignedLiteralRemainder();
+        OresllmScalarIntersectionCases();
         foreach (var (name, expression, expected) in new (string, string, long)[]
         {
             ("precedence", "2 + 3 * 4", 14L),
@@ -141,3 +142,81 @@ static class CrossBackendCheckedI64ParityTests
         }
     }
 }
+    private static void OresllmScalarIntersectionCases()
+    {
+        // Actual .NET parser -> OresIR -> CIL reference interpreter, NOT NativeAOT.
+        // These 28 expressions match contracts/oresllm-parity/v1/scalar.json.
+        foreach (var (expression, expected) in new (string, long)[]
+        {
+            ("0", 0L),
+            ("42", 42L),
+            ("2 + 3 * 4", 14L),
+            ("(2 + 3) * 4", 20L),
+            ("-7 + 3", -4L),
+            ("-7 * -6", 42L),
+            ("9223372036854775807", long.MaxValue),
+            ("-9223372036854775808", long.MinValue),
+            ("9223372036854775807 - 1", long.MaxValue - 1L),
+            ("-9223372036854775808 + 1", long.MinValue + 1L),
+            ("1 - 9", -8L),
+            ("(-5) * (3 + 4)", -35L),
+            ("(17 - 2) * 3", 45L),
+            ("0 - (4 * 5)", -20L),
+            ("1 + (2 * (3 + 4))", 15L),
+            ("-(-5)", 5L),
+            ("0 * 9223372036854775807", 0L),
+        })
+        {
+            var source = Header + "pub fnc main():int{return " + expression + ";}";
+            var ast = OresParser.Parse(source);
+            var ir = OresIrLowering.Lower(ast);
+            long fromIr = OresIrReferenceEvaluator.Evaluate(ir);
+            if (fromIr != expected)
+                throw new Exception($"OresLLM i64 managed IR mismatch: {expression}: {fromIr} vs {expected}");
+            var folder = Path.Combine(Path.GetTempPath(), "oresnet-oresllm-" +
+                Guid.NewGuid().ToString("N"));
+            var file = Path.Combine(folder, "OresGenerated.dll");
+            try
+            {
+                CilEmitter.EmitLibrary(ir, file);
+                using var assembly = AssemblyDefinition.ReadAssembly(file);
+                var method = assembly.MainModule.Types
+                    .Single(t => t.FullName == "Oreslang.Generated.OresProgram")
+                    .Methods.Single(f => f.Name == "Run");
+                long fromCil = CilReferenceEvaluator.Evaluate(method);
+                if (fromCil != expected)
+                    throw new Exception($"OresLLM i64 CIL mismatch: {expression}: {fromCil} vs {expected}");
+            }
+            finally
+            {
+                if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+            }
+        }
+
+        foreach (string expression in new[]
+        {
+            "9223372036854775807 + 1",
+            "-9223372036854775808 - 1",
+            "9223372036854775807 * 2",
+            "-(-9223372036854775808)",
+            "(9223372036854775807 + 1) * 0",
+            "0 - (9223372036854775807 + 1)",
+        })
+        {
+            var ast = OresParser.Parse(Header + "pub fnc main():int{return " + expression + ";}");
+            var ir = OresIrLowering.Lower(ast);
+            try { _ = OresIrReferenceEvaluator.Evaluate(ir); }
+            catch (OverflowException) { continue; }
+            throw new Exception("OresLLM checked overflow admitted: " + expression);
+        }
+
+        foreach (string expression in new[]
+        {
+            "unknown_value", "7 / 2", "5 ^ 3", "5 ^^ 3", "1__0"
+        })
+        {
+            try { _ = OresParser.Parse(Header + "pub fnc main():int{return " + expression + ";}"); }
+            catch (FormatException) { continue; }
+            throw new Exception("OresLLM unsupported expression admitted: " + expression);
+        }
+    }
