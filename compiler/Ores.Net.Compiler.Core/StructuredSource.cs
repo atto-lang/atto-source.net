@@ -146,7 +146,7 @@ public static class OresStructuredParser
             while (prefix >= 0 && tokens[prefix].Text is
                    ("pub" or "private" or "shared" or "untrusted" or
                     "serial" or "http" or "tcp" or "websocket" or
-                    "unary" or "stream"))
+                    "unary" or "stream" or "abstract" or "transform" or "pipe"))
                 prefix--;
             bool prefixedDefinition = prefix >= 0 && tokens[prefix].Text == "define";
             bool legacyActorPrefix = actorNominal &&
