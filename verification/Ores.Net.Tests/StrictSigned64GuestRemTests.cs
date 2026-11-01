@@ -192,6 +192,39 @@ internal static class StrictSigned64GuestRemTests
         }
         Require(admitted == 8, "all eight shared signed64 modulus vectors admitted");
 
+        // The two instructions have the same CIL call token index in otherwise
+        // identical modules. Their MVID must still differ because their
+        // static runtime methods, and therefore behavior, differ.
+        string remAssemblyPath = Path.Combine(folder, "OresGenerated.rem.identity.dll");
+        string modAssemblyPath = Path.Combine(folder, "OresGenerated.mod.identity.dll");
+        var remProgram = CompileSource("Integer.rem(-9, 4)");
+        var modProgram = CompileSource("Integer.mod(-9, 4)");
+        CilEmitter.EmitLibrary(remProgram, remAssemblyPath);
+        CilEmitter.EmitLibrary(modProgram, modAssemblyPath);
+        using (var remAssembly = AssemblyDefinition.ReadAssembly(remAssemblyPath))
+        using (var modAssembly = AssemblyDefinition.ReadAssembly(modAssemblyPath))
+        {
+            Require(remAssembly.MainModule.Mvid != modAssembly.MainModule.Mvid,
+                "different verified runtime methods cannot share a deterministic MVID");
+            Require(remAssembly.MainModule.Types.Single(t =>
+                t.FullName == "Oreslang.Generated.OresProgram")
+                .Methods.Single(m => m.Name == "Run").Body.Instructions.Any(ins =>
+                    ins.OpCode.Code == Code.Call &&
+                    ins.Operand is MethodReference mr && mr.Name == "Rem"),
+                "rem module preserves the exact static method name");
+            Require(modAssembly.MainModule.Types.Single(t =>
+                t.FullName == "Oreslang.Generated.OresProgram")
+                .Methods.Single(m => m.Name == "Run").Body.Instructions.Any(ins =>
+                    ins.OpCode.Code == Code.Call &&
+                    ins.Operand is MethodReference mr && mr.Name == "Mod"),
+                "mod module preserves the exact static method name");
+        }
+        string replayPath = Path.Combine(folder, "OresGenerated.mod.identity.repro.dll");
+        CilEmitter.EmitLibrary(modProgram, replayPath);
+        Require(File.ReadAllBytes(modAssemblyPath).AsSpan().SequenceEqual(
+            File.ReadAllBytes(replayPath)),
+            "same verified mod source must emit byte-identical deterministic assembly");
+
         foreach (var (expression, wanted) in new (string, long)[]
         {
             ("Integer.mod(-9, 4) + 39", 42),
