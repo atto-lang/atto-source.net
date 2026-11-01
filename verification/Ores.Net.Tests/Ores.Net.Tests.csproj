@@ -11,6 +11,9 @@
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../examples/structured-bindings42.ores" Link="structured-bindings42.ores"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/parity/native-scalar-zero-v1/*.ores"
+          Link="contracts/parity/native-scalar-zero-v1/%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/parity/portable-scalar-v1-20261101.json"
           Link="contracts/parity/portable-scalar-v1-20261101.json"
           CopyToOutputDirectory="PreserveNewest" />
