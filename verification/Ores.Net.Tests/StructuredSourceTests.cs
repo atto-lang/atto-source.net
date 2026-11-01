@@ -135,6 +135,8 @@ internal static class StructuredSourceTests
             "const x=7;const int y=x as int;return y+35;",
             "const x:int=7;return x+35;",
             "const x=7 as int;return x+35;",
+            "return (7 as int)+35;",
+            "return (7 as int as int)+35;",
             "const x=(2+5) as int;return x+35;",
             "const x=7 as int as int;return x+35;",
             "const x=7;const y=x as int;return y+35;",
@@ -164,6 +166,9 @@ internal static class StructuredSourceTests
         }, "bool cast must preserve bool inference, never i64 storage type");
         foreach (var invalid in new[] {
             "const x=7 as bool;return 42;",
+            "return 7 as bool;",
+            "return true as int;",
+            "return 9223372036854775808 as int;",
             "const x=true as int;return 42;",
             "const x=7 as? int;return 42;",
             "const x=7 as Thing;return 42;",
