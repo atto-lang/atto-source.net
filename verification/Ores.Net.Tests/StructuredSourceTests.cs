@@ -144,8 +144,8 @@ internal static class StructuredSourceTests
             "const bool x=true as bool;if x{return 42;}else{return 0;}",
             "const x=(7 eq 7) as bool;if x{return 42;}else{return 0;}",
             "let x=7 as int;x=42;return x;",
-            "val x=42;const y=x as int;return y;",
-            "val bool x=true;const y=x as bool;if y{return 42;}else{return 0;}",
+            "val x=42;val y=x as int;return y;",
+            "val bool x=true;val y=x as bool;if y{return 42;}else{return 0;}",
             "const x=7;if true{const nested=x as int;return nested+35;}else{return 0;}",
             "const x=7;return (x+35) as int;"
         })
@@ -201,20 +201,40 @@ internal static class StructuredSourceTests
             "const is immutable");
         Reject("fnc main():int{val bool v=true;if v {v=false;}return 1;}",
             "nested blocks cannot mutate outer val");
-        // Unlike a compile-time constant-expression requirement, Oreslang
-        // const is an immutable *binding* and may be initialized at runtime.
+        // Java reference: standalone const is compile-time, while val and
+        // the new type-first default are runtime single-assignment bindings.
         foreach (var source in new[] {
             "fnc main():int{let int x=2;const int c=x;return c;}",
-            "fnc main():int{val int x=2;const int c=x;return c;}"
+            "fnc main():int{val int x=2;const int c=x;return c;}",
+            "fnc main(int p):int{const c=p+1;return c;}",
+            "fnc main():int{int x=2;const c=x;return c;}"
+        })
+            Reject(source, "runtime-initialized standalone const must fail closed");
+        // Type-first locals are readonly (the same scalar value as const
+        // for a literal) but need not be compile-time constants.
+        foreach (var source in new[] {
+            "fnc main():int{int x=7;return x;}",
+            "fnc main():int{bool enabled=true;if enabled{return 42;}else{return 0;}}",
+            "fnc main(int p):int{int x=p+1;return x;}",
+            "fnc main():int{int x=7;int y=x+1;return y;}"
         })
         {
-            var runtimeConst = OresStructuredParser.Parse(source);
-            Require(runtimeConst.Body[1] is StructuredLet {
-                Name: "c", Kind: StructuredBindingKind.Const,
-                Initializer: StructuredRead { Type: IrValueType.I64 }
-            }, "runtime-initialized const must not acquire fake compile-time value");
+            var defaultLocal = OresStructuredParser.Parse(source);
+            Require(defaultLocal.Body[0] is StructuredLet {
+                Kind: StructuredBindingKind.Val
+            }, "type-first declarations must lower as readonly single-assignment");
         }
-        Reject("fnc main():int{const int x=9223372036854775807+1;return x;}",
+        foreach (var source in new[] {
+            "fnc main():int{int x=7;x=8;return x;}",
+            "fnc main():int{bool flag=true;flag=false;return 1;}",
+            "fnc main():int{int x=7;int x=8;return x;}",
+            "fnc main():int{int x=x+1;return x;}",
+            "fnc main():int{int x;return 7;}",
+            "fnc main():int{bool x=7;return 7;}",
+            "fnc main():int{int x=true;return 7;}"
+        })
+            Reject(source, "type-first runtime readonly binding misuse");
+                Reject("fnc main():int{const int x=9223372036854775807+1;return x;}",
             "const arithmetic must trap during admission");
         Reject("fnc main():int{const int x=-(-9223372036854775808);return x;}",
             "const negation overflow is rejected during admission");
