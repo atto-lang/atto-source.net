@@ -97,6 +97,7 @@ catch (FormatException ex) when (ex.Message == "Expected 'fnc' at offset 7") { }
 Reject(() => OresParser.Parse("fnc main():int { return 1=2; }"), "assignment expression");
 Reject(() => OresParser.Parse("fnc main():int { const x = 1; return x; }"), "local assignment");
 
+TcpPoolLeaseLedgerSelfTest.Run(); // trusted TCP lease authority, no socket I/O
 ActorRefNoWireSelfTest.Run();
 ActorMailboxBoundsSelfTest.Run();
 SelectContinuationFenceSelfTest.Run();
