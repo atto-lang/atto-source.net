@@ -44,6 +44,13 @@ public static class CilEmitter
         if (program.Instructions.Count > maxLocalSlots)
             throw new FormatException("OresIR CIL local slot budget exceeded");
 
+        // MemberRef tokens are ordinal identifiers, not semantic identities.
+        // A Rem and Mod call can encode the same IL token with different
+        // metadata names. Bind every verified opcode into the deterministic MVID.
+        var verifiedOpcodes = new byte[program.Instructions.Count];
+        for (int i = 0; i < verifiedOpcodes.Length; i++)
+            verifiedOpcodes[i] = checked((byte)program.Instructions[i].Opcode);
+
         EmitLibraryCore(outputFile, (metadata, bodies) =>
         {
             int count = program.Instructions.Count;
@@ -61,7 +68,7 @@ public static class CilEmitter
                 localVariablesSignature: localSignature,
                 attributes: MethodBodyAttributes.InitLocals);
             return (bodyOffset, methodCode, localsBlob);
-        });
+        }, verifiedOpcodes);
     }
 
     // Experimental CFG entry point. Only a verified function is accepted;
@@ -163,7 +170,8 @@ public static class CilEmitter
 
     internal static void EmitLibraryCore(string outputFile,
         Func<MetadataBuilder, MethodBodyStreamEncoder,
-            (int BodyOffset, BlobBuilder Code, BlobBuilder? Locals)> buildBody)
+            (int BodyOffset, BlobBuilder Code, BlobBuilder? Locals)> buildBody,
+        byte[]? verifiedOpcodeIdentity = null)
     {
         var ilStream = new BlobBuilder();
         var bodyStream = new MethodBodyStreamEncoder(ilStream);
@@ -177,6 +185,16 @@ public static class CilEmitter
         contentHash.AppendData(ilStream.ToArray());
         if (localSignatureBlob is not null)
             contentHash.AppendData(localSignatureBlob.ToArray());
+        // Intrinsics with different MemberRef names may have the same token
+        // number and method-body bytes. Append the trusted, fixed-width
+        // source-to-IR opcode identity before deriving the portable MVID.
+        // This must never depend on file paths, process time or randomness.
+        if (verifiedOpcodeIdentity is not null)
+        {
+            contentHash.AppendData(new byte[] { 0x4f, 0x52, 0x45, 0x53, 0x01 });
+            contentHash.AppendData(BitConverter.GetBytes(verifiedOpcodeIdentity.Length));
+            contentHash.AppendData(verifiedOpcodeIdentity);
+        }
         byte[] hash = contentHash.GetHashAndReset();
         var moduleId = new Guid(hash.AsSpan(0, 16));
         metadata.AddModule(
