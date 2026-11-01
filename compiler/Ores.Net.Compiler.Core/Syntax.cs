@@ -47,6 +47,12 @@ public static class OresParser
         }
         for (int i = 0; i + 1 < tokens.Count; i++)
         {
+            // Native AOT has no isolate-scoped ETS, local pg actor membership
+            // or mailbox delivery lowering. Reject before OresIR/CIL emission.
+            // The lexer has already stripped comments, so trivia is harmless.
+            if ((tokens[i].Text is "ets" or "pg") && tokens[i + 1].Text == ".")
+                throw new FormatException(
+                    $"ETS/pg guest APIs require authenticated isolate, table and actor-mailbox lowering (unsupported .NET bootstrap) at offset {tokens[i].Offset}");
             if (tokens[i].Text == "select" &&
                 StaticSelectAdmission.IsStaticSelectFollower(tokens[i + 1].Text))
                 throw StaticSelectAdmission.Unsupported(tokens[i].Offset);
