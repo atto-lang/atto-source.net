@@ -95,6 +95,15 @@ internal static class StructuredCfgLoweringTests
         Check(File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
             "scalar-cast-inference-five-backend.ores")),
             42, "byte-identical five-backend immutable/inference/cast core");
+        // Sources are copied verbatim from the five-compiler Git blob contract.
+        // Check compiles and independently interprets actual emitted CIL;
+        // a rejected source must never reach PE publication.
+        Check(File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
+            "portable-checked-cast-positive-v2.ores")),
+            42, "exact-byte identity-cast guest shared with Java LLVM Wasm Cranelift");
+        Reject(File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
+            "portable-checked-cast-negative-v2.ores")),
+            "exact-byte impossible int-to-bool cast may not reach CIL");
         Check("fnc main():int{bool flag=true;if flag{return 42;}else{return 0;}}",
             42, "type-first bool is immutable typed SSA");
         Check("fnc main():int{int x=(2+5) as int;return x+35;}",
