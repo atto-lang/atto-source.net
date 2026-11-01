@@ -248,6 +248,109 @@ internal static class StrictSigned64GuestRemTests
         }
     }
 
+    private static void VerifyPortablePowXorContract(string folder)
+    {
+        using var document = JsonDocument.Parse(File.ReadAllText(Path.Combine(
+            AppContext.BaseDirectory, "strict-named-integer-arithmetic-v1.json")));
+        int admitted = 0;
+        foreach (var item in document.RootElement.GetProperty("cases").EnumerateArray())
+        {
+            string operation = item.GetProperty("operation").GetString()!;
+            if (operation is not ("pow" or "bit_xor")) continue;
+            admitted++;
+            string guestName = operation == "pow" ? "pow" : "bitXor";
+            string cilName = operation == "pow" ? "Pow" : "BitXor";
+            IrOpcode opcode = operation == "pow"
+                ? IrOpcode.StrictPow : IrOpcode.StrictBitXor;
+            string id = item.GetProperty("id").GetString()!;
+            string left = item.GetProperty("left").GetString()!;
+            string right = item.GetProperty("right").GetString()!;
+            var ir = CompileSource("Integer." + guestName + "(" + left + ", " + right + ")");
+            Require(ir.Instructions.Any(op => op.Opcode == opcode),
+                "typed SSA intrinsic for " + id);
+            string emitted = Path.Combine(folder, "OresGenerated.powxor.dll");
+            CilEmitter.EmitLibrary(ir, emitted);
+            using var assembly = AssemblyDefinition.ReadAssembly(emitted);
+            var entry = assembly.MainModule.Types.Single(t =>
+                t.FullName == "Oreslang.Generated.OresProgram")
+                .Methods.Single(m => m.Name == "Run");
+            Require(entry.Body.Instructions.Any(ins => ins.OpCode.Code == Code.Call &&
+                ins.Operand is MethodReference method && !method.HasThis &&
+                !method.ExplicitThis && method.GenericParameters.Count == 0 &&
+                method.CallingConvention == MethodCallingConvention.Default &&
+                method.Name == cilName &&
+                method.DeclaringType.FullName ==
+                    "Ores.Net.Runtime.StrictSigned64Arithmetic" &&
+                method.DeclaringType.Scope is AssemblyNameReference
+                    { Name: "Ores.Net.Runtime", Version: { Major: 1, Minor: 0, Build: 0, Revision: 0 } } &&
+                method.ReturnType.MetadataType == MetadataType.Int64 &&
+                method.Parameters.Count == 2 &&
+                method.Parameters.All(p => p.ParameterType.MetadataType == MetadataType.Int64)),
+                "closed static MemberRef ABI for " + id);
+            var expected = item.GetProperty("expect");
+            if (expected.TryGetProperty("error", out var failure))
+            {
+                string category = failure.GetString()!;
+                if (category == "OVERFLOW")
+                {
+                    ExpectOverflow(() => _ = OresIrReferenceEvaluator.Evaluate(ir),
+                        "checked SSA power overflow: " + id);
+                    ExpectOverflow(() => _ = CilReferenceEvaluator.Evaluate(entry),
+                        "decoded CIL power overflow: " + id);
+                }
+                else if (category == "NEGATIVE_EXPONENT")
+                {
+                    void ExpectNegativeExponent(Action action)
+                    {
+                        try { action(); }
+                        catch (ArgumentOutOfRangeException) { return; }
+                        throw new Exception("Expected negative exponent rejection: " + id);
+                    }
+                    ExpectNegativeExponent(() => _ = OresIrReferenceEvaluator.Evaluate(ir));
+                    ExpectNegativeExponent(() => _ = CilReferenceEvaluator.Evaluate(entry));
+                }
+                else throw new Exception("Unexpected power/XOR failure: " + category);
+            }
+            else
+            {
+                long value = long.Parse(expected.GetProperty("value").GetString()!,
+                    NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture);
+                Require(OresIrReferenceEvaluator.Evaluate(ir) == value,
+                    "verified SSA power/XOR result: " + id);
+                Require(CilReferenceEvaluator.Evaluate(entry) == value,
+                    "decoded CIL power/XOR result: " + id);
+            }
+            RejectForgedRemCall(entry, m => m.Name = "UnsupportedCall",
+                "forged pow/XOR intrinsic name: " + id);
+            RejectForgedRemCall(entry, m => m.HasThis = true,
+                "forged pow/XOR instance call: " + id);
+        }
+        Require(admitted == 11, "all 11 shared signed64 power/XOR vectors admitted");
+
+        // These mixed operations prove SSA statement order and static
+        // MethodRef resolution when several intrinsics share one IL body.
+        foreach (var (source, expected) in new (string, long)[]
+        {
+            ("Integer.bitXor(Integer.mod(-9, 4), Integer.pow(2, 3))", 11),
+            ("Integer.rem(Integer.bitXor(5, 3), Integer.pow(2, 2))", 2),
+            ("Integer.pow(Integer.rem(-9, 4) + 3, 3)", 8),
+            ("Integer.mod(Integer.pow(-2, 3), 5)", 2)
+        })
+        {
+            var ir = CompileSource(source);
+            string emitted = Path.Combine(folder, "OresGenerated.composed.dll");
+            CilEmitter.EmitLibrary(ir, emitted);
+            using var assembly = AssemblyDefinition.ReadAssembly(emitted);
+            var entry = assembly.MainModule.Types.Single(t =>
+                t.FullName == "Oreslang.Generated.OresProgram")
+                .Methods.Single(m => m.Name == "Run");
+            Require(OresIrReferenceEvaluator.Evaluate(ir) == expected,
+                "mixed named operation SSA: " + source);
+            Require(CilReferenceEvaluator.Evaluate(entry) == expected,
+                "mixed named operation CIL: " + source);
+        }
+    }
+
     public static void Run()
     {
         string folder = Path.Combine(Path.GetTempPath(),
@@ -347,7 +450,10 @@ internal static class StrictSigned64GuestRemTests
                 "Integer.rem(1, 2.0)", "Integer.rem(left=1, 2)",
                 "Integer.rem<int>(1, 2)", "Integer.mod(1)",
                 "Integer.mod(1, 2, 3)", "Integer.mod(true, 2)",
-                "Integer.mod(1, false)", "Integer.pow(1, 2)",
+                "Integer.mod(1, false)", "Integer.pow(1)",
+                "Integer.pow(1, 2, 3)", "Integer.pow(true, 2)",
+                "Integer.pow(1, false)", "Integer.bitXor(1)",
+                "Integer.bitXor(1, 2, 3)", "Integer.bitXor(true, 2)",
                 "Other.rem(1, 2)", "Integer.rem(1, 2).x",
                 "Integer.rem(1, 2) % 0",
                 "Integer.rem(1, 2) % Integer.rem(1, 2)"
@@ -393,6 +499,7 @@ internal static class StrictSigned64GuestRemTests
 
             VerifyPortableRemContract(folder);
             VerifyPortableModContract(folder);
+            VerifyPortablePowXorContract(folder);
 
             // Deliberately forge forward-reference SSA: verifier must fail closed.
             var forged = new IrFunction("main", IrValueType.I64,
