@@ -1,4 +1,4 @@
-name: Oreslang client scalar Native AOT (partial target)
+name: Oreslang client scalar Native AOT (six guest executions required)
 on:
   pull_request:
     paths:
@@ -37,11 +37,11 @@ jobs:
           dotnet publish compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj \
             -c Release -r linux-x64 -o artifacts/compiler/linux-x64 -warnaserror
           bash verification/assert-linux-native-release.sh artifacts/compiler/linux-x64/oresnet
-      - name: Execute client scalar check, rejection and two native AOT binaries
+      - name: Execute six native AOT guests and three compiler rejections
         run: |
           set -euo pipefail
           bash verification/assert-clients-scalar-linux-native-aot.sh
-      - name: Explicit partial-result boundary
+      - name: Explicit scope boundary
         run: |
-          echo 'Two compiled Native AOT scalar guests; four additional compile-only positives.'
+          echo 'Six positive Native AOT scalar guests and three compiler rejections required.'
           echo 'No claim for async, HTTP, JSON, actor, full SDK, Java, LLVM, Wasm or Cranelift.'
