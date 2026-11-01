@@ -5,9 +5,14 @@ fnc min_i64_successor_is_exact(): TestOutcome {
   return expect_equal_int(minimum + 1, -9223372036854775807,
     "i64 boundary successor must be exact");
 }
+fnc i64_above_double_precision_exact(): TestOutcome {
+  return expect_equal_int(9007199254740993 - 9007199254740992, 1,
+    "integer expressions must remain exact beyond float64 mantissa");
+}
 pub routine main(): void {
   val TestSuite suite = new TestSuite("dotnet-guest-semantics", arr[
-    new TestCase("min_i64_successor_is_exact", min_i64_successor_is_exact, false, "")
+    new TestCase("min_i64_successor_is_exact", min_i64_successor_is_exact, false, ""),
+    new TestCase("i64_above_double_precision_exact", i64_above_double_precision_exact, false, "")
   ]);
   val TestOptions options = new TestOptions("", false, true);
   val RunSummary summary = run_suite(rt borrow suite, rt borrow options);
