@@ -45,22 +45,22 @@ internal static class StateRegionLoanProvenanceSelfTest
 
         // WASM/Node safe-integer admission must agree with the .NET JSON
         // conformance reader. Native ulong scheduler counters are independent.
-        string rawMax = root.GetProperty("borrow").GetRawText();
-        string originalId = "\\"executionId\\":1001";
+        string rawMax = JsonSerializer.Serialize(root.GetProperty("borrow"));
+        string originalId = "\"executionId\":1001";
         Require(rawMax.Contains(originalId, StringComparison.Ordinal),
             "exact expected canonical executionId");
         using var safeId = JsonDocument.Parse(rawMax.Replace(
-            originalId, "\\"executionId\\":9007199254740991",
+            originalId, "\"executionId\":9007199254740991",
             StringComparison.Ordinal));
         Require(Read(safeId.RootElement).ExecutionId == MaxJsonSafeId,
             "maximum JS-safe integer JSON ID admitted");
         foreach (string unsafeId in new[] {
             "9007199254740992", "18446744073709551615", "0",
-            "-1", "1.5", "\\"9007199254740991\\""
+            "-1", "1.5", "\"9007199254740991\""
         })
         {
             using var forged = JsonDocument.Parse(rawMax.Replace(
-                originalId, "\\"executionId\\":" + unsafeId,
+                originalId, "\"executionId\":" + unsafeId,
                 StringComparison.Ordinal));
             Expect<InvalidOperationException>(
                 () => _ = Read(forged.RootElement),
