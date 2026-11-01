@@ -41,16 +41,16 @@ internal static class StructuredSourceTests
         // ordinary metadata. Require a feature-specific diagnostic, not a
         // generic invalid-character parse rejection or fake CIL success.
         foreach (var source in new[] {
-            "@Inject(MutableStateContainer())\\ndefine class Foo as\\nstate {}\\nend\\n",
-            "@Inject(MutableStateContainer(scope = #instance))\\ndefine class Foo as\\nend\\n",
-            "@StateBacked(MutableStateContainer(scope = #shared))\\ndefine class Foo as\\nend\\n",
-            "@MutableStateContainer()\\ndefine actor A as\\nend\\n",
-            "@StateContainer()\\ndefine singleton S as\\nend\\n",
-            "@Inject(SessionState)\\nfnc main():int{return 7;}"
+            "@Inject(MutableStateContainer())\ndefine class Foo as\nstate {}\nend\n",
+            "@Inject(MutableStateContainer(scope = #instance))\ndefine class Foo as\nend\n",
+            "@StateBacked(MutableStateContainer(scope = #shared))\ndefine class Foo as\nend\n",
+            "@MutableStateContainer()\ndefine actor A as\nend\n",
+            "@StateContainer()\ndefine singleton S as\nend\n",
+            "@Inject(SessionState)\nfnc main():int{return 7;}"
         })
             RejectFeature(source, "STATE_INJECTION_UNSUPPORTED");
         var commentOnlyInjection = OresStructuredParser.Parse(
-            "// @Inject(MutableStateContainer()) is a comment\\nfnc main():int{return 7;}");
+            "// @Inject(MutableStateContainer()) is a comment\nfnc main():int{return 7;}");
         Require(commentOnlyInjection is not null,
             "injection spelling inside a comment is not executable syntax");
 
