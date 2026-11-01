@@ -28,19 +28,49 @@ for name in 01-precedence 02-grouping 03-signed 04-i64-edge 05-separators 06-nes
   "$compiler" check "$src/$name.ores"
 done
 
-# A negative must reject at compile time without leaving any generated CIL.
-# Use distinct outputs and refuse stale artifacts masking a failure.
+# A negative must be a compiler-owned rejection, never a crash, signal,
+# timeout, missing binary or unrelated host failure. Do not follow symlinked
+# output parents or reuse a stale artifact from an earlier successful build.
 for name in 07-unknown-reject 08-overflow-reject 09-syntax-reject; do
-  output="artifacts/client-scalar-rejected/$name/OresGenerated.dll"
-  mkdir -p -- "$(dirname -- "$output")"
+  folder="artifacts/client-scalar-rejected/$name"
+  output="$folder/OresGenerated.dll"
+  [[ ! -L artifacts && ! -L artifacts/client-scalar-rejected &&
+     ! -L "$folder" && ! -L "$output" ]] || {
+    echo "Refusing symlinked compiler output path: $name" >&2
+    exit 1
+  }
+  mkdir -p -- "$folder"
+  [[ -d "$folder" && ! -L "$folder" ]] || exit 1
   rm -f -- "$output"
-  if "$compiler" compile "$src/$name.ores" --out "$output" >"artifacts/client-scalar-rejected/$name/diagnostic.txt" 2>&1; then
+  diagnostic="$folder/diagnostic.txt"
+  rm -f -- "$diagnostic"
+  if "$compiler" compile "$src/$name.ores" --out "$output" >"$diagnostic" 2>&1; then
     echo "Rejected client scalar unexpectedly compiled: $name" >&2
     exit 1
+  else
+    result=$?
   fi
-  test ! -e "$output" || { echo "Rejected client scalar published CIL: $name" >&2; exit 1; }
-  test -s "artifacts/client-scalar-rejected/$name/diagnostic.txt" || {
-    echo "Rejected client scalar lacked a diagnostic: $name" >&2
+  if [[ "$result" -ne 1 ]]; then
+    echo "Expected semantic compiler rejection (1), got status $result: $name" >&2
+    exit 1
+  fi
+  [[ ! -e "$output" && ! -L "$output" && -s "$diagnostic" ]] || {
+    echo "Rejected client scalar left CIL, or omitted a diagnostic: $name" >&2
+    exit 1
+  }
+  if grep -Eqi 'segmentation fault|stack trace|unhandled exception|internal compiler error|fatal error|timed out|panic' "$diagnostic"; then
+    echo "Compiler crashed instead of rejecting: $name" >&2
+    exit 1
+  fi
+  case "$name" in
+    07-unknown-reject)
+      grep -Eqi 'unknown|undefined|undeclared|unresolved|symbol|identifier|not found' "$diagnostic" ;;
+    08-overflow-reject)
+      grep -Eqi 'range|overflow|literal|integer|64.bit' "$diagnostic" ;;
+    09-syntax-reject)
+      grep -Eqi 'syntax|parse|expected|unexpected|token|expression' "$diagnostic" ;;
+  esac || {
+    echo "Wrong compiler-owned diagnostic category: $name" >&2
     exit 1
   }
 done
