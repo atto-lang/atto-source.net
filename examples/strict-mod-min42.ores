@@ -1,0 +1,4 @@
+// Signed MIN/-1 must yield zero without native hardware remainder overflow.
+define pub fnc main(): int {
+    return Integer.mod(-9223372036854775808, -1) + 42;
+}
