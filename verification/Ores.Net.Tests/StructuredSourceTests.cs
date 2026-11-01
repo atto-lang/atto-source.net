@@ -63,7 +63,7 @@ internal static class StructuredSourceTests
         Require(commentOnlyInjection is not null,
             "injection spelling inside a comment is not executable syntax");
         var leadingComment = OresStructuredParser.Parse(
-            "// nested annotation @StateBacked(MutableStateContainer(scope = #instance)) is inert\\n"
+            "// nested annotation @StateBacked(MutableStateContainer(scope = #instance)) is inert\n"
             + "fnc main():int{return 7;}");
         Require(leadingComment is not null,
             "state backing in a comment must not trigger a false-positive capability denial");
