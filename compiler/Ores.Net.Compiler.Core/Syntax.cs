@@ -159,6 +159,15 @@ public static class OresParser
                 if (word == "enum")
                     throw new FormatException(
                         $"nominal enum overloads require compiler-bound dispatch (unsupported .NET bootstrap) at offset {start}");
+                // The scalar Native AOT source path must not treat unlowered
+                // critical sections or suspension as ordinary identifiers.
+                // These tokens are recognized after comment skipping.
+                if (word == "critical")
+                    throw new FormatException($"E_CRITICAL_UNLOWERED: scheduler gate and non-suspending critical body lowering required at offset {start}");
+                if (word is "suspends" or "suspend")
+                    throw new FormatException($"E_SUSPENDS_UNLOWERED: continuation and effect lowering required at offset {start}");
+                if (word == "async")
+                    throw new FormatException($"E_ASYNC_UNLOWERED: async generators require iterator frames; general functions migrate to suspends at offset {start}");
                 if (word is "gen" or "generator")
                     throw new FormatException(
                         $"generator declarations require iterator-frame and continuation lowering in .NET Native AOT backend at offset {start}");
