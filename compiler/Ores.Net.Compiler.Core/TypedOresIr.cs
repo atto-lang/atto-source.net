@@ -16,7 +16,8 @@ public enum IrOpcode
     CheckedMultiply,
     CheckedDivide,
     SignedRemainderLiteral,
-    StrictRem
+    StrictRem,
+    StrictMod
 }
 
 /// <summary>
@@ -103,7 +104,7 @@ public static class OresIrVerifier
                 if (instruction.Opcode is not (IrOpcode.CheckedAdd or
                     IrOpcode.CheckedSubtract or IrOpcode.CheckedMultiply or
                     IrOpcode.CheckedDivide or IrOpcode.SignedRemainderLiteral or
-                    IrOpcode.StrictRem))
+                    IrOpcode.StrictRem or IrOpcode.StrictMod))
                     throw new FormatException("Unknown IR opcode");
 
                 if (instruction.Constant.HasValue ||
@@ -224,12 +225,15 @@ public static class OresIrLowering
                         break;
                     }
                     case NamedIntegerRem:
+                    case NamedIntegerMod:
                     {
                         if (results.Count < 2)
                             throw new FormatException("IR intrinsic operand underflow");
                         int right = results.Pop();
                         int left = results.Pop();
-                        results.Push(EmitBinary(IrOpcode.StrictRem, left, right));
+                        results.Push(EmitBinary(
+                            current.Node is NamedIntegerMod ? IrOpcode.StrictMod : IrOpcode.StrictRem,
+                            left, right));
                         break;
                     }
                     default:
@@ -255,6 +259,11 @@ public static class OresIrLowering
                         pending.Push(new Pending(binary.Left, false));
                         break;
                     case NamedIntegerRem call:
+                        pending.Push(new Pending(call, true));
+                        pending.Push(new Pending(call.Right, false));
+                        pending.Push(new Pending(call.Left, false));
+                        break;
+                    case NamedIntegerMod call:
                         pending.Push(new Pending(call, true));
                         pending.Push(new Pending(call.Right, false));
                         pending.Push(new Pending(call.Left, false));
