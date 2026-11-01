@@ -25,6 +25,15 @@ while IFS= read -r -d '' entry; do
   rest="${metadata#* }"
   blob="${rest%% *}"
   [[ "$mode" == '100644' || "$mode" == '100755' ]] || fail "forbidden Git entry mode $mode: $path"
+  # Reject path resolution through directory symlinks before reading tracked bytes.
+  parent="${path%/*}"
+  if [[ "$parent" != "$path" ]]; then
+    while :; do
+      [[ -d "$parent" && ! -L "$parent" ]] || fail "symlinked or missing tracked ancestor: $parent ($path)"
+      [[ "$parent" == */* ]] || break
+      parent="${parent%/*}"
+    done
+  fi
   [[ -f "$path" && ! -L "$path" ]] || fail "missing or symlinked tracked file: $path"
   # Never trust .gitattributes clean-filter normalization for PHYSICAL byte identity.
   actual_blob="$(git hash-object --no-filters -- "$path")" || fail "cannot hash tracked file: $path"
