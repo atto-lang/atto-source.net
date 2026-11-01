@@ -17,7 +17,9 @@ public enum IrOpcode
     CheckedDivide,
     SignedRemainderLiteral,
     StrictRem,
-    StrictMod
+    StrictMod,
+    StrictPow,
+    StrictBitXor
 }
 
 /// <summary>
@@ -104,7 +106,8 @@ public static class OresIrVerifier
                 if (instruction.Opcode is not (IrOpcode.CheckedAdd or
                     IrOpcode.CheckedSubtract or IrOpcode.CheckedMultiply or
                     IrOpcode.CheckedDivide or IrOpcode.SignedRemainderLiteral or
-                    IrOpcode.StrictRem or IrOpcode.StrictMod))
+                    IrOpcode.StrictRem or IrOpcode.StrictMod or
+                    IrOpcode.StrictPow or IrOpcode.StrictBitXor))
                     throw new FormatException("Unknown IR opcode");
 
                 if (instruction.Constant.HasValue ||
@@ -226,14 +229,22 @@ public static class OresIrLowering
                     }
                     case NamedIntegerRem:
                     case NamedIntegerMod:
+                    case NamedIntegerPow:
+                    case NamedIntegerBitXor:
                     {
                         if (results.Count < 2)
                             throw new FormatException("IR intrinsic operand underflow");
                         int right = results.Pop();
                         int left = results.Pop();
-                        results.Push(EmitBinary(
-                            current.Node is NamedIntegerMod ? IrOpcode.StrictMod : IrOpcode.StrictRem,
-                            left, right));
+                        var op = current.Node switch
+                        {
+                            NamedIntegerRem => IrOpcode.StrictRem,
+                            NamedIntegerMod => IrOpcode.StrictMod,
+                            NamedIntegerPow => IrOpcode.StrictPow,
+                            NamedIntegerBitXor => IrOpcode.StrictBitXor,
+                            _ => throw new FormatException("Unsupported typed Integer operation")
+                        };
+                        results.Push(EmitBinary(op, left, right));
                         break;
                     }
                     default:
@@ -264,6 +275,16 @@ public static class OresIrLowering
                         pending.Push(new Pending(call.Left, false));
                         break;
                     case NamedIntegerMod call:
+                        pending.Push(new Pending(call, true));
+                        pending.Push(new Pending(call.Right, false));
+                        pending.Push(new Pending(call.Left, false));
+                        break;
+                    case NamedIntegerPow call:
+                        pending.Push(new Pending(call, true));
+                        pending.Push(new Pending(call.Right, false));
+                        pending.Push(new Pending(call.Left, false));
+                        break;
+                    case NamedIntegerBitXor call:
                         pending.Push(new Pending(call, true));
                         pending.Push(new Pending(call.Right, false));
                         pending.Push(new Pending(call.Left, false));
