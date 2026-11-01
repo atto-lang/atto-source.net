@@ -235,6 +235,23 @@ public static class OresStructuredParser
             int offset = index;
             if (index == source.Length) return new Token("", index);
             char ch = source[index];
+            // Injection changes ownership and lifetime authority. The scalar
+            // CIL bootstrap cannot treat an annotation as harmless metadata.
+            // Perform this check after comments have been skipped so comment
+            // text cannot trigger a false rejection.
+            if (ch == '@')
+            {
+                int nameEnd = index + 1;
+                while (nameEnd < source.Length &&
+                       (Alpha(source[nameEnd]) || Digit(source[nameEnd]) ||
+                        source[nameEnd] == '_')) nameEnd++;
+                string name = source[(index + 1)..nameEnd];
+                if (name is "Inject" or "StateBacked" or "MutableStateContainer" or "StateContainer")
+                    throw new FormatException(
+                        $"STATE_INJECTION_UNSUPPORTED: @{name} requires typed container ownership, borrow checks and Native AOT lowering at offset {offset}");
+                throw new FormatException(
+                    $"Annotations require verified compiler lowering at offset {offset}");
+            }
             if (moduleMode && ch == '"')
             {
                 index++;
