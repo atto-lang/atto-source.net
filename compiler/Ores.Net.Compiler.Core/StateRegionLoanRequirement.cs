@@ -44,6 +44,13 @@ public readonly record struct StateRegionLoanRequirement
             throw new ArgumentException(
                 "state-region requirement needs a place", nameof(place));
 
+        if (kind != StateRegionLoanProvenance.AccessKind.Read &&
+            kind != StateRegionLoanProvenance.AccessKind.Write)
+            throw new ArgumentOutOfRangeException(nameof(kind));
+        if (action != StateRegionLoanProvenance.LoanAction.Borrow &&
+            action != StateRegionLoanProvenance.LoanAction.Release)
+            throw new ArgumentOutOfRangeException(nameof(action));
+
         RegionBinding = regionBinding;
         Execution = execution;
         GenerationFence = generationFence;
@@ -53,7 +60,18 @@ public readonly record struct StateRegionLoanRequirement
         Action = action;
     }
 
+    private bool IsValid =>
+        !string.IsNullOrWhiteSpace(RegionBinding) &&
+        Execution == ExecutionBinding.CurrentLogicalExecution &&
+        GenerationFence && LoanId != 0 &&
+        !string.IsNullOrWhiteSpace(Place) &&
+        (Kind == StateRegionLoanProvenance.AccessKind.Read ||
+         Kind == StateRegionLoanProvenance.AccessKind.Write) &&
+        (Action == StateRegionLoanProvenance.LoanAction.Borrow ||
+         Action == StateRegionLoanProvenance.LoanAction.Release);
+
     public bool MatchesRelease(in StateRegionLoanRequirement release) =>
+        IsValid && release.IsValid &&
         Action == StateRegionLoanProvenance.LoanAction.Borrow &&
         release.Action == StateRegionLoanProvenance.LoanAction.Release &&
         StringComparer.Ordinal.Equals(RegionBinding, release.RegionBinding) &&
@@ -65,7 +83,7 @@ public readonly record struct StateRegionLoanRequirement
 
     public StateRegionLoanRequirement ReleaseRequirement()
     {
-        if (Action != StateRegionLoanProvenance.LoanAction.Borrow)
+        if (!IsValid || Action != StateRegionLoanProvenance.LoanAction.Borrow)
             throw new InvalidOperationException(
                 "only a borrow requirement can derive a release requirement");
         return new StateRegionLoanRequirement(
