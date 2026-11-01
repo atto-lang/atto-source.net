@@ -90,8 +90,11 @@ internal static class StateRegionLoanProvenanceSelfTest
                 "inventory.stock", StateRegionLoanProvenance.AccessKind.Write,
                 StateRegionLoanProvenance.LoanAction.Borrow),
             "unsafe execution generation cannot alias in JS");
-        using var unsafeJson = JsonDocument.Parse(
-            rawBorrow.Replace("\"executionId\":1001", "\"executionId\":9007199254740992"));
+        var unsafeJsonRaw = rawBorrow.Replace(
+            "\"executionId\": 1001", "\"executionId\": 9007199254740992",
+            StringComparison.Ordinal);
+        Require(unsafeJsonRaw != rawBorrow, "unsafe JSON fixture mutation applied");
+        using var unsafeJson = JsonDocument.Parse(unsafeJsonRaw);
         Expect<ArgumentOutOfRangeException>(() => _ = Read(unsafeJson.RootElement),
             "unsafe exact integer rejected by JSON receipt constructor");
 
