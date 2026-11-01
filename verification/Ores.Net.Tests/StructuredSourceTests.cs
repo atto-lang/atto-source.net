@@ -37,6 +37,28 @@ internal static class StructuredSourceTests
 
     public static void Run()
     {
+        // AST identity and constant provenance must stay independent: a
+        // default readonly typed binding is NOT an explicit constexpr const.
+        var immutableDefaults = OresStructuredParser.Parse(
+            "fnc main():int{int x=7;bool good=true;const int c=7;val int v=7;let int m=7;return x;}");
+        Require(immutableDefaults.Body[0] is StructuredLet {
+            Name: "x", Kind: StructuredBindingKind.Readonly, ValueType: IrValueType.I64
+        }, "int x must be a readonly non-constexpr binding");
+        Require(immutableDefaults.Body[1] is StructuredLet {
+            Name: "good", Kind: StructuredBindingKind.Readonly, ValueType: IrValueType.Bool
+        }, "bool x must be a readonly non-constexpr binding");
+        Require(immutableDefaults.Body[2] is StructuredLet {
+            Name: "c", Kind: StructuredBindingKind.Const
+        }, "explicit const retains its constexpr identity");
+        Require(immutableDefaults.Body[3] is StructuredLet {
+            Name: "v", Kind: StructuredBindingKind.Val
+        }, "val remains an independent single-assignment spelling");
+        Require(immutableDefaults.Body[4] is StructuredLet {
+            Name: "m", Kind: StructuredBindingKind.Let
+        }, "let remains the only rebindable local");
+        Reject("fnc main():int{int x=7;x=8;return x;}",
+            "readonly type-first rebinding is forbidden");
+
         // Local value types are block-local declarations on the structured
         // frontend. They are admitted into the AST but deliberately rejected
         // by CFG/CIL lowering until value layout and construction are verified.
