@@ -47,6 +47,13 @@ public readonly record struct StateRegionLoanProvenance
             throw new ArgumentException(
                 "state-region provenance requires a nonblank place", nameof(place));
 
+        if (kind != AccessKind.Read && kind != AccessKind.Write)
+            throw new ArgumentOutOfRangeException(nameof(kind),
+                "invalid state-region access kind");
+        if (action != LoanAction.Borrow && action != LoanAction.Release)
+            throw new ArgumentOutOfRangeException(nameof(action),
+                "invalid state-region loan action");
+
         RegionId = regionId;
         RegionGeneration = regionGeneration;
         RuntimeDomain = runtimeDomain;
@@ -59,7 +66,17 @@ public readonly record struct StateRegionLoanProvenance
         Action = action;
     }
 
+    // Value types permit default initialization; a default or forged enum must
+    // never acquire authority merely because two field values compare equal.
+    private bool IsValid =>
+        RegionId != 0 && RegionGeneration != 0 && RuntimeDomain != 0 &&
+        ExecutionId != 0 && ExecutionSlot != 0 && ExecutionGeneration != 0 &&
+        LoanId != 0 && !string.IsNullOrWhiteSpace(Place) &&
+        (Kind == AccessKind.Read || Kind == AccessKind.Write) &&
+        (Action == LoanAction.Borrow || Action == LoanAction.Release);
+
     public bool AuthorizesRelease(in StateRegionLoanProvenance release) =>
+        IsValid && release.IsValid &&
         Action == LoanAction.Borrow &&
         release.Action == LoanAction.Release &&
         RegionId == release.RegionId &&
@@ -74,7 +91,7 @@ public readonly record struct StateRegionLoanProvenance
 
     public StateRegionLoanProvenance ReleaseRecord()
     {
-        if (Action != LoanAction.Borrow)
+        if (!IsValid || Action != LoanAction.Borrow)
             throw new InvalidOperationException(
                 "only a borrow provenance record can derive a release record");
         return new StateRegionLoanProvenance(
