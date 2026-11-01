@@ -35,5 +35,29 @@ internal static class CriticalSuspendsBoundaryTests
         }
         if (OresParser.Parse("fnc main():int{return 42;} // critical suspends await") is not Literal { Value: 42 })
             throw new Exception("Line comment must not trigger critical effect rejection");
+
+        // Experimental structured/CIL lowering is an independent public
+        // compiler entrypoint. It must not accept these unsupported effects
+        // just because the scalar CLI's parser is strict.
+        foreach (var (source, diagnostic) in new (string, string)[] {
+            ("critical suspends fnc main():int{return 1;}", "E_CALLABLE_MODIFIERS"),
+            ("suspends critical fnc main():int{return 1;}", "E_CALLABLE_MODIFIERS"),
+            ("async fnc main():int{return 1;}", "E_CALLABLE_MODIFIERS"),
+            ("pub suspends fnc main():int{return 1;}", "E_SUSPENDS_UNSUPPORTED"),
+            ("pub critical fnc main():int{return 1;}", "E_CRITICAL_UNSUPPORTED"),
+            ("fnc main():int{critical {return 1;}}", "E_CRITICAL_UNSUPPORTED"),
+            ("fnc main():int{return await 1;}", "E_SUSPENDS_UNSUPPORTED")
+        })
+        {
+            try
+            {
+                _ = OresStructuredParser.Parse(source);
+            }
+            catch (FormatException error) when (error.Message.Contains(diagnostic, StringComparison.Ordinal))
+            {
+                continue;
+            }
+            throw new Exception($"Structured parser did not reject with {diagnostic}: {source}");
+        }
     }
 }
