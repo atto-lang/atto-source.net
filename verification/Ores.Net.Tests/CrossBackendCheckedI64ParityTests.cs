@@ -106,6 +106,7 @@ static class CrossBackendCheckedI64ParityTests
                     "oresnet-wave-" + Guid.NewGuid().ToString("N"));
                 try
                 {
+                    Directory.CreateDirectory(folder);
                     var binary = Path.Combine(folder, "OresGenerated.dll");
                     CilEmitter.EmitLibrary(ir, binary);
                     using var assembly = AssemblyDefinition.ReadAssembly(binary);
