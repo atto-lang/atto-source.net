@@ -140,6 +140,28 @@ jobs:
           bash -n verification/oresllm-eight-scalar-native-aot.sh
           bash verification/oresllm-eight-scalar-native-aot.sh
           echo 'Eight native AOT scalar guest checks executed; not five-backend parity'
+      - name: Opt-in compile shared OresLLM scalar gradient with real Linux NativeAOT
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_file=contracts/v1/semantics/fixtures/oresllm-scalar-gradient.ores
+          expected_blob=fbd4877db8dc2edf8a02fb76ee738d24cb69f922
+          test "$(git hash-object -- "$source_file")" = "$expected_blob" || {
+            echo 'OresLLM scalar gradient source differs from Java/LLVM exact byte contract' >&2
+            exit 1
+          }
+          bash scripts/publish-linux.sh "$source_file" artifacts/oresllm-gradient-native
+          app=artifacts/oresllm-gradient-native/linux-x64/oreslang-app
+          bash verification/assert-linux-native-release.sh "$app"
+          work="$(mktemp -d)"
+          trap 'rm -rf -- "$work"' EXIT
+          "$app" >"$work/stdout" 2>"$work/stderr"
+          printf '42\n' >"$work/expected"
+          cmp --silent "$work/stdout" "$work/expected"
+          test ! -s "$work/stderr"
+          echo "ORESLLM_NATIVE_AOT_SCALAR_GRADIENT_42|git_blob=$expected_blob"
+
       - name: Record exact-head Native AOT execution receipt
         shell: bash
         env:
