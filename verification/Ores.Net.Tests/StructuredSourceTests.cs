@@ -42,6 +42,11 @@ internal static class StructuredSourceTests
         // source spelling must fail at the dedicated capability boundary.
         foreach (var actorSource in new[] {
             "define actor A1 as end",
+            "actor A1 as end",
+            "actor fnc invoke():int{return 1;}",
+            "fnc actor invoke():int{return 1;}",
+            "actor worker as end",
+            "actor A1 implements Traced as end",
             "define pub actor A1 as end",
             "define shared actor A1 as end",
             "define untrusted actor A1 as end",
