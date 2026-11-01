@@ -85,7 +85,16 @@ public static class OresStructuredParser
         var tokens = new List<Token>();
         do
         {
-            tokens.Add(lexer.Read());
+            var token = lexer.Read();
+            // Linked-import admission lexes the whole module before parsing.
+            // Refuse an unsupported singleton shell before @Inject / generics
+            // can be misclassified as unrelated tokenization errors.
+            if (token.Text == "singleton" &&
+                (tokens.Count > 0 && tokens[^1].Text == "define" ||
+                 tokens.Count > 1 && tokens[^1].Text == "pub" &&
+                 tokens[^2].Text == "define"))
+                throw new FormatException(SingletonUnsupported + " at offset " + token.Offset);
+            tokens.Add(token);
             if (tokens.Count > MaxTokens) throw new FormatException("Structured token budget exceeded");
         } while (tokens[^1].Text.Length != 0);
         return tokens;
