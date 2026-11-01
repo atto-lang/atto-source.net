@@ -275,7 +275,7 @@ public sealed class ActorRuntime : IDisposable
                 _actors.Add(candidateId, cell);
                 try
                 {
-                    _pubSub.RegisterActor(cell.Reference);
+                    _pubSub.RegisterActor(cell.Reference, kind);
                 }
                 catch
                 {
