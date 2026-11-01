@@ -18,7 +18,8 @@ internal sealed class FrozenTcpSlab
     }
 
     private readonly object gate = new();
-    private readonly byte[] bytes;
+    private byte[]? bytes;
+    private readonly int size;
     private int pins;
     private bool retiring;
 
@@ -28,9 +29,10 @@ internal sealed class FrozenTcpSlab
         if (input.Length > MaxBytes)
             throw new ArgumentOutOfRangeException(nameof(input), "TCP slab exceeds one MiB");
         bytes = (byte[])input.Clone();
+        size = input.Length;
     }
 
-    internal int Size => bytes.Length;
+    internal int Size => size;
 
     internal Pin AcquirePin()
     {
@@ -49,9 +51,10 @@ internal sealed class FrozenTcpSlab
         {
             if (pin is null || !ReferenceEquals(pin.Owner, this) || !pin.Active)
                 throw new InvalidOperationException("invalid TCP slab pin");
-            if ((uint)index >= (uint)bytes.Length)
+            var snapshot = bytes ?? throw new InvalidOperationException("TCP slab storage retired");
+            if ((uint)index >= (uint)snapshot.Length)
                 throw new ArgumentOutOfRangeException(nameof(index));
-            return bytes[index];
+            return snapshot[index];
         }
     }
 
@@ -63,21 +66,33 @@ internal sealed class FrozenTcpSlab
                 throw new InvalidOperationException("invalid TCP slab pin release");
             pin.Active = false;
             pins--;
+            FinalizeRetirement();
         }
     }
 
     internal void Retire()
     {
-        lock (gate) retiring = true;
+        lock (gate)
+        {
+            retiring = true;
+            FinalizeRetirement();
+        }
     }
 
     internal bool Freed
     {
-        get { lock (gate) return retiring && pins == 0; }
+        get { lock (gate) return bytes is null; }
     }
 
     internal int PinCount
     {
         get { lock (gate) return pins; }
+    }
+
+    private void FinalizeRetirement()
+    {
+        // Reclamation eligibility, NOT guaranteed immediate zeroization.
+        // Only a trusted host with physically quiesced IO may call Retire.
+        if (retiring && pins == 0) bytes = null;
     }
 }
