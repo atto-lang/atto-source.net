@@ -82,8 +82,45 @@ internal static class VmIsolateHostTests
         faultHost.Destroy(recovered);
         if (host.GuestSnapshot(a).Scalar != -3)
             throw new Exception("foreign tenant fault changed tenant-a");
+
+        // Two OresVM hosts may mint the same tenant label and numeric
+        // generation. Handle object identity, not these public fields, is
+        // the trusted native authority. A foreign host cannot turn, inspect,
+        // retire, or influence a tenant belonging to this host.
+        var foreignHost = new OresVmHost(maxTenants: 1);
+        var foreignA = foreignHost.CreateIsolate("tenant-a");
+        foreignHost.Start(foreignA);
+        if (foreignA.Generation != a.Generation)
+            throw new Exception("foreign host identity collision fixture unavailable");
+        ExpectFailure(() => host.Snapshot(foreignA), "foreign host snapshot");
+        ExpectFailure(() => host.GuestSnapshot(foreignA), "foreign host guest state");
+        ExpectFailure(() => host.InvokeGeneratedScalar(foreignA, () => 77),
+            "foreign host native guest");
+        if (host.GuestSnapshot(a).Scalar != -3 ||
+            foreignHost.GuestSnapshot(foreignA).Scalar != 0)
+            throw new Exception("foreign authority mutated another isolate");
+        foreignHost.BeginShutdown(foreignA);
+        foreignHost.CompleteShutdown(foreignA);
+        foreignHost.Destroy(foreignA);
+
+        // Quota/phase failures must be non-consuming. No valid actor or pin
+        // can be minted by a foreign, stale or quiescing incarnation.
+        foreach (int invalid in new[] { 0, -1, 65537 })
+        {
+            try {
+                host.CreateIsolate("never-admitted", maxActors: invalid);
+                throw new Exception("invalid actor quota admitted: " + invalid);
+            } catch (ArgumentOutOfRangeException) { }
+            try {
+                host.CreateIsolate("never-admitted", maxResourcePins: invalid);
+                throw new Exception("invalid pin quota admitted: " + invalid);
+            } catch (ArgumentOutOfRangeException) { }
+        }
+        ExpectFailure(() => host.CreateIsolate("never-admitted"), "full host after quota negatives");
         var actorA = host.RegisterActor(a, 3);
         var actorB = host.RegisterActor(b, 3);
+        ExpectFailure(() => host.RegisterActor(a, 3), "duplicate actor incarnation");
+        ExpectFailure(() => host.PinResource(a, actorB), "foreign actor pin");
         var refA = actorA.Mailbox.CurrentRef;
         host.SendActor(a, actorA, refA, new byte[] { 1, 2, 3 });
         if (actorA.Mailbox.QueuedMessages != 1)
