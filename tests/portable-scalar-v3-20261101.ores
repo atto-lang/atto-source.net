@@ -1,0 +1,74 @@
+// Portable scalar v3: 12 new source-identical native Oreslang tests.
+// AUTHORED ONLY: no backend guest pass without exact-head compiler execution.
+// Negative compilation/overflow vectors are separate in the shared JSON manifest.
+import class TestCase, TestSuite, TestOptions, TestOutcome, RunSummary from "ores.std/testing";
+import fnc expect_equal_int, run_suite, require_success from "ores.std/testing";
+
+fnc check_near_max_sum(): TestOutcome {
+  return expect_equal_int(9223372036854775805 + 2, 9223372036854775807, "portable scalar v3: near-max-sum");
+}
+
+fnc check_near_min_successor_two(): TestOutcome {
+  return expect_equal_int((-9223372036854775807 - 1) + 2, -9223372036854775806, "portable scalar v3: near-min-successor-two");
+}
+
+fnc check_wide_precision_multiply(): TestOutcome {
+  return expect_equal_int((9007199254740993 - 9007199254740992) * 41, 41, "portable scalar v3: wide-precision-multiply");
+}
+
+fnc check_signed_precision_three(): TestOutcome {
+  return expect_equal_int(-9007199254740995 + 9007199254740992, -3, "portable scalar v3: signed-precision-three");
+}
+
+fnc check_trillion_zero_cancel(): TestOutcome {
+  return expect_equal_int(1000000000000000 + (-1000000000000000), 0, "portable scalar v3: trillion-zero-cancel");
+}
+
+fnc check_mixed_precedence(): TestOutcome {
+  return expect_equal_int(5 + 7 * 9 - 4 * 3, 56, "portable scalar v3: mixed-precedence");
+}
+
+fnc check_right_nested_subtraction_v3(): TestOutcome {
+  return expect_equal_int(80 - (50 - (25 - 5)), 50, "portable scalar v3: right-nested-subtraction-v3");
+}
+
+fnc check_left_nested_subtraction_v3(): TestOutcome {
+  return expect_equal_int(((80 - 50) - 25) - 5, 0, "portable scalar v3: left-nested-subtraction-v3");
+}
+
+fnc check_wide_positive_product(): TestOutcome {
+  return expect_equal_int(2147483647 * 2147483647, 4611686014132420609, "portable scalar v3: wide-positive-product");
+}
+
+fnc check_wide_negative_product(): TestOutcome {
+  return expect_equal_int((-2147483647) * 2147483647, -4611686014132420609, "portable scalar v3: wide-negative-product");
+}
+
+fnc check_quadruple_negation(): TestOutcome {
+  return expect_equal_int(-(-(-(-33))), 33, "portable scalar v3: quadruple-negation");
+}
+
+fnc check_max_range_roundtrip(): TestOutcome {
+  return expect_equal_int((9223372036854775800 - 9007199254740993) + 9007199254740993, 9223372036854775800, "portable scalar v3: max-range-roundtrip");
+}
+
+pub routine main(): void {
+  val TestSuite suite = new TestSuite("portable-scalar-v3", arr[
+    new TestCase("near-max-sum", check_near_max_sum, false, ""),
+    new TestCase("near-min-successor-two", check_near_min_successor_two, false, ""),
+    new TestCase("wide-precision-multiply", check_wide_precision_multiply, false, ""),
+    new TestCase("signed-precision-three", check_signed_precision_three, false, ""),
+    new TestCase("trillion-zero-cancel", check_trillion_zero_cancel, false, ""),
+    new TestCase("mixed-precedence", check_mixed_precedence, false, ""),
+    new TestCase("right-nested-subtraction-v3", check_right_nested_subtraction_v3, false, ""),
+    new TestCase("left-nested-subtraction-v3", check_left_nested_subtraction_v3, false, ""),
+    new TestCase("wide-positive-product", check_wide_positive_product, false, ""),
+    new TestCase("wide-negative-product", check_wide_negative_product, false, ""),
+    new TestCase("quadruple-negation", check_quadruple_negation, false, ""),
+    new TestCase("max-range-roundtrip", check_max_range_roundtrip, false, "")
+  ]);
+  val TestOptions options = new TestOptions("", false, true);
+  val RunSummary summary = run_suite(rt borrow suite, rt borrow options);
+  require_success(rt borrow summary);
+  return;
+}
