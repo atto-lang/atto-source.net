@@ -135,11 +135,24 @@ public static class OresStructuredParser
                   tokens[^2].Text == "define")))
                 throw new FormatException(
                     $"Inverted class requires checked bracket-row and ownership lowering in the .NET backend at offset {token.Offset}");
-            if ((token.Text == "class" || token.Text == "actor") &&
-                tokens.Count > 0 &&
-                (tokens[^1].Text == "define" ||
-                 (tokens[^1].Text == "pub" && tokens.Count > 1 &&
-                  tokens[^2].Text == "define")))
+            // Recognize actor declarations through all supported prefixes:
+            // "define pub/shared/untrusted/serial http actor", "define isoactor",
+            // and the legacy "shared actor". Until actor method slots, actor
+            // inheritance and sealed state exist in CIL, do not allow a
+            // modifier spelling to slip past the explicit capability gate.
+            bool actorNominal = token.Text is "actor" or "isoactor";
+            bool nominalStart = token.Text == "class" || actorNominal;
+            int prefix = tokens.Count - 1;
+            while (prefix >= 0 && tokens[prefix].Text is
+                   ("pub" or "private" or "shared" or "untrusted" or
+                    "serial" or "http" or "tcp" or "websocket" or
+                    "unary" or "stream"))
+                prefix--;
+            bool prefixedDefinition = prefix >= 0 && tokens[prefix].Text == "define";
+            bool legacyActorPrefix = actorNominal &&
+                (token.Text == "isoactor" ||
+                 (tokens.Count > 0 && tokens[^1].Text is "shared" or "untrusted"));
+            if (nominalStart && (prefixedDefinition || legacyActorPrefix))
             {
                 if (braceDepth > 0)
                     throw new FormatException(
