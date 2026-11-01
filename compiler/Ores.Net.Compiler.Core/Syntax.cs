@@ -40,6 +40,17 @@ public static class OresParser
         for (;;)
         {
             var token = lexer.Read();
+            // The scalar frontend tokenizes eagerly. Deny a compiler-owned
+            // singleton declaration as soon as its contextual kind is seen,
+            // before unsupported trait generics or @Inject inside its body
+            // can turn the required capability error into a lexer failure.
+            // A callable/variable merely named singleton stays contextual.
+            if (token.Text == "singleton" &&
+                (tokens.Count > 0 && tokens[^1].Text == "define" ||
+                 tokens.Count > 1 && tokens[^1].Text == "pub" &&
+                 tokens[^2].Text == "define"))
+                throw new FormatException(
+                    "ORES-SINGLETON-UNSUPPORTED: singleton declarations require exactly-once complete publication, cycle/failure semantics, runtime-derived actor authority for shared state, and five-backend guest execution parity at offset " + token.Offset);
             tokens.Add(token);
             if (tokens.Count > MaxTokens)
                 throw new FormatException("Token count exceeds bootstrap limit");
