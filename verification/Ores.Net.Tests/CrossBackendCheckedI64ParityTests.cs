@@ -1,9 +1,23 @@
 using Ores.Net.Compiler;
+using System.Security.Cryptography;
+using System.Text;
 using Mono.Cecil;
 
 static class CrossBackendCheckedI64ParityTests
 {
     private const string Header = "// oreslang:checked-i64-v1\n";
+    private static readonly string[] WaveSourceSha256 =
+    {
+        "2d186d0c400c23c6fcdf1df963580351eacea82250097a1cd083a1cc308b40f5",
+        "73e5fc703df0b0d3af6898c156ff105ec28e8dfc639f2a02ccca0f1cd3c69dd8",
+        "2ca62fbe11d05cb219a4be255669842994c279e0e0a5208fbc3d3a0e4c047d29",
+        "efb740b31d72bfdc1eecc8a7eb87a7b84c8961f444fbbcc08a142ca54cf7c97b",
+        "391467d7baf7b84b339a63e55be2395d9a8a4d92b5719f249df428b34bac7ccd",
+        "d1fa2dc614cd61c442ab1bfa5683fac50cc9d72139e0dcdf0a67b3610d427bd6",
+        "0322dc2a7d48fed12d917aaaf2a50c025b77402a2b21fdbb87224fece59b44b0",
+        "3483cb15d4b2f2c24f90ba65e55e886b59eaea2190aa9c18f8ed10badba04e76",
+    };
+
 
     public static void Run()
     {
@@ -27,7 +41,35 @@ static class CrossBackendCheckedI64ParityTests
             ("wave/nested grouping", "2 * (3 + 4) * 3", 42L),
         })
         {
-            var ast = OresParser.Parse(Header + "define pub fnc main(): int { return " + expression + "; }");
+            string source;
+            if (name.StartsWith("wave/", StringComparison.Ordinal))
+            {
+                var id = name switch
+                {
+                    "wave/grouped precedence" => 34,
+                    "wave/double negation" => 35,
+                    "wave/left associative subtraction" => 36,
+                    "wave/signed multiplication" => 37,
+                    "wave/negative multiplication chain" => 38,
+                    "wave/i64 max minus large" => 39,
+                    "wave/i64 min plus max" => 40,
+                    "wave/nested grouping" => 41,
+                    _ => throw new InvalidOperationException("unknown wave scalar case")
+                };
+                source = "// " + id +
+                    ": candidate source-identical checked-i64 scalar program.\\n" +
+                    "// Expected integer result 42; guest execution on each backend is unverified.\\n" +
+                    "pub fnc main(): int { return " + expression + "; }\\n";
+                var actualSha = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(source)))
+                    .ToLowerInvariant();
+                if (actualSha != WaveSourceSha256[id - 34])
+                    throw new Exception("FAIL: Oreslang source bytes differ from shared parity case " + id);
+            }
+            else
+            {
+                source = Header + "define pub fnc main(): int { return " + expression + "; }";
+            }
+            var ast = OresParser.Parse(source);
             var ir = OresIrLowering.Lower(ast);
             var actual = OresIrReferenceEvaluator.Evaluate(ir);
             if (actual != expected)
