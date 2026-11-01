@@ -31,26 +31,53 @@ static void InvalidSend(Action action, string why)
 }
 
 // Guarded mutable sharing is not implemented in either .NET bootstrap parser.
-// Test semantic admission at the exact token boundary, never ordinary CIL
-// scalar fallback, and reject comment-separated spellings as well.
+// Enforce the dedicated lexer-owned error and the original source offset.
+// A generic parse failure, comment false positive, or future partial lowering
+// must never be reported as successful fail-closed capability enforcement.
+const string mutableShareError =
+    "native rt mut share requires verified SharedMutex<T> capability, guarded lowering and allocation-domain proof in .NET Native AOT at offset ";
 foreach (var source in new[] {
     "fnc main():int{return rt mut share 1;}",
     "fnc main():int{return 1+(rt mut share 2);}",
     "fnc main():int{return rt mut share (rt mut borrow 1);}",
+    "fnc main():int{return rt mut share (rt mut share 5);}",
     "fnc main():int{return rt /* gap */ mut /* second */ share 3;}",
-    "fnc main():int{return rt" + Environment.NewLine + "mut" + Environment.NewLine + "share 4;}"
+    "fnc main():int{return rt /* outer /* nested */ gap */ mut share 6;}",
+    "fnc main():int{return rt" + Environment.NewLine +
+        "mut" + Environment.NewLine + "share 4;}",
+    "fnc main():int{return rt // line boundary" + Environment.NewLine +
+        "mut // second boundary" + Environment.NewLine + "share 8;}"
 })
 {
-    RejectDiagnostic(() => OresParser.Parse(source),
-        "native rt mut share requires verified SharedMutex<T> capability, guarded lowering and allocation-domain proof",
-        "scalar compiler must not emit unsupported shared writable alias");
-    RejectDiagnostic(() => OresStructuredParser.Parse(source),
-        "native rt mut share requires verified SharedMutex<T> capability, guarded lowering and allocation-domain proof",
-        "structured frontend must not admit unsupported shared writable alias");
+    int expectedOffset = source.IndexOf("rt", StringComparison.Ordinal);
+    Require(expectedOffset >= 0, "negative test must contain ownership keyword");
+    foreach (var parser in new Action[] {
+        () => { _ = OresParser.Parse(source); },
+        () => { _ = OresStructuredParser.Parse(source); }
+    })
+    {
+        try
+        {
+            parser();
+            throw new Exception("Unsupported mutable sharing was admitted: " + source);
+        }
+        catch (FormatException ex)
+        {
+            Require(ex.Message == mutableShareError + expectedOffset,
+                "mutable-share denial must identify the capability and exact lexical offset: " + ex.Message);
+        }
+    }
 }
-Require(OresParser.Parse("fnc main():int{return 42;} // rt mut share") is Literal,
-    "scalar lexer must ignore ownership keywords in comments");
-_ = OresStructuredParser.Parse("fnc main():int{return 42;} // rt mut share");
+foreach (var source in new[] {
+    "fnc main():int{return 42;} // rt mut share",
+    "fnc main():int{/* rt mut share */ return 42;}",
+    "fnc main():int{/* rt /* mut */ share */ return 42;}"
+})
+{
+    Require(OresParser.Parse(source) is Literal,
+        "comment-only ownership words must not trigger scalar rejection");
+    _ = OresStructuredParser.Parse(source);
+}
 
 // Opaque top types and value-producing conditionals are language-reserved,
  // but this i64-only bootstrap has no tagged dynamic-value ABI or typed CFG
