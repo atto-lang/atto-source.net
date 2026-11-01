@@ -30,6 +30,28 @@ static void InvalidSend(Action action, string why)
     throw new Exception("Expected mailbox rejection: " + why);
 }
 
+// Guarded mutable sharing is not implemented in either .NET bootstrap parser.
+// Test semantic admission at the exact token boundary, never ordinary CIL
+// scalar fallback, and reject comment-separated spellings as well.
+foreach (var source in new[] {
+    "fnc main():int{return rt mut share 1;}",
+    "fnc main():int{return 1+(rt mut share 2);}",
+    "fnc main():int{return rt mut share (rt mut borrow 1);}",
+    "fnc main():int{return rt /* gap */ mut /* second */ share 3;}",
+    "fnc main():int{return rt\\nmut\\nshare 4;}".Replace("\\\\n", "\\n")
+})
+{
+    RejectDiagnostic(() => OresParser.Parse(source),
+        "rt mut share requires verified SharedMutex<T> guarded lowering",
+        "scalar compiler must not emit unsupported shared writable alias");
+    RejectDiagnostic(() => OresStructuredParser.Parse(source),
+        "rt mut share requires verified SharedMutex<T> guarded lowering",
+        "structured frontend must not admit unsupported shared writable alias");
+}
+Require(OresParser.Parse("fnc main():int{return 42;} // rt mut share") is Literal,
+    "scalar lexer must ignore ownership keywords in comments");
+_ = OresStructuredParser.Parse("fnc main():int{return 42;} // rt mut share");
+
 // Opaque top types and value-producing conditionals are language-reserved,
  // but this i64-only bootstrap has no tagged dynamic-value ABI or typed CFG
  // lowering for them yet. Reject before OresIR/CIL emission.
