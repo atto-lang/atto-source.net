@@ -55,5 +55,25 @@ internal static class FrozenTcpSlabSelfTest
         empty.ReleasePin(emptyPin);
         empty.Retire();
         Check(empty.Freed, "empty slab retired");
+        Check(slab.Size == 5, "original logical size survives backing release");
+        var noReaders = new FrozenTcpSlab(new byte[] { 9, 10 });
+        noReaders.Retire();
+        noReaders.Retire();
+        Check(noReaders.Freed && noReaders.Size == 2,
+            "retire with no pins drops storage immediately");
+        Reject<InvalidOperationException>(() => noReaders.AcquirePin(),
+            "retired slab cannot repin");
+        var deferred = new FrozenTcpSlab(new byte[] { 77 });
+        var temporaryPin = deferred.AcquirePin();
+        deferred.ReleasePin(temporaryPin);
+        Check(!deferred.Freed, "unretired slab backing is preserved");
+        var retained = deferred.AcquirePin();
+        deferred.Retire();
+        Check(!deferred.Freed && deferred.ReadByte(retained, 0) == 77,
+            "remaining reader retains backing across retire");
+        deferred.ReleasePin(retained);
+        Check(deferred.Freed && deferred.Size == 1,
+            "final pin releases backing and preserves size");
+
     }
 }
