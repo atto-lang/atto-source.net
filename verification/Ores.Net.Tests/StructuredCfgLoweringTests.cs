@@ -1,4 +1,6 @@
 using Mono.Cecil;
+using System.Security.Cryptography;
+using System.Text;
 using Ores.Net.Compiler;
 
 internal static class StructuredCfgLoweringTests
@@ -73,8 +75,40 @@ internal static class StructuredCfgLoweringTests
         throw new Exception("Invalid structured source accepted: " + label);
     }
 
+    private static void PinnedFiveBackendCastGuests()
+    {
+        // Same exact .ores source files as the Java/LLVM/Wasm/Cranelift
+        // candidates. CFG evaluation, emitted CIL interpretation and
+        // deterministic assembly bytes are separate from NativeAOT execution.
+        (string File, string GitBlob)[] fixtures =
+        {
+            ("45-cast-int-literal.ores", "69cecd231d32bf70ea36424e59c932861d01fe44"),
+            ("46-chained-cast-int.ores", "b088dd3f5e3114be4affbb4935582b58f010d75f"),
+            ("47-grouped-cast-multiply.ores", "9ebc3f7bc230557fe2f2639172883bb2f4589464"),
+            ("48-readonly-local-cast.ores", "87d0773504e0d22fc3cf1ee76755b36a2fc415c6"),
+            ("49-const-typed-identity.ores", "bff7c6070008c5c6a8b3316e8a289f93d3f8c5b3")
+        };
+        foreach (var fixture in fixtures)
+        {
+            string file = Path.Combine(AppContext.BaseDirectory, "parity", fixture.File);
+            byte[] sourceBytes = File.ReadAllBytes(file);
+            if (sourceBytes.Length == 0 || sourceBytes.Length >= 8192)
+                throw new Exception("Invalid pinned Oreslang guest size: " + fixture.File);
+            byte[] header = Encoding.ASCII.GetBytes("blob " + sourceBytes.Length);
+            byte[] objectBytes = new byte[header.Length + 1 + sourceBytes.Length];
+            header.CopyTo(objectBytes, 0);
+            sourceBytes.CopyTo(objectBytes, header.Length + 1);
+            string actualBlob = Convert.ToHexString(SHA1.HashData(objectBytes)).ToLowerInvariant();
+            if (actualBlob != fixture.GitBlob)
+                throw new Exception("Oreslang source-byte drift: " + fixture.File);
+            Check(Encoding.UTF8.GetString(sourceBytes), 42,
+                "shared native i64 cast fixture " + fixture.File);
+        }
+    }
+
     public static void Run()
     {
+        PinnedFiveBackendCastGuests();
         const string sum = """
             define pub fnc main():int {
                 let int total=0;

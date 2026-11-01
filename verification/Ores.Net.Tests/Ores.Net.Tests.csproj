@@ -20,6 +20,16 @@
     <None Include="../../contracts/scalar/v1/**/*"
           Link="contracts/scalar/v1/%(RecursiveDir)%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../tests/parity/45-cast-int-literal.ores" Link="parity/45-cast-int-literal.ores"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../tests/parity/46-chained-cast-int.ores" Link="parity/46-chained-cast-int.ores"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../tests/parity/47-grouped-cast-multiply.ores" Link="parity/47-grouped-cast-multiply.ores"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../tests/parity/48-readonly-local-cast.ores" Link="parity/48-readonly-local-cast.ores"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../tests/parity/49-const-typed-identity.ores" Link="parity/49-const-typed-identity.ores"
+          CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="../../compiler/Ores.Net.Compiler.Core/Ores.Net.Compiler.Core.csproj" />
     <ProjectReference Include="../../runtime/Ores.Net.Runtime/Ores.Net.Runtime.csproj" />
     <!-- Independent metadata inspection runs only in the test process. -->
