@@ -101,6 +101,41 @@ static class CrossBackendCheckedI64ParityTests
             }
         }
 
+        // An attacker can supply arbitrary IR to the verifier. Reject
+        // malformed operands and forged constant fields before CIL publication.
+        foreach (var bad in new[]
+        {
+            new IrFunction("main", IrValueType.I64,
+                new IrInstruction[]
+                {
+                    new(0, IrOpcode.ConstantI64, IrValueType.I64, Constant: 40),
+                    new(1, IrOpcode.BitXor, IrValueType.I64, Left: 0, Right: 0, Constant: 2)
+                }, 1),
+            new IrFunction("main", IrValueType.I64,
+                new IrInstruction[]
+                {
+                    new(0, IrOpcode.ConstantI64, IrValueType.I64, Constant: 40),
+                    new(1, IrOpcode.BitXor, IrValueType.I64, Left: 0, Right: 2)
+                }, 1),
+            new IrFunction("main", IrValueType.I64,
+                new IrInstruction[]
+                {
+                    new(0, IrOpcode.ConstantI64, IrValueType.I64, Constant: 40),
+                    new(1, IrOpcode.BitXor, IrValueType.I64, Left: null, Right: 0)
+                }, 1)
+        })
+        {
+            try
+            {
+                _ = OresIrVerifier.Verify(bad);
+            }
+            catch (FormatException)
+            {
+                continue;
+            }
+            throw new Exception("Malformed bitXor OresIR admitted");
+        }
+
         foreach (var expression in new[]
         {
             "5 ^ 3",
