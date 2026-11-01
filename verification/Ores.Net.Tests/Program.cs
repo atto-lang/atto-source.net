@@ -38,7 +38,7 @@ foreach (var source in new[] {
     "fnc main():int{return 1+(rt mut share 2);}",
     "fnc main():int{return rt mut share (rt mut borrow 1);}",
     "fnc main():int{return rt /* gap */ mut /* second */ share 3;}",
-    "fnc main():int{return rt\\nmut\\nshare 4;}".Replace("\\\\n", "\\n")
+    "fnc main():int{return rt" + Environment.NewLine + "mut" + Environment.NewLine + "share 4;}"
 })
 {
     RejectDiagnostic(() => OresParser.Parse(source),
