@@ -1,0 +1,4 @@
+// Bitwise signed64 XOR should preserve exact operand identity.
+define pub fnc main(): int {
+    return Integer.bitXor(5, 3) + 36;
+}
