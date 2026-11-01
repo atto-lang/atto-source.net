@@ -137,7 +137,13 @@ internal static class StructuredCfgLoweringTests
             ("fnc main():int{return (7 as int)+(35 as int);}", "two checked identity operands"),
             ("fnc main():int{return ((2+5) as int)*6;}", "cast binds before multiplication"),
             ("fnc main():int{return (7 as int as int)*6;}", "chained cast binds before multiplication"),
-            ("fnc main():int{const x=7 as int;const y=x as int;return y*6;}", "checked cast through inferred constant reference")
+            ("fnc main():int{const x=7 as int;const y=x as int;return y*6;}", "checked cast through inferred constant reference"),
+            ("fnc main():int{let x=7;x=x+1;x=x+34;return x;}", "SSA let multiwrite matches Cranelift LLVM"),
+            ("fnc main():int{let x=7;const snap=x;x=42;return snap+35;}", "const captures prior SSA version"),
+            ("fnc main():int{let x=7;val snap=x;x=42;return snap+35;}", "val captures prior SSA version"),
+            ("fnc main():int{let x=7;const snap=x as int;x=42;return snap+35;}", "checked cast snapshot cannot alias mutable local"),
+            ("fnc main():int{let x=7 as int;x=(x+35) as int;return x;}", "cast applied to mutable SSA replacement"),
+            ("fnc main():int{const base=7;let x=base;x=42;return x;}", "mutable sourced from immutable const")
         })
             Check(source, 42, "scalar cast/inference " + label);
         foreach (var (source, label) in new[] {
