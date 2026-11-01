@@ -18,6 +18,24 @@ internal static class SingletonDeclarationAdmissionTests
             RejectSingleton(() => { _ = OresStructuredParser.Parse(source); }, "structured/" + source);
         }
 
+        // Shared candidate bytes: injected Stateful and inline sealed state.
+        // Both shipping parsers must reject at the singleton capability boundary
+        // before unsupported @Inject/trait/member syntax is encountered.
+        foreach (var source in new[]
+        {
+            "define singleton StateBank implements Stateful<BankState> as\n"
+                + "    @Inject\n"
+                + "    state: MutableStateContainer<BankState>\n"
+                + "end\n",
+            "define singleton StateBank as\n"
+                + "    state { let count: int = 0 }\n"
+                + "end\n"
+        })
+        {
+            RejectSingleton(() => { _ = OresParser.Parse(source); }, "scalar/managed/" + source);
+            RejectSingleton(() => { _ = OresStructuredParser.Parse(source); }, "structured/managed/" + source);
+        }
+
         // Local declarations must fail at the singleton admission boundary,
         // not at an incidental assignment/statement parse error.
         foreach (var source in new[]
