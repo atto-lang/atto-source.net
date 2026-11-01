@@ -6,6 +6,7 @@ import {createHash} from 'node:crypto';
 const path='verification/oresllm-eight-scalar-native-aot.sh';
 const script=readFileSync(path,'utf8');
 const workflow=readFileSync('.github/workflows/oresllm-eight-scalar-native-aot.yml','utf8');
+const existingWorkflow=readFileSync('.github/workflows/strict-linux-native-aot.yml','utf8');
 const expectations=new Map([
  ['literal-42',['accept','42']],
  ['precedence',['accept','28']],
@@ -46,6 +47,8 @@ test('NativeAOT CI runs only by explicit dispatch on same private source reposit
  assert.match(workflow,/git rev-parse HEAD/);
  assert.match(workflow,/setup-dotnet@[0-9a-f]{40}/);
  assert.match(workflow,/bash verification\/oresllm-eight-scalar-native-aot\.sh/);
+ assert.match(existingWorkflow,/if: github\.event_name == 'workflow_dispatch'/);
+ assert.match(existingWorkflow,/bash verification\/oresllm-eight-scalar-native-aot\.sh/);
 });
 test('host guard does not claim NativeAOT execution',()=>{
  assert.match(script,/NOT a CIL reference oracle/);
