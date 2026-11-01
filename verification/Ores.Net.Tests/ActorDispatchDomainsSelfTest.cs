@@ -91,6 +91,7 @@ internal static class ActorDispatchDomainsSelfTest
             "carrier self-dispose is rejected instead of self-joining");
 
         ConcurrentDisposeWithoutStartedCarriers();
+        DisposalWaitsForEveryActiveDomain();
         // Each physical actor domain must participate in the same join fence.
         foreach (var kind in new[] {
             ActorKind.Private, ActorKind.Shared, ActorKind.Untrusted
@@ -99,6 +100,84 @@ internal static class ActorDispatchDomainsSelfTest
 
         Console.WriteLine(
             "PASS .NET three lazy actor dispatch domains with no per-actor pools");
+    }
+
+    private static void DisposalWaitsForEveryActiveDomain()
+    {
+        // A successful join from one pool is not global quiescence. Retain
+        // one turn in each physical domain and release them independently.
+        using var domains = new ActorDispatchDomains(new ActorDispatcherOptions
+        {
+            PrivateWorkers = 1,
+            SharedWorkers = 1,
+            UntrustedWorkers = 1,
+            QueueCapacityPerDomain = 16
+        });
+        using var entered = new CountdownEvent(3);
+        using var privateRelease = new ManualResetEventSlim();
+        using var sharedRelease = new ManualResetEventSlim();
+        using var untrustedRelease = new ManualResetEventSlim();
+        using var privateExited = new ManualResetEventSlim();
+        using var sharedExited = new ManualResetEventSlim();
+        using var untrustedExited = new ManualResetEventSlim();
+
+        void Admit(ActorKind kind, ManualResetEventSlim release,
+            ManualResetEventSlim exited)
+        {
+            Require(domains.TryDispatch(kind, () =>
+            {
+                entered.Signal();
+                try
+                {
+                    if (!release.Wait(TimeSpan.FromSeconds(10)))
+                        throw new Exception("cross-domain join probe timed out");
+                }
+                finally
+                {
+                    exited.Set();
+                }
+            }), "admit blocked cross-domain turn: " + kind);
+        }
+
+        Admit(ActorKind.Private, privateRelease, privateExited);
+        Admit(ActorKind.Shared, sharedRelease, sharedExited);
+        Admit(ActorKind.Untrusted, untrustedRelease, untrustedExited);
+        Require(entered.Wait(TimeSpan.FromSeconds(5)),
+            "all three physical domains entered their turns");
+
+        Task dispose = Task.Factory.StartNew(domains.Dispose,
+            CancellationToken.None, TaskCreationOptions.LongRunning,
+            TaskScheduler.Default);
+        try
+        {
+            Require(SpinWait.SpinUntil(
+                () => !domains.TryDispatch(ActorKind.Private, static () => { }),
+                TimeSpan.FromSeconds(5)),
+                "cross-domain Dispose must close admission");
+
+            privateRelease.Set();
+            Require(privateExited.Wait(TimeSpan.FromSeconds(5)),
+                "private carrier exits after release");
+            Require(!dispose.Wait(TimeSpan.FromMilliseconds(75)),
+                "private carrier is not global quiescence");
+            sharedRelease.Set();
+            Require(sharedExited.Wait(TimeSpan.FromSeconds(5)),
+                "shared carrier exits after release");
+            Require(!dispose.Wait(TimeSpan.FromMilliseconds(75)),
+                "private and shared carriers are not global quiescence");
+            untrustedRelease.Set();
+            Require(dispose.Wait(TimeSpan.FromSeconds(5)) && untrustedExited.IsSet,
+                "global Dispose joins all three physical domains");
+            Require(!domains.TryDispatch(ActorKind.Untrusted, static () => { }),
+                "completed shutdown refuses untrusted admission");
+        }
+        finally
+        {
+            // A test failure must not strand a live carrier or dispose caller.
+            privateRelease.Set();
+            sharedRelease.Set();
+            untrustedRelease.Set();
+        }
     }
 
     private static void ConcurrentDisposeWithoutStartedCarriers()
@@ -186,6 +265,9 @@ internal static class ActorDispatchDomainsSelfTest
         }), "blocked carrier is admitted: " + kind);
         Require(entered.Wait(TimeSpan.FromSeconds(5)),
             "blocked carrier reaches the physical turn: " + kind);
+        Require(domains.TryDispatch(kind, static () =>
+            throw new InvalidOperationException("expected shutdown fault")),
+            "faulting item queued behind active turn: " + kind);
 
         Task first = Task.Factory.StartNew(() =>
         {
@@ -246,6 +328,8 @@ internal static class ActorDispatchDomainsSelfTest
                 "all callers join and carrier rejects self-Dispose: " + kind);
             Require(!domains.TryDispatch(kind, static () => { }),
                 "no dispatch admission after completed Dispose: " + kind);
+            Require(domains.FaultedWorkItems == 1 && domains.CompletedWorkItems >= 2,
+                "join drains admitted faulting work exactly once: " + kind);
             // Repeated shutdown must also be safe on the caller thread.
             domains.Dispose();
         }
