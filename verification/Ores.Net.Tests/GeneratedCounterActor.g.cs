@@ -27,7 +27,6 @@ public static class Actor_Counter
         OresVmHost.ActorScheduler scheduler, OresVmHost.IsolateHandle isolate,
         OresVmHost.ActorTicket actor)
     {
-        return scheduler.DispatchNext(
-            isolate, actor, ActorLayoutIdentity, Call_increment);
+        return scheduler.DispatchNext(isolate, actor, ActorLayoutIdentity, Call_increment);
     }
 }
