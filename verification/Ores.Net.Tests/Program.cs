@@ -111,6 +111,7 @@ SelectableI64FutureSelfTest.Run();
 ActorDispatchDomainsSelfTest.Run();
 ActorRuntimeSelfTest.Run();
 ActorPubSubSelfTest.Run();
+ActorPubSubSourceAdmissionTests.Run();
 ProjectRootSourceTests.Run(); // host-only resolver, not linked .NET source imports
 
 // Import parity is deliberately not claimed for the .NET scalar compiler.
