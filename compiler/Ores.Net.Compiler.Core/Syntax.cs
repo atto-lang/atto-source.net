@@ -184,6 +184,8 @@ public static class OresParser
                 _i++;
                 return new Token(text[start.._i], start);
             }
+            if (ch == '%')
+                throw new FormatException($"noncanonical '%' source operator; use named Integer.rem/mod at offset {start}");
             throw new FormatException($"Invalid character at offset {start}");
         }
     }
