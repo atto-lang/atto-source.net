@@ -19,8 +19,25 @@ compiler="artifacts/compiler/linux-x64/oresnet"
 scalar="artifacts/stategraph-scalar/linux-x64/oreslang-app"
 bash verification/assert-linux-native-release.sh "$compiler"
 bash verification/assert-linux-native-release.sh "$scalar"
-[[ "$("$scalar")" = "42" ]] || { echo 'SG_NET_SCALAR_GUEST_WRONG_RESULT' >&2; exit 1; }
-"$compiler" check examples/stategraph-portability/scalar.ores
+tmp="$(mktemp -d)"
+trap 'rm -rf -- "$tmp"' EXIT
+printf '42\n' > "$tmp/expected"
+run_aot_guest() {
+  local binary="$1" label="$2" status
+  : > "$tmp/out"
+  : > "$tmp/err"
+  set +e
+  timeout --kill-after=3s 45s "$binary" > "$tmp/out" 2> "$tmp/err"
+  status=$?
+  set -e
+  if [[ "$status" -ne 0 ]] || ! cmp -s "$tmp/out" "$tmp/expected" || [[ -s "$tmp/err" ]]; then
+    cat "$tmp/err" >&2
+    echo "SG_NET_NATIVE_GUEST_NOT_ACCEPTED label=$label status=$status" >&2
+    exit 1
+  fi
+}
+run_aot_guest "$scalar" shared-scalar
+"$compiler" check "$shared"
 "$compiler" check examples/stategraph-portability/scalar.ores
 printf 'SG_NET_SHARED_SCALAR_NATIVE_PASS blob=%s guest_stdout=42\n' "$(git rev-parse "HEAD:$shared")"
 # Only the experimental structured lane may accept graph-step control flow.
@@ -31,13 +48,20 @@ fi
 bash scripts/publish-linux.sh examples/stategraph-portability/structured.ores artifacts/stategraph-structured --structured
 structured="artifacts/stategraph-structured/linux-x64/oreslang-app"
 bash verification/assert-linux-native-release.sh "$structured"
-[[ "$("$structured")" = "42" ]] || { echo 'SG_NET_STRUCTURED_GUEST_WRONG_RESULT' >&2; exit 1; }
+run_aot_guest "$structured" structured
 echo "SG_NET_NATIVE_STRUCTURED_PASS source=$(git rev-parse HEAD) blob=$(git rev-parse HEAD:examples/stategraph-portability/structured.ores)"
 denied="artifacts/rejected-stategraph/linux-x64/OresGenerated.dll"
 mkdir -p "$(dirname "$denied")"
 rm -f "$denied"
-if "$compiler" compile-structured examples/stategraph-portability/reject-generic.ores --out "$denied"; then
-  echo 'SG_NET_UNSAFE: unsupported generic graph code admitted' >&2
+set +e
+timeout --kill-after=3s 45s "$compiler" compile-structured \
+  examples/stategraph-portability/reject-generic.ores --out "$denied" \
+  > "$tmp/negative.out" 2> "$tmp/negative.err"
+negative_status=$?
+set -e
+if [[ "$negative_status" -ne 1 ]] || [[ -s "$tmp/negative.out" ]] ||
+   [[ ! -s "$tmp/negative.err" ]]; then
+  echo "SG_NET_UNSAFE: negative compiler check did not return diagnosed rejection status=$negative_status" >&2
   exit 1
 fi
 [[ ! -e "$denied" ]] || { echo 'SG_NET_UNSAFE: denied source emitted assembly' >&2; exit 1; }
