@@ -253,6 +253,7 @@ static class CrossBackendCheckedI64ParityTests
         foreach (var (expression, expected) in new (string, long)[]
         {
             ("-7 * 0", 0L),
+            ("2 * ((5 * 3 + 1) - 9) * 3", 42L), // OresLLM scalar gradient (not autograd)
             ("(2 + 3) * (10 - 2)", 40L),
             ("9223372036854775807 - 9223372036854775807", 0L),
         })
