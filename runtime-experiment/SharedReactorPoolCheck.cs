@@ -130,6 +130,33 @@ static class Check
                 Require(denied);
             }
         }
+        // Admission vs Dispose: no accepted callback may be lost or doubled.
+        using (var io = new Io())
+        using (var pool = new SharedReactorPool(io, 2, 2))
+        {
+            io.Pool = pool;
+            int accepted = 0, finished = 0, entered = 0;
+            var producers = new Thread[4];
+            for (int i = 0; i < producers.Length; ++i)
+            {
+                producers[i] = new Thread(() => {
+                    Interlocked.Increment(ref entered);
+                    for (int j = 0; j < 1000; ++j)
+                    {
+                        if (pool.TrySubmit(() => Interlocked.Increment(ref finished)))
+                            Interlocked.Increment(ref accepted);
+                        else Thread.Yield();
+                    }
+                });
+                producers[i].Start();
+            }
+            Until(() => Volatile.Read(ref entered) == 4 && Volatile.Read(ref accepted) > 0);
+            pool.Dispose();
+            foreach (var producer in producers) producer.Join();
+            Require(Volatile.Read(ref accepted) == Volatile.Read(ref finished));
+            Require(!pool.TrySubmit(() => {}));
+            Require(Volatile.Read(ref io.Active) == 0);
+        }
         Console.WriteLine("shared-reactor host: default-two, single-poller, UDP readiness, shared execution, " +
             "bounded queue, 8000 concurrent submissions, growth cap, self-join denial, drain PASS");
     }
