@@ -11,6 +11,9 @@
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../examples/structured-bindings42.ores" Link="structured-bindings42.ores"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/parity/scalar50/v1.tsv"
+          Link="contracts/parity/scalar50/v1.tsv"
+          CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/scalar/v1/**/*"
           Link="contracts/scalar/v1/%(RecursiveDir)%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest" />
