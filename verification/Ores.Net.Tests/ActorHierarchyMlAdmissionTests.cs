@@ -58,6 +58,15 @@ internal static class ActorHierarchyMlAdmissionTests
             _ = OresStructuredParser.Parse(text);
         }
 
+        // This is only a managed reference-evaluator preflight. The separate
+        // Linux Native AOT script must publish the real compiler and guest
+        // from the exact SHA-pinned .ores file before claiming execution.
+        const string portableSource =
+            "pub fnc main(): int { return 2 - 1 * (2 * 1 - 42) * 1; }\n";
+        var portableIr = OresIrLowering.Lower(OresParser.Parse(portableSource));
+        if (OresIrReferenceEvaluator.Evaluate(portableIr) != 42)
+            throw new Exception("Canonical scalar guest syntax/result diverged from reference evaluator");
+
         // This is a hand-derived signed-i64 numeric intersection, not an
         // implementation of Tensor, backprop, actor communication or ML training.
         foreach (var (expression, expected) in new (string, long)[]
