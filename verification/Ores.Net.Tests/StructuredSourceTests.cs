@@ -131,6 +131,9 @@ internal static class StructuredSourceTests
         }, "compile-time bool may appear in typed conditionals");
         // Java/LLVM/.NET scalar inference and checked-cast conformance.
         foreach (var declaration in new[] {
+            "int x=7;const y=x;const int z=y as int;return z+35;",
+            "bool flag=true;if flag{return 42;}else{return 0;}",
+            "int x=(2+5) as int;return x+35;",
             "const int x=7;const y=7 as int;return x+y+28;",
             "const x=7;const int y=x as int;return y+35;",
             "const x:int=7;return x+35;",
@@ -165,6 +168,9 @@ internal static class StructuredSourceTests
             Kind: StructuredBindingKind.Const, ValueType: IrValueType.Bool
         }, "bool cast must preserve bool inference, never i64 storage type");
         foreach (var invalid in new[] {
+            "int x=true;return 42;",
+            "bool x=7;return 42;",
+            "int x=7;x=8;return x;",
             "const x=7 as bool;return 42;",
             "return 7 as bool;",
             "return true as int;",

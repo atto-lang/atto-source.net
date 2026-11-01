@@ -589,36 +589,52 @@ public static class OresStructuredParser
                 Expect(";");
                 return (new StructuredReturn(at, value), true);
             }
-            if (Current.Text is "let" or "val" or "const")
+            if (Current.Text is "let" or "val" or "const" or "int" or "bool")
             {
-                StructuredBindingKind kind = Current.Text switch
-                {
-                    "let" => StructuredBindingKind.Let,
-                    "val" => StructuredBindingKind.Val,
-                    _ => StructuredBindingKind.Const
-                };
-                index++;
-                // All three scalar declaration forms are admissible:
-                // const int x=e, const x:int=e, const x=e.
-                // A declaration's type is a check; it is not a cast.
-                bool annotated = Current.Text is "int" or "bool";
+                // Bare type-first locals are immutable by default:
+                //   int x=e;  == const int x=e;
+                // Explicit let is the only rebindable scalar binding.
+                bool typeFirstImmutable = Current.Text is "int" or "bool";
+                StructuredBindingKind kind = typeFirstImmutable
+                    ? StructuredBindingKind.Const
+                    : Current.Text switch
+                    {
+                        "let" => StructuredBindingKind.Let,
+                        "val" => StructuredBindingKind.Val,
+                        _ => StructuredBindingKind.Const
+                    };
+                bool annotated;
                 IrValueType type = IrValueType.I64;
                 string name;
                 int nameAt;
-                if (annotated)
+                if (typeFirstImmutable)
                 {
+                    annotated = true;
                     type = Type();
                     nameAt = Current.Offset;
                     name = Name();
                 }
                 else
                 {
-                    nameAt = Current.Offset;
-                    name = Name();
-                    if (Take(":"))
+                    index++;
+                    // Prefix forms admit const int x=e, const x:int=e, const x=e.
+                    // A declaration's type is a check; it is not a cast.
+                    annotated = Current.Text is "int" or "bool";
+                    if (annotated)
                     {
                         type = Type();
-                        annotated = true;
+                        nameAt = Current.Offset;
+                        name = Name();
+                    }
+                    else
+                    {
+                        nameAt = Current.Offset;
+                        name = Name();
+                        if (Take(":"))
+                        {
+                            type = Type();
+                            annotated = true;
+                        }
                     }
                 }
                 if (scopes.Any(scope => scope.ContainsKey(name)))

@@ -92,6 +92,19 @@ internal static class StructuredCfgLoweringTests
             42, "real const/val/let source through verified CFG and CIL");
         Check("fnc main():int{const int c=40+2;return c;}",
             42, "compile-time const typed SSA");
+        Check(File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
+            "scalar-cast-inference-five-backend.ores")),
+            42, "byte-identical five-backend immutable/inference/cast core");
+        Check("fnc main():int{bool flag=true;if flag{return 42;}else{return 0;}}",
+            42, "type-first bool is immutable typed SSA");
+        Check("fnc main():int{int x=(2+5) as int;return x+35;}",
+            42, "type-first int with checked identity cast");
+        Reject("fnc main():int{int x=7;x=8;return x;}",
+            "type-first int binding is immutable by default");
+        Reject("fnc main():int{int x=true;return 0;}",
+            "type-first int initializer type mismatch");
+        Reject("fnc main():int{bool x=7;return 0;}",
+            "type-first bool initializer type mismatch");
 
         // Compiler-backed .NET evidence: each source passes typed admission,
         // independent CFG reference evaluation, actual CIL interpretation,
