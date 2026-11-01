@@ -92,6 +92,34 @@ internal static class StructuredCfgLoweringTests
             42, "real const/val/let source through verified CFG and CIL");
         Check("fnc main():int{const int c=40+2;return c;}",
             42, "compile-time const typed SSA");
+
+        // Compiler-backed .NET evidence: each source passes typed admission,
+        // independent CFG reference evaluation, actual CIL interpretation,
+        // and deterministic PE byte reproduction.
+        foreach (var (source, label) in new[] {
+            ("fnc main():int{const int x=7;const y=7 as int;return x+y+28;}", "explicit-annotation equals inferred checked cast"),
+            ("fnc main():int{const x=7;const y=x as int;return y+35;}", "unannotated int inference"),
+            ("fnc main():int{const x:int=7;return x+35;}", "name-first typed annotation"),
+            ("fnc main():int{const x=(2+5) as int;return x+35;}", "parenthesized additive cast"),
+            ("fnc main():int{const x=7 as int as int;return x+35;}", "chained identity proofs"),
+            ("fnc main():int{const yes=true as bool;if yes{return 42;}else{return 0;}}", "bool inference never int"),
+            ("fnc main():int{const yes=(6*7 eq 42) as bool;if yes{return 42;}else{return 0;}}", "bool comparison checked cast"),
+            ("fnc main():int{let x=7 as int;x=42;return x;}", "explicit let permits rebinding"),
+            ("fnc main():int{let int x=40;const y=x;return y+2;}", "const runtime initializer is fixed binding"),
+            ("fnc plus(int n):int{return n+1;}fnc main():int{const x=plus(41) as int;return x;}", "checked cast of function result"),
+            ("fnc plus(int n):int{return n+1;}fnc main():int{const x=plus(41);return x;}", "inferred function result without cast"),
+            ("fnc main():int{const x=7;if true{const z=x as int;return z+35;}else{return 0;}}", "scope-local inference")
+        })
+            Check(source, 42, "scalar cast/inference " + label);
+        foreach (var (source, label) in new[] {
+            ("fnc main():int{const x=7 as bool;return 42;}", "int-to-bool cast"),
+            ("fnc main():int{const x=true as int;return 42;}", "bool-to-int cast"),
+            ("fnc main():int{const x=7 as? int;return 42;}", "optional cast without tagged Option lowering"),
+            ("fnc main():int{const x=7 as Phantom;return 42;}", "nominal cast without runtime tag"),
+            ("fnc main():int{const x=true;return x+1;}", "inferred bool arithmetic"),
+            ("fnc main():int{const x=7 as int;x=8;return 42;}", "cast does not grant mutation")
+        })
+            Reject(source, "scalar cast/inference " + label);
         Check("fnc main():int{let int x=5;val int y=x+1;x=x+1;return y;}",
             6, "runtime val has independent SSA identity");
         Check("fnc main():int{const bool b=2<3;if b{return 42;}else{return 0;}}",
