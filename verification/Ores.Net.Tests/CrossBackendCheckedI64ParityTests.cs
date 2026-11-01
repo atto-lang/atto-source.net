@@ -8,6 +8,7 @@ static class CrossBackendCheckedI64ParityTests
     public static void Run()
     {
         SignedLiteralRemainder();
+        NamedBitXor();
         foreach (var (name, expression, expected) in new (string, string, long)[]
         {
             ("precedence", "2 + 3 * 4", 14L),
@@ -56,6 +57,88 @@ static class CrossBackendCheckedI64ParityTests
             return;
         }
         throw new Exception("FAILED: int/int division was admitted without float lowering");
+    }
+
+    private static void NamedBitXor()
+    {
+        // These are host-only compiler/IL oracles, never claimed as actual
+        // Native AOT guest execution. The workflow's .ores native gate is separate.
+        foreach (var (expression, expected) in new (string, long)[]
+        {
+            ("Integer.bitXor(40, 2)", 42),
+            ("Integer.bitXor(0, 0)", 0),
+            ("Integer.bitXor(5, 3)", 6),
+            ("Integer.bitXor(-1, 0)", -1),
+            ("Integer.bitXor(-9223372036854775808, 9223372036854775807)", -1),
+            ("Integer.bitXor(4 + 1, 3 * 2)", 3),
+            ("Integer.bitXor(Integer.bitXor(5, 3), 44)", 42)
+        })
+        {
+            var source = "pub fnc main():int{return " + expression + ";}";
+            var ast = OresParser.Parse(source);
+            var ir = OresIrLowering.Lower(ast);
+            long reference = OresIrReferenceEvaluator.Evaluate(ir);
+            if (reference != expected)
+                throw new Exception($"bitXor OresIR mismatch: {expression}, got {reference}");
+            var folder = Path.Combine(Path.GetTempPath(), "oresnet-bitxor-" +
+                Guid.NewGuid().ToString("N"));
+            var file = Path.Combine(folder, "OresGenerated.dll");
+            try
+            {
+                CilEmitter.EmitLibrary(ir, file);
+                using var assembly = AssemblyDefinition.ReadAssembly(file);
+                var method = assembly.MainModule.Types
+                    .Single(t => t.FullName == "Oreslang.Generated.OresProgram")
+                    .Methods.Single(m => m.Name == "Run");
+                long actual = CilReferenceEvaluator.Evaluate(method);
+                if (actual != expected)
+                    throw new Exception($"bitXor CIL mismatch: {expression}: {actual} vs {expected}");
+            }
+            finally
+            {
+                if (Directory.Exists(folder))
+                    Directory.Delete(folder, recursive: true);
+            }
+        }
+
+        foreach (var expression in new[]
+        {
+            "5 ^ 3",
+            "Integer.rem(5, 3)",
+            "Integer.bitXor(1)",
+            "Integer.bitXor(1, 2, 3)",
+            "Integer.bitXor()"
+        })
+        {
+            try
+            {
+                _ = OresParser.Parse("pub fnc main():int{return " + expression + ";}");
+            }
+            catch (FormatException)
+            {
+                continue;
+            }
+            throw new Exception("Unsupported integer operation admitted: " + expression);
+        }
+
+        foreach (var expression in new[]
+        {
+            "Integer.bitXor(9223372036854775807 + 1, 0)",
+            "Integer.bitXor(0, 9223372036854775807 + 1)",
+        })
+        {
+            var ir = OresIrLowering.Lower(
+                OresParser.Parse("pub fnc main():int{return " + expression + ";}"));
+            try
+            {
+                _ = OresIrReferenceEvaluator.Evaluate(ir);
+            }
+            catch (OverflowException)
+            {
+                continue;
+            }
+            throw new Exception("bitXor masked operand overflow: " + expression);
+        }
     }
 
     private static void SignedLiteralRemainder()
