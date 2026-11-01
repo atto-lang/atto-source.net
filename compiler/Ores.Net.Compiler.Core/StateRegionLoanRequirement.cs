@@ -38,7 +38,7 @@ public readonly record struct StateRegionLoanRequirement
             throw new ArgumentException(
                 "state-region requirement must be generation fenced",
                 nameof(generationFence));
-        if (loanId == 0)
+        if (loanId == 0 || loanId > StateRegionLoanProvenance.MaxJsonSafeIdentity)
             throw new ArgumentOutOfRangeException(nameof(loanId));
         if (string.IsNullOrWhiteSpace(place))
             throw new ArgumentException(
@@ -64,6 +64,7 @@ public readonly record struct StateRegionLoanRequirement
         !string.IsNullOrWhiteSpace(RegionBinding) &&
         Execution == ExecutionBinding.CurrentLogicalExecution &&
         GenerationFence && LoanId != 0 &&
+        LoanId <= StateRegionLoanProvenance.MaxJsonSafeIdentity &&
         !string.IsNullOrWhiteSpace(Place) &&
         (Kind == StateRegionLoanProvenance.AccessKind.Read ||
          Kind == StateRegionLoanProvenance.AccessKind.Write) &&
