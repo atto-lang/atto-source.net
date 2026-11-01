@@ -17,6 +17,12 @@ static class CrossBackendCheckedI64ParityTests
             ("min", "-9223372036854775808", long.MinValue),
             ("zero", "0", 0L),
             ("signed multiplication", "-7 * -6", 42L),
+            // Keep these in lockstep with the native LLVM/Cranelift scalar
+            // source executions; this evaluator is not an AOT guest receipt.
+            ("shared precedence", "4 + 6 * (5 - 1)", 28L),
+            ("shared nested parentheses", "7 * (4 + 2)", 42L),
+            ("shared left associativity", "42 - 10 - 2", 30L),
+            ("shared parenthesized precedence", "(2 + 3) * 8", 40L),
         })
         {
             var ast = OresParser.Parse(Header + "define pub fnc main(): int { return " + expression + "; }");
@@ -32,6 +38,8 @@ static class CrossBackendCheckedI64ParityTests
             ("subtract overflow", "-9223372036854775808 - 1"),
             ("multiply overflow", "9223372036854775807 * 2"),
             ("unary negate minimum", "-(-9223372036854775808)"),
+            ("multiply min by negative one", "-9223372036854775808 * -1"),
+            ("nested multiply overflow", "7 * (9223372036854775807 - 1)"),
         })
         {
             try
