@@ -29,6 +29,20 @@ internal static class StateRegionLoanProvenanceSelfTest
         }
         Require(invalid == 9, "all nine canonical negative vectors executed");
 
+        // JSON parsers can silently select one of two repeated keys.
+        // Never let ambiguous or extra fields become trusted loan metadata.
+        string rawBorrow = root.GetProperty("borrow").GetRawText();
+        using var duplicateIdentity = JsonDocument.Parse(
+            rawBorrow[..^1] + ",\"executionId\":1002}");
+        Expect<InvalidOperationException>(
+            () => _ = Read(duplicateIdentity.RootElement),
+            "duplicate execution identity must be rejected");
+        using var unknownAuthority = JsonDocument.Parse(
+            rawBorrow[..^1] + ",\"memory\":1}");
+        Expect<InvalidOperationException>(
+            () => _ = Read(unknownAuthority.RootElement),
+            "unknown guest memory authority field must be rejected");
+
         Expect<ArgumentOutOfRangeException>(() => _ =
             new StateRegionLoanProvenance(
                 9, 3, 7, 1001, 0, 0, 501, "inventory.stock",
@@ -103,6 +117,26 @@ internal static class StateRegionLoanProvenanceSelfTest
 
     private static StateRegionLoanProvenance Read(JsonElement value)
     {
+        // Match the shared schema's additionalProperties=false semantics.
+        // GetProperty() alone chooses the last duplicate JSON name, allowing
+        // contradictory execution/loan identity fields to be smuggled.
+        var allowed = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "contractVersion", "regionId", "regionGeneration", "runtimeDomain",
+            "executionId", "executionSlot", "executionGeneration", "loanId",
+            "place", "kind", "action"
+        };
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        if (value.ValueKind != JsonValueKind.Object)
+            throw new InvalidOperationException("state-region record must be an object");
+        foreach (var property in value.EnumerateObject())
+        {
+            if (!allowed.Contains(property.Name) || !seen.Add(property.Name))
+                throw new InvalidOperationException(
+                    "unknown or duplicate state-region provenance field: " + property.Name);
+        }
+        if (seen.Count != allowed.Count)
+            throw new InvalidOperationException("missing state-region provenance field");
         Require(value.GetProperty("contractVersion").GetString() == "1.0",
             "record contract version");
         var kind = value.GetProperty("kind").GetString() switch
