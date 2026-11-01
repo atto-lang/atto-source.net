@@ -45,6 +45,11 @@ internal static class ActorPubSubSelfTest
 
         Require(a.Leave(right), "right leaves only A");
         Require(!a.Contains(right), "right no longer belongs to A");
+        bool departedPublishRejected = false;
+        try { _ = reliable.Publish(right, "forged-after-leave"); }
+        catch (InvalidOperationException) { departedPublishRejected = true; }
+        Require(departedPublishRejected,
+            "leaving a group revokes actor publication authority even with a cached topic handle");
         Require(b.Contains(left), "A membership change does not affect B");
         ActorPublishReceipt afterLeave = reliable.Publish(publisher, "three");
         // left still has unread "two", so the one remaining subscriber applies
