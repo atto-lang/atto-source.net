@@ -110,6 +110,7 @@ SelectableI64ChannelSelfTest.Run();
 SelectableI64FutureSelfTest.Run();
 ActorDispatchDomainsSelfTest.Run();
 ActorRuntimeSelfTest.Run();
+UniversalHotLoadV1SelfTest.Run();
 ProjectRootSourceTests.Run(); // host-only resolver, not linked .NET source imports
 
 // Import parity is deliberately not claimed for the .NET scalar compiler.
