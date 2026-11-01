@@ -304,6 +304,30 @@ internal static class TcpPoolLeaseLedgerSelfTest
             finally { listener.Stop(); }
         }
 
+
+        {
+            var pool = New();
+            var first = Acquire(pool);
+            Require(pool.TryBegin(first, ActorA, 7), "first operation starts");
+            Require(pool.TryComplete(first), "first completion succeeds");
+            Require(!pool.TryBegin(first, ActorA, 7),
+                "completion replay cannot finish next operation on one lease");
+            Require(!pool.TryComplete(first), "duplicate completion denied");
+            Require(pool.TryRelease(first, ActorA, 7),
+                "single-use lease retires");
+            Require(pool.TryConfirmPhysicalClose(0, first.Generation + 1),
+                "trusted old-socket close fence");
+            var second = Acquire(pool, actor: ActorB);
+            Require(pool.TryBegin(second, ActorB, 7),
+                "new generation acquires fresh single exchange");
+            Require(!pool.TryComplete(first),
+                "old completion cannot finish replacement lease");
+            Require(!pool.TryBegin(second, ActorB, 7),
+                "new generation also forbids intra-lease replay");
+            Require(pool.TryComplete(second), "replacement completion");
+            Require(pool.TryRelease(second, ActorB, 7),
+                "replacement retires cleanly");
+        }
         foreach (var wrong in new[] { 0, -1, 1025 })
         {
             try
