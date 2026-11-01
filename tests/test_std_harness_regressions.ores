@@ -1,0 +1,16 @@
+import class TestCase, TestSuite, TestOptions, TestOutcome, RunSummary from "std/testing";
+import fnc expect_true, expect_false, expect_equal_int, expect_equal_string, run_suite, require_success, fail from "std/testing";
+fnc min_i64_successor_is_exact(): TestOutcome {
+  val int minimum = -9223372036854775807 - 1;
+  return expect_equal_int(minimum + 1, -9223372036854775807,
+    "i64 boundary successor must be exact");
+}
+pub routine main(): void {
+  val TestSuite suite = new TestSuite("dotnet-guest-semantics", arr[
+    new TestCase("min_i64_successor_is_exact", min_i64_successor_is_exact, false, "")
+  ]);
+  val TestOptions options = new TestOptions("", false, true);
+  val RunSummary summary = run_suite(rt borrow suite, rt borrow options);
+  require_success(rt borrow summary);
+  return;
+}
