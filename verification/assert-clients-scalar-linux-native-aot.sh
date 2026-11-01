@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Same byte-identical Oreslang scalar sources used by the public clients pilot.
-# Six compiler checks + three compiler denials + two real Native AOT executions.
+# Six compiler checks + three compiler denials + six real Native AOT executions.
 # Does not establish module, JSON, async, transport or full SDK parity.
 set -Eeuo pipefail
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -76,17 +76,21 @@ for name in 07-unknown-reject 08-overflow-reject 09-syntax-reject; do
 done
 
 # Native AOT pipeline, never a managed dotnet run fallback.
-for pair in '01-precedence:14' '02-grouping:20'; do
+for pair in '01-precedence:14' '02-grouping:20' '03-signed:5' \
+  '04-i64-edge:1' '05-separators:100' '06-nested:35'; do
   name="${pair%%:*}"
   expected="${pair#*:}"
   # The existing source compiler + static native linker is the only release path.
   bash scripts/publish-linux.sh "$src/$name.ores" "artifacts/client-scalar-$name"
   exe="artifacts/client-scalar-$name/linux-x64/oreslang-app"
   bash verification/assert-linux-native-release.sh "$exe"
+  printf 'NATIVE_GUEST=%s\n' "$name"
+  sha256sum -- "$exe"
+  # Check real guest stdout and process status; no managed-code fallback.
   actual="$("$exe")"
   if [[ "$actual" != "$expected" ]]; then
     echo "Native AOT scalar result mismatch: $name" >&2
     exit 1
   fi
 done
-echo 'NET_CLIENT_SCALAR_PARTIAL_6_CHECKS_3_NEGATIVES_2_NATIVE_AOT_EXECUTIONS'
+echo 'NET_CLIENT_SCALAR_6_CHECKS_3_NEGATIVES_6_NATIVE_AOT_EXECUTIONS'
