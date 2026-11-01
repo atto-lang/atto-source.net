@@ -32,8 +32,12 @@ static void InvalidSend(Action action, string why)
 
 // Shared proxy-LB signed-i64 scalar intersection. These are the exact
 // expressions in platform-conformance/fixtures/proxy-lb-v1/manifest.json.
-// This is actual .NET source parse + checked IR reference evaluation; not
-// Native AOT binary guest execution and NOT proxy/network functionality.
+// Parse + lower + emit ACTUAL CIL, then independently interpret emitted CIL.
+// Native AOT process execution and proxy transport are still unverified.
+var lbVectorDirectory = Directory.CreateTempSubdirectory("ores-net-proxy-lb-");
+try
+{
+int lbVectorIndex = 0;
 foreach (var (expression, expected) in new (string Expression, long Expected)[] {
     ("9*1-1*3", 6L),
     ("2*1-1*3", -1L),
@@ -46,6 +50,20 @@ foreach (var (expression, expected) in new (string Expression, long Expected)[] 
     var loweredScalar = OresIrLowering.Lower(OresParser.Parse(scalarSource));
     Require(OresIrReferenceEvaluator.Evaluate(loweredScalar) == expected,
         "proxy-LB checked i64 IR mismatch for " + expression);
+    var compiledPath = Path.Combine(lbVectorDirectory.FullName,
+        "proxy-lb-" + lbVectorIndex++ + ".dll");
+    CilEmitter.EmitLibrary(loweredScalar, compiledPath);
+    using var lbAssembly = AssemblyDefinition.ReadAssembly(compiledPath);
+    var lbEntry = lbAssembly.MainModule.Types.Single(t =>
+        t.FullName == "Oreslang.Generated.OresProgram").Methods.Single(m =>
+        m.Name == "Run");
+    Require(CilReferenceEvaluator.Evaluate(lbEntry) == expected,
+        "proxy-LB emitted checked CIL mismatch for " + expression);
+}
+}
+finally
+{
+    lbVectorDirectory.Delete(recursive: true);
 }
 // Unsupported imported proxy modules must not masquerade as a scalar program.
 Reject(() => OresParser.Parse("define module lb_policy as end\n"),
