@@ -145,7 +145,16 @@ jobs:
           output="$(artifacts/strict-rem-zero/linux-x64/oreslang-app 2>&1)" || status=$?
           test "$status" -eq 70
           test "$output" = "Oreslang division by zero"
-          echo 'LINUX_NET_NATIVE_AOT_STRICT_REM_GUEST_EXECUTED_42_MIN_ZERO'
+          bash scripts/publish-linux.sh examples/strict-mod42.ores artifacts/strict-mod42
+          test "$(artifacts/strict-mod42/linux-x64/oreslang-app)" = 42
+          bash scripts/publish-linux.sh examples/strict-mod-min42.ores artifacts/strict-mod-min42
+          test "$(artifacts/strict-mod-min42/linux-x64/oreslang-app)" = 42
+          bash scripts/publish-linux.sh examples/strict-mod-zero.ores artifacts/strict-mod-zero
+          mod_status=0
+          mod_output="$(artifacts/strict-mod-zero/linux-x64/oreslang-app 2>&1)" || mod_status=$?
+          test "$mod_status" -eq 70
+          test "$mod_output" = "Oreslang division by zero"
+          echo 'LINUX_NET_NATIVE_AOT_STRICT_REM_MOD_GUEST_EXECUTED_42_MIN_ZERO'
       - name: Record exact-head Native AOT execution receipt
         shell: bash
         env:
@@ -158,11 +167,14 @@ jobs:
           sha_normal="$(sha256sum artifacts/strict-rem42/linux-x64/oreslang-app | cut -d' ' -f1)"
           sha_min="$(sha256sum artifacts/strict-rem-min42/linux-x64/oreslang-app | cut -d' ' -f1)"
           sha_zero="$(sha256sum artifacts/strict-rem-zero/linux-x64/oreslang-app | cut -d' ' -f1)"
-          for digest in "$sha_normal" "$sha_min" "$sha_zero"; do
+          sha_mod_normal="$(sha256sum artifacts/strict-mod42/linux-x64/oreslang-app | cut -d' ' -f1)"
+          sha_mod_min="$(sha256sum artifacts/strict-mod-min42/linux-x64/oreslang-app | cut -d' ' -f1)"
+          sha_mod_zero="$(sha256sum artifacts/strict-mod-zero/linux-x64/oreslang-app | cut -d' ' -f1)"
+          for digest in "$sha_normal" "$sha_min" "$sha_zero" "$sha_mod_normal" "$sha_mod_min" "$sha_mod_zero"; do
             [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || { echo 'Invalid native digest' >&2; exit 1; }
           done
-          printf '{"schema":"oreslang.net.exact_head_native_aot_v1","repository":"%s","source_head_sha":"%s","tree_sha":"%s","run_id":%s,"run_attempt":%s,"runner_os":"Linux","target_rid":"linux-x64","checks":["managed-tests","native-compiler","native-app","negative-source-no-cil","source-isolation-4","canonical-precedence","structured-ssa-cil-native45","sidecar-negative","strict-rem-guest42-min-zero"],"source_only":false,"independently_verified":false,"strict_rem_native_sha256":{"normal":"%s","signed_min":"%s","zero_divisor":"%s"}}\n' \
-            "$GITHUB_REPOSITORY" "$EXPECTED_HEAD" "$tree" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$sha_normal" "$sha_min" "$sha_zero" > artifacts/evidence/linux-native-aot.json
+          printf '{"schema":"oreslang.net.exact_head_native_aot_v1","repository":"%s","source_head_sha":"%s","tree_sha":"%s","run_id":%s,"run_attempt":%s,"runner_os":"Linux","target_rid":"linux-x64","checks":["managed-tests","native-compiler","native-app","negative-source-no-cil","source-isolation-4","canonical-precedence","structured-ssa-cil-native45","sidecar-negative","strict-rem-guest42-min-zero","strict-mod-guest42-min-zero"],"source_only":false,"independently_verified":false,"strict_rem_native_sha256":{"normal":"%s","signed_min":"%s","zero_divisor":"%s"},"strict_mod_native_sha256":{"normal":"%s","signed_min":"%s","zero_divisor":"%s"}}\n' \
+            "$GITHUB_REPOSITORY" "$EXPECTED_HEAD" "$tree" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$sha_normal" "$sha_min" "$sha_zero" "$sha_mod_normal" "$sha_mod_min" "$sha_mod_zero" > artifacts/evidence/linux-native-aot.json
       - name: Upload Linux native executables and evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -172,6 +184,9 @@ jobs:
             artifacts/strict-rem42/linux-x64/oreslang-app
             artifacts/strict-rem-min42/linux-x64/oreslang-app
             artifacts/strict-rem-zero/linux-x64/oreslang-app
+            artifacts/strict-mod42/linux-x64/oreslang-app
+            artifacts/strict-mod-min42/linux-x64/oreslang-app
+            artifacts/strict-mod-zero/linux-x64/oreslang-app
             artifacts/apps/linux-x64/oreslang-app
             artifacts/parity/linux-x64/oreslang-app
             artifacts/parity-precedence/linux-x64/oreslang-app
