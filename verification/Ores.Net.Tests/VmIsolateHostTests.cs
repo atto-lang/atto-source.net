@@ -66,9 +66,9 @@ internal static class VmIsolateHostTests
             throw new Exception("foreign tenant fault changed tenant-a");
         var actorA = host.RegisterActor(a, 3);
         var actorB = host.RegisterActor(b, 3);
-        var refA = actorA.Mailbox.CurrentRef;
+        var refA = actorA.CurrentRef;
         host.SendActor(a, actorA, refA, new byte[] { 1, 2, 3 });
-        if (actorA.Mailbox.QueuedMessages != 1)
+        if (actorA.QueuedMessages != 1)
             throw new Exception("actor mailbox must be real, not a fake ticket");
 
         // Native host state-loan nesting is bounded even for a trusted
@@ -176,7 +176,7 @@ internal static class VmIsolateHostTests
         host.RetireResource(a, actorA, pin);
         ExpectFailure(() => host.RetireResource(a, actorA, pin), "replay ticket");
         host.RetireActor(a, actorA);
-        if (actorA.Mailbox.QueuedMessages != 0)
+        if (actorA.QueuedMessages != 0)
             throw new Exception("retire must drain pending mailbox-owned copies");
         ExpectFailure(() => host.SendActor(a, actorA, refA, new byte[] { 4 }), "stale actor ref");
         host.CompleteShutdown(a); host.Destroy(a);
