@@ -88,6 +88,13 @@ internal static class VmIsolateHostTests
         // the trusted native authority. A foreign host cannot turn, inspect,
         // retire, or influence a tenant belonging to this host.
         var foreignHost = new OresVmHost(maxTenants: 1);
+        // Reuse generation 2 in a DIFFERENT host to prove object identity
+        // still denies the collision, not merely a numeric epoch mismatch.
+        var primer = foreignHost.CreateIsolate("primer");
+        foreignHost.Start(primer);
+        foreignHost.BeginShutdown(primer);
+        foreignHost.CompleteShutdown(primer);
+        foreignHost.Destroy(primer);
         var foreignA = foreignHost.CreateIsolate("tenant-a");
         foreignHost.Start(foreignA);
         if (foreignA.Generation != a.Generation)
