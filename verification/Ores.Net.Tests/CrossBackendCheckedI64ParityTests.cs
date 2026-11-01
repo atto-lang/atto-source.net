@@ -160,20 +160,23 @@ static class CrossBackendCheckedI64ParityTests
 
     private static void OreslanaPortableScalarCilBoundary()
     {
-        // Shipping scalar parser + verified OresIR + emitted CIL evaluator.
+        // Oreslana/Orestra scalar candidates: shipping parser, verified OresIR, emitted CIL evaluator.
         // THIS IS NOT A Native AOT guest execution certificate, nor class/actor support.
         foreach (var (name, expression, expected) in new (string, string, long)[]
         {
             ("capacity-zero", "(4096 - 64) + (32 * 2) - 4096", 0L),
             ("nonzero-execution", "73", 73L),
             ("i64-upper-bound", "(9223372036854775807 - 9223372036854775800) * 6", 42L),
+            ("orestra-reservation-zero", "(1000 - 600) - 400", 0L),
+            ("orestra-subtract-first-boundary", "(9223372036854775807 - 9223372036854775700) - 65", 42L),
+            ("orestra-nonzero-entry-canary", "73", 73L),
         })
         {
             var source = "pub fnc main(): int { return " + expression + "; }\n";
             var ir = OresIrLowering.Lower(OresParser.Parse(source));
             long reference = OresIrReferenceEvaluator.Evaluate(ir);
             if (reference != expected)
-                throw new Exception("Oreslana OresIR scalar mismatch: " + name);
+                throw new Exception("Portable application OresIR scalar mismatch: " + name);
             var folder = Path.Combine(Path.GetTempPath(),
                 "oresnet-oreslana-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(folder);
@@ -187,7 +190,7 @@ static class CrossBackendCheckedI64ParityTests
                     .Methods.Single(m => m.Name == "Run");
                 var actual = CilReferenceEvaluator.Evaluate(methodInfo);
                 if (actual != expected)
-                    throw new Exception("Oreslana emitted CIL scalar mismatch: " + name);
+                    throw new Exception("Portable application emitted CIL scalar mismatch: " + name);
             }
             finally
             {
