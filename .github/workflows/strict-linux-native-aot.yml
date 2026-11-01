@@ -72,6 +72,17 @@ jobs:
           test "$(artifacts/parity/linux-x64/oreslang-app)" = 42
           test "$(artifacts/apps/linux-x64/oreslang-app)" = 14
           echo 'LINUX_NET_NATIVE_AOT_COMPILER_AND_APP_EXECUTED'
+      - name: Execute flags2env client ABI scalar through Linux Native AOT
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_file=examples/flags2env-client-abi-status.ores
+          test "$(sha256sum "$source_file" | awk '{print $1}')" = 9add46476c703374f76dd1a0a5827fbad0eb69ff703f4f3cf302604a6f506750
+          bash scripts/publish-linux.sh "$source_file" artifacts/flags2env-client
+          app=artifacts/flags2env-client/linux-x64/oreslang-app
+          bash verification/assert-linux-native-release.sh "$app"
+          test "$("$app")" = 42
+          echo 'LINUX_NET_NATIVE_AOT_FLAGS2ENV_ABI_STATUS_42'
       - name: Execute shared native.precedence and prove three-source isolation
         shell: bash
         run: |
@@ -141,7 +152,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           tree="$(git rev-parse 'HEAD^{tree}')"
           mkdir -p artifacts/evidence
-          printf '{"schema":"oreslang.net.exact_head_native_aot_v1","repository":"%s","source_head_sha":"%s","tree_sha":"%s","run_id":%s,"run_attempt":%s,"runner_os":"Linux","target_rid":"linux-x64","checks":["managed-tests","native-compiler","native-app","negative-source-no-cil","source-isolation-4","canonical-precedence","structured-ssa-cil-native45","sidecar-negative"],"source_only":false,"independently_verified":false}\n' \
+          printf '{"schema":"oreslang.net.exact_head_native_aot_v1","repository":"%s","source_head_sha":"%s","tree_sha":"%s","run_id":%s,"run_attempt":%s,"runner_os":"Linux","target_rid":"linux-x64","checks":["managed-tests","native-compiler","native-app","negative-source-no-cil","source-isolation-4","flags2env-client-abi-status42","canonical-precedence","structured-ssa-cil-native45","sidecar-negative"],"source_only":false,"independently_verified":false}\n' \
             "$GITHUB_REPOSITORY" "$EXPECTED_HEAD" "$tree" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > artifacts/evidence/linux-native-aot.json
       - name: Upload Linux native executables and evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -152,6 +163,7 @@ jobs:
             artifacts/apps/linux-x64/oreslang-app
             artifacts/parity/linux-x64/oreslang-app
             artifacts/parity-precedence/linux-x64/oreslang-app
+            artifacts/flags2env-client/linux-x64/oreslang-app
             artifacts/structured/linux-x64/oreslang-app
             artifacts/compiler/linux-x64/oresnet
           if-no-files-found: error
