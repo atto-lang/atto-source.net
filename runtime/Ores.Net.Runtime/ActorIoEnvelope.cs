@@ -89,7 +89,7 @@ public sealed class ActorIoEnvelope
         lock (_gate)
         {
             RequireCurrent(actor);
-            int bytes = Utf8Bytes(diagnostic.Code) + Utf8Bytes(diagnostic.Message);
+            long bytes = (long)Utf8Bytes(diagnostic.Code) + Utf8Bytes(diagnostic.Message);
             return TryEnqueueRecord(_errors, ref _errorBytes, diagnostic, bytes);
         }
     }
@@ -115,7 +115,7 @@ public sealed class ActorIoEnvelope
         lock (_gate)
         {
             RequireCurrent(actor);
-            int bytes = Utf8Bytes(@event.Kind) + Utf8Bytes(@event.Payload);
+            long bytes = (long)Utf8Bytes(@event.Kind) + Utf8Bytes(@event.Payload);
             return TryEnqueueRecord(_events, ref _eventBytes, @event, bytes);
         }
     }
@@ -157,14 +157,14 @@ public sealed class ActorIoEnvelope
                 throw new ArgumentOutOfRangeException(nameof(values),
                     "Actor metadata entry limit exceeded");
 
-            int bytes = 0;
+            long bytes = 0;
             var owned = new Dictionary<string, string>(StringComparer.Ordinal);
             foreach (var pair in values)
             {
                 if (string.IsNullOrEmpty(pair.Key))
                     throw new ArgumentException("Actor metadata keys must be nonempty", nameof(values));
-                int entryBytes = Utf8Bytes(pair.Key) + Utf8Bytes(pair.Value);
-                if (bytes > MaxMetadataBytes - entryBytes)
+                long entryBytes = (long)Utf8Bytes(pair.Key) + Utf8Bytes(pair.Value);
+                if (entryBytes > MaxMetadataBytes || bytes > MaxMetadataBytes - entryBytes)
                     throw new ArgumentOutOfRangeException(nameof(values),
                         "Actor metadata byte limit exceeded");
                 if (!owned.TryAdd(pair.Key, pair.Value))
@@ -225,7 +225,7 @@ public sealed class ActorIoEnvelope
         Queue<T> queue,
         ref int queuedBytes,
         T item,
-        int bytes)
+        long bytes)
     {
         if (bytes < 0 || bytes > MaxBytesPerChannel)
             return false;
@@ -234,7 +234,7 @@ public sealed class ActorIoEnvelope
             bytes > MaxBytesPerChannel - queuedBytes)
             return false;
         queue.Enqueue(item);
-        queuedBytes += bytes;
+        queuedBytes += checked((int)bytes);
         return true;
     }
 
