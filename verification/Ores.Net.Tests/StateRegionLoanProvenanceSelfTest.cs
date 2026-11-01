@@ -36,6 +36,24 @@ internal static class StateRegionLoanProvenanceSelfTest
                 StateRegionLoanProvenance.LoanAction.Borrow),
             "unbound execution handle rejected");
 
+        Expect<ArgumentOutOfRangeException>(() => _ =
+            new StateRegionLoanProvenance(
+                9, 3, 7, 1001, 41, 6, 501, "inventory.stock",
+                (StateRegionLoanProvenance.AccessKind)255,
+                StateRegionLoanProvenance.LoanAction.Borrow),
+            "forged runtime access enum rejected");
+        Expect<ArgumentOutOfRangeException>(() => _ =
+            new StateRegionLoanProvenance(
+                9, 3, 7, 1001, 41, 6, 501, "inventory.stock",
+                StateRegionLoanProvenance.AccessKind.Write,
+                (StateRegionLoanProvenance.LoanAction)255),
+            "forged runtime action enum rejected");
+        var defaultBorrow = default(StateRegionLoanProvenance);
+        Require(!defaultBorrow.AuthorizesRelease(valid),
+            "default-initialized runtime receipt must not authorize release");
+        Expect<InvalidOperationException>(() => _ = defaultBorrow.ReleaseRecord(),
+            "default runtime receipt cannot mint release");
+
         var requirement = new StateRegionLoanRequirement(
             "inventory",
             StateRegionLoanRequirement.ExecutionBinding.CurrentLogicalExecution,
@@ -56,6 +74,28 @@ internal static class StateRegionLoanProvenanceSelfTest
                 StateRegionLoanProvenance.AccessKind.Write,
                 StateRegionLoanProvenance.LoanAction.Borrow),
             "compiler requirement cannot disable generation fence");
+
+        Expect<ArgumentOutOfRangeException>(() => _ =
+            new StateRegionLoanRequirement(
+                "inventory",
+                StateRegionLoanRequirement.ExecutionBinding.CurrentLogicalExecution,
+                true, 501, "inventory.stock",
+                (StateRegionLoanProvenance.AccessKind)255,
+                StateRegionLoanProvenance.LoanAction.Borrow),
+            "forged symbolic mode rejected");
+        Expect<ArgumentOutOfRangeException>(() => _ =
+            new StateRegionLoanRequirement(
+                "inventory",
+                StateRegionLoanRequirement.ExecutionBinding.CurrentLogicalExecution,
+                true, 501, "inventory.stock",
+                StateRegionLoanProvenance.AccessKind.Write,
+                (StateRegionLoanProvenance.LoanAction)255),
+            "forged symbolic action rejected");
+        var defaultRequirement = default(StateRegionLoanRequirement);
+        Require(!defaultRequirement.MatchesRelease(requirement.ReleaseRequirement()),
+            "default symbolic requirement must not match release");
+        Expect<InvalidOperationException>(() => _ = defaultRequirement.ReleaseRequirement(),
+            "default symbolic requirement cannot mint release");
 
         Console.WriteLine(
             "PASS .NET state-region requirement/provenance v1 (1 positive, 9 negative vectors)");
