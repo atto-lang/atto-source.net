@@ -175,6 +175,7 @@ public sealed class ActorRuntime : IDisposable
     private readonly ActorRuntimeOptions _options;
     private readonly ActorArenaBudget _nativeBudget;
     private readonly ActorDispatchDomains _domains;
+    private readonly ActorPubSub _pubSub;
 
     private ulong _nextActorId;
     private bool _closed;
@@ -220,7 +221,14 @@ public sealed class ActorRuntime : IDisposable
         _options = options;
         _nativeBudget = new ActorArenaBudget(options.NativeBudgetBytes);
         _domains = new ActorDispatchDomains(options.Dispatcher);
+        _pubSub = new ActorPubSub(
+            maxGroups: Math.Min(options.MaxActors, 4096),
+            maxGroupsPerActor: 64,
+            maxTopics: 4096,
+            maxSubscriptionsPerActor: 1024);
     }
+
+    public ActorPubSub PubSub => _pubSub;
 
     public int LiveActors
     {
@@ -265,6 +273,15 @@ public sealed class ActorRuntime : IDisposable
 
                 var cell = new ActorCell(this, kind, mailbox, arena, handler);
                 _actors.Add(candidateId, cell);
+                try
+                {
+                    _pubSub.RegisterActor(cell.Reference);
+                }
+                catch
+                {
+                    _actors.Remove(candidateId);
+                    throw;
+                }
                 _nextActorId = candidateId;
                 return cell.Reference;
             }
@@ -521,6 +538,7 @@ public sealed class ActorRuntime : IDisposable
         cell.Mailbox.Stop();
         cell.Arena.Retire();
         cell.Arena.TryReclaim();
+        _pubSub.RetireActor(cell.Reference);
 
         lock (_gate)
         {
