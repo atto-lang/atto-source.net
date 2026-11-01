@@ -38,6 +38,19 @@ const string mutableShareError =
     "native rt mut share requires verified SharedMutex<T> capability, guarded lowering and allocation-domain proof in .NET Native AOT at offset ";
 foreach (var source in new[] {
     "fnc main():int{return rt mut share 1;}",
+    // Heap owners and borrowed aliases must never be silently treated as
+    // CIL i64 scalars merely because the unsupported share is nested.
+    // This asserts the compiler-owned capability diagnostic, not positive
+    // heap/Array/Arc support in either .NET frontend.
+    "fnc main():int{return rt mut share (SharedMutex.new(42));}",
+    "fnc main():int{return rt mut share (Arc.new(42));}",
+    "fnc main():int{return rt mut share (Box.new(42));}",
+    "fnc main():int{return rt mut share (Rc.new(42));}",
+    "fnc main():int{return rt mut share (rt borrow owner);}",
+    "fnc main():int{return rt mut share (rt take owner);}",
+    "fnc main():int{return rt mut share (rt mut borrow owner);}",
+    "fnc main():int{return rt mut share (40+2);}",
+
     "fnc main():int{return 1+(rt mut share 2);}",
     "fnc main():int{return rt mut share (rt mut borrow 1);}",
     "fnc main():int{return rt mut share (rt mut share 5);}",
