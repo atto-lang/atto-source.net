@@ -97,6 +97,37 @@ catch (FormatException ex) when (ex.Message == "Expected 'fnc' at offset 7") { }
 Reject(() => OresParser.Parse("fnc main():int { return 1=2; }"), "assignment expression");
 Reject(() => OresParser.Parse("fnc main():int { const x = 1; return x; }"), "local assignment");
 
+// Immutable-default v1 / five-backend admission (common-source #203).
+// Shipping scalar .NET has no locals. Reject all new spellings BEFORE
+// CIL/Native AOT emission; a generic parse rejection is not proof that
+// readonly semantics have been implemented. The structured path is
+// separately staged in #201/#282 and requires real Native AOT validation.
+foreach (var source in new[] {
+    "fnc main():int { int x = 7; return x; }",
+    "fnc main():int { const x = 7; return x; }",
+    "fnc main():int { const int x = 7; return x; }",
+    "fnc main():int { const x: int = 7; return x; }",
+    "fnc main():int { int x = 7; int y = x * 3; return y; }",
+    "fnc main():int { int x = 7; x = 8; return x; }",
+    "fnc main():int { int x = 7; x += 1; return x; }",
+    "fnc main():int { const x = 7; x = 8; return x; }",
+    "fnc main():int { int x = x + 1; return x; }",
+    "fnc main():int { int x = y; int y = 7; return x; }",
+    "fnc main():int { int x = 7; int x = 8; return x; }",
+    "fnc main():int { const x; return 7; }",
+    "fnc main():int { const x = undefined_name; return x; }",
+    "fnc main():int { string x = 7; return 0; }",
+    "fnc main():int { const unused = 9223372036854775807 + 1; return 7; }",
+    "fnc main(int x):int { const y = x + 1; return y; }"
+}) {
+    Reject(() => OresParser.Parse(source),
+        "shipping scalar compiler must fail closed on immutable-default locals");
+}
+// False keyword detection from comments would change scalar semantics.
+Require(OresParser.Parse("fnc main():int{return 42;} // const x = 7;") is Literal,
+    "immutable declaration comment must not be compiled as a binding");
+
+
 ActorRefNoWireSelfTest.Run();
 ActorMailboxBoundsSelfTest.Run();
 SelectContinuationFenceSelfTest.Run();
