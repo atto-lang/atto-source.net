@@ -1,0 +1,94 @@
+// Identical native Oreslang guest suite across Java, LLVM and .NET.
+// Source contracts alone do not establish compiler-backed guest execution.
+// The Wasm bridge runs the 16 import-free scalar expressions separately.
+import class TestCase, TestSuite, TestOptions, TestOutcome, RunSummary from "ores.std/testing";
+import fnc expect_equal_int, run_suite, require_success from "ores.std/testing";
+
+fnc case_zero(): TestOutcome {
+  return expect_equal_int(0, 0, "portable scalar parity: zero");
+}
+
+fnc case_positive_forty_two(): TestOutcome {
+  return expect_equal_int(6 * 7, 42, "portable scalar parity: positive-forty-two");
+}
+
+fnc case_negative_forty_two(): TestOutcome {
+  return expect_equal_int(-7 * 6, -42, "portable scalar parity: negative-forty-two");
+}
+
+fnc case_max_i64(): TestOutcome {
+  return expect_equal_int(9223372036854775807, 9223372036854775807, "portable scalar parity: max-i64");
+}
+
+fnc case_min_i64(): TestOutcome {
+  return expect_equal_int(-9223372036854775808, -9223372036854775808, "portable scalar parity: min-i64");
+}
+
+fnc case_max_minus_one(): TestOutcome {
+  return expect_equal_int(9223372036854775807 - 1, 9223372036854775806, "portable scalar parity: max-minus-one");
+}
+
+fnc case_min_plus_one(): TestOutcome {
+  return expect_equal_int(-9223372036854775808 + 1, -9223372036854775807, "portable scalar parity: min-plus-one");
+}
+
+fnc case_over_binary64_mantissa(): TestOutcome {
+  return expect_equal_int(9007199254740993 - 9007199254740992, 1, "portable scalar parity: over-binary64-mantissa");
+}
+
+fnc case_negative_over_binary64(): TestOutcome {
+  return expect_equal_int(-9007199254740993 - (-9007199254740992), -1, "portable scalar parity: negative-over-binary64");
+}
+
+fnc case_precedence(): TestOutcome {
+  return expect_equal_int(2 + 3 * 4, 14, "portable scalar parity: precedence");
+}
+
+fnc case_parentheses(): TestOutcome {
+  return expect_equal_int((2 + 3) * 4, 20, "portable scalar parity: parentheses");
+}
+
+fnc case_subtraction_left_assoc(): TestOutcome {
+  return expect_equal_int(20 - 5 - 3, 12, "portable scalar parity: subtraction-left-assoc");
+}
+
+fnc case_grouped_subtraction(): TestOutcome {
+  return expect_equal_int(20 - (5 - 3), 18, "portable scalar parity: grouped-subtraction");
+}
+
+fnc case_double_negative(): TestOutcome {
+  return expect_equal_int(-(-42), 42, "portable scalar parity: double-negative");
+}
+
+fnc case_two_negative_factors(): TestOutcome {
+  return expect_equal_int((-7) * (-6), 42, "portable scalar parity: two-negative-factors");
+}
+
+fnc case_underscore_literal(): TestOutcome {
+  return expect_equal_int(1_000 + 24, 1024, "portable scalar parity: underscore-literal");
+}
+
+pub routine main(): void {
+  val TestSuite suite = new TestSuite("portable-scalar-v1", arr[
+    new TestCase("zero", case_zero, false, ""),
+    new TestCase("positive-forty-two", case_positive_forty_two, false, ""),
+    new TestCase("negative-forty-two", case_negative_forty_two, false, ""),
+    new TestCase("max-i64", case_max_i64, false, ""),
+    new TestCase("min-i64", case_min_i64, false, ""),
+    new TestCase("max-minus-one", case_max_minus_one, false, ""),
+    new TestCase("min-plus-one", case_min_plus_one, false, ""),
+    new TestCase("over-binary64-mantissa", case_over_binary64_mantissa, false, ""),
+    new TestCase("negative-over-binary64", case_negative_over_binary64, false, ""),
+    new TestCase("precedence", case_precedence, false, ""),
+    new TestCase("parentheses", case_parentheses, false, ""),
+    new TestCase("subtraction-left-assoc", case_subtraction_left_assoc, false, ""),
+    new TestCase("grouped-subtraction", case_grouped_subtraction, false, ""),
+    new TestCase("double-negative", case_double_negative, false, ""),
+    new TestCase("two-negative-factors", case_two_negative_factors, false, ""),
+    new TestCase("underscore-literal", case_underscore_literal, false, "")
+  ]);
+  val TestOptions options = new TestOptions("", false, true);
+  val RunSummary summary = run_suite(rt borrow suite, rt borrow options);
+  require_success(rt borrow summary);
+  return;
+}
