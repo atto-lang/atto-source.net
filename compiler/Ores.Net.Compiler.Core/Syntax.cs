@@ -179,7 +179,10 @@ public static class OresParser
             // Lex assignment punctuation so unsupported declarations are rejected
             // at their declaration, rather than at a later initializer. The
             // arithmetic parser still has no assignment production.
-            if ("()+-*/%{}:;.=?".IndexOf(ch) >= 0)
+            if (ch is '%' or '^')
+                throw new FormatException(
+                    $"Removed Oreslang operator '{ch}' is not valid source at offset {start}");
+            if ("()+-*/{}:;.=?".IndexOf(ch) >= 0)
             {
                 _i++;
                 return new Token(text[start.._i], start);
@@ -262,35 +265,16 @@ public static class OresParser
         {
             CheckDepth(depth);
             Expression left = ParseUnary(depth + 1);
-            while (Current.Text is "*" or "/" or "%")
+            while (Current.Text is "*" or "/")
             {
                 char op = Current.Text[0];
-                // Reference Oreslang int/int has a float result. This i64-only
-                // frontend must not silently truncate it using CIL div.
+                // int/int is float in Oreslang and remains unsupported in this
+                // i64-only bootstrap; % and ^ are removed at lexical admission.
                 if (op == '/')
-                    throw new FormatException("Division requires float result lowering; unsupported in the i64 source subset");
+                    throw new FormatException(
+                        "Division requires float result lowering; unsupported in the i64 source subset");
                 _index++;
-                var rhs = ParseUnary(depth + 1);
-                if (op == '%')
-                {
-                    // Portable P0 subset: a syntactically signed nonzero
-                    // integer literal is required. No dynamic zero/error
-                    // effects or untyped CLR remainder fallbacks.
-                    long divisor = rhs switch
-                    {
-                        Literal literal => literal.Value,
-                        Unary { Operator: '+', Value: Literal literal } => literal.Value,
-                        Unary { Operator: '-', Value: Literal literal }
-                            when literal.Value != long.MinValue => -literal.Value,
-                        _ => throw new FormatException(
-                            "Remainder requires a signed integer literal divisor")
-                    };
-                    if (divisor == 0)
-                        throw new FormatException("Remainder divisor cannot be zero");
-                    left = new Binary('%', left, new Literal(divisor));
-                }
-                else
-                    left = new Binary(op, left, rhs);
+                left = new Binary(op, left, ParseUnary(depth + 1));
             }
             return left;
         }
