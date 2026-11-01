@@ -55,6 +55,9 @@ internal static class StructuredSourceTests
         Require(OresStructuredParser.Parse(
             "fnc main():int{/* critical suspends async */return 7;}").Body.Count == 1,
             "comment-only reserved words cannot trigger an effect rejection");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{let int critical=7;return critical;}").Body.Count == 2,
+            "contextual critical may remain a scalar local identifier");
 
         // Local value types are block-local declarations on the structured
         // frontend. They are admitted into the AST but deliberately rejected
