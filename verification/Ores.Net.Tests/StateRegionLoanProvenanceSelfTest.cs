@@ -62,6 +62,39 @@ internal static class StateRegionLoanProvenanceSelfTest
                 StateRegionLoanProvenance.AccessKind.Write,
                 (StateRegionLoanProvenance.LoanAction)255),
             "forged runtime action enum rejected");
+        // Shared wire/JSON v1 must round-trip through WASM Number exactly.
+        // A native 64-bit identity beyond 2^53-1 would alias in JS and must
+        // fail closed, rather than falsely authorizing a release there.
+        const ulong limit = StateRegionLoanProvenance.MaxJsonSafeIdentity;
+        var upper = new StateRegionLoanProvenance(
+            limit, limit, limit, limit, limit, limit, limit,
+            "inventory.stock", StateRegionLoanProvenance.AccessKind.Write,
+            StateRegionLoanProvenance.LoanAction.Borrow);
+        Require(upper.AuthorizesRelease(upper.ReleaseRecord()),
+            "max safe integer identities remain valid");
+        Expect<ArgumentOutOfRangeException>(() => _ =
+            new StateRegionLoanProvenance(
+                limit + 1, 3, 7, 1001, 41, 6, 501,
+                "inventory.stock", StateRegionLoanProvenance.AccessKind.Write,
+                StateRegionLoanProvenance.LoanAction.Borrow),
+            "unsafe regionId cannot alias in JS");
+        Expect<ArgumentOutOfRangeException>(() => _ =
+            new StateRegionLoanProvenance(
+                9, 3, 7, 1001, 41, 6, limit + 1,
+                "inventory.stock", StateRegionLoanProvenance.AccessKind.Write,
+                StateRegionLoanProvenance.LoanAction.Borrow),
+            "unsafe loanId cannot alias in JS");
+        Expect<ArgumentOutOfRangeException>(() => _ =
+            new StateRegionLoanProvenance(
+                9, 3, 7, 1001, 41, limit + 1, 501,
+                "inventory.stock", StateRegionLoanProvenance.AccessKind.Write,
+                StateRegionLoanProvenance.LoanAction.Borrow),
+            "unsafe execution generation cannot alias in JS");
+        using var unsafeJson = JsonDocument.Parse(
+            rawBorrow.Replace("\\\"executionId\\\":1001", "\\\"executionId\\\":9007199254740992"));
+        Expect<ArgumentOutOfRangeException>(() => _ = Read(unsafeJson.RootElement),
+            "unsafe exact integer rejected by JSON receipt constructor");
+
         var defaultBorrow = default(StateRegionLoanProvenance);
         Require(!defaultBorrow.AuthorizesRelease(valid),
             "default-initialized runtime receipt must not authorize release");
