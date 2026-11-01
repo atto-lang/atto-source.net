@@ -86,6 +86,12 @@ static class CrossBackendCheckedI64ParityTests
             Header + "pub fnc main():int{return 7*6;}"));
         if (OresIrReferenceEvaluator.Evaluate(positive) != 42)
             throw new Exception("Canonical multiply baseline regressed");
+        // '%' remains valid text inside lexical comments, never as an
+        // executable operator. Guard against a crude pre-lexical filter.
+        var commentProgram = OresIrLowering.Lower(OresParser.Parse(
+            Header + "pub fnc main():int{return 42;} // % comment only"));
+        if (OresIrReferenceEvaluator.Evaluate(commentProgram) != 42)
+            throw new Exception("Percent in a comment corrupted parsing");
 
         // The IR is untrusted; a source parser's admission does not grant
         // externally constructed IR the right to use arbitrary divisors.
