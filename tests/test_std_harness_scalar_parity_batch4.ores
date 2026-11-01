@@ -1,0 +1,136 @@
+// Authored native Oreslang compiler/stdlib parity cases.
+// This is not compiler-backed evidence until an exact-head guest run succeeds.
+import class TestCase, TestSuite, TestOptions, TestOutcome, RunSummary from "ores.std/testing";
+import fnc expect_true, expect_false, expect_equal_bool, expect_equal_int, expect_not_equal_int, expect_equal_string, expect_not_equal_string, expect_near_float, escape_machine_field, run_suite, require_success from "ores.std/testing";
+
+fnc signed_max_identity(): TestOutcome {
+  return expect_equal_int(9223372036854775807 + 0, 9223372036854775807, "max identity lost precision");
+}
+
+fnc signed_min_identity(): TestOutcome {
+  val int minimum = -9223372036854775807 - 1;
+  return expect_equal_int(minimum + 0, minimum, "min identity lost precision");
+}
+
+fnc signed_max_predecessor(): TestOutcome {
+  return expect_equal_int(9223372036854775807 - 1, 9223372036854775806, "max predecessor must remain exact");
+}
+
+fnc signed_min_successor(): TestOutcome {
+  val int minimum = -9223372036854775807 - 1;
+  return expect_equal_int(minimum + 1, -9223372036854775807, "minimum successor must remain exact");
+}
+
+fnc positive_binary64_gap(): TestOutcome {
+  return expect_equal_int(9007199254740995 - 9007199254740993, 2, "integer calculation must not round to double");
+}
+
+fnc negative_binary64_gap(): TestOutcome {
+  return expect_equal_int(-9007199254740995 - (-9007199254740993), -2, "negative i64 calculation must remain exact");
+}
+
+fnc positive_large_equals_itself(): TestOutcome {
+  return expect_true(9007199254740993 == 9007199254740993, "high precision equality mismatch");
+}
+
+fnc high_precision_inequality(): TestOutcome {
+  return expect_not_equal_int(9007199254740992, 9007199254740993, "adjacent large integers must differ");
+}
+
+fnc signed_small_multiply(): TestOutcome {
+  return expect_equal_int((-12) * 7, -84, "negative multiplication sign was lost");
+}
+
+fnc double_negative_multiply(): TestOutcome {
+  return expect_equal_int((-7) * (-6), 42, "two negative factors yield positive result");
+}
+
+fnc subtraction_associativity(): TestOutcome {
+  return expect_equal_int(100 - 30 - 20, 50, "subtraction must group left to right");
+}
+
+fnc grouped_subtraction(): TestOutcome {
+  return expect_equal_int(100 - (30 - 20), 90, "grouped subtraction must be preserved");
+}
+
+fnc operator_precedence(): TestOutcome {
+  return expect_equal_int(7 + 5 * 3, 22, "multiplication precedence is incorrect");
+}
+
+fnc explicit_parentheses(): TestOutcome {
+  return expect_equal_int((7 + 5) * 3, 36, "parentheses must bind expression");
+}
+
+fnc multiplication_associativity_small(): TestOutcome {
+  return expect_equal_int((2 * 3) * 7, 2 * (3 * 7), "small integer multiplication grouping changed outcome");
+}
+
+fnc boolean_comparison_equality(): TestOutcome {
+  return expect_equal_bool((7 < 9), true, "less-than comparison must be a boolean");
+}
+
+fnc boolean_comparison_disagreement(): TestOutcome {
+  return expect_equal_bool((9 < 7), false, "less-than cannot reverse operands");
+}
+
+fnc zero_float_tolerance(): TestOutcome {
+  return expect_near_float(3.5, 3.5, 0.0, "equal finite floats should pass with zero tolerance");
+}
+
+fnc positive_float_tolerance_boundary(): TestOutcome {
+  return expect_near_float(1.25, 1.0, 0.25, "near-float inclusive boundary changed");
+}
+
+fnc outside_float_tolerance_rejected(): TestOutcome {
+  val TestOutcome result = expect_near_float(1.5, 1.0, 0.25, "outside tolerance");
+  return expect_false(result.passed, "outside tolerance was incorrectly accepted");
+}
+
+fnc string_case_distinction(): TestOutcome {
+  return expect_not_equal_string("Oreslang", "oreslang", "case changes string identity");
+}
+
+fnc string_exact_equality(): TestOutcome {
+  return expect_equal_string("actor/lock/123", "actor/lock/123", "equal string must remain equal");
+}
+
+fnc machine_pipe_escaping(): TestOutcome {
+  return expect_equal_string(escape_machine_field("part|field"), "part\\u007cfield", "pipe delimiter must not survive receipt encoding");
+}
+
+fnc machine_newline_escaping(): TestOutcome {
+  return expect_equal_string(escape_machine_field("a\nb"), "a\\nb", "newline must not split machine event");
+}
+
+pub routine main(): void {
+  val TestSuite suite = new TestSuite("compiler-scalar-parity-batch4", arr[
+    new TestCase("signed_max_identity", signed_max_identity, false, ""),
+    new TestCase("signed_min_identity", signed_min_identity, false, ""),
+    new TestCase("signed_max_predecessor", signed_max_predecessor, false, ""),
+    new TestCase("signed_min_successor", signed_min_successor, false, ""),
+    new TestCase("positive_binary64_gap", positive_binary64_gap, false, ""),
+    new TestCase("negative_binary64_gap", negative_binary64_gap, false, ""),
+    new TestCase("positive_large_equals_itself", positive_large_equals_itself, false, ""),
+    new TestCase("high_precision_inequality", high_precision_inequality, false, ""),
+    new TestCase("signed_small_multiply", signed_small_multiply, false, ""),
+    new TestCase("double_negative_multiply", double_negative_multiply, false, ""),
+    new TestCase("subtraction_associativity", subtraction_associativity, false, ""),
+    new TestCase("grouped_subtraction", grouped_subtraction, false, ""),
+    new TestCase("operator_precedence", operator_precedence, false, ""),
+    new TestCase("explicit_parentheses", explicit_parentheses, false, ""),
+    new TestCase("multiplication_associativity_small", multiplication_associativity_small, false, ""),
+    new TestCase("boolean_comparison_equality", boolean_comparison_equality, false, ""),
+    new TestCase("boolean_comparison_disagreement", boolean_comparison_disagreement, false, ""),
+    new TestCase("zero_float_tolerance", zero_float_tolerance, false, ""),
+    new TestCase("positive_float_tolerance_boundary", positive_float_tolerance_boundary, false, ""),
+    new TestCase("outside_float_tolerance_rejected", outside_float_tolerance_rejected, false, ""),
+    new TestCase("string_case_distinction", string_case_distinction, false, ""),
+    new TestCase("string_exact_equality", string_exact_equality, false, ""),
+    new TestCase("machine_pipe_escaping", machine_pipe_escaping, false, ""),
+    new TestCase("machine_newline_escaping", machine_newline_escaping, false, "")
+  ]);
+  val TestOptions options = new TestOptions("", false, true);
+  val RunSummary summary = run_suite(rt borrow suite, rt borrow options);
+  require_success(rt borrow summary);
+  return;
+}
