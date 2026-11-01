@@ -1,0 +1,5 @@
+// Generic patch and callback probe: unsupported until real NativeAOT lowering.
+define pub class GraphPatch<T> as
+  pub val T payload;
+end
+pub fnc main(): int { return 42; }
