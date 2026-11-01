@@ -132,6 +132,17 @@ jobs:
             echo 'Native verifier accepted a managed DLL sidecar' >&2
             exit 1
           fi
+      - name: Run six canonical Oreslang scalar native guest cases (manual, costly)
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+          bash -n verification/verify-portable-scalar-linux.sh
+          mkdir -p artifacts/evidence
+          bash verification/verify-portable-scalar-linux.sh | tee artifacts/evidence/portable-six-native.txt
       - name: Record exact-head Native AOT execution receipt
         shell: bash
         env:
@@ -149,6 +160,7 @@ jobs:
           name: oreslang-net-linux-x64-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             artifacts/evidence/linux-native-aot.json
+            artifacts/evidence/portable-six-native.txt
             artifacts/apps/linux-x64/oreslang-app
             artifacts/parity/linux-x64/oreslang-app
             artifacts/parity-precedence/linux-x64/oreslang-app
