@@ -127,6 +127,9 @@ internal sealed class TcpPoolLeaseLedger
             policyEpoch = next;
             foreach (var slot in slots)
             {
+                // Idle pre-connected sockets may carry stale TLS/tenant
+                // authority. Epoch rollover quarantines every slot.
+                slot.Quarantine = true;
                 if (slot.Current is not { } lease) continue;
                 lease.Revoked = true;
                 if (!lease.Active) Retire(lease);
