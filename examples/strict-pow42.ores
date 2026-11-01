@@ -1,0 +1,4 @@
+// Signed64 checked power: -32 + 74 = 42.
+define pub fnc main(): int {
+    return Integer.pow(-2, 5) + 74;
+}
