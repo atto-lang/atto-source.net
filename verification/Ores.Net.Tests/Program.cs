@@ -30,6 +30,27 @@ static void InvalidSend(Action action, string why)
     throw new Exception("Expected mailbox rejection: " + why);
 }
 
+// Shared proxy-LB signed-i64 scalar intersection. These are the exact
+// expressions in platform-conformance/fixtures/proxy-lb-v1/manifest.json.
+// This is actual .NET source parse + checked IR reference evaluation; not
+// Native AOT binary guest execution and NOT proxy/network functionality.
+foreach (var (expression, expected) in new (string Expression, long Expected)[] {
+    ("9*1-1*3", 6L),
+    ("2*1-1*3", -1L),
+    ("3*1-1*3", 0L),
+    ("1024*16-1024*16", 0L),
+    ("1024*16-0*16", 16384L)
+})
+{
+    var scalarSource = "fnc main():int{return " + expression + ";}\n";
+    var loweredScalar = OresIrLowering.Lower(OresParser.Parse(scalarSource));
+    Require(OresIrReferenceEvaluator.Evaluate(loweredScalar) == expected,
+        "proxy-LB checked i64 IR mismatch for " + expression);
+}
+// Unsupported imported proxy modules must not masquerade as a scalar program.
+Reject(() => OresParser.Parse("define module lb_policy as end\n"),
+    "proxy actor/module lowering is not a shipping scalar .NET profile");
+
 // Opaque top types and value-producing conditionals are language-reserved,
  // but this i64-only bootstrap has no tagged dynamic-value ABI or typed CFG
  // lowering for them yet. Reject before OresIR/CIL emission.
