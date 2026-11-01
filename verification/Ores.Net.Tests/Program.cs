@@ -694,6 +694,7 @@ SourceI64Conformance.Run();
 SharedScalarParityConformance.Run();
 CfgVerifierTests.Run();
 CfgCilStressTests.Run();
+SupervisorStopLedgerSelfTest.Run();
 StructuredSourceTests.Run();
 StructuredCfgLoweringTests.Run();
 StructuredStaticAbiTests.Run();
