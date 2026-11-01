@@ -17,6 +17,25 @@ internal static class VmIsolateHostTests
         ExpectFailure(() => host.CreateIsolate("hostile",
             isolation: OresVmHost.IsolationMode.SandboxedProcess),
             "unsupported process sandbox must reject before admission");
+        // Same exact ID grammar as the native Wasmtime tenant host:
+        // no dot components, slashes, path escapes or Unicode lookalikes.
+        // Reject before allocating a tenant or consuming its capacity.
+        foreach (var invalidId in new[] {
+            ".", "..", "../escape", "a/b", @"a\b", "a b", "é",
+            "", " ", new string('x', 129)
+        })
+        {
+            try {
+                host.CreateIsolate(invalidId);
+                throw new Exception("invalid tenant ID was admitted: " + invalidId);
+            }
+            catch (ArgumentException) { }
+        }
+        var validTenantLabel = host.CreateIsolate("tenant.a-b_1");
+        host.Start(validTenantLabel);
+        host.BeginShutdown(validTenantLabel);
+        host.CompleteShutdown(validTenantLabel);
+        host.Destroy(validTenantLabel);
         var a = host.CreateIsolate("tenant-a", maxActors: 1, maxResourcePins: 1);
         var b = host.CreateIsolate("tenant-b", maxActors: 1);
         ExpectFailure(() => host.CreateIsolate("tenant-c"), "host limit");

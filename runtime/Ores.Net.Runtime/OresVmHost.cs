@@ -94,7 +94,10 @@ public sealed class OresVmHost
     {
         if (isolation != IsolationMode.TrustedInProcess)
             throw new InvalidOperationException("sandboxed tenant process isolation not implemented");
-        if (string.IsNullOrWhiteSpace(tenantId) || tenantId.Length > 128 ||
+        // Dot-only IDs are future path/namespace control components, not
+        // tenant identities. Match the Wasmtime registry's fail-closed rule.
+        if (string.IsNullOrWhiteSpace(tenantId) || tenantId is "." or ".." ||
+            tenantId.Length > 128 ||
             !tenantId.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-' or '.'))
             throw new ArgumentException("invalid tenant ID", nameof(tenantId));
         if (maxActors is < 1 or > 65536 || maxResourcePins is < 1 or > 65536)
