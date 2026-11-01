@@ -20,7 +20,7 @@ if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) { throw 'Native comp
 $expressions = @(
     '-7%3', '7%-3', '-7%-3', '8%3*2', '20%6%3',
     '-9223372036854775808%-1', '7%0', '7%(1+1)',
-    '(9223372036854775807+1)%-1', 'Integer.bitXor(7%3,1)',
+    '(9223372036854775807+1)%-1', '7 + (7%3)',
     '7^3', '7^^3'
 )
 $rejections = 0
