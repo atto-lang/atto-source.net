@@ -37,6 +37,25 @@ internal static class StructuredSourceTests
 
     public static void Run()
     {
+        // These are source-admission negatives, not proof of runtime guards.
+        foreach (var source in new[] {
+            "pub async fnc work():int{return 1;}",
+            "async fnc work():int{return 1;}"
+        }) RejectFeature(source, "'async' modifier removed");
+        foreach (var source in new[] {
+            "pub suspends fnc work():int{return 1;}",
+            "pub suspends critical fnc work():int{return 1;}"
+        }) RejectFeature(source, "suspends requires verified continuation lowering");
+        foreach (var source in new[] {
+            "pub critical fnc work():int{return 1;}",
+            "pub critical suspends fnc work():int{return 1;}",
+            "fnc main():int{critical{return 1;}return 7;}",
+            "fnc main():int{try critical{return 1;}return 7;}"
+        }) RejectFeature(source, "critical requires scheduler-owned guard lowering");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{/* critical suspends async */return 7;}").Body.Count == 1,
+            "comment-only reserved words cannot trigger an effect rejection");
+
         // Local value types are block-local declarations on the structured
         // frontend. They are admitted into the AST but deliberately rejected
         // by CFG/CIL lowering until value layout and construction are verified.
