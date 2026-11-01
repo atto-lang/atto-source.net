@@ -50,6 +50,21 @@ test('NativeAOT CI runs only by explicit dispatch on same private source reposit
  assert.match(existingWorkflow,/if: github\.event_name == 'workflow_dispatch'/);
  assert.match(existingWorkflow,/bash verification\/oresllm-eight-scalar-native-aot\.sh/);
 });
+test('exact shared OresLLM gradient is guarded by opt-in NativeAOT execution',()=>{
+ const source=readFileSync('contracts/v1/semantics/fixtures/oresllm-scalar-gradient.ores');
+ const expected=Buffer.from('pub fnc main(): int { return 2 * ((5 * 3 + 1) - 9) * 3; }\n');
+ assert.deepEqual(source,expected);
+ const sha=createHash('sha1').update('blob '+source.length+'\0').update(source).digest('hex');
+ assert.equal(sha,'fbd4877db8dc2edf8a02fb76ee738d24cb69f922');
+ assert.match(existingWorkflow,/name: Opt-in compile shared OresLLM scalar gradient with real Linux NativeAOT/);
+ assert.match(existingWorkflow,/if: github\.event_name == 'workflow_dispatch'/);
+ assert.match(existingWorkflow,/git hash-object -- "\$source_file"/);
+ assert.match(existingWorkflow,/expected_blob=fbd4877db8dc2edf8a02fb76ee738d24cb69f922/);
+ assert.match(existingWorkflow,/bash scripts\/publish-linux\.sh "\$source_file" artifacts\/oresllm-gradient-native/);
+ assert.match(existingWorkflow,/bash verification\/assert-linux-native-release\.sh "\$app"/);
+ assert.match(existingWorkflow,/cmp --silent "\$work\/stdout" "\$work\/expected"/);
+ assert.match(existingWorkflow,/test ! -s "\$work\/stderr"/);
+});
 test('host guard does not claim NativeAOT execution',()=>{
  assert.match(script,/NOT a CIL reference oracle/);
  assert.match(workflow,/Never source-only certification/);
