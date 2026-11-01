@@ -80,6 +80,7 @@ Require(OresParser.Parse(
 AsyncOnlyIoPolicyTests.Run();
 SourceByteBudgetTests.Run();
 StructuralPatternAdmissionTests.Run();
+AdtSourceAdmissionTests.Run();
 NumericSeparatorParityTests.Run();
 CrossBackendCheckedI64ParityTests.Run();
 AsyncInteropFailClosedTests.Run();
