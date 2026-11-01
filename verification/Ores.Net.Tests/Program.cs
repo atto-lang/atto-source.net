@@ -97,6 +97,21 @@ catch (FormatException ex) when (ex.Message == "Expected 'fnc' at offset 7") { }
 Reject(() => OresParser.Parse("fnc main():int { return 1=2; }"), "assignment expression");
 Reject(() => OresParser.Parse("fnc main():int { const x = 1; return x; }"), "local assignment");
 
+// The .NET scalar compiler must NOT claim guest access to host slab pins or
+// raw TCP pooling until a typed actor-ownership lowering and NativeAOT
+// transport boundary are actually implemented.
+foreach (var source in new[] {
+    "fnc main():int{return FrozenTcpSlab.pin();}",
+    "fnc main():int{return FrozenBytes.read_at(0);}",
+    "fnc main():int{return SharedBuffer.pin();}",
+    "fnc main():int{return TcpPool.acquire_async();}",
+    "fnc main():int{return rt share socket;}",
+    "fnc main():int{return rt mut share socket;}"
+}) {
+    Reject(() => OresParser.Parse(source),
+        "unsupported host-only TCP slab or guest pooling source");
+}
+
 FrozenTcpSlabSelfTest.Run(); // host-only immutable shared-buffer parity
 TcpPoolLeaseLedgerSelfTest.Run(); // trusted TCP lease authority, no socket I/O
 await TcpPoolPhysicalCloseLoopbackSelfTest.RunAsync(); // host-only real TCP close fence
