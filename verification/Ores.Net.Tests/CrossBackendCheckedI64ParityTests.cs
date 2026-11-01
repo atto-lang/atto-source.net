@@ -57,9 +57,9 @@ static class CrossBackendCheckedI64ParityTests
                     _ => throw new InvalidOperationException("unknown wave scalar case")
                 };
                 source = "// " + id +
-                    ": candidate source-identical checked-i64 scalar program.\\n" +
-                    "// Expected integer result 42; guest execution on each backend is unverified.\\n" +
-                    "pub fnc main(): int { return " + expression + "; }\\n";
+                    ": candidate source-identical checked-i64 scalar program.\n" +
+                    "// Expected integer result 42; guest execution on each backend is unverified.\n" +
+                    "pub fnc main(): int { return " + expression + "; }\n";
                 var actualSha = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(source)))
                     .ToLowerInvariant();
                 if (actualSha != WaveSourceSha256[id - 34])
@@ -74,6 +74,30 @@ static class CrossBackendCheckedI64ParityTests
             var actual = OresIrReferenceEvaluator.Evaluate(ir);
             if (actual != expected)
                 throw new Exception($"FAILED: cross-backend checked-i64 {name}: expected {expected}, got {actual}");
+            // Independently verify emitted CIL as well as typed OresIR.
+            // This remains a CIL interpreter receipt, not NativeAOT execution.
+            if (name.StartsWith("wave/", StringComparison.Ordinal))
+            {
+                var folder = Path.Combine(Path.GetTempPath(),
+                    "oresnet-wave-" + Guid.NewGuid().ToString("N"));
+                try
+                {
+                    var binary = Path.Combine(folder, "OresGenerated.dll");
+                    CilEmitter.EmitLibrary(ir, binary);
+                    using var assembly = AssemblyDefinition.ReadAssembly(binary);
+                    var method = assembly.MainModule.Types
+                        .Single(t => t.FullName == "Oreslang.Generated.OresProgram")
+                        .Methods.Single(m => m.Name == "Run");
+                    var actualCil = CilReferenceEvaluator.Evaluate(method);
+                    if (actualCil != expected)
+                        throw new Exception($"FAILED: emitted CIL {name}: expected {expected}, got {actualCil}");
+                }
+                finally
+                {
+                    if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+                }
+            }
+
         }
 
         foreach (var (name, expression) in new (string, string)[]
