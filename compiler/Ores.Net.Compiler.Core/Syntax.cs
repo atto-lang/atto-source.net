@@ -7,6 +7,17 @@ public sealed record Literal(long Value) : Expression;
 public sealed record Unary(char Operator, Expression Value) : Expression;
 public sealed record Binary(char Operator, Expression Left, Expression Right) : Expression;
 
+// Shared by the scalar and structured frontends so unsupported mutable sharing
+// cannot be diagnosed differently before native CIL lowering exists.
+internal static class MutableShareAdmission
+{
+    internal const string DiagnosticPrefix =
+        "native rt mut share requires verified SharedMutex<T> capability, guarded lowering and allocation-domain proof in .NET Native AOT at offset ";
+
+    internal static FormatException Unsupported(int offset) =>
+        new(DiagnosticPrefix + offset);
+}
+
 public static class OresParser
 {
     private const int MaxDepth = 128;
@@ -49,8 +60,7 @@ public static class OresParser
         {
             if (i + 2 < tokens.Count && tokens[i].Text == "rt" &&
                 tokens[i + 1].Text == "mut" && tokens[i + 2].Text == "share")
-                throw new FormatException(
-                    $"native rt mut share requires verified SharedMutex<T> capability, guarded lowering and allocation-domain proof in .NET Native AOT at offset {tokens[i].Offset}");
+                throw MutableShareAdmission.Unsupported(tokens[i].Offset);
             if (tokens[i].Text == "select" &&
                 StaticSelectAdmission.IsStaticSelectFollower(tokens[i + 1].Text))
                 throw StaticSelectAdmission.Unsupported(tokens[i].Offset);
