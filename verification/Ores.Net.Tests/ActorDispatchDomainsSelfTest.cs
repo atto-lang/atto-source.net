@@ -117,6 +117,7 @@ internal static class ActorDispatchDomainsSelfTest
         using var exited = new ManualResetEventSlim();
         using var firstEntered = new ManualResetEventSlim();
         using var secondEntered = new ManualResetEventSlim();
+        bool carrierSelfDisposeRejected = false;
         Require(domains.TryDispatch(kind, () =>
         {
             entered.Set();
@@ -124,6 +125,11 @@ internal static class ActorDispatchDomainsSelfTest
             {
                 if (!release.Wait(TimeSpan.FromSeconds(10)))
                     throw new Exception("blocked carrier exceeded shutdown test budget");
+                // Reject self-Dispose even after global shutdown has started.
+                // Waiting on the completion fence from this carrier would
+                // deadlock the first disposer, which is joining this thread.
+                try { domains.Dispose(); }
+                catch (InvalidOperationException) { carrierSelfDisposeRejected = true; }
             }
             finally
             {
@@ -168,8 +174,8 @@ internal static class ActorDispatchDomainsSelfTest
             release.Set();
             Require(first.Wait(TimeSpan.FromSeconds(5)) &&
                     second.Wait(TimeSpan.FromSeconds(5)) &&
-                    exited.IsSet,
-                "all Dispose callers complete after carrier exits: " + kind);
+                    exited.IsSet && carrierSelfDisposeRejected,
+                "both callers join and carrier rejects self-Dispose: " + kind);
             Require(!domains.TryDispatch(kind, static () => { }),
                 "no dispatch admission after completed Dispose: " + kind);
             // Repeated shutdown must also be safe on the caller thread.
