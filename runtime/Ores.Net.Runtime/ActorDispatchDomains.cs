@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Runtime.ExceptionServices;
 using System.Threading;
 
 namespace Ores.Net.Runtime;
@@ -73,6 +74,10 @@ public sealed class ActorDispatchDomains : IDisposable
     private readonly ActorDispatchPool _private;
     private readonly ActorDispatchPool _shared;
     private readonly ActorDispatchPool _untrusted;
+    // A second Dispose must not return while another caller still joins live
+    // carrier threads. Keep the event alive for concurrent waiters.
+    private readonly ManualResetEventSlim _disposeComplete = new(false);
+    private ExceptionDispatchInfo? _disposeFailure;
     private int _closed;
 
     public ActorDispatchDomains(ActorDispatcherOptions? options = null)
@@ -118,20 +123,37 @@ public sealed class ActorDispatchDomains : IDisposable
 
     public void Dispose()
     {
-        if (Volatile.Read(ref _closed) != 0)
-            return;
+        // Even if another thread is already disposing, an active worker must
+        // never wait on its own termination: that would deadlock shutdown.
         if (_private.IsCurrentWorker ||
             _shared.IsCurrentWorker ||
             _untrusted.IsCurrentWorker)
             throw new InvalidOperationException(
                 "ActorDispatchDomains.Dispose cannot join its current carrier");
 
-        if (Interlocked.Exchange(ref _closed, 1) != 0)
+        if (Interlocked.CompareExchange(ref _closed, 1, 0) != 0)
+        {
+            _disposeComplete.Wait();
+            _disposeFailure?.Throw();
             return;
+        }
 
-        _private.Dispose();
-        _shared.Dispose();
-        _untrusted.Dispose();
+        try
+        {
+            _private.Dispose();
+            _shared.Dispose();
+            _untrusted.Dispose();
+        }
+        catch (Exception error)
+        {
+            _disposeFailure = ExceptionDispatchInfo.Capture(error);
+            throw;
+        }
+        finally
+        {
+            // Publish the completion/failure before waking every waiter.
+            _disposeComplete.Set();
+        }
     }
 
     private ActorDispatchPool Pool(ActorKind kind) => kind switch
