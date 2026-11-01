@@ -61,6 +61,28 @@ internal static class StructuredSourceTests
             "define actor A1 impl Traced as end"
         })
             RejectFeature(actorSource, "receiver-erased method slots");
+        // Same canonical lifecycle source as the platform-conformance v1
+        // fixture; .NET must refuse it until ActorRef and CIL state/receive
+        // lowering are actually implemented and executed.
+        RejectFeature(@"// Lifecycle baseline only. No sealed state, inheritance, or actor-group parity claim.
+define actor A1 as
+  receive(ActorMail<int> mail): void {
+    self.send(mail.value + 1);
+    self.end();
+    return;
+  }
+end
+
+pub async routine main(): void {
+  val worker = spawn A1();
+  await worker.get_ready();
+  worker.send(41);
+  val reply = (await worker.outputs.next()).value.unwrap();
+  stdio.stdout.write(reply.value);
+  await worker.get_done();
+  return;
+}
+", "receiver-erased method slots");
         Require(OresStructuredParser.Parse(
             "fnc main():int{/* define pub actor A1 as end */return 42;}"
         ).Body.Count == 1, "actor declarations in comments must remain inert");
