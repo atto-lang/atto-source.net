@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Ores.Net.Compiler;
 
 // HOST-ONLY reference. The .NET scalar compiler has not compiled the
@@ -91,6 +92,47 @@ internal static class HpcFinanceRiskHostParityTests
         throw new InvalidOperationException("finance contract mutation accepted");
     }
 
+    private static void CheckGuestManifest()
+    {
+        var bytes = File.ReadAllBytes(Path.Combine(
+            AppContext.BaseDirectory, "hpc-finance-guests-v1.json"));
+        Require(bytes.Length is > 0 and <= 32768, "guest manifest byte budget");
+        var header = Encoding.ASCII.GetBytes("blob " +
+            bytes.Length.ToString(CultureInfo.InvariantCulture) + "\0");
+        using var digest = IncrementalHash.CreateHash(HashAlgorithmName.SHA1);
+        digest.AppendData(header);
+        digest.AppendData(bytes);
+        var blob = Convert.ToHexString(digest.GetHashAndReset()).ToLowerInvariant();
+        Require(blob == "062cff056919708b2cc9e6f9a6f4cb6ec00661e8",
+            "guest manifest Git blob not reviewed");
+        using var document = JsonDocument.Parse(bytes);
+        var root = document.RootElement;
+        Require(root.GetProperty("status").GetString() == "authored-not-compiler-executed",
+            "unverified guest evidence was promoted");
+        Require(root.GetProperty("risk_fixture_git_blob").GetString() ==
+            "cec489c1f7603617797340dd1b4a71cc85acfebd", "risk fixture drift");
+        var programs = root.GetProperty("programs");
+        Require(programs.GetArrayLength() == 11, "guest program inventory changed");
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        var total = 0;
+        foreach (var item in programs.EnumerateArray())
+        {
+            var id = item.GetProperty("id").GetString() ?? "";
+            var path = item.GetProperty("path").GetString() ?? "";
+            var sha = item.GetProperty("git_blob").GetString() ?? "";
+            Require(ids.Add(id), "duplicate guest ID");
+            Require(path == "tests/" + id + ".ores", "guest path mismatch");
+            Require(sha.Length == 40 && sha.All(ch =>
+                (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f')),
+                "unverified guest blob SHA format");
+            total += item.GetProperty("assertions").GetInt32();
+        }
+        Require(total == 182 && root.GetProperty("total_assertions").GetInt32() == 182,
+            "guest assertion count drift");
+        Require(root.GetProperty("expected_risk_decisions").GetInt32() == 180,
+            "risk cross-product inventory drift");
+    }
+
     private static void CheckUnsupportedGuestAdmission()
     {
         // No fake float support: preserve negative source admission until
@@ -111,6 +153,7 @@ internal static class HpcFinanceRiskHostParityTests
 
     public static void Run()
     {
+        CheckGuestManifest();
         var rows = ReadCorpus();
         VerifyInventory(rows);
         var duplicate = (string[])rows.Clone();
