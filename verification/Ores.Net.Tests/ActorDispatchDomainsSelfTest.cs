@@ -111,7 +111,7 @@ internal static class ActorDispatchDomainsSelfTest
             PrivateWorkers = 1,
             SharedWorkers = 1,
             UntrustedWorkers = 1,
-            QueueCapacityPerDomain = 16
+            QueueCapacityPerDomain = 1024
         });
         using var entered = new CountdownEvent(3);
         using var privateRelease = new ManualResetEventSlim();
@@ -150,10 +150,16 @@ internal static class ActorDispatchDomainsSelfTest
             TaskScheduler.Default);
         try
         {
-            Require(SpinWait.SpinUntil(
-                () => !domains.TryDispatch(ActorKind.Private, static () => { }),
-                TimeSpan.FromSeconds(5)),
-                "cross-domain Dispose must close admission");
+            // Each accepted probe uses one queue slot. Keep the number
+            // strictly below the configured 1024 capacity: rejection must
+            // prove closed admission, never mere queue saturation.
+            bool closed = false;
+            for (int attempt = 0; attempt < 500 && !closed; ++attempt)
+            {
+                closed = !domains.TryDispatch(ActorKind.Private, static () => { });
+                if (!closed) Thread.Sleep(1);
+            }
+            Require(closed, "cross-domain Dispose must close admission");
 
             privateRelease.Set();
             Require(privateExited.Wait(TimeSpan.FromSeconds(5)),
