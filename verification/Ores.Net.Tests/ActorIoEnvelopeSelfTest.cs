@@ -51,6 +51,28 @@ internal static class ActorIoEnvelopeSelfTest
         Require(io.TryReadOutput(actor, out var full) && full?.Length == fullRecord.Length,
             "full output drains exactly");
 
+        var oversizedMetadataValue = new string('x', ActorIoEnvelope.MaxMetadataBytes + 1);
+        ExpectRange(
+            () => io.ReplaceMetadata(actor, new Dictionary<string, string>
+            {
+                ["oversized"] = oversizedMetadataValue
+            }),
+            "oversized metadata must fail before counter mutation");
+        Require(
+            !io.TryEmitError(
+                actor,
+                new ActorIoDiagnostic(
+                    "E_BIG",
+                    new string('x', ActorIoEnvelope.MaxBytesPerChannel + 1))),
+            "oversized diagnostic must fail closed");
+        Require(
+            !io.TryEmitEvent(
+                actor,
+                new ActorIoEvent(
+                    "big",
+                    new string('x', ActorIoEnvelope.MaxBytesPerChannel + 1))),
+            "oversized event must fail closed");
+
         var stale = actor;
         mailbox.Stop();
         var fresh = mailbox.Restart();
@@ -68,6 +90,13 @@ internal static class ActorIoEnvelopeSelfTest
 
         Console.WriteLine(
             "PASS .NET actor io bounded input/output/error/events/metadata and generation fencing");
+    }
+
+    private static void ExpectRange(Action action, string scenario)
+    {
+        try { action(); }
+        catch (ArgumentOutOfRangeException) { return; }
+        throw new Exception("Actor I/O quota accepted invalid input: " + scenario);
     }
 
     private static void ExpectStale(Action action, string scenario)
