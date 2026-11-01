@@ -136,8 +136,61 @@ internal static class ActorNativeHeapSelfTest
         Require(bounded.Allocate(bob, 8).HasValue
                 && !bounded.Remove(bob, only.Value), "generation fenced slot reuse");
 
+        NativeHeapSurvivorDoesNotAliasRetiredNeighbor(alice, bob);
         NativeCapacityBudgetWaitsForFinalLease(alice);
         Console.WriteLine("PASS .NET per-actor unmanaged heaps, bounds, loans, ABA, recycle, retirement");
+    }
+
+    // Real unmanaged host allocations; compiled .ores actor-field lowering is
+    // still a separate gate. Distinct owner regions must not alias, even when
+    // neighboring heaps are pending retirement or physically reclaimed.
+    private static void NativeHeapSurvivorDoesNotAliasRetiredNeighbor(
+        ActorRef alice, ActorRef bob)
+    {
+        using var a = new ActorNativeHeap(alice, 64, 2);
+        using var b = new ActorNativeHeap(bob, 64, 2);
+        var ah = a.Allocate(alice, 4);
+        var bh = b.Allocate(bob, 4);
+        Require(ah.HasValue && bh.HasValue, "two private native heap allocations");
+        Require(a.Write(alice, ah.Value, new byte[] { 1, 2, 3, 4 }) &&
+                b.Write(bob, bh.Value, new byte[] { 5, 6, 7, 8 }),
+            "write independent host heaps");
+        Span<byte> observed = stackalloc byte[4];
+        Require(!b.Read(bob, ah.Value, observed) &&
+                !a.Read(alice, bh.Value, observed),
+            "cross-heap handles cannot alias even when owner is valid");
+        Require(b.Read(bob, bh.Value, observed) &&
+                observed.SequenceEqual(new byte[] { 5, 6, 7, 8 }),
+            "foreign handle failures cannot corrupt survivor");
+
+        using var pin = a.AcquireLifetimeLease(alice);
+        Require(pin is not null, "real retirement lifetime pin");
+        Require(!a.Retire(alice) && !a.Retired,
+            "logical retirement must not free pinned native bytes");
+        Require(b.Write(bob, bh.Value, new byte[] { 9, 10, 11, 12 }),
+            "other actor progresses while neighbor remains pinned");
+        pin!.Dispose();
+        Require(a.Retired, "last physical pin must reclaim native heap");
+        Require(b.Read(bob, bh.Value, observed) &&
+                observed.SequenceEqual(new byte[] { 9, 10, 11, 12 }),
+            "surviving actor memory intact after neighbor reclaim");
+        Require(!b.Read(bob, ah.Value, observed),
+            "retired heap handle never aliases survivor");
+        Require(a.Retire(alice), "repeat native retire is idempotent");
+
+        using var replacement = new ActorNativeHeap(alice, 64, 2);
+        var fresh = replacement.Allocate(alice, 4);
+        Require(fresh.HasValue, "fresh heap allocation after retirement");
+        Require(!replacement.Read(alice, ah.Value, observed),
+            "old heap handle cannot alias replacement");
+        Require(replacement.Read(alice, fresh.Value, observed) &&
+                observed.SequenceEqual(new byte[4]),
+            "replacement native heap is zero-filled");
+        Require(replacement.Write(alice, fresh.Value, new byte[] { 42, 43, 44, 45 }),
+            "replacement write admitted");
+        Require(b.Read(bob, bh.Value, observed) &&
+                observed.SequenceEqual(new byte[] { 9, 10, 11, 12 }),
+            "replacement writes cannot affect surviving actor");
     }
 
     private static void Require(bool good, string reason)
