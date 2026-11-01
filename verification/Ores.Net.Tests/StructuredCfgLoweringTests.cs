@@ -90,7 +90,15 @@ internal static class StructuredCfgLoweringTests
         Check(File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
             "structured-bindings42.ores")),
             42, "real const/val/let source through verified CFG and CIL");
-        Check("fnc main():int{const int c=40+2;return c;}",
+        Check("fnc main():int{int x=7;return x+35;}",
+            42, "type-first immutable int local through verified CFG/CIL");
+        Check("fnc main():int{int x=6*7;return x;}",
+            42, "typed-default computation returns 42");
+        Check("fnc plus(int n):int{return n+1;}fnc main():int{int x=plus(41);return x;}",
+            42, "typed default accepts immutable runtime helper result");
+        Check("fnc main():int{bool ready=true;if ready{return 42;}else{return 0;}}",
+            42, "typed-default bool retains static type");
+                Check("fnc main():int{const int c=40+2;return c;}",
             42, "compile-time const typed SSA");
 
         // Compiler-backed .NET evidence: each source passes typed admission,
@@ -105,16 +113,16 @@ internal static class StructuredCfgLoweringTests
             ("fnc main():int{const yes=true as bool;if yes{return 42;}else{return 0;}}", "bool inference never int"),
             ("fnc main():int{const yes=(6*7 eq 42) as bool;if yes{return 42;}else{return 0;}}", "bool comparison checked cast"),
             ("fnc main():int{let x=7 as int;x=42;return x;}", "explicit let permits rebinding"),
-            ("fnc main():int{let int x=40;const y=x;return y+2;}", "const runtime initializer is fixed binding"),
-            ("fnc plus(int n):int{return n+1;}fnc main():int{const x=plus(41) as int;return x;}", "checked cast of function result"),
-            ("fnc plus(int n):int{return n+1;}fnc main():int{const x=plus(41);return x;}", "inferred function result without cast"),
+            ("fnc main():int{let int x=40;val y=x;return y+2;}", "const runtime initializer is fixed binding"),
+            ("fnc plus(int n):int{return n+1;}fnc main():int{val x=plus(41) as int;return x;}", "checked cast of function result"),
+            ("fnc plus(int n):int{return n+1;}fnc main():int{val x=plus(41);return x;}", "inferred function result without cast"),
             ("fnc main():int{const x=7;if true{const z=x as int;return z+35;}else{return 0;}}", "scope-local inference"),
             ("fnc main():int{const x=true as bool as bool;if x{return 42;}else{return 0;}}", "chained bool identity casts"),
-            ("fnc main():int{val x=7;const y=x as int;return y+35;}", "inferred val preserves int"),
+            ("fnc main():int{val x=7;val y=x as int;return y+35;}", "inferred val preserves int"),
             ("fnc main():int{let x=7;x=42;return x;}", "inferred let preserves mutable int"),
             ("fnc main():int{let x=false;x=true;if x{return 42;}else{return 0;}}", "inferred mutable bool"),
-            ("fnc yes():bool{return true;}fnc main():int{const x=yes();if x{return 42;}else{return 0;}}", "inferred bool helper result"),
-            ("fnc yes():bool{return true;}fnc main():int{const x=yes() as bool;if x{return 42;}else{return 0;}}", "checked bool helper result"),
+            ("fnc yes():bool{return true;}fnc main():int{val x=yes();if x{return 42;}else{return 0;}}", "inferred bool helper result"),
+            ("fnc yes():bool{return true;}fnc main():int{val x=yes() as bool;if x{return 42;}else{return 0;}}", "checked bool helper result"),
             ("fnc seven():int{return 7 as int;}fnc main():int{return seven()+35;}", "checked identity cast at helper return"),
             ("fnc main():int{const a=7;const b=a;const c=b as int;return c+35;}", "multi-hop int inference"),
             ("fnc main():int{const a=true;const b=a;const c=b as bool;if c{return 42;}else{return 0;}}", "multi-hop bool inference"),
@@ -254,7 +262,13 @@ internal static class StructuredCfgLoweringTests
         Reject("fnc main():int{return 1/2;}",
             "source int division requires float lowering");
 
-        Reject("fnc main():int{val int x=1;x=2;return x;}", "val reassignment");
+        Reject("fnc main():int{int x=7;x=8;return x;}", "typed-default readonly rebind");
+        Reject("fnc main():int{int x=7;int x=8;return x;}", "typed-default duplicate local");
+        Reject("fnc main():int{int x=x+1;return x;}", "typed-default self reference");
+        Reject("fnc main():int{bool x=7;return 0;}", "typed-default bool mismatch");
+        Reject("fnc main(int p):int{const x=p+1;return x;}",
+            "standalone const cannot depend on runtime parameter");
+                Reject("fnc main():int{val int x=1;x=2;return x;}", "val reassignment");
         Reject("fnc main():int{const int x=1;x=2;return x;}", "const reassignment");
         Reject("fnc main():int{val int x=1;if true{x=2;}return x;}",
             "val cannot be mutated inside nested block");
@@ -267,7 +281,9 @@ internal static class StructuredCfgLoweringTests
 
         CheckOverflow("fnc main():int{return -(-9223372036854775808);}",
             "checked negation");
-        CheckOverflow("fnc main():int{val int n=9223372036854775807;return n+1;}",
+        CheckOverflow("fnc main():int{int unused=9223372036854775807+1;return 7;}",
+            "typed-default unused initializer must eagerly fail with checked overflow");
+                CheckOverflow("fnc main():int{val int n=9223372036854775807;return n+1;}",
             "runtime val checked overflow in emitted CIL");
         CheckOverflow("fnc main():int{return 9223372036854775807+1;}",
             "checked addition");
