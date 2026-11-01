@@ -5,6 +5,8 @@ namespace Ores.Net.Compiler;
 public abstract record Expression;
 public sealed record Literal(long Value) : Expression;
 public sealed record Unary(char Operator, Expression Value) : Expression;
+// ODB1 integer-byte extraction subset. General shifts remain unsupported.
+public sealed record ShiftRight8(Expression Value) : Expression;
 public sealed record Binary(char Operator, Expression Left, Expression Right) : Expression;
 
 public static class OresParser
@@ -171,6 +173,11 @@ public static class OresParser
                 _i += 2;
                 return new Token("|>", start);
             }
+            if (ch == '>' && _i + 1 < text.Length && text[_i + 1] == '>')
+            {
+                _i += 2;
+                return new Token(">>", start);
+            }
             if (ch == '-' && _i + 1 < text.Length && text[_i + 1] == '>')
             {
                 _i += 2;
@@ -231,12 +238,28 @@ public static class OresParser
             Expect("int");
             Expect("{");
             Expect("return");
-            var expression = ParseAdd(0);
+            var expression = ParseShift(0);
             Expect(";");
             Expect("}");
             if (Current.Text.Length != 0)
                 throw new FormatException($"Unexpected token at offset {Current.Offset}");
             return expression;
+        }
+
+        private Expression ParseShift(int depth)
+        {
+            CheckDepth(depth);
+            Expression left = ParseAdd(depth + 1);
+            while (Take(">>"))
+            {
+                // Fail closed on all other/dynamic counts until the full
+                // typed shift contract and bitwise operators are lowered.
+                Expression count = ParseAdd(depth + 1);
+                if (count is not Literal { Value: 8 })
+                    throw new FormatException("Only the literal signed >> 8 scalar subset is supported");
+                left = new ShiftRight8(left);
+            }
+            return left;
         }
 
         private Expression ParseAdd(int depth)
@@ -335,7 +358,7 @@ public static class OresParser
             }
             if (Take("("))
             {
-                var inner = ParseAdd(depth + 1);
+                var inner = ParseShift(depth + 1);
                 Expect(")");
                 return inner;
             }

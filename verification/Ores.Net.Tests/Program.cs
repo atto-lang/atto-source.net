@@ -77,6 +77,44 @@ Require(OresParser.Parse(
     "fnc main():int{return 1;} /* enum Color /* enum Mode */ end */") is Literal,
     "nested block-comment enum words must not trigger overload admission");
 
+// Native ODB1 scalar floor: signed arithmetic shift-by-eight. The full
+// Frame/List/Result/module codec is NOT yet supported by this scalar CLI.
+foreach (var (source, expected) in new (string, long)[] {
+    ("fnc main():int{return 0>>8;}", 0),
+    ("fnc main():int{return 255>>8;}", 0),
+    ("fnc main():int{return 256>>8;}", 1),
+    ("fnc main():int{return 65535>>8;}", 255),
+    ("fnc main():int{return 2147483647>>8;}", 8388607),
+    ("fnc main():int{return -1>>8;}", -1),
+    ("fnc main():int{return -256>>8;}", -1),
+    ("fnc main():int{return -9223372036854775808>>8;}", -36028797018963968L),
+    ("fnc main():int{return 255+1>>8;}", 1),
+    ("fnc main():int{return 65536>>8>>8;}", 1),
+}) {
+    var parsed = OresParser.Parse(source);
+    var verified = OresIrLowering.Lower(parsed);
+    Require(OresIrReferenceEvaluator.Evaluate(verified) == expected,
+        "verified scalar shift result: " + source);
+}
+foreach (string invalid in new[] {
+    "fnc main():int{return 256>>7;}",
+    "fnc main():int{return 256>>8+1;}",
+    "fnc main():int{return 256>>-8;}",
+    "fnc main():int{return 256>>>8;}",
+    "fnc main():int{return 256>8;}",
+    "fnc main():int{return 256<<8;}",
+    "fnc main():int{return 256/256;}",
+    "fnc main():int{return 1>>0;}"
+}) Reject(() => OresParser.Parse(invalid), "unsupported shift/float source: " + invalid);
+Reject(() => OresIrVerifier.Verify(new IrFunction("main", IrValueType.I64, new[] {
+    new IrInstruction(0, IrOpcode.ConstantI64, IrValueType.I64, Constant: 256),
+    new IrInstruction(1, IrOpcode.SignedShiftRight8, IrValueType.I64,
+        Left: 0, Right: 0)
+}, 1)), "forged binary shape of unary signed shift");
+Reject(() => OresIrVerifier.Verify(new IrFunction("main", IrValueType.I64, new[] {
+    new IrInstruction(0, IrOpcode.SignedShiftRight8, IrValueType.I64, Left: 0)
+}, 0)), "forged forward self-reference in signed shift");
+
 AsyncOnlyIoPolicyTests.Run();
 SourceByteBudgetTests.Run();
 StructuralPatternAdmissionTests.Run();
@@ -455,6 +493,29 @@ try
     CilEmitter.EmitLibrary(lowered, irRepro);
     Require(File.ReadAllBytes(irGenerated).AsSpan().SequenceEqual(File.ReadAllBytes(irRepro)),
         "verified IR PE emission is byte-for-byte deterministic");
+
+    // ODB1 signed shift must survive the actual emitted CIL, not merely AST
+    // or managed reference evaluation. Verify emitted Shr instruction and
+    // compare signed/positive results on representative wire-id boundaries.
+    foreach (var (input, expected) in new (long, long)[] {
+        (0, 0), (255, 0), (256, 1), (65535, 255),
+        (2147483647, 8388607), (-1, -1), (-256, -1),
+        (long.MinValue, -36028797018963968L)
+    }) {
+        string source = $"fnc main():int{{return {input}>>8;}}";
+        var typedShift = OresIrLowering.Lower(OresParser.Parse(source));
+        var shiftPath = Path.Combine(folder, "OresGenerated.shift." +
+            Guid.NewGuid().ToString("N") + ".dll");
+        CilEmitter.EmitLibrary(typedShift, shiftPath);
+        using var shiftAsm = AssemblyDefinition.ReadAssembly(shiftPath);
+        var shiftEntry = shiftAsm.MainModule.Types.Single(t =>
+            t.FullName == "Oreslang.Generated.OresProgram").Methods.Single(m => m.Name == "Run");
+        Require(shiftEntry.Body.Instructions.Any(i => i.OpCode.Code == Code.Shr),
+            "CIL native signed shift-by-eight opcode present");
+        Require(CilReferenceEvaluator.Evaluate(shiftEntry) == expected &&
+                OresIrReferenceEvaluator.Evaluate(typedShift) == expected,
+            "signed shift ODB1 scalar wire value from emitted CIL");
+    }
 
     // Compare the independent IR reference interpreter with the emitted CIL
     // for normal arithmetic, divide-by-zero and signed overflow.

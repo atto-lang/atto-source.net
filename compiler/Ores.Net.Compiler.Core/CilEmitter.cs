@@ -84,6 +84,12 @@ public static class CilEmitter
                 case IrOpcode.ConstantI64:
                     il.LoadConstantI8(operation.Constant!.Value);
                     break;
+                case IrOpcode.SignedShiftRight8:
+                    il.LoadLocal(operation.Left!.Value);
+                    il.LoadConstantI4(8);
+                    il.OpCode(ILOpCode.Shr);
+                    maxStack = 2;
+                    break;
                 case IrOpcode.SignedRemainderLiteral:
                     // Prior SSA instructions (including numerator overflow
                     // checks) have already executed. Never emit CLR rem for
@@ -465,6 +471,7 @@ public static class CilEmitter
                 var opcode = work.Node switch
                 {
                     Unary { Operator: '-' } => ILOpCode.Sub_ovf,
+                    ShiftRight8 => ILOpCode.Shr,
                     Binary { Operator: '+' } => ILOpCode.Add_ovf,
                     Binary { Operator: '-' } => ILOpCode.Sub_ovf,
                     Binary { Operator: '*' } => ILOpCode.Mul_ovf,
@@ -493,6 +500,12 @@ public static class CilEmitter
                         evaluationDepth++;
                         pending.Push(new Pending(unary, true));
                         pending.Push(new Pending(unary.Value, false));
+                        break;
+                    case ShiftRight8 shift:
+                        // Build the same exact integer shift as verified OresIR.
+                        pending.Push(new Pending(shift, true));
+                        pending.Push(new Pending(new Literal(8), false));
+                        pending.Push(new Pending(shift.Value, false));
                         break;
                     case Binary binary when binary.Operator is '+' or '-' or '*' or '/':
                         pending.Push(new Pending(binary, true));

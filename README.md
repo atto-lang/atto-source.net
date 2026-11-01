@@ -307,3 +307,22 @@ This integration branch is unverified until exact-head .NET 10 managed
 tests and actual Linux/Windows Native AOT publish/execution run with
 nonempty CI job steps. Its parents are the independent #185 structured
 compiler and #200 Native AOT release branches.
+
+## ODB1 scalar byte extraction — signed shift-by-eight candidate (draft)
+
+The Oreslang ODB1 WAL codec uses `int >> 8` rather than `int / 256`
+because Java/GraalVM Oreslang defines `int / int` as float. The .NET
+shipping **scalar** frontend now has a deliberately restricted `>> 8`
+operator, validated as `SignedShiftRight8` unary OresIR and emitted as
+actual ECMA-335 CIL `shr` on signed i64. Other shift counts and unsigned
+shifts still reject before emission. The verifier rejects malformed
+unary/forward-reference IR. Managed-source experimental emitters retain
+the matching C# and F# signed shift semantics.
+
+Verification code checks positive/signed i64 boundary values, malformed
+source, forged IR shapes, and emitted CIL opcodes and results. These
+tests require the .NET SDK/NativeAOT builds and **have not executed in
+this environment**. The full `wal_frame.ores` source still requires
+module imports, collections, Frame and Result lowering, actor-owned
+isolate memory and nonblocking WAL capabilities. The scalar shift
+implementation alone is **not** five-backend ODB1 parity or durability.

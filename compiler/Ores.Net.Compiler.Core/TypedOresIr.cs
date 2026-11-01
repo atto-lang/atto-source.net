@@ -15,7 +15,8 @@ public enum IrOpcode
     CheckedSubtract,
     CheckedMultiply,
     CheckedDivide,
-    SignedRemainderLiteral
+    SignedRemainderLiteral,
+    SignedShiftRight8
 }
 
 /// <summary>
@@ -97,6 +98,15 @@ public static class OresIrVerifier
                     instruction.Left.HasValue || instruction.Right.HasValue)
                     throw new FormatException("Malformed IR constant");
             }
+            else if (instruction.Opcode == IrOpcode.SignedShiftRight8)
+            {
+                // Unlike binary arithmetic, this is a verified unary i64
+                // operation: no attacker-selected shift count or RHS operand.
+                if (instruction.Constant.HasValue || instruction.Right.HasValue ||
+                    instruction.Left is not int left || left < 0 || left >= i ||
+                    verified[left].Type != IrValueType.I64)
+                    throw new FormatException("Malformed verified signed shift-by-eight");
+            }
             else
             {
                 if (instruction.Opcode is not (IrOpcode.CheckedAdd or
@@ -173,6 +183,15 @@ public static class OresIrLowering
             return id;
         }
 
+        int EmitUnary(IrOpcode opcode, int left)
+        {
+            if (instructions.Count >= OresIrVerifier.MaxInstructions)
+                throw new FormatException("IR instruction budget exceeded");
+            int id = instructions.Count;
+            instructions.Add(new IrInstruction(id, opcode, IrValueType.I64, Left: left));
+            return id;
+        }
+
         int EmitBinary(IrOpcode opcode, int left, int right)
         {
             if (instructions.Count >= OresIrVerifier.MaxInstructions)
@@ -201,6 +220,13 @@ public static class OresIrLowering
                         int operand = results.Pop();
                         results.Push(EmitBinary(IrOpcode.CheckedSubtract,
                             Constant(0), operand));
+                        break;
+                    }
+                    case ShiftRight8:
+                    {
+                        if (results.Count < 1)
+                            throw new FormatException("IR shift operand underflow");
+                        results.Push(EmitUnary(IrOpcode.SignedShiftRight8, results.Pop()));
                         break;
                     }
                     case Binary binary:
@@ -237,6 +263,10 @@ public static class OresIrLowering
                     case Unary { Operator: '+' or '-' } unary:
                         pending.Push(new Pending(node, true));
                         pending.Push(new Pending(unary.Value, false));
+                        break;
+                    case ShiftRight8 shift:
+                        pending.Push(new Pending(node, true));
+                        pending.Push(new Pending(shift.Value, false));
                         break;
                     case Binary binary when binary.Operator is '+' or '-' or '*' or '/' or '%':
                         pending.Push(new Pending(binary, true));

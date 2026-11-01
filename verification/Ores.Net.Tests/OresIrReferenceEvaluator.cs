@@ -22,6 +22,7 @@ internal static class OresIrReferenceEvaluator
                 IrOpcode.CheckedMultiply => checked(left * right),
                 IrOpcode.CheckedDivide => DivideChecked(left, right),
                 IrOpcode.SignedRemainderLiteral => right == -1 ? 0 : left % right,
+                IrOpcode.SignedShiftRight8 => left >> 8,
                 _ => throw new FormatException("Unverified IR opcode")
             };
         }

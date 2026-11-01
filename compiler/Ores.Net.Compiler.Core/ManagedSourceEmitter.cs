@@ -66,6 +66,13 @@ public static class ManagedSourceEmitter
                     ? (cs ? "long.MinValue" : "System.Int64.MinValue")
                     : number.ToString(CultureInfo.InvariantCulture) + "L";
             }
+            else if (op.Opcode == IrOpcode.SignedShiftRight8 &&
+                     op.Constant is null && op.Right is null &&
+                     op.Left is int shiftOperand && shiftOperand >= 0 && shiftOperand < i)
+            {
+                // C# >> and F# >>> are arithmetic right shift for signed i64.
+                expr = cs ? $"v{shiftOperand} >> 8" : $"v{shiftOperand} >>> 8";
+            }
             else if (op.Opcode is IrOpcode.CheckedAdd or IrOpcode.CheckedSubtract or
                      IrOpcode.CheckedMultiply or IrOpcode.CheckedDivide or
                      IrOpcode.SignedRemainderLiteral &&
