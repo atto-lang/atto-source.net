@@ -23,6 +23,10 @@ internal static class SingletonDeclarationAdmissionTests
         // before unsupported @Inject/trait/member syntax is encountered.
         foreach (var source in new[]
         {
+            "define singleton StateBank with Stateful<BankState> as\n"
+                + "    @Inject\n"
+                + "    state: MutableStateContainer<BankState>\n"
+                + "end\n",
             "define singleton StateBank implements Stateful<BankState> as\n"
                 + "    @Inject\n"
                 + "    state: MutableStateContainer<BankState>\n"
