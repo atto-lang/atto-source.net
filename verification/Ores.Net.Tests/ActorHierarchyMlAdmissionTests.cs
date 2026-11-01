@@ -1,4 +1,6 @@
 using Ores.Net.Compiler;
+using System.Security.Cryptography;
+using System.Text;
 
 // Target-only actor/ML forms must fail closed on both scalar and structured
 // source paths. These tests do NOT assert a .NET actor scheduler or autograd.
@@ -57,6 +59,18 @@ internal static class ActorHierarchyMlAdmissionTests
                 throw new Exception("Comment-only actor/ML words changed scalar execution");
             _ = OresStructuredParser.Parse(text);
         }
+
+        // Until the actor scheduler and state-loan lowering exist, the
+        // byte-identical shared Counter guest is a source admission negative,
+        // not a success signal for .NET or Native AOT actor execution.
+        var counterPath = Path.Combine(AppContext.BaseDirectory, "actor-counter-target.ores");
+        var counterBytes = File.ReadAllBytes(counterPath);
+        var gitPrefix = Encoding.ASCII.GetBytes("blob " + counterBytes.Length + "\\0");
+        var counterBlob = SHA1.HashData(gitPrefix.Concat(counterBytes).ToArray());
+        if (!string.Equals(Convert.ToHexString(counterBlob),
+                "C49780B4B42251DB20AE9AC864EB8606BF7DA922", StringComparison.Ordinal))
+            throw new Exception("Canonical cross-toolchain Counter actor fixture bytes drifted");
+        RejectBoth(Encoding.UTF8.GetString(counterBytes), "canonical-counter-guest");
 
         // This is only a managed reference-evaluator preflight. The separate
         // Linux Native AOT script must publish the real compiler and guest
