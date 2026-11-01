@@ -205,9 +205,34 @@ static class CrossBackendCheckedI64ParityTests
         {
             var ast = OresParser.Parse(Header + "pub fnc main():int{return " + expression + ";}");
             var ir = OresIrLowering.Lower(ast);
+            bool irTrapped = false;
             try { _ = OresIrReferenceEvaluator.Evaluate(ir); }
-            catch (OverflowException) { continue; }
-            throw new Exception("OresLLM checked overflow admitted: " + expression);
+            catch (OverflowException) { irTrapped = true; }
+            if (!irTrapped)
+                throw new Exception("OresLLM checked overflow admitted in IR: " + expression);
+
+            // Independent emitted-CIL interpretation must also trap. IR-only
+            // overflow evidence cannot certify the managed backend lowering.
+            var folder = Path.Combine(Path.GetTempPath(), "oresnet-overflow-" +
+                Guid.NewGuid().ToString("N"));
+            var file = Path.Combine(folder, "OresGenerated.dll");
+            try
+            {
+                CilEmitter.EmitLibrary(ir, file);
+                using var assembly = AssemblyDefinition.ReadAssembly(file);
+                var method = assembly.MainModule.Types
+                    .Single(t => t.FullName == "Oreslang.Generated.OresProgram")
+                    .Methods.Single(f => f.Name == "Run");
+                bool cilTrapped = false;
+                try { _ = CilReferenceEvaluator.Evaluate(method); }
+                catch (OverflowException) { cilTrapped = true; }
+                if (!cilTrapped)
+                    throw new Exception("OresLLM checked overflow admitted in CIL: " + expression);
+            }
+            finally
+            {
+                if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+            }
         }
 
         foreach (string expression in new[]
