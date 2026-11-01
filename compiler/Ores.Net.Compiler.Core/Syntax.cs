@@ -10,6 +10,8 @@ public sealed record Binary(char Operator, Expression Left, Expression Right) : 
 // Explicitly admitted named intrinsics in the shipping signed-i64 bootstrap.
 public sealed record NamedIntegerRem(Expression Left, Expression Right) : Expression;
 public sealed record NamedIntegerMod(Expression Left, Expression Right) : Expression;
+public sealed record NamedIntegerPow(Expression Left, Expression Right) : Expression;
+public sealed record NamedIntegerBitXor(Expression Left, Expression Right) : Expression;
 
 public static class OresParser
 {
@@ -349,7 +351,7 @@ public static class OresParser
             {
                 Expect(".");
                 string operation = Current.Text;
-                if (operation is not ("rem" or "mod"))
+                if (operation is not ("rem" or "mod" or "pow" or "bitXor"))
                     throw new FormatException($"Unsupported Integer intrinsic at offset {Current.Offset}");
                 _index++;
                 Expect("(");
@@ -357,9 +359,14 @@ public static class OresParser
                 Expect(",");
                 var right = ParseAdd(depth + 1);
                 Expect(")");
-                return operation == "rem"
-                    ? new NamedIntegerRem(left, right)
-                    : new NamedIntegerMod(left, right);
+                return operation switch
+                {
+                    "rem" => new NamedIntegerRem(left, right),
+                    "mod" => new NamedIntegerMod(left, right),
+                    "pow" => new NamedIntegerPow(left, right),
+                    "bitXor" => new NamedIntegerBitXor(left, right),
+                    _ => throw new FormatException("Unsupported Integer intrinsic")
+                };
             }
             if (Current.Text.Length == 0 || Current.Text[0] is < '0' or > '9')
                 throw new FormatException($"Expected integer at offset {Current.Offset}");
