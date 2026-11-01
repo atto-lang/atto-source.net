@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
@@ -192,7 +193,9 @@ public static class CilEmitter
         if (verifiedOpcodeIdentity is not null)
         {
             contentHash.AppendData(new byte[] { 0x4f, 0x52, 0x45, 0x53, 0x01 });
-            contentHash.AppendData(BitConverter.GetBytes(verifiedOpcodeIdentity.Length));
+            Span<byte> countBytes = stackalloc byte[sizeof(int)];
+            BinaryPrimitives.WriteInt32LittleEndian(countBytes, verifiedOpcodeIdentity.Length);
+            contentHash.AppendData(countBytes);
             contentHash.AppendData(verifiedOpcodeIdentity);
         }
         byte[] hash = contentHash.GetHashAndReset();
