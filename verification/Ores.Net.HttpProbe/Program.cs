@@ -78,6 +78,21 @@ ActorHttpEndpoint Resolve(string method, string path) => new(
         if (path != "/linger") actors.Stop(context.Self);
     });
 
+// Kestrel HTTP does not imply an actor-owned, generation-fenced WebSocket
+// guest transport. Unsupported options must be denied before a port is bound.
+foreach (var (upgrade, live) in new[] { (true, false), (false, true), (true, true) })
+{
+    try
+    {
+        await using var unexpected = await ActorHttpServer.StartAsync(
+            actors, Resolve, new ActorHttpServerOptions
+            { EnableWebSocketUpgrade = upgrade, EnableLiveViewUpdates = live });
+        throw new Exception("Unsupported WebSocket/LiveView transport was admitted");
+    }
+    catch (NotSupportedException ex) when (
+        ex.Message.Contains("WebSocket/LiveView actor guest transport",
+            StringComparison.Ordinal)) { }
+}
 await using var server = await ActorHttpServer.StartAsync(actors, Resolve,
     new ActorHttpServerOptions { MaxRequests = 16, MaxBodyBytes = 1024, MaxResponseBytes = 1024, RequestTimeout = TimeSpan.FromSeconds(2) });
 using var client = new HttpClient { BaseAddress = server.Address, Timeout = TimeSpan.FromSeconds(6) };

@@ -21,9 +21,16 @@ public sealed class ActorHttpServerOptions
     public int MaxBodyBytes { get; init; } = 1024 * 1024;
     public int MaxResponseBytes { get; init; } = 1024 * 1024;
     public TimeSpan RequestTimeout { get; init; } = TimeSpan.FromSeconds(30);
+    // Explicit capability admission: neither a Kestrel HTTP listener nor an
+    // HTTP actor ticket currently grants an Oreslang guest WebSocket socket.
+    public bool EnableWebSocketUpgrade { get; init; }
+    public bool EnableLiveViewUpdates { get; init; }
 
     internal void Validate()
     {
+        if (EnableWebSocketUpgrade || EnableLiveViewUpdates)
+            throw new NotSupportedException(
+                "Oreslang .NET WebSocket/LiveView actor guest transport is not implemented");
         if (Port is < 0 or > 65535 || MaxRequests is < 1 or > 65536 ||
             MaxBodyBytes is < 0 or > 16 * 1024 * 1024 ||
             MaxResponseBytes is < 0 or > 16 * 1024 * 1024 ||
