@@ -23,6 +23,33 @@ if bash "$verifier" "$work/native"; then
   exit 1
 fi
 rm "$work/unwanted.runtimeconfig.json"
+# Case-folding must not bypass sidecar denial on case-sensitive volumes.
+printf 'MZ' > "$work/SHADOW.DLL"
+if bash "$verifier" "$work/native"; then
+  echo 'Verifier admitted a case-aliased managed DLL sidecar' >&2
+  exit 1
+fi
+rm "$work/SHADOW.DLL"
+printf 'fake runtime host' > "$work/LIBHOSTPOLICY.DYLIB"
+if bash "$verifier" "$work/native"; then
+  echo 'Verifier admitted a managed runtime host dylib' >&2
+  exit 1
+fi
+rm "$work/LIBHOSTPOLICY.DYLIB"
+
+# Independently test a Mach-O with a managed runtime dependency outside
+# the executable directory; sidecar-only checks must not accept it.
+mkdir -p "$work/runtime" "$work/linked"
+printf 'int fake_hostpolicy(void) { return 7; }\n' > "$work/fake-runtime.c"
+printf 'extern int fake_hostpolicy(void); int main(void) { return fake_hostpolicy(); }\n' > "$work/linked-main.c"
+xcrun clang -arch arm64 -dynamiclib "$work/fake-runtime.c" \
+  -Wl,-install_name,@rpath/libhostpolicy.dylib -o "$work/runtime/libhostpolicy.dylib"
+xcrun clang -arch arm64 "$work/linked-main.c" \
+  -L"$work/runtime" -lhostpolicy -Wl,-rpath,"$work/runtime" -o "$work/linked/native"
+if bash "$verifier" "$work/linked/native"; then
+  echo 'Verifier admitted dynamically linked managed runtime dylib' >&2
+  exit 1
+fi
 ln -s "$work/native" "$work/alias"
 if bash "$verifier" "$work/alias"; then
   echo 'Verifier admitted a symlinked executable' >&2
