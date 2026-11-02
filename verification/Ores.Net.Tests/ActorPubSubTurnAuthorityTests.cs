@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Security;
 using System.Threading;
+using System.Threading.Tasks;
 using Ores.Net.Runtime;
 
 /// <summary>
@@ -48,6 +49,16 @@ internal static class ActorPubSubTurnAuthorityTests
                     "actor must not use host ActorRef publication");
                 RequireDenied(() => _ = topic.Subscribe(context.Self),
                     "actor must not use host ActorRef subscription");
+                // ThreadStatic alone is insufficient: a Task inherits the
+                // actor's ExecutionContext but runs on another thread.
+                RequireDenied(() => _ = Task.Run(
+                    () => topic.Publish(context.Self, "offloaded-spoof"))
+                    .GetAwaiter().GetResult(),
+                    "actor-origin Task.Run must not regain host publish authority");
+                RequireDenied(() => _ = Task.Run(
+                    () => runtime.PubSub.CreateGroup())
+                    .GetAwaiter().GetResult(),
+                    "actor-origin Task.Run must not regain group-manager authority");
                 Require(topic.Subscribe(context),
                     "actor context subscribes inside physical turn");
                 Require(!topic.Subscribe(context),
