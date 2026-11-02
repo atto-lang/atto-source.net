@@ -8,7 +8,7 @@ namespace Ores.Net.Compiler;
 /// </summary>
 public static class StructuralShapeAdmission
 {
-    public static void RejectUnsupportedPatterns(string source)
+    public static void RejectUnsupportedPatterns(string source, bool allowCompileTimeRows = false)
     {
         ArgumentNullException.ThrowIfNull(source);
         bool afterOn = false;
@@ -68,7 +68,7 @@ public static class StructuralShapeAdmission
                 while (i < source.Length &&
                        (char.IsAsciiLetterOrDigit(source[i]) || source[i] == '_')) i++;
                 var word = source[start..i];
-                if (previousWord == "infer" && word is ("struct" or "record"))
+                if (!allowCompileTimeRows && previousWord == "infer" && word is ("struct" or "record"))
                     throw new FormatException($"Inferred aggregate requires closed-row type, ownership and Native AOT lowering; unsupported in scalar CIL at offset {start}");
                 if (afterOn && word == "structural")
                     throw new FormatException($"Structural match pattern unsupported in scalar CIL at offset {start}");
@@ -76,7 +76,7 @@ public static class StructuralShapeAdmission
                 previousWord = word;
                 continue;
             }
-            if (c == '{' && previousWord is ("struct" or "record"))
+            if (!allowCompileTimeRows && c == '{' && previousWord is ("struct" or "record"))
                 throw new FormatException($"Inline aggregate requires closed-row type, ownership and Native AOT lowering; unsupported in scalar CIL at offset {i}");
             afterOn = false;
             previousWord = null;
