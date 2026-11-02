@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Security;
 using System.Threading;
 using Ores.Net.Runtime;
 
@@ -33,6 +34,19 @@ internal static class ActorPubSubTurnAuthorityTests
             try
             {
                 retained = context;
+                RequireDenied(() => _ = runtime.PubSub.CreateGroup(),
+                    "actor must not create an ActorGroup");
+                RequireDenied(() => _ = group.DefineTopic<string>(
+                    "forged", ActorTopicDeliveryPolicy.Reliable, 1),
+                    "actor must not define a topic");
+                RequireDenied(() => _ = group.Join(context.Self),
+                    "actor must not grant group membership");
+                RequireDenied(() => group.Dispose(),
+                    "actor must not close its manager's group");
+                RequireDenied(() => _ = topic.Publish(context.Self, "spoofed"),
+                    "actor must not use host ActorRef publication");
+                RequireDenied(() => _ = topic.Subscribe(context.Self),
+                    "actor must not use host ActorRef subscription");
                 Require(topic.Subscribe(context),
                     "actor context subscribes inside physical turn");
                 Require(!topic.Subscribe(context),
@@ -167,6 +181,14 @@ internal static class ActorPubSubTurnAuthorityTests
         runtime.Stop(next);
         Require(SpinWait.SpinUntil(() => runtime.LiveActors == 0,
             TimeSpan.FromSeconds(5)), "replacement slot reclamation");
+    }
+
+    private static void RequireDenied(Action action, string description)
+    {
+        try { action(); }
+        catch (SecurityException) { return; }
+        throw new Exception(
+            "Actor pubsub guest manager authority leaked: " + description);
     }
 
     private static void Require(bool condition, string description)
