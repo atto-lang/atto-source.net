@@ -560,28 +560,25 @@ public sealed class ActorPubSub
         if (value is null)
             throw new ArgumentNullException(nameof(value),
                 "Oreslang event values use Option<T>, not null");
-
-        // Reject malformed UTF-16 rather than letting .NET's default
-        // replacement fallback change the value transported by LLVM's
-        // strict UTF-8 String ABI. UTF-8 size, not UTF-16 Length, governs
-        // the immutable payload limit.
-        if (value is string text)
-        {
-            int byteLength;
-            try
-            {
-                byteLength = StrictUtf8.GetByteCount(text);
-            }
-            catch (EncoderFallbackException error)
-            {
-                throw new ArgumentException(
-                    "ActorGroup String contains invalid UTF-16", nameof(value), error);
-            }
-            if (byteLength > MaxFrozenPayloadBytes)
-                throw new InvalidOperationException(
-                    "ActorGroup event exceeds 16 MiB per-delivery payload limit");
-        }
+        // Only immutable scalar/String payloads are admitted; the strict
+        // one-pass UTF-8 validation and bound occurs in MeasurePayloadBytes.
         return value;
+    }
+
+    private static int MeasureStringBytes(string text)
+    {
+        int bytes;
+        try { bytes = StrictUtf8.GetByteCount(text); }
+        catch (EncoderFallbackException error)
+        {
+            throw new ArgumentException(
+                "ActorGroup String contains invalid UTF-16",
+                nameof(text), error);
+        }
+        if (bytes > MaxFrozenPayloadBytes)
+            throw new InvalidOperationException(
+                "ActorGroup event exceeds 16 MiB per-delivery payload limit");
+        return bytes;
     }
 
     private static int MeasurePayloadBytes<T>(T value)
@@ -590,7 +587,7 @@ public sealed class ActorPubSub
         // Logical byte accounting does not claim precise CLR heap size.
         return value switch
         {
-            string text => StrictUtf8.GetByteCount(text),
+            string text => MeasureStringBytes(text),
             bool or byte => 1,
             short or ushort => 2,
             int or uint or float => 4,
