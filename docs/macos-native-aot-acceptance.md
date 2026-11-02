@@ -15,6 +15,16 @@ execute before any native proof is claimed.
   Generated CIL is a **build-time input only**, never a runtime DLL.
 - Inspect the native compiler and both app outputs for native Mach-O arm64
   headers and no `.dll`, `.deps.json`, or `.runtimeconfig.json` sidecars.
+- Require the canonical add fixture's Git blob SHA to be exactly
+  `015f8b0f79aafa796a148d2adeff1574e8d6c491`, matching the
+  current Java, LLVM, and .NET `contracts/v1/semantics/fixtures/add.ores`
+  files. Source identity is checked before native compilation.
+- Execute a separate overflow guest that must exit 70 with an overflow
+  diagnostic. Reject division-by-zero and minimum-i64 / -1 in source
+  admission before any CIL file is written. Preserve the original
+  hello=14 and add=42 binaries across the negative build.
+- Source-free adversarial checks also reject symlinked and out-of-tree guest
+  inputs before executing the SDK.
 - Execute `hello.ores` to produce 14 and the shared `add.ores` fixture to
   produce 42 with an environment whose PATH contains no dotnet toolchain.
   Re-run the first image after publishing the second to detect stale source
