@@ -15,6 +15,7 @@ internal static class ActorPubSubTurnAuthorityTests
         TurnBoundSubscribePublishAndRead();
         SubscriptionQuotaAndEpochRejoin();
         GlobalQueueSlotsAreBoundedAndReclaimed();
+        InvalidUtf8AndOversizedStringFailBeforeAdmission();
         Console.WriteLine(
             "PASS .NET bounded pubsub turn authority, membership epochs and quotas");
     }
@@ -181,6 +182,40 @@ internal static class ActorPubSubTurnAuthorityTests
         runtime.Stop(next);
         Require(SpinWait.SpinUntil(() => runtime.LiveActors == 0,
             TimeSpan.FromSeconds(5)), "replacement slot reclamation");
+    }
+
+    private static void InvalidUtf8AndOversizedStringFailBeforeAdmission()
+    {
+        using var runtime = new ActorRuntime();
+        using var group = runtime.PubSub.CreateGroup();
+        var topic = group.DefineTopic<string>(
+            "strict-utf8", ActorTopicDeliveryPolicy.Reliable, 1);
+        ActorRef actor = runtime.Spawn(
+            ActorKind.Shared, static (_, _) => { });
+        Require(group.Join(actor), "UTF-8 test actor joined");
+        Require(topic.Subscribe(actor), "UTF-8 test subscription");
+
+        bool malformedRejected = false;
+        try { _ = topic.Publish(actor, "\uD800"); }
+        catch (ArgumentException) { malformedRejected = true; }
+        Require(malformedRejected, "lone UTF-16 surrogate must not be replaced");
+
+        // The budget is charged in UTF-8 bytes. Multi-byte characters
+        // cannot escape the limit by exploiting a smaller UTF-16 Length.
+        bool oversizedRejected = false;
+        try { _ = topic.Publish(actor, new string('\u00E9', 8 * 1024 * 1024 + 1)); }
+        catch (InvalidOperationException) { oversizedRejected = true; }
+        Require(oversizedRejected, "16MiB UTF-8 payload limit enforced");
+        Require(!topic.TryRead(actor, out _),
+            "invalid or over-budget payload must not reach the queue");
+
+        Require(topic.Publish(actor, "valid").Accepted == 1,
+            "rejected deliveries must not consume queue slots");
+        Require(topic.TryRead(actor, out string value) && value == "valid",
+            "valid payload preserved after rejection");
+        runtime.Stop(actor);
+        Require(SpinWait.SpinUntil(() => runtime.LiveActors == 0,
+            TimeSpan.FromSeconds(5)), "UTF-8 test actor retirement");
     }
 
     private static void RequireDenied(Action action, string description)
