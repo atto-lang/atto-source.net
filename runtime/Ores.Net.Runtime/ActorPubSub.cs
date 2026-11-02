@@ -708,6 +708,34 @@ public sealed class ActorPubSub
             return new ActorPublishReceipt(count, count, 0, 0, false);
         }
 
+        private ActorPublishReceipt PublishLatest(Entry item)
+        {
+            // Replacement accounting is all-or-nothing. Reject the new value
+            // without disturbing a single retained older value.
+            long oldBytes = 0;
+            int coalesced = 0;
+            foreach (SubscriptionEdge edge in _subscribers.Values)
+            {
+                oldBytes += edge.Bytes;
+                if (edge.Queue.Count != 0) coalesced++;
+            }
+            long projected = _owner._queuedPayloadBytes - oldBytes +
+                             (long)item.Bytes * _subscribers.Count;
+            if (projected > MaxTotalQueuedPayloadBytes)
+                throw new InvalidOperationException(
+                    "LATEST publication exceeds 64 MiB graph byte quota");
+
+            foreach (SubscriptionEdge edge in _subscribers.Values)
+            {
+                if (edge.Queue.Count != 0) edge.Queue.Dequeue();
+                edge.Queue.Enqueue(item);
+                edge.Bytes = item.Bytes;
+            }
+            _owner._queuedPayloadBytes = projected;
+            int count = _subscribers.Count;
+            return new ActorPublishReceipt(count, count, 0, coalesced, false);
+        }
+
         internal bool TryRead(ActorRef actor, out T value)
         {
             if (!_subscribers.TryGetValue(actor, out SubscriptionEdge? edge))
