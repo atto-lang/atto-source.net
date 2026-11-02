@@ -637,8 +637,10 @@ public sealed class ActorPubSub
             internal long Bytes;
         }
 
-        internal TopicState(ActorTopicDeliveryPolicy policy, int capacity)
+        internal TopicState(
+            ActorPubSub owner, ActorTopicDeliveryPolicy policy, int capacity)
         {
+            _owner = owner;
             Policy = policy;
             Capacity = capacity;
         }
