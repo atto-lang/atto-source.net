@@ -684,6 +684,30 @@ public sealed class ActorPubSub
             };
         }
 
+        private ActorPublishReceipt PublishReliable(Entry item)
+        {
+            int count = _subscribers.Count;
+            foreach (SubscriptionEdge edge in _subscribers.Values)
+            {
+                if (edge.Queue.Count >= Capacity ||
+                    edge.Bytes > MaxFrozenPayloadBytes - item.Bytes)
+                    return new ActorPublishReceipt(count, 0, 0, 0, true);
+            }
+            long bytes = (long)item.Bytes * count;
+            if (_owner._queuedPayloadBytes > MaxTotalQueuedPayloadBytes - bytes)
+                return new ActorPublishReceipt(count, 0, 0, 0, true);
+
+            // Every ring was preallocated at subscribe time, and there is
+            // no allocation after this all-subscriber admission boundary.
+            foreach (SubscriptionEdge edge in _subscribers.Values)
+            {
+                edge.Queue.Enqueue(item);
+                edge.Bytes += item.Bytes;
+            }
+            _owner._queuedPayloadBytes += bytes;
+            return new ActorPublishReceipt(count, count, 0, 0, false);
+        }
+
         internal bool TryRead(ActorRef actor, out T value)
         {
             if (!_subscribers.TryGetValue(actor, out SubscriptionEdge? edge))
