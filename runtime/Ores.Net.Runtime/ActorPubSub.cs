@@ -655,8 +655,20 @@ public sealed class ActorPubSub
         // Enqueue must then have no allocation/resize failure path that could
         // commit to an early subscriber and fail at a later one.
         internal void Add(ActorRef actor) =>
-            _subscribers.Add(actor, new Queue<T>(Capacity));
-        public bool RemoveActor(ActorRef actor) => _subscribers.Remove(actor);
+            _subscribers.Add(actor, new SubscriptionEdge(Capacity));
+        public bool RemoveActor(ActorRef actor)
+        {
+            if (!_subscribers.Remove(actor, out SubscriptionEdge? edge))
+                return false;
+            _owner._queuedPayloadBytes -= edge.Bytes;
+            return true;
+        }
+        public void Clear()
+        {
+            foreach (SubscriptionEdge edge in _subscribers.Values)
+                _owner._queuedPayloadBytes -= edge.Bytes;
+            _subscribers.Clear();
+        }
 
         internal ActorPublishReceipt Publish(T value)
         {
