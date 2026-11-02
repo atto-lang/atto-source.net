@@ -41,7 +41,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bash -n scripts/publish-macos.sh verification/assert-macos-native-release.sh verification/assert-macos-native-release-selftest.sh
+          bash -n scripts/publish-macos.sh verification/assert-macos-native-release.sh verification/assert-macos-native-release-selftest.sh verification/assert-macos-native-arithmetic.sh
           pwsh -NoProfile -File verification/assert-aot-gates.ps1 -Rid osx-arm64
           bash verification/assert-macos-native-release-selftest.sh
       - name: Run managed source/compiler regression tests
@@ -66,6 +66,8 @@ jobs:
             exit 1
           fi
           test ! -e "$denied"
+          # Cross-backend canonical bytes: identical to the Java and LLVM fixture.
+          test "$(git hash-object -- contracts/v1/semantics/fixtures/add.ores)" = 015f8b0f79aafa796a148d2adeff1574e8d6c491
           bash scripts/publish-macos.sh contracts/v1/semantics/fixtures/add.ores artifacts/parity
           add=artifacts/parity/osx-arm64/oreslang-app
           bash verification/assert-macos-native-release.sh "$hello"
@@ -79,6 +81,13 @@ jobs:
             fi
           done
           echo 'MACOS_NET_NATIVE_AOT_GUEST_14_AND_42_EXECUTED'
+      - name: Execute checked i64 trap and fail-closed source division cases
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash verification/assert-macos-native-arithmetic.sh
+          test "$(artifacts/apps/osx-arm64/oreslang-app)" = 14
+          test "$(artifacts/parity/osx-arm64/oreslang-app)" = 42
       - name: Record independently checkable exact-head guest receipt
         shell: bash
         env:
@@ -90,7 +99,7 @@ jobs:
           fixture_sha="$(shasum -a 256 contracts/v1/semantics/fixtures/add.ores | awk '{print $1}')"
           app_sha="$(shasum -a 256 artifacts/parity/osx-arm64/oreslang-app | awk '{print $1}')"
           mkdir -p artifacts/evidence
-          printf '{"schema":"atto.net.exact_head_native_aot_v1","repository":"%s","source_head_sha":"%s","tree_sha":"%s","run_id":%s,"run_attempt":%s,"runner_os":"macOS","target_rid":"osx-arm64","source_fixture_sha256":"%s","native_guest_sha256":"%s","guest_receipts":["hello=14","add=42","unsupported_actor_rejected","managed_sidecar_rejected","source_isolation"],"source_only":false,"independently_verified":false}\n' \
+          printf '{"schema":"atto.net.exact_head_native_aot_v1","repository":"%s","source_head_sha":"%s","tree_sha":"%s","run_id":%s,"run_attempt":%s,"runner_os":"macOS","target_rid":"osx-arm64","source_fixture_sha256":"%s","native_guest_sha256":"%s","guest_receipts":["hello=14","add=42","unsupported_actor_rejected","managed_sidecar_rejected","source_isolation","overflow_exit70","division_source_rejected"],"source_only":false,"independently_verified":false}\n' \
             "$GITHUB_REPOSITORY" "$EXPECTED_HEAD" "$tree" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$fixture_sha" "$app_sha" > artifacts/evidence/macos-native-aot.json
       - name: Upload macOS native binaries and receipt
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -101,5 +110,6 @@ jobs:
             artifacts/compiler/osx-arm64/oresnet
             artifacts/apps/osx-arm64/oreslang-app
             artifacts/parity/osx-arm64/oreslang-app
+            artifacts/native-negative-overflow/osx-arm64/oreslang-app
           if-no-files-found: error
           retention-days: 14
