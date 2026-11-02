@@ -471,6 +471,7 @@ public sealed class ActorPubSub
                         record.SubscriptionCount > 0)
                         record.SubscriptionCount--;
                 }
+                topic.Clear(); // release retained bytes before deleting topic
                 _topics.Remove(key);
             }
         }
