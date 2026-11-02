@@ -55,8 +55,15 @@ public sealed class ClosedAggregateSpreadPlan
         return a.Length.CompareTo(b.Length);
     }
 
+    private void CheckBudget(int additionalWrites)
+    {
+        if (_elements >= 1024 || additionalWrites > 8192 - _writes.Count)
+            throw new FormatException("AGGREGATE_SPREAD_PLAN_BUDGET");
+    }
+
     public void AddNamed(string name, string type)
     {
+        CheckBudget(1);
         _ = CheckedKey(name);
         CheckType(type);
         if (!_explicitNames.Add(name))
@@ -72,6 +79,7 @@ public sealed class ClosedAggregateSpreadPlan
         ArgumentNullException.ThrowIfNull(source.Fields);
         if (source.Fields.Count > 64)
             throw new FormatException("AGGREGATE_FIELD_BUDGET");
+        CheckBudget(source.Fields.Count);
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var prepared = new List<ClosedAggregateField>(source.Fields.Count);
         foreach (var f in source.Fields)
