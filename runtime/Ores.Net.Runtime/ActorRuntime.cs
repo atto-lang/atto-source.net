@@ -171,6 +171,9 @@ public sealed class ActorRuntime : IDisposable
     // unlike ThreadStatic. Keep the actor-origin marker in captured tasks
     // even after the physical turn returns. Such tasks must never acquire
     // host/supervisor ActorRef pubsub authority by changing carrier threads.
+    // This is defense in depth, NOT an unforgeable guest capability: a trusted
+    // raw C# host handler can suppress ExecutionContext flow. Compiler guest
+    // lowering must use context-bound intrinsics, never these host overloads.
     // A boolean sentinel cannot keep a retired ActorRuntime alive in a
     // captured asynchronous ExecutionContext.
     private static readonly AsyncLocal<bool> s_actorOrigin = new();
