@@ -67,6 +67,11 @@ internal static class StructuredSourceTests
             + "fnc main():int{return 7;}");
         Require(leadingComment is not null,
             "state backing in a comment must not trigger a false-positive capability denial");
+        var blockCommentOnly = OresStructuredParser.Parse(
+            "/* outer @Inject(SessionState) /* inner @StateBacked(MutableStateContainer(scope = #instance)) */ still comment */\n"
+            + "fnc main():int{return 7;}");
+        Require(blockCommentOnly is not null,
+            "nested block comments must not mint or falsely reject container capabilities");
 
         // Local value types are block-local declarations on the structured
         // frontend. They are admitted into the AST but deliberately rejected
