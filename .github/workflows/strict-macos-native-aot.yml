@@ -1,0 +1,105 @@
+name: Strict .NET macOS ARM64 Native AOT
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: strict-net-macos-aot-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos-arm64-compiler-and-guest:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Check exact source head and native ARM64 host
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-fA-F]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = arm64
+          test -n "$(git rev-parse 'HEAD^{tree}')"
+          xcode-select -p
+          xcrun --find clang
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Check strict NativeAOT gates and negative release selftests
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/publish-macos.sh verification/assert-macos-native-release.sh verification/assert-macos-native-release-selftest.sh
+          pwsh -NoProfile -File verification/assert-aot-gates.ps1 -Rid osx-arm64
+          bash verification/assert-macos-native-release-selftest.sh
+      - name: Run managed source/compiler regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
+      - name: Publish and execute two distinct native AttoLang guest programs
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/publish-macos.sh examples/hello.ores
+          compiler=artifacts/compiler/osx-arm64/oresnet
+          hello=artifacts/apps/osx-arm64/oreslang-app
+          test "$(env -i PATH=/usr/bin:/bin "$hello")" = 14
+          "$compiler" check examples/hello.ores
+          denied=artifacts/rejected/osx-arm64/OresGenerated.dll
+          mkdir -p "$(dirname "$denied")"
+          rm -f "$denied"
+          if "$compiler" compile contracts/scalar/v1/fixtures/reject-actor.ores --out "$denied"; then
+            echo 'Native compiler admitted unsupported actor source' >&2
+            exit 1
+          fi
+          test ! -e "$denied"
+          bash scripts/publish-macos.sh contracts/v1/semantics/fixtures/add.ores artifacts/parity
+          add=artifacts/parity/osx-arm64/oreslang-app
+          bash verification/assert-macos-native-release.sh "$hello"
+          bash verification/assert-macos-native-release.sh "$add"
+          test "$(env -i PATH=/usr/bin:/bin "$add")" = 42
+          test "$(env -i PATH=/usr/bin:/bin "$hello")" = 14
+          for binary in "$compiler" "$hello" "$add"; do
+            if otool -L "$binary" | grep -Ei '/dotnet/|libcoreclr|libhostfxr|libmono'; then
+              echo "Native output depends on a managed runtime: $binary" >&2
+              exit 1
+            fi
+          done
+          echo 'MACOS_NET_NATIVE_AOT_GUEST_14_AND_42_EXECUTED'
+      - name: Record independently checkable exact-head guest receipt
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          fixture_sha="$(shasum -a 256 contracts/v1/semantics/fixtures/add.ores | awk '{print $1}')"
+          app_sha="$(shasum -a 256 artifacts/parity/osx-arm64/oreslang-app | awk '{print $1}')"
+          mkdir -p artifacts/evidence
+          printf '{"schema":"atto.net.exact_head_native_aot_v1","repository":"%s","source_head_sha":"%s","tree_sha":"%s","run_id":%s,"run_attempt":%s,"runner_os":"macOS","target_rid":"osx-arm64","source_fixture_sha256":"%s","native_guest_sha256":"%s","guest_receipts":["hello=14","add=42","unsupported_actor_rejected","managed_sidecar_rejected","source_isolation"],"source_only":false,"independently_verified":false}\n' \
+            "$GITHUB_REPOSITORY" "$EXPECTED_HEAD" "$tree" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$fixture_sha" "$app_sha" > artifacts/evidence/macos-native-aot.json
+      - name: Upload macOS native binaries and receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: atto-net-macos-arm64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/evidence/macos-native-aot.json
+            artifacts/compiler/osx-arm64/oresnet
+            artifacts/apps/osx-arm64/oreslang-app
+            artifacts/parity/osx-arm64/oreslang-app
+          if-no-files-found: error
+          retention-days: 14
