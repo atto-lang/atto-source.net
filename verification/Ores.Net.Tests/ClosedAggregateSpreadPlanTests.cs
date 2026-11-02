@@ -55,6 +55,13 @@ internal static class ClosedAggregateSpreadPlanTests
             bad.AddNamed("\uD800", "int");
         }, "AGGREGATE_INVALID_UTF8_FIELD");
 
+        Reject(() => {
+            var excessive = new ClosedAggregateSpreadPlan(ClosedAggregateKind.ReadonlyRecord);
+            var empty = new ClosedAggregateShape(ClosedAggregateKind.ReadonlyRecord,
+                Array.Empty<ClosedAggregateField>());
+            for (int i = 0; i < 1025; i++) excessive.AddCheckedSpread(empty);
+        }, "AGGREGATE_SPREAD_PLAN_BUDGET");
+
         var unicode = new ClosedAggregateSpreadPlan(ClosedAggregateKind.ReadonlyRecord);
         unicode.AddNamed("\U00010000", "int");
         unicode.AddNamed("\uE000", "int");
