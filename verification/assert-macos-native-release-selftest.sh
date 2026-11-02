@@ -72,4 +72,18 @@ mkdir -p "$staging/artifacts/apps"
 ln -s "$work/outside" "$staging/artifacts/apps/redirect"
 assert_rejected 'escapes through symlink' 'artifacts/apps/redirect'
 [[ ! -e "$work/outside/osx-arm64" ]] || { echo 'Escaped staging tree' >&2; exit 1; }
+# External and symlinked sources must fail before the fake SDK is invoked.
+printf 'fnc main():int { return 42; }\n' > "$work/outside-source.ores"
+ln -s "$work/outside-source.ores" "$staging/linked-source.ores"
+for denied_source in "$work/outside-source.ores" "$staging/linked-source.ores"; do
+  if output="$(PATH="$work/bin:$PATH" bash "$staging/scripts/publish-macos.sh" "$denied_source" artifacts/apps 2>&1)"; then
+    echo "Unsafe AOT source unexpectedly admitted: $denied_source" >&2
+    exit 1
+  fi
+  if [[ "$output" != *"Source must be a regular non-symlinked file inside this checkout"* ||
+        "$output" == *DOTNET_INVOKED* ]]; then
+    echo "Unsafe source did not fail closed before SDK invocation: $output" >&2
+    exit 1
+  fi
+done
 echo 'MACOS_ARM64_NET_NATIVE_AOT_RELEASE_GATES_SELFTEST_PASSED'
