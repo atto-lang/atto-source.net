@@ -252,6 +252,11 @@ internal static class ActorPubSubTurnAuthorityTests
             "invalid-\uD800", ActorTopicDeliveryPolicy.Reliable, 1); }
         catch (ArgumentException) { malformed = true; }
         Require(malformed, "topic names must reject unpaired UTF-16 surrogates");
+        bool c1Rejected = false;
+        try { _ = group.DefineTopic<string>(
+            "bad-\u0085-name", ActorTopicDeliveryPolicy.Reliable, 1); }
+        catch (ArgumentException) { c1Rejected = true; }
+        Require(c1Rejected, "Unicode C1 controls must be rejected in topic names");
 
         bool overlong = false;
         try { _ = group.DefineTopic<string>(
