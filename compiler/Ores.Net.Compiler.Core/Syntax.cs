@@ -285,7 +285,7 @@ public static class OresParser
         private Expression ParseIdentityCast(int depth)
         {
             CheckDepth(depth);
-            var value = ParseUnary(depth + 1);
+            var value = ParseUnary(depth);
             while (Current.Text == "as")
             {
                 int at = Current.Offset;
