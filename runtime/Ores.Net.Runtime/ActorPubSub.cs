@@ -98,6 +98,7 @@ public sealed class ActorPubSub
 
     public ActorGroup CreateGroup(int maxMembers = 1024)
     {
+        ActorRuntime.RequireHostPubSubAuthority("create an ActorGroup");
         if (maxMembers <= 0)
             throw new ArgumentOutOfRangeException(nameof(maxMembers));
 
@@ -131,8 +132,16 @@ public sealed class ActorPubSub
         private ActorPubSub Owner =>
             _owner ?? throw new ObjectDisposedException(nameof(ActorGroup));
 
-        public bool Join(ActorRef actor) => Owner.Join(Id, actor);
-        public bool Leave(ActorRef actor) => Owner.Leave(Id, actor);
+        public bool Join(ActorRef actor)
+        {
+            ActorRuntime.RequireHostPubSubAuthority("admit an ActorGroup member");
+            return Owner.Join(Id, actor);
+        }
+        public bool Leave(ActorRef actor)
+        {
+            ActorRuntime.RequireHostPubSubAuthority("revoke an ActorGroup member");
+            return Owner.Leave(Id, actor);
+        }
         public bool Contains(ActorRef actor) => Owner.Contains(Id, actor);
         public int MemberCount => Owner.MemberCount(Id);
 
@@ -140,13 +149,19 @@ public sealed class ActorPubSub
             string name,
             ActorTopicDeliveryPolicy policy,
             int capacity)
-            => Owner.DefineTopic<T>(Id, name, policy, capacity);
+        {
+            ActorRuntime.RequireHostPubSubAuthority("define an ActorGroup topic");
+            return Owner.DefineTopic<T>(Id, name, policy, capacity);
+        }
 
         public ActorTopic<T> Topic<T>(string name)
             => Owner.Topic<T>(Id, name);
 
         public void Dispose()
         {
+            // Reject before invalidating the caller's handle; an actor cannot
+            // hijack group closure and leave the manager with a dead handle.
+            ActorRuntime.RequireHostPubSubAuthority("close an ActorGroup");
             ActorPubSub? owner = Interlocked.Exchange(ref _owner, null);
             owner?.CloseGroup(Id);
         }
@@ -167,17 +182,33 @@ public sealed class ActorPubSub
 
         // Host/runtime-only operations: these accept a full ActorRef
         // (including generation and nonce), never an integer actor ID.
-        public bool Subscribe(ActorRef actor) =>
-            _owner.Subscribe<T>(GroupId, Name, actor);
+        public bool Subscribe(ActorRef actor)
+        {
+            ActorRuntime.RequireHostPubSubAuthority(
+                "subscribe with an unbound ActorRef");
+            return _owner.Subscribe<T>(GroupId, Name, actor);
+        }
 
-        public bool Unsubscribe(ActorRef actor) =>
-            _owner.Unsubscribe<T>(GroupId, Name, actor);
+        public bool Unsubscribe(ActorRef actor)
+        {
+            ActorRuntime.RequireHostPubSubAuthority(
+                "unsubscribe with an unbound ActorRef");
+            return _owner.Unsubscribe<T>(GroupId, Name, actor);
+        }
 
-        public ActorPublishReceipt Publish(ActorRef publisher, T value) =>
-            _owner.Publish(GroupId, Name, publisher, value);
+        public ActorPublishReceipt Publish(ActorRef publisher, T value)
+        {
+            ActorRuntime.RequireHostPubSubAuthority(
+                "publish with an unbound ActorRef");
+            return _owner.Publish(GroupId, Name, publisher, value);
+        }
 
-        public bool TryRead(ActorRef subscriber, out T value) =>
-            _owner.TryRead(GroupId, Name, subscriber, out value);
+        public bool TryRead(ActorRef subscriber, out T value)
+        {
+            ActorRuntime.RequireHostPubSubAuthority(
+                "read with an unbound ActorRef");
+            return _owner.TryRead(GroupId, Name, subscriber, out value);
+        }
 
         // Compiler/runtime-only guest bridge. A retained ActorContext is
         // unusable after its physical turn; the compiler never supplies an
