@@ -36,6 +36,9 @@ public sealed class ActorPubSub
     // Match LLVM's per-delivery maximum; a capacity bound alone cannot
     // bound the memory retained by a single enormous String event.
     private const int MaxFrozenPayloadBytes = 16 * 1024 * 1024;
+    private const long MaxTotalQueuedPayloadBytes = 64L * 1024 * 1024;
+    // Logical frozen bytes, one charge per subscriber; guarded by _gate.
+    private long _queuedPayloadBytes;
     private static readonly UTF8Encoding StrictUtf8 = new(
         encoderShouldEmitUTF8Identifier: false,
         throwOnInvalidBytes: true);
