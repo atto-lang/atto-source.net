@@ -24,10 +24,27 @@ file -b "$binary" | grep -Eq '^Mach-O 64-bit .*arm64.*executable|^Mach-O 64-bit 
   exit 1
 }
 directory="$(dirname "$binary")"
-for candidate in "$directory"/*.dll "$directory"/*.deps.json "$directory"/*.runtimeconfig.json; do
+# Case-insensitive names must fail even on case-sensitive macOS volumes.
+# NativeAOT release output must not ship a managed host runtime or sidecars.
+shopt -s nullglob nocaseglob
+for candidate in "$directory"/*.dll "$directory"/*.deps.json "$directory"/*.runtimeconfig.json \
+    "$directory"/libhostpolicy*.dylib "$directory"/libhostfxr*.dylib \
+    "$directory"/libcoreclr*.dylib "$directory"/libmono*.dylib; do
   if [[ -e "$candidate" || -L "$candidate" ]]; then
     echo "Managed runtime sidecar forbidden in strict macOS AOT output: $candidate" >&2
     exit 1
   fi
 done
+shopt -u nullglob nocaseglob
+# Fail closed on runtime dynamic-link dependencies even when no managed
+# sidecar lives next to this binary.
+command -v otool >/dev/null || { echo 'Missing otool dependency auditor' >&2; exit 2; }
+if ! dependencies="$(otool -L "$binary" 2>&1)"; then
+  echo "Unable to inspect Mach-O linked dependencies: $binary" >&2
+  exit 1
+fi
+if printf '%s\n' "$dependencies" | grep -Eiq 'lib(hostpolicy|hostfxr|coreclr|mono)[^/[:space:]]*\.dylib'; then
+  echo "Managed runtime dynamic linkage forbidden in NativeAOT release: $binary" >&2
+  exit 1
+fi
 echo "Verified standalone Mach-O ARM64 layout: $binary"
