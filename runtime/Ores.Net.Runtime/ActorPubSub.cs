@@ -569,6 +569,23 @@ public sealed class ActorPubSub
         return value;
     }
 
+    private static int MeasurePayloadBytes<T>(T value)
+    {
+        // Only frozen scalar/UTF-8 String types are admitted by DefineTopic.
+        // Logical byte accounting does not claim precise CLR heap size.
+        return value switch
+        {
+            string text => StrictUtf8.GetByteCount(text),
+            bool or byte => 1,
+            short or ushort => 2,
+            int or uint or float => 4,
+            long or ulong or double => 8,
+            decimal or Guid => 16,
+            _ => throw new NotSupportedException(
+                "unsupported topic payload byte representation")
+        };
+    }
+
     internal void Close()
     {
         lock (_gate)
