@@ -157,6 +157,8 @@ public sealed class ActorPubSub
         public ulong GroupId { get; }
         public string Name { get; }
 
+        // Host/runtime-only operations: these accept a full ActorRef
+        // (including generation and nonce), never an integer actor ID.
         public bool Subscribe(ActorRef actor) =>
             _owner.Subscribe<T>(GroupId, Name, actor);
 
@@ -168,6 +170,39 @@ public sealed class ActorPubSub
 
         public bool TryRead(ActorRef subscriber, out T value) =>
             _owner.TryRead(GroupId, Name, subscriber, out value);
+
+        // Compiler/runtime-only guest bridge. A retained ActorContext is
+        // unusable after its physical turn; the compiler never supplies an
+        // arbitrary ActorRef as publication or subscription authority.
+        // Do not convert these to an AsyncLocal/ExecutionContext capability:
+        // logical tasks can suspend and carriers can be reused by other actors.
+        public bool Subscribe(ActorContext context)
+        {
+            ArgumentNullException.ThrowIfNull(context);
+            context.ValidateActiveTurn();
+            return _owner.Subscribe<T>(GroupId, Name, context.Self);
+        }
+
+        public bool Unsubscribe(ActorContext context)
+        {
+            ArgumentNullException.ThrowIfNull(context);
+            context.ValidateActiveTurn();
+            return _owner.Unsubscribe<T>(GroupId, Name, context.Self);
+        }
+
+        public ActorPublishReceipt Publish(ActorContext context, T value)
+        {
+            ArgumentNullException.ThrowIfNull(context);
+            context.ValidateActiveTurn();
+            return _owner.Publish(GroupId, Name, context.Self, value);
+        }
+
+        public bool TryRead(ActorContext context, out T value)
+        {
+            ArgumentNullException.ThrowIfNull(context);
+            context.ValidateActiveTurn();
+            return _owner.TryRead(GroupId, Name, context.Self, out value);
+        }
     }
 
     private bool Join(ulong groupId, ActorRef actor)
