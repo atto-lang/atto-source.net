@@ -167,6 +167,18 @@ public sealed class ActorRuntime : IDisposable
     [ThreadStatic]
     private static ActorRuntime? s_currentRuntime;
 
+    // The actor dispatcher is the physical guest authority boundary.
+    // A carrier must never call manager/host ActorRef pubsub APIs on behalf
+    // of an arbitrary actor; source lowering uses ActorContext-checked
+    // intrinsics that expire when the physical turn ends.
+    internal static void RequireHostPubSubAuthority(string operation)
+    {
+        if (s_currentRuntime is not null)
+            throw new System.Security.SecurityException(
+                "actor code cannot " + operation +
+                "; use a turn-scoped actor capability instead");
+    }
+
     private readonly object _gate = new();
     // A second Dispose caller must wait for worker joining and reclamation,
     // not merely observe the _closed admission flag and return prematurely.
