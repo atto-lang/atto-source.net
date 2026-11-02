@@ -60,8 +60,9 @@ try
         return 0;
     }
     if (validStaticFacts &&
+        !string.Equals(Path.GetExtension(args[1]), ".atto", StringComparison.OrdinalIgnoreCase) &&
         !string.Equals(Path.GetExtension(args[1]), ".ores", StringComparison.OrdinalIgnoreCase))
-        throw new FormatException("Static-facts export requires a .ores source file");
+        throw new FormatException("Static-facts export requires a .atto or .ores source file");
     var source = ReadBoundedSource(args[1], rejectBom: validStaticFacts);
     if (validStaticFacts)
     {
