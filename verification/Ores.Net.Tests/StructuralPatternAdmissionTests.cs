@@ -41,9 +41,9 @@ internal static class StructuralPatternAdmissionTests
         }
         // Contextual identifiers and comments/strings are not aggregate constructors.
         foreach (string source in new[] {
-            "// infer struct{n:42}\\nfnc main():int{return 42;}",
+            "// infer struct{n:42}\nfnc main():int{return 42;}",
             "/* infer /* record{n:42} */ done */ fnc main():int{return 42;}",
-            "fnc main():int{const msg=\\\"infer struct{n:42}\\\";return 42;}",
+            "fnc main():int{const msg=\"infer struct{n:42}\";return 42;}",
             "fnc record():int{return 42;} fnc main():int{return record();}"
         })
             StructuralShapeAdmission.RejectUnsupportedPatterns(source);
