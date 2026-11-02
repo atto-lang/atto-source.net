@@ -262,7 +262,7 @@ internal static class ActorPubSubTurnAuthorityTests
         string boundary = new string('\u00E9', 128);
         var defined = group.DefineTopic<string>(
             boundary, ActorTopicDeliveryPolicy.Reliable, 1);
-        Require(group.Topic<string>(boundary) is not null,
+        Require(defined is not null && group.Topic<string>(boundary) is not null,
             "exactly 256 UTF-8 bytes is an admissible topic name");
     }
 
