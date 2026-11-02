@@ -72,9 +72,7 @@ public static class ProjectRootSourceResolver
         if (relative is ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar,
                 StringComparison.Ordinal) || Path.IsPathRooted(relative))
             throw new FormatException("project-root source escapes package");
-        if (Path.GetExtension(candidate).Length == 0) candidate += ".ores";
-        if (Path.GetExtension(candidate) != ".ores")
-            throw new FormatException("non-Oreslang sources unsupported in .NET bootstrap");
+        candidate = ResolveSourceExtension(candidate);
         if (!File.Exists(candidate))
             throw new FormatException("project-root source not found");
         CheckNotReparsePoint(candidate);
@@ -101,18 +99,36 @@ public static class ProjectRootSourceResolver
         string root = Path.GetFullPath(sourceRoot);
         string owner = Path.GetFullPath(importer);
         if (!Directory.Exists(root) || !File.Exists(owner) ||
-            Path.GetExtension(owner) != ".ores")
+            !IsSourceExtension(Path.GetExtension(owner)))
             throw new FormatException("relative importer must exist inside source root");
         CheckNotReparsePoint(root);
         ValidateSourcePath(root, owner);
         string candidate = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(owner)!, specifier));
-        if (Path.GetExtension(candidate).Length == 0) candidate += ".ores";
-        if (Path.GetExtension(candidate) != ".ores" || !File.Exists(candidate))
+        candidate = ResolveSourceExtension(candidate);
+        if (!File.Exists(candidate))
             throw new FormatException("relative source file not found or unsupported extension");
         if (string.Equals(owner, candidate, OperatingSystem.IsWindows()
                 ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
             throw new FormatException("relative source cannot import itself");
         ValidateSourcePath(root, candidate);
+        return candidate;
+    }
+
+    private static bool IsSourceExtension(string extension) =>
+        extension is ".atto" or ".ores";
+
+    // Canonical .atto wins for an extensionless import. Explicit legacy .ores
+    // keeps working; unknown extensions must not be allowed as source.
+    private static string ResolveSourceExtension(string candidate)
+    {
+        string extension = Path.GetExtension(candidate);
+        if (extension.Length == 0)
+        {
+            string canonical = candidate + ".atto";
+            return File.Exists(canonical) ? canonical : candidate + ".ores";
+        }
+        if (!IsSourceExtension(extension))
+            throw new FormatException("source imports require .atto or .ores extension");
         return candidate;
     }
 
