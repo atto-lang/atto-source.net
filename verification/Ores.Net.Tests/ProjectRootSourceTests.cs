@@ -49,6 +49,10 @@ internal static class ProjectRootSourceTests
                   Path.GetFullPath(source), "explicit legacy .ores rejected");
             Check(ProjectRootSourceResolver.Resolve(app, "+/src/answer.atto") ==
                   Path.GetFullPath(attoSource), "explicit .atto rejected");
+            string upperAttoSource = Path.Combine(app, "src", "upper.ATTO");
+            File.WriteAllText(upperAttoSource, "pub fnc answer():int{return 44;}\\n");
+            Check(ProjectRootSourceResolver.Resolve(app, "+/src/upper.ATTO") ==
+                  Path.GetFullPath(upperAttoSource), "case-insensitive explicit .ATTO rejected");
             Reject(() => ProjectRootSourceResolver.Resolve(app, "+/src/answer.py"),
                    "foreign source admitted");
             File.Delete(attoSource);
@@ -112,6 +116,10 @@ internal static class ProjectRootSourceTests
             File.WriteAllText(attoImporter, "fnc main():int{return 43;}\n");
             Check(ProjectRootSourceResolver.ResolveRelative(attoImporter, "./local.atto", app) ==
                   Path.GetFullPath(localAtto), ".atto importer did not resolve .atto dependency");
+            string upperAttoImporter = Path.Combine(routes, "upper-main.ATTO");
+            File.WriteAllText(upperAttoImporter, "fnc main():int{return 44;}\\n");
+            Check(ProjectRootSourceResolver.ResolveRelative(upperAttoImporter, "./local.atto", app) ==
+                  Path.GetFullPath(localAtto), "case-insensitive .ATTO importer was rejected");
             File.Delete(localAtto);
             Check(ProjectRootSourceResolver.ResolveRelative(importer, "./local", app) ==
                   Path.GetFullPath(local), "relative legacy fallback lost");

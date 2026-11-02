@@ -32,6 +32,11 @@ try {
     }
     Assert-Exit -Expected 2 -Arguments @('compile', $source, '--other', 'ignored') -Case 'unknown flag'
     Assert-Exit -Expected 0 -Arguments @('check', $source) -Case 'valid check'
+    # The canonical extension must exercise the same shipping parser and CIL path.
+    $attoSource = Join-Path $work 'valid.atto'
+    Copy-Item -LiteralPath $source -Destination $attoSource
+    Assert-Exit -Expected 0 -Arguments @('check', $attoSource) -Case 'valid AttoLang check'
+
     # A successful source/typed-IR check must not become an executable result.
     # Exactly the separate compile command may publish OresGenerated.dll.
     if ((Get-ChildItem -LiteralPath $work -Force | Measure-Object).Count -ne 0) {
@@ -54,6 +59,12 @@ try {
     }
 
     Assert-Exit -Expected 0 -Arguments @('compile', $source, '--out', $out) -Case 'valid compile'
+    $attoOut = Join-Path $work 'AttoGenerated.dll'
+    Assert-Exit -Expected 0 -Arguments @('compile', $attoSource, '--out', $attoOut) -Case 'valid AttoLang compile'
+    if (-not (Test-Path -LiteralPath $attoOut) -or (Get-Item -LiteralPath $attoOut).Length -le 0) {
+        throw 'Valid .atto source failed to produce a non-empty assembly'
+    }
+
     if (-not (Test-Path -LiteralPath $out)) {
         throw 'Valid source failed to produce assembly'
     }

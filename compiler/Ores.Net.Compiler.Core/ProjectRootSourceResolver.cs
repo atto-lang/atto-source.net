@@ -115,7 +115,8 @@ public static class ProjectRootSourceResolver
     }
 
     private static bool IsSourceExtension(string extension) =>
-        extension is ".atto" or ".ores";
+        string.Equals(extension, ".atto", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(extension, ".ores", StringComparison.OrdinalIgnoreCase);
 
     // Canonical .atto wins for an extensionless import. Explicit legacy .ores
     // keeps working; unknown extensions must not be allowed as source.
