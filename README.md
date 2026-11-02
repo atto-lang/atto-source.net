@@ -1,4 +1,8 @@
-# Oreslang .NET — Windows Native AOT backend
+# AttoLang .NET Native AOT backend
+
+AttoLang is the current public language name (formerly Oreslang). This repository remains an independent CIL compiler plus .NET Native AOT prototype. Its implemented subset remains limited to checked signed-i64 scalar arithmetic; this branding update does not imply full-language parity. Keep existing `Ores.Net.*` project identities, `oresnet` command, generated artifact names and `.ores` fixtures stable.
+
+Use [AttoLang Brand Compatibility v1](https://github.com/ores-truffle-oreslang/oreslang-common-source/blob/main/contracts/v1/attolang-brand-compat-v1.json) as the migration policy. Do not rename repository paths, package coordinates, command names, ABI or wire-format identifiers as part of a branding-only change.
 
 Independent **CIL compiler + .NET Native AOT runtime** for Oreslang. No LLVM, GraalVM, JIT, runtime CIL generation, or dynamic assembly loading is used by released binaries.
 
