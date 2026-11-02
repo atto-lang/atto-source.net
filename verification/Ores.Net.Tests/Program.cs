@@ -37,6 +37,13 @@ static void InvalidSend(Action action, string why)
 const string mutableShareError =
     "native rt mut share requires verified SharedMutex<T> capability, guarded lowering and allocation-domain proof in .NET Native AOT at offset ";
 foreach (var source in new[] {
+    // Six shared negative expressions used by the Wasm and Cranelift gates.
+    "fnc main():int{return rt mut share 42;}",
+    "fnc main():int{return (rt mut share 42);}",
+    "fnc main():int{return 1+(rt mut share 2);}",
+    "fnc main():int{return rt mut share (rt borrow 3);}",
+    "fnc main():int{return rt mut share (rt mut borrow 4);}",
+    "fnc main():int{return rt mut share (rt mut share 5);}",
     "fnc main():int{return rt mut share 1;}",
     // Heap owners and borrowed aliases must never be silently treated as
     // CIL i64 scalars merely because the unsupported share is nested.
