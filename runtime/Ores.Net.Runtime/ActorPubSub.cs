@@ -247,13 +247,13 @@ public sealed class ActorPubSub
             group.Members.Remove(actor);
             foreach (var entry in _topics)
             {
-                if (entry.Key.GroupId == groupId &&
-                    entry.Value.RemoveActor(actor) &&
-                    actorRecord.SubscriptionCount > 0)
-                {
+                if (entry.Key.GroupId != groupId ||
+                    !entry.Value.RemoveActor(actor)) continue;
+                // An edge always owns one queue-slot reservation even if its
+                // actor accounting was already found inconsistent.
+                _reservedQueueSlots -= entry.Value.Capacity;
+                if (actorRecord.SubscriptionCount > 0)
                     actorRecord.SubscriptionCount--;
-                    _reservedQueueSlots -= entry.Value.Capacity;
-                }
             }
             return true;
         }
