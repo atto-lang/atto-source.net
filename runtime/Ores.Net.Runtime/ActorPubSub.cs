@@ -670,52 +670,18 @@ public sealed class ActorPubSub
             _subscribers.Clear();
         }
 
-        internal ActorPublishReceipt Publish(T value)
+        internal ActorPublishReceipt Publish(T value, int payloadBytes)
         {
-            if (Policy == ActorTopicDeliveryPolicy.Reliable)
+            // All policies run under ActorPubSub._gate; queues and ledger
+            // change together, without allocations after preflight.
+            var entry = new Entry(value, payloadBytes);
+            return Policy switch
             {
-                foreach (Queue<T> queue in _subscribers.Values)
-                {
-                    if (queue.Count >= Capacity)
-                        return new ActorPublishReceipt(
-                            _subscribers.Count, 0, 0, 0, Backpressured: true);
-                }
-
-                foreach (Queue<T> queue in _subscribers.Values)
-                    queue.Enqueue(value);
-
-                return new ActorPublishReceipt(
-                    _subscribers.Count, _subscribers.Count, 0, 0, Backpressured: false);
-            }
-
-            int accepted = 0;
-            int dropped = 0;
-            int coalesced = 0;
-            foreach (Queue<T> queue in _subscribers.Values)
-            {
-                if (Policy == ActorTopicDeliveryPolicy.Latest)
-                {
-                    if (queue.Count != 0)
-                    {
-                        queue.Dequeue();
-                        coalesced++;
-                    }
-                    queue.Enqueue(value);
-                    accepted++;
-                }
-                else if (queue.Count >= Capacity)
-                {
-                    dropped++;
-                }
-                else
-                {
-                    queue.Enqueue(value);
-                    accepted++;
-                }
-            }
-
-            return new ActorPublishReceipt(
-                _subscribers.Count, accepted, dropped, coalesced, Backpressured: false);
+                ActorTopicDeliveryPolicy.Reliable => PublishReliable(entry),
+                ActorTopicDeliveryPolicy.Latest => PublishLatest(entry),
+                ActorTopicDeliveryPolicy.Lossy => PublishLossy(entry),
+                _ => throw new InvalidOperationException("Unknown topic policy")
+            };
         }
 
         internal bool TryRead(ActorRef actor, out T value)
