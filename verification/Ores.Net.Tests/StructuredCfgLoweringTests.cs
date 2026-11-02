@@ -110,6 +110,28 @@ internal static class StructuredCfgLoweringTests
             "compile-time aggregate cannot escape as scalar");
         Reject("fnc main():int{const a=record{foo:2};const b=record{...a,foo:true};return b.foo;}",
             "record bool cannot return as int");
+        // Runtime-valued immutable rows snapshot scalars into private verified
+        // SSA places: later mutation of the original local cannot change them.
+        Check("fnc main():int{let int source=20;val row=infer struct{x:source,y:22};source=99;return row.x+row.y;}",
+            42, "runtime val aggregate snapshot survives source reassignment");
+        Check("fnc main():int{val int seed=20;val a=record{x:seed};val b=record{...a,y:22};return b.x+b.y;}",
+            42, "runtime readonly record spread into immutable result");
+        Check("fnc main():int{const a=record{x:20};val b=record{...a,x:40+2};return b.x;}",
+            42, "runtime val spread from compile-time const row");
+        Check("fnc main():int{val row=infer struct{x:true,y:40};val update=infer struct{...row,x:2};return update.x+update.y;}",
+            42, "runtime val type-changing scalar override");
+        Check("fnc twice(int n):int{return n*2;}fnc main():int{val row=infer record{x:twice(21)};return row.x;}",
+            42, "typed helper call evaluated by emitted CIL in row construction");
+        Check("fnc main():int{let int source=20;val original=record{x:source};val changed=record{...original,x:42};source=99;return changed.x-original.x+20;}",
+            42, "runtime spread never aliases or mutates original owner");
+        Reject("fnc main():int{let int value=41;const row=infer struct{x:value};return row.x;}",
+            "const aggregate cannot capture runtime let");
+        Reject("fnc main():int{val row=infer record{...missing,x:42};return row.x;}",
+            "runtime spread from unknown source fails before CIL");
+        Reject("fnc main():int{val row=infer struct{x:1,x:2};return row.x;}",
+            "runtime row duplicate explicit key fails");
+        Reject("fnc main():int{val row=infer record{x:42};return row;}",
+            "runtime aggregate value cannot escape as scalar");
         Check("fnc main():int{const int c=40+2;return c;}",
             42, "compile-time const typed SSA");
         Check("fnc main():int{let int x=5;val int y=x+1;x=x+1;return y;}",
