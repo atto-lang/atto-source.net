@@ -249,17 +249,17 @@ internal static class ActorPubSubTurnAuthorityTests
         using var group = runtime.PubSub.CreateGroup();
         bool malformed = false;
         try { _ = group.DefineTopic<string>(
-            "invalid-\\uD800", ActorTopicDeliveryPolicy.Reliable, 1); }
+            "invalid-\uD800", ActorTopicDeliveryPolicy.Reliable, 1); }
         catch (ArgumentException) { malformed = true; }
         Require(malformed, "topic names must reject unpaired UTF-16 surrogates");
 
         bool overlong = false;
         try { _ = group.DefineTopic<string>(
-            new string('\\u00E9', 129), ActorTopicDeliveryPolicy.Reliable, 1); }
+            new string('\u00E9', 129), ActorTopicDeliveryPolicy.Reliable, 1); }
         catch (ArgumentException) { overlong = true; }
         Require(overlong, "topic names bound encoded UTF-8 bytes, not UTF-16 length");
 
-        string boundary = new string('\\u00E9', 128);
+        string boundary = new string('\u00E9', 128);
         var defined = group.DefineTopic<string>(
             boundary, ActorTopicDeliveryPolicy.Reliable, 1);
         Require(group.Topic<string>(boundary) is not null,
