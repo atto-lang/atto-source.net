@@ -46,6 +46,15 @@ internal static class ActorPubSubByteQuotaTests
         Require(partial.Accepted == 8 && partial.Dropped == 1,
             "LOSSY admits 8 of 9 copies within shared byte cap");
 
+        var latest = group.DefineTopic<string>(
+            "latest-bytes", ActorTopicDeliveryPolicy.Latest, 1);
+        foreach (var actor in subscribers)
+            Require(latest.Subscribe(actor), "latest subscribe");
+        bool denied = false;
+        try { _ = latest.Publish(subscribers[0], "blocked"); }
+        catch (InvalidOperationException) { denied = true; }
+        Require(denied, "LATEST honors shared graph byte budget");
+
         foreach (var actor in subscribers) runtime.Stop(actor);
         Require(SpinWait.SpinUntil(
             () => runtime.LiveActors == 0, TimeSpan.FromSeconds(10)),
