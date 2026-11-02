@@ -55,6 +55,19 @@ internal static class ActorPubSubByteQuotaTests
         catch (InvalidOperationException) { denied = true; }
         Require(denied, "LATEST honors shared graph byte budget");
 
+        int delivered = 0;
+        foreach (var actor in subscribers)
+            if (lossy.TryRead(actor, out _)) delivered++;
+        Require(delivered == 8, "LOSSY queue stores exactly eight events");
+        Require(latest.Publish(subscribers[0], "old").Accepted == 9,
+            "LATEST runs after reclaiming LOSSY byte credits");
+        var replacement = latest.Publish(subscribers[0], "new");
+        Require(replacement.Coalesced == 9 && replacement.Accepted == 9,
+            "LATEST replacement accounts prior bytes");
+        foreach (var actor in subscribers)
+            Require(latest.TryRead(actor, out string value) && value == "new",
+                "LATEST only retains the newest message");
+
         foreach (var actor in subscribers) runtime.Stop(actor);
         Require(SpinWait.SpinUntil(
             () => runtime.LiveActors == 0, TimeSpan.FromSeconds(10)),
