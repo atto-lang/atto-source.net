@@ -166,6 +166,24 @@ public static class OresStructuredParser
         }
         for (int i = 0; i + 1 < tokens.Count; i++)
         {
+            // No protected state heap or virtual actor activation exists in
+            // the structured Native AOT compiler. Recognize the two-word
+            // declaration head after either visibility spelling, not merely
+            // the following generic "expected fnc" parse error.
+            if (tokens[i].Text == "define" ||
+                (tokens[i].Text == "pub" && tokens[i + 1].Text == "define"))
+            {
+                int j = tokens[i].Text == "define" ? i + 1 : i + 2;
+                if (j < tokens.Count && tokens[j].Text == "pub") j++;
+                if (j + 1 < tokens.Count &&
+                    tokens[j].Text == "state" && tokens[j + 1].Text == "container")
+                    throw new FormatException(
+                        $"STATE_CONTAINER_BACKEND_UNSUPPORTED: protected heap region and critical guard lowering required at offset {tokens[j].Offset}");
+                if (j + 1 < tokens.Count &&
+                    tokens[j].Text == "virtual" && tokens[j + 1].Text == "actor")
+                    throw new FormatException(
+                        $"VIRTUAL_ACTOR_BACKEND_UNSUPPORTED: logical key and activation fencing required at offset {tokens[j].Offset}");
+            }
             if (tokens[i].Text == "select" &&
                 StaticSelectAdmission.IsStaticSelectFollower(tokens[i + 1].Text))
                 throw StaticSelectAdmission.Unsupported(tokens[i].Offset);
