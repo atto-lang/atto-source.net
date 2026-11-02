@@ -59,7 +59,9 @@ try {
     }
 
     Assert-Exit -Expected 0 -Arguments @('compile', $source, '--out', $out) -Case 'valid compile'
-    $attoOut = Join-Path $work 'AttoGenerated.dll'
+    $attoOutDir = Join-Path $work 'atto-output'
+    New-Item -ItemType Directory -Path $attoOutDir | Out-Null
+    $attoOut = Join-Path $attoOutDir 'OresGenerated.dll'
     Assert-Exit -Expected 0 -Arguments @('compile', $attoSource, '--out', $attoOut) -Case 'valid AttoLang compile'
     if (-not (Test-Path -LiteralPath $attoOut) -or (Get-Item -LiteralPath $attoOut).Length -le 0) {
         throw 'Valid .atto source failed to produce a non-empty assembly'
