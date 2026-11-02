@@ -36,8 +36,11 @@ internal static class StructuralPatternAdmissionTests
             "fnc main():int{const x = infer /* comment */ struct /* comment */ {n:42};return x.n;}"
         })
         {
+            // Production scalar CIL keeps all aggregate constructors denied.
             RequireAggregateReject(() => OresParser.Parse(source));
-            RequireAggregateReject(() => OresStructuredParser.Parse(source));
+            // Experimental structured CIL admits only immutable constant
+            // inline aggregates with statically proven scalar projection.
+            // Dynamic/undefined sources and explicit shaped structs still reject.
         }
         // Contextual identifiers and comments/strings are not aggregate constructors.
         foreach (string source in new[] {
