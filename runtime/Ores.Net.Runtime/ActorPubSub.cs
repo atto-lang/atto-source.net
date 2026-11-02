@@ -686,14 +686,17 @@ public sealed class ActorPubSub
 
         internal bool TryRead(ActorRef actor, out T value)
         {
-            if (!_subscribers.TryGetValue(actor, out Queue<T>? queue))
+            if (!_subscribers.TryGetValue(actor, out SubscriptionEdge? edge))
                 throw new InvalidOperationException("Actor is not subscribed to topic");
-            if (queue.Count == 0)
+            if (edge.Queue.Count == 0)
             {
                 value = default!;
                 return false;
             }
-            value = queue.Dequeue();
+            Entry item = edge.Queue.Dequeue();
+            edge.Bytes -= item.Bytes;
+            _owner._queuedPayloadBytes -= item.Bytes;
+            value = item.Value;
             return true;
         }
     }
