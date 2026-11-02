@@ -124,6 +124,8 @@ internal static class StructuredCfgLoweringTests
             42, "typed helper call evaluated by emitted CIL in row construction");
         Check("fnc main():int{let int source=20;val original=record{x:source};val changed=record{...original,x:42};source=99;return changed.x-original.x+20;}",
             42, "runtime spread never aliases or mutates original owner");
+        Reject("fnc main():int{let int seed=20;val runtime=record{x:seed};const illegal=record{...runtime,y:22};return illegal.x+illegal.y;}",
+            "compile-time const row cannot spread a runtime val row");
         Reject("fnc main():int{let int value=41;const row=infer struct{x:value};return row.x;}",
             "const aggregate cannot capture runtime let");
         Reject("fnc main():int{val row=infer record{...missing,x:42};return row.x;}",
