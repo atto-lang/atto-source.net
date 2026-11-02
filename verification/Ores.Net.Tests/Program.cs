@@ -112,6 +112,7 @@ ActorDispatchDomainsSelfTest.Run();
 ActorRuntimeSelfTest.Run();
 ActorPubSubSelfTest.Run();
 ActorPubSubTurnAuthorityTests.Run();
+ActorPubSubByteQuotaTests.Run();
 ActorPubSubSourceAdmissionTests.Run();
 ProjectRootSourceTests.Run(); // host-only resolver, not linked .NET source imports
 
