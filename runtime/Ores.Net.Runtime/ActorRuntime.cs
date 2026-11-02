@@ -171,7 +171,9 @@ public sealed class ActorRuntime : IDisposable
     // unlike ThreadStatic. Keep the actor-origin marker in captured tasks
     // even after the physical turn returns. Such tasks must never acquire
     // host/supervisor ActorRef pubsub authority by changing carrier threads.
-    private static readonly AsyncLocal<ActorRuntime?> s_actorOrigin = new();
+    // A boolean sentinel cannot keep a retired ActorRuntime alive in a
+    // captured asynchronous ExecutionContext.
+    private static readonly AsyncLocal<bool> s_actorOrigin = new();
 
     // The actor dispatcher is the physical guest authority boundary.
     // A carrier must never call manager/host ActorRef pubsub APIs on behalf
@@ -179,7 +181,7 @@ public sealed class ActorRuntime : IDisposable
     // intrinsics that expire when the physical turn ends.
     internal static void RequireHostPubSubAuthority(string operation)
     {
-        if (s_currentRuntime is not null || s_actorOrigin.Value is not null)
+        if (s_currentRuntime is not null || s_actorOrigin.Value)
             throw new System.Security.SecurityException(
                 "actor code cannot " + operation +
                 "; use a turn-scoped actor capability instead");
@@ -436,9 +438,9 @@ public sealed class ActorRuntime : IDisposable
     private void RunCell(ActorCell cell)
     {
         ActorRuntime? previous = s_currentRuntime;
-        ActorRuntime? previousOrigin = s_actorOrigin.Value;
+        bool previousOrigin = s_actorOrigin.Value;
         s_currentRuntime = this;
-        s_actorOrigin.Value = this;
+        s_actorOrigin.Value = true;
         bool finalize = false;
 
         try
