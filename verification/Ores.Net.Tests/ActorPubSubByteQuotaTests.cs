@@ -38,6 +38,14 @@ internal static class ActorPubSubByteQuotaTests
                     original.Length == payload.Length,
                 "full graph rejection retains original queued message");
 
+        var lossy = group.DefineTopic<string>(
+            "lossy-bytes", ActorTopicDeliveryPolicy.Lossy, 1);
+        foreach (var actor in subscribers)
+            Require(lossy.Subscribe(actor), "lossy subscribe");
+        var partial = lossy.Publish(subscribers[0], payload);
+        Require(partial.Accepted == 8 && partial.Dropped == 1,
+            "LOSSY admits 8 of 9 copies within shared byte cap");
+
         foreach (var actor in subscribers) runtime.Stop(actor);
         Require(SpinWait.SpinUntil(
             () => runtime.LiveActors == 0, TimeSpan.FromSeconds(10)),
