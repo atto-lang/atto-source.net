@@ -66,7 +66,13 @@ def verify(repo: Path) -> int:
             if mode in (b"100644", b"100755"):
                 if not stat.S_ISREG(metadata.st_mode):
                     raise IntegrityError("tracked regular file is not regular")
-                if bool(metadata.st_mode & stat.S_IXUSR) != (mode == b"100755"):
+                # Windows checkout filesystems do not reliably expose Unix
+                # executable permission bits through Python stat(). HEAD/index
+                # mode identity is checked above via Git's exact tree; on POSIX
+                # independently require the on-disk executable bit as well.
+                if os.name != "nt" and (
+                    bool(metadata.st_mode & stat.S_IXUSR) != (mode == b"100755")
+                ):
                     raise IntegrityError("tracked executable mode differs from index")
                 content = target.read_bytes()
             elif mode == b"120000":
