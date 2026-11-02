@@ -619,9 +619,12 @@ public static class OresStructuredParser
                 else throw Error("infer requires an inline struct or readonly record");
                 var plan = new ClosedAggregateSpreadPlan(aggregateKind);
                 var values = new Dictionary<string, StructuredExpr>(StringComparer.Ordinal);
+                int elementCount = 0;
                 Expect("{");
                 while (Current.Text != "}")
                 {
+                    if (++elementCount > 1024)
+                        throw Error("AGGREGATE_SPREAD_PLAN_BUDGET");
                     if (Current.Text.Length == 0) throw Error("Unterminated inferred aggregate");
                     if (Current.Text == ".")
                     {
@@ -698,7 +701,8 @@ public static class OresStructuredParser
                 var type = Type();
                 int nameAt = Current.Offset;
                 string name = Name();
-                if (scopes.Any(scope => scope.ContainsKey(name)))
+                if (scopes.Any(scope => scope.ContainsKey(name)) ||
+                    aggregateScopes.Any(scope => scope.ContainsKey(name)))
                     throw new FormatException($"Duplicate local binding at offset {nameAt}");
                 Expect("=");
                 var initializer = Expr(depth + 1);
