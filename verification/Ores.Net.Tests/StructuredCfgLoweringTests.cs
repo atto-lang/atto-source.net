@@ -90,6 +90,26 @@ internal static class StructuredCfgLoweringTests
         Check(File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
             "structured-bindings42.ores")),
             42, "real const/val/let source through verified CFG and CIL");
+        // Real Oreslang source -> static closed-row typecheck -> verified CFG
+        // -> deterministic emitted CIL. No managed aggregate object is emitted.
+        Check("fnc main():int{const base=infer struct{x:20};const next=infer struct{...base,y:22};return next.x+next.y;}",
+            42, "inferred struct spread to emitted CIL");
+        Check("fnc main():int{const base=infer record{x:20};const next=infer record{...base,y:22};return next.x+next.y;}",
+            42, "inferred readonly record spread to emitted CIL");
+        Check("fnc main():int{const a=record{x:20};const b=record{...a,x:42};return b.x-a.x+20;}",
+            42, "record override does not mutate original");
+        Check("fnc main():int{const a=infer struct{active:true,score:40};const b=infer struct{...a,active:2};return b.active+b.score;}",
+            42, "overridden field's inferred type changes bool to int");
+        Check("fnc main():int{const a=infer struct{active:true,value:42};if a.active{return a.value;}else{return 0;}}",
+            42, "typed bool field projects into scalar CFG");
+        Reject("fnc main():int{const a=infer struct{...missing,x:1};return a.x;}",
+            "dynamic or missing spread source rejected");
+        Reject("fnc main():int{const a=infer struct{x:1,x:2};return a.x;}",
+            "duplicate explicit aggregate fields rejected");
+        Reject("fnc main():int{const a=infer record{x:1};return a;}",
+            "compile-time aggregate cannot escape as scalar");
+        Reject("fnc main():int{const a=record{foo:2};const b=record{...a,foo:true};return b.foo;}",
+            "record bool cannot return as int");
         Check("fnc main():int{const int c=40+2;return c;}",
             42, "compile-time const typed SSA");
         Check("fnc main():int{let int x=5;val int y=x+1;x=x+1;return y;}",
