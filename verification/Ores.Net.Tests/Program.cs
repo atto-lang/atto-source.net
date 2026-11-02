@@ -669,6 +669,7 @@ Require(await RuntimeHost.ExecuteAsync(() => throw new DivideByZeroException()) 
 
 ManagedSourceEmitterTests.Run();
 SourceI64Conformance.Run();
+ScalarIdentityCastBootstrapTests.Run();
 SharedScalarParityConformance.Run();
 CfgVerifierTests.Run();
 CfgCilStressTests.Run();
