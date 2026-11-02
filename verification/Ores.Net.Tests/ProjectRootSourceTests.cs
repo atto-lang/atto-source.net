@@ -50,7 +50,7 @@ internal static class ProjectRootSourceTests
             Check(ProjectRootSourceResolver.Resolve(app, "+/src/answer.atto") ==
                   Path.GetFullPath(attoSource), "explicit .atto rejected");
             string upperAttoSource = Path.Combine(app, "src", "upper.ATTO");
-            File.WriteAllText(upperAttoSource, "pub fnc answer():int{return 44;}\\n");
+            File.WriteAllText(upperAttoSource, "pub fnc answer():int{return 44;}\n");
             Check(ProjectRootSourceResolver.Resolve(app, "+/src/upper.ATTO") ==
                   Path.GetFullPath(upperAttoSource), "case-insensitive explicit .ATTO rejected");
             Reject(() => ProjectRootSourceResolver.Resolve(app, "+/src/answer.py"),
@@ -117,7 +117,7 @@ internal static class ProjectRootSourceTests
             Check(ProjectRootSourceResolver.ResolveRelative(attoImporter, "./local.atto", app) ==
                   Path.GetFullPath(localAtto), ".atto importer did not resolve .atto dependency");
             string upperAttoImporter = Path.Combine(routes, "upper-main.ATTO");
-            File.WriteAllText(upperAttoImporter, "fnc main():int{return 44;}\\n");
+            File.WriteAllText(upperAttoImporter, "fnc main():int{return 44;}\n");
             Check(ProjectRootSourceResolver.ResolveRelative(upperAttoImporter, "./local.atto", app) ==
                   Path.GetFullPath(localAtto), "case-insensitive .ATTO importer was rejected");
             File.Delete(localAtto);
