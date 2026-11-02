@@ -63,7 +63,7 @@ internal static class ProjectRootSourceTests
             // and silently replaced by a valid legacy .ores sibling.
             string danglingAtto = Path.Combine(app, "src", "dangling.atto");
             string danglingLegacy = Path.Combine(app, "src", "dangling.ores");
-            File.WriteAllText(danglingLegacy, "pub fnc answer():int{return 41;}\\n");
+            File.WriteAllText(danglingLegacy, "pub fnc answer():int{return 41;}\n");
             bool danglingAttoCreated = false;
             try
             {
