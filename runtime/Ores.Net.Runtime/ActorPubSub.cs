@@ -627,7 +627,15 @@ public sealed class ActorPubSub
 
     private sealed class TopicState<T> : ITopicState
     {
-        private readonly Dictionary<ActorRef, Queue<T>> _subscribers = new();
+        private readonly ActorPubSub _owner;
+        private readonly Dictionary<ActorRef, SubscriptionEdge> _subscribers = new();
+        private readonly record struct Entry(T Value, int Bytes);
+
+        private sealed class SubscriptionEdge(int capacity)
+        {
+            internal readonly Queue<Entry> Queue = new(capacity);
+            internal long Bytes;
+        }
 
         internal TopicState(ActorTopicDeliveryPolicy policy, int capacity)
         {
