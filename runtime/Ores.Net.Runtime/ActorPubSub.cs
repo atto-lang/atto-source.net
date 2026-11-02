@@ -736,6 +736,29 @@ public sealed class ActorPubSub
             return new ActorPublishReceipt(count, count, 0, coalesced, false);
         }
 
+        private ActorPublishReceipt PublishLossy(Entry item)
+        {
+            int accepted = 0;
+            int dropped = 0;
+            foreach (SubscriptionEdge edge in _subscribers.Values)
+            {
+                if (edge.Queue.Count >= Capacity ||
+                    edge.Bytes > MaxFrozenPayloadBytes - item.Bytes ||
+                    _owner._queuedPayloadBytes >
+                        MaxTotalQueuedPayloadBytes - item.Bytes)
+                {
+                    dropped++;
+                    continue;
+                }
+                edge.Queue.Enqueue(item);
+                edge.Bytes += item.Bytes;
+                _owner._queuedPayloadBytes += item.Bytes;
+                accepted++;
+            }
+            return new ActorPublishReceipt(
+                _subscribers.Count, accepted, dropped, 0, false);
+        }
+
         internal bool TryRead(ActorRef actor, out T value)
         {
             if (!_subscribers.TryGetValue(actor, out SubscriptionEdge? edge))
