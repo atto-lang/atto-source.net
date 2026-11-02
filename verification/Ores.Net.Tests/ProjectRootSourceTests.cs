@@ -59,6 +59,34 @@ internal static class ProjectRootSourceTests
             Check(ProjectRootSourceResolver.Resolve(app, "+/src/answer") ==
                   Path.GetFullPath(source), "legacy fallback lost");
 
+            // A dangling canonical .atto entry must not be treated as absent
+            // and silently replaced by a valid legacy .ores sibling.
+            string danglingAtto = Path.Combine(app, "src", "dangling.atto");
+            string danglingLegacy = Path.Combine(app, "src", "dangling.ores");
+            File.WriteAllText(danglingLegacy, "pub fnc answer():int{return 41;}\\n");
+            bool danglingAttoCreated = false;
+            try
+            {
+                File.CreateSymbolicLink(danglingAtto, Path.Combine(app, "src", "missing-target.atto"));
+                danglingAttoCreated = true;
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or
+                     PlatformNotSupportedException or IOException)
+            {
+                // Some Windows runners deny symlink creation.
+            }
+            try
+            {
+                if (danglingAttoCreated)
+                    Reject(() => ProjectRootSourceResolver.Resolve(app, "+/src/dangling"),
+                           "dangling canonical .atto fell back to legacy .ores");
+            }
+            finally
+            {
+                if (danglingAttoCreated) File.Delete(danglingAtto);
+                File.Delete(danglingLegacy);
+            }
+
             // TOML line endings are LF or CRLF. A bare CR can otherwise
             // conceal [project] or a second root after a # comment.
             File.WriteAllText(manifest,
