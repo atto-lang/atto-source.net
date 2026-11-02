@@ -14,11 +14,15 @@ public enum ActorTopicDeliveryPolicy
 }
 
 public readonly record struct ActorPublishReceipt(
+    ulong Sequence,
     int Subscribers,
     int Accepted,
     int Dropped,
     int Coalesced,
     bool Backpressured);
+
+/// <summary>One bounded pub/sub delivery carrying its topic-local sequence.</summary>
+public readonly record struct ActorPubSubDelivery<T>(ulong Sequence, T Value);
 
 /// <summary>
 /// NativeAOT-safe, in-process ActorGroup/pub-sub admission substrate.
@@ -213,11 +217,27 @@ public sealed class ActorPubSub
             return _owner.Publish(GroupId, Name, publisher, value);
         }
 
+        /// <summary>Portable v1 naming for a nonblocking, atomic publish attempt.</summary>
+        public ActorPublishReceipt TryPublish(ActorRef publisher, T value)
+        {
+            ActorRuntime.RequireHostPubSubAuthority(
+                "publish with an unbound ActorRef");
+            return _owner.Publish(GroupId, Name, publisher, value);
+        }
+
         public bool TryRead(ActorRef subscriber, out T value)
         {
             ActorRuntime.RequireHostPubSubAuthority(
                 "read with an unbound ActorRef");
             return _owner.TryRead(GroupId, Name, subscriber, out value);
+        }
+
+        public bool TryReadDelivery(
+            ActorRef subscriber, out ActorPubSubDelivery<T> delivery)
+        {
+            ActorRuntime.RequireHostPubSubAuthority(
+                "read with an unbound ActorRef");
+            return _owner.TryReadDelivery(GroupId, Name, subscriber, out delivery);
         }
 
         // Compiler/runtime-only guest bridge. A retained ActorContext is
@@ -246,11 +266,26 @@ public sealed class ActorPubSub
             return _owner.Publish(GroupId, Name, context.Self, value);
         }
 
+        public ActorPublishReceipt TryPublish(ActorContext context, T value)
+        {
+            ArgumentNullException.ThrowIfNull(context);
+            context.ValidateActiveTurn();
+            return _owner.Publish(GroupId, Name, context.Self, value);
+        }
+
         public bool TryRead(ActorContext context, out T value)
         {
             ArgumentNullException.ThrowIfNull(context);
             context.ValidateActiveTurn();
             return _owner.TryRead(GroupId, Name, context.Self, out value);
+        }
+
+        public bool TryReadDelivery(
+            ActorContext context, out ActorPubSubDelivery<T> delivery)
+        {
+            ArgumentNullException.ThrowIfNull(context);
+            context.ValidateActiveTurn();
+            return _owner.TryReadDelivery(GroupId, Name, context.Self, out delivery);
         }
     }
 
@@ -441,6 +476,21 @@ public sealed class ActorPubSub
         ActorRef subscriber,
         out T value)
     {
+        if (!TryReadDelivery(groupId, name, subscriber, out ActorPubSubDelivery<T> delivery))
+        {
+            value = default!;
+            return false;
+        }
+        value = delivery.Value;
+        return true;
+    }
+
+    private bool TryReadDelivery<T>(
+        ulong groupId,
+        string name,
+        ActorRef subscriber,
+        out ActorPubSubDelivery<T> delivery)
+    {
         lock (_gate)
         {
             _ = RequireActorLocked(subscriber);
@@ -450,7 +500,7 @@ public sealed class ActorPubSub
                     "Topic read requires live ActorGroup membership");
 
             TopicState<T> topic = RequireTopicLocked<T>(groupId, name);
-            return topic.TryRead(subscriber, out value);
+            return topic.TryRead(subscriber, out delivery);
         }
     }
 
@@ -648,7 +698,16 @@ public sealed class ActorPubSub
     {
         private readonly ActorPubSub _owner;
         private readonly Dictionary<ActorRef, SubscriptionEdge> _subscribers = new();
-        private readonly record struct Entry(T Value, int Bytes);
+        private readonly record struct Entry(
+            ulong Sequence, T Value, int Bytes);
+        private ulong _lastSequence;
+
+        private ulong NextSequence()
+        {
+            if (_lastSequence == ulong.MaxValue)
+                throw new InvalidOperationException("Actor topic sequence exhausted");
+            return ++_lastSequence;
+        }
 
         private sealed class SubscriptionEdge(int capacity)
         {
@@ -693,41 +752,41 @@ public sealed class ActorPubSub
         {
             // All policies run under ActorPubSub._gate; queues and ledger
             // change together, without allocations after preflight.
-            var entry = new Entry(value, payloadBytes);
             return Policy switch
             {
-                ActorTopicDeliveryPolicy.Reliable => PublishReliable(entry),
-                ActorTopicDeliveryPolicy.Latest => PublishLatest(entry),
-                ActorTopicDeliveryPolicy.Lossy => PublishLossy(entry),
+                ActorTopicDeliveryPolicy.Reliable => PublishReliable(value, payloadBytes),
+                ActorTopicDeliveryPolicy.Latest => PublishLatest(value, payloadBytes),
+                ActorTopicDeliveryPolicy.Lossy => PublishLossy(value, payloadBytes),
                 _ => throw new InvalidOperationException("Unknown topic policy")
             };
         }
 
-        private ActorPublishReceipt PublishReliable(Entry item)
+        private ActorPublishReceipt PublishReliable(T value, int payloadBytes)
         {
             int count = _subscribers.Count;
             foreach (SubscriptionEdge edge in _subscribers.Values)
             {
                 if (edge.Queue.Count >= Capacity ||
-                    edge.Bytes > MaxFrozenPayloadBytes - item.Bytes)
-                    return new ActorPublishReceipt(count, 0, 0, 0, true);
+                    edge.Bytes > MaxFrozenPayloadBytes - payloadBytes)
+                    return new ActorPublishReceipt(0, count, 0, 0, 0, true);
             }
-            long bytes = (long)item.Bytes * count;
+            long bytes = (long)payloadBytes * count;
             if (_owner._queuedPayloadBytes > MaxTotalQueuedPayloadBytes - bytes)
-                return new ActorPublishReceipt(count, 0, 0, 0, true);
+                return new ActorPublishReceipt(0, count, 0, 0, 0, true);
 
-            // Every ring was preallocated at subscribe time, and there is
-            // no allocation after this all-subscriber admission boundary.
+            // All recipients have capacity before sequence allocation.
+            // Bounded Queue<T> instances are pre-sized at subscription creation.
+            var item = new Entry(NextSequence(), value, payloadBytes);
             foreach (SubscriptionEdge edge in _subscribers.Values)
             {
                 edge.Queue.Enqueue(item);
                 edge.Bytes += item.Bytes;
             }
             _owner._queuedPayloadBytes += bytes;
-            return new ActorPublishReceipt(count, count, 0, 0, false);
+            return new ActorPublishReceipt(item.Sequence, count, count, 0, 0, false);
         }
 
-        private ActorPublishReceipt PublishLatest(Entry item)
+        private ActorPublishReceipt PublishLatest(T value, int payloadBytes)
         {
             // Replacement accounting is all-or-nothing. Reject the new value
             // without disturbing a single retained older value.
@@ -739,11 +798,12 @@ public sealed class ActorPubSub
                 if (edge.Queue.Count != 0) coalesced++;
             }
             long projected = _owner._queuedPayloadBytes - oldBytes +
-                             (long)item.Bytes * _subscribers.Count;
+                             (long)payloadBytes * _subscribers.Count;
             if (projected > MaxTotalQueuedPayloadBytes)
                 throw new InvalidOperationException(
                     "LATEST publication exceeds 64 MiB graph byte quota");
 
+            var item = new Entry(NextSequence(), value, payloadBytes);
             foreach (SubscriptionEdge edge in _subscribers.Values)
             {
                 if (edge.Queue.Count != 0) edge.Queue.Dequeue();
@@ -752,13 +812,14 @@ public sealed class ActorPubSub
             }
             _owner._queuedPayloadBytes = projected;
             int count = _subscribers.Count;
-            return new ActorPublishReceipt(count, count, 0, coalesced, false);
+            return new ActorPublishReceipt(item.Sequence, count, count, 0, coalesced, false);
         }
 
-        private ActorPublishReceipt PublishLossy(Entry item)
+        private ActorPublishReceipt PublishLossy(T value, int payloadBytes)
         {
             int accepted = 0;
             int dropped = 0;
+            var item = new Entry(NextSequence(), value, payloadBytes);
             foreach (SubscriptionEdge edge in _subscribers.Values)
             {
                 if (edge.Queue.Count >= Capacity ||
@@ -775,22 +836,22 @@ public sealed class ActorPubSub
                 accepted++;
             }
             return new ActorPublishReceipt(
-                _subscribers.Count, accepted, dropped, 0, false);
+                item.Sequence, _subscribers.Count, accepted, dropped, 0, false);
         }
 
-        internal bool TryRead(ActorRef actor, out T value)
+        internal bool TryRead(ActorRef actor, out ActorPubSubDelivery<T> delivery)
         {
             if (!_subscribers.TryGetValue(actor, out SubscriptionEdge? edge))
                 throw new InvalidOperationException("Actor is not subscribed to topic");
             if (edge.Queue.Count == 0)
             {
-                value = default!;
+                delivery = default;
                 return false;
             }
             Entry item = edge.Queue.Dequeue();
             edge.Bytes -= item.Bytes;
             _owner._queuedPayloadBytes -= item.Bytes;
-            value = item.Value;
+            delivery = new ActorPubSubDelivery<T>(item.Sequence, item.Value);
             return true;
         }
     }
