@@ -263,7 +263,7 @@ public static class OresParser
         private Expression ParseMul(int depth)
         {
             CheckDepth(depth);
-            Expression left = ParseUnary(depth + 1);
+            Expression left = ParseIdentityCast(depth + 1);
             while (Current.Text is "*" or "/")
             {
                 char op = Current.Text[0];
@@ -272,10 +272,29 @@ public static class OresParser
                 if (op == '/')
                     throw new FormatException("Division requires float result lowering; unsupported in the i64 source subset");
                 _index++;
-                var rhs = ParseUnary(depth + 1);
+                var rhs = ParseIdentityCast(depth + 1);
                 left = new Binary(op, left, rhs);
             }
             return left;
+        }
+
+        // This bootstrap already has a verified i64-only AST/IR/CIL path.
+        // A checked 'as int' is therefore an exact identity proof, not a
+        // conversion. Preserve the operand for overflow and evaluation order.
+        // All non-i64 targets and 'as?' fail before any CIL is emitted.
+        private Expression ParseIdentityCast(int depth)
+        {
+            CheckDepth(depth);
+            var value = ParseUnary(depth + 1);
+            while (Current.Text == "as")
+            {
+                int at = Current.Offset;
+                _index++;
+                if (!Take("int"))
+                    throw new FormatException(
+                        $"Checked scalar cast requires exact int identity in .NET i64 bootstrap at offset {at}");
+            }
+            return value;
         }
 
         private Expression ParseUnary(int depth)
