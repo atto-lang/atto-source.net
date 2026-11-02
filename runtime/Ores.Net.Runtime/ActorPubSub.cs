@@ -622,6 +622,7 @@ public sealed class ActorPubSub
         IEnumerable<ActorRef> Subscribers { get; }
         int Capacity { get; }
         bool RemoveActor(ActorRef actor);
+        void Clear();
     }
 
     private sealed class TopicState<T> : ITopicState
