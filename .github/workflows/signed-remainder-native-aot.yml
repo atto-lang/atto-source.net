@@ -36,10 +36,17 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $actual -cne $env:EXPECTED_HEAD) {
             throw "Source checkout mismatch expected=$env:EXPECTED_HEAD actual=$actual"
           }
-          $dirty = @(git status --porcelain --untracked-files=all)
-          if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) {
-            throw 'Compiler checkout is dirty before tests'
+          # git status/diff can invoke configured clean filters. This
+          # verifier reads tracked files as raw bytes, checks HEAD/index tree
+          # identity, and rejects untracked files including ignored injections.
+          # Keep the prior Linux self-test exercising hostile Git filter cases.
+          $python = if ($env:RUNNER_OS -ceq 'Windows') { 'python' } else { 'python3' }
+          if ($env:RUNNER_OS -ceq 'Linux') {
+            & $python scripts/verify-raw-worktree.py --self-test
+            if ($LASTEXITCODE -ne 0) { throw 'Raw worktree self-test failed' }
           }
+          & $python scripts/verify-raw-worktree.py .
+          if ($LASTEXITCODE -ne 0) { throw 'Raw worktree identity differs from exact HEAD' }
           $tree = (git rev-parse 'HEAD^{tree}').Trim()
           if ($LASTEXITCODE -ne 0 -or $tree -cnotmatch '^[0-9a-f]{40}$') {
             throw 'Unable to pin source root tree identity'
