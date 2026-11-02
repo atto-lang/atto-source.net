@@ -147,6 +147,16 @@ internal static class StructuredCfgLoweringTests
         CheckOverflow(
             "fnc main():int{int unused=9223372036854775807+1;return 7;}",
             "unused readonly runtime initializer still traps");
+        // The input is unavailable at compile time inside the helper.
+        // Runtime-readonly must remain a nonconstant local while CIL retains
+        // the helper argument and checked arithmetic, not fold to 42.
+        Check("fnc plus_one(int p):int{int local=p+1;return local;}" +
+                "fnc main():int{return plus_one(41);}",
+            42, "runtime readonly helper argument survives CFG/CIL");
+        Reject("fnc plus_one(int p):int{int local=p+1;local=0;return local;}" +
+                "fnc main():int{return plus_one(41);}",
+            "runtime readonly helper local cannot be reassigned");
+
 
 
         Check(File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
