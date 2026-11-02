@@ -322,6 +322,13 @@ public sealed class ActorPubSub
     {
         ValidateTopicName(name);
         ValidatePayloadType<T>();
+        // Reject undefined enum values at definition, not after the first
+        // publication. The LLVM ABI rejects invalid delivery-policy values
+        // before committing any topic state.
+        if (policy is not (ActorTopicDeliveryPolicy.Reliable or
+                           ActorTopicDeliveryPolicy.Latest or
+                           ActorTopicDeliveryPolicy.Lossy))
+            throw new ArgumentOutOfRangeException(nameof(policy));
         if (capacity <= 0 || capacity > MaxTopicCapacity)
             throw new ArgumentOutOfRangeException(nameof(capacity),
                 "Actor topic capacity exceeds the bounded ring limit");
