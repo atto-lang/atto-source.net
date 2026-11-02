@@ -13,6 +13,7 @@ internal static class ActorPubSubTurnAuthorityTests
     {
         TurnBoundSubscribePublishAndRead();
         SubscriptionQuotaAndEpochRejoin();
+        GlobalQueueSlotsAreBoundedAndReclaimed();
         Console.WriteLine(
             "PASS .NET bounded pubsub turn authority, membership epochs and quotas");
     }
@@ -120,6 +121,52 @@ internal static class ActorPubSubTurnAuthorityTests
         runtime.Stop(replacement);
         Require(SpinWait.SpinUntil(() => runtime.LiveActors == 0,
                 TimeSpan.FromSeconds(5)), "replacement finalization");
+    }
+
+
+    private static void GlobalQueueSlotsAreBoundedAndReclaimed()
+    {
+        using var runtime = new ActorRuntime();
+        using var group = runtime.PubSub.CreateGroup();
+        var topics = new List<ActorPubSub.ActorTopic<string>>();
+        for (int i = 0; i < 17; i++)
+            topics.Add(group.DefineTopic<string>(
+                "slots-" + i, ActorTopicDeliveryPolicy.Reliable, 65_536));
+        ActorRef actor = runtime.Spawn(
+            ActorKind.Shared, static (_, _) => { });
+        Require(group.Join(actor), "queue-slot quota membership");
+        for (int i = 0; i < 16; i++)
+            Require(topics[i].Subscribe(actor),
+                "preallocate 65,536 slots for edge " + i);
+
+        bool quotaRejected = false;
+        try { _ = topics[16].Subscribe(actor); }
+        catch (InvalidOperationException) { quotaRejected = true; }
+        Require(quotaRejected,
+            "more than 1,048,576 total fixed queue slots must fail closed");
+        Require(topics[0].Unsubscribe(actor), "remove one preallocated queue");
+        Require(topics[16].Subscribe(actor),
+            "unsubscribe releases exactly one bounded queue reservation");
+
+        bool oversizedRejected = false;
+        try { _ = group.DefineTopic<string>(
+            "oversized", ActorTopicDeliveryPolicy.Reliable, 65_537); }
+        catch (ArgumentOutOfRangeException) { oversizedRejected = true; }
+        Require(oversizedRejected, "per-edge capacity beyond 65,536 rejected");
+
+        runtime.Stop(actor);
+        Require(SpinWait.SpinUntil(() => runtime.LiveActors == 0,
+            TimeSpan.FromSeconds(5)), "slot-owning actor finalization");
+
+        ActorRef next = runtime.Spawn(
+            ActorKind.Shared, static (_, _) => { });
+        Require(group.Join(next), "replacement after slot reclamation");
+        for (int i = 0; i < 16; i++)
+            Require(topics[i].Subscribe(next),
+                "retired subscriptions return all aggregate queue slots");
+        runtime.Stop(next);
+        Require(SpinWait.SpinUntil(() => runtime.LiveActors == 0,
+            TimeSpan.FromSeconds(5)), "replacement slot reclamation");
     }
 
     private static void Require(bool condition, string description)
