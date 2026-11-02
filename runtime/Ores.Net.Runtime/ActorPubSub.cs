@@ -521,8 +521,22 @@ public sealed class ActorPubSub
     private static void ValidateTopicName(string name)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
-        if (name.Length > 256 || name.Any(char.IsControl))
+        if (name.Any(char.IsControl))
             throw new ArgumentException("Invalid topic name", nameof(name));
+
+        // Match the native LLVM ABI's 256-byte UTF-8 namespace bound,
+        // not UTF-16 code-unit length. Never silently replace surrogates:
+        // replacement would let two distinct names alias across backends.
+        int bytes;
+        try { bytes = StrictUtf8.GetByteCount(name); }
+        catch (EncoderFallbackException error)
+        {
+            throw new ArgumentException(
+                "ActorGroup topic name contains invalid UTF-16", nameof(name), error);
+        }
+        if (bytes > 256)
+            throw new ArgumentException(
+                "ActorGroup topic name exceeds 256 UTF-8 bytes", nameof(name));
     }
 
     private static void ValidatePayloadType<T>()
