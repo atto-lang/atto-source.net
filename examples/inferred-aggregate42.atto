@@ -1,5 +1,7 @@
-pub fnc main():int {
-    const base = infer struct{x: 20, active: true};
-    const next = infer record{...base, x: 42};
-    return next.x;
+pub fnc main(): int {
+    let int seed = 20;
+    val base = infer struct{x: seed, active: true};
+    val next = infer record{...base, y: 22};
+    seed = 99;
+    return next.x + next.y;
 }
