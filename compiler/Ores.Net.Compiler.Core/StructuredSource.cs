@@ -723,6 +723,12 @@ public static class OresStructuredParser
                         if (origin is null)
                             throw new FormatException(
                                 $"Aggregate spread requires a previous immutable closed local at offset {offset}");
+                        // A const value requires every spread field to be a
+                        // compile-time scalar. A runtime val row may only be
+                        // spread into another runtime val aggregate.
+                        if (origin.Values.Values.Any(field =>
+                            field is not StructuredInt and not StructuredBool))
+                            throw Error("const aggregate spread requires compile-time constant source");
                         plan.AddCheckedSpread(origin.Shape);
                         foreach (var field in origin.Values)
                             values[field.Key] = field.Value;
