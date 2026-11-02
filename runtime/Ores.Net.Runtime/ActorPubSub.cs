@@ -344,7 +344,7 @@ public sealed class ActorPubSub
             if (_topics.Count >= _maxTopics)
                 throw new InvalidOperationException("Topic capacity exceeded");
 
-            _topics.Add(key, new TopicState<T>(policy, capacity));
+            _topics.Add(key, new TopicState<T>(this, policy, capacity));
             return new ActorTopic<T>(this, groupId, name);
         }
     }
@@ -420,9 +420,11 @@ public sealed class ActorPubSub
                 throw new InvalidOperationException(
                     "Publication requires live ActorGroup membership");
 
+            T frozen = Freeze(value);
+            int payloadBytes = MeasurePayloadBytes(frozen);
             TopicState<T> topic = RequireTopicLocked<T>(groupId, name);
             PruneStaleLocked(groupId, topic);
-            return topic.Publish(Freeze(value));
+            return topic.Publish(frozen, payloadBytes);
         }
     }
 
@@ -577,6 +579,7 @@ public sealed class ActorPubSub
             _groups.Clear();
             _actors.Clear();
             _reservedQueueSlots = 0;
+            _queuedPayloadBytes = 0;
         }
     }
 
