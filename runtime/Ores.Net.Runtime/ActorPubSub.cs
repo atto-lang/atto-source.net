@@ -500,7 +500,12 @@ public sealed class ActorPubSub
         public IEnumerable<ActorRef> Subscribers => _subscribers.Keys;
 
         internal bool Contains(ActorRef actor) => _subscribers.ContainsKey(actor);
-        internal void Add(ActorRef actor) => _subscribers.Add(actor, new Queue<T>());
+        // Preallocate every bounded ring *before* publishing the subscription.
+        // A RELIABLE fanout checks capacity for all edges before enqueue.
+        // Enqueue must then have no allocation/resize failure path that could
+        // commit to an early subscriber and fail at a later one.
+        internal void Add(ActorRef actor) =>
+            _subscribers.Add(actor, new Queue<T>(Capacity));
         public bool RemoveActor(ActorRef actor) => _subscribers.Remove(actor);
 
         internal ActorPublishReceipt Publish(T value)
