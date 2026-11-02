@@ -41,6 +41,20 @@ internal static class ProjectRootSourceTests
             File.WriteAllText(manifest, "schema_version = \"1\"\n");
             Check(ProjectRootSourceResolver.Resolve(app, "+/src/answer") == Path.GetFullPath(source),
                   "inferred extension");
+            string attoSource = Path.Combine(app, "src", "answer.atto");
+            File.WriteAllText(attoSource, "pub fnc answer():int{return 43;}\n");
+            Check(ProjectRootSourceResolver.Resolve(app, "+/src/answer") ==
+                  Path.GetFullPath(attoSource), "canonical .atto did not win");
+            Check(ProjectRootSourceResolver.Resolve(app, "+/src/answer.ores") ==
+                  Path.GetFullPath(source), "explicit legacy .ores rejected");
+            Check(ProjectRootSourceResolver.Resolve(app, "+/src/answer.atto") ==
+                  Path.GetFullPath(attoSource), "explicit .atto rejected");
+            Reject(() => ProjectRootSourceResolver.Resolve(app, "+/src/answer.py"),
+                   "foreign source admitted");
+            File.Delete(attoSource);
+            Check(ProjectRootSourceResolver.Resolve(app, "+/src/answer") ==
+                  Path.GetFullPath(source), "legacy fallback lost");
+
             // TOML line endings are LF or CRLF. A bare CR can otherwise
             // conceal [project] or a second root after a # comment.
             File.WriteAllText(manifest,
@@ -88,6 +102,20 @@ internal static class ProjectRootSourceTests
                   Path.GetFullPath(local), "./ did not resolve relative to importer");
             Check(ProjectRootSourceResolver.ResolveRelative(importer, "../answer", app) ==
                   Path.GetFullPath(source), "../ did not resolve relative to importer");
+            string localAtto = Path.Combine(routes, "local.atto");
+            File.WriteAllText(localAtto, "fnc local():int{return 43;}\n");
+            Check(ProjectRootSourceResolver.ResolveRelative(importer, "./local", app) ==
+                  Path.GetFullPath(localAtto), "canonical relative .atto did not win");
+            Check(ProjectRootSourceResolver.ResolveRelative(importer, "./local.ores", app) ==
+                  Path.GetFullPath(local), "explicit relative .ores was rejected");
+            string attoImporter = Path.Combine(routes, "main.atto");
+            File.WriteAllText(attoImporter, "fnc main():int{return 43;}\n");
+            Check(ProjectRootSourceResolver.ResolveRelative(attoImporter, "./local.atto", app) ==
+                  Path.GetFullPath(localAtto), ".atto importer did not resolve .atto dependency");
+            File.Delete(localAtto);
+            Check(ProjectRootSourceResolver.ResolveRelative(importer, "./local", app) ==
+                  Path.GetFullPath(local), "relative legacy fallback lost");
+
             foreach (var bad in new[] { "local", ".hidden/local", "./", "../",
                                         "./missing", "./local.java", "./main",
                                         "../../../../outside", "./local//alias",
