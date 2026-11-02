@@ -255,6 +255,22 @@ public static class OresStructuredCfgLowering
                     case StructuredLocalTypeDecl localType:
                         throw new FormatException(
                             $"Local {localType.Kind.ToString().ToLowerInvariant()} '{localType.Name}' requires verified value layout and CIL lowering at offset {localType.At}");
+                    case StructuredAggregateRuntimeLet aggregate:
+                    {
+                        // Eagerly evaluate EVERY write exactly once in source
+                        // order. Even an overwritten field can contain an
+                        // observable call/trap and must not be elided.
+                        foreach (var write in aggregate.Writes)
+                        {
+                            if (variables.ContainsKey(write.Place) ||
+                                write.Value.Type != write.Type)
+                                throw new FormatException(
+                                    "Invalid aggregate scalar SSA place or type");
+                            int value = Expression(write.Value, current, variables);
+                            variables.Add(write.Place, new Binding(write.Type, value));
+                        }
+                        break;
+                    }
                     case StructuredLet declaration:
                     {
                         if (variables.ContainsKey(declaration.Name))
