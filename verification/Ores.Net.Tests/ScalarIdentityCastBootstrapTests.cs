@@ -54,6 +54,37 @@ internal static class ScalarIdentityCastBootstrapTests
                 Require(OresIrReferenceEvaluator.Evaluate(direct) == expected,
                     "identity has no conversion effects " + expression);
             }
+            // A checked identity proof must never mask eager i64 overflow,
+            // in either the IR evaluator or the physically emitted CIL.
+            var overflow = new[]
+            {
+                "9223372036854775807 as int + 1",
+                "(-9223372036854775808) as int - 1",
+                "(3037000500 as int) * (3037000500 as int)",
+                "-((-9223372036854775808) as int)"
+            };
+            for (int i = 0; i < overflow.Length; i++)
+            {
+                var typed = OresIrLowering.Lower(OresParser.Parse(
+                    "fnc main():int{return " + overflow[i] + ";}"));
+                bool irTrapped = false;
+                try { _ = OresIrReferenceEvaluator.Evaluate(typed); }
+                catch (OverflowException) { irTrapped = true; }
+                Require(irTrapped, "typed IR must not hide cast overflow " + overflow[i]);
+
+                var output = Path.Combine(directory, "overflow-" + i + ".dll");
+                CilEmitter.EmitLibrary(typed, output);
+                using var assembly = AssemblyDefinition.ReadAssembly(output);
+                var entry = assembly.MainModule.Types.Single(t =>
+                    t.FullName == "Oreslang.Generated.OresProgram")
+                    .Methods.Single(m => m.Name == "Run");
+                bool cilTrapped = false;
+                try { _ = CilReferenceEvaluator.Evaluate(entry); }
+                catch (OverflowException) { cilTrapped = true; }
+                Require(cilTrapped, "physical CIL must not hide cast overflow " + overflow[i]);
+            }
+
+            int invalidIndex = 0;
             foreach (var expression in new[]
             {
                 "1 as bool", "1 as string", "1 as? int", "1 as",
@@ -62,19 +93,24 @@ internal static class ScalarIdentityCastBootstrapTests
                 "1 as /* mixed */ bool"
             })
             {
+                var invalidPath = Path.Combine(directory, "invalid-" + invalidIndex++ + ".dll");
+                bool rejected = false;
                 try
                 {
-                    _ = OresParser.Parse("fnc main():int{return " + expression + ";}");
+                    var ast = OresParser.Parse("fnc main():int{return " + expression + ";}");
+                    CilEmitter.EmitLibrary(OresIrLowering.Lower(ast), invalidPath);
                 }
                 catch (FormatException error) when (error.Message.Contains(
                     "Checked scalar cast requires exact int identity",
-                    StringComparison.Ordinal)) { continue; }
-                throw new InvalidOperationException("scalar-as-int: wrong rejection for " + expression);
+                    StringComparison.Ordinal)) { rejected = true; }
+                Require(rejected, "wrong rejection for " + expression);
+                Require(!File.Exists(invalidPath),
+                    "invalid cast must not publish physical CIL: " + expression);
             }
             Require(OresIrReferenceEvaluator.Evaluate(OresIrLowering.Lower(
                     OresParser.Parse("fnc main():int{return 4;} // as bool"))) == 4,
                 "comment must not be checked as executable syntax");
-            Console.WriteLine("scalar-as-int: 10 typed-IR+CIL positives, 10 diagnostic negatives, 1 comment control (no NativeAOT claim)");
+            Console.WriteLine("scalar-as-int: 10 typed-IR+CIL positives, 4 paired overflow traps, 10 artifact-free diagnostic negatives, 1 comment control (no NativeAOT claim)");
         }
         finally
         {
