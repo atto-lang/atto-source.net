@@ -169,7 +169,36 @@ def self_test() -> None:
             raise IntegrityError("staged index divergence was accepted")
         if (root / "filter-executed").exists():
             raise IntegrityError("Git clean filter executed during verification")
-    print("RAW_WORKTREE_SELF_TEST_PASS clean=1 negative=6 filter_executed=0")
+    # A Windows core.autocrlf=true checkout can transcode canonical LF blobs
+    # to CRLF without changing HEAD or the index. This is not an exact raw
+    # checkout and must reject; core.autocrlf=false restores exact bytes.
+    with tempfile.TemporaryDirectory(prefix="raw-worktree-eol-test-") as tmp:
+        root = Path(tmp)
+        git(root, "init", "-q")
+        git(root, "config", "core.autocrlf", "false")
+        (root / "fixture.cs").write_bytes(b"class Fixture {}\n")
+        git(root, "add", "fixture.cs")
+        git(root, "-c", "user.name=Fixture", "-c",
+            "user.email=fixture@example.invalid", "commit", "-qm", "initial")
+        if verify(root) != 1:
+            raise IntegrityError("LF control checkout rejected")
+        git(root, "config", "core.autocrlf", "true")
+        (root / "fixture.cs").unlink()
+        git(root, "checkout", "--", "fixture.cs")
+        if b"\r\n" not in (root / "fixture.cs").read_bytes():
+            raise IntegrityError("autocrlf negative fixture did not transcode LF")
+        try:
+            verify(root)
+        except IntegrityError:
+            pass
+        else:
+            raise IntegrityError("autocrlf-transcoded checkout was accepted")
+        git(root, "config", "core.autocrlf", "false")
+        (root / "fixture.cs").unlink()
+        git(root, "checkout", "--", "fixture.cs")
+        if verify(root) != 1:
+            raise IntegrityError("LF-preserving checkout rejected")
+    print("RAW_WORKTREE_SELF_TEST_PASS clean=3 negative=7 filter_executed=0")
 
 
 if __name__ == "__main__":
