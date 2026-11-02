@@ -126,7 +126,7 @@ public static class ProjectRootSourceResolver
         if (extension.Length == 0)
         {
             string canonical = candidate + ".atto";
-            return File.Exists(canonical) ? canonical : candidate + ".ores";
+            return MarkerExistsNoFollow(canonical) ? canonical : candidate + ".ores";
         }
         if (!IsSourceExtension(extension))
             throw new FormatException("source imports require .atto or .ores extension");
