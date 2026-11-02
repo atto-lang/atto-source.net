@@ -29,15 +29,7 @@ jobs:
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           $ErrorActionPreference = 'Stop'
-          if ($env:EXPECTED_HEAD -cnotmatch '^[0-9a-f]{40}
-        with:
-          dotnet-version: 10.0.x
-      - name: Verify parser, IR and CIL contracts
-        run: dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
-      - name: Execute 9 native canonical guests and reject 12 noncanonical percent cases
-        shell: pwsh
-        run: ./verification/assert-native-remainder.ps1 -Rid '${{ matrix.rid }}'
-) {
+          if ($env:EXPECTED_HEAD -cnotmatch '^[0-9a-f]{40}$') {
             throw 'Expected source commit must be a full hexadecimal SHA'
           }
           $actual = (git rev-parse HEAD).Trim()
@@ -49,15 +41,7 @@ jobs:
             throw 'Compiler checkout is dirty before tests'
           }
           $tree = (git rev-parse 'HEAD^{tree}').Trim()
-          if ($LASTEXITCODE -ne 0 -or $tree -cnotmatch '^[0-9a-f]{40}
-        with:
-          dotnet-version: 10.0.x
-      - name: Verify parser, IR and CIL contracts
-        run: dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
-      - name: Execute 9 native canonical guests and reject 12 noncanonical percent cases
-        shell: pwsh
-        run: ./verification/assert-native-remainder.ps1 -Rid '${{ matrix.rid }}'
-) {
+          if ($LASTEXITCODE -ne 0 -or $tree -cnotmatch '^[0-9a-f]{40}$') {
             throw 'Unable to pin source root tree identity'
           }
           Write-Output "EXACT_SOURCE_HEAD=$actual"
