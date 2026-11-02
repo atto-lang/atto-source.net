@@ -60,6 +60,44 @@ public static class OresParser
     {
         private int _i;
 
+        // Diagnostic priority: recognize both forbidden modifier orderings
+        // before the scalar-bootstrap catch-all capability rejection. This
+        // lookahead is bounded and skips trivia without touching lexer state.
+        private bool FollowedByWord(string expected)
+        {
+            int pos = _i;
+            while (pos < text.Length)
+            {
+                if (char.IsWhiteSpace(text[pos])) { pos++; continue; }
+                if (pos + 1 < text.Length && text[pos] == '/' && text[pos + 1] == '/')
+                {
+                    pos += 2;
+                    while (pos < text.Length && text[pos] is not ('\\n' or '\\r' or '\\u0085' or '\\u2028' or '\\u2029')) pos++;
+                    continue;
+                }
+                if (pos + 1 < text.Length && text[pos] == '/' && text[pos + 1] == '*')
+                {
+                    int depth = 1;
+                    pos += 2;
+                    while (depth > 0 && pos < text.Length)
+                    {
+                        if (pos + 1 < text.Length && text[pos] == '/' && text[pos + 1] == '*')
+                        { if (++depth > 128) return false; pos += 2; }
+                        else if (pos + 1 < text.Length && text[pos] == '*' && text[pos + 1] == '/')
+                        { depth--; pos += 2; }
+                        else pos++;
+                    }
+                    if (depth > 0) return false;
+                    continue;
+                }
+                break;
+            }
+            if (pos + expected.Length > text.Length ||
+                !text.AsSpan(pos, expected.Length).SequenceEqual(expected.AsSpan())) return false;
+            pos += expected.Length;
+            return pos == text.Length || !(text[pos] is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_');
+        }
+
         public Token Read()
         {
             while (_i < text.Length)
@@ -162,12 +200,17 @@ public static class OresParser
                 // The scalar Native AOT source path must not treat unlowered
                 // critical sections or suspension as ordinary identifiers.
                 // These tokens are recognized after comment skipping.
+                if ((word == "critical" && FollowedByWord("suspends")) ||
+                    (word == "suspends" && FollowedByWord("critical")))
+                    throw new FormatException($"E_CRITICAL_SUSPENDS_DECL: critical body may not suspend at offset {start}");
                 if (word == "critical")
                     throw new FormatException($"E_CRITICAL_UNLOWERED: scheduler gate and non-suspending critical body lowering required at offset {start}");
                 if (word is "suspends" or "suspend")
                     throw new FormatException($"E_SUSPENDS_UNLOWERED: continuation and effect lowering required at offset {start}");
+                if (word == "async" && (FollowedByWord("fnc") || FollowedByWord("routine")))
+                    throw new FormatException($"E_ASYNC_FUNCTION_REMOVED: use suspends with explicit Future semantics at offset {start}");
                 if (word == "async")
-                    throw new FormatException($"E_ASYNC_UNLOWERED: async generators require iterator frames; general functions migrate to suspends at offset {start}");
+                    throw new FormatException($"E_ASYNC_UNLOWERED: async generators require iterator frames at offset {start}");
                 if (word is "gen" or "generator")
                     throw new FormatException(
                         $"generator declarations require iterator-frame and continuation lowering in .NET Native AOT backend at offset {start}");
