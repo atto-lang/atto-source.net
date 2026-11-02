@@ -14,12 +14,16 @@ public enum ActorTopicDeliveryPolicy
 }
 
 public readonly record struct ActorPublishReceipt(
-    ulong Sequence,
     int Subscribers,
     int Accepted,
     int Dropped,
     int Coalesced,
-    bool Backpressured);
+    bool Backpressured)
+{
+    // Additive metadata; retain the original five-field constructor and
+    // generated Deconstruct signature for existing API consumers.
+    public ulong Sequence { get; init; }
+}
 
 /// <summary>One bounded pub/sub delivery carrying its topic-local sequence.</summary>
 public readonly record struct ActorPubSubDelivery<T>(ulong Sequence, T Value);
@@ -768,7 +772,7 @@ public sealed class ActorPubSub
             {
                 if (edge.Queue.Count >= Capacity ||
                     edge.Bytes > MaxFrozenPayloadBytes - payloadBytes)
-                    return new ActorPublishReceipt(0, count, 0, 0, 0, true);
+                    return new ActorPublishReceipt(count, 0, 0, 0, true);
             }
             long bytes = (long)payloadBytes * count;
             if (_owner._queuedPayloadBytes > MaxTotalQueuedPayloadBytes - bytes)
@@ -783,7 +787,7 @@ public sealed class ActorPubSub
                 edge.Bytes += item.Bytes;
             }
             _owner._queuedPayloadBytes += bytes;
-            return new ActorPublishReceipt(item.Sequence, count, count, 0, 0, false);
+            return new ActorPublishReceipt(count, count, 0, 0, false) { Sequence = item.Sequence };
         }
 
         private ActorPublishReceipt PublishLatest(T value, int payloadBytes)
@@ -812,7 +816,7 @@ public sealed class ActorPubSub
             }
             _owner._queuedPayloadBytes = projected;
             int count = _subscribers.Count;
-            return new ActorPublishReceipt(item.Sequence, count, count, 0, coalesced, false);
+            return new ActorPublishReceipt(count, count, 0, coalesced, false) { Sequence = item.Sequence };
         }
 
         private ActorPublishReceipt PublishLossy(T value, int payloadBytes)
@@ -836,7 +840,7 @@ public sealed class ActorPubSub
                 accepted++;
             }
             return new ActorPublishReceipt(
-                item.Sequence, _subscribers.Count, accepted, dropped, 0, false);
+                _subscribers.Count, accepted, dropped, 0, false) { Sequence = item.Sequence };
         }
 
         internal bool TryRead(ActorRef actor, out ActorPubSubDelivery<T> delivery)
