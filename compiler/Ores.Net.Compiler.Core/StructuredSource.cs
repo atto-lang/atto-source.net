@@ -36,6 +36,14 @@ public sealed record StructuredLocalTypeDecl(int At, string Name,
 public sealed record StructuredLet(int At, string Name, IrValueType ValueType,
     StructuredExpr Initializer, StructuredBindingKind Kind = StructuredBindingKind.Let)
     : StructuredStmt(At);
+// Immutable runtime-valued aggregate field snapshots. All field expressions
+// execute in lexical order, even when later spread/explicit fields override.
+// Each private SSA place is opaque to source syntax and never escapes a row.
+public sealed record StructuredAggregateScalarWrite(string Place,
+    IrValueType Type, StructuredExpr Value);
+public sealed record StructuredAggregateRuntimeLet(int At,
+    IReadOnlyList<StructuredAggregateScalarWrite> Writes)
+    : StructuredStmt(At);
 public sealed record StructuredSet(int At, string Name, StructuredExpr Value)
     : StructuredStmt(At);
 public sealed record StructuredReturn(int At, StructuredExpr Value) : StructuredStmt(At);
@@ -596,6 +604,86 @@ public static class OresStructuredParser
                 return (new StructuredLocalTypeDecl(at, name, kind,
                     Array.AsReadOnly(fields.ToArray())), false);
             }
+            // Immutable runtime-valued rows have private scalar SSA snapshots.
+            // 'const' retains its compile-time-constant requirement below.
+            if (Current.Text == "val" && index + 3 < tokens.Count &&
+                tokens[index + 2].Text == "=" &&
+                (tokens[index + 3].Text is "infer" or "record"))
+            {
+                Expect("val");
+                int nameAt = Current.Offset;
+                string rowName = Name();
+                if (scopes.Any(scope => scope.ContainsKey(rowName)) ||
+                    aggregateScopes.Any(scope => scope.ContainsKey(rowName)))
+                    throw new FormatException($"Duplicate aggregate binding at offset {nameAt}");
+                Expect("=");
+                Take("infer");
+                ClosedAggregateKind aggregateKind;
+                if (Take("struct")) aggregateKind = ClosedAggregateKind.ExactStruct;
+                else if (Take("record")) aggregateKind = ClosedAggregateKind.ReadonlyRecord;
+                else throw Error("val aggregate requires inline struct/record");
+                var plan = new ClosedAggregateSpreadPlan(aggregateKind);
+                var values = new Dictionary<string, StructuredExpr>(StringComparer.Ordinal);
+                var writes = new List<StructuredAggregateScalarWrite>();
+                int elements = 0;
+                Expect("{");
+                while (Current.Text != "}")
+                {
+                    if (++elements > 1024)
+                        throw Error("AGGREGATE_SPREAD_PLAN_BUDGET");
+                    if (Current.Text.Length == 0)
+                        throw Error("Unterminated runtime aggregate");
+                    if (Current.Text == ".")
+                    {
+                        Expect("."); Expect("."); Expect(".");
+                        int sourceAt = Current.Offset;
+                        string sourceName = Name();
+                        var source = FindAggregate(sourceName);
+                        if (source is null)
+                            throw new FormatException(
+                                $"Aggregate spread requires an immutable earlier row at offset {sourceAt}");
+                        plan.AddCheckedSpread(source.Shape);
+                        // Iterate canonical checked source shape, never a dynamic dictionary.
+                        foreach (var field in source.Shape.Fields)
+                        {
+                            if (!source.Values.TryGetValue(field.Name, out var projected))
+                                throw Error("Aggregate spread source shape mismatch");
+                            string place = "$atto_row_" + aggregateSentinels++;
+                            writes.Add(new StructuredAggregateScalarWrite(place,
+                                projected.Type, projected));
+                            values[field.Name] = new StructuredRead(sourceAt, place, projected.Type);
+                        }
+                    }
+                    else
+                    {
+                        int fieldAt = Current.Offset;
+                        string name = Name();
+                        Expect(":");
+                        var field = Expr(depth + 1);
+                        string type = field.Type == IrValueType.Bool ? "bool" : "int";
+                        plan.AddNamed(name, type);
+                        string place = "$atto_row_" + aggregateSentinels++;
+                        writes.Add(new StructuredAggregateScalarWrite(place,
+                            field.Type, field));
+                        values[name] = new StructuredRead(fieldAt, place, field.Type);
+                    }
+                    if (!Take(",")) break;
+                }
+                Expect("}");
+                Expect(";");
+                var shape = plan.InferShape();
+                if (shape.Fields.Count != values.Count)
+                    throw Error("Aggregate final runtime field count mismatch");
+                foreach (var field in shape.Fields)
+                    if (!values.TryGetValue(field.Name, out var projected) ||
+                        projected.Type != (field.Type == "bool"
+                            ? IrValueType.Bool : IrValueType.I64))
+                        throw Error("Aggregate runtime field type mismatch");
+                aggregateScopes[^1].Add(rowName, new StaticAggregate(shape,
+                    new System.Collections.ObjectModel.ReadOnlyDictionary<string, StructuredExpr>(values)));
+                return (new StructuredAggregateRuntimeLet(at,
+                    Array.AsReadOnly(writes.ToArray())), false);
+            }
             // Experimental constant-only aggregate execution. The full
             // source is typechecked; all scalar fields are compile-time values
             // and every projection is rewritten to a typed scalar literal.
@@ -953,9 +1041,13 @@ public static class OresStructuredParser
                 string field = Name();
                 if (!aggregate.Values.TryGetValue(field, out var exact))
                     throw Error("Unknown inferred aggregate field");
-                return exact.Type == IrValueType.Bool
-                    ? new StructuredBool(offset, ((StructuredBool)exact).Value)
-                    : new StructuredInt(offset, ((StructuredInt)exact).Value);
+                return exact switch
+                {
+                    StructuredBool flag => new StructuredBool(offset, flag.Value),
+                    StructuredInt number => new StructuredInt(offset, number.Value),
+                    StructuredRead read => new StructuredRead(offset, read.Name, read.Type),
+                    _ => throw Error("Unverified aggregate field projection")
+                };
             }
             bool localBinding = scopes.Any(scope => scope.ContainsKey(name));
             if (linking is not null)
