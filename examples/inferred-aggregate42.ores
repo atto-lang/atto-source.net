@@ -1,0 +1,5 @@
+pub fnc main():int {
+    const base = infer struct{x: 20, active: true};
+    const next = infer record{...base, x: 42};
+    return next.x;
+}
