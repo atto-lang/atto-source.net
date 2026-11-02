@@ -59,6 +59,7 @@ jobs:
             tee "$RUNNER_TEMP/pubsub-managed.log"
           grep -Fx 'PASS .NET ActorGroup pub-sub bounded delivery, multi-membership and lifecycle cleanup' "$RUNNER_TEMP/pubsub-managed.log"
           grep -Fx 'PASS .NET bounded pubsub turn authority, membership epochs and quotas' "$RUNNER_TEMP/pubsub-managed.log"
+          grep -Fx 'PASS .NET pubsub 64MiB bounded all-or-nothing' "$RUNNER_TEMP/pubsub-managed.log"
           grep -Fx 'PASS .NET pub-sub source corpus fails closed before scalar/structured lowering' "$RUNNER_TEMP/pubsub-managed.log"
       - name: Compile and execute actual NativeAOT pubsub host binary
         shell: bash
