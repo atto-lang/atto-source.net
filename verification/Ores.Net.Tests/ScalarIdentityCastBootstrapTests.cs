@@ -53,6 +53,15 @@ internal static class ScalarIdentityCastBootstrapTests
                 var direct = OresIrLowering.Lower(OresParser.Parse(withoutCast));
                 Require(OresIrReferenceEvaluator.Evaluate(direct) == expected,
                     "identity has no conversion effects " + expression);
+                // A true source identity must retain the *physical* CIL,
+                // not just produce the same value under an IR interpreter.
+                // The emitter is deterministic by contract and independent
+                // of the target DLL path; bytes must match without casts.
+                var directPath = Path.Combine(directory, "without-cast-" + i + ".dll");
+                CilEmitter.EmitLibrary(direct, directPath);
+                Require(File.ReadAllBytes(output).AsSpan().SequenceEqual(
+                    File.ReadAllBytes(directPath)),
+                    "identity cast unexpectedly changed emitted CIL " + expression);
             }
             // A checked identity proof must never mask eager i64 overflow,
             // in either the IR evaluator or the physically emitted CIL.
@@ -110,7 +119,7 @@ internal static class ScalarIdentityCastBootstrapTests
             Require(OresIrReferenceEvaluator.Evaluate(OresIrLowering.Lower(
                     OresParser.Parse("fnc main():int{return 4;} // as bool"))) == 4,
                 "comment must not be checked as executable syntax");
-            Console.WriteLine("scalar-as-int: 10 typed-IR+CIL positives, 4 paired overflow traps, 10 artifact-free diagnostic negatives, 1 comment control (no NativeAOT claim)");
+            Console.WriteLine("scalar-as-int: 10 typed-IR+CIL positives + byte-identical CIL, 4 paired overflow traps, 10 artifact-free diagnostic negatives, 1 comment control (no NativeAOT claim)");
         }
         finally
         {
