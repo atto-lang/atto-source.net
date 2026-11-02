@@ -30,7 +30,12 @@ public readonly record struct ActorPublishReceipt(
 /// </summary>
 public sealed class ActorPubSub
 {
+    private const int MaxTopicCapacity = 65_536;
+    private const int MaxTotalQueueSlots = 1 << 20;
     private readonly object _gate = new();
+    // Lifetime credits for all topic/subscriber edges in this registry.
+    // Every mutation is guarded by _gate, including termination cleanup.
+    private int _reservedQueueSlots;
     private readonly int _maxGroups;
     private readonly int _maxGroupsPerActor;
     private readonly int _maxTopics;
@@ -84,7 +89,10 @@ public sealed class ActorPubSub
             }
 
             foreach (ITopicState topic in _topics.Values)
-                topic.RemoveActor(actor);
+            {
+                if (topic.RemoveActor(actor))
+                    _reservedQueueSlots -= topic.Capacity;
+            }
         }
     }
 
@@ -242,7 +250,10 @@ public sealed class ActorPubSub
                 if (entry.Key.GroupId == groupId &&
                     entry.Value.RemoveActor(actor) &&
                     actorRecord.SubscriptionCount > 0)
+                {
                     actorRecord.SubscriptionCount--;
+                    _reservedQueueSlots -= entry.Value.Capacity;
+                }
             }
             return true;
         }
@@ -270,8 +281,9 @@ public sealed class ActorPubSub
     {
         ValidateTopicName(name);
         ValidatePayloadType<T>();
-        if (capacity <= 0)
-            throw new ArgumentOutOfRangeException(nameof(capacity));
+        if (capacity <= 0 || capacity > MaxTopicCapacity)
+            throw new ArgumentOutOfRangeException(nameof(capacity),
+                "Actor topic capacity exceeds the bounded ring limit");
         if (policy == ActorTopicDeliveryPolicy.Latest && capacity != 1)
             throw new ArgumentException("LATEST topic capacity must equal one", nameof(capacity));
 
@@ -325,8 +337,14 @@ public sealed class ActorPubSub
             if (actorRecord.SubscriptionCount >= _maxSubscriptionsPerActor)
                 throw new InvalidOperationException(
                     "Actor topic subscription quota exceeded");
+            if (_reservedQueueSlots > MaxTotalQueueSlots - topic.Capacity)
+                throw new InvalidOperationException(
+                    "Actor topic aggregate queue-slot quota exceeded");
 
+            // All fixed storage is allocated before publishing the edge.
+            // Throwing here must not consume a logical reservation.
             topic.Add(actor);
+            _reservedQueueSlots += topic.Capacity;
             actorRecord.SubscriptionCount++;
             return true;
         }
@@ -339,6 +357,7 @@ public sealed class ActorPubSub
             TopicState<T> topic = RequireTopicLocked<T>(groupId, name);
             if (!topic.RemoveActor(actor))
                 return false;
+            _reservedQueueSlots -= topic.Capacity;
             if (_actors.TryGetValue(actor, out ActorRecord? actorRecord) &&
                 actorRecord.SubscriptionCount > 0)
                 actorRecord.SubscriptionCount--;
@@ -404,6 +423,7 @@ public sealed class ActorPubSub
                 ITopicState topic = _topics[key];
                 foreach (ActorRef actor in topic.Subscribers)
                 {
+                    _reservedQueueSlots -= topic.Capacity;
                     if (_actors.TryGetValue(actor, out ActorRecord? record) &&
                         record.SubscriptionCount > 0)
                         record.SubscriptionCount--;
@@ -424,8 +444,9 @@ public sealed class ActorPubSub
 
         foreach (ActorRef actor in stale)
         {
-            if (topic.RemoveActor(actor) &&
-                _actors.TryGetValue(actor, out ActorRecord? record) &&
+            if (!topic.RemoveActor(actor)) continue;
+            _reservedQueueSlots -= topic.Capacity;
+            if (_actors.TryGetValue(actor, out ActorRecord? record) &&
                 record.SubscriptionCount > 0)
                 record.SubscriptionCount--;
         }
@@ -494,6 +515,7 @@ public sealed class ActorPubSub
             _topics.Clear();
             _groups.Clear();
             _actors.Clear();
+            _reservedQueueSlots = 0;
         }
     }
 
@@ -517,6 +539,7 @@ public sealed class ActorPubSub
     private interface ITopicState
     {
         IEnumerable<ActorRef> Subscribers { get; }
+        int Capacity { get; }
         bool RemoveActor(ActorRef actor);
     }
 
@@ -531,7 +554,7 @@ public sealed class ActorPubSub
         }
 
         internal ActorTopicDeliveryPolicy Policy { get; }
-        internal int Capacity { get; }
+        public int Capacity { get; }
         public IEnumerable<ActorRef> Subscribers => _subscribers.Keys;
 
         internal bool Contains(ActorRef actor) => _subscribers.ContainsKey(actor);
