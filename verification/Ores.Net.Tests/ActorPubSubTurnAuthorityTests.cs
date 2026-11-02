@@ -30,6 +30,8 @@ internal static class ActorPubSubTurnAuthorityTests
         using var completed = new ManualResetEventSlim();
         ActorContext? retained = null;
         Exception? failure = null;
+        Task? delayedOffload = null;
+        using var releaseOffload = new ManualResetEventSlim();
 
         ActorRef actor = runtime.Spawn(ActorKind.Shared, (context, _) =>
         {
@@ -70,6 +72,15 @@ internal static class ActorPubSubTurnAuthorityTests
                     && value == "actor-origin",
                     "physical-turn read retains payload");
                 Require(topic.Unsubscribe(context), "turn-bound close");
+                // This task inherits the actor ExecutionContext, but only
+                // runs its privileged attempt after the actor turn expires.
+                delayedOffload = Task.Run(() =>
+                {
+                    releaseOffload.Wait();
+                    RequireDenied(
+                        () => _ = topic.Publish(context.Self, "post-turn-spoof"),
+                        "captured actor-origin offload cannot publish after turn");
+                });
             }
             catch (Exception error) { failure = error; }
             finally { completed.Set(); }
@@ -78,6 +89,8 @@ internal static class ActorPubSubTurnAuthorityTests
         runtime.Send(actor, new byte[] { 1 });
         Require(completed.Wait(TimeSpan.FromSeconds(5)),
             "actor turn completed");
+        releaseOffload.Set();
+        delayedOffload?.GetAwaiter().GetResult();
         if (failure is not null)
             throw new Exception("Actor pubsub turn-bound test failed", failure);
         Require(retained is not null, "captured only for negative stale test");
