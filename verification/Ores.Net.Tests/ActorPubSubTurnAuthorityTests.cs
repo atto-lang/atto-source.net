@@ -17,6 +17,7 @@ internal static class ActorPubSubTurnAuthorityTests
         SubscriptionQuotaAndEpochRejoin();
         GlobalQueueSlotsAreBoundedAndReclaimed();
         InvalidUtf8AndOversizedStringFailBeforeAdmission();
+        InvalidUtf8AndOversizedTopicNamesFailBeforeAdmission();
         Console.WriteLine(
             "PASS .NET bounded pubsub turn authority, membership epochs and quotas");
     }
@@ -240,6 +241,29 @@ internal static class ActorPubSubTurnAuthorityTests
         runtime.Stop(actor);
         Require(SpinWait.SpinUntil(() => runtime.LiveActors == 0,
             TimeSpan.FromSeconds(5)), "UTF-8 test actor retirement");
+    }
+
+    private static void InvalidUtf8AndOversizedTopicNamesFailBeforeAdmission()
+    {
+        using var runtime = new ActorRuntime();
+        using var group = runtime.PubSub.CreateGroup();
+        bool malformed = false;
+        try { _ = group.DefineTopic<string>(
+            "invalid-\\uD800", ActorTopicDeliveryPolicy.Reliable, 1); }
+        catch (ArgumentException) { malformed = true; }
+        Require(malformed, "topic names must reject unpaired UTF-16 surrogates");
+
+        bool overlong = false;
+        try { _ = group.DefineTopic<string>(
+            new string('\\u00E9', 129), ActorTopicDeliveryPolicy.Reliable, 1); }
+        catch (ArgumentException) { overlong = true; }
+        Require(overlong, "topic names bound encoded UTF-8 bytes, not UTF-16 length");
+
+        string boundary = new string('\\u00E9', 128);
+        var defined = group.DefineTopic<string>(
+            boundary, ActorTopicDeliveryPolicy.Reliable, 1);
+        Require(group.Topic<string>(boundary) is not null,
+            "exactly 256 UTF-8 bytes is an admissible topic name");
     }
 
     private static void RequireDenied(Action action, string description)
