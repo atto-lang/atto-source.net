@@ -19,6 +19,21 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     steps:
+      # On Git for Windows, core.autocrlf=true rewrites committed LF blobs
+      # to CRLF. A raw-blob identity check must verify an exact checkout,
+      # not a platform-transcoded one. Set this before actions/checkout.
+      - name: Disable platform-dependent Git checkout conversion
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config --global core.autocrlf false
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot pin Git raw checkout mode' }
+          git config --global core.eol lf
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot pin Git LF checkout mode' }
+          $conversion = (git config --global --get core.autocrlf).Trim()
+          if ($LASTEXITCODE -ne 0 -or $conversion -cne 'false') {
+            throw 'Git checkout conversion is not disabled'
+          }
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
