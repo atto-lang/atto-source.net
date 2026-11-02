@@ -57,7 +57,6 @@ internal static class ActorPubSubTurnAuthorityTests
         bool denied = false;
         try { _ = topic.Publish(retained!, "stale-turn"); }
         catch (InvalidOperationException) { denied = true; }
-        catch (ObjectDisposedException) { denied = true; }
         Require(denied,
             "retained ActorContext must never grant authority after handler return");
 
