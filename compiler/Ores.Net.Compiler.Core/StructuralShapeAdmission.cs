@@ -12,6 +12,7 @@ public static class StructuralShapeAdmission
     {
         ArgumentNullException.ThrowIfNull(source);
         bool afterOn = false;
+        string? previousWord = null;
         for (int i = 0; i < source.Length;)
         {
             char c = source[i];
@@ -58,6 +59,7 @@ public static class StructuralShapeAdmission
                 }
                 if (!closed) throw new FormatException($"Unterminated source string at offset {start}");
                 afterOn = false;
+                previousWord = null;
                 continue;
             }
             if (char.IsAsciiLetter(c) || c == '_')
@@ -66,12 +68,18 @@ public static class StructuralShapeAdmission
                 while (i < source.Length &&
                        (char.IsAsciiLetterOrDigit(source[i]) || source[i] == '_')) i++;
                 var word = source[start..i];
+                if (previousWord == "infer" && word is ("struct" or "record"))
+                    throw new FormatException($"Inferred aggregate requires closed-row type, ownership and Native AOT lowering; unsupported in scalar CIL at offset {start}");
                 if (afterOn && word == "structural")
                     throw new FormatException($"Structural match pattern unsupported in scalar CIL at offset {start}");
                 afterOn = word == "on";
+                previousWord = word;
                 continue;
             }
+            if (c == '{' && previousWord is ("struct" or "record"))
+                throw new FormatException($"Inline aggregate requires closed-row type, ownership and Native AOT lowering; unsupported in scalar CIL at offset {i}");
             afterOn = false;
+            previousWord = null;
             i++;
         }
     }
