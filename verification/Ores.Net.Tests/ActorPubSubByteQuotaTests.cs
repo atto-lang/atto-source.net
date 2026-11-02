@@ -68,6 +68,20 @@ internal static class ActorPubSubByteQuotaTests
             Require(latest.TryRead(actor, out string value) && value == "new",
                 "LATEST only retains the newest message");
 
+        Require(topic.Publish(subscribers[0], payload).Accepted == 8,
+            "refill graph before group close");
+        group.Dispose();
+        using var replacement = runtime.PubSub.CreateGroup();
+        var fresh = replacement.DefineTopic<string>(
+            "after-close", ActorTopicDeliveryPolicy.Reliable, 1);
+        for (int i = 0; i < 8; i++)
+        {
+            Require(replacement.Join(subscribers[i]), "join replacement group");
+            Require(fresh.Subscribe(subscribers[i]), "subscribe after close");
+        }
+        Require(fresh.Publish(subscribers[0], payload).Accepted == 8,
+            "group close reclaimed the entire old 64MiB byte budget");
+
         foreach (var actor in subscribers) runtime.Stop(actor);
         Require(SpinWait.SpinUntil(
             () => runtime.LiveActors == 0, TimeSpan.FromSeconds(10)),
