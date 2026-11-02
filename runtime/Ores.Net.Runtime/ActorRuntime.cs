@@ -167,13 +167,19 @@ public sealed class ActorRuntime : IDisposable
     [ThreadStatic]
     private static ActorRuntime? s_currentRuntime;
 
+    // ExecutionContext flows into Task.Run and other managed offloads,
+    // unlike ThreadStatic. Keep the actor-origin marker in captured tasks
+    // even after the physical turn returns. Such tasks must never acquire
+    // host/supervisor ActorRef pubsub authority by changing carrier threads.
+    private static readonly AsyncLocal<ActorRuntime?> s_actorOrigin = new();
+
     // The actor dispatcher is the physical guest authority boundary.
     // A carrier must never call manager/host ActorRef pubsub APIs on behalf
     // of an arbitrary actor; source lowering uses ActorContext-checked
     // intrinsics that expire when the physical turn ends.
     internal static void RequireHostPubSubAuthority(string operation)
     {
-        if (s_currentRuntime is not null)
+        if (s_currentRuntime is not null || s_actorOrigin.Value is not null)
             throw new System.Security.SecurityException(
                 "actor code cannot " + operation +
                 "; use a turn-scoped actor capability instead");
@@ -430,7 +436,9 @@ public sealed class ActorRuntime : IDisposable
     private void RunCell(ActorCell cell)
     {
         ActorRuntime? previous = s_currentRuntime;
+        ActorRuntime? previousOrigin = s_actorOrigin.Value;
         s_currentRuntime = this;
+        s_actorOrigin.Value = this;
         bool finalize = false;
 
         try
@@ -532,6 +540,7 @@ public sealed class ActorRuntime : IDisposable
                 // Even a failure during dispatch-token teardown must not
                 // poison a reusable carrier's thread-static runtime identity.
                 s_currentRuntime = previous;
+                s_actorOrigin.Value = previousOrigin;
             }
         }
     }
