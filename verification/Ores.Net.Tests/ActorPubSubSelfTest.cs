@@ -27,21 +27,23 @@ internal static class ActorPubSubSelfTest
         Require(!reliable.Subscribe(right), "duplicate subscription is idempotent");
 
         ActorPublishReceipt first = reliable.Publish(publisher, "one");
-        Require(first.Accepted == 2 && !first.Backpressured,
-            "first RELIABLE publication admitted to all subscribers");
+        Require(first.Sequence == 1 && first.Accepted == 2 && !first.Backpressured,
+            "first RELIABLE publication receives topic sequence 1");
 
         ActorPublishReceipt blocked = reliable.Publish(publisher, "two");
-        Require(blocked.Backpressured && blocked.Accepted == 0,
-            "RELIABLE backpressure is all-or-nothing");
+        Require(blocked.Sequence == 0 && blocked.Backpressured && blocked.Accepted == 0,
+            "RELIABLE backpressure is all-or-nothing and allocates no sequence");
 
-        Require(reliable.TryRead(left, out string leftOne) && leftOne == "one",
-            "left receives first RELIABLE value");
-        Require(reliable.TryRead(right, out string rightOne) && rightOne == "one",
-            "right receives first RELIABLE value");
+        Require(reliable.TryReadDelivery(left, out ActorPubSubDelivery<string> leftDelivery) &&
+                leftDelivery.Sequence == 1 && leftDelivery.Value == "one",
+            "left receives the value with its topic sequence");
+        Require(reliable.TryReadDelivery(right, out ActorPubSubDelivery<string> rightDelivery) &&
+                rightDelivery.Sequence == 1 && rightDelivery.Value == "one",
+            "right receives the same admitted topic sequence");
 
         ActorPublishReceipt second = reliable.Publish(publisher, "two");
-        Require(second.Accepted == 2 && !second.Backpressured,
-            "RELIABLE capacity is reclaimed after reads");
+        Require(second.Sequence == 2 && second.Accepted == 2 && !second.Backpressured,
+            "next committed RELIABLE publish increments the topic sequence");
 
         Require(a.Leave(right), "right leaves only A");
         Require(!a.Contains(right), "right no longer belongs to A");
@@ -54,31 +56,38 @@ internal static class ActorPubSubSelfTest
         ActorPublishReceipt afterLeave = reliable.Publish(publisher, "three");
         // left still has unread "two", so the one remaining subscriber applies
         // bounded backpressure rather than partially accepting the publication.
-        Require(afterLeave.Backpressured && afterLeave.Accepted == 0,
-            "leave prunes only departed subscription and preserves remaining bound");
+        Require(afterLeave.Sequence == 0 && afterLeave.Backpressured && afterLeave.Accepted == 0,
+            "failed publication after leave does not consume a topic sequence");
         Require(reliable.TryRead(left, out string leftTwo) && leftTwo == "two",
             "remaining A subscriber retained queued value");
-        Require(reliable.Publish(publisher, "three").Accepted == 1,
-            "publication reaches only remaining A subscriber");
+        ActorPublishReceipt third = reliable.TryPublish(publisher, "three");
+        Require(third.Sequence == 3 && third.Accepted == 1,
+            "TryPublish commits next sequence after capacity returns");
 
         var latest = b.DefineTopic<string>(
             "latest", ActorTopicDeliveryPolicy.Latest, capacity: 1);
         Require(latest.Subscribe(left), "left LATEST subscription");
         ActorPublishReceipt latestOne = latest.Publish(publisher, "old");
         ActorPublishReceipt latestTwo = latest.Publish(publisher, "new");
-        Require(latestOne.Accepted == 1 && latestTwo.Coalesced == 1,
-            "LATEST coalesces unread older value");
-        Require(latest.TryRead(left, out string latestValue) &&
-                latestValue == "new",
-            "LATEST retains newest value");
+        Require(latestOne.Sequence == 1 && latestTwo.Sequence == 2 &&
+                latestOne.Accepted == 1 && latestTwo.Coalesced == 1,
+            "LATEST publishes monotonically increasing topic-local sequences");
+        Require(latest.TryReadDelivery(left, out ActorPubSubDelivery<string> latestDelivery) &&
+                latestDelivery.Sequence == 2 && latestDelivery.Value == "new",
+            "LATEST retains newest value and its sequence");
 
         var lossy = b.DefineTopic<string>(
             "lossy", ActorTopicDeliveryPolicy.Lossy, capacity: 1);
         Require(lossy.Subscribe(left), "left LOSSY subscription");
-        Require(lossy.Publish(publisher, "one").Accepted == 1,
-            "LOSSY first value admitted");
-        Require(lossy.Publish(publisher, "two").Dropped == 1,
-            "LOSSY drops new value when bounded queue is full");
+        ActorPublishReceipt lossyFirst = lossy.Publish(publisher, "one");
+        ActorPublishReceipt lossyDrop = lossy.Publish(publisher, "two");
+        Require(lossyFirst.Sequence == 1 && lossyFirst.Accepted == 1,
+            "LOSSY first publication receives sequence 1");
+        Require(lossyDrop.Sequence == 2 && lossyDrop.Dropped == 1,
+            "LOSSY advances sequence even when every recipient drops the event");
+        Require(lossy.TryReadDelivery(left, out ActorPubSubDelivery<string> lossyDelivery) &&
+                lossyDelivery.Sequence == 1 && lossyDelivery.Value == "one",
+            "LOSSY read preserves the sequence of the event actually retained");
 
         Require(a.Join(isolated), "private actor can cooperate as group member");
         bool privateRejected = false;
@@ -92,7 +101,22 @@ internal static class ActorPubSubSelfTest
         catch (InvalidOperationException) { typeRejected = true; }
         Require(typeRejected, "topic name cannot be rebound to another payload type");
 
+        var lateTopic = a.DefineTopic<int>(
+            "late-subscriber", ActorTopicDeliveryPolicy.Reliable, 2);
+        ActorPublishReceipt noSubscribers = lateTopic.TryPublish(publisher, 41);
+        Require(noSubscribers.Sequence == 1 && noSubscribers.Accepted == 0,
+            "publish without subscribers succeeds and consumes sequence 1");
+        ActorRef late = runtime.Spawn(ActorKind.Shared, static (_, _) => { });
+        Require(a.Join(late) && lateTopic.Subscribe(late), "late subscriber joins after first publish");
+        ActorPublishReceipt afterSubscription = lateTopic.TryPublish(publisher, 42);
+        Require(afterSubscription.Sequence == 2 && afterSubscription.Accepted == 1,
+            "later subscription receives sequence 2 only, without replay");
+        Require(lateTopic.TryReadDelivery(late, out ActorPubSubDelivery<int> lateDelivery) &&
+                lateDelivery.Sequence == 2 && lateDelivery.Value == 42,
+            "late subscriber observes actual topic sequence with no implicit replay");
+
         runtime.Stop(left);
+        runtime.Stop(late);
         Require(SpinWait.SpinUntil(() => runtime.LiveActors == 3,
                 TimeSpan.FromSeconds(5)),
             "left actor finalizes");
