@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using System.Threading;
 
 namespace Ores.Net.Runtime;
@@ -32,6 +33,12 @@ public sealed class ActorPubSub
 {
     private const int MaxTopicCapacity = 65_536;
     private const int MaxTotalQueueSlots = 1 << 20;
+    // Match LLVM's per-delivery maximum; a capacity bound alone cannot
+    // bound the memory retained by a single enormous String event.
+    private const int MaxFrozenPayloadBytes = 16 * 1024 * 1024;
+    private static readonly UTF8Encoding StrictUtf8 = new(
+        encoderShouldEmitUTF8Identifier: false,
+        throwOnInvalidBytes: true);
     private readonly object _gate = new();
     // Lifetime credits for all topic/subscriber edges in this registry.
     // Every mutation is guarded by _gate, including termination cleanup.
@@ -534,6 +541,26 @@ public sealed class ActorPubSub
             throw new ArgumentNullException(nameof(value),
                 "Oreslang event values use Option<T>, not null");
 
+        // Reject malformed UTF-16 rather than letting .NET's default
+        // replacement fallback change the value transported by LLVM's
+        // strict UTF-8 String ABI. UTF-8 size, not UTF-16 Length, governs
+        // the immutable payload limit.
+        if (value is string text)
+        {
+            int byteLength;
+            try
+            {
+                byteLength = StrictUtf8.GetByteCount(text);
+            }
+            catch (EncoderFallbackException error)
+            {
+                throw new ArgumentException(
+                    "ActorGroup String contains invalid UTF-16", nameof(value), error);
+            }
+            if (byteLength > MaxFrozenPayloadBytes)
+                throw new InvalidOperationException(
+                    "ActorGroup event exceeds 16 MiB per-delivery payload limit");
+        }
         return value;
     }
 
