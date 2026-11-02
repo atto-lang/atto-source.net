@@ -365,9 +365,9 @@ public sealed class ActorRuntime : IDisposable
 
     public void Dispose()
     {
-        if (ReferenceEquals(s_currentRuntime, this))
+        if (ReferenceEquals(s_currentRuntime, this) || s_actorOrigin.Value)
             throw new InvalidOperationException(
-                "ActorRuntime.Dispose cannot run from one of its actor carriers");
+                "ActorRuntime.Dispose cannot run from an actor carrier or actor-origin offload");
 
         // Hold across joins and final reclamation, not just the _closed check.
         lock (_disposeGate)
