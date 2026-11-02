@@ -776,7 +776,7 @@ public sealed class ActorPubSub
             }
             long bytes = (long)payloadBytes * count;
             if (_owner._queuedPayloadBytes > MaxTotalQueuedPayloadBytes - bytes)
-                return new ActorPublishReceipt(0, count, 0, 0, 0, true);
+                return new ActorPublishReceipt(count, 0, 0, 0, true);
 
             // All recipients have capacity before sequence allocation.
             // Bounded Queue<T> instances are pre-sized at subscription creation.
