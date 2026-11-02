@@ -257,6 +257,12 @@ internal static class ActorPubSubTurnAuthorityTests
             "bad-\u0085-name", ActorTopicDeliveryPolicy.Reliable, 1); }
         catch (ArgumentException) { c1Rejected = true; }
         Require(c1Rejected, "Unicode C1 controls must be rejected in topic names");
+        bool invalidPolicy = false;
+        try { _ = group.DefineTopic<string>(
+            "undefined-policy", (ActorTopicDeliveryPolicy)99, 1); }
+        catch (ArgumentOutOfRangeException) { invalidPolicy = true; }
+        Require(invalidPolicy,
+            "undefined delivery policy rejected before topic registration");
 
         bool overlong = false;
         try { _ = group.DefineTopic<string>(
