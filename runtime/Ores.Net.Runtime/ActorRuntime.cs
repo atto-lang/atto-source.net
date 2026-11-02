@@ -225,7 +225,9 @@ public sealed class ActorRuntime : IDisposable
             maxGroups: Math.Min(options.MaxActors, 4096),
             maxGroupsPerActor: 64,
             maxTopics: 4096,
-            maxSubscriptionsPerActor: 1024);
+            // Shared ActorGroup admission quota is 64 per actor, matching
+            // the Java/Graal bounded cooperation contract.
+            maxSubscriptionsPerActor: 64);
     }
 
     public ActorPubSub PubSub => _pubSub;
