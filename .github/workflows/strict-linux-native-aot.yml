@@ -72,6 +72,21 @@ jobs:
           test "$(artifacts/parity/linux-x64/oreslang-app)" = 42
           test "$(artifacts/apps/linux-x64/oreslang-app)" = 14
           echo 'LINUX_NET_NATIVE_AOT_COMPILER_AND_APP_EXECUTED'
+      - name: Execute canonical AttoLang source as real Linux Native AOT
+        shell: bash
+        run: |
+          set -euo pipefail
+          atto_source=contracts/atto-parity-v1/add.atto
+          # Exact source bytes are shared with Java, LLVM and Wasm. A
+          # legacy sibling is a byte-identity reference, not a fallback.
+          cmp -- "$atto_source" contracts/v1/semantics/fixtures/add.ores
+          bash scripts/publish-linux.sh "$atto_source" artifacts/atto-parity
+          app=artifacts/atto-parity/linux-x64/oreslang-app
+          bash verification/assert-linux-native-release.sh "$app"
+          test "$("$app")" = 42
+          test "$(artifacts/parity/linux-x64/oreslang-app)" = 42
+          test "$(artifacts/apps/linux-x64/oreslang-app)" = 14
+          echo 'LINUX_NET_NATIVE_AOT_CANONICAL_ATTO_GUEST_EXECUTED_42'
       - name: Execute shared native.precedence and prove three-source isolation
         shell: bash
         run: |
@@ -141,7 +156,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           tree="$(git rev-parse 'HEAD^{tree}')"
           mkdir -p artifacts/evidence
-          printf '{"schema":"oreslang.net.exact_head_native_aot_v1","repository":"%s","source_head_sha":"%s","tree_sha":"%s","run_id":%s,"run_attempt":%s,"runner_os":"Linux","target_rid":"linux-x64","checks":["managed-tests","native-compiler","native-app","negative-source-no-cil","source-isolation-4","canonical-precedence","structured-ssa-cil-native45","sidecar-negative"],"source_only":false,"independently_verified":false}\n' \
+          printf '{"schema":"oreslang.net.exact_head_native_aot_v1","repository":"%s","source_head_sha":"%s","tree_sha":"%s","run_id":%s,"run_attempt":%s,"runner_os":"Linux","target_rid":"linux-x64","checks":["managed-tests","native-compiler","native-app","negative-source-no-cil","source-isolation-4","canonical-precedence","canonical-atto-native42","structured-ssa-cil-native45","sidecar-negative"],"source_only":false,"independently_verified":false}\n' \
             "$GITHUB_REPOSITORY" "$EXPECTED_HEAD" "$tree" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > artifacts/evidence/linux-native-aot.json
       - name: Upload Linux native executables and evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -151,6 +166,7 @@ jobs:
             artifacts/evidence/linux-native-aot.json
             artifacts/apps/linux-x64/oreslang-app
             artifacts/parity/linux-x64/oreslang-app
+            artifacts/atto-parity/linux-x64/oreslang-app
             artifacts/parity-precedence/linux-x64/oreslang-app
             artifacts/structured/linux-x64/oreslang-app
             artifacts/compiler/linux-x64/oresnet
