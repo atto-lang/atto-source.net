@@ -60,7 +60,11 @@ internal static class StructuredSourceTests
             "@StateBacked(MutableStateContainer(scope = #shared))\ndefine class Foo as\nend\n",
             "@MutableStateContainer()\ndefine actor A as\nend\n",
             "@StateContainer()\ndefine singleton S as\nend\n",
-            "@Inject(SessionState)\nfnc main():int{return 7;}"
+            "@Inject(SessionState)\nfnc main():int{return 7;}",
+            "@Inject\ndefine class Foo as\nend\n",
+            "@Inject<MutableStateContainer()>\ndefine class Foo as\nend\n",
+            "@StateContainer()\ndefine class Foo as\nend\n",
+            "@Inject(SessionState)\npub fnc main():int{return 42;}\n"
         })
         {
             string annotation = source.StartsWith("@Inject", StringComparison.Ordinal)
