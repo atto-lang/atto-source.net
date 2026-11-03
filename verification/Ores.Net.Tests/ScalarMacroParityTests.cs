@@ -1,4 +1,5 @@
 using Ores.Net.Compiler;
+using Mono.Cecil;
 
 public static class ScalarMacroParityTests
 {
@@ -67,6 +68,31 @@ public static class ScalarMacroParityTests
             "identity must splice an arithmetic AST without textual rewriting");
         Expect42(LiteralMacro + Main("literal!(const -9223372036854775808 + 9223372036854775807 + 43)"),
             "checked intermediate constants must admit valid signed-i64 arithmetic");
+
+        // Verify the real source -> checked OresIR -> deterministic CIL path,
+        // rather than only an in-memory expression evaluator. This metadata
+        // check does not claim a published Native AOT executable.
+        string folder = Path.Combine(Path.GetTempPath(),
+            "oresnet-macro-tests-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            string a = Path.Combine(folder, "macro.a.dll");
+            string b = Path.Combine(folder, "macro.b.dll");
+            Expression expanded = OresParser.Parse(constSource);
+            CilEmitter.EmitLibrary(expanded, a);
+            CilEmitter.EmitLibrary(expanded, b);
+            Require(File.ReadAllBytes(a).AsSpan().SequenceEqual(File.ReadAllBytes(b)),
+                "macro CIL output must be deterministic");
+            using var assembly = AssemblyDefinition.ReadAssembly(a);
+            var entry = assembly.MainModule.Types.Single(t =>
+                t.FullName == "Oreslang.Generated.OresProgram").Methods.Single(m => m.Name == "Run");
+            Require(CilReferenceEvaluator.Evaluate(entry) == 42,
+                "generated CIL from the macro AST must evaluate to 42");
+        }
+        finally
+        {
+            if (Directory.Exists(folder)) Directory.Delete(folder, true);
+        }
 
         // Compiler-only declarations: unsupported/uninvoked ones are not discarded.
         Reject("define pub macro literal(Const<int> x) -> Syntax<Expr> { return quote(x); }" +
