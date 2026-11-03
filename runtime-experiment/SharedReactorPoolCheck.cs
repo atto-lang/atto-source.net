@@ -16,6 +16,16 @@ static class Check
         while (!predicate()) { Require(time.ElapsedMilliseconds < 5000); Thread.Yield(); }
     }
     // A real UDP readiness source; readiness observation never runs work inline.
+    sealed class FailingIo : SharedReactorPool.IReactor
+    {
+        public int Fail;
+        public void Poll(bool mayWait)
+        {
+            if (Volatile.Read(ref Fail) != 0) throw new InvalidOperationException("poll failure");
+            if (mayWait) Thread.Sleep(1);
+        }
+        public void Wake() { }
+    }
     sealed class Io : SharedReactorPool.IReactor, IDisposable
     {
         readonly Socket _input = new(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
@@ -131,6 +141,24 @@ static class Check
                 catch (ArgumentException) { denied = true; }
                 Require(denied);
             }
+        }
+        // A failed poll seals admission and drains accepted work without repoll.
+        var failingIo = new FailingIo();
+        using (var pool = new SharedReactorPool(failingIo, 1, 1))
+        {
+            using var entered = new ManualResetEventSlim();
+            using var release = new ManualResetEventSlim();
+            Require(pool.TrySubmit(() => { entered.Set(); Require(release.Wait(5000)); }));
+            Require(entered.Wait(5000));
+            int done = 0;
+            for (int i = 0; i < 128; ++i)
+                Require(pool.TrySubmit(() => Interlocked.Increment(ref done)));
+            Volatile.Write(ref failingIo.Fail, 1);
+            release.Set();
+            Until(() => pool.Failures == 1);
+            pool.Dispose();
+            Require(pool.Failures == 1 && Volatile.Read(ref done) == 128
+                && pool.Completed == 129 && !pool.TrySubmit(() => {}));
         }
         Console.WriteLine("shared-reactor host: default-two, single-poller, UDP readiness, shared execution, " +
             "bounded queue, 8000 concurrent submissions, growth cap, self-join denial, drain PASS");
