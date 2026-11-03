@@ -51,8 +51,14 @@ for name in "${positive[@]}"; do
     cat "$tmp/guest.stderr" >&2
     exit 1
   fi
-  printf 'MACRO_AOT_GUEST_PASS fixture=%s stdout=42 exit=0 sha256=%s\n' \
-    "$name" "$(sha256sum "$guest" | cut -d' ' -f1)"
+  # Bind each successful receipt to the exact source bytes, native
+  # compiler, verified/generated CIL and final AOT guest. The checkout
+  # commit/tree are recorded above for the whole run.
+  printf 'MACRO_AOT_GUEST_PASS fixture=%s stdout=42 exit=0 source_sha256=%s compiler_sha256=%s cil_sha256=%s guest_sha256=%s\n' \
+    "$name" "$(sha256sum "$source" | cut -d' ' -f1)" \
+    "$(sha256sum "$root/artifacts/compiler/linux-x64/oresnet" | cut -d' ' -f1)" \
+    "$(sha256sum "$root/artifacts/generated/linux-x64/OresGenerated.dll" | cut -d' ' -f1)" \
+    "$(sha256sum "$guest" | cut -d' ' -f1)"
 done
 
 compiler="$root/artifacts/compiler/linux-x64/oresnet"
