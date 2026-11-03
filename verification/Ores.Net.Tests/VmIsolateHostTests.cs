@@ -201,5 +201,6 @@ internal static class VmIsolateHostTests
         overflowVm.BeginShutdown(over);overflowVm.CompleteShutdown(over);overflowVm.Destroy(over);
         host.RetireActor(b, actorB);
         host.BeginShutdown(b); host.CompleteShutdown(b); host.Destroy(b);
+        Console.WriteLine("PASS .NET tenant IsolateVM host admission, generation fencing, quiescence and drain");
     }
 }
