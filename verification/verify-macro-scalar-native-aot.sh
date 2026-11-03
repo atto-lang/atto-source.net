@@ -7,7 +7,7 @@ set -Eeuo pipefail
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
-for tool in dotnet git file readelf realpath; do
+for tool in dotnet git file readelf realpath cmp sha256sum; do
   command -v "$tool" >/dev/null || { echo "MACRO_AOT_NOT_EXECUTED missing $tool" >&2; exit 2; }
 done
 printf 'MACRO_AOT_SOURCE_HEAD=%s\n' "$(git rev-parse HEAD)"
@@ -44,7 +44,7 @@ for name in "${positive[@]}"; do
   "$guest" >"$tmp/guest.stdout" 2>"$tmp/guest.stderr"
   actual=$?
   set -e
-  if [[ $actual -ne 0 ]] || [[ "$(cat "$tmp/guest.stdout")" != "42" ]] || \
+  if [[ $actual -ne 0 ]] || ! cmp -s -- "$tmp/guest.stdout" <(printf '42\n') || \
      [[ -s "$tmp/guest.stderr" ]]; then
     echo "MACRO_AOT_GUEST_FAIL fixture=$name expected_stdout=42 expected_exit=0 actual_exit=$actual" >&2
     cat "$tmp/guest.stdout" >&2
