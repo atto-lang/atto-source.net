@@ -29,7 +29,7 @@ Hard bounds: 8 declarations per translation unit, 128 expansions, 512 visited `C
 **Exact-source execution gate prepared:** `bash verification/verify-macro-scalar-native-aot.sh`
 uses the seven new `.atto` fixtures under `verification/fixtures/` and checks
 the production compiler's Release test program, independently linked Linux
-Native AOT guest exit-42 binaries for identity, literal and nested macros,
+Native AOT guest binaries whose stdout is exactly `42\\n` and exit status is 0 for identity, literal and nested macros,
 Native AOT release layouts, compile-negative diagnostics and absence of
 output artifacts for `check`, `compile`, `emit-csharp` and `emit-fsharp`.
 The shell gate is **authored, not executed**. It must run within the source
@@ -37,7 +37,7 @@ repository or only on an independently authorized private destination.
 
 **Verification required before merge:**
 1. Build the .NET 10 source compiler on the exact branch head and run `dotnet run --project verification/Ores.Net.Tests`. Check the dedicated macro AST, checked OresIR, deterministic CIL bytes and Mono.Cecil entry evaluation assertions.
-2. Publish the exact compiler and application with Native AOT for supported Windows/Linux RID(s), execute both programs with exit 42, capture source/tree, compiler, generated DLL, host executable and SDK hashes.
+2. Publish the exact compiler and application with Native AOT for supported Windows/Linux RID(s), execute the generated guests and assert stdout `42` with exit status 0 (the native host's established value-output ABI), and capture source/tree, compiler, generated DLL, host executable and SDK hashes.
 3. Run negative cases through the actual CLI `check`, `compile`, `emit-csharp` and `emit-fsharp`, asserting nonzero errors and **no output artifacts**; run linked/structured path denial cases.
 4. Compare shared macro vectors against Java/Graal #2049 and LLVM #1026 at pinned heads. A backend's non-executing source checks, zero-step Actions job, or synthetic CIL smoke must never be recorded as executable cross-backend parity.
 5. Obtain independent review and an authorized source-bound runner. A funded test organization does not, by itself, authorize export of private source.
