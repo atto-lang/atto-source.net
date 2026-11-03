@@ -35,6 +35,20 @@ internal static class StructuredSourceTests
         throw new Exception("Unsupported receiver/capture syntax was admitted");
     }
 
+    private static void RejectScalarStateInjection(string source, string expectedDiagnostic)
+    {
+        try { _ = OresParser.Parse(source); }
+        catch (FormatException error)
+        {
+            Require(error.Message.Contains(expectedDiagnostic, StringComparison.Ordinal),
+                "scalar compiler rejected injected state for wrong reason: " + error.Message);
+            Require(error.Message.Contains("offset", StringComparison.Ordinal),
+                "scalar injection diagnostic lacks an exact source offset");
+            return;
+        }
+        throw new Exception("Scalar compiler admitted unsupported state injection");
+    }
+
     public static void Run()
     {
         // Injected mutable containers are not the current scalar backend's
@@ -57,11 +71,33 @@ internal static class StructuredSourceTests
                         ? "MutableStateContainer"
                         : "StateContainer";
             RejectFeature(source, "STATE_INJECTION_UNSUPPORTED: @" + annotation);
+            RejectScalarStateInjection(source, "STATE_INJECTION_UNSUPPORTED: @" + annotation);
         }
         var commentOnlyInjection = OresStructuredParser.Parse(
             "// @Inject(MutableStateContainer()) is a comment\nfnc main():int{return 7;}");
         Require(commentOnlyInjection is not null,
             "injection spelling inside a comment is not executable syntax");
+        _ = OresParser.Parse(
+            "// @Inject(MutableStateContainer()) is a comment\nfnc main():int{return 7;}");
+        _ = OresParser.Parse(
+            "/* outer @Inject /* inner @StateBacked */ ignored */\nfnc main():int{return 7;}");
+        RejectScalarStateInjection(
+            "// skipped @Inject\n@StateBacked(MutableStateContainer())\nfnc main():int{return 7;}",
+            "STATE_INJECTION_UNSUPPORTED: @StateBacked");
+        // Unknown annotations must be explicit errors too, not silently
+        // downgraded to scalar expression source.
+        foreach (var unknown in new[] {"@NotRegistered", "@InjectExtra"})
+        {
+            try { _ = OresParser.Parse(unknown + "\nfnc main():int{return 7;}"); }
+            catch (FormatException error)
+            {
+                Require(error.Message.Contains("Annotations require verified compiler lowering", StringComparison.Ordinal),
+                    "unknown annotation was misclassified as a state effect");
+                continue;
+            }
+            throw new Exception("Unknown scalar annotation unexpectedly compiled");
+        }
+
         var leadingComment = OresStructuredParser.Parse(
             "// nested annotation @StateBacked(MutableStateContainer(scope = #instance)) is inert\n"
             + "fnc main():int{return 7;}");
