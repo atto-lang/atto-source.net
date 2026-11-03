@@ -150,9 +150,12 @@ public static class ScalarMacroParityTests
             "NET_MACRO_EXPANDER_REQUIRED", "129th expansion must be rejected");
 
         string broad = "1";
-        for (int i = 0; i < 9; ++i) broad = "(" + broad + "+" + broad + ")";
+        for (int i = 0; i < 8; ++i) broad = "(" + broad + "+" + broad + ")";
+        Require(OresParser.Parse(LiteralMacro + Main($"literal!(const {broad})")) is
+            Literal { Value: 256 }, "511-node Const<int> AST stays within 512 visits");
+        broad = "(" + broad + "+" + broad + ")";
         Reject(LiteralMacro + Main($"literal!(const {broad})"),
-            "NET_MACRO_CONST_BUDGET", "broad shallow AST must respect evaluator budget");
+            "NET_MACRO_CONST_BUDGET", "1023-node shallow AST exceeds 512 evaluator visits");
 
         string many = string.Concat(Enumerable.Range(0, 9).Select(i =>
             $"define macro ident_{i}(Syntax<Expr> x) -> Syntax<Expr> {{ return x; }}\n"));
