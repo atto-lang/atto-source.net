@@ -3,13 +3,19 @@
 set -Eeuo pipefail
 
 if [[ $# -lt 1 || $# -gt 3 ]]; then
-  echo 'usage: bash scripts/publish-linux.sh source.ores [app-output-root] [--structured]' >&2
+  echo 'usage: bash scripts/publish-linux.sh source.atto [app-output-root] [--structured] (legacy .ores accepted)' >&2
   exit 2
 fi
 for tool in dotnet file readelf realpath; do
   command -v "$tool" >/dev/null || { echo "missing required tool: $tool" >&2; exit 2; }
 done
 root="$(cd -- "$(dirname -- "$0")/.." && pwd)"
+# Canonical .atto is the default user source spelling. Preserve explicit
+# legacy .ores entrypoints during migration, but never infer a foreign suffix.
+case "$1" in
+  *.atto|*.ores) ;;
+  *) echo 'native AOT source must use .atto (legacy .ores accepted)' >&2; exit 2 ;;
+esac
 source_file="$(realpath -- "$1")"
 [[ -f "$source_file" ]] || { echo "missing source: $source_file" >&2; exit 2; }
 output_root='artifacts/apps'
