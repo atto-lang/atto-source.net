@@ -93,6 +93,30 @@ internal static class SupervisorStopLedgerSelfTest
         competing.ReconcileVerifiedStop(competingTicket);
         Require(competing.Snapshot(competingChild, competingActor)
                 == SupervisorStopLedger.Phase.Stopped, "contended STOP did not reconcile");
-        Console.WriteLine("NET_SUPERVISOR_STOP_LEDGER=PASS cases=3");
+        // A restored runtime can reuse the same supervisor/group and actor
+        // capability, but cannot reuse an earlier ledger's STOP ticket.
+        var replayOld = new SupervisorStopLedger(supervisor, group, 1);
+        var replayNew = new SupervisorStopLedger(supervisor, group, 1);
+        var oldChild = replayOld.Register(actor);
+        var newChild = replayNew.Register(actor);
+        replayOld.AssertPhysicallyFinalized(oldChild, actor);
+        replayNew.AssertPhysicallyFinalized(newChild, actor);
+        var oldTicket = replayOld.ReserveStop(oldChild, actor);
+        var newTicket = replayNew.ReserveStop(newChild, actor);
+        Require(oldTicket.Turn == newTicket.Turn
+                && oldTicket.Incarnation == newTicket.Incarnation,
+                "cross-ledger replay fixture did not reuse numeric identities");
+        Reject(() => replayNew.ClaimHostInvocation(oldTicket),
+            "old ledger STOP ticket claimed in new runtime");
+        Reject(() => replayNew.ReconcileVerifiedStop(oldTicket),
+            "old ledger STOP receipt reconciled in new runtime");
+        Require(replayNew.StopReceipt(newTicket) == SupervisorStopLedger.Receipt.Pending,
+            "foreign STOP replay mutated live ledger receipt");
+        replayNew.ClaimHostInvocation(newTicket);
+        replayNew.MarkApplied(newTicket);
+        replayNew.AcknowledgeApplied(newTicket);
+        Require(replayNew.Snapshot(newChild, actor) == SupervisorStopLedger.Phase.Stopped,
+            "valid current STOP receipt cannot commit after rejected replay");
+        Console.WriteLine("NET_SUPERVISOR_STOP_LEDGER=PASS cases=4");
     }
 }
