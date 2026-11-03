@@ -352,6 +352,33 @@ jobs:
             throw "Earlier hello.ores Native AOT output changed after native.add: '$previousOutput'"
           }
           Write-Host 'Native AOT source isolation proven: hello=14 and native.add=42'
+      - name: Execute canonical AttoLang .atto as real Windows Native AOT
+        shell: pwsh
+        run: |
+          $atto = 'contracts/atto-parity-v1/add.atto'
+          $legacy = 'contracts/v1/semantics/fixtures/add.ores'
+          $expected = (Get-FileHash -LiteralPath $legacy -Algorithm SHA256).Hash
+          $actualHash = (Get-FileHash -LiteralPath $atto -Algorithm SHA256).Hash
+          if ($actualHash -cne $expected) {
+            throw 'Canonical AttoLang corpus differs from reviewed native.add source bytes'
+          }
+          ./scripts/publish-windows.ps1 -Source $atto -Rid win-x64 -Output artifacts/atto-parity
+          $exe = 'artifacts/atto-parity/win-x64/oreslang-app.exe'
+          ./verification/assert-native-release.ps1 -Binary $exe -Rid win-x64
+          $actual = & $exe
+          if ($LASTEXITCODE -ne 0 -or ($actual | Out-String).Trim() -cne '42') {
+            throw "Canonical .atto Native AOT expected 42, got '$actual'"
+          }
+          foreach ($existing in @(
+            @{File='artifacts/parity/win-x64/oreslang-app.exe'; Expected='42'},
+            @{File='artifacts/apps/win-x64/oreslang-app.exe'; Expected='14'}
+          )) {
+            $value = & $existing.File
+            if ($LASTEXITCODE -ne 0 -or ($value | Out-String).Trim() -cne $existing.Expected) {
+              throw "Native AOT source isolation failed for $($existing.File)"
+            }
+          }
+          Write-Host 'WINDOWS_NET_NATIVE_AOT_CANONICAL_ATTO_GUEST_EXECUTED_42'
       - name: Execute shared native.precedence in Windows Native AOT
         shell: pwsh
         run: |
@@ -410,7 +437,8 @@ jobs:
             runner_os = $env:RUNNER_OS
             target_rid = 'win-x64'
             checks = @('managed-regressions','native-compiler','native-app',
-                       'native-PE','arithmetic-negative','CFG-native-execution')
+                       'native-PE','arithmetic-negative','CFG-native-execution',
+                        'canonical-atto-native42')
             source_only = $false
             independently_verified = $false
           }
@@ -427,7 +455,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: oreslang-net-win-x64
-          path: artifacts/apps/win-x64/
+          path: |
+            artifacts/apps/win-x64/oreslang-app.exe
+            artifacts/atto-parity/win-x64/oreslang-app.exe
           if-no-files-found: error
 
   # The Windows release remains mandatory. Linux is an independent diagnostic
