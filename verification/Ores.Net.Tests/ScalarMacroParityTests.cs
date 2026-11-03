@@ -76,7 +76,7 @@ public static class ScalarMacroParityTests
         Reject("define macro make(Type x) -> Syntax<Expr> { return x; }" +
             Main("42"), "NET_MACRO_EXPANDER_REQUIRED", "unsupported type input even when unused");
         Reject("define macro identity(Syntax<Expr> x) -> Syntax<Expr> { return quote(x+x); }" +
-            Main("42"), "Expected ';'", "generated expression/call-site duplication");
+            Main("42"), "Expected 'x'", "generated expression/call-site duplication");
         Reject(LiteralMacro + LiteralMacro + Main("42"),
             "NET_MACRO_EXPANDER_REQUIRED", "duplicate macro must fail even if unused");
         Reject(IdentityMacro + Main("identity!(const 42)"),
