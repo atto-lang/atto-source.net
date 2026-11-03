@@ -29,7 +29,7 @@ Hard bounds: 8 declarations per translation unit, 128 expansions, 512 visited `C
 **Exact-source execution gate prepared:** `bash verification/verify-macro-scalar-native-aot.sh`
 uses the seven new `.atto` fixtures under `verification/fixtures/` and checks
 the production compiler's Release test program, independently linked Linux
-Native AOT guest binaries whose stdout is exactly `42\\n` and exit status is 0 for identity, literal and nested macros,
+Native AOT guest binaries whose stdout is exactly the bytes `42` followed by a newline and exit status is 0 for identity, literal and nested macros,
 Native AOT release layouts, compile-negative diagnostics and absence of
 output artifacts for `check`, `compile`, `emit-csharp` and `emit-fsharp`.
 The shell gate is **authored, not executed**. It must run within the source
