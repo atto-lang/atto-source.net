@@ -100,6 +100,7 @@ AsyncOnlyIoPolicyTests.Run();
 SourceByteBudgetTests.Run();
 StructuralPatternAdmissionTests.Run();
 NumericSeparatorParityTests.Run();
+ScalarMacroParityTests.Run();
 CrossBackendCheckedI64ParityTests.Run();
 AsyncInteropFailClosedTests.Run();
 await HostTaskObservationTests.Run();
