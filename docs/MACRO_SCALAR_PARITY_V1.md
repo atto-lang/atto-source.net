@@ -26,6 +26,15 @@ Hard bounds: 8 declarations per translation unit, 128 expansions, 512 visited `C
 
 **Not supported:** name generation/hygiene, checked explicit capture, templates beyond exact AST identity / literal quotation, declarations / imports / public macro exports, cross-module cache identities, macro argument types other than `Const<int>` or `Syntax<Expr>`, general `comptime`, float/bool/String/Symbol constants, actors, ownership-aware side-effect duplication, and expanded structured/linked CFG compilation. The experimental structured frontend and linked-import scanner explicitly reject all macro declarations and invocations, including the two scalar positives, until they have separately proven typed AST expansion.
 
+**Exact-source execution gate prepared:** `bash verification/verify-macro-scalar-native-aot.sh`
+uses the seven new `.atto` fixtures under `verification/fixtures/` and checks
+the production compiler's Release test program, independently linked Linux
+Native AOT guest exit-42 binaries for identity, literal and nested macros,
+Native AOT release layouts, compile-negative diagnostics and absence of
+output artifacts for `check`, `compile`, `emit-csharp` and `emit-fsharp`.
+The shell gate is **authored, not executed**. It must run within the source
+repository or only on an independently authorized private destination.
+
 **Verification required before merge:**
 1. Build the .NET 10 source compiler on the exact branch head and run `dotnet run --project verification/Ores.Net.Tests`. Check the dedicated macro AST, checked OresIR, deterministic CIL bytes and Mono.Cecil entry evaluation assertions.
 2. Publish the exact compiler and application with Native AOT for supported Windows/Linux RID(s), execute both programs with exit 42, capture source/tree, compiler, generated DLL, host executable and SDK hashes.
