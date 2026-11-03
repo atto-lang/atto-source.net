@@ -214,7 +214,7 @@ public static class OresParser
             foreach (char ch in word)
                 if (!(ch is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_'))
                     return false;
-            return word is not ("define" or "pub" or "macro" or "return" or "fnc" or "main");
+            return word is not ("define" or "pub" or "macro" or "return" or "fnc" or "main" or "quote" or "unquote");
         }
 
         // Closed scalar stage-0 subset also accepted by LLVM #1026:
