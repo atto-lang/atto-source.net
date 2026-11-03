@@ -222,6 +222,16 @@ public static class OresParser
         //   define macro identity(Syntax<Expr> x) -> Syntax<Expr> { return x; }
         // Validate even unused macros: unsupported bodies must never be erased
         // silently by an AOT compiler.
+        // Malformed/unsupported macro signatures and bodies have one stable
+        // compile-time-only rejection category. Do not let ordinary expression
+        // grammar diagnostics disguise an unimplemented macro expander.
+        private void ExpectMacro(string expected)
+        {
+            if (!Take(expected))
+                throw UnsupportedMacro(Current.Offset,
+                    $"unsupported macro signature/body; expected '{expected}'");
+        }
+
         private void ParseMacroPrelude()
         {
             while (Current.Text is "define" or "pub")
@@ -237,7 +247,7 @@ public static class OresParser
                     }
                     else
                     {
-                        Expect("pub");
+                        ExpectMacro("pub");
                         if (exposed) throw UnsupportedMacro(Current.Offset, "duplicate pub modifier");
                         exposed = true;
                     }
@@ -255,16 +265,16 @@ public static class OresParser
                 if (!IsMacroName(name))
                     throw UnsupportedMacro(at, "invalid or reserved macro name");
                 _index++;
-                Expect("(");
+                ExpectMacro("(");
                 bool constInput;
                 if (Take("Const"))
                 {
-                    Expect("<"); Expect("int"); Expect(">");
+                    ExpectMacro("<"); ExpectMacro("int"); ExpectMacro(">");
                     constInput = true;
                 }
                 else if (Take("Syntax"))
                 {
-                    Expect("<"); Expect("Expr"); Expect(">");
+                    ExpectMacro("<"); ExpectMacro("Expr"); ExpectMacro(">");
                     constInput = false;
                 }
                 else
@@ -273,15 +283,15 @@ public static class OresParser
                 if (!IsMacroName(parameter))
                     throw UnsupportedMacro(at, "invalid macro parameter name");
                 _index++;
-                Expect(")");
-                Expect("->"); Expect("Syntax"); Expect("<"); Expect("Expr"); Expect(">");
-                Expect("{"); Expect("return");
+                ExpectMacro(")");
+                ExpectMacro("->"); ExpectMacro("Syntax"); ExpectMacro("<"); ExpectMacro("Expr"); ExpectMacro(">");
+                ExpectMacro("{"); ExpectMacro("return");
                 if (constInput)
                 {
-                    Expect("quote"); Expect("("); Expect(parameter); Expect(")");
+                    ExpectMacro("quote"); ExpectMacro("("); ExpectMacro(parameter); ExpectMacro(")");
                 }
-                else Expect(parameter);
-                Expect(";"); Expect("}");
+                else ExpectMacro(parameter);
+                ExpectMacro(";"); ExpectMacro("}");
                 if (_macros.Count >= MaxMacroDeclarations)
                     throw UnsupportedMacro(at, "macro declaration budget exceeded");
                 if (!_macros.TryAdd(name, new ScalarMacro(name, parameter, constInput)))
