@@ -10,6 +10,10 @@ $binary = (Resolve-Path -LiteralPath $Compiler).Path
 $source = (Resolve-Path -LiteralPath $ValidSource).Path
 $work = Join-Path ([IO.Path]::GetTempPath()) ("oresnet-cli-" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $work | Out-Null
+# The .atto copy lives outside $work so the empty-directory check below
+# still proves that validation-only checks publish nothing.
+$attoDir = Join-Path ([IO.Path]::GetTempPath()) ("oresnet-cli-atto-" + [Guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $attoDir | Out-Null
 
 function Assert-Exit {
     param([int]$Expected, [string[]]$Arguments, [string]$Case)
@@ -33,7 +37,7 @@ try {
     Assert-Exit -Expected 2 -Arguments @('compile', $source, '--other', 'ignored') -Case 'unknown flag'
     Assert-Exit -Expected 0 -Arguments @('check', $source) -Case 'valid check'
     # The canonical extension must exercise the same shipping parser and CIL path.
-    $attoSource = Join-Path $work 'valid.atto'
+    $attoSource = Join-Path $attoDir 'valid.atto'
     Copy-Item -LiteralPath $source -Destination $attoSource
     Assert-Exit -Expected 0 -Arguments @('check', $attoSource) -Case 'valid AttoLang check'
 
@@ -80,4 +84,5 @@ try {
 finally {
     Pop-Location
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $attoDir -Recurse -Force -ErrorAction SilentlyContinue
 }

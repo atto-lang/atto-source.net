@@ -148,6 +148,10 @@ internal static class ProjectRootSourceTests
             File.WriteAllText(upperAttoImporter, "fnc main():int{return 44;}\n");
             Check(ProjectRootSourceResolver.ResolveRelative(upperAttoImporter, "./local.atto", app) ==
                   Path.GetFullPath(localAtto), "case-insensitive .ATTO importer was rejected");
+            // Remove the .atto importers so "./main" below still means the
+            // importer itself rather than a canonical main.atto sibling.
+            File.Delete(attoImporter);
+            File.Delete(upperAttoImporter);
             File.Delete(localAtto);
             Check(ProjectRootSourceResolver.ResolveRelative(importer, "./local", app) ==
                   Path.GetFullPath(local), "relative legacy fallback lost");
