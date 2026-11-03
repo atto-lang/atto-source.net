@@ -92,6 +92,26 @@ internal static class ActorPubSubSelfTest
         catch (InvalidOperationException) { typeRejected = true; }
         Require(typeRejected, "topic name cannot be rebound to another payload type");
 
+        // Java, LLVM and Wasm all reject whitespace-only Topic names.
+        // Preserve .NET's Unicode whitespace check as an executable contract.
+        foreach (string invalidName in new[] {
+            " ", "  ", "\t", "\u00a0", "\u2003", "\u202f", "\u3000"
+        })
+        {
+            bool rejectedName = false;
+            try
+            {
+                _ = a.DefineTopic<string>(
+                    invalidName, ActorTopicDeliveryPolicy.Lossy, capacity: 1);
+            }
+            catch (ArgumentException)
+            {
+                rejectedName = true;
+            }
+            Require(rejectedName, "Unicode whitespace-only topic must be rejected");
+        }
+
+
         runtime.Stop(left);
         Require(SpinWait.SpinUntil(() => runtime.LiveActors == 3,
                 TimeSpan.FromSeconds(5)),
