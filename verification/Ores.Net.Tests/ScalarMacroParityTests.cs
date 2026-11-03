@@ -79,8 +79,9 @@ public static class ScalarMacroParityTests
             string a = Path.Combine(folder, "macro.a.dll");
             string b = Path.Combine(folder, "macro.b.dll");
             Expression expanded = OresParser.Parse(constSource);
-            CilEmitter.EmitLibrary(expanded, a);
-            CilEmitter.EmitLibrary(expanded, b);
+            var verified = OresIrLowering.Lower(expanded);
+            CilEmitter.EmitLibrary(verified, a);
+            CilEmitter.EmitLibrary(verified, b);
             Require(File.ReadAllBytes(a).AsSpan().SequenceEqual(File.ReadAllBytes(b)),
                 "macro CIL output must be deterministic");
             using var assembly = AssemblyDefinition.ReadAssembly(a);
