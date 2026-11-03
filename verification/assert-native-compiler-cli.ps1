@@ -62,6 +62,24 @@ try {
         throw 'Invalid source unexpectedly generated CIL'
     }
 
+    # Canonical .atto rejects the same malformed, oversized and non-UTF8
+    # inputs as legacy .ores; rejected compilation may not publish CIL.
+    $invalidAtto = Join-Path $attoDir 'invalid.atto'
+    [IO.File]::WriteAllText($invalidAtto, 'fnc main():int {return 1 @ 3;}')
+    Assert-Exit -Expected 1 -Arguments @('check', $invalidAtto) -Case 'invalid .atto check'
+    Assert-Exit -Expected 1 -Arguments @('compile', $invalidAtto, '--out', $out) -Case 'invalid .atto compile'
+    if (Test-Path -LiteralPath $out) {
+        throw 'Invalid .atto source unexpectedly generated CIL'
+    }
+
+    $oversizeAtto = Join-Path $attoDir 'oversize.atto'
+    [IO.File]::WriteAllBytes($oversizeAtto, [byte[]]::new(1048577))
+    Assert-Exit -Expected 1 -Arguments @('check', $oversizeAtto) -Case 'oversize .atto source'
+
+    $invalidUtf8Atto = Join-Path $attoDir 'invalid-utf8.atto'
+    [IO.File]::WriteAllBytes($invalidUtf8Atto, [byte[]]@(0xFF, 0xFE, 0xFF))
+    Assert-Exit -Expected 1 -Arguments @('check', $invalidUtf8Atto) -Case 'invalid UTF8 .atto source'
+
     Assert-Exit -Expected 0 -Arguments @('compile', $source, '--out', $out) -Case 'valid compile'
     $attoOutDir = Join-Path $work 'atto-output'
     New-Item -ItemType Directory -Path $attoOutDir | Out-Null
