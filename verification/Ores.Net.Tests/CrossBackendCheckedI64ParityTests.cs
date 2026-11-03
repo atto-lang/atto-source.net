@@ -7,7 +7,7 @@ static class CrossBackendCheckedI64ParityTests
 
     public static void Run()
     {
-        SignedLiteralRemainder();
+        RemovedPercentSourceOperator();
         foreach (var (name, expression, expected) in new (string, string, long)[]
         {
             ("precedence", "2 + 3 * 4", 14L),
@@ -58,48 +58,16 @@ static class CrossBackendCheckedI64ParityTests
         throw new Exception("FAILED: int/int division was admitted without float lowering");
     }
 
-    private static void SignedLiteralRemainder()
+    private static void RemovedPercentSourceOperator()
     {
-        // Exercise parser -> verified OresIR -> emitted CIL bytes -> an
-        // independent bounded CIL interpreter (not a Native AOT execution).
-        foreach (var (expression, expected) in new (string, long)[]
-        {
-            ("-7 % 3", -1),
-            ("7 % -3", 1),
-            ("-7 % -3", -1),
-            ("8 % 3 * 2", 4),
-            ("20 % 6 % 3", 2),
-            ("-9223372036854775808 % -1", 0),
-            ("-9223372036854775808 % -9223372036854775808", 0),
-            ("9223372036854775807 % -9223372036854775808", long.MaxValue)
-        })
-        {
-            var ast = OresParser.Parse(Header + "pub fnc main():int{return " + expression + ";}");
-            var verified = OresIrLowering.Lower(ast);
-            if (OresIrReferenceEvaluator.Evaluate(verified) != expected)
-                throw new Exception("Remainder managed reference mismatch: " + expression);
-            var folder = Path.Combine(Path.GetTempPath(), "oresnet-remainder-" +
-                Guid.NewGuid().ToString("N"));
-            var file = Path.Combine(folder, "OresGenerated.dll");
-            try
-            {
-                CilEmitter.EmitLibrary(verified, file);
-                using var assembly = AssemblyDefinition.ReadAssembly(file);
-                var method = assembly.MainModule.Types
-                    .Single(t => t.FullName == "Oreslang.Generated.OresProgram")
-                    .Methods.Single(f => f.Name == "Run");
-                long actual = CilReferenceEvaluator.Evaluate(method);
-                if (actual != expected)
-                    throw new Exception($"Remainder CIL mismatch: {expression}: {actual} vs {expected}");
-            }
-            finally
-            {
-                if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
-            }
-        }
-
+        // The canonical Oreslang grammar has no percent operator. Reject
+        // every historic spelling *before* producing OresIR or CIL.
         foreach (string expression in new[]
         {
+            "-7 % 3", "7 % -3", "-7 % -3", "8 % 3 * 2",
+            "20 % 6 % 3", "-9223372036854775808 % -1",
+            "-9223372036854775808 % -9223372036854775808",
+            "9223372036854775807 % -9223372036854775808",
             "7 % 0", "7 % (1+1)", "7 % -(1+1)",
             "7 % -9223372036854775809"
         })
@@ -108,12 +76,22 @@ static class CrossBackendCheckedI64ParityTests
             {
                 _ = OresParser.Parse(Header + "pub fnc main():int{return " + expression + ";}");
             }
-            catch (FormatException)
+            catch (FormatException ex) when (ex.Message.Contains("noncanonical '%' source operator", StringComparison.Ordinal))
             {
                 continue;
             }
-            throw new Exception("Compiler admitted unsupported remainder: " + expression);
+            throw new Exception("Noncanonical percent source was admitted: " + expression);
         }
+        var positive = OresIrLowering.Lower(OresParser.Parse(
+            Header + "pub fnc main():int{return 7*6;}"));
+        if (OresIrReferenceEvaluator.Evaluate(positive) != 42)
+            throw new Exception("Canonical multiply baseline regressed");
+        // '%' remains valid text inside lexical comments, never as an
+        // executable operator. Guard against a crude pre-lexical filter.
+        var commentProgram = OresIrLowering.Lower(OresParser.Parse(
+            Header + "pub fnc main():int{return 42;} // % comment only"));
+        if (OresIrReferenceEvaluator.Evaluate(commentProgram) != 42)
+            throw new Exception("Percent in a comment corrupted parsing");
 
         // The IR is untrusted; a source parser's admission does not grant
         // externally constructed IR the right to use arbitrary divisors.

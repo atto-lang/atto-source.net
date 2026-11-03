@@ -10,11 +10,12 @@ $compilerDir = Join-Path $work 'compiler'
 dotnet publish compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -r $Rid -o $compilerDir -warnaserror
 if ($LASTEXITCODE -ne 0) { throw 'Native compiler publish failed' }
 $compiler = Join-Path $compilerDir "oresnet$suffix"
+# Historical script filename; this is now the canonical NO-% NativeAOT gate.
+# Every positive mode must build and execute real generated native code.
 $cases = @(
-    @{ Name = 'negative-dividend'; Expression = '-7%3'; Output = '-1'; Exit = 0 },
-    @{ Name = 'negative-divisor'; Expression = '7%-3'; Output = '1'; Exit = 0 },
-    @{ Name = 'minimum-minus-one'; Expression = '-9223372036854775808%-1'; Output = '0'; Exit = 0 },
-    @{ Name = 'overflow-before-zero'; Expression = '(9223372036854775807+1)%-1'; Output = ''; Exit = 70 }
+    @{ Name = 'canonical-multiply'; Expression = '7*6'; Output = '42'; Exit = 0 },
+    @{ Name = 'canonical-precedence'; Expression = '8-3*2'; Output = '2'; Exit = 0 },
+    @{ Name = 'checked-overflow'; Expression = '9223372036854775807+1'; Output = ''; Exit = 70 }
 )
 foreach ($mode in @('compile', 'emit-csharp', 'emit-fsharp')) {
     foreach ($case in $cases) {
@@ -60,18 +61,31 @@ foreach ($mode in @('compile', 'emit-csharp', 'emit-fsharp')) {
         }
         if ($case.Exit -eq 70 -and $errorText -notmatch 'arithmetic overflow') { throw 'Missing overflow diagnostic' }
         $hash = (Get-FileHash $app -Algorithm SHA256).Hash
-        Write-Output "REMAINDER_NATIVE_PASS mode=$mode case=$($case.Name) exit=$exitCode output=$actual SHA256=$hash"
+        Write-Output "CANONICAL_SCALAR_NATIVE_PASS mode=$mode case=$($case.Name) exit=$exitCode output=$actual SHA256=$hash"
     }
-    foreach ($expression in @('7%0', '7%(1+1)', '7%-9223372036854775809')) {
-        $inputFile = Join-Path $work 'rejected.ores'
+    $rejectDir = Join-Path $work "rejected/$mode"
+    New-Item -ItemType Directory -Path $rejectDir -Force | Out-Null
+    $negativeIndex = 0
+    foreach ($expression in @('7%3', '-7%-3', '(8%3)*2', '-9223372036854775808%-1')) {
+        $inputFile = Join-Path $rejectDir "input-$negativeIndex.ores"
         [IO.File]::WriteAllText($inputFile, "fnc main():int{return $expression;}", [Text.UTF8Encoding]::new($false))
         $extension = switch ($mode) { 'compile' { 'dll' } 'emit-csharp' { 'cs' } 'emit-fsharp' { 'fs' } }
-        $outputFile = Join-Path $work "rejected/OresGenerated.$extension"
-        & $compiler $mode $inputFile --out $outputFile
-        if ($LASTEXITCODE -eq 0 -or (Test-Path $outputFile)) { throw "$mode admitted unsupported divisor $expression" }
+        $outputFile = Join-Path $rejectDir "OresGenerated-$negativeIndex.$extension"
+        $errorFile = Join-Path $rejectDir "rejection-$negativeIndex.stderr"
+        & $compiler $mode $inputFile --out $outputFile 2> $errorFile
+        $code = $LASTEXITCODE
+        if ($code -ne 1 -or (Test-Path $outputFile)) {
+            throw "$mode incorrectly admitted $expression or left an emitted artifact (exit=$code)"
+        }
+        $diagnostic = [IO.File]::ReadAllText($errorFile)
+        if ($diagnostic -notmatch "noncanonical '%' source operator") {
+            throw "$mode rejected $expression for the wrong reason: $diagnostic"
+        }
+        Write-Output "CANONICAL_PERCENT_REJECTED mode=$mode index=$negativeIndex source=$expression"
+        $negativeIndex++
     }
 }
-Write-Output 'REMAINDER_NATIVE_SUITE_PASS: 12 native executions, 9 source denials'
+Write-Output 'CANONICAL_OPERATOR_NATIVE_SUITE_PASS: 9 native executions, 12 source denials'
 # The last compiler invocation is an expected rejection. Publish success only
 # after every assertion, instead of leaking that command's nonzero exit status.
 exit 0
