@@ -38,16 +38,20 @@ for name in "${positive[@]}"; do
   bash scripts/publish-linux.sh "$source" "$dest"
   guest="$root/$dest/linux-x64/oreslang-app"
   bash verification/assert-linux-native-release.sh "$guest"
+  # RuntimeHost.ExecuteAsync writes the guest's i64 value to stdout and
+  # returns status 0 on success. Exit code 42 is NOT its value ABI.
   set +e
   "$guest" >"$tmp/guest.stdout" 2>"$tmp/guest.stderr"
   actual=$?
   set -e
-  if [[ $actual -ne 42 ]]; then
-    echo "MACRO_AOT_GUEST_FAIL fixture=$name expected_exit=42 actual_exit=$actual" >&2
+  if [[ $actual -ne 0 ]] || [[ "$(cat "$tmp/guest.stdout")" != "42" ]] || \
+     [[ -s "$tmp/guest.stderr" ]]; then
+    echo "MACRO_AOT_GUEST_FAIL fixture=$name expected_stdout=42 expected_exit=0 actual_exit=$actual" >&2
+    cat "$tmp/guest.stdout" >&2
     cat "$tmp/guest.stderr" >&2
     exit 1
   fi
-  printf 'MACRO_AOT_GUEST_PASS fixture=%s expected_exit=42 sha256=%s\n' \
+  printf 'MACRO_AOT_GUEST_PASS fixture=%s stdout=42 exit=0 sha256=%s\n' \
     "$name" "$(sha256sum "$guest" | cut -d' ' -f1)"
 done
 
