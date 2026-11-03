@@ -59,6 +59,23 @@ internal static class ProjectRootSourceTests
             Check(ProjectRootSourceResolver.Resolve(app, "+/src/answer") ==
                   Path.GetFullPath(source), "legacy fallback lost");
 
+            // An existing directory named .atto must also block .ores
+            // fallback, rather than silently importing the wrong source.
+            string directoryAtto = Path.Combine(app, "src", "directory-shadow.atto");
+            string directoryLegacy = Path.Combine(app, "src", "directory-shadow.ores");
+            Directory.CreateDirectory(directoryAtto);
+            File.WriteAllText(directoryLegacy, "fnc answer():int{return 41;}\n");
+            try
+            {
+                Reject(() => ProjectRootSourceResolver.Resolve(app, "+/src/directory-shadow"),
+                       "canonical .atto directory silently fell back to .ores");
+            }
+            finally
+            {
+                Directory.Delete(directoryAtto);
+                File.Delete(directoryLegacy);
+            }
+
             // A dangling canonical .atto entry must not be treated as absent
             // and silently replaced by a valid legacy .ores sibling.
             string danglingAtto = Path.Combine(app, "src", "dangling.atto");
@@ -155,6 +172,22 @@ internal static class ProjectRootSourceTests
             File.Delete(localAtto);
             Check(ProjectRootSourceResolver.ResolveRelative(importer, "./local", app) ==
                   Path.GetFullPath(local), "relative legacy fallback lost");
+
+            string relativeDirectoryAtto = Path.Combine(routes, "directory-shadow.atto");
+            string relativeDirectoryLegacy = Path.Combine(routes, "directory-shadow.ores");
+            Directory.CreateDirectory(relativeDirectoryAtto);
+            File.WriteAllText(relativeDirectoryLegacy, "fnc local():int{return 41;}\n");
+            try
+            {
+                Reject(() => ProjectRootSourceResolver.ResolveRelative(
+                           importer, "./directory-shadow", app),
+                       "relative canonical .atto directory silently fell back to .ores");
+            }
+            finally
+            {
+                Directory.Delete(relativeDirectoryAtto);
+                File.Delete(relativeDirectoryLegacy);
+            }
 
             foreach (var bad in new[] { "local", ".hidden/local", "./", "../",
                                         "./missing", "./local.java", "./main",
