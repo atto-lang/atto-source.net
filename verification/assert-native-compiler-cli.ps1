@@ -10,6 +10,10 @@ $binary = (Resolve-Path -LiteralPath $Compiler).Path
 $source = (Resolve-Path -LiteralPath $ValidSource).Path
 $work = Join-Path ([IO.Path]::GetTempPath()) ("oresnet-cli-" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $work | Out-Null
+# The .atto copy lives outside $work so the empty-directory check below
+# still proves that validation-only checks publish nothing.
+$attoDir = Join-Path ([IO.Path]::GetTempPath()) ("oresnet-cli-atto-" + [Guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $attoDir | Out-Null
 
 function Assert-Exit {
     param([int]$Expected, [string[]]$Arguments, [string]$Case)
@@ -32,6 +36,11 @@ try {
     }
     Assert-Exit -Expected 2 -Arguments @('compile', $source, '--other', 'ignored') -Case 'unknown flag'
     Assert-Exit -Expected 0 -Arguments @('check', $source) -Case 'valid check'
+    # The canonical extension must exercise the same shipping parser and CIL path.
+    $attoSource = Join-Path $attoDir 'valid.atto'
+    Copy-Item -LiteralPath $source -Destination $attoSource
+    Assert-Exit -Expected 0 -Arguments @('check', $attoSource) -Case 'valid AttoLang check'
+
     # A successful source/typed-IR check must not become an executable result.
     # Exactly the separate compile command may publish OresGenerated.dll.
     if ((Get-ChildItem -LiteralPath $work -Force | Measure-Object).Count -ne 0) {
@@ -54,6 +63,14 @@ try {
     }
 
     Assert-Exit -Expected 0 -Arguments @('compile', $source, '--out', $out) -Case 'valid compile'
+    $attoOutDir = Join-Path $work 'atto-output'
+    New-Item -ItemType Directory -Path $attoOutDir | Out-Null
+    $attoOut = Join-Path $attoOutDir 'OresGenerated.dll'
+    Assert-Exit -Expected 0 -Arguments @('compile', $attoSource, '--out', $attoOut) -Case 'valid AttoLang compile'
+    if (-not (Test-Path -LiteralPath $attoOut) -or (Get-Item -LiteralPath $attoOut).Length -le 0) {
+        throw 'Valid .atto source failed to produce a non-empty assembly'
+    }
+
     if (-not (Test-Path -LiteralPath $out)) {
         throw 'Valid source failed to produce assembly'
     }
@@ -67,4 +84,5 @@ try {
 finally {
     Pop-Location
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $attoDir -Recurse -Force -ErrorAction SilentlyContinue
 }
