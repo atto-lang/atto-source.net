@@ -22,7 +22,7 @@ static class Check
         readonly Socket _sender = new(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
         readonly AutoResetEvent _wake = new(false);
         public SharedReactorPool? Pool;
-        public int Active, Delivered;
+        public int Active, Delivered, Wakes;
         public readonly ConcurrentDictionary<int, bool> Polls = new(), Executions = new();
         int _pending;
         public Io()
@@ -31,7 +31,7 @@ static class Check
             _sender.Connect(_input.LocalEndPoint!);
         }
         public void Emit() { Require(_sender.Send(new byte[] { 1 }) == 1); }
-        public void Wake() => _wake.Set();
+        public void Wake() { Interlocked.Increment(ref Wakes); _wake.Set(); }
         public void Poll(bool mayWait)
         {
             Require(Interlocked.Increment(ref Active) == 1); s_polling = true;
@@ -102,7 +102,9 @@ static class Check
             Require(pool.TrySubmit(() => { entered.Set(); Require(release.Wait(5000)); }));
             Require(entered.Wait(5000));
             int done = 0;
+            int wakesBeforeHotQueue = Volatile.Read(ref io.Wakes);
             for (int i = 0; i < 1024; ++i) Require(pool.TrySubmit(() => Interlocked.Increment(ref done)));
+            Require(Volatile.Read(ref io.Wakes) == wakesBeforeHotQueue); // no polling worker
             Require(!pool.TrySubmit(() => {})); release.Set(); pool.Dispose(); Require(done == 1024);
         }
         using (var io = new Io())
