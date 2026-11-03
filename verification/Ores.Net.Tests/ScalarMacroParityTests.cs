@@ -102,6 +102,10 @@ public static class ScalarMacroParityTests
             Main("42"), "NET_MACRO_EXPANDER_REQUIRED", "alternate public macro spelling");
         Reject("define macro make(Type x) -> Syntax<Expr> { return x; }" +
             Main("42"), "NET_MACRO_EXPANDER_REQUIRED", "unsupported type input even when unused");
+        Reject("define macro literal(Const<int> quote) -> Syntax<Expr> { return quote(quote); }" +
+            Main("42"), "NET_MACRO_EXPANDER_REQUIRED", "quote must not be rebound in macro scope");
+        Reject("define macro identity(Syntax<Expr> unquote) -> Syntax<Expr> { return unquote; }" +
+            Main("42"), "NET_MACRO_EXPANDER_REQUIRED", "unquote must not be rebound in macro scope");
         Reject("define macro identity(Syntax<Expr> x) -> Syntax<Expr> { return quote(x+x); }" +
             Main("42"), "Expected 'x'", "generated expression/call-site duplication");
         Reject(LiteralMacro + LiteralMacro + Main("42"),
