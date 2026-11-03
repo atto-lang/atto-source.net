@@ -59,7 +59,11 @@ public sealed class SharedReactorPool : IDisposable
             _queue[(_head + _size) % Capacity] = work; ++_size;
             Monitor.Pulse(_gate);
         }
-        WakeReactor(); return true;
+        // Lease acquisition precedes the poller's ready-queue check, so an
+        // absent owner means a future poller will observe this submission.
+        // Avoid notifying the reactor on every hot-queue admission.
+        if (Volatile.Read(ref _pollOwner) != -1) WakeReactor();
+        return true;
     }
     private void Run(int slot)
     {
