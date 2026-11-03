@@ -8,6 +8,14 @@ Host components remain opt-in. Existing runtime/CLI defaults and guest feature a
 
 ## Exact component Git blobs
 
-- `runtime/Ores.Net.Runtime/SharedReactorPool.cs`: `3de92b2e0b782ab0bf8b077771efd4b67e6c4acd`
-- `runtime-experiment/SharedReactorPoolCheck.cs`: `775b441688b478fc583f5fff743cf27815ceded8`
+- `runtime/Ores.Net.Runtime/SharedReactorPool.cs`: `5e7c2e46ec718983d92aa4c6a8f3f5deb58640d8`
+- `runtime-experiment/SharedReactorPoolCheck.cs`: `0752d8cdedeb3440dc25de65f23e01eaa4b7f5c7`
 - `runtime-experiment/SharedReactorPoolCheck.csproj`: `8991d43ad4495cd3c495376571c50701e8fd1496`
+
+## Incremental wake-gating hardening — 2026-11-03
+
+Hot-queue submissions avoid calling the reactor wake function when the single polling lease is absent. The polling lease is acquired before the poller's ready-queue check; active-lease submissions still wake it after publication. Added a deterministic saturation regression: while the only executor is blocked in user work, 1024 accepted queue entries do not trigger reactor wakeups. An ordinary shutdown continues to wake an active reactor.
+
+Host implementation and regression assertion updated for wake gating while no polling lease exists. SDK10 and Native AOT are unavailable locally; NOT_EXECUTED. Focused CI reported no steps, not a failed code/test execution.
+
+These results are standalone host-substrate evidence only. The PR remains draft and opt-in; runtime wiring, actor authority, CONTROL priority, cancellation generation fencing, and total-process thread measurements are still required. Remote zero-step workflow failures are not execution evidence.
