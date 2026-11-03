@@ -92,16 +92,16 @@ internal static class StructuredCfgLoweringTests
             42, "real const/val/let source through verified CFG and CIL");
         // Real Oreslang source -> static closed-row typecheck -> verified CFG
         // -> deterministic emitted CIL. No managed aggregate object is emitted.
-        Check("fnc main():int{const base=infer struct{x:20};const next=infer struct{...base,y:22};return next.x+next.y;}",
-            42, "inferred struct spread to emitted CIL");
-        Check("fnc main():int{const base=infer record{x:20};const next=infer record{...base,y:22};return next.x+next.y;}",
-            42, "inferred readonly record spread to emitted CIL");
-        Check("fnc main():int{const a=record{x:20};const b=record{...a,x:42};return b.x-a.x+20;}",
-            42, "record override does not mutate original");
-        Check("fnc main():int{const a=infer struct{active:true,score:40};const b=infer struct{...a,active:2};return b.active+b.score;}",
-            42, "overridden field's inferred type changes bool to int");
-        Check("fnc main():int{const a=infer struct{active:true,value:42};if a.active{return a.value;}else{return 0;}}",
-            42, "typed bool field projects into scalar CFG");
+        Check("fnc main():int{const base=infer struct{x:20};const next=infer struct{...base,y:23};return next.x+next.y;}",
+            43, "inferred struct spread to emitted CIL");
+        Check("fnc main():int{const base=infer record{x:20};const next=infer record{...base,y:24};return next.x+next.y;}",
+            44, "inferred readonly record spread to emitted CIL");
+        Check("fnc main():int{const a=record{x:20};const b=record{...a,x:45};return b.x-a.x+20;}",
+            45, "record override does not mutate original");
+        Check("fnc main():int{const a=infer struct{active:true,score:44};const b=infer struct{...a,active:2};return b.active+b.score;}",
+            46, "overridden field's inferred type changes bool to int");
+        Check("fnc main():int{const a=infer struct{active:true,value:47};if a.active{return a.value;}else{return 0;}}",
+            47, "typed bool field projects into scalar CFG");
         Reject("fnc main():int{const a=infer struct{...missing,x:1};return a.x;}",
             "dynamic or missing spread source rejected");
         Reject("fnc main():int{const a=infer struct{x:1,x:2};return a.x;}",
@@ -112,18 +112,18 @@ internal static class StructuredCfgLoweringTests
             "record bool cannot return as int");
         // Runtime-valued immutable rows snapshot scalars into private verified
         // SSA places: later mutation of the original local cannot change them.
-        Check("fnc main():int{let int source=20;val row=infer struct{x:source,y:22};source=99;return row.x+row.y;}",
-            42, "runtime val aggregate snapshot survives source reassignment");
-        Check("fnc main():int{val int seed=20;val a=record{x:seed};val b=record{...a,y:22};return b.x+b.y;}",
-            42, "runtime readonly record spread into immutable result");
-        Check("fnc main():int{const a=record{x:20};val b=record{...a,x:40+2};return b.x;}",
-            42, "runtime val spread from compile-time const row");
-        Check("fnc main():int{val row=infer struct{x:true,y:40};val update=infer struct{...row,x:2};return update.x+update.y;}",
-            42, "runtime val type-changing scalar override");
-        Check("fnc twice(int n):int{return n*2;}fnc main():int{val row=infer record{x:twice(21)};return row.x;}",
-            42, "typed helper call evaluated by emitted CIL in row construction");
-        Check("fnc main():int{let int source=20;val original=record{x:source};val changed=record{...original,x:42};source=99;return changed.x-original.x+20;}",
-            42, "runtime spread never aliases or mutates original owner");
+        Check("fnc main():int{let int source=20;val row=infer struct{x:source,y:28};source=99;return row.x+row.y;}",
+            48, "runtime val aggregate snapshot survives source reassignment");
+        Check("fnc main():int{val int seed=20;val a=record{x:seed};val b=record{...a,y:29};return b.x+b.y;}",
+            49, "runtime readonly record spread into immutable result");
+        Check("fnc main():int{const a=record{x:20};val b=record{...a,x:40+10};return b.x;}",
+            50, "runtime val spread from compile-time const row");
+        Check("fnc main():int{val row=infer struct{x:true,y:49};val update=infer struct{...row,x:2};return update.x+update.y;}",
+            51, "runtime val type-changing scalar override");
+        Check("fnc twice(int n):int{return n*2;}fnc main():int{val row=infer record{x:twice(26)};return row.x;}",
+            52, "typed helper call evaluated by emitted CIL in row construction");
+        Check("fnc main():int{let int source=20;val original=record{x:source};val changed=record{...original,x:53};source=99;return changed.x-original.x+20;}",
+            53, "runtime spread never aliases or mutates original owner");
         Reject("fnc main():int{let int seed=20;val runtime=record{x:seed};const illegal=record{...runtime,y:22};return illegal.x+illegal.y;}",
             "compile-time const row cannot spread a runtime val row");
         Reject("fnc main():int{let int value=41;const row=infer struct{x:value};return row.x;}",
