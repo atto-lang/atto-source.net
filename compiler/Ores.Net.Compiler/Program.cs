@@ -16,7 +16,7 @@ bool validStaticFacts = args.Length == 2 &&
 bool moduleCommand = args.Length >= 1 && args[0] is "check-modules" or "compile-modules";
 if (!validCheck && !validCompile && !validStructuredCheck && !validStructuredCompile && !validStaticFacts && !validEmitSource && !moduleCommand)
 {
-    Console.Error.WriteLine("usage: oresnet check input.ores | oresnet compile input.ores --out path/OresGenerated.dll | oresnet check-structured input.ores | oresnet compile-structured input.ores --out path/OresGenerated.dll | oresnet emit-csharp input.ores --out path/OresProgram.cs | oresnet emit-fsharp input.ores --out path/OresProgram.fs | oresnet static-facts input.ores | oresnet static-facts-structured input.ores");
+    Console.Error.WriteLine("usage: oresnet check input.atto|input.ores | oresnet compile input.atto|input.ores --out path/OresGenerated.dll | oresnet check-structured input.atto|input.ores | oresnet compile-structured input.atto|input.ores --out path/OresGenerated.dll | oresnet emit-csharp input.atto|input.ores --out path/OresProgram.cs | oresnet emit-fsharp input.atto|input.ores --out path/OresProgram.fs | oresnet static-facts input.atto|input.ores | oresnet static-facts-structured input.atto|input.ores");
     return 2;
 }
 
@@ -60,8 +60,9 @@ try
         return 0;
     }
     if (validStaticFacts &&
+        !string.Equals(Path.GetExtension(args[1]), ".atto", StringComparison.OrdinalIgnoreCase) &&
         !string.Equals(Path.GetExtension(args[1]), ".ores", StringComparison.OrdinalIgnoreCase))
-        throw new FormatException("Static-facts export requires a .ores source file");
+        throw new FormatException("Static-facts export requires a .atto or .ores source file");
     var source = ReadBoundedSource(args[1], rejectBom: validStaticFacts);
     if (validStaticFacts)
     {
