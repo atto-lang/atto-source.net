@@ -3,6 +3,8 @@
     <OutputType>Exe</OutputType>
   </PropertyGroup>
   <ItemGroup>
+    <None Include="../elm-composition-rejections.json" Link="elm-composition-rejections.json"
+          CopyToOutputDirectory="PreserveNewest" />
     <None Include="../value-boundary-rejections.json" Link="value-boundary-rejections.json"
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/v2/cpu-gpu-task-unsupported-v2.json" Link="cpu-gpu-task-unsupported-v2.json"

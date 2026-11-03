@@ -45,6 +45,25 @@ RejectDiagnostic(
 Require(OresParser.Parse("fnc main():int{return 1;} // any unknown ?") is Literal,
     "opaque-top and ternary tokens in comments remain lexically invisible");
 
+// Two-word runtime declaration kinds must never become scalar CIL or
+// unguarded native state. They are distinct from ordinary actor declarations.
+foreach (var (source, code) in new[] {
+    ("define state container Counter as end", "STATE_CONTAINER_BACKEND_UNSUPPORTED"),
+    ("define pub state /* comment */ container Counter as end", "STATE_CONTAINER_BACKEND_UNSUPPORTED"),
+    ("pub define state container Counter as end", "STATE_CONTAINER_BACKEND_UNSUPPORTED"),
+    ("define virtual actor Cart as end", "VIRTUAL_ACTOR_BACKEND_UNSUPPORTED"),
+    ("define pub virtual /* comment */ actor Cart as end", "VIRTUAL_ACTOR_BACKEND_UNSUPPORTED"),
+    ("pub define virtual actor Cart as end", "VIRTUAL_ACTOR_BACKEND_UNSUPPORTED")
+})
+{
+    RejectDiagnostic(() => OresParser.Parse(source), code, "scalar declaration gate");
+    RejectDiagnostic(() => OresStructuredParser.Parse(source), code, "structured declaration gate");
+}
+Require(OresParser.Parse("fnc main():int{return 42;} // define virtual actor X") is Literal,
+    "comment text must not become declaration");
+Require(OresStructuredParser.Parse("fnc main():int{return 42;} // define state container X") is not null,
+    "structured comments must not become declarations");
+
 // Shipping scalar parser has no class-method CIL/Native AOT lowering.
  // It must reject the exact Java receiver-parity sources before emission,
  // independently of the experimental structured parser's diagnostic gate.
@@ -80,6 +99,7 @@ Require(OresParser.Parse(
 VmIsolateHostTests.Run();
 AsyncOnlyIoPolicyTests.Run();
 SourceByteBudgetTests.Run();
+ElmCompositionAdmissionTests.Run();
 StructuralPatternAdmissionTests.Run();
 NumericSeparatorParityTests.Run();
 CrossBackendCheckedI64ParityTests.Run();
