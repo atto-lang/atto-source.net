@@ -107,7 +107,13 @@ public static class ScalarMacroParityTests
         Reject("define macro identity(Syntax<Expr> unquote) -> Syntax<Expr> { return unquote; }" +
             Main("42"), "NET_MACRO_EXPANDER_REQUIRED", "unquote must not be rebound in macro scope");
         Reject("define macro identity(Syntax<Expr> x) -> Syntax<Expr> { return quote(x+x); }" +
-            Main("42"), "Expected 'x'", "generated expression/call-site duplication");
+            Main("42"), "NET_MACRO_EXPANDER_REQUIRED", "generated expression/call-site duplication");
+        Reject("define macro invalid(Const<int> x) -> Syntax<Decl> { return quote(x); }" +
+            Main("42"), "NET_MACRO_EXPANDER_REQUIRED", "result-kind mismatch rejected at declaration");
+        Reject("define macro bad(Syntax<Expr> x) -> Syntax<Expr> { return dynamic_call(x); }" +
+            Main("42"), "NET_MACRO_EXPANDER_REQUIRED", "unsupported macro helper body");
+        Reject("define macro bad(Syntax<Expr> x, Syntax<Expr> y) -> Syntax<Expr> { return x; }" +
+            Main("42"), "NET_MACRO_EXPANDER_REQUIRED", "multi-parameter expander unavailable");
         Reject(LiteralMacro + LiteralMacro + Main("42"),
             "NET_MACRO_EXPANDER_REQUIRED", "duplicate macro must fail even if unused");
         Reject(IdentityMacro + Main("identity!(const 42)"),
@@ -124,6 +130,24 @@ public static class ScalarMacroParityTests
             "NET_MACRO_CONST_OVERFLOW", "unary signed overflow");
         Reject(LiteralMacro + Main("literal!(const 1 / 2)"),
             "Division requires float result lowering", "integer division cannot change language typing");
+
+        // Inclusive 64-level const evaluator bound, distinct from parser's
+        // independent 128 nesting bound. No runtime bypass on depth 65.
+        string negations64 = string.Concat(Enumerable.Repeat("-", 64)) + "1";
+        string negations65 = "-" + negations64;
+        Require(OresParser.Parse(LiteralMacro + Main($"literal!(const {negations64})")) is
+            Literal { Value: 1 }, "64 nested unary const nodes are admitted");
+        Reject(LiteralMacro + Main($"literal!(const {negations65})"),
+            "NET_MACRO_CONST_BUDGET", "65 nested const nodes must fail closed");
+
+        // Macro-expansion count boundary, independent of AST evaluator budget.
+        string invocations128 = string.Join("+",
+            Enumerable.Repeat("identity!(syntax expr 1)", 128));
+        string invocations129 = invocations128 + "+identity!(syntax expr 1)";
+        Require(OresParser.Parse(IdentityMacro + Main(invocations128)) is Binary,
+            "128 macro expansions are admitted in closed scalar frontend");
+        Reject(IdentityMacro + Main(invocations129),
+            "NET_MACRO_EXPANDER_REQUIRED", "129th expansion must be rejected");
 
         string broad = "1";
         for (int i = 0; i < 9; ++i) broad = "(" + broad + "+" + broad + ")";
