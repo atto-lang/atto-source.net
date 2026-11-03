@@ -11,6 +11,10 @@ public static class OresParser
 {
     private const int MaxDepth = 128;
     private const int MaxTokens = 100_000;
+    private const int MaxMacroDeclarations = 8;
+    private const int MaxMacroExpansions = 128;
+    private const int MaxMacroConstSteps = 512;
+    private const int MaxMacroConstDepth = 64;
 
     public static Expression Parse(string source)
     {
@@ -179,7 +183,7 @@ public static class OresParser
             // Lex assignment punctuation so unsupported declarations are rejected
             // at their declaration, rather than at a later initializer. The
             // arithmetic parser still has no assignment production.
-            if ("()+-*/{}:;.=?".IndexOf(ch) >= 0)
+            if ("()+-*/{}:;.=?<>!".IndexOf(ch) >= 0)
             {
                 _i++;
                 return new Token(text[start.._i], start);
@@ -192,7 +196,140 @@ public static class OresParser
 
     private sealed class Reader(List<Token> tokens)
     {
+        // Macro definitions are compiler-only. Neither these declarations nor
+        // their arguments appear in OresIR/CIL, and no runtime expansion exists.
+        private sealed record ScalarMacro(string Name, string Parameter, bool ConstInput);
+        private readonly Dictionary<string, ScalarMacro> _macros = new(StringComparer.Ordinal);
         private int _index;
+        private int _macroExpansions;
+
+        private static FormatException UnsupportedMacro(int at, string reason) =>
+            new($"NET_MACRO_EXPANDER_REQUIRED: {reason} at offset {at}; " +
+                "macro expansion must finish before OresIR/CIL; runtime fallback is forbidden");
+
+        private static bool IsMacroName(string word)
+        {
+            if (word.Length is 0 or > 128 || !(word[0] is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or '_'))
+                return false;
+            foreach (char ch in word)
+                if (!(ch is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_'))
+                    return false;
+            return word is not ("define" or "pub" or "macro" or "return" or "fnc" or "main");
+        }
+
+        // Closed scalar stage-0 subset also accepted by LLVM #1026:
+        //   define macro literal(Const<int> x) -> Syntax<Expr> { return quote(x); }
+        //   define macro identity(Syntax<Expr> x) -> Syntax<Expr> { return x; }
+        // Validate even unused macros: unsupported bodies must never be erased
+        // silently by an AOT compiler.
+        private void ParseMacroPrelude()
+        {
+            while (Current.Text is "define" or "pub")
+            {
+                int checkpoint = _index;
+                bool defined = false, exposed = false;
+                while (Current.Text is "define" or "pub")
+                {
+                    if (Take("define"))
+                    {
+                        if (defined) throw UnsupportedMacro(Current.Offset, "duplicate define modifier");
+                        defined = true;
+                    }
+                    else
+                    {
+                        Expect("pub");
+                        if (exposed) throw UnsupportedMacro(Current.Offset, "duplicate pub modifier");
+                        exposed = true;
+                    }
+                }
+                if (Current.Text != "macro")
+                {
+                    _index = checkpoint; // Normal main declaration: existing grammar owns it.
+                    return;
+                }
+                int at = Current.Offset;
+                _index++;
+                if (!defined || exposed)
+                    throw UnsupportedMacro(at, "public or unqualified macro declarations require checked export/visibility metadata");
+                string name = Current.Text;
+                if (!IsMacroName(name))
+                    throw UnsupportedMacro(at, "invalid or reserved macro name");
+                _index++;
+                Expect("(");
+                bool constInput;
+                if (Take("Const"))
+                {
+                    Expect("<"); Expect("int"); Expect(">");
+                    constInput = true;
+                }
+                else if (Take("Syntax"))
+                {
+                    Expect("<"); Expect("Expr"); Expect(">");
+                    constInput = false;
+                }
+                else
+                    throw UnsupportedMacro(at, "only Const<int> and Syntax<Expr> inputs are supported");
+                string parameter = Current.Text;
+                if (!IsMacroName(parameter))
+                    throw UnsupportedMacro(at, "invalid macro parameter name");
+                _index++;
+                Expect(")");
+                Expect("->"); Expect("Syntax"); Expect("<"); Expect("Expr"); Expect(">");
+                Expect("{"); Expect("return");
+                if (constInput)
+                {
+                    Expect("quote"); Expect("("); Expect(parameter); Expect(")");
+                }
+                else Expect(parameter);
+                Expect(";"); Expect("}");
+                if (_macros.Count >= MaxMacroDeclarations)
+                    throw UnsupportedMacro(at, "macro declaration budget exceeded");
+                if (!_macros.TryAdd(name, new ScalarMacro(name, parameter, constInput)))
+                    throw UnsupportedMacro(at, "duplicate macro declaration");
+            }
+        }
+
+        private static long EvaluateMacroConst(Expression expression, int at)
+        {
+            int steps = 0;
+            long Visit(Expression node, int depth)
+            {
+                if (++steps > MaxMacroConstSteps || depth > MaxMacroConstDepth)
+                    throw UnsupportedMacro(at, "NET_MACRO_CONST_BUDGET: closed Const<int> AST budget exceeded");
+                try
+                {
+                    switch (node)
+                    {
+                        case Literal number: return number.Value;
+                        case Unary unary when unary.Operator is '+' or '-':
+                        {
+                            long value = Visit(unary.Value, depth + 1);
+                            return unary.Operator == '-' ? checked(-value) : value;
+                        }
+                        case Binary binary when binary.Operator is '+' or '-' or '*':
+                        {
+                            long left = Visit(binary.Left, depth + 1);
+                            long right = Visit(binary.Right, depth + 1);
+                            return binary.Operator switch
+                            {
+                                '+' => checked(left + right),
+                                '-' => checked(left - right),
+                                '*' => checked(left * right),
+                                _ => throw UnsupportedMacro(at, "unsupported const binary operator")
+                            };
+                        }
+                        default:
+                            throw UnsupportedMacro(at, "Const<int> must be a closed scalar AST");
+                    }
+                }
+                catch (OverflowException ex)
+                {
+                    throw new FormatException(
+                        $"NET_MACRO_CONST_OVERFLOW at offset {at}; runtime fallback is forbidden", ex);
+                }
+            }
+            return Visit(expression, 0);
+        }
         private Token Current => tokens[_index];
 
         private bool Take(string value)
@@ -210,6 +347,7 @@ public static class OresParser
 
         public Expression ParseProgram()
         {
+            ParseMacroPrelude();
             bool defined = false, exposed = false;
             while (Current.Text is "define" or "pub")
             {
@@ -308,6 +446,36 @@ public static class OresParser
 
                 throw new FormatException(
                     $"Runtime ownership operation requires typed lowering; unsupported in the .NET scalar backend at offset {at}");
+            }
+            if (IsMacroName(Current.Text) && _index + 1 < tokens.Count &&
+                tokens[_index + 1].Text == "!")
+            {
+                int at = Current.Offset;
+                string name = Current.Text;
+                if (!_macros.TryGetValue(name, out ScalarMacro? macro))
+                    throw UnsupportedMacro(at, $"unresolved macro '{name}'");
+                if (++_macroExpansions > MaxMacroExpansions)
+                    throw UnsupportedMacro(at, "macro expansion count exceeds 128");
+                _index += 2;
+                Expect("(");
+                Expression argument;
+                if (macro.ConstInput)
+                {
+                    if (!Take("const"))
+                        throw UnsupportedMacro(at, "Const<int> macro requires a const argument");
+                    argument = ParseAdd(depth + 1);
+                    Expect(")");
+                    // Materialize a new checked literal in the compiler AST.
+                    // No token-string rewriting, reflection or JIT execution.
+                    return new Literal(EvaluateMacroConst(argument, at));
+                }
+                if (!Take("syntax") || !Take("expr"))
+                    throw UnsupportedMacro(at, "Syntax<Expr> macro requires syntax expr");
+                argument = ParseAdd(depth + 1);
+                Expect(")");
+                // Single call-site AST splice: no generated identifier, and
+                // no copied/replayed ownership or effectful expression.
+                return argument;
             }
             if (Take("+")) return new Unary('+', ParseUnary(depth + 1));
             if (Take("-"))
