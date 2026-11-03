@@ -92,6 +92,8 @@ public sealed class SharedReactorPool : IDisposable
                     if (++slices < 64) continue;
                 }
                 slices = 0;
+                // Drain accepted work after closing or a poll failure.
+                lock (_gate) { if (_closing) continue; }
                 if (Interlocked.CompareExchange(ref _pollOwner, slot, -1) == -1)
                 {
                     try
