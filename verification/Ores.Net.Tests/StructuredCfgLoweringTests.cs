@@ -121,6 +121,44 @@ internal static class StructuredCfgLoweringTests
             }
             """;
         Check(sum, 45, "two loop-carried SSA values sum 0..9");
+        // Genuine type-first readonly bindings in the EXPERIMENTAL structured
+        // source -> verified CFG -> deterministic CIL interpreter path.
+        // This is not a released Windows/Linux Native AOT guest receipt.
+        foreach (var (source, expected, label) in new[] {
+            ("fnc main():int{int x=7;return x;}", 7L, "readonly int literal"),
+            ("fnc main():int{const x=7;return x;}", 7L, "existing constexpr"),
+            ("fnc main():int{const int x=7;return x;}", 7L, "typed constexpr"),
+            ("fnc main():int{const x:int=7;return x;}", 7L, "name-first constexpr"),
+            ("fnc main():int{int x=7;int y=x*3;return y;}", 21L, "readonly SSA dependencies"),
+            ("fnc main():int{int x=7;return x+1;}", 8L, "readonly scalar read"),
+            ("fnc main():int{bool yes=true;if yes{return 42;}else{return 0;}}",
+                42L, "readonly bool flow"),
+            ("fnc main():int{let int x=7;x=8;return x;}", 8L, "existing explicit let")
+        }) Check(source, expected, label);
+        foreach (var (source, label) in new[] {
+            ("fnc main():int{int x=7;x=8;return x;}", "readonly rebinding"),
+            ("fnc main():int{int x=7;int x=8;return x;}", "duplicate local"),
+            ("fnc main():int{int x=7;return x+undefined_name;}", "unknown name"),
+            ("fnc main():int{int x=x+1;return x;}", "self initializer"),
+            ("fnc main():int{int x=true;return x;}", "typed int/bool mismatch"),
+            ("fnc main():int{bool yes=7;return 42;}", "typed bool/int mismatch"),
+            ("fnc main():int{int x;return 42;}", "initializer mandatory")
+        }) Reject(source, label);
+        CheckOverflow(
+            "fnc main():int{int unused=9223372036854775807+1;return 7;}",
+            "unused readonly runtime initializer still traps");
+        // The input is unavailable at compile time inside the helper.
+        // Runtime-readonly must remain a nonconstant local while CIL retains
+        // the helper argument and checked arithmetic, not fold to 42.
+        Check("fnc plus_one(int p):int{int local=p+1;return local;}" +
+                "fnc main():int{return plus_one(41);}",
+            42, "runtime readonly helper argument survives CFG/CIL");
+        Reject("fnc plus_one(int p):int{int local=p+1;local=0;return local;}" +
+                "fnc main():int{return plus_one(41);}",
+            "runtime readonly helper local cannot be reassigned");
+
+
+
         Check(File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
             "structured-bindings42.ores")),
             42, "real const/val/let source through verified CFG and CIL");

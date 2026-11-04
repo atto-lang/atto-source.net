@@ -27,7 +27,7 @@ public sealed record StructuredBinary(int At, StructuredOperator Operator,
 public abstract record StructuredStmt(int Offset);
 // Compile-time const, single-assignment val, and mutable let are distinct
 // source bindings; the experimental structured AST preserves that distinction.
-public enum StructuredBindingKind { Let, Val, Const }
+public enum StructuredBindingKind { Let, Val, Const, Readonly }
 public enum StructuredLocalTypeKind { Struct, Record }
 public sealed record StructuredLocalField(string Name, IrValueType Type);
 public sealed record StructuredLocalTypeDecl(int At, string Name,
@@ -595,8 +595,10 @@ public static class OresStructuredParser
                 //   int x=e;  == const int x=e;
                 // Explicit let is the only rebindable scalar binding.
                 bool typeFirstImmutable = Current.Text is "int" or "bool";
+                // A runtime-initialized readonly scalar is NOT an explicit
+                // compile-time const, even if later optimizers fold its value.
                 StructuredBindingKind kind = typeFirstImmutable
-                    ? StructuredBindingKind.Const
+                    ? StructuredBindingKind.Readonly
                     : Current.Text switch
                     {
                         "let" => StructuredBindingKind.Let,
