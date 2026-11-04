@@ -31,7 +31,7 @@ The `twice!` template is **one exact, identifier-free expression shape**, not ge
 
 The declaration is validated (including when unused) and omitted from runtime AST. `literal!` visits only closed, checked signed-i64 literal/unary/add/subtract/multiply expression AST and emits a new literal node; `identity!` forwards the one caller-owned expression AST. All three forms expand before `OresIrLowering`, the standard verified OresIR, deterministic CIL emitter and statically linked Native AOT host. No runtime macro registry, `Reflection.Emit`, source-string replay, Eval, JIT or generated code execution occurs.
 
-Hard bounds: 8 declarations per translation unit, 128 expansions, 512 visited `Const<int>` AST nodes and maximum evaluation depth 64. Signed overflow fails before CIL publication; unsupported macro parameter/results/bodies, public macros and unresolved macros fail closed. The source size/token/depth limits remain in force. Recursive macro calls cannot exist inside the three accepted declaration bodies.
+Hard bounds: 8 declarations per translation unit, 128 expansions, 512 visited `Const<int>` AST nodes and maximum evaluation depth 64. Macro and parameter names cannot rebind compile-time tags/intrinsics (`const`, `syntax`, `expr`, `Const`, `Syntax`, `Expr`, `quote`, `unquote`, `eval`, `rt` or the scalar `int` type name). Signed overflow fails before CIL publication; unsupported macro parameter/results/bodies, public macros and unresolved macros fail closed. The source size/token/depth limits remain in force. Recursive macro calls cannot exist inside the three accepted declaration bodies.
 
 **Not supported:** name generation/hygiene, checked explicit capture, templates beyond exact AST identity / literal quotation / the two-unquote closed-literal addition, declarations / imports / public macro exports, cross-module cache identities, macro argument types other than `Const<int>` or `Syntax<Expr>`, general `comptime`, float/bool/String/Symbol constants, actors, ownership-aware side-effect duplication, and expanded structured/linked CFG compilation. The experimental structured frontend and linked-import scanner explicitly reject all macro declarations and invocations, including the scalar and typed-template positives, until they have separately proven typed AST expansion.
 
@@ -52,6 +52,7 @@ newline and whose successful exit status is **0**; Native AOT release layouts;
 and **eight** negative fixtures times four CLI commands = **32** rejection
 checks with no output artifacts. LLVM's native guest currently uses exit-status
 42 instead; these host ABIs are distinct but their guest integer values agree.
+The gate also requires the exact head supplied by CI, clean tracked source before/after, five positive and 32 negative receipts, an exact expected CLI rejection exit code (1), no output files from an isolated negative command working directory, and immutable compiler/generated-CIL hashes during every negative case. The workflow covers changes to compiler, runtime, host, fixtures and build helpers rather than only the macro parser.
 The shell gate is **authored, not executed**. It must run within the source
 repository or only on an independently authorized private destination.
 

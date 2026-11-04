@@ -147,6 +147,14 @@ public static class ScalarMacroParityTests
             Main("42"), "NET_MACRO_EXPANDER_REQUIRED", "unsupported macro helper body");
         Reject("define macro bad(Syntax<Expr> x, Syntax<Expr> y) -> Syntax<Expr> { return x; }" +
             Main("42"), "NET_MACRO_EXPANDER_REQUIRED", "multi-parameter expander unavailable");
+        Reject("define macro syntax(Syntax<Expr> x) -> Syntax<Expr> { return x; }" +
+            Main("42"), "NET_MACRO_EXPANDER_REQUIRED", "syntax tag is reserved, even for unused macros");
+        Reject("define macro identity(Syntax<Expr> const) -> Syntax<Expr> { return const; }" +
+            Main("42"), "NET_MACRO_EXPANDER_REQUIRED", "const tag must not be rebound as a macro parameter");
+        Reject("define macro rt(Syntax<Expr> x) -> Syntax<Expr> { return x; }" +
+            Main("42"), "NET_MACRO_EXPANDER_REQUIRED", "runtime ownership prefix must not name a macro");
+        Reject("define macro identity(Syntax<Expr> Expr) -> Syntax<Expr> { return Expr; }" +
+            Main("42"), "NET_MACRO_EXPANDER_REQUIRED", "typed syntax names must not be macro parameters");
         Reject("define macro eval(Syntax<Expr> x) -> Syntax<Expr> { return x; }" +
             Main("42"), "NET_MACRO_EXPANDER_REQUIRED", "eval intrinsic must not be rebound");
         Reject(TwiceMacro + Main("twice!(syntax expr 20 + 1)"),

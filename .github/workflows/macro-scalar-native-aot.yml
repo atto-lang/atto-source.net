@@ -2,13 +2,22 @@ name: Macro scalar exact-source Native AOT
 
 on:
   pull_request:
+    # Any compiler, runtime, host, fixture or build-helper change can
+    # invalidate a previous successful CIL/AOT receipt.
     paths:
-      - 'compiler/Ores.Net.Compiler.Core/Syntax.cs'
-      - 'compiler/Ores.Net.Compiler.Core/StructuredSource.cs'
-      - 'verification/Ores.Net.Tests/**'
-      - 'verification/fixtures/macro-*.atto'
-      - 'verification/verify-macro-scalar-native-aot.sh'
+      - 'compiler/**'
+      - 'runtime/**'
+      - 'host/**'
+      - 'verification/**'
+      - 'scripts/**'
+      - 'contracts/**'
+      - 'examples/**'
+      - 'global.json'
+      - 'Directory.*.props'
+      - 'Directory.*.targets'
+      - 'NuGet.Config'
       - '.github/workflows/macro-scalar-native-aot.yml'
+      - '.github/actions/**'
   workflow_dispatch:
 
 permissions:
@@ -19,6 +28,17 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
+      - name: Deny cross-repository pull-request checkout before reading source
+        shell: bash
+        env:
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          SOURCE_REPO: ${{ github.repository }}
+        run: |
+          set -Eeuo pipefail
+          if [[ "$HEAD_REPO" != "$SOURCE_REPO" ]]; then
+            echo "MACRO_AOT_NOT_AUTHORIZED cross-repository PR source is not an approved CI input" >&2
+            exit 1
+          fi
       - name: Checkout exact PR head without persisted credentials
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -43,4 +63,6 @@ jobs:
           sudo apt-get install -y clang zlib1g-dev
       - name: Execute compiler tests and five independent Native AOT macro guests
         shell: bash
+        env:
+          MACRO_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: bash verification/verify-macro-scalar-native-aot.sh

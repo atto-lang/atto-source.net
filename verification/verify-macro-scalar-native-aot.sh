@@ -10,7 +10,16 @@ cd "$root"
 for tool in dotnet git file readelf realpath cmp sha256sum timeout; do
   command -v "$tool" >/dev/null || { echo "MACRO_AOT_NOT_EXECUTED missing $tool" >&2; exit 2; }
 done
-printf 'MACRO_AOT_SOURCE_HEAD=%s\n' "$(git rev-parse HEAD)"
+actual_head="$(git rev-parse HEAD)"
+if [[ -n "${MACRO_EXPECTED_HEAD:-}" && "$actual_head" != "$MACRO_EXPECTED_HEAD" ]]; then
+  echo "MACRO_AOT_NOT_EXECUTED exact-head mismatch expected=$MACRO_EXPECTED_HEAD actual=$actual_head" >&2
+  exit 2
+fi
+if ! git diff --quiet -- . || ! git diff --cached --quiet -- .; then
+  echo "MACRO_AOT_NOT_EXECUTED dirty tracked source before tests" >&2
+  exit 2
+fi
+printf 'MACRO_AOT_SOURCE_HEAD=%s\n' "$actual_head"
 printf 'MACRO_AOT_SOURCE_TREE=%s\n' "$(git rev-parse HEAD^{tree})"
 printf 'MACRO_AOT_DOTNET_SDK=%s\n' "$(dotnet --version)"
 
@@ -31,6 +40,7 @@ trap 'rm -rf -- "$tmp"' EXIT
 
 # The first guest publish builds the compiler itself with Native AOT.
 # Each app is independently linked as strict Native AOT from checked CIL.
+positive_passes=0
 for name in "${positive[@]}"; do
   source="$source_root/$name"
   case "$name" in
@@ -65,10 +75,17 @@ for name in "${positive[@]}"; do
     "$(sha256sum "$root/artifacts/compiler/linux-x64/oresnet" | cut -d' ' -f1)" \
     "$(sha256sum "$root/artifacts/generated/linux-x64/OresGenerated.dll" | cut -d' ' -f1)" \
     "$(sha256sum "$guest" | cut -d' ' -f1)"
+  positive_passes=$((positive_passes + 1))
 done
 
 compiler="$root/artifacts/compiler/linux-x64/oresnet"
 bash verification/assert-linux-native-release.sh "$compiler"
+generated_cil="$root/artifacts/generated/linux-x64/OresGenerated.dll"
+[[ -s "$generated_cil" ]] || { echo "MACRO_AOT_NOT_EXECUTED missing final CIL" >&2; exit 2; }
+baseline_cil_sha="$(sha256sum "$generated_cil" | cut -d' ' -f1)"
+baseline_compiler_sha="$(sha256sum "$compiler" | cut -d' ' -f1)"
+negative_work="$tmp/rejection-work"
+negative_passes=0
 
 # Failure must happen before artifact publication, on the real released
 # Native AOT compiler binary, for check/compile/source-emission commands.
@@ -83,6 +100,8 @@ for name in "${negative[@]}"; do
     *) exit 2 ;;
   esac
   for command in check compile emit-csharp emit-fsharp; do
+    rm -rf -- "$negative_work"
+    mkdir -p -- "$negative_work"
     rm -f -- "$tmp/OresGenerated.dll" "$tmp/Source.cs" "$tmp/Source.fs" "$tmp/stdout" "$tmp/stderr"
     case "$command" in
       check) invocation=("$compiler" check "$source") ;;
@@ -91,17 +110,14 @@ for name in "${negative[@]}"; do
       emit-fsharp) invocation=("$compiler" emit-fsharp "$source" --out "$tmp/Source.fs") ;;
     esac
     set +e
-    timeout --signal=TERM --kill-after=2s 20s "${invocation[@]}" >"$tmp/stdout" 2>"$tmp/stderr"
+    ( cd -- "$negative_work"; timeout --signal=TERM --kill-after=2s 20s "${invocation[@]}" ) >"$tmp/stdout" 2>"$tmp/stderr"
     status=$?
     set -e
-    if [[ $status -eq 0 ]]; then
-      echo "MACRO_AOT_REJECTION_FAILED command=$command fixture=$name (unexpected success)" >&2
-      exit 1
-    fi
-    # A timed-out or killed compiler is NEVER a successful rejection, even
-    # when it wrote an expected diagnostic before hanging.
-    if [[ $status -eq 124 || $status -eq 137 || $status -eq 143 ]]; then
-      echo "MACRO_AOT_NOT_EXECUTED command=$command fixture=$name timeout_or_killed=$status" >&2
+    # The production CLI returns exactly 1 for a typed FormatException.
+    # Usage errors, runtime crashes, timeouts and missing executables are
+    # infrastructure/code failures, never successful fail-closed rejections.
+    if [[ $status -ne 1 ]]; then
+      echo "MACRO_AOT_REJECTION_FAILED command=$command fixture=$name unexpected_status=$status" >&2
       exit 1
     fi
     if ! grep -Fq -- "$needle" "$tmp/stderr"; then
@@ -110,12 +126,28 @@ for name in "${negative[@]}"; do
       exit 1
     fi
     if [[ -s "$tmp/stdout" ]] || [[ -e "$tmp/OresGenerated.dll" ]] || \
-       [[ -e "$tmp/Source.cs" ]] || [[ -e "$tmp/Source.fs" ]]; then
+       [[ -e "$tmp/Source.cs" ]] || [[ -e "$tmp/Source.fs" ]] || \
+       [[ -n "$(find "$negative_work" -mindepth 1 -print -quit)" ]]; then
       echo "MACRO_AOT_LEAKED_OUTPUT command=$command fixture=$name" >&2
       exit 1
     fi
+    if [[ "$(sha256sum "$generated_cil" | cut -d' ' -f1)" != "$baseline_cil_sha" ]] || \
+       [[ "$(sha256sum "$compiler" | cut -d' ' -f1)" != "$baseline_compiler_sha" ]]; then
+      echo "MACRO_AOT_MUTATED_RELEASE command=$command fixture=$name" >&2
+      exit 1
+    fi
+    negative_passes=$((negative_passes + 1))
     printf 'MACRO_AOT_REJECTION_PASS command=%s fixture=%s\n' "$command" "$name"
   done
 done
 
+if [[ $positive_passes -ne 5 || $negative_passes -ne 32 ]]; then
+  echo "MACRO_AOT_INCOMPLETE expected_positives=5 actual=$positive_passes expected_rejections=32 actual=$negative_passes" >&2
+  exit 1
+fi
+if ! git diff --quiet -- . || ! git diff --cached --quiet -- .; then
+  echo "MACRO_AOT_MUTATED_TRACKED_SOURCE" >&2
+  exit 1
+fi
+printf 'MACRO_AOT_COUNTS guests=%s rejections=%s\n' "$positive_passes" "$negative_passes"
 echo "MACRO_AOT_EXACT_SOURCE_FULL_GATE_PASS"
