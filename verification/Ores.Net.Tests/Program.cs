@@ -136,6 +136,32 @@ Require(OresParser.Parse("fnc main():int{return 42;} // define virtual actor X")
 Require(OresStructuredParser.Parse("fnc main():int{return 42;} // define state container X") is not null,
     "structured comments must not become declarations");
 
+// AttoLang guard is reserved, but .NET source CFG/ownership effects are
+// not implemented. Both parser entrypoints must deny it explicitly before
+// CIL/NativeAOT emission, not interpret it as a mutable local or function.
+foreach (var guardSource in new[] {
+    "fnc main():int{guard true{return 1;}return 42;}",
+    "fnc main():int{guard 1>0{return 1;}return 42;}",
+    "fnc main():int{guard false{return 1;}return 42;}"
+})
+{
+    RejectDiagnostic(() => OresParser.Parse(guardSource),
+        "GUARD_BACKEND_UNSUPPORTED", "shipping scalar guard admission");
+    RejectDiagnostic(() => OresStructuredParser.Parse(guardSource),
+        "GUARD_BACKEND_UNSUPPORTED", "structured CFG guard admission");
+}
+RejectDiagnostic(
+    () => OresStructuredParser.Parse(
+        "fnc main():int{if true{guard false{return 1;}}else{return 2;}return 42;}"),
+    "GUARD_BACKEND_UNSUPPORTED", "nested guard is not executed as plain if");
+Reject(() => OresStructuredParser.Parse("fnc main():int{let int guard=42;return 42;}"),
+    "guard cannot be reused as a binding name");
+Require(OresParser.Parse("fnc main():int{return 42;} // guard is comment") is Literal,
+    "guard in a comment must not trigger source admission");
+Require(OresStructuredParser.Parse(
+    "fnc main():int{return 42;} // guard is comment") is not null,
+    "structured parser must ignore guard in comments");
+
 // Shipping scalar parser has no class-method CIL/Native AOT lowering.
  // It must reject the exact Java receiver-parity sources before emission,
  // independently of the experimental structured parser's diagnostic gate.

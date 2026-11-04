@@ -236,6 +236,9 @@ public static class OresParser
             if (!Take(":")) Expect("->");
             Expect("int");
             Expect("{");
+            if (Current.Text == "guard")
+                throw new FormatException(
+                    $"GUARD_BACKEND_UNSUPPORTED: early-exit CFG and ownership lowering required at offset {Current.Offset}");
             Expect("return");
             var expression = ParseAdd(0);
             Expect(";");
