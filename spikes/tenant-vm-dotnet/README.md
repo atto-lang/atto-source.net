@@ -22,7 +22,7 @@ cp /path/to/libtenantvm.so out/
 LD_LIBRARY_PATH=out ./out/Spike /path/to/hostile_bounds/guest.so <sha256 from its manifest.json>
 ```
 
-What it shows, on Ubuntu 24.04 arm64 with .NET 8, 2026-11-03: 1000 VMs and 10,000 actors, with correct
-state per tenant, while the CLR ran 545 forced GCs and caught about 1.09M managed null faults on another
-thread. Trap, out-of-range read and spin each ended one VM. A wrong digest is refused. NativeAOT passed
-on the previous ABI version and was not rerun on this one. This has not run on macOS or x86_64, or in CI.
+What it shows, on Ubuntu 24.04 arm64 with .NET 8, 2026-11-03, under both CoreCLR JIT and NativeAOT: 1000 VMs
+and 10,000 actors, with correct state per tenant, while the CLR ran 751 and 1196 forced GCs and caught 1.5M
+and 2.4M managed null faults on another thread. Trap, out-of-range read and spin each ended one VM. A wrong
+digest is refused. This has not run on macOS or x86_64, or in CI.
