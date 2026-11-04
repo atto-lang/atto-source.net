@@ -195,6 +195,19 @@ public static class ScalarMacroParityTests
             "NET_MACRO_EXPANDER_REQUIRED", "argument category must be Const<int>");
         Reject(Main("missing!(syntax expr 42)"),
             "NET_MACRO_EXPANDER_REQUIRED", "undefined macros do not become runtime calls");
+        // Reserved intrinsic spellings are *not* valid macro declarations,
+        // but an attempted bang call must still take the fail-closed compiler
+        // macro path rather than an ordinary scalar value/call fallback.
+        foreach (string spelling in new[] { "quote", "unquote", "eval", "syntax", "const",
+                                             "rt", "main", "Expr", "Syntax", "Const" })
+        {
+            Reject(Main(spelling + "!(syntax expr 42)"),
+                "NET_MACRO_EXPANDER_REQUIRED",
+                "reserved macro-like bang invocation " + spelling);
+        }
+        Reject(Main("42!(syntax expr 42)"),
+            "NET_MACRO_EXPANDER_REQUIRED",
+            "non-identifier bang invocation cannot bypass compile-time admission");
         Reject(LiteralMacro + Main("literal!(const dynamic_name)"),
             "Expected integer", "dynamic Const<int> must fail before CIL");
         Reject(LiteralMacro + Main("literal!(const 9223372036854775807 + 1)"),
