@@ -599,6 +599,9 @@ public static class OresStructuredParser
                 return (new StructuredLocalTypeDecl(at, name, kind,
                     Array.AsReadOnly(fields.ToArray())), false);
             }
+            if (Current.Text == "guard")
+                throw new FormatException(
+                    $"GUARD_BACKEND_UNSUPPORTED: early-exit CFG and ownership lowering required at offset {at}");
             if (Take("return"))
             {
                 var value = Expr(depth + 1);
@@ -691,7 +694,7 @@ public static class OresStructuredParser
                     or "define" or "pub" or "fnc" or "const" or "val" or "final"
                     or "struct" or "record" or "class" or "actor"
                     or "module" or "import" or "from" or "as" or "end"
-                    or "routine" or "async" or "isoactor")
+                    or "routine" or "async" or "isoactor" or "guard")
                 throw new FormatException($"Invalid identifier at offset {at}");
             index++;
             return name;
