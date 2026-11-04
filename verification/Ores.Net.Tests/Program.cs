@@ -49,6 +49,11 @@ Require(OresStructuredParser.Parse(
     "fnc main():int{/* define activity Fake as */ // define workflow Fake as\n return 42; }")
     .Body.Count == 1, "comments mentioning durable declarations must not trigger capability rejection");
 
+var durableM0SourcePath = Path.Combine(AppContext.BaseDirectory,
+    "contracts", "durable-m0", "v1", "checkout.atto");
+RejectDiagnostic(() => OresStructuredParser.Parse(File.ReadAllText(durableM0SourcePath)),
+    "DURABLE_M0_BACKEND_UNSUPPORTED",
+    "shared Java/LLVM/.NET/Wasm declaration corpus must fail before unimplemented CIL lowering");
 // Shared canonical manifest *reference*, not .NET compiler manifestation:
 // LLVM CMake, .NET System.Text.Json, Wasm Node and conformance Node load
 // these exact bytes, never a copied claim that a backend emitted them.
