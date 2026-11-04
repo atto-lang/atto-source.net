@@ -29,7 +29,7 @@ internal static class AttoXpScalarParityTests
     {
         var root = Path.Combine(AppContext.BaseDirectory, "contracts", "attoxp-scalar-v1");
         Need(Directory.Exists(root), "missing scalar corpus");
-        var files = Directory.EnumerateFileSystemEntries(root).Select(Path.GetFileName)
+        var files = Directory.EnumerateFileSystemEntries(root).Select(path => Path.GetFileName(path) ?? "")
             .ToHashSet(StringComparer.Ordinal);
         var allowed = Cases.Select(c => c.File).Append("cases.json")
             .ToHashSet(StringComparer.Ordinal);
