@@ -198,7 +198,8 @@ public static class OresParser
     {
         // Macro definitions are compiler-only. Neither these declarations nor
         // their arguments appear in OresIR/CIL, and no runtime expansion exists.
-        private sealed record ScalarMacro(string Name, string Parameter, bool ConstInput);
+        private enum MacroKind { ConstIntQuote, SyntaxExprIdentity, SyntaxExprLiteralTwice }
+        private sealed record ScalarMacro(string Name, string Parameter, MacroKind Kind);
         private readonly Dictionary<string, ScalarMacro> _macros = new(StringComparer.Ordinal);
         private int _index;
         private int _macroExpansions;
@@ -214,12 +215,17 @@ public static class OresParser
             foreach (char ch in word)
                 if (!(ch is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_'))
                     return false;
-            return word is not ("define" or "pub" or "macro" or "return" or "fnc" or "main" or "quote" or "unquote");
+            return word is not ("define" or "pub" or "macro" or "return" or "fnc" or "main" or "quote" or "unquote" or "eval");
         }
 
         // Closed scalar stage-0 subset also accepted by LLVM #1026:
         //   define macro literal(Const<int> x) -> Syntax<Expr> { return quote(x); }
         //   define macro identity(Syntax<Expr> x) -> Syntax<Expr> { return x; }
+        //   define macro twice(Syntax<Expr> x) -> Syntax<Expr> {
+        //       return quote(unquote(x) + unquote(x)); }
+        // Only closed integer literal arguments can be repeated. This avoids
+        // pre-typecheck ownership/effect amplification and never emits runtime
+        // source parsing, JIT, dynamic code or reflection.
         // Validate even unused macros: unsupported bodies must never be erased
         // silently by an AOT compiler.
         // Malformed/unsupported macro signatures and bodies have one stable
@@ -286,15 +292,32 @@ public static class OresParser
                 ExpectMacro(")");
                 ExpectMacro("->"); ExpectMacro("Syntax"); ExpectMacro("<"); ExpectMacro("Expr"); ExpectMacro(">");
                 ExpectMacro("{"); ExpectMacro("return");
+                MacroKind kind;
                 if (constInput)
                 {
                     ExpectMacro("quote"); ExpectMacro("("); ExpectMacro(parameter); ExpectMacro(")");
+                    kind = MacroKind.ConstIntQuote;
                 }
-                else ExpectMacro(parameter);
+                else if (Take("quote"))
+                {
+                    // Deliberately narrow identifier-free typed template:
+                    // exactly two direct, same-parameter unquotes with '+'.
+                    ExpectMacro("(");
+                    ExpectMacro("unquote"); ExpectMacro("("); ExpectMacro(parameter); ExpectMacro(")");
+                    ExpectMacro("+");
+                    ExpectMacro("unquote"); ExpectMacro("("); ExpectMacro(parameter); ExpectMacro(")");
+                    ExpectMacro(")");
+                    kind = MacroKind.SyntaxExprLiteralTwice;
+                }
+                else
+                {
+                    ExpectMacro(parameter);
+                    kind = MacroKind.SyntaxExprIdentity;
+                }
                 ExpectMacro(";"); ExpectMacro("}");
                 if (_macros.Count >= MaxMacroDeclarations)
                     throw UnsupportedMacro(at, "macro declaration budget exceeded");
-                if (!_macros.TryAdd(name, new ScalarMacro(name, parameter, constInput)))
+                if (!_macros.TryAdd(name, new ScalarMacro(name, parameter, kind)))
                     throw UnsupportedMacro(at, "duplicate macro declaration");
             }
         }
@@ -469,7 +492,7 @@ public static class OresParser
                 _index += 2;
                 Expect("(");
                 Expression argument;
-                if (macro.ConstInput)
+                if (macro.Kind == MacroKind.ConstIntQuote)
                 {
                     if (!Take("const"))
                         throw UnsupportedMacro(at, "Const<int> macro requires a const argument");
@@ -481,8 +504,31 @@ public static class OresParser
                 }
                 if (!Take("syntax") || !Take("expr"))
                     throw UnsupportedMacro(at, "Syntax<Expr> macro requires syntax expr");
+                if (macro.Kind == MacroKind.SyntaxExprLiteralTwice &&
+                    IsMacroName(Current.Text) &&
+                    (_index + 1 >= tokens.Count || tokens[_index + 1].Text != "!"))
+                    throw UnsupportedMacro(at, "repeated unquote requires a closed integer literal; cannot duplicate a name or call before ownership analysis");
                 argument = ParseAdd(depth + 1);
                 Expect(")");
+                if (macro.Kind == MacroKind.SyntaxExprLiteralTwice)
+                {
+                    // This pre-typecheck expander cannot prove name copyability
+                    // or the absence of effects/ownership transfers. Only a
+                    // closed integer literal is safe to repeat. Both AST
+                    // occurrences MUST have fresh identity (no DAG alias).
+                    if (argument is not Literal number)
+                        throw UnsupportedMacro(at, "repeated unquote requires a closed integer literal; cannot duplicate effects or ownership");
+                    try
+                    {
+                        _ = checked(number.Value + number.Value);
+                    }
+                    catch (OverflowException ex)
+                    {
+                        throw new FormatException(
+                            $"NET_MACRO_CONST_OVERFLOW at offset {at}; runtime fallback is forbidden", ex);
+                    }
+                    return new Binary('+', new Literal(number.Value), new Literal(number.Value));
+                }
                 // Single call-site AST splice: no generated identifier, and
                 // no copied/replayed ownership or effectful expression.
                 return argument;
