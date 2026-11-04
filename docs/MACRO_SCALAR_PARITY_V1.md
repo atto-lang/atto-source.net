@@ -27,7 +27,10 @@ Hard bounds: 8 declarations per translation unit, 128 expansions, 512 visited `C
 **Not supported:** name generation/hygiene, checked explicit capture, templates beyond exact AST identity / literal quotation, declarations / imports / public macro exports, cross-module cache identities, macro argument types other than `Const<int>` or `Syntax<Expr>`, general `comptime`, float/bool/String/Symbol constants, actors, ownership-aware side-effect duplication, and expanded structured/linked CFG compilation. The experimental structured frontend and linked-import scanner explicitly reject all macro declarations and invocations, including the two scalar positives, until they have separately proven typed AST expansion.
 
 **Exact-source execution gate prepared:** `bash verification/verify-macro-scalar-native-aot.sh`
-uses the seven new `.atto` fixtures under `verification/fixtures/` and checks
+uses all seven byte-identical shared stage-0 `.atto` fixtures from
+[common-source PR #218](https://github.com/ores-truffle-oreslang/oreslang-common-source/pull/218)
+plus a .NET stage-0-specific public-macro rejection fixture under
+`verification/fixtures/`, and checks
 the production compiler's Release test program, independently linked Linux
 Native AOT guest binaries whose stdout is exactly the bytes `42` followed by a newline and exit status is 0 for identity, literal and nested macros,
 Native AOT release layouts, compile-negative diagnostics and absence of
