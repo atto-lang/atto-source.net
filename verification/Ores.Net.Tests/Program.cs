@@ -49,6 +49,54 @@ Require(OresStructuredParser.Parse(
     "fnc main():int{/* define activity Fake as */ // define workflow Fake as\n return 42; }")
     .Body.Count == 1, "comments mentioning durable declarations must not trigger capability rejection");
 
+// Shared canonical manifest *reference*, not .NET compiler manifestation:
+// LLVM CMake, .NET System.Text.Json, Wasm Node and conformance Node load
+// these exact bytes, never a copied claim that a backend emitted them.
+var durableM0Path = Path.Combine(AppContext.BaseDirectory,
+    "contracts", "durable-m0", "v1", "manifest-v1.json");
+var durableM0ShaPath = Path.Combine(AppContext.BaseDirectory,
+    "contracts", "durable-m0", "v1", "manifest-v1.sha256");
+byte[] durableM0Bytes = File.ReadAllBytes(durableM0Path);
+const string durableM0PinnedSha = "aa1eed7637b99d8c270c3cd7a3f15ab83acf0463b00ebaa58f0f52c8dd525784";
+var durableM0ActualSha = Convert.ToHexString(
+    System.Security.Cryptography.SHA256.HashData(durableM0Bytes)).ToLowerInvariant();
+Require(durableM0Bytes.Length == 1671 &&
+    durableM0ActualSha == durableM0PinnedSha &&
+    File.ReadAllText(durableM0ShaPath).Trim() == durableM0PinnedSha,
+    "DURABLE_M0_MANIFEST_DRIFT: candidate reference bytes, size or SHA-256 changed");
+using (var durableM0Doc = System.Text.Json.JsonDocument.Parse(durableM0Bytes))
+{
+    var root = durableM0Doc.RootElement;
+    Require(root.GetProperty("format").GetString() == "atto.durable.manifest.v1",
+        "durable M0 reference manifest version");
+    var activity = root.GetProperty("activities")[0];
+    Require(activity.GetProperty("id").GetString() == "Billing.PaymentProvider",
+        "activity target must be module-qualified");
+    var workflow = root.GetProperty("workflows")[0];
+    Require(workflow.GetProperty("id").GetString() == "Billing.Checkout",
+        "workflow target must be module-qualified");
+    var commands = workflow.GetProperty("commands");
+    Require(commands.GetArrayLength() == 3,
+        "durable M0 reference must preserve three ordered history commands");
+    for (int step = 0; step < commands.GetArrayLength(); step++)
+        Require(commands[step].GetProperty("order").GetInt32() == step,
+            "durable M0 history order must be dense and stable");
+    Require(commands[0].GetProperty("target").GetString() == "Billing.PaymentProvider.charge",
+        "durable activity call must have canonical qualified target");
+    Require(workflow.GetProperty("queries")[0].GetProperty("endpoint").GetString() == "status",
+        "read-only query must remain outside ordered history");
+    byte[] reencoded = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(root);
+    Require(reencoded.AsSpan().SequenceEqual(durableM0Bytes),
+        "System.Text.Json must preserve exact canonical candidate bytes");
+}
+byte[] durableM0Mutation = (byte[])durableM0Bytes.Clone();
+durableM0Mutation[0] ^= 1;
+Require(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+    durableM0Mutation)).ToLowerInvariant() != durableM0PinnedSha,
+    "mutated manifest must not retain approved source-free reference digest");
+Console.WriteLine("DURABLE_M0_REFERENCE_ONLY|sha256=" + durableM0PinnedSha +
+    "|bytes=1671|not_guest_execution");
+
 // Opaque top types and value-producing conditionals are language-reserved,
  // but this i64-only bootstrap has no tagged dynamic-value ABI or typed CFG
  // lowering for them yet. Reject before OresIR/CIL emission.
