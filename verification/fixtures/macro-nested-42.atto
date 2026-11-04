@@ -4,6 +4,7 @@ define macro literal(Const<int> value) -> Syntax<Expr> {
 define macro identity(Syntax<Expr> value) -> Syntax<Expr> {
     return value;
 }
+
 pub fnc main() -> int {
     return identity!(syntax expr literal!(const 6 * 7));
 }
