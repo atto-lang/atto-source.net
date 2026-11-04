@@ -311,3 +311,22 @@ This integration branch is unverified until exact-head .NET 10 managed
 tests and actual Linux/Windows Native AOT publish/execution run with
 nonempty CI job steps. Its parents are the independent #185 structured
 compiler and #200 Native AOT release branches.
+
+## Untrusted actor compilation policy (candidate; not implemented)
+
+AttoLang's trust level does not determine whether code is JIT, AOT or
+interpreted. **Untrusted actors MAY be JIT-compiled** when an independently
+reviewed host enforces isolation, memory/CPU/mailbox quotas, worker termination,
+capability restrictions and generation-fenced lifetime. See the common
+[candidate execution contract](https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/pull/332).
+
+The **current shipping .NET compiler/host remains NativeAOT only** and
+supports only its documented arithmetic subset. This does not imply that its
+NativeAOT image supports dynamic CIL loading. Two independent future paths:
+(1) emit AttoLang CIL for a **managed CLR JIT process worker** with OS
+sandboxing and reliable process termination; (2) compile AttoLang to Wasm and
+embed an **independent Wasm JIT engine** under a NativeAOT supervisor/worker.
+Neither path is implemented or conformance-certified by this README.
+
+Preserve direct CIL generation for .NET interoperability. Never depend on
+Thread.Abort or treat an AssemblyLoadContext as hostile-code isolation.
