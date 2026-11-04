@@ -120,6 +120,16 @@ public static class OresStructuredParser
         while (true)
         {
             var token = lexer.Read();
+            // Durable M0 is metadata-only in the Java compiler. Never let
+            // activity/workflow declarations silently reach scalar CIL lowering
+            // before a typed history manifest, replay ABI and ownership gate exist.
+            // Tokens are already comment/string-aware; do not regex raw source.
+            if ((token.Text is "activity" or "workflow") && tokens.Count > 0 &&
+                (tokens[^1].Text == "define" ||
+                 (tokens[^1].Text == "pub" && tokens.Count > 1 &&
+                  tokens[^2].Text == "define")))
+                throw new FormatException(
+                    $"DURABLE_M0_BACKEND_UNSUPPORTED: .NET durable {token.Text} requires versioned manifest and replay lowering at offset {token.Offset}");
             // The scalar bootstrap does not have class/actor dispatch or
             // ownership-aware lexical closures. Refuse these at source admission
             // with a stable capability diagnostic, not an accidental parse error.
