@@ -19,8 +19,12 @@ dotnet run --project "$test_project" -c Release
 echo "MACRO_AOT_HOST_TESTS_PASS"
 
 source_root="$root/verification/fixtures"
-declare -a positive=(macro-literal-42.atto macro-identity-42.atto macro-nested-42.atto)
-declare -a negative=(macro-overflow-reject.atto macro-public-reject.atto macro-wrong-kind-reject.atto macro-runtime-const-reject.atto macro-unresolved-reject.atto)
+declare -a positive=(macro-literal-42.atto macro-identity-42.atto macro-nested-42.atto
+    macro-template-twice-42.atto macro-template-twice-nested-42.atto)
+declare -a negative=(macro-overflow-reject.atto macro-public-reject.atto macro-wrong-kind-reject.atto
+    macro-runtime-const-reject.atto macro-unresolved-reject.atto
+    macro-template-twice-name-reject.atto macro-template-twice-composite-reject.atto
+    macro-template-twice-overflow-reject.atto)
 
 tmp="$(mktemp -d)"
 trap 'rm -rf -- "$tmp"' EXIT
@@ -33,6 +37,8 @@ for name in "${positive[@]}"; do
     macro-literal-42.atto) dest=artifacts/macro-literal ;;
     macro-identity-42.atto) dest=artifacts/macro-identity ;;
     macro-nested-42.atto) dest=artifacts/macro-nested ;;
+    macro-template-twice-42.atto) dest=artifacts/macro-template-twice ;;
+    macro-template-twice-nested-42.atto) dest=artifacts/macro-template-twice-nested ;;
     *) echo "unexpected macro fixture" >&2; exit 2 ;;
   esac
   bash scripts/publish-linux.sh "$source" "$dest"
@@ -69,8 +75,9 @@ bash verification/assert-linux-native-release.sh "$compiler"
 for name in "${negative[@]}"; do
   source="$source_root/$name"
   case "$name" in
-    macro-overflow-reject.atto) needle=NET_MACRO_CONST_OVERFLOW ;;
-    macro-public-reject.atto|macro-wrong-kind-reject.atto|macro-unresolved-reject.atto)
+    macro-overflow-reject.atto|macro-template-twice-overflow-reject.atto)
+      needle=NET_MACRO_CONST_OVERFLOW ;;
+    macro-public-reject.atto|macro-wrong-kind-reject.atto|macro-unresolved-reject.atto|macro-template-twice-name-reject.atto|macro-template-twice-composite-reject.atto)
       needle=NET_MACRO_EXPANDER_REQUIRED ;;
     macro-runtime-const-reject.atto) needle="Expected integer" ;;
     *) exit 2 ;;
