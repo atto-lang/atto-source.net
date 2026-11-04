@@ -6,6 +6,12 @@ using System.Threading;
 
 namespace Ores.Net.Runtime;
 
+/// <summary>
+/// Delivery policies exposed by the .NET runtime substrate.
+/// Reliable is the only candidate mapping to portable pub/sub v1.
+/// Latest and Lossy are explicit .NET extensions and cannot establish
+/// portable-core parity without a separately versioned extension contract.
+/// </summary>
 public enum ActorTopicDeliveryPolicy
 {
     Reliable,
@@ -30,6 +36,11 @@ public readonly record struct ActorPubSubDelivery<T>(ulong Sequence, T Value);
 
 /// <summary>
 /// NativeAOT-safe, in-process ActorGroup/pub-sub admission substrate.
+///
+/// Portable-v1 alignment is intentionally narrower than this host API:
+/// only Reliable + atomic all-recipient TryPublish is a portable-core
+/// candidate. Latest/Lossy behavior is backend extension surface, and this
+/// host implementation is not source-level or NativeAOT guest evidence.
 ///
 /// This is runtime infrastructure, not source-level Topic&lt;T&gt; lowering.
 /// General topic handles cannot impersonate host/supervisor publication.
