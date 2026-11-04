@@ -29,11 +29,13 @@ echo "MACRO_AOT_HOST_TESTS_PASS"
 
 source_root="$root/verification/fixtures"
 declare -a positive=(macro-literal-42.atto macro-identity-42.atto macro-nested-42.atto
-    macro-template-twice-42.atto macro-template-twice-nested-42.atto)
+    macro-template-twice-42.atto macro-template-twice-nested-42.atto
+    macro-arithmetic-42.atto macro-identity-expression-42.atto)
 declare -a negative=(macro-overflow-reject.atto macro-public-reject.atto macro-wrong-kind-reject.atto
     macro-runtime-const-reject.atto macro-unresolved-reject.atto
     macro-template-twice-name-reject.atto macro-template-twice-composite-reject.atto
-    macro-template-twice-overflow-reject.atto)
+    macro-template-twice-overflow-reject.atto
+    macro-unused-template-mismatch-reject.atto macro-unary-overflow-reject.atto)
 
 tmp="$(mktemp -d)"
 trap 'rm -rf -- "$tmp"' EXIT
@@ -49,6 +51,8 @@ for name in "${positive[@]}"; do
     macro-nested-42.atto) dest=artifacts/macro-nested ;;
     macro-template-twice-42.atto) dest=artifacts/macro-template-twice ;;
     macro-template-twice-nested-42.atto) dest=artifacts/macro-template-twice-nested ;;
+    macro-arithmetic-42.atto) dest=artifacts/macro-arithmetic ;;
+    macro-identity-expression-42.atto) dest=artifacts/macro-identity-expression ;;
     *) echo "unexpected macro fixture" >&2; exit 2 ;;
   esac
   bash scripts/publish-linux.sh "$source" "$dest"
@@ -92,9 +96,9 @@ negative_passes=0
 for name in "${negative[@]}"; do
   source="$source_root/$name"
   case "$name" in
-    macro-overflow-reject.atto|macro-template-twice-overflow-reject.atto)
+    macro-overflow-reject.atto|macro-template-twice-overflow-reject.atto|macro-unary-overflow-reject.atto)
       needle=NET_MACRO_CONST_OVERFLOW ;;
-    macro-public-reject.atto|macro-wrong-kind-reject.atto|macro-unresolved-reject.atto|macro-template-twice-name-reject.atto|macro-template-twice-composite-reject.atto)
+    macro-public-reject.atto|macro-wrong-kind-reject.atto|macro-unresolved-reject.atto|macro-template-twice-name-reject.atto|macro-template-twice-composite-reject.atto|macro-unused-template-mismatch-reject.atto)
       needle=NET_MACRO_EXPANDER_REQUIRED ;;
     macro-runtime-const-reject.atto) needle="Expected integer" ;;
     *) exit 2 ;;
@@ -141,8 +145,8 @@ for name in "${negative[@]}"; do
   done
 done
 
-if [[ $positive_passes -ne 5 || $negative_passes -ne 32 ]]; then
-  echo "MACRO_AOT_INCOMPLETE expected_positives=5 actual=$positive_passes expected_rejections=32 actual=$negative_passes" >&2
+if [[ $positive_passes -ne 7 || $negative_passes -ne 40 ]]; then
+  echo "MACRO_AOT_INCOMPLETE expected_positives=7 actual=$positive_passes expected_rejections=40 actual=$negative_passes" >&2
   exit 1
 fi
 if ! git diff --quiet -- . || ! git diff --cached --quiet -- .; then

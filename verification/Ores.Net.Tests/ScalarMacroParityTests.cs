@@ -79,6 +79,10 @@ public static class ScalarMacroParityTests
             "typed quote/unquote emits distinct AST identities");
         Expect42(twiceSource, "twice! literal template re-enters checked OresIR");
         Expect42(twiceNestedSource, "nested literal! inside twice! expands before OresIR");
+        Expect42(LiteralMacro + Main("literal!(const (3 * 4) + (7 * 6) - 12)"),
+            "mixed checked multiply/add/subtract constant must evaluate to 42");
+        Expect42(IdentityMacro + Main("identity!(syntax expr (6 * 7))"),
+            "non-literal identity syntax retains expression semantics");
         Expect42(LiteralMacro + IdentityMacro +
             Main("identity!(syntax expr literal!(const 6 * 7))"),
             "nested macros must expand completely before OresIR");
@@ -157,6 +161,11 @@ public static class ScalarMacroParityTests
             Main("42"), "NET_MACRO_EXPANDER_REQUIRED", "typed syntax names must not be macro parameters");
         Reject("define macro eval(Syntax<Expr> x) -> Syntax<Expr> { return x; }" +
             Main("42"), "NET_MACRO_EXPANDER_REQUIRED", "eval intrinsic must not be rebound");
+        Reject("define macro unsafe(Syntax<Expr> value) -> Syntax<Expr> {" +
+            "return quote(unquote(value) + unquote(other)); }" + Main("42"),
+            "NET_MACRO_EXPANDER_REQUIRED", "unused invalid template declaration must fail before CIL");
+        Reject(LiteralMacro + Main("literal!(const -(-9223372036854775808))"),
+            "NET_MACRO_CONST_OVERFLOW", "shared unary minimum signed overflow");
         Reject(TwiceMacro + Main("twice!(syntax expr 20 + 1)"),
             "NET_MACRO_EXPANDER_REQUIRED", "template must not duplicate a composite expression");
         Reject(TwiceMacro + Main("twice!(syntax expr runtime_value)"),

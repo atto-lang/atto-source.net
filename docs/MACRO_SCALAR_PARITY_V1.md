@@ -46,13 +46,14 @@ LLVM also keeps its stronger separately authored test with a **bound**
 `main(int value)` parameter; .NET's scalar entry grammar does not yet
 admit a parameterized `main`, so that extra LLVM case is not in the
 byte-identical shared set.
-The gate checks the production compiler's Release tests; **five** separately
+The additional shared hardening vectors cover mixed checked constant arithmetic, non-literal identity expressions, rejected unused template captures, and signed minimum unary overflow.
+The gate checks the production compiler's Release tests; **seven** separately
 published Linux Native AOT guests whose stdout is exactly `42` followed by a
 newline and whose successful exit status is **0**; Native AOT release layouts;
-and **eight** negative fixtures times four CLI commands = **32** rejection
+and **ten** negative fixtures times four CLI commands = **40** rejection
 checks with no output artifacts. LLVM's native guest currently uses exit-status
 42 instead; these host ABIs are distinct but their guest integer values agree.
-The gate also requires the exact head supplied by CI, clean tracked source before/after, five positive and 32 negative receipts, an exact expected CLI rejection exit code (1), no output files from an isolated negative command working directory, and immutable compiler/generated-CIL hashes during every negative case. The workflow covers changes to compiler, runtime, host, fixtures and build helpers rather than only the macro parser.
+The gate also requires the exact head supplied by CI, clean tracked source before/after, seven positive and 40 negative receipts, an exact expected CLI rejection exit code (1), no output files from an isolated negative command working directory, and immutable compiler/generated-CIL hashes during every negative case. The workflow covers changes to compiler, runtime, host, fixtures and build helpers rather than only the macro parser.
 The shell gate is **authored, not executed**. It must run within the source
 repository or only on an independently authorized private destination.
 
