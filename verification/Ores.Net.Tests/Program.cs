@@ -30,6 +30,25 @@ static void InvalidSend(Action action, string why)
     throw new Exception("Expected mailbox rejection: " + why);
 }
 
+// Durable M0 is not lowered by the .NET Native AOT compiler. Exercise the
+// real structured lexer/parser boundary, not a source-substring approximation.
+foreach (var durableSource in new[] {
+    "define activity Payments as charge(int cents)->int{return cents;} end",
+    "define workflow Checkout as run(int id)->int{return id;} end",
+    "pub define activity Payments as charge(int cents)->int{return cents;} end",
+    "pub define workflow Checkout as run(int id)->int{return id;} end",
+    "define pub activity Payments as charge(int cents)->int{return cents;} end",
+    "define pub workflow Checkout as run(int id)->int{return id;} end",
+    "define /* whitespace token */ activity Payments as charge(int cents)->int{return cents;} end",
+    "define /* outer /* inner */ outer */ workflow Checkout as run(int id)->int{return id;} end"
+})
+    RejectDiagnostic(() => OresStructuredParser.Parse(durableSource),
+        "DURABLE_M0_BACKEND_UNSUPPORTED",
+        "durable M0 declaration must fail before CIL or Native AOT emission");
+Require(OresStructuredParser.Parse(
+    "fnc main():int{/* define activity Fake as */ // define workflow Fake as\n return 42; }")
+    .Body.Count == 1, "comments mentioning durable declarations must not trigger capability rejection");
+
 // Opaque top types and value-producing conditionals are language-reserved,
  // but this i64-only bootstrap has no tagged dynamic-value ABI or typed CFG
  // lowering for them yet. Reject before OresIR/CIL emission.
