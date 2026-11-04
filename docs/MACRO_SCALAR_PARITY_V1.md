@@ -36,17 +36,23 @@ Hard bounds: 8 declarations per translation unit, 128 expansions, 512 visited `C
 **Not supported:** name generation/hygiene, checked explicit capture, templates beyond exact AST identity / literal quotation / the two-unquote closed-literal addition, declarations / imports / public macro exports, cross-module cache identities, macro argument types other than `Const<int>` or `Syntax<Expr>`, general `comptime`, float/bool/String/Symbol constants, actors, ownership-aware side-effect duplication, and expanded structured/linked CFG compilation. The experimental structured frontend and linked-import scanner explicitly reject all macro declarations and invocations, including the scalar and typed-template positives, until they have separately proven typed AST expansion.
 
 **Exact-source execution gate prepared:** `bash verification/verify-macro-scalar-native-aot.sh`
-uses all seven byte-identical shared stage-0 `.atto` fixtures from
-[common-source PR #218](https://github.com/ores-truffle-oreslang/oreslang-common-source/pull/218)
-plus a .NET stage-0-specific public-macro rejection fixture under
-`verification/fixtures/`. The template parity extension adds **five**
-source-byte-identical LLVM fixture vectors (`twice!`, nested `literal! + twice!`,
-composite rejection, overflow rejection, and unresolved-name rejection).
-LLVM also keeps its stronger separately authored test with a **bound**
-`main(int value)` parameter; .NET's scalar entry grammar does not yet
-admit a parameterized `main`, so that extra LLVM case is not in the
-byte-identical shared set.
-The additional shared hardening vectors cover mixed checked constant arithmetic, non-literal identity expressions, rejected unused template captures, and signed minimum unary overflow.
+uses **16 byte-identical shared scalar `.atto` sources** across this
+.NET PR #346, LLVM PR #1026, and Wasm PR #287: seven guest-value-42
+positives and nine compiler-negative inputs. The original seven source
+vectors came from [common-source PR #218](https://github.com/ores-truffle-oreslang/oreslang-common-source/pull/218).
+Five later template vectors cover `twice!`, nested `literal! + twice!`,
+composite rejection, overflow rejection, and unresolved-name rejection.
+Four additional shared vectors cover mixed checked constant arithmetic,
+non-literal identity expressions, rejected unused template captures, and
+signed-minimum unary overflow. The .NET AOT script also runs a
+backend-specific public-macro denial, making its negative total ten.
+LLVM names two identical source blobs differently:
+`dynamic-const-reject.atto` corresponds to .NET/Wasm
+`runtime-const-reject.atto`; and
+`template-twice-unresolved-name-reject.atto` corresponds to
+`template-twice-name-reject.atto`. LLVM additionally tests a bound
+`main(int value)` case that the .NET scalar entry parser does not admit.
+Byte identity is **not** evidence of compiler execution or parity.
 The gate checks the production compiler's Release tests; **seven** separately
 published Linux Native AOT guests whose stdout is exactly `42` followed by a
 newline and whose successful exit status is **0**; Native AOT release layouts;
