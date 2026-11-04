@@ -17,7 +17,7 @@ permissions:
 jobs:
   scalar-macro-native-aot:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - name: Checkout exact PR head without persisted credentials
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -41,6 +41,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y clang zlib1g-dev
-      - name: Execute compiler tests and three independent Native AOT macro guests
+      - name: Execute compiler tests and five independent Native AOT macro guests
         shell: bash
         run: bash verification/verify-macro-scalar-native-aot.sh
