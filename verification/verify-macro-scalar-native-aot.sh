@@ -7,7 +7,7 @@ set -Eeuo pipefail
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
-for tool in dotnet git file readelf realpath cmp sha256sum; do
+for tool in dotnet git file readelf realpath cmp sha256sum timeout; do
   command -v "$tool" >/dev/null || { echo "MACRO_AOT_NOT_EXECUTED missing $tool" >&2; exit 2; }
 done
 printf 'MACRO_AOT_SOURCE_HEAD=%s\n' "$(git rev-parse HEAD)"
@@ -47,7 +47,7 @@ for name in "${positive[@]}"; do
   # RuntimeHost.ExecuteAsync writes the guest's i64 value to stdout and
   # returns status 0 on success. Exit code 42 is NOT its value ABI.
   set +e
-  "$guest" >"$tmp/guest.stdout" 2>"$tmp/guest.stderr"
+  timeout --signal=TERM --kill-after=2s 10s "$guest" >"$tmp/guest.stdout" 2>"$tmp/guest.stderr"
   actual=$?
   set -e
   if [[ $actual -ne 0 ]] || ! cmp -s -- "$tmp/guest.stdout" <(printf '42\n') || \
@@ -90,7 +90,7 @@ for name in "${negative[@]}"; do
       emit-csharp) invocation=("$compiler" emit-csharp "$source" --out "$tmp/Source.cs") ;;
       emit-fsharp) invocation=("$compiler" emit-fsharp "$source" --out "$tmp/Source.fs") ;;
     esac
-    if "${invocation[@]}" >"$tmp/stdout" 2>"$tmp/stderr"; then
+    if timeout --signal=TERM --kill-after=2s 20s "${invocation[@]}" >"$tmp/stdout" 2>"$tmp/stderr"; then
       echo "MACRO_AOT_REJECTION_FAILED command=$command fixture=$name (unexpected success)" >&2
       exit 1
     fi
