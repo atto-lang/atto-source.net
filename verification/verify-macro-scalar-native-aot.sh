@@ -90,8 +90,18 @@ for name in "${negative[@]}"; do
       emit-csharp) invocation=("$compiler" emit-csharp "$source" --out "$tmp/Source.cs") ;;
       emit-fsharp) invocation=("$compiler" emit-fsharp "$source" --out "$tmp/Source.fs") ;;
     esac
-    if timeout --signal=TERM --kill-after=2s 20s "${invocation[@]}" >"$tmp/stdout" 2>"$tmp/stderr"; then
+    set +e
+    timeout --signal=TERM --kill-after=2s 20s "${invocation[@]}" >"$tmp/stdout" 2>"$tmp/stderr"
+    status=$?
+    set -e
+    if [[ $status -eq 0 ]]; then
       echo "MACRO_AOT_REJECTION_FAILED command=$command fixture=$name (unexpected success)" >&2
+      exit 1
+    fi
+    # A timed-out or killed compiler is NEVER a successful rejection, even
+    # when it wrote an expected diagnostic before hanging.
+    if [[ $status -eq 124 || $status -eq 137 || $status -eq 143 ]]; then
+      echo "MACRO_AOT_NOT_EXECUTED command=$command fixture=$name timeout_or_killed=$status" >&2
       exit 1
     fi
     if ! grep -Fq -- "$needle" "$tmp/stderr"; then
