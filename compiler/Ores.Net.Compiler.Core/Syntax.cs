@@ -159,6 +159,16 @@ public static class OresParser
                 if (word == "enum")
                     throw new FormatException(
                         $"nominal enum overloads require compiler-bound dispatch (unsupported .NET bootstrap) at offset {start}");
+                // The shipping i64-only frontend has no tagged sum storage,
+                // constructor discriminants, payload lifetime handling or
+                // ordinary-throw-to-Option trap lowering. Keep an explicit
+                // unsupported-feature category rather than a generic parse
+                // error that might be mistaken for an ADT semantic rejection.
+                // This check occurs after comment/trivia skipping; an inert
+                // comment is never proof that executable tagged source exists.
+                if (word is "Option" or "Result" or "Some" or "None" or "Ok" or "Err" or "trap")
+                    throw new FormatException(
+                        $"Option/Result/trap requires verified tagged-sum CIL and NativeAOT guest-control lowering at offset {start}");
                 if (word is "gen" or "generator")
                     throw new FormatException(
                         $"generator declarations require iterator-frame and continuation lowering in .NET Native AOT backend at offset {start}");
