@@ -118,6 +118,31 @@ jobs:
           done
           echo 'NET_ATTO_SCALAR_V1_GROUPING_BOUNDARY_NATIVEAOT_3_REJECTIONS'
 
+      - name: Execute signed-i64 minimum and independent precedence as real NativeAOT
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Full signed i64 values must be witnessed through native stdout,
+          # never through truncated shell/process exit codes.
+          bash scripts/publish-linux.sh contracts/atto-scalar-v1/positive/signed-minimum.atto artifacts/atto-v1-minimum
+          minimum=artifacts/atto-v1-minimum/linux-x64/oreslang-app
+          bash verification/assert-linux-native-release.sh "$minimum"
+          test "$("$minimum")" = "-9223372036854775808"
+          bash scripts/publish-linux.sh contracts/atto-scalar-v1/positive/precedence.atto artifacts/atto-v1-precedence
+          precedence=artifacts/atto-v1-precedence/linux-x64/oreslang-app
+          bash verification/assert-linux-native-release.sh "$precedence"
+          test "$("$precedence")" = 14
+          # Isolated native applications may not be silently overwritten by
+          # later guest compilation, nor carry a managed CIL sidecar.
+          test "$(artifacts/atto-v1-grouping/linux-x64/oreslang-app)" = 20
+          test "$(artifacts/atto-v1-i64-bound/linux-x64/oreslang-app)" = 9223372036854775806
+          for app in "$minimum" "$precedence"; do
+            test -x "$app"
+            test ! -e "$(dirname "$app")/OresGenerated.dll"
+            sha256sum "$app"
+          done
+          echo 'NET_ATTO_SCALAR_V1_I64_MIN_PRECEDENCE_NATIVEAOT_EXECUTED'
+
       - name: Execute shared native.precedence and prove three-source isolation
         shell: bash
         run: |
@@ -200,6 +225,10 @@ jobs:
             artifacts/atto-parity/linux-x64/oreslang-app
             artifacts/parity-precedence/linux-x64/oreslang-app
             artifacts/structured/linux-x64/oreslang-app
+            artifacts/atto-v1-minimum/linux-x64/oreslang-app
+            artifacts/atto-v1-precedence/linux-x64/oreslang-app
+            artifacts/atto-v1-grouping/linux-x64/oreslang-app
+            artifacts/atto-v1-i64-bound/linux-x64/oreslang-app
             artifacts/compiler/linux-x64/oresnet
           if-no-files-found: error
           retention-days: 14
