@@ -458,7 +458,8 @@ public static class OresParser
         private Expression ParseUnary(int depth)
         {
             CheckDepth(depth);
-            if (Current.Text == "rt")
+            if (Current.Text == "rt" &&
+                !(_index + 1 < tokens.Count && tokens[_index + 1].Text == "!"))
             {
                 int at = Current.Offset;
                 _index++;
