@@ -66,10 +66,11 @@ See [managed source backends](docs/MANAGED_SOURCE_BACKENDS.md).
 ### Draft compile-time scalar macros
 
 The production scalar frontend also has a restricted, **compiler-only** `define macro`
-stage-0 feature branch: `Const<int>` quotation and `Syntax<Expr>` identity,
-with checked constant evaluation, AST expansion before CIL and explicit
-rejection of other macro forms. It does not implement arbitrary typed
-templates, macro imports/exports, hygiene, or structured-source macro
+stage-0 feature branch: `Const<int>` quotation, `Syntax<Expr>` identity, and
+one literal-only repeated `quote(unquote(value) + unquote(value))` template,
+with checked constant evaluation, fresh compiler AST identities before CIL,
+and explicit rejection of all unsafe or unsupported macro forms. It does not
+implement general typed templates, macro imports/exports, hygiene, or structured-source macro
 execution. **No verified cross-backend Native AOT pass is claimed.**
 See [the macro parity scope and test gates](docs/MACRO_SCALAR_PARITY_V1.md).
 
