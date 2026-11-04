@@ -13,6 +13,11 @@ public static class ScalarMacroParityTests
             return value;
         }
         """;
+    private const string TwiceMacro = """
+        define macro twice(Syntax<Expr> value) -> Syntax<Expr> {
+            return quote(unquote(value) + unquote(value));
+        }
+        """;
 
     private static string Main(string expression) =>
         $"pub fnc main(): int {{ return {expression}; }}";
@@ -55,12 +60,25 @@ public static class ScalarMacroParityTests
     {
         string constSource = LiteralMacro + Main("literal!(const 40 + 2)");
         string identitySource = IdentityMacro + Main("identity!(syntax expr 42)");
+        string twiceSource = TwiceMacro + Main("twice!(syntax expr 21)");
+        string twiceNestedSource = LiteralMacro + TwiceMacro +
+            Main("twice!(syntax expr literal!(const 20 + 1))");
         Require(OresParser.Parse(constSource) is Literal { Value: 42 },
             "Const<int> quote must lower to a literal AST node");
         Require(OresParser.Parse(identitySource) is Literal { Value: 42 },
             "Syntax<Expr> identity must preserve the call-site AST node");
         Expect42(constSource, "Const<int> quote must survive OresIR verification and interpretation");
         Expect42(identitySource, "Syntax<Expr> identity must survive OresIR");
+        // Repeated splice creates two separately owned compiler AST leaves,
+        // and normal OresIR verification handles the generated binary Add.
+        Expression twiceTree = OresParser.Parse(twiceSource);
+        Require(twiceTree is Binary { Operator: '+' } plus &&
+            plus.Left is Literal { Value: 21 } &&
+            plus.Right is Literal { Value: 21 } &&
+            !ReferenceEquals(plus.Left, plus.Right),
+            "typed quote/unquote emits distinct AST identities");
+        Expect42(twiceSource, "twice! literal template re-enters checked OresIR");
+        Expect42(twiceNestedSource, "nested literal! inside twice! expands before OresIR");
         Expect42(LiteralMacro + IdentityMacro +
             Main("identity!(syntax expr literal!(const 6 * 7))"),
             "nested macros must expand completely before OresIR");
@@ -89,6 +107,21 @@ public static class ScalarMacroParityTests
                 t.FullName == "Oreslang.Generated.OresProgram").Methods.Single(m => m.Name == "Run");
             Require(CilReferenceEvaluator.Evaluate(entry) == 42,
                 "generated CIL from the macro AST must evaluate to 42");
+
+            // The structural template must pass the same verified OresIR ->
+            // deterministic emitted CIL path, not a reference-AST shortcut.
+            string t1 = Path.Combine(folder, "macro.twice.a.dll");
+            string t2 = Path.Combine(folder, "macro.twice.b.dll");
+            var templateIr = OresIrLowering.Lower(OresParser.Parse(twiceNestedSource));
+            CilEmitter.EmitLibrary(templateIr, t1);
+            CilEmitter.EmitLibrary(templateIr, t2);
+            Require(File.ReadAllBytes(t1).AsSpan().SequenceEqual(File.ReadAllBytes(t2)),
+                "nested typed template CIL bytes must be deterministic");
+            using var templateAssembly = AssemblyDefinition.ReadAssembly(t1);
+            var templateEntry = templateAssembly.MainModule.Types.Single(t =>
+                t.FullName == "Oreslang.Generated.OresProgram").Methods.Single(m => m.Name == "Run");
+            Require(CilReferenceEvaluator.Evaluate(templateEntry) == 42,
+                "typed template generated CIL evaluates to 42");
         }
         finally
         {
@@ -114,6 +147,29 @@ public static class ScalarMacroParityTests
             Main("42"), "NET_MACRO_EXPANDER_REQUIRED", "unsupported macro helper body");
         Reject("define macro bad(Syntax<Expr> x, Syntax<Expr> y) -> Syntax<Expr> { return x; }" +
             Main("42"), "NET_MACRO_EXPANDER_REQUIRED", "multi-parameter expander unavailable");
+        Reject("define macro eval(Syntax<Expr> x) -> Syntax<Expr> { return x; }" +
+            Main("42"), "NET_MACRO_EXPANDER_REQUIRED", "eval intrinsic must not be rebound");
+        Reject(TwiceMacro + Main("twice!(syntax expr 20 + 1)"),
+            "NET_MACRO_EXPANDER_REQUIRED", "template must not duplicate a composite expression");
+        Reject(TwiceMacro + Main("twice!(syntax expr runtime_value)"),
+            "NET_MACRO_EXPANDER_REQUIRED", "template must not duplicate a runtime identifier");
+        Reject(TwiceMacro + Main("twice!(syntax expr 9223372036854775807)"),
+            "NET_MACRO_CONST_OVERFLOW", "repeated positive literal overflow");
+        Reject(TwiceMacro + Main("twice!(syntax expr -9223372036854775808)"),
+            "NET_MACRO_CONST_OVERFLOW", "repeated negative minimum literal overflow");
+        Reject("define macro twice(Syntax<Expr> x) -> Syntax<Expr> {" +
+            "return quote(unquote(x) + unquote(y)); }" + Main("42"),
+            "NET_MACRO_EXPANDER_REQUIRED", "template cannot splice undeclared parameter");
+        Reject("define macro twice(Syntax<Expr> x) -> Syntax<Expr> {" +
+            "return quote(unquote(x) + x); }" + Main("42"),
+            "NET_MACRO_EXPANDER_REQUIRED", "template requires two direct unquotes");
+        Reject("define macro twice(Syntax<Expr> x) -> Syntax<Expr> {" +
+            "return quote(unquote(x) + unquote(x) + unquote(x)); }" + Main("42"),
+            "NET_MACRO_EXPANDER_REQUIRED", "template cannot amplify syntax three times");
+        Reject(TwiceMacro + Main("twice!(const 21)"),
+            "NET_MACRO_EXPANDER_REQUIRED", "template requires Syntax<Expr>, not Const<int>");
+        RejectStructured(TwiceMacro + Main("twice!(syntax expr 21)"),
+            "structured typed template must fail closed");
         Reject(LiteralMacro + LiteralMacro + Main("42"),
             "NET_MACRO_EXPANDER_REQUIRED", "duplicate macro must fail even if unused");
         Reject(IdentityMacro + Main("identity!(const 42)"),
