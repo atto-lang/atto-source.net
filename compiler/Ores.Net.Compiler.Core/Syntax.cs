@@ -482,7 +482,12 @@ public static class OresParser
                 throw new FormatException(
                     $"Runtime ownership operation requires typed lowering; unsupported in the .NET scalar backend at offset {at}");
             }
-            if (IsMacroName(Current.Text) && _index + 1 < tokens.Count &&
+            // Every token followed by ! is a macro invocation candidate.
+            // IsMacroName intentionally rejects reserved identifiers, but using
+            // it to *detect* calls would route quote!/eval!/rt!/main! to the
+            // ordinary scalar-expression error instead of the fail-closed
+            // macro diagnostic. The declared-name check still happens below.
+            if (Current.Text.Length != 0 && _index + 1 < tokens.Count &&
                 tokens[_index + 1].Text == "!")
             {
                 int at = Current.Offset;
