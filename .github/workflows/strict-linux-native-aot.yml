@@ -87,6 +87,37 @@ jobs:
           test "$(artifacts/parity/linux-x64/oreslang-app)" = 42
           test "$(artifacts/apps/linux-x64/oreslang-app)" = 14
           echo 'LINUX_NET_NATIVE_AOT_CANONICAL_ATTO_GUEST_EXECUTED_42'
+      - name: Verify 19 Atto scalar fixtures and execute distinct real NativeAOT guests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 verification/atto-scalar-v1-source.py
+          # Process stdout from the published native host carries full i64,
+          # unlike LLVM native process exit status. Keep separately linked apps.
+          bash scripts/publish-linux.sh contracts/atto-scalar-v1/positive/parentheses.atto artifacts/atto-v1-grouping
+          grouping=artifacts/atto-v1-grouping/linux-x64/oreslang-app
+          bash verification/assert-linux-native-release.sh "$grouping"
+          test "$("$grouping")" = 20
+          bash scripts/publish-linux.sh contracts/atto-scalar-v1/positive/signed-max-minus-one.atto artifacts/atto-v1-i64-bound
+          boundary=artifacts/atto-v1-i64-bound/linux-x64/oreslang-app
+          bash verification/assert-linux-native-release.sh "$boundary"
+          test "$("$boundary")" = 9223372036854775806
+          test "$("$grouping")" = 20
+          # Negative operators must fail in the real source compiler before
+          # publishing CIL, not merely in host-side regex/source tests.
+          compiler=artifacts/compiler/linux-x64/oresnet
+          mkdir -p artifacts/atto-v1-rejected
+          for name in removed-modulo removed-caret removed-double-caret; do
+            out="artifacts/atto-v1-rejected/${name}.dll"
+            rm -f -- "$out"
+            if "$compiler" compile "contracts/atto-scalar-v1/negative/${name}.atto" --out "$out"; then
+              echo "AttoLang removed operator emitted CIL: $name" >&2
+              exit 1
+            fi
+            test ! -e "$out"
+          done
+          echo 'NET_ATTO_SCALAR_V1_GROUPING_BOUNDARY_NATIVEAOT_3_REJECTIONS'
+
       - name: Execute shared native.precedence and prove three-source isolation
         shell: bash
         run: |
