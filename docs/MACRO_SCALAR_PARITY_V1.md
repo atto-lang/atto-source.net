@@ -39,11 +39,13 @@ Hard bounds: 8 declarations per translation unit, 128 expansions, 512 visited `C
 uses all seven byte-identical shared stage-0 `.atto` fixtures from
 [common-source PR #218](https://github.com/ores-truffle-oreslang/oreslang-common-source/pull/218)
 plus a .NET stage-0-specific public-macro rejection fixture under
-`verification/fixtures/`. The template parity extension adds four source-byte-identical
-LLVM fixture vectors (`twice!`, nested `literal! + twice!`, composite rejection,
-overflow rejection), and one .NET-specific name-rejection fixture because
-its scalar `main` does not accept the parameterized `main(int value)` used
-by LLVM. No same-byte claim is made for that one fixture.
+`verification/fixtures/`. The template parity extension adds **five**
+source-byte-identical LLVM fixture vectors (`twice!`, nested `literal! + twice!`,
+composite rejection, overflow rejection, and unresolved-name rejection).
+LLVM also keeps its stronger separately authored test with a **bound**
+`main(int value)` parameter; .NET's scalar entry grammar does not yet
+admit a parameterized `main`, so that extra LLVM case is not in the
+byte-identical shared set.
 The gate checks the production compiler's Release tests; **five** separately
 published Linux Native AOT guests whose stdout is exactly `42` followed by a
 newline and whose successful exit status is **0**; Native AOT release layouts;
