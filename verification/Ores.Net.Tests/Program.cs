@@ -690,6 +690,7 @@ Require(await RuntimeHost.ExecuteAsync(() => throw new DivideByZeroException()) 
 ManagedSourceEmitterTests.Run();
 SourceI64Conformance.Run();
 SharedScalarParityConformance.Run();
+AttoXpScalarParityTests.Run(); // pinned .atto scalar IR + CIL evaluator only
 CfgVerifierTests.Run();
 CfgCilStressTests.Run();
 StructuredSourceTests.Run();
