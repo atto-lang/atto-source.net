@@ -9,12 +9,16 @@ public static class ActorPubSubSourceAdmission
 {
     public const string Diagnostic =
         "native ActorGroup/Topic source lowering unsupported";
+    public const string PipeDiagnostic =
+        "native actor pipe source lowering unsupported";
 
     public static void RejectUnsupported(string source)
     {
         ArgumentNullException.ThrowIfNull(source);
         Token? previous = null;
         Token? beforePrevious = null;
+        Token? thirdPrevious = null;
+        int pendingPipeOffset = -1;
 
         int i = 0;
         while (i < source.Length)
@@ -95,6 +99,29 @@ public static class ActorPubSubSourceAdmission
                 i++;
             }
 
+            // Infix "pipe" is contextual: an identifier named pipe or
+            // functional |> must not be rejected. Require expression tokens
+            // on both sides before reporting unsupported actor lowering.
+            if (pendingPipeOffset >= 0)
+            {
+                if (IsActorPipeRight(token))
+                    throw PipeUnsupported(pendingPipeOffset);
+                pendingPipeOffset = -1;
+            }
+
+            if (token.IsIdentifier && token.Text == "pipe")
+            {
+                bool staticCall = previous is { Text: "." } &&
+                    beforePrevious is { Text: "ActorUtils", IsIdentifier: true };
+                bool staticColonCall = previous is { Text: ":" } &&
+                    beforePrevious is { Text: ":" } &&
+                    thirdPrevious is { Text: "ActorUtils", IsIdentifier: true };
+                if (staticCall || staticColonCall)
+                    throw PipeUnsupported(token.Offset);
+                if (IsActorPipeLeft(previous))
+                    pendingPipeOffset = token.Offset;
+            }
+
             if (token.Text == "group" && token.IsIdentifier &&
                 previous is { Text: "." } &&
                 beforePrevious is { Text: "actor", IsIdentifier: true })
@@ -107,10 +134,26 @@ public static class ActorPubSubSourceAdmission
                   beforePrevious is { Text: "." })))
                 throw Unsupported(prior.Offset);
 
+            thirdPrevious = beforePrevious;
             beforePrevious = previous;
             previous = token;
         }
     }
+
+    private static bool IsActorPipeLeft(Token? previous) =>
+        previous is { Text: ")" or "]" or "}" } ||
+        previous is { IsIdentifier: true } word &&
+            word.Text is not ("fnc" or "routine" or "method" or "define" or
+                "pub" or "static" or "val" or "let" or "const" or "final" or
+                "return" or "spawn" or "pipe" or "as" or "case");
+
+    private static bool IsActorPipeRight(Token next) =>
+        next.Text is "(" or "[" ||
+        next.IsIdentifier && next.Text is not (
+            "then" or "fi" or "end" or "else" or "as" or "case" or "over");
+
+    private static FormatException PipeUnsupported(int offset) =>
+        new($"{PipeDiagnostic} at offset {offset}");
 
     private static FormatException Unsupported(int offset) =>
         new($"{Diagnostic} at offset {offset}");
