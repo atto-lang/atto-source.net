@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Fail-closed SOURCE-ONLY AttoLang canonical core identity; not compiler parity."""
+"""Fail-closed source-only AttoLang canonical core identity gate.
+
+This checks vendored guest SOURCE; it does NOT execute a compiler or guest.
+"""
 from pathlib import Path
 import hashlib
 import sys
@@ -14,8 +17,10 @@ MAX_BYTES = 1024 * 1024
 class Rejected(ValueError):
     pass
 
+
 def git_blob_hash(data: bytes) -> str:
     return hashlib.sha1(b"blob " + str(len(data)).encode("ascii") + b"\x00" + data).hexdigest()
+
 
 def check(root: Path) -> dict[str, str]:
     root = Path(root)
@@ -47,6 +52,7 @@ def check(root: Path) -> dict[str, str]:
             raise Rejected("canonical .atto Git blob changed")
         verified[name] = digest
     return verified
+
 
 def main() -> int:
     try:

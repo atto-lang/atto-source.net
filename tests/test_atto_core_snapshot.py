@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Independent negative mutations; these never assert compiler execution."""
+"""Negative mutation tests for the portable source-identity gate."""
 import importlib.util
 from pathlib import Path
 import shutil
