@@ -102,6 +102,22 @@ internal static class StructuredCfgLoweringTests
         // general function ABI or runtime call instruction.
         Check("fnc plus_one(int x):int{return x+1;}fnc main():int{return plus_one(41);}",
             42, "one typed i64 helper");
+        // A conservative *candidate audit*, not a CIL tail. or NativeAOT
+        // guarantee. It cannot authorize recursive calls or ABI transfer.
+        var simpleTail = OresStructuredCfgLowering.LowerModule(
+            "fnc inc(int x):int{return x+1;}fnc main():int{return inc(41);}");
+        var tailCandidates = CfgTailCallCandidates.Inspect(simpleTail.Main);
+        if (tailCandidates.Count != 1 || tailCandidates[0].Target != "inc")
+            throw new Exception("CFG direct return/call candidate not identified");
+        var intervening = OresStructuredCfgLowering.LowerModule(
+            "fnc inc(int x):int{return x+1;}fnc main():int{return inc(40)+1;}");
+        if (CfgTailCallCandidates.Inspect(intervening.Main).Count != 0)
+            throw new Exception("CFG falsely claimed non-tail arithmetic as tail");
+        var nested = OresStructuredCfgLowering.LowerModule(
+            "fnc inc(int x):int{return x+1;}fnc main():int{return inc(inc(40));}");
+        if (CfgTailCallCandidates.Inspect(nested.Main).Count != 1)
+            throw new Exception("CFG must identify only the outer returned call");
+
         Check("fnc twice(int x):int{return x*2;}fnc answer():int{return twice(21);}fnc main():int{return answer();}",
             42, "chained helper functions");
         Check("fnc sum(int x,int y):int{return x+y;}fnc main():int{return sum(19,23);}",
