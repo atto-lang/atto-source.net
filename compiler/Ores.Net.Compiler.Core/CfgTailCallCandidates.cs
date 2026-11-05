@@ -31,3 +31,53 @@ public static class CfgTailCallCandidates
         return Array.AsReadOnly(candidates.ToArray());
     }
 }
+
+/**
+ * A stricter inventory that preserves only returned direct calls whose caller
+ * and callee have exactly the same scalar ABI signature. This is still
+ * analysis-only: even an exact scalar signature never authorizes CIL tail.,
+ * NativeAOT tail recursion, EH-region transfer, or ownership cleanup.
+ */
+public sealed record CfgSameSignatureTailCandidate(
+    string Caller, string Target, string BlockName, int ResultId);
+
+public static class CfgSameSignatureTailCandidates
+{
+    public static IReadOnlyList<CfgSameSignatureTailCandidate> Inspect(VerifiedCfgModule module)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+        var declarations = new Dictionary<string, VerifiedCfgFunction>(StringComparer.Ordinal);
+        foreach (VerifiedCfgFunction helper in module.Helpers)
+        {
+            if (!declarations.TryAdd(helper.Name, helper))
+                throw new FormatException("Duplicate tail-call helper identity");
+        }
+
+        var results = new List<CfgSameSignatureTailCandidate>();
+        void Examine(VerifiedCfgFunction caller)
+        {
+            foreach (CfgTailCallCandidate candidate in CfgTailCallCandidates.Inspect(caller))
+            {
+                if (!declarations.TryGetValue(candidate.Target, out var callee) ||
+                    caller.ResultType != callee.ResultType ||
+                    caller.Parameters.Count != callee.Parameters.Count)
+                    continue;
+                bool identical = true;
+                for (int i = 0; i < caller.Parameters.Count; i++)
+                {
+                    if (caller.Parameters[i] != callee.Parameters[i])
+                    {
+                        identical = false;
+                        break;
+                    }
+                }
+                if (identical)
+                    results.Add(new CfgSameSignatureTailCandidate(
+                        caller.Name, candidate.Target, candidate.BlockName, candidate.ResultId));
+            }
+        }
+        foreach (VerifiedCfgFunction helper in module.Helpers) Examine(helper);
+        Examine(module.Main);
+        return Array.AsReadOnly(results.ToArray());
+    }
+}
