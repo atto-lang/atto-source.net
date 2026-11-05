@@ -1,0 +1,42 @@
+# Source-only gate in the owning private repository; NO external checkout.
+name: AttoLang canonical core source snapshot (SOURCE ONLY)
+on:
+  pull_request:
+    paths:
+      - 'contracts/atto-core-v1/**'
+      - 'tests/check_atto_core_snapshot.py'
+      - 'tests/test_atto_core_snapshot.py'
+      - '.github/workflows/atto-core-source-snapshot.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-identity-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact PR head without persisted credentials
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Bind immutable head, source tree and reject dirty checkout
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet --exit-code
+          git diff --cached --quiet --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+          echo "ATTO_CORE_SNAPSHOT_HEAD=$EXPECTED_HEAD"
+          echo "ATTO_CORE_SNAPSHOT_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Verify source identities and run 12 negative mutations
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -I tests/check_atto_core_snapshot.py
+          python3 -I -m unittest discover -s tests -p 'test_atto_core_snapshot.py' -v
+          echo "ATTO_CORE_SNAPSHOT_SOURCE_ONLY=YES"
+          echo "ATTO_CORE_COMPILER_EXECUTION=NOT_EXECUTED"
