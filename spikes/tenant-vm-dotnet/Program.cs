@@ -31,7 +31,7 @@ static unsafe class Program {
     }
     static string Reason(int r) => Marshal.PtrToStringUTF8(Native.ores_vm_c_reason_name(r));
 
-    static string s_null;
+    static string s_null = null; // Deliberately null: drives real managed null faults.
 
     // Arguments: a lowered guest library and its digest, from tools/tenant-vm/lower_guest.py.
     static int Main(string[] args) {
