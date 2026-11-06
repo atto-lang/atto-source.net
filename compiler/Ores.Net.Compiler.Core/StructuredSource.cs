@@ -308,6 +308,11 @@ public static class OresStructuredParser
                 do { index++; } while (index < source.Length &&
                     (Alpha(source[index]) || Digit(source[index]) || source[index] == '_'));
                 string word = source[offset..index];
+                // Reject before the condition is lexed: `guard 1>0` contains
+                // characters this lexer refuses outside module mode.
+                if (word == "guard")
+                    throw new FormatException(
+                        $"GUARD_BACKEND_UNSUPPORTED: early-exit CFG and ownership lowering required at offset {offset}");
                 if (word is "cpu" or "gpu" ||
                     (word == "nb" && !StaticSelectAdmission.FollowedByStaticSelect(source, index)))
                     throw new FormatException(

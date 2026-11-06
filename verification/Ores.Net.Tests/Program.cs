@@ -353,6 +353,12 @@ foreach (var expr in new[] {
     try { OresParser.Parse("fnc main():int{return " + expr + ";}"); }
     catch (FormatException ex) when (ex.Message.Contains("pipeline requires named callable lowering",
             StringComparison.OrdinalIgnoreCase)) { continue; }
+    // Option/Result words are refused by the lexer (#328) before the
+    // pipeline is seen. That is also fail-closed, but only accepted for the
+    // inputs that actually name Option or Result.
+    catch (FormatException ex) when ((expr.Contains("Option") || expr.Contains("Result")) &&
+        ex.Message.StartsWith("Option/Result/trap requires verified tagged-sum CIL",
+            StringComparison.Ordinal)) { continue; }
     throw new Exception("Unsupported value pipeline must fail closed: " + expr);
 }
 Require(OresParser.Parse("fnc main():int{return 1;} // 1 |> unsupported") is Literal,

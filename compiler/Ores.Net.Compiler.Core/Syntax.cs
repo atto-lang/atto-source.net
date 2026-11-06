@@ -169,6 +169,12 @@ public static class OresParser
                 if (word is "Option" or "Result" or "Some" or "None" or "Ok" or "Err" or "trap")
                     throw new FormatException(
                         $"Option/Result/trap requires verified tagged-sum CIL and NativeAOT guest-control lowering at offset {start}");
+                // Reject here, not only in the reader: a guard condition such
+                // as `1>0` contains characters this scalar lexer cannot lex,
+                // which would otherwise surface as a generic lexer error.
+                if (word == "guard")
+                    throw new FormatException(
+                        $"GUARD_BACKEND_UNSUPPORTED: early-exit CFG and ownership lowering required at offset {start}");
                 if (word is "gen" or "generator")
                     throw new FormatException(
                         $"generator declarations require iterator-frame and continuation lowering in .NET Native AOT backend at offset {start}");
