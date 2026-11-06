@@ -12,11 +12,11 @@ internal static class VmIsolateHostTests
     public static void Run()
     {
         var host = new OresVmHost(maxTenants: 2);
-        // Fail closed: NativeAOT and separate host dictionaries do not imply
-        // OS sandboxing or a separate GC-managed heap for hostile tenants.
+        // Fail closed: the native TenantVm isolate is not wired in yet, and a
+        // host dictionary is not an isolate, so untrusted admission must reject.
         ExpectFailure(() => host.CreateIsolate("hostile",
-            isolation: OresVmHost.IsolationMode.SandboxedProcess),
-            "unsupported process sandbox must reject before admission");
+            isolation: OresVmHost.IsolationMode.NativeVmIsolate),
+            "unwired native VM isolate must reject before admission");
         // Same exact ID grammar as the native Wasmtime tenant host:
         // no dot components, slashes, path escapes or Unicode lookalikes.
         // Reject before allocating a tenant or consuming its capacity.

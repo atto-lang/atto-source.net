@@ -258,6 +258,39 @@ internal static class StructuredSourceTests
             throw new Exception(".NET frontend admitted unlowered inverted class source");
         }
 
+        // Shared implicit-val/typed-initialize feature gate. This .NET
+        // bootstrap does not have nominal class layouts or CIL constructors.
+        // Even sources accepted by Java/LLVM must reject here with an
+        // explicit unsupported-capability diagnostic, never fake execution.
+        foreach (var source in new[] {
+            "define class C as int id: 42; end",
+            "define class C as val int id: 42; end",
+            "define class C as let int id: 1; end",
+            "define class C as final int id: 1; end",
+            "define class C as const int id: 1; end",
+            "define class C as final int id; initialize(int n) -> void :: self.id=n; end end",
+            "define class C as\n final int id;\n initialize(int n) -> void\n self.id=n;\n end\nend",
+            "define class C as\n final int id;\n initialize(int n): void\n self.id=n;\n end\nend",
+            "define class C as final int id; initialize(int n): void { self.id=n; } end",
+            "define class C as initialize() -> void { return; } end",
+            "define class C as initialize(int n) as self.id=n; end end",
+            "define class C as initialize(int n) -> int { return n; } end",
+            "define class C as final int id; initialize(int n) -> void :: self.id=n; self.id=n; end end",
+            "define class C as let int id; initialize() -> void {} end",
+            "define class C as let int id; initialize(int n) -> void :: publish(self); self.id=n; end end",
+            "define class Parent as val int id; end define class Child extends Parent as initialize() -> void {} end",
+            "pub define class C as pub val int id: 42; end",
+        })
+        {
+            RejectFeature(source,
+                "Nominal class/actor methods require receiver-erased method slots");
+        }
+        // Keywords in comments must not become a global word-scanning gate.
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{/* initialize -> void :: class val */return 42;}")
+                .Body.Count == 1,
+            "class/initialize words in comments must preserve scalar execution");
+
         // Canonical Java foo() == foo(self) uses one caller-visible slot.
         // The .NET bootstrap has neither nominal class AST nor CIL dispatch:
         // validate a *specific* fail-closed diagnostic for the exact sources

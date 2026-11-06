@@ -10,9 +10,11 @@ public sealed class OresVmHost
     public enum Phase { Created, Running, Quiescing, Stopped }
 
     // A NativeAOT host-owned dictionary is NOT a separate tenant CLR heap.
-    // Explicit process mode refuses admission until a supervised OS sandbox
-    // and independently authenticated worker identity actually exist.
-    public enum IsolationMode { TrustedInProcess, SandboxedProcess }
+    // Untrusted tenants get a NativeVmIsolate: validated Wasm on the shared
+    // native TenantVm core, in this same process (tenant isolation v2). It
+    // refuses admission until that core is wired in; it never falls back to
+    // TrustedInProcess.
+    public enum IsolationMode { TrustedInProcess, NativeVmIsolate }
 
     public sealed class IsolateHandle
     {
@@ -93,7 +95,7 @@ public sealed class OresVmHost
         IsolationMode isolation = IsolationMode.TrustedInProcess)
     {
         if (isolation != IsolationMode.TrustedInProcess)
-            throw new InvalidOperationException("sandboxed tenant process isolation not implemented");
+            throw new InvalidOperationException("native TenantVm isolate not wired into this host yet");
         // Dot-only IDs are future path/namespace control components, not
         // tenant identities. Match the Wasmtime registry's fail-closed rule.
         if (string.IsNullOrWhiteSpace(tenantId) || tenantId is "." or ".." ||

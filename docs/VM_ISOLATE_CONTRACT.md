@@ -34,8 +34,12 @@ a security sandbox. No general guest-code tenant isolation is claimed.
 7. Include a distinct status/result ABI, including legitimate signed
    negative values. Check native artifact entry ABI **before** function
    pointer casts; ABI version mismatch must fail closed.
-8. An in-process isolate is **not an OS security sandbox**. Native/FFI
-   arbitrary pointers require process-level separation for hostile tenants.
+8. Tenants, including hostile ones, share one OS process with one VM-isolate
+   each (conformance tenant isolation v2). A host-owned registry like this one
+   is not that isolate by itself. Untrusted tenants run as validated Wasm on
+   the shared native TenantVm core; tenant-supplied native code, FFI pointers
+   and CIL are refused. A process sandbox is optional defense in depth, never
+   required.
 
 ## V8 lessons and crucial differences
 
@@ -47,8 +51,8 @@ the assumption that a V8 Isolate is equivalent to a renderer-process
 security boundary. Oreslang must eventually schedule independently sealed
 actors within one tenant concurrently, rather than imposing one
 entering thread for the whole tenant. Pointer compression changes memory
-representation, not authorization. In-process host admission is insufficient
-for arbitrary untrusted native machine code.
+representation, not authorization. In-process host admission alone is insufficient for untrusted code: the
+isolate also needs validated guest code, a private heap and per-tenant kill.
 
 Architecture reference: LLVM draft PR #1158,
 `docs/ORESVM_VS_ISOLATEVM.md` in `oreslang-source.llvm`.
@@ -63,8 +67,9 @@ Resource pins are explicit host bookkeeping, **not** proof of physical
 OS/FFI callback retirement. No user source compiler lowering to a per-tenant
 entry ABI is provided. Do not rely on `AssemblyLoadContext`, reflection
 emit, runtime CIL generation or process-global mutable statics to isolate
-Native AOT tenants. For hostile/native tenant execution, use separate
-sandboxed worker **processes**.
+Native AOT tenants. Untrusted tenants use `IsolationMode.NativeVmIsolate`
+(validated Wasm on the shared native TenantVm core, same process), which
+fails closed until that core is wired in. See `spikes/tenant-vm-dotnet`.
 
 Tests: `VmIsolateHostTests.Run()` is wired into the existing
 `verification/Ores.Net.Tests/Program.cs` suite; the .NET toolchain must

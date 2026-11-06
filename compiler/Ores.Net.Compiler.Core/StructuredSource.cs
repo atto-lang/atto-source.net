@@ -120,6 +120,16 @@ public static class OresStructuredParser
         while (true)
         {
             var token = lexer.Read();
+            // Durable M0 is metadata-only in the Java compiler. Never let
+            // activity/workflow declarations silently reach scalar CIL lowering
+            // before a typed history manifest, replay ABI and ownership gate exist.
+            // Tokens are already comment/string-aware; do not regex raw source.
+            if ((token.Text is "activity" or "workflow") && tokens.Count > 0 &&
+                (tokens[^1].Text == "define" ||
+                 (tokens[^1].Text == "pub" && tokens.Count > 1 &&
+                  tokens[^2].Text == "define")))
+                throw new FormatException(
+                    $"DURABLE_M0_BACKEND_UNSUPPORTED: .NET durable {token.Text} requires versioned manifest and replay lowering at offset {token.Offset}");
             // The scalar bootstrap does not have class/actor dispatch or
             // ownership-aware lexical closures. Refuse these at source admission
             // with a stable capability diagnostic, not an accidental parse error.
@@ -599,6 +609,9 @@ public static class OresStructuredParser
                 return (new StructuredLocalTypeDecl(at, name, kind,
                     Array.AsReadOnly(fields.ToArray())), false);
             }
+            if (Current.Text == "guard")
+                throw new FormatException(
+                    $"GUARD_BACKEND_UNSUPPORTED: early-exit CFG and ownership lowering required at offset {at}");
             if (Take("return"))
             {
                 var value = Expr(depth + 1);
@@ -691,7 +704,7 @@ public static class OresStructuredParser
                     or "define" or "pub" or "fnc" or "const" or "val" or "final"
                     or "struct" or "record" or "class" or "actor"
                     or "module" or "import" or "from" or "as" or "end"
-                    or "routine" or "async" or "isoactor")
+                    or "routine" or "async" or "isoactor" or "guard")
                 throw new FormatException($"Invalid identifier at offset {at}");
             index++;
             return name;
