@@ -6,6 +6,9 @@
     <None Include="../../contracts/v1/annotation-admission-v1.cases"
           Link="annotation-admission-v1.cases"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/annotations/annotation-compiler-corpus-v2.json"
+          Link="annotation-compiler-corpus-v2.json"
+          CopyToOutputDirectory="PreserveNewest" />
     <None Include="../value-boundary-rejections.json" Link="value-boundary-rejections.json"
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/v2/cpu-gpu-task-unsupported-v2.json" Link="cpu-gpu-task-unsupported-v2.json"
