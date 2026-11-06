@@ -648,9 +648,14 @@ public static class OresStructuredParser
                 else
                     type = initializer.Type; // No i64 fallback for bool or unsupported types.
                 long? constantValue = null;
-                if (kind == StructuredBindingKind.Const &&
-                    IsCompileTimeScalar(initializer))
+                if (kind == StructuredBindingKind.Const)
                 {
+                    // Readonly runtime locals are not compile-time constants.
+                    // A const may depend only on earlier *proven const* values,
+                    // never on a val, let, type-first readonly local or call.
+                    if (!IsCompileTimeScalar(initializer))
+                        throw new FormatException(
+                            $"const initializer must be a compile-time scalar at offset {initializer.Offset}");
                     try { constantValue = ConstantValue(initializer); }
                     catch (OverflowException)
                     {
@@ -727,25 +732,36 @@ public static class OresStructuredParser
             throw new FormatException($"Undefined local '{name}' at offset {at}");
         }
 
-        // A source const is a fixed binding, not a demand for compile-time
-        // evaluation. Fold pure scalar literals, retaining runtime initializer
-        // expression and immutable binding for calls/reads. Do not mask overflow.
-        private static bool IsCompileTimeScalar(StructuredExpr expression) =>
+        // The provenance of a const must come from literals or earlier
+        // proven consts, not from any runtime-readonly/val/let binding.
+        // Keep this recursive check separate from rebind permission.
+        private bool IsCompileTimeScalar(StructuredExpr expression) =>
             expression switch
             {
                 StructuredInt or StructuredBool => true,
+                StructuredRead read =>
+                    Lookup(read.Name, read.Offset) is
+                    { Kind: StructuredBindingKind.Const, ConstantValue: not null },
                 StructuredNegate unary => IsCompileTimeScalar(unary.Value),
                 StructuredBinary binary => IsCompileTimeScalar(binary.Left)
                                            && IsCompileTimeScalar(binary.Right),
                 _ => false
             };
 
-        private static long ConstantValue(StructuredExpr expression)
+        private long ConstantValue(StructuredExpr expression)
         {
             switch (expression)
             {
                 case StructuredInt intLiteral: return intLiteral.Value;
                 case StructuredBool boolLiteral: return boolLiteral.Value ? 1L : 0L;
+                case StructuredRead read:
+                    // A resolved readonly binding is *not* necessarily const.
+                    // Never fold runtime-initialized references as constexpr.
+                    if (Lookup(read.Name, read.Offset) is
+                        { Kind: StructuredBindingKind.Const, ConstantValue: long known })
+                        return known;
+                    throw new FormatException(
+                        $"const dependency is not compile-time proven at offset {read.Offset}");
                 case StructuredNegate negate:
                     return checked(-ConstantValue(negate.Value));
                 case StructuredBinary binary:
