@@ -81,7 +81,7 @@ static void InvalidSend(Action action, string why)
 {
     var path = Path.Combine(AppContext.BaseDirectory, "annotation-compiler-corpus-v2.json");
     var corpusBytes = File.ReadAllBytes(path);
-    var gitHeader = System.Text.Encoding.ASCII.GetBytes($"blob {corpusBytes.Length}\\0");
+    var gitHeader = System.Text.Encoding.ASCII.GetBytes($"blob {corpusBytes.Length}\0");
     var gitInput = new byte[gitHeader.Length + corpusBytes.Length];
     gitHeader.CopyTo(gitInput, 0);
     corpusBytes.CopyTo(gitInput, gitHeader.Length);
@@ -114,19 +114,19 @@ static void InvalidSend(Action action, string why)
             "unearned .NET annotation support: " + id);
         var source = row.GetProperty("source").GetString()
             ?? throw new Exception("missing annotation source");
-        Require(source.EndsWith('\\n') && !source.Contains('\\r') &&
+        Require(source.EndsWith('\n') && !source.Contains('\r') &&
             source.Contains('@'), "invalid candidate source boundaries: " + id);
         Reject(() => OresParser.Parse(source), "v2 scalar annotation case " + id);
         Reject(() => OresStructuredParser.Parse(source), "v2 structured annotation case " + id);
     }
     // All six common comment endings must not conceal a later live @Doc token.
-    foreach (var eol in new[] { "\\n", "\\r", "\\r\\n", "\\u0085", "\\u2028", "\\u2029" })
+    foreach (var eol in new[] { "\n", "\r", "\r\n", "\u0085", "\u2028", "\u2029" })
     {
-        var live = "fnc main():int{return 42;} // inert" + eol + "@Doc(\\\"active\\\")";
+        var live = "fnc main():int{return 42;} // inert" + eol + "@Doc(\"active\")";
         Reject(() => OresParser.Parse(live), "scalar live annotation after comment boundary");
         Reject(() => OresStructuredParser.Parse(live),
             "structured live annotation after comment boundary");
-        var inert = "fnc main():int{return 42;} // @Doc(\\\"inert\\\")" + eol;
+        var inert = "fnc main():int{return 42;} // @Doc(\"inert\")" + eol;
         Require(OresParser.Parse(inert) is Literal,
             "scalar annotation in comment is not active");
         Require(OresStructuredParser.Parse(inert) is not null,
