@@ -154,7 +154,7 @@ internal static class StructuredSourceTests
         }, "compile-time bool may appear in typed conditionals");
         // Java/LLVM/.NET scalar inference and checked-cast conformance.
         foreach (var declaration in new[] {
-            "int x=7;const y=x;const int z=y as int;return z+35;",
+            "int x=7;val y=x;val int z=y as int;return z+35;",
             "bool flag=true;if flag{return 42;}else{return 0;}",
             "int x=(2+5) as int;return x+35;",
             "const int x=7;const y=7 as int;return x+y+28;",
@@ -170,8 +170,8 @@ internal static class StructuredSourceTests
             "const bool x=true as bool;if x{return 42;}else{return 0;}",
             "const x=(7 eq 7) as bool;if x{return 42;}else{return 0;}",
             "let x=7 as int;x=42;return x;",
-            "val x=42;const y=x as int;return y;",
-            "val bool x=true;const y=x as bool;if y{return 42;}else{return 0;}",
+            "val x=42;val y=x as int;return y;",
+            "val bool x=true;val y=x as bool;if y{return 42;}else{return 0;}",
             "const x=7;if true{const nested=x as int;return nested+35;}else{return 0;}",
             "const x=7;return (x+35) as int;"
         })
@@ -230,19 +230,37 @@ internal static class StructuredSourceTests
             "const is immutable");
         Reject("fnc main():int{val bool v=true;if v {v=false;}return 1;}",
             "nested blocks cannot mutate outer val");
-        // Unlike a compile-time constant-expression requirement, Oreslang
-        // const is an immutable *binding* and may be initialized at runtime.
+        // Compile-time const provenance is stricter than readonly binding
+        // permission: runtime let, val, type-first and helper values are NOT
+        // constant even if they happen to evaluate to literal 2.
         foreach (var source in new[] {
             "fnc main():int{let int x=2;const int c=x;return c;}",
-            "fnc main():int{val int x=2;const int c=x;return c;}"
+            "fnc main():int{val int x=2;const int c=x;return c;}",
+            "fnc main():int{int x=2;const int c=x;return c;}",
+            "fnc helper(int x):int{return x+1;}fnc main():int{const int c=helper(1);return c;}"
+        })
+            Reject(source, "runtime-only const initializer cannot pass static provenance");
+        // A runtime-readonly val still captures the value of a mutable source
+        // without inheriting its rebinding rights or inventing constexpr.
+        foreach (var source in new[] {
+            "fnc main():int{let int x=2;val int c=x;return c;}",
+            "fnc main():int{val int x=2;val int c=x;return c;}",
+            "fnc main():int{int x=2;val int c=x;return c;}"
         })
         {
-            var runtimeConst = OresStructuredParser.Parse(source);
-            Require(runtimeConst.Body[1] is StructuredLet {
-                Name: "c", Kind: StructuredBindingKind.Const,
+            var runtimeVal = OresStructuredParser.Parse(source);
+            Require(runtimeVal.Body[1] is StructuredLet {
+                Name: "c", Kind: StructuredBindingKind.Val,
                 Initializer: StructuredRead { Type: IrValueType.I64 }
-            }, "runtime-initialized const must not acquire fake compile-time value");
+            }, "runtime val must retain read and single-assignment permissions");
         }
+        // Previously proven constexpr dependencies must still be allowed.
+        var constChain = OresStructuredParser.Parse(
+            "fnc main():int{const int a=3;const b=a*2;return b+1;}");
+        Require(constChain.Body[1] is StructuredLet {
+            Name: "b", Kind: StructuredBindingKind.Const,
+            Initializer: StructuredInt { Value: 6 }
+        }, "const dependency chain must retain static value six");
         Reject("fnc main():int{const int x=9223372036854775807+1;return x;}",
             "const arithmetic must trap during admission");
         Reject("fnc main():int{const int x=-(-9223372036854775808);return x;}",
