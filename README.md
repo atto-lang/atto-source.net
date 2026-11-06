@@ -312,21 +312,29 @@ tests and actual Linux/Windows Native AOT publish/execution run with
 nonempty CI job steps. Its parents are the independent #185 structured
 compiler and #200 Native AOT release branches.
 
-## Untrusted actor compilation policy (candidate; not implemented)
+## Untrusted actors and tenants (decided; not yet wired into this host)
 
-AttoLang's trust level does not determine whether code is JIT, AOT or
-interpreted. **Untrusted actors MAY be JIT-compiled** when an independently
-reviewed host enforces isolation, memory/CPU/mailbox quotas, worker termination,
-capability restrictions and generation-fenced lifetime. See the common
-[candidate execution contract](https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/pull/332).
+**Decision (2026-11-03):** tenants, including hostile tenants and untrusted
+guest code, share one OS process. Each tenant gets its own VM-isolate inside
+it, as GraalVM isolates work. A per-tenant OS process or sandbox is not
+required. It may be added as defense in depth, but never as a precondition.
+Contract: [tenant isolation v2](https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/pull/352).
 
-The **current shipping .NET compiler/host remains NativeAOT only** and
-supports only its documented arithmetic subset. This does not imply that its
-NativeAOT image supports dynamic CIL loading. Two independent future paths:
-(1) emit AttoLang CIL for a **managed CLR JIT process worker** with OS
-sandboxing and reliable process termination; (2) compile AttoLang to Wasm and
-embed an **independent Wasm JIT engine** under a NativeAOT supervisor/worker.
-Neither path is implemented or conformance-certified by this README.
+On .NET this means:
 
-Preserve direct CIL generation for .NET interoperability. Never depend on
-Thread.Abort or treat an AssemblyLoadContext as hostile-code isolation.
+- **Untrusted tenants run as validated Wasm on the shared native TenantVm
+  core**, called through its C API (`spikes/tenant-vm-dotnet`). Guest code runs
+  on native carrier threads, not CLR threads, so a spinning guest can be
+  stopped, a guest fault ends only its VM, and tenants add no CLR GC load.
+- **Untrusted CIL is refused.** CoreCLR has one process-wide GC heap, no
+  runtime IL verification and no AppDomains, cannot kill a spinning managed
+  thread (`Thread.Abort` is unsupported), and ends the process on stack
+  overflow. An `AssemblyLoadContext` is not an isolate.
+- **Direct CIL stays a first-class backend for trusted code**, JIT or
+  NativeAOT. Trusted tenants may run as CIL; compiler-inserted fuel and depth
+  checks can bound their loops and recursion.
+
+Trust level and compilation mode stay independent: untrusted Wasm may be
+JIT-compiled, AOT-lowered or interpreted. The **current shipping .NET
+compiler/host remains NativeAOT only**, supports only its documented
+arithmetic subset, and does not load CIL at runtime.

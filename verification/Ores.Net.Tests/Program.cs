@@ -30,6 +30,78 @@ static void InvalidSend(Action action, string why)
     throw new Exception("Expected mailbox rejection: " + why);
 }
 
+// Durable M0 is not lowered by the .NET Native AOT compiler. Exercise the
+// real structured lexer/parser boundary, not a source-substring approximation.
+foreach (var durableSource in new[] {
+    "define activity Payments as charge(int cents)->int{return cents;} end",
+    "define workflow Checkout as run(int id)->int{return id;} end",
+    "pub define activity Payments as charge(int cents)->int{return cents;} end",
+    "pub define workflow Checkout as run(int id)->int{return id;} end",
+    "define pub activity Payments as charge(int cents)->int{return cents;} end",
+    "define pub workflow Checkout as run(int id)->int{return id;} end",
+    "define /* whitespace token */ activity Payments as charge(int cents)->int{return cents;} end",
+    "define /* outer /* inner */ outer */ workflow Checkout as run(int id)->int{return id;} end"
+})
+    RejectDiagnostic(() => OresStructuredParser.Parse(durableSource),
+        "DURABLE_M0_BACKEND_UNSUPPORTED",
+        "durable M0 declaration must fail before CIL or Native AOT emission");
+Require(OresStructuredParser.Parse(
+    "fnc main():int{/* define activity Fake as */ // define workflow Fake as\n return 42; }")
+    .Body.Count == 1, "comments mentioning durable declarations must not trigger capability rejection");
+
+var durableM0SourcePath = Path.Combine(AppContext.BaseDirectory,
+    "contracts", "durable-m0", "v1", "checkout.atto");
+RejectDiagnostic(() => OresStructuredParser.Parse(File.ReadAllText(durableM0SourcePath)),
+    "DURABLE_M0_BACKEND_UNSUPPORTED",
+    "shared Java/LLVM/.NET/Wasm declaration corpus must fail before unimplemented CIL lowering");
+// Shared canonical manifest *reference*, not .NET compiler manifestation:
+// LLVM CMake, .NET System.Text.Json, Wasm Node and conformance Node load
+// these exact bytes, never a copied claim that a backend emitted them.
+var durableM0Path = Path.Combine(AppContext.BaseDirectory,
+    "contracts", "durable-m0", "v1", "manifest-v1.json");
+var durableM0ShaPath = Path.Combine(AppContext.BaseDirectory,
+    "contracts", "durable-m0", "v1", "manifest-v1.sha256");
+byte[] durableM0Bytes = File.ReadAllBytes(durableM0Path);
+const string durableM0PinnedSha = "aa1eed7637b99d8c270c3cd7a3f15ab83acf0463b00ebaa58f0f52c8dd525784";
+var durableM0ActualSha = Convert.ToHexString(
+    System.Security.Cryptography.SHA256.HashData(durableM0Bytes)).ToLowerInvariant();
+Require(durableM0Bytes.Length == 1671 &&
+    durableM0ActualSha == durableM0PinnedSha &&
+    File.ReadAllText(durableM0ShaPath).Trim() == durableM0PinnedSha,
+    "DURABLE_M0_MANIFEST_DRIFT: candidate reference bytes, size or SHA-256 changed");
+using (var durableM0Doc = System.Text.Json.JsonDocument.Parse(durableM0Bytes))
+{
+    var root = durableM0Doc.RootElement;
+    Require(root.GetProperty("format").GetString() == "atto.durable.manifest.v1",
+        "durable M0 reference manifest version");
+    var activity = root.GetProperty("activities")[0];
+    Require(activity.GetProperty("id").GetString() == "Billing.PaymentProvider",
+        "activity target must be module-qualified");
+    var workflow = root.GetProperty("workflows")[0];
+    Require(workflow.GetProperty("id").GetString() == "Billing.Checkout",
+        "workflow target must be module-qualified");
+    var commands = workflow.GetProperty("commands");
+    Require(commands.GetArrayLength() == 3,
+        "durable M0 reference must preserve three ordered history commands");
+    for (int step = 0; step < commands.GetArrayLength(); step++)
+        Require(commands[step].GetProperty("order").GetInt32() == step,
+            "durable M0 history order must be dense and stable");
+    Require(commands[0].GetProperty("target").GetString() == "Billing.PaymentProvider.charge",
+        "durable activity call must have canonical qualified target");
+    Require(workflow.GetProperty("queries")[0].GetProperty("endpoint").GetString() == "status",
+        "read-only query must remain outside ordered history");
+    byte[] reencoded = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(root);
+    Require(reencoded.AsSpan().SequenceEqual(durableM0Bytes),
+        "System.Text.Json must preserve exact canonical candidate bytes");
+}
+byte[] durableM0Mutation = (byte[])durableM0Bytes.Clone();
+durableM0Mutation[0] ^= 1;
+Require(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+    durableM0Mutation)).ToLowerInvariant() != durableM0PinnedSha,
+    "mutated manifest must not retain approved source-free reference digest");
+Console.WriteLine("DURABLE_M0_REFERENCE_ONLY|sha256=" + durableM0PinnedSha +
+    "|bytes=1671|not_guest_execution");
+
 // Opaque top types and value-producing conditionals are language-reserved,
  // but this i64-only bootstrap has no tagged dynamic-value ABI or typed CFG
  // lowering for them yet. Reject before OresIR/CIL emission.
@@ -64,6 +136,32 @@ Require(OresParser.Parse("fnc main():int{return 42;} // define virtual actor X")
 Require(OresStructuredParser.Parse("fnc main():int{return 42;} // define state container X") is not null,
     "structured comments must not become declarations");
 
+// AttoLang guard is reserved, but .NET source CFG/ownership effects are
+// not implemented. Both parser entrypoints must deny it explicitly before
+// CIL/NativeAOT emission, not interpret it as a mutable local or function.
+foreach (var guardSource in new[] {
+    "fnc main():int{guard true{return 1;}return 42;}",
+    "fnc main():int{guard 1>0{return 1;}return 42;}",
+    "fnc main():int{guard false{return 1;}return 42;}"
+})
+{
+    RejectDiagnostic(() => OresParser.Parse(guardSource),
+        "GUARD_BACKEND_UNSUPPORTED", "shipping scalar guard admission");
+    RejectDiagnostic(() => OresStructuredParser.Parse(guardSource),
+        "GUARD_BACKEND_UNSUPPORTED", "structured CFG guard admission");
+}
+RejectDiagnostic(
+    () => OresStructuredParser.Parse(
+        "fnc main():int{if true{guard false{return 1;}}else{return 2;}return 42;}"),
+    "GUARD_BACKEND_UNSUPPORTED", "nested guard is not executed as plain if");
+Reject(() => OresStructuredParser.Parse("fnc main():int{let int guard=42;return 42;}"),
+    "guard cannot be reused as a binding name");
+Require(OresParser.Parse("fnc main():int{return 42;} // guard is comment") is Literal,
+    "guard in a comment must not trigger source admission");
+Require(OresStructuredParser.Parse(
+    "fnc main():int{return 42;} // guard is comment") is not null,
+    "structured parser must ignore guard in comments");
+
 // Shipping scalar parser has no class-method CIL/Native AOT lowering.
  // It must reject the exact Java receiver-parity sources before emission,
  // independently of the experimental structured parser's diagnostic gate.
@@ -96,6 +194,7 @@ Require(OresParser.Parse(
     "fnc main():int{return 1;} /* enum Color /* enum Mode */ end */") is Literal,
     "nested block-comment enum words must not trigger overload admission");
 
+OptionResultTrapAdmissionTests.Run();
 AsyncOnlyIoPolicyTests.Run();
 SourceByteBudgetTests.Run();
 ElmCompositionAdmissionTests.Run();
@@ -254,6 +353,12 @@ foreach (var expr in new[] {
     try { OresParser.Parse("fnc main():int{return " + expr + ";}"); }
     catch (FormatException ex) when (ex.Message.Contains("pipeline requires named callable lowering",
             StringComparison.OrdinalIgnoreCase)) { continue; }
+    // Option/Result words are refused by the lexer (#328) before the
+    // pipeline is seen. That is also fail-closed, but only accepted for the
+    // inputs that actually name Option or Result.
+    catch (FormatException ex) when ((expr.Contains("Option") || expr.Contains("Result")) &&
+        ex.Message.StartsWith("Option/Result/trap requires verified tagged-sum CIL",
+            StringComparison.Ordinal)) { continue; }
     throw new Exception("Unsupported value pipeline must fail closed: " + expr);
 }
 Require(OresParser.Parse("fnc main():int{return 1;} // 1 |> unsupported") is Literal,
@@ -690,6 +795,7 @@ Require(await RuntimeHost.ExecuteAsync(() => throw new DivideByZeroException()) 
 ManagedSourceEmitterTests.Run();
 SourceI64Conformance.Run();
 SharedScalarParityConformance.Run();
+AttoXpScalarParityTests.Run(); // pinned .atto scalar IR + CIL evaluator only
 CfgVerifierTests.Run();
 CfgCilStressTests.Run();
 StructuredSourceTests.Run();
