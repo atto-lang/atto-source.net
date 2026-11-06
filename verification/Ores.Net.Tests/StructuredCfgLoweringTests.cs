@@ -121,6 +121,30 @@ internal static class StructuredCfgLoweringTests
             }
             """;
         Check(sum, 45, "two loop-carried SSA values sum 0..9");
+        // Three literal spellings are equivalent, but const is NOT a
+        // compile-time initializer requirement. All four observations travel
+        // through real generated CIL and its checked reference evaluator.
+        foreach (var (source, label) in new[] {
+            ("fnc main():int{int x=7;return x;}", "type-first literal"),
+            ("fnc main():int{const x=7;return x;}", "inferred const literal"),
+            ("fnc main():int{const int x=7;return x;}", "typed const literal"),
+            ("fnc inc(int p):int{return p+1;}fnc main():int{int x=inc(6);return x;}",
+                "type-first runtime helper"),
+            ("fnc inc(int p):int{return p+1;}fnc main():int{const x=inc(6);return x;}",
+                "const runtime helper must remain legal"),
+            ("fnc inc(int p):int{return p+1;}fnc main():int{const int x=inc(6);return x;}",
+                "typed const runtime helper must remain legal")
+        })
+            Check(source, 7, "binding equivalence with CIL: " + label);
+        Check("fnc main():int{let int x=7;x=8;return x;}",
+            8, "explicit let actually rebinds in emitted CIL");
+        Reject("fnc inc(int p):int{return p+1;}" +
+               "fnc main():int{const int x=inc(6);x=8;return x;}",
+            "readonly runtime const cannot rebind after successful call parse");
+        Reject("fnc inc(int p):int{return p+1;}" +
+               "fnc main():int{int x=inc(6);x=8;return x;}",
+            "type-first readonly cannot rebind after successful call parse");
+
         // Genuine type-first readonly bindings in the EXPERIMENTAL structured
         // source -> verified CFG -> deterministic CIL interpreter path.
         // This is not a released Windows/Linux Native AOT guest receipt.
@@ -201,16 +225,16 @@ internal static class StructuredCfgLoweringTests
             ("fnc main():int{const yes=true as bool;if yes{return 42;}else{return 0;}}", "bool inference never int"),
             ("fnc main():int{const yes=(6*7 eq 42) as bool;if yes{return 42;}else{return 0;}}", "bool comparison checked cast"),
             ("fnc main():int{let x=7 as int;x=42;return x;}", "explicit let permits rebinding"),
-            ("fnc main():int{let int x=40;val y=x;return y+2;}", "val runtime initializer is fixed binding"),
-            ("fnc plus(int n):int{return n+1;}fnc main():int{val x=plus(41) as int;return x;}", "checked cast of function result"),
-            ("fnc plus(int n):int{return n+1;}fnc main():int{val x=plus(41);return x;}", "inferred function result without cast"),
+            ("fnc main():int{let int x=40;const y=x;return y+2;}", "const runtime initializer is fixed binding"),
+            ("fnc plus(int n):int{return n+1;}fnc main():int{const x=plus(41) as int;return x;}", "checked cast of function result"),
+            ("fnc plus(int n):int{return n+1;}fnc main():int{const x=plus(41);return x;}", "inferred function result without cast"),
             ("fnc main():int{const x=7;if true{const z=x as int;return z+35;}else{return 0;}}", "scope-local inference"),
             ("fnc main():int{const x=true as bool as bool;if x{return 42;}else{return 0;}}", "chained bool identity casts"),
-            ("fnc main():int{val x=7;val y=x as int;return y+35;}", "inferred val preserves int"),
+            ("fnc main():int{val x=7;const y=x as int;return y+35;}", "inferred val preserves int"),
             ("fnc main():int{let x=7;x=42;return x;}", "inferred let preserves mutable int"),
             ("fnc main():int{let x=false;x=true;if x{return 42;}else{return 0;}}", "inferred mutable bool"),
-            ("fnc yes():bool{return true;}fnc main():int{val x=yes();if x{return 42;}else{return 0;}}", "inferred bool helper result"),
-            ("fnc yes():bool{return true;}fnc main():int{val x=yes() as bool;if x{return 42;}else{return 0;}}", "checked bool helper result"),
+            ("fnc yes():bool{return true;}fnc main():int{const x=yes();if x{return 42;}else{return 0;}}", "inferred bool helper result"),
+            ("fnc yes():bool{return true;}fnc main():int{const x=yes() as bool;if x{return 42;}else{return 0;}}", "checked bool helper result"),
             ("fnc seven():int{return 7 as int;}fnc main():int{return seven()+35;}", "checked identity cast at helper return"),
             ("fnc main():int{const a=7;const b=a;const c=b as int;return c+35;}", "multi-hop int inference"),
             ("fnc main():int{const a=true;const b=a;const c=b as bool;if c{return 42;}else{return 0;}}", "multi-hop bool inference"),
@@ -222,9 +246,9 @@ internal static class StructuredCfgLoweringTests
             ("fnc main():int{return (7 as int as int)*6;}", "chained cast binds before multiplication"),
             ("fnc main():int{const x=7 as int;const y=x as int;return y*6;}", "checked cast through inferred constant reference"),
             ("fnc main():int{let x=7;x=x+1;x=x+34;return x;}", "SSA let multiwrite matches Cranelift LLVM"),
+            ("fnc main():int{let x=7;const snap=x;x=42;return snap+35;}", "const captures prior SSA version"),
             ("fnc main():int{let x=7;val snap=x;x=42;return snap+35;}", "val captures prior SSA version"),
-            ("fnc main():int{let x=7;val snap=x;x=42;return snap+35;}", "val captures prior SSA version"),
-            ("fnc main():int{let x=7;val snap=x as int;x=42;return snap+35;}", "val checked cast snapshot cannot alias mutable local"),
+            ("fnc main():int{let x=7;const snap=x as int;x=42;return snap+35;}", "checked cast snapshot cannot alias mutable local"),
             ("fnc main():int{let x=7 as int;x=(x+35) as int;return x;}", "cast applied to mutable SSA replacement"),
             ("fnc main():int{const base=7;let x=base;x=42;return x;}", "mutable sourced from immutable const")
         })
@@ -368,27 +392,11 @@ internal static class StructuredCfgLoweringTests
         Reject("fnc main():int{const int x=1;x=2;return x;}", "const reassignment");
         Reject("fnc main():int{val int x=1;if true{x=2;}return x;}",
             "val cannot be mutated inside nested block");
-        Check("fnc main():int{let int x=40;val int y=x;return y+2;}",
-            42, "val eagerly snapshots current mutable binding value");
-        Check("fnc main():int{val int x=40;val int y=x;return y+2;}",
-            42, "val accepts runtime single-assignment source value");
-        // Semantic const provenance (not a generic parse failure): a
-        // previously compiled const may feed another const, while a runtime
-        // readonly/val/let/helper result is forbidden as const input.
-        Check("fnc main():int{const int a=3;const b=a*2;return b+1;}",
-            7, "proven const chain computes seven");
-        foreach (var (source, label) in new[] {
-            ("fnc main():int{int x=7;const y=x+1;return y;}",
-                "type-first readonly local cannot become constexpr"),
-            ("fnc main():int{let int x=7;const y=x;return y;}",
-                "mutable local cannot become constexpr"),
-            ("fnc main():int{val int x=7;const y=x;return y;}",
-                "single-assignment val cannot become constexpr"),
-            ("fnc plus(int p):int{return p+1;}fnc main():int{const y=plus(6);return y;}",
-                "runtime helper call cannot become constexpr")
-        })
-            Reject(source, "nonconstant const provenance: " + label);
-                Reject("fnc main():int{const int x=9223372036854775807+1;return x;}",
+        Check("fnc main():int{let int x=40;const int y=x;return y+2;}",
+            42, "const eagerly snapshots current mutable binding value");
+        Check("fnc main():int{val int x=40;const int y=x;return y+2;}",
+            42, "const accepts runtime single-assignment source value");
+        Reject("fnc main():int{const int x=9223372036854775807+1;return x;}",
             "const overflow is rejected before CIL");
 
         CheckOverflow("fnc main():int{return -(-9223372036854775808);}",
