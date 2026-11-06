@@ -75,21 +75,9 @@ public static class OresStructuredParser
         return reader.ReadImports();
     }
 
-    private static List<Token> LexLinked(string source)
-    {
-        if (source.Length > MaxChars || System.Text.Encoding.UTF8.GetByteCount(source) > MaxChars)
-            throw new FormatException("Source exceeds 1 MiB UTF-8 parser limit");
-        var lexer = new Lexer(source, true);
-        var tokens = new List<Token>();
-        do
-        {
-            tokens.Add(lexer.Read());
-            if (tokens.Count > MaxTokens) throw new FormatException("Structured token budget exceeded");
-        } while (tokens[^1].Text.Length != 0);
-        return tokens;
-    }
-
-    private static StructuredLinkedUnit ParseCore(string source, LinkedModuleContext? linking)
+    // Import discovery must enforce the same byte, NUL and UTF-16 admission
+    // as full parsing BEFORE it can resolve or probe another module.
+    private static void ValidateSourceInput(string source)
     {
         ArgumentNullException.ThrowIfNull(source);
         if (source.Length > MaxChars)
@@ -110,6 +98,24 @@ public static class OresStructuredParser
         // UTF-8 bytes, matching the disk/CLI boundary, not code-unit count.
         if (System.Text.Encoding.UTF8.GetByteCount(source) > 1_048_576)
             throw new FormatException("Source exceeds 1 MiB UTF-8 parser limit");
+    }
+
+    private static List<Token> LexLinked(string source)
+    {
+        ValidateSourceInput(source);
+        var lexer = new Lexer(source, true);
+        var tokens = new List<Token>();
+        do
+        {
+            tokens.Add(lexer.Read());
+            if (tokens.Count > MaxTokens) throw new FormatException("Structured token budget exceeded");
+        } while (tokens[^1].Text.Length != 0);
+        return tokens;
+    }
+
+    private static StructuredLinkedUnit ParseCore(string source, LinkedModuleContext? linking)
+    {
+        ValidateSourceInput(source);
         // No structural match lowering or readonly shape metadata in scalar CIL yet.
         StructuralShapeAdmission.RejectUnsupportedPatterns(source);
         var lexer = new Lexer(source, linking is not null);
