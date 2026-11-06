@@ -197,6 +197,16 @@ public static class OresParser
                 if (word == "enum")
                     throw new FormatException(
                         $"nominal enum overloads require compiler-bound dispatch (unsupported .NET bootstrap) at offset {start}");
+                // The shipping i64-only frontend has no tagged sum storage,
+                // constructor discriminants, payload lifetime handling or
+                // ordinary-throw-to-Option trap lowering. Keep an explicit
+                // unsupported-feature category rather than a generic parse
+                // error that might be mistaken for an ADT semantic rejection.
+                // This check occurs after comment/trivia skipping; an inert
+                // comment is never proof that executable tagged source exists.
+                if (word is "Option" or "Result" or "Some" or "None" or "Ok" or "Err" or "trap")
+                    throw new FormatException(
+                        $"Option/Result/trap requires verified tagged-sum CIL and NativeAOT guest-control lowering at offset {start}");
                 // The scalar Native AOT source path must not treat unlowered
                 // critical sections or suspension as ordinary identifiers.
                 // These tokens are recognized after comment skipping.
@@ -231,11 +241,13 @@ public static class OresParser
             // Lex assignment punctuation so unsupported declarations are rejected
             // at their declaration, rather than at a later initializer. The
             // arithmetic parser still has no assignment production.
-            if ("()+-*/%{}:;.=?".IndexOf(ch) >= 0)
+            if ("()+-*/{}:;.=?".IndexOf(ch) >= 0)
             {
                 _i++;
                 return new Token(text[start.._i], start);
             }
+            if (ch == '%')
+                throw new FormatException($"noncanonical '%' source operator; use named Integer.rem/mod at offset {start}");
             throw new FormatException($"Invalid character at offset {start}");
         }
     }
@@ -275,6 +287,10 @@ public static class OresParser
                     exposed = true;
                 }
             }
+            if (Current.Text == "state" && _index + 1 < tokens.Count && tokens[_index + 1].Text == "container")
+                throw new FormatException($"STATE_CONTAINER_BACKEND_UNSUPPORTED: protected heap region and critical guard lowering required at offset {Current.Offset}");
+            if (Current.Text == "virtual" && _index + 1 < tokens.Count && tokens[_index + 1].Text == "actor")
+                throw new FormatException($"VIRTUAL_ACTOR_BACKEND_UNSUPPORTED: logical key and activation fencing required at offset {Current.Offset}");
             Expect("fnc");
             Expect("main");
             Expect("(");
@@ -282,6 +298,9 @@ public static class OresParser
             if (!Take(":")) Expect("->");
             Expect("int");
             Expect("{");
+            if (Current.Text == "guard")
+                throw new FormatException(
+                    $"GUARD_BACKEND_UNSUPPORTED: early-exit CFG and ownership lowering required at offset {Current.Offset}");
             Expect("return");
             var expression = ParseAdd(0);
             Expect(";");
@@ -314,7 +333,7 @@ public static class OresParser
         {
             CheckDepth(depth);
             Expression left = ParseUnary(depth + 1);
-            while (Current.Text is "*" or "/" or "%")
+            while (Current.Text is "*" or "/")
             {
                 char op = Current.Text[0];
                 // Reference Oreslang int/int has a float result. This i64-only
@@ -323,26 +342,7 @@ public static class OresParser
                     throw new FormatException("Division requires float result lowering; unsupported in the i64 source subset");
                 _index++;
                 var rhs = ParseUnary(depth + 1);
-                if (op == '%')
-                {
-                    // Portable P0 subset: a syntactically signed nonzero
-                    // integer literal is required. No dynamic zero/error
-                    // effects or untyped CLR remainder fallbacks.
-                    long divisor = rhs switch
-                    {
-                        Literal literal => literal.Value,
-                        Unary { Operator: '+', Value: Literal literal } => literal.Value,
-                        Unary { Operator: '-', Value: Literal literal }
-                            when literal.Value != long.MinValue => -literal.Value,
-                        _ => throw new FormatException(
-                            "Remainder requires a signed integer literal divisor")
-                    };
-                    if (divisor == 0)
-                        throw new FormatException("Remainder divisor cannot be zero");
-                    left = new Binary('%', left, new Literal(divisor));
-                }
-                else
-                    left = new Binary(op, left, rhs);
+                left = new Binary(op, left, rhs);
             }
             return left;
         }
