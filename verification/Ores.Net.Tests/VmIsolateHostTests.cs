@@ -74,8 +74,10 @@ internal static class VmIsolateHostTests
         ExpectFailure(() => faultHost.Snapshot(fault), "stale fault handle");
         try { faultHost.InvokeGeneratedScalar(recovered, () => throw new OverflowException()); }
         catch (OverflowException) { }
+        // The failed call never commits, and the faulted incarnation's state
+        // is discarded (tenant isolation v2), so it reads back as 0.
         if (faultHost.Snapshot(recovered).Phase != OresVmHost.Phase.Quiescing ||
-            faultHost.GuestSnapshot(recovered).Scalar != 1 ||
+            faultHost.GuestSnapshot(recovered).Scalar != 0 ||
             faultHost.GuestSnapshot(recovered).GuestCalls != 0)
             throw new Exception("guest fault leaked a pin or mutated state");
         faultHost.CompleteShutdown(recovered);

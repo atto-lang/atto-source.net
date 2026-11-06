@@ -35,6 +35,8 @@ public sealed class OresVmHost
         public ulong Id { get; }
         internal ulong Epoch { get; }
         internal ActorMailbox Mailbox { get; }
+        // Bytes queued in this mailbox, charged to the tenant and host quotas.
+        internal long QueuedBytes;
     }
 
     public sealed class ResourcePin
@@ -60,18 +62,28 @@ public sealed class OresVmHost
         internal long ScalarState;
         internal int ActiveGuestCalls;
         internal readonly object GuestTurn = new();
+        internal required long MailLimit { get; init; }
+        internal long QueuedMailBytes;
+        internal string? EndReason;
     }
 
     private readonly object _gate = new();
     private readonly Dictionary<string, TenantState> _tenants = new(StringComparer.Ordinal);
     private readonly int _maxTenants;
     private ulong _nextGeneration = 1;
+    private readonly long _maxQueuedMailBytes;
+    private long _queuedMailBytes;
+    // How often a caller queued behind a running turn rechecks admission.
+    private static readonly TimeSpan QueuedTurnRecheck = TimeSpan.FromMilliseconds(5);
     [ThreadStatic] private static bool _inGuestTurn;
 
-    public OresVmHost(int maxTenants = 32)
+    public OresVmHost(int maxTenants = 32, long maxQueuedMailBytes = 256L * 1024 * 1024)
     {
         if (maxTenants is < 1 or > 1024) throw new ArgumentOutOfRangeException(nameof(maxTenants));
+        if (maxQueuedMailBytes is < 1 or > 64L * 1024 * 1024 * 1024)
+            throw new ArgumentOutOfRangeException(nameof(maxQueuedMailBytes));
         _maxTenants = maxTenants;
+        _maxQueuedMailBytes = maxQueuedMailBytes;
     }
 
     private TenantState Check(IsolateHandle handle)
@@ -92,7 +104,7 @@ public sealed class OresVmHost
     }
 
     public IsolateHandle CreateIsolate(string tenantId, int maxActors = 64, int maxResourcePins = 1024,
-        IsolationMode isolation = IsolationMode.TrustedInProcess)
+        IsolationMode isolation = IsolationMode.TrustedInProcess, long maxQueuedMailBytes = 16L * 1024 * 1024)
     {
         if (isolation != IsolationMode.TrustedInProcess)
             throw new InvalidOperationException("native TenantVm isolate not wired into this host yet");
@@ -104,13 +116,16 @@ public sealed class OresVmHost
             throw new ArgumentException("invalid tenant ID", nameof(tenantId));
         if (maxActors is < 1 or > 65536 || maxResourcePins is < 1 or > 65536)
             throw new ArgumentOutOfRangeException(nameof(maxActors), "invalid tenant quotas");
+        if (maxQueuedMailBytes is < 1 or > 64L * 1024 * 1024 * 1024)
+            throw new ArgumentOutOfRangeException(nameof(maxQueuedMailBytes), "invalid tenant mail quota");
         lock (_gate) {
             if (_tenants.ContainsKey(tenantId)) throw new InvalidOperationException("duplicate tenant");
             if (_tenants.Count >= _maxTenants) throw new InvalidOperationException("host tenant quota");
             if (_nextGeneration == ulong.MaxValue) throw new InvalidOperationException("generation exhausted");
             var handle = new IsolateHandle(tenantId, _nextGeneration++);
             _tenants.Add(tenantId, new TenantState {
-                Handle = handle, ActorLimit = maxActors, PinLimit = maxResourcePins
+                Handle = handle, ActorLimit = maxActors, PinLimit = maxResourcePins,
+                MailLimit = maxQueuedMailBytes
             });
             return handle;
         }
@@ -151,8 +166,45 @@ public sealed class OresVmHost
             var s = Check(handle); CheckActor(s, actor);
             if (s.Phase != Phase.Running)
                 throw new InvalidOperationException("tenant actor admission closed");
+            // Each mailbox bounds itself, but a tenant may own many actors.
+            // Bound queued mail per tenant and per host as well.
+            if (payload.Length > s.MailLimit - s.QueuedMailBytes)
+                throw new InvalidOperationException("tenant mail quota exceeded");
+            if (payload.Length > _maxQueuedMailBytes - _queuedMailBytes)
+                throw new InvalidOperationException("host mail quota exceeded");
             actor.Mailbox.Send(destination, payload);
+            actor.QueuedBytes += payload.Length;
+            s.QueuedMailBytes += payload.Length;
+            _queuedMailBytes += payload.Length;
         }
+    }
+
+    // Host-mediated receive, so every delivered message returns its quota.
+    public bool TryReceiveActor(IsolateHandle handle, ActorTicket actor, out byte[]? payload)
+    {
+        lock (_gate) {
+            var s = Check(handle); CheckActor(s, actor);
+            if (!actor.Mailbox.TryReceive(out payload) || payload is null) { payload = null; return false; }
+            actor.QueuedBytes -= payload.Length;
+            s.QueuedMailBytes -= payload.Length;
+            _queuedMailBytes -= payload.Length;
+            return true;
+        }
+    }
+
+    public (long Tenant, long Host) QueuedMail(IsolateHandle handle)
+    {
+        lock (_gate) {
+            var s = Check(handle);
+            return (s.QueuedMailBytes, _queuedMailBytes);
+        }
+    }
+
+    // Why a tenant stopped admitting guest work on its own: null while it is
+    // healthy, "guest-fault" after a trapped guest call.
+    public string? EndReason(IsolateHandle handle)
+    {
+        lock (_gate) return Check(handle).EndReason;
     }
 
     public ResourcePin PinResource(IsolateHandle handle, ActorTicket actor)
@@ -188,6 +240,9 @@ public sealed class OresVmHost
             if (s.PinsByActor[actor] != 0)
                 throw new InvalidOperationException("actor has outstanding resources");
             actor.Mailbox.Stop(); // Erase pending private queued copies.
+            s.QueuedMailBytes -= actor.QueuedBytes;
+            _queuedMailBytes -= actor.QueuedBytes;
+            actor.QueuedBytes = 0;
             s.PinsByActor.Remove(actor);
             s.Actors.Remove(actor.Id);
         }
@@ -217,7 +272,17 @@ public sealed class OresVmHost
             }
             try
             {
-                lock (tenant.GuestTurn)
+                // A plain lock would keep a queued caller waiting until the
+                // running turn returns, possibly never. Retry briefly and
+                // recheck admission each time instead.
+                while (!Monitor.TryEnter(tenant.GuestTurn, QueuedTurnRecheck))
+                {
+                    lock (_gate) {
+                        if (tenant.Phase != Phase.Running)
+                            throw new InvalidOperationException("queued guest cancelled on shutdown");
+                    }
+                }
+                try
                 {
                     lock (_gate) {
                         if (tenant.Phase != Phase.Running)
@@ -238,16 +303,21 @@ public sealed class OresVmHost
                         lock (_gate) {
                             if (tenant.Phase == Phase.Running)
                                 tenant.Phase = Phase.Quiescing;
+                            // The faulted incarnation's state is not trusted
+                            // and is never read back.
+                            tenant.EndReason ??= "guest-fault";
+                            tenant.ScalarState = 0;
                         }
                         throw;
                     }
                     lock (_gate) {
-                        if (tenant.Phase is not (Phase.Running or Phase.Quiescing))
+                        if (tenant.Phase is not (Phase.Running or Phase.Quiescing) || tenant.EndReason is not null)
                             throw new InvalidOperationException("stopped tenant cannot commit");
                         tenant.ScalarState = checked(tenant.ScalarState + result);
                         return tenant.ScalarState;
                     }
                 }
+                finally { Monitor.Exit(tenant.GuestTurn); }
             }
             finally {
                 lock (_gate) { --tenant.ActiveGuestCalls; }
