@@ -1,5 +1,5 @@
 # Historical filename retained for existing workflow callers. This now checks
-# source rejection of the retired modulo operator and supported NativeAOT arithmetic.
+# source rejection of retired modulo/reserved caret operators and supported NativeAOT arithmetic.
 param([Parameter(Mandatory = $true)][ValidateSet('linux-x64', 'win-x64')][string]$Rid)
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
@@ -26,7 +26,10 @@ $rejected = @(
     '-9223372036854775808%-9223372036854775808',
     '9223372036854775807%-9223372036854775808',
     '7%0', '7%(1+1)', '7%-(1+1)', '7%-9223372036854775809',
-    '7%%2', '7%2%0'
+    '7%%2', '7%2%0',
+    '7^3', '7^^3', '-7^3', '7^(-3)', '(7^3)',
+    '7^3^1', '7^^(1+2)', '7^^3^^1', '7^ ^3',
+    '-9223372036854775808^^-1'
 )
 foreach ($mode in @('compile', 'emit-csharp', 'emit-fsharp')) {
     foreach ($case in $cases) {
@@ -88,13 +91,14 @@ foreach ($mode in @('compile', 'emit-csharp', 'emit-fsharp')) {
         if ($exitCode -eq 0 -or (Test-Path $outputFile)) {
             throw "$mode admitted retired modulo source: $expression"
         }
-        if ($diagnostic -notmatch "Removed Oreslang operator") {
+        $expectedDiagnostic = if ($expression.Contains('^')) { 'Reserved AttoLang operator' } else { 'Removed Oreslang operator' }
+        if ($diagnostic -notmatch [regex]::Escape($expectedDiagnostic)) {
             throw "$mode rejected source without expected operator diagnostic: $expression $diagnostic"
         }
-        Write-Output "MODULO_SOURCE_REJECTED mode=$mode case=$caseIndex"
+        Write-Output "RESERVED_OPERATOR_SOURCE_REJECTED mode=$mode case=$caseIndex"
     }
 }
-Write-Output 'OPERATOR_NATIVE_SUITE_PASS: 12 NativeAOT executions, 42 source denials'
+Write-Output 'OPERATOR_NATIVE_SUITE_PASS: 12 NativeAOT executions, 72 source denials'
 # The last compiler invocation is an expected rejection. Publish success only
 # after every assertion, instead of leaking that command's nonzero exit status.
 exit 0

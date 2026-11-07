@@ -183,6 +183,15 @@ public static class OresParser
             // at lexing admission, before any scalar IR or NativeAOT artifact.
             if (ch == '%')
                 throw new FormatException($"Removed Oreslang operator '%' at offset {start}");
+            // Reject reserved AttoLang operators before constructing scalar IR.
+            if (ch == '^')
+            {
+                bool doubleCaret = _i + 1 < text.Length && text[_i + 1] == '^';
+                string spelling = doubleCaret ? "^^" : "^";
+                string replacement = doubleCaret ? "Xor(a, b)" : "Integer.bitXor(a, b)";
+                throw new FormatException(
+                    $"Reserved AttoLang operator '{spelling}'; use {replacement} at offset {start}");
+            }
             if ("()+-*/{}:;.=?".IndexOf(ch) >= 0)
             {
                 _i++;

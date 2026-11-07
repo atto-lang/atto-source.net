@@ -8,6 +8,7 @@ static class CrossBackendCheckedI64ParityTests
     public static void Run()
     {
         RejectRemovedModulo();
+        RejectReservedCaretOperators();
         foreach (var (name, expression, expected) in new (string, string, long)[]
         {
             ("precedence", "2 + 3 * 4", 14L),
@@ -56,6 +57,66 @@ static class CrossBackendCheckedI64ParityTests
             return;
         }
         throw new Exception("FAILED: int/int division was admitted without float lowering");
+    }
+
+    private static void RejectReservedCaretOperators()
+    {
+        // Java #2641 reserves ^ and ^^; neither may reach .NET CIL emission.
+        var cases = new (string Expression, string Spelling, string Replacement)[]
+        {
+            ("7^3", "^", "Integer.bitXor(a, b)"),
+            ("7 ^ 3", "^", "Integer.bitXor(a, b)"),
+            ("-7^3", "^", "Integer.bitXor(a, b)"),
+            ("7 ^ (-3)", "^", "Integer.bitXor(a, b)"),
+            ("(7^3)", "^", "Integer.bitXor(a, b)"),
+            ("7^3^1", "^", "Integer.bitXor(a, b)"),
+            ("7^^3", "^^", "Xor(a, b)"),
+            ("7 ^^ 3", "^^", "Xor(a, b)"),
+            ("7^^(1+2)", "^^", "Xor(a, b)"),
+            ("7^^3^^1", "^^", "Xor(a, b)"),
+            ("7^ ^3", "^", "Integer.bitXor(a, b)"),
+            ("-9223372036854775808^^-1", "^^", "Xor(a, b)")
+        };
+        foreach (var (expression, spelling, replacement) in cases)
+        {
+            string text = Header + "fnc main():int{return " + expression + ";}";
+            foreach (var (frontend, parse) in new (string, Action)[]
+            {
+                ("scalar", () => { _ = OresParser.Parse(text); }),
+                ("structured", () => { _ = OresStructuredParser.Parse(text); })
+            })
+            {
+                try { parse(); }
+                catch (FormatException error) when
+                    (error.Message.Contains($"Reserved AttoLang operator '{spelling}'",
+                        StringComparison.Ordinal) &&
+                     error.Message.Contains(replacement, StringComparison.Ordinal) &&
+                     error.Message.Contains("at offset ", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+                throw new Exception($"FAILED: {frontend} admitted {spelling} in {expression}");
+            }
+        }
+
+        // Comments are lexically invisible, including nested block comments
+        // and Unicode line separators; they must never cause false positives.
+        foreach (string text in new[]
+        {
+            "fnc main():int{return 40+2;} // ^ ^^\n",
+            "fnc main():int{return 40 /* ^ /* ^^ */ ^ */ +2;}",
+            "fnc main():int{return 40+2;} // ^^\u2028"
+        })
+        {
+            if (OresIrReferenceEvaluator.Evaluate(
+                    OresIrLowering.Lower(OresParser.Parse(text))) != 42)
+                throw new Exception("FAILED: scalar caret comment control");
+            if (OresStructuredParser.Parse(text).Body.Count != 1)
+                throw new Exception("FAILED: structured caret comment control");
+        }
+        try { _ = OresIrLowering.Lower(new Binary('^', new Literal(7), new Literal(3))); }
+        catch (FormatException) { return; }
+        throw new Exception("FAILED: forged caret AST reached verified IR");
     }
 
     private static void RejectRemovedModulo()
