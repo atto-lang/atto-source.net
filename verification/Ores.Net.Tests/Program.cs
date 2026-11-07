@@ -202,6 +202,7 @@ CapabilityIoLifecycleV1SelfTest.Run();
 SourceByteBudgetTests.Run();
 ElmCompositionAdmissionTests.Run();
 StructuralPatternAdmissionTests.Run();
+AdtSourceAdmissionTests.Run();
 NumericSeparatorParityTests.Run();
 CrossBackendCheckedI64ParityTests.Run();
 AsyncInteropFailClosedTests.Run();
