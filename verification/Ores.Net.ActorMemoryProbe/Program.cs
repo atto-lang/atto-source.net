@@ -161,3 +161,71 @@ Require(SpinWait.SpinUntil(() => runtime.LiveActors == 0 &&
 Console.WriteLine("PASS actor-memory-survivor: same-pool peer reads and writes during pinned STOP and after physical reclaim");
 Console.WriteLine("PASS actor-memory-native-probe: four private heaps (two shared-pool actors), foreign handles denied, pooled carriers, stale context denied, pinned STOP and physical reclaim");
 Console.WriteLine("PASS actor-logical-stack-native-probe: four distinct actor-owned frames, cross-turn reads and foreign-handle denial");
+
+// The first production typed-frame backend uses this same native actor-owned
+// stack slab. Check the immutable *trusted compiler schema* in a published
+// NativeAOT binary across two independently admitted physical turns; never
+// confuse this host ABI probe with compiled .atto actor/await execution.
+using var typedRuntime = new ActorRuntime(new ActorRuntimeOptions
+{
+    MaxActors = 1, MessagesPerDispatch = 1,
+    MailboxMessages = 2, MailboxBytes = 64,
+    ActorPersistentBytes = 256, ActorScratchBytes = 64,
+    ActorStackBytes = 96, ActorMaxStackFrames = 4,
+    ActorMaxAllocations = 8, ActorMaxReadLoans = 8,
+    ActorMaxLifetimePins = 8, NativeBudgetBytes = 4096,
+    Dispatcher = new ActorDispatcherOptions
+    {
+        PrivateWorkers = 1, SharedWorkers = 1, UntrustedWorkers = 1,
+        QueueCapacityPerDomain = 1
+    }
+});
+ActorStackFrameHandle? typedActivation = null;
+var guardedActor = typedRuntime.Spawn(ActorKind.Private, (ctx, message) =>
+{
+    if (message.Span[0] == 1)
+    {
+        byte[] mutableTypes = { 1, 2 };
+        typedActivation = ActorScalarFrameAbiV1.Push(ctx, mutableTypes, blockCount: 1);
+        mutableTypes[0] = 2; // an external caller must never retype the frame
+        ActorScalarFrameAbiV1.WriteI64(ctx, typedActivation, 0, long.MinValue);
+        ActorScalarFrameAbiV1.WriteBool(ctx, typedActivation, 1, true);
+        return;
+    }
+
+    Require(message.Span[0] == 2, "unexpected scalar ABI probe phase");
+    Require(ActorScalarFrameAbiV1.ReadI64(ctx, typedActivation!, 0) ==
+            long.MinValue && ActorScalarFrameAbiV1.ReadBool(ctx, typedActivation!, 1),
+        "typed scalar frame failed cross-turn read with sealed source kinds");
+    byte[] original = new byte[ActorScalarFrameAbiV1.SlotBytes];
+    ctx.ReadStackFrame(typedActivation!, ActorScalarFrameAbiV1.HeaderBytes, original);
+    byte[] forged = new byte[ActorScalarFrameAbiV1.SlotBytes];
+    forged[0] = 2;
+    forged[1] = 2;
+    forged[8] = 1;
+    ctx.WriteStackFrame(typedActivation!, ActorScalarFrameAbiV1.HeaderBytes, forged);
+    Deny(() => { _ = ActorScalarFrameAbiV1.ReadBool(ctx, typedActivation!, 0); });
+    Deny(() => ActorScalarFrameAbiV1.WriteBool(ctx, typedActivation!, 0, true));
+    ctx.WriteStackFrame(typedActivation!, ActorScalarFrameAbiV1.HeaderBytes, original);
+
+    ctx.WriteStackFrame(typedActivation!, 8, new byte[] { 2, 0, 0, 0 });
+    Deny(() => { _ = ActorScalarFrameAbiV1.ReadProgramCounter(ctx, typedActivation!); });
+    ctx.WriteStackFrame(typedActivation!, 8, new byte[] { 1, 0, 0, 0 });
+    Require(ActorScalarFrameAbiV1.ReadI64(ctx, typedActivation!, 0) ==
+            long.MinValue,
+        "restored typed bytes did not preserve canonical immutable type authority");
+    ActorScalarFrameAbiV1.Pop(ctx, typedActivation!);
+});
+typedRuntime.Send(guardedActor, new byte[] { 1 });
+Require(SpinWait.SpinUntil(() => typedRuntime.CompletedMessages == 1,
+    TimeSpan.FromSeconds(10)), "native immutable scalar layout first turn failed");
+typedRuntime.Send(guardedActor, new byte[] { 2 });
+Require(SpinWait.SpinUntil(() => typedRuntime.CompletedMessages == 2,
+    TimeSpan.FromSeconds(10)), "native immutable scalar layout replay/check turn failed");
+Require(typedRuntime.FaultedTurns == 0,
+    "native immutable scalar layout unexpectedly faulted its host actor");
+typedRuntime.Stop(guardedActor);
+Require(SpinWait.SpinUntil(() =>
+    typedRuntime.LiveActors == 0 && typedRuntime.NativeReservedBytes == 0,
+    TimeSpan.FromSeconds(10)), "native typed scalar frame was not reclaimed");
+Console.WriteLine("PASS actor-scalar-sealed-schema-native-probe: immutable i64/bool layout, forged tags and block counts denied across turns; NOT compiled .atto");
