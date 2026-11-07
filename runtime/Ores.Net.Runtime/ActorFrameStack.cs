@@ -235,7 +235,7 @@ internal sealed class ActorFrameStack
         _arena.ValidatePhysicalTurn(turn);
         int offset = CheckedSlotOffset(frame, slot, ActorStackSlotKind.I64);
         Span<byte> encoded = stackalloc byte[8];
-        Read(turn, frame, offset, encoded);
+        Read(turn, frame, offset, encoded, typedAccess: true);
         return BinaryPrimitives.ReadInt64LittleEndian(encoded);
     }
 
@@ -246,7 +246,7 @@ internal sealed class ActorFrameStack
         int offset = CheckedSlotOffset(frame, slot, ActorStackSlotKind.I64);
         Span<byte> encoded = stackalloc byte[8];
         BinaryPrimitives.WriteInt64LittleEndian(encoded, value);
-        Write(turn, frame, offset, encoded);
+        Write(turn, frame, offset, encoded, typedAccess: true);
     }
 
     internal bool ReadBool(ActorArenaTurn turn,
@@ -255,7 +255,7 @@ internal sealed class ActorFrameStack
         _arena.ValidatePhysicalTurn(turn);
         int offset = CheckedSlotOffset(frame, slot, ActorStackSlotKind.Bool);
         Span<byte> encoded = stackalloc byte[1];
-        Read(turn, frame, offset, encoded);
+        Read(turn, frame, offset, encoded, typedAccess: true);
         if (encoded[0] > 1)
             throw new FormatException("Noncanonical bool in typed actor frame");
         return encoded[0] == 1;
@@ -268,7 +268,7 @@ internal sealed class ActorFrameStack
         int offset = CheckedSlotOffset(frame, slot, ActorStackSlotKind.Bool);
         Span<byte> encoded = stackalloc byte[1];
         encoded[0] = value ? (byte)1 : (byte)0;
-        Write(turn, frame, offset, encoded);
+        Write(turn, frame, offset, encoded, typedAccess: true);
     }
 
     private int CheckedSlotOffset(ActorStackFrameHandle frame,
@@ -293,22 +293,28 @@ internal sealed class ActorFrameStack
     }
 
     internal void Read(ActorArenaTurn turn, ActorStackFrameHandle frame,
-        int offset, Span<byte> destination)
+        int offset, Span<byte> destination, bool typedAccess = false)
     {
         _arena.ValidatePhysicalTurn(turn);
         if (_pendingResume is not null)
             throw new InvalidOperationException("Suspended actor stack cannot be read");
         ValidateFrame(frame, offset, destination.Length);
+        if (frame.Layout is not null && !typedAccess)
+            throw new InvalidOperationException(
+                "Typed actor frames deny raw byte access outside verified slot operations");
         _arena.Read(turn, _backing!, checked(frame.Offset + offset), destination);
     }
 
     internal void Write(ActorArenaTurn turn, ActorStackFrameHandle frame,
-        int offset, ReadOnlySpan<byte> source)
+        int offset, ReadOnlySpan<byte> source, bool typedAccess = false)
     {
         _arena.ValidatePhysicalTurn(turn);
         if (_pendingResume is not null)
             throw new InvalidOperationException("Suspended actor stack cannot be written");
         ValidateFrame(frame, offset, source.Length);
+        if (frame.Layout is not null && !typedAccess)
+            throw new InvalidOperationException(
+                "Typed actor frames deny raw byte access outside verified slot operations");
         _arena.Write(turn, _backing!, checked(frame.Offset + offset), source);
     }
 

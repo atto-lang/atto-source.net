@@ -66,18 +66,18 @@ internal static class ActorTypedFrameResumeSelfTest
             if (message.Span[0] == 1)
             {
                 saved = context.PushTypedStackFrame(layout);
-                context.WriteStackI64(saved, 0, long.MinValue);
-                context.WriteStackBool(saved, 1, true);
-                context.WriteStackI64(saved, 2, long.MaxValue);
+                context.WriteStackI64(saved!, 0, long.MinValue);
+                context.WriteStackBool(saved!, 1, true);
+                context.WriteStackI64(saved!, 2, long.MaxValue);
                 oldContext = context;
-                ticket = context.SuspendStackFrame(saved);
+                ticket = context.SuspendStackFrame(saved!);
                 RejectInvalid(() => _ = context.ResumeStackFrame(ticket!),
                     "cannot resume within the suspending physical turn");
-                RejectInvalid(() => context.ReadStackI64(saved, 0),
+                RejectInvalid(() => context.ReadStackI64(saved!, 0),
                     "cannot read while the actor stack is suspended");
-                RejectInvalid(() => context.WriteStackBool(saved, 1, false),
+                RejectInvalid(() => context.WriteStackBool(saved!, 1, false),
                     "cannot overwrite a suspended continuation");
-                RejectInvalid(() => context.PopStackFrame(saved),
+                RejectInvalid(() => context.PopStackFrame(saved!),
                     "cannot pop a suspended continuation without cancellation");
                 RejectInvalid(() => context.PushStackFrame(8),
                     "cannot create new frame under a frozen stack");
@@ -100,9 +100,12 @@ internal static class ActorTypedFrameResumeSelfTest
                 "wrong slot kind cannot masquerade as i64");
             RejectRange(() => _ = context.ReadStackI64(restored, 3),
                 "typed slot indices are bounded");
-            context.WriteStackFrame(restored, 8, new byte[] { 2 });
-            RejectFormat(() => _ = context.ReadStackBool(restored, 1),
-                "noncanonical raw bool is rejected on typed restoration");
+            RejectInvalid(() =>
+                context.WriteStackFrame(restored, 8, new byte[] { 2 }),
+                "raw bytes cannot forge a noncanonical typed bool");
+            RejectInvalid(() =>
+                context.ReadStackFrame(restored, 0, new byte[8]),
+                "typed spills cannot be read through raw byte access");
             context.WriteStackBool(restored, 1, false);
             Require(!context.ReadStackBool(restored, 1),
                 "typed bool restoration uses canonical one-byte encoding");
@@ -159,9 +162,9 @@ internal static class ActorTypedFrameResumeSelfTest
             if (message.Span[0] == 1)
             {
                 canceledFrame = context.PushTypedStackFrame(layout);
-                context.WriteStackI64(canceledFrame, 0, -123456789);
-                context.WriteStackBool(canceledFrame, 1, true);
-                canceledTicket = context.SuspendStackFrame(canceledFrame);
+                context.WriteStackI64(canceledFrame!, 0, -123456789);
+                context.WriteStackBool(canceledFrame!, 1, true);
+                canceledTicket = context.SuspendStackFrame(canceledFrame!);
                 return;
             }
 
@@ -278,13 +281,6 @@ internal static class ActorTypedFrameResumeSelfTest
         try { action(); }
         catch (ArgumentOutOfRangeException) { return; }
         throw new Exception("Actor typed frame bounds were too permissive: " + scenario);
-    }
-
-    private static void RejectFormat(Action action, string scenario)
-    {
-        try { action(); }
-        catch (FormatException) { return; }
-        throw new Exception("Actor typed frame bool validation was too permissive: " + scenario);
     }
 
     private static void RejectNoWire(Action action, string scenario)

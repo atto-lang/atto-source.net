@@ -93,7 +93,9 @@ The runtime host additionally supplies immutable 1–128-slot `ActorStackFrameLa
 descriptors. Each slot is eight bytes, little-endian, and is exactly `I64`
 or `Bool`; bool values have canonical one-byte 0/1 encodings. Layouts copy
 caller-provided arrays so later mutation cannot change an already-issued frame.
-Raw `PushStackFrame` frames cannot be used as typed continuation spill frames.
+Raw `PushStackFrame` frames cannot be used as typed continuation spill frames;
+typed frames refuse the public raw byte read/write calls even during a live
+physical turn. Only canonical typed operations may touch their slots.
 
 `SuspendStackFrame` only accepts the active LIFO top frame, freezes the entire
 actor stack, and returns an exact-issued JSON-nonserializable
@@ -112,7 +114,7 @@ verified await suspension, supervisor propagation, structured cancellation,
 and distinct Windows/Linux native execution receipts are pending.
 
 The `ActorTypedFrameResumeSelfTest` covers layout snapshotting, typed i64/bool
-round-trip across physical turns, noncanonical bool denial, stale/foreign
+round-trip across physical turns, raw typed-frame access denial, stale/foreign
 tickets, same-turn denial, single-claim replay, cancellation and zeroed reuse,
 retirement unwind, and actor-local quota-fault containment with a surviving
 peer. Source-org CI without nonzero executed steps is **NOT_EXECUTED**.
