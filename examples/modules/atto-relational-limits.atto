@@ -12,4 +12,7 @@ define module limits as
   pub fnc at_least(int value, int bound) -> bool {
     return value >= bound;
   }
+  pub fnc at_most(int value, int bound) -> bool {
+    return value <= bound;
+  }
 end
