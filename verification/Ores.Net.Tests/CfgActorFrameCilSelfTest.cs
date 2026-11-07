@@ -212,7 +212,7 @@ internal static class CfgActorFrameCilSelfTest
 
     private static int Calls(MethodDefinition method, string name) =>
         method.Body.Instructions.Count(i =>
-            i.OpCode.Code is Code.Call or Code.Callvirt &&
+            (i.OpCode.Code is Code.Call or Code.Callvirt) &&
             i.Operand is MethodReference mr && mr.Name == name);
 
     private static string NewTemp()
