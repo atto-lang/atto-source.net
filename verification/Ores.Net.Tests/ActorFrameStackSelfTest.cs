@@ -7,6 +7,7 @@ internal static class ActorFrameStackSelfTest
         InvalidConfigurationFailsBeforeCarrierAdmission();
         IndependentStacksSurviveTurnsAndRejectForeignAndStaleHandles();
         BoundsAndLifoExhaustionAreFailureNeutral();
+        RetirementAllowsInFlightFrameCleanupButRejectsPush();
         Console.WriteLine(
             "PASS .NET actor-owned logical frame stack host-only regression (not guest/AOT certification)");
     }
@@ -183,6 +184,42 @@ internal static class ActorFrameStackSelfTest
         Require(WaitUntil(() =>
             runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0),
             "bounded logical stack retires without native memory leak");
+    }
+
+    private static void RetirementAllowsInFlightFrameCleanupButRejectsPush()
+    {
+        using var runtime = new ActorRuntime(Options());
+        using var entered = new ManualResetEventSlim();
+        using var leave = new ManualResetEventSlim();
+        bool poppedDuringRetirement = false;
+        var actor = runtime.Spawn(ActorKind.Private, (context, _) =>
+        {
+            var root = context.PushStackFrame(16);
+            context.WriteStackFrame(root, 0, new byte[] { 0xE7 });
+            entered.Set();
+            if (!leave.Wait(TimeSpan.FromSeconds(5)))
+                throw new Exception("Retirement frame probe timed out");
+            RejectInvalid(() => context.PushStackFrame(8),
+                "retired actor must not admit a new frame");
+            context.PopStackFrame(root);
+            poppedDuringRetirement = true;
+        });
+        runtime.Send(actor, new byte[] { 1 });
+        try
+        {
+            Require(entered.Wait(TimeSpan.FromSeconds(5)),
+                "actor entered a live physical turn before retirement");
+            runtime.Stop(actor);
+        }
+        finally
+        {
+            leave.Set();
+        }
+        Require(WaitUntil(() => runtime.CompletedMessages == 1 &&
+            runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0),
+            "actor stops after permitted stack unwind and full native reclaim");
+        Require(poppedDuringRetirement && runtime.FaultedTurns == 0,
+            "in-flight frame cleanup must remain legal after logical retirement");
     }
 
     private static bool WaitUntil(Func<bool> condition) =>
