@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Ores.Net.Runtime;
+using Ores.Net.Compiler.ActorFrames;
 
 static void Require(bool ok, string why)
 {
@@ -19,7 +20,7 @@ var options = new ActorRuntimeOptions
     MaxActors = actorCount, MessagesPerDispatch = 1,
     MailboxMessages = 4, MailboxBytes = 64,
     ActorPersistentBytes = 128, ActorScratchBytes = 64,
-    ActorStackBytes = 256, ActorMaxStackFrames = 4,
+    ActorStackBytes = 512, ActorMaxStackFrames = 4,
     ActorMaxAllocations = 8, ActorMaxReadLoans = 8,
     ActorMaxLifetimePins = 8, NativeBudgetBytes = 4096,
     Dispatcher = new ActorDispatcherOptions
@@ -28,6 +29,11 @@ var options = new ActorRuntimeOptions
         QueueCapacityPerDomain = actorCount
     }
 };
+// Real typed .atto source is parsed and verified, then executed by the
+// explicit actor-frame trampoline; it is not compiled to actor CIL yet.
+var sourceFile = Path.Combine(AppContext.BaseDirectory,
+    "actor-frame-v1", "source-scalar-bridge.atto");
+var scalarGuest = ActorScalarFrameProgram.Compile(File.ReadAllText(sourceFile));
 using var runtime = new ActorRuntime(options);
 using var initialized = new CountdownEvent(actorCount);
 using var verified = new CountdownEvent(actorCount);
@@ -76,6 +82,8 @@ for (int i = 0; i < actorCount; ++i)
             }
             if (first)
             {
+                Require(scalarGuest.Execute(context) == 42,
+                    "source-verified native frame interpreter executed inside actor");
                 handles[index] = context.AllocatePersistent(8);
                 context.Write(handles[index]!, 0,
                     new byte[] { (byte)(11 + index), 0, 0, 0, 0, 0, 0, 0 });
