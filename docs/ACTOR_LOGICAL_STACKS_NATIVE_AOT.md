@@ -27,8 +27,10 @@ change the arena/process native budget accounting.
 - Cross-actor frame use, off-carrier access and stale turn replay all fail
   through the existing `ActorArena` physical-turn and capability checks.
 - Retirement blocks **new pushes**; active-turn cleanup and final arena
-  reclamation follow existing quiescence gates. The runtime does not
-  serialize or grant frame handles via mailbox `ActorRef`.
+  reclamation follow existing quiescence gates. An explicit JSON converter
+  denies serialization and deserialization of frame handles; no `ActorRef`
+  message can grant native-frame authority. Other wire formats must enforce
+  the same no-authority policy.
 
 ## What separate stacks mean (and do not mean)
 
