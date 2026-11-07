@@ -8,6 +8,7 @@ internal static class ActorRuntimeSelfTest
         ThreeKindsUseAssignedDomainsAndActorArenas();
         UnknownActorKindFailsBeforeNativeAllocation();
         RejectedMessagesDoNotStartCarriers();
+        ForgedSameIdCannotObserveTermination();
         OneActorNeverRunsTwoHandlersConcurrently();
         DeliveredMessageStorageIsTurnBound();
         PersistentShardSurvivesAcrossActorTurns();
@@ -18,6 +19,41 @@ internal static class ActorRuntimeSelfTest
         FailedTurnAdmissionScrubsDequeuedMessage();
         Console.WriteLine(
             "PASS .NET integrated actor runtime mailbox, arena, domains, stop and fault isolation");
+    }
+
+    private static void ForgedSameIdCannotObserveTermination()
+    {
+        using var runtime = new ActorRuntime(Options());
+        var real = runtime.Spawn(ActorKind.Shared, static (_, _) => { });
+        var forged = new ActorMailbox(real.Id).CurrentRef;
+        Require(forged.Id == real.Id && forged.Generation == real.Generation &&
+                forged != real,
+            "test must forge the same numeric actor identity with a different nonce");
+
+        // Internal observation is reached reflectively in this host-only test;
+        // production need not expose an unauthenticated public observation API.
+        MethodInfo? observer = typeof(ActorRuntime).GetMethod(
+            "ObserveTermination", BindingFlags.Instance | BindingFlags.NonPublic);
+        Require(observer is not null, "termination observer entrypoint must exist");
+        bool denied = false;
+        try
+        {
+            _ = observer!.Invoke(runtime, new object[] { forged });
+        }
+        catch (TargetInvocationException exception)
+            when (exception.InnerException is InvalidOperationException)
+        {
+            denied = true;
+        }
+        Require(denied, "a forged ActorRef must not observe another actor's termination");
+        Require(runtime.LiveActors == 1,
+            "denied observation must not affect the original actor's lifecycle");
+
+        Task legitimate = (Task)(observer!.Invoke(runtime, new object[] { real })
+            ?? throw new InvalidOperationException("missing legitimate termination task"));
+        runtime.Stop(real);
+        Require(legitimate.Wait(TimeSpan.FromSeconds(5)),
+            "runtime-minted ActorRef must continue to observe termination");
     }
 
     private static void UnknownActorKindFailsBeforeNativeAllocation()
