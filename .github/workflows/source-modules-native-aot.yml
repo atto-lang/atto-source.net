@@ -318,8 +318,18 @@ jobs:
               throw 'Compiler executable changed while building native numeric guests'
             }
             foreach ($file in $caseFiles) { Assert-CommittedCoreSource $file }
+            $runId = [long]$env:GITHUB_RUN_ID
+            $runAttempt = [int]$env:GITHUB_RUN_ATTEMPT
+            if ($runId -le 0 -or $runAttempt -le 0) {
+              throw 'Numeric NativeAOT receipt requires an allocated GitHub run and attempt identity'
+            }
             $receipt = @{
               scope='atto.core/numeric-stage2-not-five-backend-parity';
+              run_id=$runId;
+              run_attempt=$runAttempt;
+              workflow_path='.github/workflows/source-modules-native-aot.yml';
+              workflow_job='native-source-modules';
+              runner_os='${{ matrix.os }}';
               label=$case.label;
               source_head=(git rev-parse HEAD);
               source_tree=(git rev-parse 'HEAD^{tree}');
@@ -340,13 +350,23 @@ jobs:
               $receipts[0].graph_sha256 -ceq $receipts[1].graph_sha256) {
             throw 'Canonical 42-to-43 mutation failed to change graph, CIL or native bytes'
           }
+          if ($receipts[0].run_id -ne $receipts[1].run_id -or
+              $receipts[0].run_attempt -ne $receipts[1].run_attempt -or
+              $receipts[0].source_head -cne $receipts[1].source_head -or
+              $receipts[0].compiler_binary_sha256 -cne $receipts[1].compiler_binary_sha256) {
+            throw 'Numeric mutation pair was not produced by the same run, attempt, head and compiler'
+          }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
           name: atto-core-numeric-native-${{ matrix.rid }}
           path: |
             artifacts/atto-core-numeric-receipts/
-          if-no-files-found: warn
+            artifacts/atto-numeric-base/OresGenerated.dll
+            artifacts/atto-numeric-mutated/OresGenerated.dll
+            artifacts/atto-numeric-base/app/oreslang-app${{ matrix.suffix }}
+            artifacts/atto-numeric-mutated/app/oreslang-app${{ matrix.suffix }}
+          if-no-files-found: error
       - name: Publish and execute statically linked module application
         shell: pwsh
         run: |

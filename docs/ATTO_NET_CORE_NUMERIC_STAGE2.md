@@ -74,3 +74,21 @@ the byte-level attestation is portable rather than accidentally
 rejecting legitimate Windows CRLF conversion. Graph, CIL,
 compiler-binary and native-artifact SHA-256 checks remain separate.
 No hosted run of these new checks is yet confirmed.
+
+## Independently rehashable numeric NativeAOT evidence
+
+The Linux/Windows numeric stage-2 workflow now binds both receipts
+to `GITHUB_RUN_ID`, `GITHUB_RUN_ATTEMPT`, the immutable workflow path,
+job ID, runner OS, exact Git source head/tree, canonical source blobs,
+and compiler binary digest. Both receipts must match on the shared
+run/attempt/head/compiler tuple while their graph/CIL/native outputs
+must differ. The source-owned Actions artifact now includes the
+actual generated CIL assemblies and Linux/Windows NativeAOT guest
+executables for both baseline and mutation, not merely JSON digests.
+A reviewer can independently SHA-256 the uploaded files and compare
+the exact receipts **within this source repository**. Neither the
+private compiler source nor a compiler binary is mirrored across
+organizations. The compiler binary itself is still only a digest
+witness; stronger independent compiler provenance requires separately
+approved source-owned review. This remains unexecuted while GitHub
+runners are unavailable.
