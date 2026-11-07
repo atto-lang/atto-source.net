@@ -1,0 +1,53 @@
+name: .NET UHL-1 native-host capability gate (not actual hot reload)
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/uhl1-nativeaot-hostonly.yml'
+      - 'runtime/Ores.Net.Runtime/UniversalHotLoadV1.cs'
+      - 'verification/Ores.Net.Tests/UniversalHotLoadV1SelfTest.cs'
+      - 'verification/Ores.Net.Tests/Program.cs'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verified-hostonly:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Validate source tree
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -n "$(git rev-parse HEAD^{tree})"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          git hash-object runtime/Ores.Net.Runtime/UniversalHotLoadV1.cs
+          git hash-object verification/Ores.Net.Tests/UniversalHotLoadV1SelfTest.cs
+      - name: Install .NET 10 SDK
+        uses: actions/setup-dotnet@d4bdcbe04912f505eaa29b3c62b4c24b99ea5ab5
+        with:
+          dotnet-version: '10.0.x'
+      - name: Execute .NET self-tests including UHL-1 admission
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj \
+            --configuration Release --no-launch-profile \
+            | tee "$RUNNER_TEMP/uhl1-net.log"
+          grep -Fqx 'PASS .NET UHL-1 host-only NativeAOT capability gate (10000 denied rounds)' \
+            "$RUNNER_TEMP/uhl1-net.log"
+      - name: Preserve host-only evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: uhl1-net-hostonly-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/uhl1-net.log
+          if-no-files-found: error
+          retention-days: 7
