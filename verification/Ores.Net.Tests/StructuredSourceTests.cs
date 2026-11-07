@@ -257,6 +257,52 @@ internal static class StructuredSourceTests
             }
             throw new Exception(".NET frontend admitted unlowered inverted class source");
         }
+        foreach (var source in new[] {
+            "define inverted struct Position as float x; float y; end",
+            "define pub inverted struct Position as float x; end",
+            "pub define inverted struct Position as float x; end",
+            "define /* declaration comment */ inverted /* layout comment */ struct Position as float x; end"
+        })
+        {
+            try { _ = OresStructuredParser.Parse(source); }
+            catch (FormatException ex)
+            {
+                Require(ex.Message.Contains(
+                        "Inverted struct requires checked value-row, one-level packed columns and ownership lowering",
+                        StringComparison.Ordinal) &&
+                        ex.Message.Contains("offset", StringComparison.Ordinal),
+                    "inverted struct must fail through the dedicated backend gate: " + ex.Message);
+                continue;
+            }
+            throw new Exception(".NET frontend admitted unlowered inverted struct source");
+        }
+        // The lookahead must not label an absent or unrelated declaration
+        // kind as an inverted CLASS. These are malformed source admissions,
+        // not claims that any nominal or inverted lowering is supported.
+        foreach (var source in new[] {
+            "define inverted",
+            "define inverted actor Position as end",
+            "define pub inverted trait Position as end",
+            "pub define /* declaration comment */ inverted /* kind comment */ bogus Position as end"
+        })
+        {
+            try { _ = OresStructuredParser.Parse(source); }
+            catch (FormatException ex)
+            {
+                Require(ex.Message.Contains(
+                        "Inverted declaration requires class or struct kind",
+                        StringComparison.Ordinal) &&
+                        ex.Message.Contains("offset", StringComparison.Ordinal),
+                    "malformed inverted kind must fail through the dedicated gate: " + ex.Message);
+                continue;
+            }
+            throw new Exception(".NET frontend admitted malformed inverted declaration: " + source);
+        }
+        // Lexical evidence only: inert comments cannot accidentally become a
+        // source layout capability or trigger the inverted declaration gate.
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{return 42;} // define inverted struct Position") is not null,
+            "inverted declaration text inside a comment must remain inert");
 
         // Shared implicit-val/typed-initialize feature gate. This .NET
         // bootstrap does not have nominal class layouts or CIL constructors.
