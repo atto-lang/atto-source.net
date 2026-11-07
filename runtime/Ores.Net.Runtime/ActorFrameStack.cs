@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -16,8 +17,13 @@ public sealed class ActorFrameExecution
 [JsonConverter(typeof(ActorFrameHandleNoWireConverter))]
 public sealed class ActorFrameHandle
 {
-    internal ActorFrameHandle(int length) => Length = length;
+    internal ActorFrameHandle(int length, ActorFrameTypedLayout? layout = null)
+    {
+        Length = length;
+        TypedLayout = layout;
+    }
     public int Length { get; }
+    internal ActorFrameTypedLayout? TypedLayout { get; }
 }
 
 /// <summary>One-shot continuation for a suspended logical actor stack.</summary>
@@ -25,6 +31,48 @@ public sealed class ActorFrameHandle
 public sealed class ActorFrameContinuation
 {
     internal ActorFrameContinuation() { }
+}
+
+/// <summary>
+/// Immutable trusted-runtime scalar spill schema. This is not proof that
+/// source .atto actors are lowered to continuations; the verified compiler
+/// CFG planner must supply the kinds before emitted CIL can use these slots.
+/// </summary>
+public enum ActorFrameScalarKind { I64, Bool }
+
+public sealed class ActorFrameTypedLayout
+{
+    private readonly ActorFrameScalarKind[] _kinds;
+
+    public ActorFrameTypedLayout(params ActorFrameScalarKind[] kinds)
+    {
+        ArgumentNullException.ThrowIfNull(kinds);
+        if (kinds.Length is 0 or > 128)
+            throw new ArgumentOutOfRangeException(nameof(kinds),
+                "Typed actor continuation requires 1..128 scalar spill slots");
+        _kinds = (ActorFrameScalarKind[])kinds.Clone();
+        foreach (var kind in _kinds)
+            if (kind is not (ActorFrameScalarKind.I64 or ActorFrameScalarKind.Bool))
+                throw new ArgumentOutOfRangeException(nameof(kinds),
+                    "Unknown typed actor frame scalar kind");
+    }
+
+    public int SlotCount => _kinds.Length;
+    public int ByteLength => checked(_kinds.Length * 8);
+
+    public ActorFrameScalarKind GetKind(int slot)
+    {
+        if ((uint)slot >= (uint)_kinds.Length)
+            throw new ArgumentOutOfRangeException(nameof(slot));
+        return _kinds[slot];
+    }
+
+    internal int CheckedOffset(int slot, ActorFrameScalarKind expected)
+    {
+        if (GetKind(slot) != expected)
+            throw new InvalidOperationException("Typed actor frame slot kind mismatch");
+        return checked(slot * 8);
+    }
 }
 
 // Host frame/continuation tokens must not become data. JSON rejection is
@@ -102,6 +150,7 @@ public unsafe sealed class ActorFrameStack : IDisposable
     private ActorFrameExecution? _execution;
     private ActorArenaTurn? _physicalTurn;
     private ActorFrameContinuation? _continuation;
+    private ulong _suspendingEpoch;
     private int _depth;
     private int _used;
 
@@ -153,25 +202,36 @@ public unsafe sealed class ActorFrameStack : IDisposable
     }
 
     public ActorFrameHandle Push(ActorArenaTurn physicalTurn,
-        ActorFrameExecution execution, int bytes)
+        ActorFrameExecution execution, int bytes,
+        ActorFrameTypedLayout? typedLayout = null)
     {
         lock (_gate)
         {
             EnsureExecution(physicalTurn, execution);
             if (bytes <= 0)
                 throw new ArgumentOutOfRangeException(nameof(bytes));
+            if (typedLayout is not null && typedLayout.ByteLength != bytes)
+                throw new InvalidOperationException(
+                    "Typed actor frame schema must exactly match allocated bytes");
             if (_depth == _frames.Length || bytes > _maxBytes - _used)
             {
                 Poison();
                 throw new ActorFrameBudgetExceededException();
             }
-            var frame = new ActorFrameHandle(bytes);
+            var frame = new ActorFrameHandle(bytes, typedLayout);
             _offsets[_depth] = _used;
             _frames[_depth++] = frame;
             CryptographicOperations.ZeroMemory(new Span<byte>(_storage + _used, bytes));
             _used += bytes;
             return frame;
         }
+    }
+
+    public ActorFrameHandle PushTyped(ActorArenaTurn physicalTurn,
+        ActorFrameExecution execution, ActorFrameTypedLayout layout)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+        return Push(physicalTurn, execution, layout.ByteLength, layout);
     }
 
     public void Write(ActorArenaTurn physicalTurn, ActorFrameExecution execution,
@@ -181,6 +241,9 @@ public unsafe sealed class ActorFrameStack : IDisposable
         {
             EnsureExecution(physicalTurn, execution);
             int index = FindFrame(frame);
+            if (frame.TypedLayout is not null)
+                throw new InvalidOperationException(
+                    "Typed actor frames deny raw byte writes");
             CheckRange(frame.Length, offset, source.Length);
             source.CopyTo(new Span<byte>(_storage + _offsets[index] + offset, source.Length));
         }
@@ -193,10 +256,79 @@ public unsafe sealed class ActorFrameStack : IDisposable
         {
             EnsureExecution(physicalTurn, execution);
             int index = FindFrame(frame);
+            if (frame.TypedLayout is not null)
+                throw new InvalidOperationException(
+                    "Typed actor frames deny raw byte reads");
             CheckRange(frame.Length, offset, destination.Length);
             new ReadOnlySpan<byte>(_storage + _offsets[index] + offset, destination.Length)
                 .CopyTo(destination);
         }
+    }
+
+    // Typed operations never route through public raw byte APIs. They check
+    // the exact-issued frame, authenticated actor turn and slot type under
+    // the same slab lock, preserving canonical little-endian scalar encoding.
+    public void WriteI64(ActorArenaTurn turn, ActorFrameExecution execution,
+        ActorFrameHandle frame, int slot, long value)
+    {
+        lock (_gate)
+        {
+            EnsureExecution(turn, execution);
+            int index = FindFrame(frame);
+            int offset = CheckedTypedOffset(frame, slot, ActorFrameScalarKind.I64);
+            Span<byte> bytes = stackalloc byte[8];
+            BinaryPrimitives.WriteInt64LittleEndian(bytes, value);
+            bytes.CopyTo(new Span<byte>(_storage + _offsets[index] + offset, 8));
+        }
+    }
+
+    public long ReadI64(ActorArenaTurn turn, ActorFrameExecution execution,
+        ActorFrameHandle frame, int slot)
+    {
+        lock (_gate)
+        {
+            EnsureExecution(turn, execution);
+            int index = FindFrame(frame);
+            int offset = CheckedTypedOffset(frame, slot, ActorFrameScalarKind.I64);
+            return BinaryPrimitives.ReadInt64LittleEndian(
+                new ReadOnlySpan<byte>(_storage + _offsets[index] + offset, 8));
+        }
+    }
+
+    public void WriteBool(ActorArenaTurn turn, ActorFrameExecution execution,
+        ActorFrameHandle frame, int slot, bool value)
+    {
+        lock (_gate)
+        {
+            EnsureExecution(turn, execution);
+            int index = FindFrame(frame);
+            int offset = CheckedTypedOffset(frame, slot, ActorFrameScalarKind.Bool);
+            _storage[_offsets[index] + offset] = value ? (byte)1 : (byte)0;
+        }
+    }
+
+    public bool ReadBool(ActorArenaTurn turn, ActorFrameExecution execution,
+        ActorFrameHandle frame, int slot)
+    {
+        lock (_gate)
+        {
+            EnsureExecution(turn, execution);
+            int index = FindFrame(frame);
+            int offset = CheckedTypedOffset(frame, slot, ActorFrameScalarKind.Bool);
+            byte value = _storage[_offsets[index] + offset];
+            if (value > 1)
+                throw new FormatException("Noncanonical bool actor spill encoding");
+            return value == 1;
+        }
+    }
+
+    private static int CheckedTypedOffset(ActorFrameHandle frame, int slot,
+        ActorFrameScalarKind kind)
+    {
+        if (frame.TypedLayout is null)
+            throw new InvalidOperationException(
+                "Untyped actor frame cannot be used as a typed guest spill");
+        return frame.TypedLayout.CheckedOffset(slot, kind);
     }
 
     public void Pop(ActorArenaTurn physicalTurn, ActorFrameExecution execution,
@@ -252,6 +384,7 @@ public unsafe sealed class ActorFrameStack : IDisposable
                 throw new InvalidOperationException("Cannot suspend an empty actor stack");
             }
             _continuation = new ActorFrameContinuation();
+            _suspendingEpoch = physicalTurn.Epoch;
             _physicalTurn = null;
             return _continuation;
         }
@@ -267,13 +400,15 @@ public unsafe sealed class ActorFrameStack : IDisposable
             if (_continuation is null ||
                 !ReferenceEquals(_execution, execution) ||
                 !ReferenceEquals(_continuation, continuation) ||
-                _physicalTurn is not null)
+                _physicalTurn is not null ||
+                physicalTurn.Epoch <= _suspendingEpoch)
             {
                 Poison();
                 throw new InvalidOperationException("Stale or foreign actor frame continuation");
             }
             _physicalTurn = physicalTurn;
             _continuation = null;
+            _suspendingEpoch = 0;
         }
     }
 
@@ -407,6 +542,7 @@ public unsafe sealed class ActorFrameStack : IDisposable
         _poisoned = true;
         _physicalTurn = null;
         _continuation = null;
+        _suspendingEpoch = 0;
         _execution = null;
         _depth = 0;
         _used = 0;
