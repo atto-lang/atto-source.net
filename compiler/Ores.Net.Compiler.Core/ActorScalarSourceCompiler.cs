@@ -32,6 +32,15 @@ public static class ActorScalarSourceCompiler
         if (source.Length > 16_384 ||
             Encoding.UTF8.GetByteCount(source) > 16_384)
             throw new FormatException("Actor M0 source exceeds 16 KiB");
+        // Reject invalid codepoints everywhere, including inside comments:
+        // ignored text must not become a way to smuggle malformed source.
+        for (int i = 0; i < source.Length; i++)
+        {
+            if (source[i] == '\0' || char.IsSurrogate(source[i]) ||
+                source[i] == '\uFEFF')
+                throw new FormatException(
+                    $"Actor M0 malformed Unicode source at offset {i}");
+        }
         var tokens = Tokenize(source);
         var parser = new Reader(tokens);
         return parser.Parse();
