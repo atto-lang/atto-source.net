@@ -4,6 +4,13 @@ AttoLang is the current public language name (formerly Oreslang). This repositor
 
 Use [AttoLang Brand Compatibility v1](https://github.com/ores-truffle-oreslang/oreslang-common-source/blob/main/contracts/v1/attolang-brand-compat-v1.json) as the migration policy. Do not rename repository paths, package coordinates, command names, ABI or wire-format identifiers as part of a branding-only change.
 
+## VM isolate execution architecture
+
+A Native AOT-compatible `OresVmHost` now provides generation-fenced tenant handles, real actor mailbox ownership, host resource pins and shutdown admission; this is **not** CLR or OS process isolation, nor general compiled Oreslang guest execution.
+
+See [the shared tenant IsolateVM contract](docs/VM_ISOLATE_CONTRACT.md) for lifecycle, V8 lessons, resource retirement, restrictions and remaining acceptance gates.
+
+
 Independent **CIL compiler + .NET Native AOT runtime** for Oreslang. No LLVM, GraalVM, JIT, runtime CIL generation, or dynamic assembly loading is used by released binaries.
 
 > **Status: bootstrap prototype, NOT the full Oreslang implementation.** Only a one-function checked signed-i64 arithmetic subset is implemented today. Native AOT compilation is required for distributed compiler and application artifacts.
