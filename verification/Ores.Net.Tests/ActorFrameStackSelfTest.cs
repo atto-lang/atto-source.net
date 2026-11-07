@@ -12,6 +12,8 @@ internal static class ActorFrameStackSelfTest
         RetireScrubsAndRefundsExactlyOnce();
         IntegratedFaultKeepsSiblingAlive();
         UnbalancedHandlerCannotSwallowStackEscape();
+        StopDuringLiveTurnMustAllowAuthenticatedUnwind();
+        FrameAuthorityIsNotJsonData();
         Console.WriteLine("PASS .NET actor frame slab host tests (NOT compiler-backed .atto or native stack isolation)");
     }
 
@@ -254,6 +256,109 @@ internal static class ActorFrameStackSelfTest
         ExpectInvalid(() => frames.ValidateTurnExit(turn),
             "handler must not return with unpopped frames");
         Require(frames.IsPoisoned, "unbalanced handler escape poisons its actor");
+    }
+
+    private static void StopDuringLiveTurnMustAllowAuthenticatedUnwind()
+    {
+        using var runtime = new ActorRuntime(new ActorRuntimeOptions
+        {
+            MaxActors = 2,
+            MessagesPerDispatch = 2,
+            ActorPersistentBytes = 256,
+            ActorScratchBytes = 128,
+            ActorFrameBytes = 128,
+            ActorMaxFrames = 4,
+            NativeBudgetBytes = 8192,
+            Dispatcher = new ActorDispatcherOptions
+            {
+                PrivateWorkers = 1, SharedWorkers = 1, UntrustedWorkers = 1,
+                QueueCapacityPerDomain = 2
+            }
+        });
+        using var entered = new ManualResetEventSlim();
+        using var allowUnwind = new ManualResetEventSlim();
+        int unwound = 0;
+        var actor = runtime.Spawn(ActorKind.Private, (context, _) =>
+        {
+            var execution = context.BeginFrames();
+            var root = context.PushFrame(execution, 16);
+            context.WriteFrame(execution, root, 0, new byte[] { 0xF1 });
+            entered.Set();
+            if (!allowUnwind.Wait(TimeSpan.FromSeconds(5)))
+                throw new Exception("Actor STOP unwind probe timed out");
+
+            // STOP sealed both native arena admission and frame admission.
+            ExpectInvalid(() => context.PushFrame(execution, 8),
+                "STOP cannot admit a new logical frame");
+            // A stolen physical-turn token must not grant cleanup authority.
+            bool offCarrierDenied = Task.Run(() =>
+            {
+                try
+                {
+                    context.PopFrame(execution, root);
+                    return false;
+                }
+                catch (InvalidOperationException) { return true; }
+            }).GetAwaiter().GetResult();
+            Require(offCarrierDenied, "off-carrier frame cleanup denied after STOP");
+
+            context.PopFrame(execution, root);
+            context.FinishFrames(execution);
+            Interlocked.Exchange(ref unwound, 1);
+        });
+
+        runtime.Send(actor, new byte[] { 1 });
+        try
+        {
+            Require(entered.Wait(TimeSpan.FromSeconds(5)),
+                "handler entered frame execution before STOP");
+            runtime.Stop(actor);
+        }
+        finally { allowUnwind.Set(); }
+
+        Require(SpinWait.SpinUntil(
+            () => runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0,
+            TimeSpan.FromSeconds(5)), "retired actor reclaimed stack and heap");
+        Require(Volatile.Read(ref unwound) == 1 &&
+                runtime.CompletedMessages == 1 && runtime.FaultedTurns == 0,
+            "STOP allows same-carrier frame unwind without spurious actor fault");
+    }
+
+    private static void FrameAuthorityIsNotJsonData()
+    {
+        using var arena = new ActorArena(7600, 1, 256, 128, 4, 2, 2);
+        using var frames = new ActorFrameStack(
+            arena, new ActorArenaBudget(128), 4, 128);
+        using var turn = arena.EnterTurn(7600, 1);
+        var execution = frames.Begin(turn);
+        var handle = frames.Push(turn, execution, 16);
+        var continuation = frames.Suspend(turn, execution);
+        ExpectJsonDenied(() =>
+            _ = System.Text.Json.JsonSerializer.Serialize(execution),
+            "execution ticket cannot cross JSON");
+        ExpectJsonDenied(() =>
+            _ = System.Text.Json.JsonSerializer.Serialize(handle),
+            "frame handle cannot cross JSON");
+        ExpectJsonDenied(() =>
+            _ = System.Text.Json.JsonSerializer.Serialize(continuation),
+            "continuation ticket cannot cross JSON");
+        ExpectJsonDenied(() =>
+            _ = System.Text.Json.JsonSerializer.Deserialize<ActorFrameExecution>("{}"),
+            "execution authority cannot be minted from JSON");
+        ExpectJsonDenied(() =>
+            _ = System.Text.Json.JsonSerializer.Deserialize<ActorFrameHandle>("{\\"Length\\":16}"),
+            "frame handle cannot be minted from JSON");
+        ExpectJsonDenied(() =>
+            _ = System.Text.Json.JsonSerializer.Deserialize<ActorFrameContinuation>("{}"),
+            "continuation authority cannot be minted from JSON");
+    }
+
+    private static void ExpectJsonDenied(Action callback, string scenario)
+    {
+        try { callback(); }
+        catch (NotSupportedException ex) when
+            (ex.Message.Contains("authority", StringComparison.Ordinal)) { return; }
+        throw new Exception("Expected explicit JSON authority denial: " + scenario);
     }
 
     private static void ExpectInvalid(Action callback, string scenario)
