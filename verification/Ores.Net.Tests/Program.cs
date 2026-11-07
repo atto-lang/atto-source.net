@@ -225,6 +225,7 @@ ActorMailboxPrivateDataSelfTest.Run();
 ActorArenaSelfTest.Run();
 ActorFrameStackSelfTest.Run();
 ActorScalarFrameProgramSelfTest.Run();
+ActorNominalCilSelfTest.Run();
 ActorShardColumnsSelfTest.Run();
 SelectArbiterSelfTest.Run();
 SelectableI64ChannelSelfTest.Run();
