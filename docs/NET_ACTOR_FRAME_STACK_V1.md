@@ -156,6 +156,52 @@ Native AOT app linkage. The existing source-local .NET 10 test workflow will
 have to execute these tests at the exact PR head before this milestone can
 be considered compiled/verified.
 
+## Source-owned compiled PE / Native AOT execution gate (authored)
+
+The `actor-memory-native-aot.yml` workflow now contains a separate **real
+compiled-code** gate, not just an imitation of compiler semantics in host
+C#. At the workflow's checked-out exact PR SHA, `Ores.Net.ActorFrameFixtureGen`
+reads the tracked `actor_frame_abi.atto` scalar source and lowers it with
+`OresStructuredCfgLowering.LowerModule` to verified typed CFG. It invokes
+`CilEmitter.EmitActorFrameLibrary` to produce
+`verification/Ores.Net.ActorCompiledProbe/Generated/OresGenerated.dll`,
+then independently regenerates the same source to a separate destination
+and requires byte-identical PE files.
+
+`Ores.Net.ActorCompiledProbe` has a **static assembly reference** to that
+prebuilt generated PE. Missing PE is a build error; the probe has no
+`Assembly.Load`, Reflection.Emit, runtime source compiler, or dynamic
+fallback. Both Linux x64 and Windows x64 workflow jobs publish this probe
+with `PublishAot=true`, then execute the resulting platform-native binary.
+
+The program checks two deliberate frame-capacity configurations:
+
+- At 32 bytes/actor, generated `Run(ActorContext)` pushes an entry frame
+  and calls a generated `plus_one` helper. The aggregate typed frame
+  byte requirement must exceed 32; the probe must observe exactly an
+  `ActorFrameBudgetExceededException` when the nested **compiled helper**
+  tries to enter. A separate sibling actor must complete its own frame
+  writes on the **same single shared carrier**, and all native budget
+  charges are reclaimed.
+- At 128 bytes/actor, that **same generated PE** must run on a new actor
+  and return `42` through the compiled helper; completion and STOP must
+  refund all actor memory. The fixture generator independently checks the
+  actual verified main+helper frame byte totals fall between these bounds,
+  so a malformed fixture cannot merely cause a generic fault.
+
+This is a genuine **compiled scalar CFG on Native AOT** receipt only if the
+runner starts and the binary actually executes with the required exact
+`PASS actor-compiled-cfg-nativeaot` log line at the same head/tree.
+It is **not canonical source `define actor` lowering**: the `.atto`
+fixture contains ordinary scalar functions, and `ActorRuntime.Spawn`
+is still called by a trusted C# host. It is also not isolated native
+machine stack overflow, await/select suspension, source-level borrow
+checking or actor supervisor/CONTROL parity.
+
+**Currently NOT_EXECUTED / NOT_CERTIFIED.** GitHub source Actions jobs have
+failed at runner admission with no executed steps; no Native AOT result,
+compiled actor CIL execution or hosted successful build is claimed.
+
 ## Parity not yet established
 
 1. The .NET scalar and structured frontends still reject actors, classes,
