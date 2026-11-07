@@ -69,6 +69,46 @@ public static class ActorScalarSourceCompiler
                 offset++;
                 continue;
             }
+            // Lexical comments are not executable declarations. Preserve the
+            // same bounded nested-block model as the structured frontend.
+            if (offset + 1 < source.Length && source[offset] == '/' &&
+                source[offset + 1] == '/')
+            {
+                offset += 2;
+                while (offset < source.Length &&
+                    source[offset] is not ('\r' or '\n'))
+                    offset++;
+                continue;
+            }
+            if (offset + 1 < source.Length && source[offset] == '/' &&
+                source[offset + 1] == '*')
+            {
+                int begin = offset;
+                offset += 2;
+                int depth = 1;
+                while (depth != 0)
+                {
+                    if (offset == source.Length)
+                        throw new FormatException(
+                            $"Unterminated actor M0 comment at offset {begin}");
+                    if (offset + 1 < source.Length &&
+                        source[offset] == '/' && source[offset + 1] == '*')
+                    {
+                        if (++depth > 32)
+                            throw new FormatException(
+                                $"Actor M0 comment depth exceeded at offset {offset}");
+                        offset += 2;
+                    }
+                    else if (offset + 1 < source.Length &&
+                             source[offset] == '*' && source[offset + 1] == '/')
+                    {
+                        depth--;
+                        offset += 2;
+                    }
+                    else offset++;
+                }
+                continue;
+            }
             if (tokens.Count >= 256)
                 throw new FormatException("Actor M0 token budget exceeded");
             int start = offset;
