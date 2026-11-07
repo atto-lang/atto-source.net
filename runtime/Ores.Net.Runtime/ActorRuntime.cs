@@ -21,6 +21,8 @@ public sealed class ActorRuntimeOptions
     public int ActorMaxAllocations { get; init; } = 4096;
     public int ActorMaxLifetimePins { get; init; } = 4096;
     public int ActorMaxReadLoans { get; init; } = 4096;
+    public int ActorFrameBytes { get; init; } = ActorFrameStack.DefaultMaximumBytes;
+    public int ActorMaxFrames { get; init; } = ActorFrameStack.DefaultMaximumFrames;
     public long NativeBudgetBytes { get; init; } = 512L * 1024 * 1024;
     public ActorDispatcherOptions Dispatcher { get; init; } = new();
 
@@ -49,6 +51,10 @@ public sealed class ActorRuntimeOptions
         if (ActorMaxReadLoans <= 0 ||
             ActorMaxReadLoans > ActorArena.MaxOutstandingReadLoans)
             throw new ArgumentOutOfRangeException(nameof(ActorMaxReadLoans));
+        if (ActorFrameBytes <= 0 || ActorFrameBytes > ActorFrameStack.MaximumBytes)
+            throw new ArgumentOutOfRangeException(nameof(ActorFrameBytes));
+        if (ActorMaxFrames <= 0 || ActorMaxFrames > ActorFrameStack.MaximumFrames)
+            throw new ArgumentOutOfRangeException(nameof(ActorMaxFrames));
         if (NativeBudgetBytes <= 0)
             throw new ArgumentOutOfRangeException(nameof(NativeBudgetBytes));
 
@@ -69,15 +75,33 @@ public sealed class ActorContext
 {
     private readonly ActorArena _arena;
     private readonly ActorArenaTurn _turn;
+    private readonly ActorFrameStack _frames;
 
     internal ActorContext(ActorRef self, ActorKind kind,
-        ActorArena arena, ActorArenaTurn turn)
+        ActorArena arena, ActorArenaTurn turn, ActorFrameStack frames)
     {
         Self = self;
         Kind = kind;
         _arena = arena;
         _turn = turn;
+        _frames = frames;
     }
+
+    // These are low-level host compiler frame APIs. No .atto actor frame
+    // emission, suspended SourceTask or NativeAOT physical stack proof yet.
+    public ActorFrameExecution BeginFrames() => _frames.Begin(_turn);
+    public ActorFrameHandle PushFrame(ActorFrameExecution execution, int bytes) =>
+        _frames.Push(_turn, execution, bytes);
+    public void WriteFrame(ActorFrameExecution execution, ActorFrameHandle frame,
+        int offset, ReadOnlySpan<byte> source) =>
+        _frames.Write(_turn, execution, frame, offset, source);
+    public void ReadFrame(ActorFrameExecution execution, ActorFrameHandle frame,
+        int offset, Span<byte> destination) =>
+        _frames.Read(_turn, execution, frame, offset, destination);
+    public void PopFrame(ActorFrameExecution execution, ActorFrameHandle frame) =>
+        _frames.Pop(_turn, execution, frame);
+    public void FinishFrames(ActorFrameExecution execution) =>
+        _frames.Finish(_turn, execution);
 
     public ActorRef Self { get; }
     public ActorKind Kind { get; }
@@ -186,12 +210,14 @@ public sealed class ActorRuntime : IDisposable
         private readonly ActorRuntime _owner;
 
         internal ActorCell(ActorRuntime owner, ActorKind kind,
-            ActorMailbox mailbox, ActorArena arena, ActorMessageHandler handler)
+            ActorMailbox mailbox, ActorArena arena, ActorFrameStack frames,
+            ActorMessageHandler handler)
         {
             _owner = owner;
             Kind = kind;
             Mailbox = mailbox;
             Arena = arena;
+            Frames = frames;
             Handler = handler;
             Reference = mailbox.CurrentRef;
             DispatchAction = Dispatch;
@@ -201,6 +227,7 @@ public sealed class ActorRuntime : IDisposable
         internal ActorKind Kind { get; }
         internal ActorMailbox Mailbox { get; }
         internal ActorArena Arena { get; }
+        internal ActorFrameStack Frames { get; }
         internal ActorMessageHandler Handler { get; }
         internal ActorRef Reference { get; }
         internal Action DispatchAction { get; }
@@ -248,6 +275,7 @@ public sealed class ActorRuntime : IDisposable
 
             ulong candidateId = _nextActorId + 1;
             ActorArena? arena = null;
+            ActorFrameStack? frames = null;
             try
             {
                 var mailbox = new ActorMailbox(candidateId,
@@ -262,14 +290,17 @@ public sealed class ActorRuntime : IDisposable
                     _options.ActorMaxLifetimePins,
                     _options.ActorMaxReadLoans,
                     _nativeBudget);
+                frames = new ActorFrameStack(arena, _nativeBudget,
+                    _options.ActorMaxFrames, _options.ActorFrameBytes);
 
-                var cell = new ActorCell(this, kind, mailbox, arena, handler);
+                var cell = new ActorCell(this, kind, mailbox, arena, frames, handler);
                 _actors.Add(candidateId, cell);
                 _nextActorId = candidateId;
                 return cell.Reference;
             }
             catch
             {
+                frames?.Dispose();
                 arena?.Dispose();
                 throw;
             }
@@ -439,8 +470,11 @@ public sealed class ActorRuntime : IDisposable
                     using (turn)
                     {
                         var context = new ActorContext(
-                            cell.Reference, cell.Kind, cell.Arena, turn);
+                            cell.Reference, cell.Kind, cell.Arena, turn, cell.Frames);
                         cell.Handler(context, payload);
+                        // A handler cannot swallow terminal frame-budget or
+                        // misbinding failures and then keep the actor alive.
+                        cell.Frames.ValidateTurnExit(turn);
                     }
                     succeeded = true;
                 }
@@ -510,6 +544,7 @@ public sealed class ActorRuntime : IDisposable
 
         cell.Stopping = true;
         cell.Mailbox.Stop();
+        cell.Frames.Seal();
         cell.Arena.Retire();
     }
 
@@ -519,6 +554,7 @@ public sealed class ActorRuntime : IDisposable
             return;
 
         cell.Mailbox.Stop();
+        cell.Frames.Dispose();
         cell.Arena.Retire();
         cell.Arena.TryReclaim();
 
