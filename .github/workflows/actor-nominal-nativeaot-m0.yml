@@ -91,7 +91,7 @@ jobs:
           $output = @(& $exe)
           if ($LASTEXITCODE -ne 0) { throw 'Generated CIL actor native execution failed' }
           $output | Write-Output
-          if ($output -cnotcontains 'ACTOR_M0_NATIVEAOT_GENERATED_CIL_EXECUTED|actors=2|left=3|right=12|frames=charged|heap=isolated') {
+          if ($output -cnotcontains 'ACTOR_M0_NATIVEAOT_GENERATED_CIL_EXECUTED|actors=2|left=3|right=13|faulted=1|survivor=1|frames=charged|heap=isolated') {
             throw 'Missing real two-actor native execution receipt'
           }
           if (Test-Path (Join-Path $out 'OresGenerated.dll')) {
