@@ -29,7 +29,11 @@
           Link="contracts/scalar/v1/%(RecursiveDir)%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="../../compiler/Ores.Net.Compiler.Core/Ores.Net.Compiler.Core.csproj" />
+    <ProjectReference Include="../../compiler/Ores.Net.Compiler.ActorFrames/Ores.Net.Compiler.ActorFrames.csproj" />
     <ProjectReference Include="../../runtime/Ores.Net.Runtime/Ores.Net.Runtime.csproj" />
+    <None Include="../../contracts/actor-frame-v1/source-scalar-bridge.atto"
+          Link="actor-frame-v1/source-scalar-bridge.atto"
+          CopyToOutputDirectory="PreserveNewest" />
     <!-- Independent metadata inspection runs only in the test process. -->
     <PackageReference Include="Mono.Cecil" Version="0.11.6" />
   </ItemGroup>
