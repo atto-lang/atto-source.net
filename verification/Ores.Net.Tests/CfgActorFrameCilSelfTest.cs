@@ -107,15 +107,18 @@ internal static class CfgActorFrameCilSelfTest
         var graph = OresCfgVerifier.Verify(new CfgFunction("main", IrValueType.I64,
             "entry", new[] { new CfgBlock("entry",
                 Array.Empty<CfgParameter>(), instructions, new CfgReturn(0)) }));
-        var module = new[] { graph }; // keep test's bound graph independent of source parser
-
-        // VerifiedCfgModule's ctor is internal. The structured compiler must
-        // still reject large layouts at planning before any file is emitted.
-        bool rejected = false;
-        try { _ = CfgActorFrameLayoutPlanner.Plan(module[0]); }
-        catch (FormatException ex) when
-            (ex.Message.Contains("budget", StringComparison.Ordinal)) { rejected = true; }
-        Require(rejected, "frame layout budget rejects 8,193 values before CIL generation");
+        string folder = NewTemp();
+        try
+        {
+            string output = Path.Combine(folder, "OresGenerated.dll");
+            bool rejected = false;
+            try { CilEmitter.EmitActorFrameLibrary(graph, output); }
+            catch (FormatException ex) when
+                (ex.Message.Contains("budget", StringComparison.Ordinal)) { rejected = true; }
+            Require(rejected && !File.Exists(output),
+                "oversized verified actor frame rejected before CIL artifact creation");
+        }
+        finally { Directory.Delete(folder, recursive: true); }
     }
 
     private static void HostTypedSpillRestoreAndExceptionalUnwind()
