@@ -74,6 +74,13 @@ public static class CilEmitter
     public static void EmitLibrary(VerifiedCfgModule module, string outputFile) =>
         CfgCilEmitter.EmitLibrary(module, outputFile);
 
+    // Generated only from the fixed, fail-closed ActorScalarSourceCompiler
+    // grammar; never expose arbitrary source helper MethodDefs as a native
+    // actor ABI. Run() remains the normal standalone scalar entry.
+    internal static void EmitActorScalarLibrary(
+        VerifiedCfgModule module, string outputFile) =>
+        CfgCilEmitter.EmitActorScalarLibrary(module, outputFile);
+
     private static int WriteVerifiedIr(VerifiedIrFunction program, InstructionEncoder il)
     {
         int maxStack = 1;
@@ -230,7 +237,8 @@ public static class CilEmitter
         VerifiedCfgModule module,
         Func<VerifiedCfgFunction, MetadataBuilder, MethodBodyStreamEncoder,
             IReadOnlyDictionary<string, MethodDefinitionHandle>,
-            (int BodyOffset, BlobBuilder Code, BlobBuilder? Locals)> buildBody)
+            (int BodyOffset, BlobBuilder Code, BlobBuilder? Locals)> buildBody,
+        bool actorScalarExports = false)
     {
         ArgumentNullException.ThrowIfNull(module);
         ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
@@ -246,6 +254,21 @@ public static class CilEmitter
         {
             if (!handles.TryAdd(methods[i].Name, MetadataTokens.MethodDefinitionHandle(i + 1)))
                 throw new FormatException("Duplicate CFG method definition");
+        }
+
+        if (actorScalarExports)
+        {
+            // Exactly these two methods are made public. A general structured
+            // module cannot export callable host ABI methods accidentally.
+            if (methods.Length != 3 ||
+                methods[1].Name != "actor_initial" ||
+                methods[1].Parameters.Count != 0 ||
+                methods[1].ResultType != IrValueType.I64 ||
+                methods[2].Name != "actor_step" ||
+                methods[2].Parameters.Count != 2 ||
+                methods[2].Parameters.Any(t => t != IrValueType.I64) ||
+                methods[2].ResultType != IrValueType.I64)
+                throw new FormatException("Unverified native actor M0 export signature");
         }
 
         // Independently link-check the entire module before emitting even
@@ -326,11 +349,16 @@ public static class CilEmitter
         int nextParameterRow = 1;
         for (int i = 0; i < methods.Length; i++)
         {
+            bool publicActorMethod = actorScalarExports && i is 1 or 2;
+            var exportName = i == 0 ? "Run" : publicActorMethod
+                ? (i == 1 ? "ActorInitial" : "ActorStep")
+                : "helper_" + methods[i].Name;
             var handle = metadata.AddMethodDefinition(
-                (i == 0 ? MethodAttributes.Public : MethodAttributes.Private) |
+                (i == 0 || publicActorMethod
+                    ? MethodAttributes.Public : MethodAttributes.Private) |
                     MethodAttributes.Static | MethodAttributes.HideBySig,
                 MethodImplAttributes.IL,
-                metadata.GetOrAddString(i == 0 ? "Run" : "helper_" + methods[i].Name),
+                metadata.GetOrAddString(exportName),
                 metadata.GetOrAddBlob(signatureBlobs[i]),
                 bodies[i].Offset, MetadataTokens.ParameterHandle(nextParameterRow));
             if (handle != handles[methods[i].Name])
