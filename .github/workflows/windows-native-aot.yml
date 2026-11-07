@@ -440,6 +440,24 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $tree -notmatch '^[0-9a-fA-F]{40}$') {
             throw 'Cannot resolve checkout Git tree'
           }
+          $fixture = 'examples/structured-signed-comparisons.atto'
+          $fixtureBlob = (& git hash-object -- $fixture).Trim()
+          if ($LASTEXITCODE -ne 0 -or $fixtureBlob -cne '31a49e3087276f83aecb183c6d4813a1c3d1b1f1') {
+            throw 'Signed relational fixture changed before evidence collection'
+          }
+          $compiler = './artifacts/compiler/win-x64/oresnet.exe'
+          $generated = Join-Path $env:RUNNER_TEMP 'ores-signed-relational-native/OresGenerated.dll'
+          $guest = './artifacts/relational-native/win-x64/oreslang-app.exe'
+          foreach ($artifact in @($compiler, $generated, $guest)) {
+            if (-not (Test-Path -LiteralPath $artifact -PathType Leaf)) {
+              throw "Signed relational artifact absent: $artifact"
+            }
+          }
+          # Confirm the same native executable still returns 42 at receipt time.
+          $guestStdout = & $guest
+          if ($LASTEXITCODE -ne 0 -or ($guestStdout | Out-String).Trim() -cne '42') {
+            throw 'Signed relational native guest failed during receipt collection'
+          }
           $receipt = [ordered]@{
             schema = 'oreslang.net.exact_head_native_aot_v1'
             repository = $env:GITHUB_REPOSITORY
@@ -450,7 +468,13 @@ jobs:
             runner_os = $env:RUNNER_OS
             target_rid = 'win-x64'
             checks = @('managed-regressions','native-compiler','native-app',
-                       'native-PE','arithmetic-negative','CFG-native-execution')
+                       'native-PE','arithmetic-negative','CFG-native-execution',
+                       'signed-relational-atto-native42')
+            relational_fixture_blob_sha = $fixtureBlob
+            relational_compiler_sha256 = (Get-FileHash -LiteralPath $compiler -Algorithm SHA256).Hash.ToLowerInvariant()
+            relational_generated_cil_sha256 = (Get-FileHash -LiteralPath $generated -Algorithm SHA256).Hash.ToLowerInvariant()
+            relational_guest_sha256 = (Get-FileHash -LiteralPath $guest -Algorithm SHA256).Hash.ToLowerInvariant()
+            relational_guest_stdout = ($guestStdout | Out-String).Trim()
             source_only = $false
             independently_verified = $false
           }
@@ -460,7 +484,10 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: oreslang-net-aot-proof-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/oreslang-net-aot-receipt.json
+          path: |
+            ${{ runner.temp }}/oreslang-net-aot-receipt.json
+            artifacts/relational-native/win-x64/oreslang-app.exe
+            artifacts/compiler/win-x64/oresnet.exe
           if-no-files-found: error
           retention-days: 14
       - name: Upload native executable
