@@ -64,6 +64,12 @@ Two independent message phases must yield:
 | Actor A | +1 | +2 | 3 |
 | Actor B | +5 | +7 | 12 |
 
+After these four successful messages, an overflow-inducing third message to A
+must trap in generated checked CIL and retire only A. Actor B then processes
+another message (+1), finishing at 13. **One fault** and **five successful
+messages** must be accounted; both actor heaps and native frame stacks must
+be refunded after STOP.
+
 Both actors must refund all native heap and stack reservations after STOP,
 without leaking a managed `OresGenerated.dll` alongside the NativeAOT
 executable.
@@ -86,7 +92,7 @@ NativeAOT probe and executes two actor heaps on Linux x64 and Windows x64.
 The native receipt is exactly:
 
 ```
-ACTOR_M0_NATIVEAOT_GENERATED_CIL_EXECUTED|actors=2|left=3|right=12|frames=charged|heap=isolated
+ACTOR_M0_NATIVEAOT_GENERATED_CIL_EXECUTED|actors=2|left=3|right=13|faulted=1|survivor=1|frames=charged|heap=isolated
 ```
 
 Host metadata tests additionally demand exact CIL export MethodDefs, checked
