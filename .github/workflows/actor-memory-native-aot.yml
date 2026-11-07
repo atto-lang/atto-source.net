@@ -41,7 +41,8 @@ jobs:
           test -z "$(git status --porcelain)"
           git rev-parse 'HEAD^{tree}'
           dotnet --info
-          dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
+          dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release | tee "$RUNNER_TEMP/actor-managed-tests.log"
+          grep -Fx 'PASS actor scalar frame ABI v1 host/compiler-boundary tests (NOT guest execution)' "$RUNNER_TEMP/actor-managed-tests.log"
       - name: Publish and execute actual host actor NativeAOT isolation probe
         shell: bash
         env:
@@ -55,3 +56,4 @@ jobs:
           "$output/$BINARY" | tee "$RUNNER_TEMP/actor-memory-native.log"
           grep -Fx 'PASS actor-memory-survivor: same-pool peer reads and writes during pinned STOP and after physical reclaim' "$RUNNER_TEMP/actor-memory-native.log"
           grep -Fx 'PASS actor-memory-native-probe: four private heaps (two shared-pool actors), foreign handles denied, pooled carriers, stale context denied, pinned STOP and physical reclaim' "$RUNNER_TEMP/actor-memory-native.log"
+          grep -Fx 'PASS actor-logical-stack-native-probe: four distinct actor-owned frames, cross-turn reads and foreign-handle denial' "$RUNNER_TEMP/actor-memory-native.log"

@@ -19,6 +19,7 @@ var options = new ActorRuntimeOptions
     MaxActors = actorCount, MessagesPerDispatch = 1,
     MailboxMessages = 4, MailboxBytes = 64,
     ActorPersistentBytes = 128, ActorScratchBytes = 64,
+    ActorStackBytes = 32, ActorMaxStackFrames = 4,
     ActorMaxAllocations = 8, ActorMaxReadLoans = 8,
     ActorMaxLifetimePins = 8, NativeBudgetBytes = 4096,
     Dispatcher = new ActorDispatcherOptions
@@ -33,6 +34,7 @@ using var verified = new CountdownEvent(actorCount);
 using var survivorVerified = new AutoResetEvent(false);
 var errors = new ConcurrentQueue<Exception>();
 var handles = new ActorArenaHandle?[actorCount];
+var frames = new ActorStackFrameHandle?[actorCount];
 var references = new ActorRef[actorCount];
 ActorArenaLifetimePin? pin = null;
 ActorContext? retained = null;
@@ -54,6 +56,9 @@ for (int i = 0; i < actorCount; ++i)
                 handles[index] = context.AllocatePersistent(8);
                 context.Write(handles[index]!, 0,
                     new byte[] { (byte)(11 + index), 0, 0, 0, 0, 0, 0, 0 });
+                frames[index] = context.PushStackFrame(8);
+                context.WriteStackFrame(frames[index]!, 0,
+                    new byte[] { (byte)(31 + index) });
             }
             else if (phase >= 2)
             {
@@ -63,6 +68,10 @@ for (int i = 0; i < actorCount; ++i)
                 context.Read(handles[index]!, 0, output);
                 Require(output[0] == (phase == 2 ? 13 : 14),
                     "survivor state changed during peer retirement");
+                var frameValue = new byte[1];
+                context.ReadStackFrame(frames[index]!, 0, frameValue);
+                Require(frameValue[0] == (byte)(31 + index),
+                    "survivor logical frame changed during peer retirement");
                 Deny(() => context.Read(handles[1]!, 0, output));
                 Deny(() => context.Write(handles[1]!, 0, output));
                 output[0]++;
@@ -76,12 +85,18 @@ for (int i = 0; i < actorCount; ++i)
                 var output = new byte[8];
                 context.Read(handles[index]!, 0, output);
                 Require(output[0] == 11 + index, "persistent actor value changed");
+                var frameValue = new byte[1];
+                context.ReadStackFrame(frames[index]!, 0, frameValue);
+                Require(frameValue[0] == (byte)(31 + index),
+                    "actor-owned logical frame did not survive physical turn");
                 for (int j = 0; j < actorCount; ++j)
                 {
                     if (j == index) continue;
                     int foreign = j;
                     Deny(() => context.Read(handles[foreign]!, 0, output));
                     Deny(() => context.Write(handles[foreign]!, 0, output));
+                    Deny(() => context.ReadStackFrame(frames[foreign]!, 0, frameValue));
+                    Deny(() => context.WriteStackFrame(frames[foreign]!, 0, frameValue));
                 }
                 context.Read(handles[index]!, 0, output);
                 Require(output[0] == 11 + index, "foreign access changed live bytes");
@@ -145,3 +160,4 @@ Require(SpinWait.SpinUntil(() => runtime.LiveActors == 0 &&
     "remaining actors did not independently retire and refund");
 Console.WriteLine("PASS actor-memory-survivor: same-pool peer reads and writes during pinned STOP and after physical reclaim");
 Console.WriteLine("PASS actor-memory-native-probe: four private heaps (two shared-pool actors), foreign handles denied, pooled carriers, stale context denied, pinned STOP and physical reclaim");
+Console.WriteLine("PASS actor-logical-stack-native-probe: four distinct actor-owned frames, cross-turn reads and foreign-handle denial");

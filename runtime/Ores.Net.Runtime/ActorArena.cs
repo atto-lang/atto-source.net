@@ -761,6 +761,15 @@ public unsafe sealed class ActorArena : IDisposable
         }
     }
 
+    // A current physical carrier may finish frame cleanup after retirement.
+    // Check this before reading caller-visible stack metadata; unlike new
+    // admission, cleanup cannot require that the arena remain non-retired.
+    internal void ValidatePhysicalTurn(ActorArenaTurn turn)
+    {
+        lock (_gate)
+            ValidateTurnLocked(turn);
+    }
+
     private void ValidateTurnLocked(ActorArenaTurn turn)
     {
         ArgumentNullException.ThrowIfNull(turn);
