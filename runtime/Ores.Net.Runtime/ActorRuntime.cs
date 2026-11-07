@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -103,6 +104,49 @@ public sealed class ActorContext
         _frames.Pop(_turn, execution, frame);
     public void FinishFrames(ActorFrameExecution execution) =>
         _frames.Finish(_turn, execution);
+
+    // These canonical little-endian scalar accessors are callable by
+    // precompiled metadata-only CIL. The frame reference is still authenticated
+    // for each physical turn by ActorFrameStack; there is no native pointer
+    // escape or dynamic reflection. Typed bool occupies one aligned 8-byte
+    // slot and rejects noncanonical (including high-byte) representations.
+    public void WriteFrameI64(ActorFrameExecution execution, ActorFrameHandle frame,
+        int offset, long value)
+    {
+        Span<byte> raw = stackalloc byte[8];
+        BinaryPrimitives.WriteInt64LittleEndian(raw, value);
+        WriteFrame(execution, frame, offset, raw);
+    }
+
+    public long ReadFrameI64(ActorFrameExecution execution, ActorFrameHandle frame,
+        int offset)
+    {
+        Span<byte> raw = stackalloc byte[8];
+        ReadFrame(execution, frame, offset, raw);
+        return BinaryPrimitives.ReadInt64LittleEndian(raw);
+    }
+
+    public void WriteFrameBool(ActorFrameExecution execution, ActorFrameHandle frame,
+        int offset, bool value)
+    {
+        Span<byte> raw = stackalloc byte[8];
+        raw.Clear();
+        raw[0] = value ? (byte)1 : (byte)0;
+        WriteFrame(execution, frame, offset, raw);
+    }
+
+    public bool ReadFrameBool(ActorFrameExecution execution, ActorFrameHandle frame,
+        int offset)
+    {
+        Span<byte> raw = stackalloc byte[8];
+        ReadFrame(execution, frame, offset, raw);
+        if (raw[0] > 1)
+            throw new InvalidOperationException("Noncanonical actor bool frame value");
+        for (int i = 1; i < raw.Length; i++)
+            if (raw[i] != 0)
+                throw new InvalidOperationException("Noncanonical actor bool frame padding");
+        return raw[0] == 1;
+    }
 
     public ActorRef Self { get; }
     public ActorKind Kind { get; }
