@@ -73,9 +73,10 @@ using (var siblingDone = new ManualResetEventSlim())
     Require(siblingDone.Wait(TimeSpan.FromSeconds(10)) && siblingResult == 42,
         "actor B failed to survive compiled CIL frame exhaustion on shared carrier");
     Require(SpinWait.SpinUntil(
-        () => runtime.LiveActors == 1 && runtime.FaultedTurns == 1,
+        () => runtime.LiveActors == 1 && runtime.FaultedTurns == 1 &&
+              runtime.CompletedMessages == 1,
         TimeSpan.FromSeconds(10)),
-        "compiled call did not fault and retire actor A with bounded frame memory");
+        "compiled actor A did not fault and sibling B did not finish its turn");
     Require(Volatile.Read(ref compiledQuotaObserved) == 1 &&
             Volatile.Read(ref unexpectedCompiledReturn) == 0,
         "actor A fault must specifically be compiled helper frame-budget overflow");
@@ -102,7 +103,9 @@ using (var done = new ManualResetEventSlim())
     runtime.Send(actor, new byte[] { 1 });
     Require(done.Wait(TimeSpan.FromSeconds(10)) && observed == 42,
         "Native AOT compiled guest scalar call did not return expected 42");
-    Require(runtime.FaultedTurns == 0 && runtime.CompletedMessages == 1,
+    Require(SpinWait.SpinUntil(
+        () => runtime.FaultedTurns == 0 && runtime.CompletedMessages == 1,
+        TimeSpan.FromSeconds(10)),
         "successful compiled guest call must leave one healthy completed turn");
     runtime.Stop(actor);
     Require(SpinWait.SpinUntil(
