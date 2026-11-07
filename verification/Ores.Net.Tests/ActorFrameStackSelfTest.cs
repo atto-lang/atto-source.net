@@ -198,7 +198,6 @@ internal static class ActorFrameStackSelfTest
             action();
         }
         catch (InvalidOperationException) { return; }
-        catch (ObjectDisposedException) { return; }
         throw new Exception("Expected actor frame stack rejection: " + why);
     }
 }
