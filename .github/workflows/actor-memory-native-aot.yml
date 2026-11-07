@@ -3,6 +3,8 @@ on:
   pull_request:
     paths:
       - 'runtime/Ores.Net.Runtime/**'
+      - 'compiler/Ores.Net.Compiler.ActorFrames/**'
+      - 'contracts/actor-frame-v1/**'
       - 'verification/Ores.Net.Tests/**'
       - 'verification/Ores.Net.ActorMemoryProbe/**'
       - '.github/workflows/actor-memory-native-aot.yml'
@@ -55,3 +57,4 @@ jobs:
           "$output/$BINARY" | tee "$RUNNER_TEMP/actor-memory-native.log"
           grep -Fx 'PASS actor-memory-survivor: same-pool peer reads and writes during pinned STOP and after physical reclaim' "$RUNNER_TEMP/actor-memory-native.log"
           grep -Fx 'PASS actor-memory-native-probe: four private heaps (two shared-pool actors), foreign handles denied, pooled carriers, stale context denied, pinned STOP and physical reclaim' "$RUNNER_TEMP/actor-memory-native.log"
+          grep -Fx 'PASS actor-scalar-native-frame-source: typed .atto CFG interpreted inside NativeAOT actor frames; not generated actor CIL' "$RUNNER_TEMP/actor-memory-native.log"
