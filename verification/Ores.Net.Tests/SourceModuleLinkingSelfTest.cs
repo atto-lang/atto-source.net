@@ -227,6 +227,70 @@ internal static class SourceModuleLinkingSelfTest
                 Reject(() => OresSourceModuleCompiler.Compile(Path.Combine(root,"main.atto"),new[]{root}),
                     "canonical .atto symlink import must not redirect to legacy source");
             }
+            // The compiler-owned atto.core/identity resource is parsed and
+            // typed-linked by the same real linker/CIL path as local sources.
+            // Canonical and legacy names share one immutable bundled unit.
+            var coreAliases = new[] {
+                "atto.core/identity", "atto.core/identity.atto", "atto.core/identity.ores",
+                "ores.core/identity", "ores.core/identity.atto", "ores.core/identity.ores"
+            };
+            foreach (var alias in coreAliases)
+            {
+                Write("core-entry.atto",
+                    "import module identity from \"" + alias +
+                    "\"; pub fnc main():int{return identity.passthrough(42);}");
+                var core = OresSourceModuleCompiler.Compile(
+                    Path.Combine(root, "core-entry.atto"), new[] { root });
+                Require(core.Sources.Count == 2, "exactly two graph units for " + alias);
+                Require(core.Sources.Count(x => x.Path == "@atto.core/identity.atto") == 1,
+                    "single compiler-owned canonical source identity for " + alias);
+                Require(core.Sources.Single(x => x.Path == "@atto.core/identity.atto").Utf8Bytes > 0,
+                    "compiler-owned resource has a real source-byte witness");
+                string coreAssembly = Path.Combine(root, "AttoCoreIdentity.dll");
+                CilEmitter.EmitLibrary(core.Module, coreAssembly);
+                using var coreImage = AssemblyDefinition.ReadAssembly(coreAssembly);
+                Require(CfgCilTestInterpreter.Evaluate(
+                    coreImage.MainModule.Types.Single(x => x.Name == "OresProgram")
+                        .Methods.Single(x => x.Name == "Run")) == 42,
+                    "compiler-owned source actually linked and executed via typed CIL");
+            }
+            Directory.CreateDirectory(Path.Combine(root, "atto.core"));
+            File.WriteAllText(Path.Combine(root, "atto.core", "identity.atto"),
+                "define module identity as pub fnc passthrough(int value):int{return 99;} end");
+            Write("core-entry.atto",
+                "import module identity from \"atto.core/identity\"; " +
+                "pub fnc main():int{return identity.passthrough(42);}");
+            var shadowDenied = OresSourceModuleCompiler.Compile(
+                Path.Combine(root, "core-entry.atto"), new[] { root });
+            Require(shadowDenied.Sources.All(x => x.Path != "0/atto.core/identity.atto"),
+                "ambient Core path must never replace embedded resource");
+            string shadowAssembly = Path.Combine(root, "AttoCoreShadowProof.dll");
+            CilEmitter.EmitLibrary(shadowDenied.Module, shadowAssembly);
+            using (var shadowImage = AssemblyDefinition.ReadAssembly(shadowAssembly))
+                Require(CfgCilTestInterpreter.Evaluate(
+                    shadowImage.MainModule.Types.Single(x => x.Name == "OresProgram")
+                        .Methods.Single(x => x.Name == "Run")) == 42,
+                    "project-local Core shadow did not override compiler source");
+            foreach (var invalid in new[] {
+                "atto.core/missing", "atto.core/identity/",
+                "atto.core/../identity", "atto.alloc/identity",
+                "atto.std/identity", "atto.runtime.actor/identity"
+            })
+            {
+                Write("core-entry.atto",
+                    "import module identity from \"" + invalid +
+                    "\"; pub fnc main():int{return identity.passthrough(42);}");
+                Reject(() => OresSourceModuleCompiler.Compile(
+                    Path.Combine(root, "core-entry.atto"), new[] { root }),
+                    "unsupported or malformed canonical namespace " + invalid);
+            }
+            Write("core-entry.atto",
+                "import module counterfeit from \"atto.core/identity\"; " +
+                "pub fnc main():int{return counterfeit.passthrough(42);}");
+            Reject(() => OresSourceModuleCompiler.Compile(
+                Path.Combine(root, "core-entry.atto"), new[] { root }),
+                "compiler-owned declared module alias mismatch");
+            Console.WriteLine("PASS stage-1 compiler-owned atto.core/identity embedded source, CIL execution and namespace-shadow negatives");
             Console.WriteLine("PASS canonical .atto negative imports, nested package authority, witness and path guards");
             Console.WriteLine("PASS AttoLang .atto real module-linking, typed CIL execution, source identity and negatives");
             Console.WriteLine("PASS source module graph, scoped imports, typed calls, CIL, source identity and fail-closed boundaries");

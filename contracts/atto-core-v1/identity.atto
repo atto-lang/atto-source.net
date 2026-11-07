@@ -1,0 +1,5 @@
+// Canonical AttoLang Core stage-1 scalar import slice.
+// Pure checked int, no allocator, Std, actor, platform or host capabilities.
+define module identity as
+  pub fnc passthrough(int value): int { return value; }
+end
