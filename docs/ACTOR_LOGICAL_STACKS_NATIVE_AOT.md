@@ -15,9 +15,11 @@ change the arena/process native budget accounting.
   `ActorMaxStackFrames` defaults to 256, capped at 1024.
 - `PushStackFrame` / `PopStackFrame` enforce LIFO. Frame contents are
   addressed through exact-issued actor-local handles, not native pointers.
-- A new frame's contents are zero. Popping scrubs them; final pop releases
-  and scrubs the slab. Frame handles are invalid forever after pop, including
-  if the same offset is reused.
+- A new frame's contents are zero. Popping immediately scrubs its bytes.
+  The backing slab stays reserved for the actor incarnation to avoid
+  fragmentation in the non-compacting arena, and is scrubbed/freed on actor
+  retirement. Frame handles are invalid forever after pop, including if
+  the same offset is reused.
 - Parent frames may be read or written while children exist, but cannot be
   popped until every child has been popped.
 - The stack survives **physical actor turn** exit, so a new admitted owner turn
