@@ -14,6 +14,9 @@ internal static class ActorFrameStackSelfTest
         CapacityOverflowPoisonsOnlyItsActor();
         DepthOverflowPoisonsOnlyItsActor();
         ForgedFrameWithIdenticalMetadataIsNotAuthority();
+        ReincarnatedActorFramesRejectOldGeneration();
+        OutOfOrderPopPoisonsTheOwningActor();
+        FrameAccessIsStrictlyBoundsChecked();
         RetirementPermitsCleanupButNotNewFrames();
         StackAdmissionFailureDoesNotLeakBudget();
         Console.WriteLine(
@@ -152,6 +155,64 @@ internal static class ActorFrameStackSelfTest
             "forged LIFO pop attempt poisons the affected actor");
     }
 
+    private static void ReincarnatedActorFramesRejectOldGeneration()
+    {
+        // Same numeric actor ID, distinct incarnation and native frame storage.
+        using var oldArena = new ActorArena(7451, 1, 256, 128);
+        using var newArena = new ActorArena(7451, 2, 256, 128);
+        using var oldStack = new ActorFrameStack(oldArena, 256, 3);
+        using var newStack = new ActorFrameStack(newArena, 256, 3);
+        using var oldTurn = oldArena.EnterTurn(7451, 1);
+        using var newTurn = newArena.EnterTurn(7451, 2);
+        using var oldFrame = oldStack.Push(oldTurn, 128);
+        using var newFrame = newStack.Push(newTurn, 128);
+        oldStack.Write(oldTurn, oldFrame, 0, new byte[] { 10 });
+        newStack.Write(newTurn, newFrame, 0, new byte[] { 20 });
+        ExpectInvalid(() => newStack.Read(newTurn, oldFrame, 0, new byte[1]),
+            "restarted actor must reject prior-incarnation frame");
+        ExpectInvalid(() => oldStack.Read(newTurn, newFrame, 0, new byte[1]),
+            "old actor must reject new-incarnation frame");
+        var value = new byte[1];
+        newStack.Read(newTurn, newFrame, 0, value);
+        Require(value[0] == 20 && !newStack.IsPoisoned,
+            "new incarnation remains unaffected by stale frame attempts");
+    }
+
+    private static void OutOfOrderPopPoisonsTheOwningActor()
+    {
+        using var arena = new ActorArena(7471, 1, 256, 128);
+        using var stack = new ActorFrameStack(arena, 512, 4);
+        using var turn = arena.EnterTurn(7471, 1);
+        var root = stack.Push(turn, 128);
+        var nested = stack.Push(turn, 32);
+        ExpectInvalid(root.Dispose, "parent frame cannot be popped before child");
+        Require(stack.IsPoisoned && stack.ActiveDepth == 2,
+            "LIFO forgery must not release any live frame");
+        nested.Dispose();
+        root.Dispose();
+        ExpectInvalid(() => stack.EnsureHealthy(turn),
+            "caught LIFO violation remains an actor-terminal fault");
+    }
+
+    private static void FrameAccessIsStrictlyBoundsChecked()
+    {
+        using var arena = new ActorArena(7481, 1, 256, 128);
+        using var stack = new ActorFrameStack(arena, 256, 3);
+        using var turn = arena.EnterTurn(7481, 1);
+        using var frame = stack.Push(turn, 128);
+        ExpectBounds(() => stack.Write(turn, frame, 128, new byte[] { 1 }),
+            "one byte past actor frame end");
+        ExpectBounds(() => stack.Read(turn, frame, -1, new byte[1]),
+            "negative actor frame offset");
+        ExpectBounds(() => stack.Read(turn, frame, int.MaxValue, new byte[1]),
+            "overflowing actor frame offset");
+        stack.Write(turn, frame, 127, new byte[] { 9 });
+        var value = new byte[1];
+        stack.Read(turn, frame, 127, value);
+        Require(value[0] == 9 && !stack.IsPoisoned,
+            "valid edge-of-frame access remains usable after bounded denials");
+    }
+
     private static void RetirementPermitsCleanupButNotNewFrames()
     {
         using var arena = new ActorArena(7501, 1, 256, 128);
@@ -189,6 +250,16 @@ internal static class ActorFrameStackSelfTest
     private static void Require(bool ok, string why)
     {
         if (!ok) throw new Exception("FAILED actor frame stack: " + why);
+    }
+
+    private static void ExpectBounds(Action action, string why)
+    {
+        try
+        {
+            action();
+        }
+        catch (ArgumentOutOfRangeException) { return; }
+        throw new Exception("Expected actor frame bounds rejection: " + why);
     }
 
     private static void ExpectInvalid(Action action, string why)
