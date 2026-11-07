@@ -146,3 +146,31 @@ continuations; `Plan` alone must never be recorded as guest parity.
   Java PR #2627, LLVM and Forge actor heap/runtime branches, and the shared
   platform-conformance actor-stack contract (#562). Retain independent
   approval and private-source CI export gates.
+
+## Canonical typed spill and suspension-epoch hardening
+
+The follow-up canonical actor-frame API supports immutable 1–128-slot
+`ActorFrameTypedLayout` descriptors with `i64` and `bool` types.
+Each scalar occupies an eight-byte little-endian slot. Only typed APIs may
+read or write typed frames; the existing raw byte operations are explicitly
+denied on typed frames, preventing forged bool contents or scalar kind
+confusion. Untyped host frame handles cannot access typed slots. Descriptors
+are snapshots of caller-provided types, not mutable aliases.
+
+The existing exact-issued `ActorFrameContinuation` is now additionally
+fenced to the physical-turn epoch in which suspension occurred.
+A continuation must resume on a **strictly later authenticated arena turn**;
+attempting to reclaim it within the original carrier turn poisons only that
+actor's logical frame stack. No CLR machine stack is suspended or switched.
+
+The `CfgActorFrameLayoutSelfTest` now also parses real structured AttoLang
+function source through the existing verified CFG lowering, derives a
+compiler-owned scalar slot layout, and feeds it into an actor's canonical
+private native frame slab for a host-only typed round-trip. This is **not**
+generated guest CIL spill/restore, and actor/await source remains unsupported.
+
+The expanded `ActorFrameStackSelfTest` covers typed schema snapshotting,
+negative unknown kinds, raw-byte type bypass attempts, wrong-kind and
+out-of-range accesses, untyped token confusion, and same-physical-turn
+continuation replay. Execution remains **NOT_EXECUTED** until SDK and
+exact-head NativeAOT runners actually run these tests.

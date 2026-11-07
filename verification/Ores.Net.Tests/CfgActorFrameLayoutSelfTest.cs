@@ -1,4 +1,5 @@
 using Ores.Net.Compiler;
+using Ores.Net.Runtime;
 
 internal static class CfgActorFrameLayoutSelfTest
 {
@@ -47,8 +48,73 @@ internal static class CfgActorFrameLayoutSelfTest
         catch (ArgumentOutOfRangeException) { rejectedLimit = true; }
         Require(rejectedLimit, "invalid maximum frame bound rejected before planning");
 
+        SourceVerifiedLayoutFeedsCanonicalActorSlab();
         Console.WriteLine(
             "PASS .NET compiler typed CFG actor-frame layout plan (no CIL spill or .atto actor guest executed)");
+    }
+
+    private static void SourceVerifiedLayoutFeedsCanonicalActorSlab()
+    {
+        const string source = """
+            fnc main():int {
+                val bool enabled = true;
+                if enabled { return 42; } else { return 0; }
+            }
+            """;
+        var verified = OresStructuredCfgLowering.Lower(source);
+        var plan = CfgActorFrameLayoutPlanner.Plan(verified, maximumFrameBytes: 2048);
+        Require(plan.Slots.Any(slot => slot.Type == IrValueType.I64) &&
+                plan.Slots.Any(slot => slot.Type == IrValueType.Bool),
+            "real typed source preserves scalar types through verified CFG");
+        var layout = new ActorFrameTypedLayout(plan.Slots.Select(slot =>
+            slot.Type switch
+            {
+                IrValueType.I64 => ActorFrameScalarKind.I64,
+                IrValueType.Bool => ActorFrameScalarKind.Bool,
+                _ => throw new FormatException("Unverified spill slot kind")
+            }).ToArray());
+        Require(layout.ByteLength == plan.ByteLength,
+            "compiler-owned CFG offsets match canonical runtime frame ABI");
+        int i64Slot = plan.Slots.First(slot => slot.Type == IrValueType.I64).ValueId;
+        int boolSlot = plan.Slots.First(slot => slot.Type == IrValueType.Bool).ValueId;
+
+        using var runtime = new ActorRuntime(new ActorRuntimeOptions
+        {
+            MaxActors = 1,
+            MessagesPerDispatch = 1,
+            ActorPersistentBytes = 8192,
+            ActorScratchBytes = 512,
+            ActorFrameBytes = 2048,
+            ActorMaxFrames = 4,
+            NativeBudgetBytes = 64 * 1024,
+            Dispatcher = new ActorDispatcherOptions
+            {
+                PrivateWorkers = 1, SharedWorkers = 1, UntrustedWorkers = 1,
+                QueueCapacityPerDomain = 4
+            }
+        });
+        var actor = runtime.Spawn(ActorKind.Private, (context, _) =>
+        {
+            var execution = context.BeginFrames();
+            var frame = context.PushTypedFrame(execution, layout);
+            context.WriteFrameI64(execution, frame, i64Slot, 42);
+            context.WriteFrameBool(execution, frame, boolSlot, true);
+            Require(context.ReadFrameI64(execution, frame, i64Slot) == 42 &&
+                    context.ReadFrameBool(execution, frame, boolSlot),
+                "source-derived types reach independent actor-owned native slab");
+            context.PopFrame(execution, frame);
+            context.FinishFrames(execution);
+        });
+        runtime.Send(actor, new byte[] { 1 });
+        Require(SpinWait.SpinUntil(() => runtime.CompletedMessages == 1,
+            TimeSpan.FromSeconds(5)), "source-derived typed frame host turn completed");
+        Require(runtime.FaultedTurns == 0,
+            "typed compiler-plan host probe does not fault its actor");
+        runtime.Stop(actor);
+        Require(SpinWait.SpinUntil(() =>
+                runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0,
+            TimeSpan.FromSeconds(5)),
+            "source-derived actor frame and arena release native quota");
     }
 
     private static void ExpectFrameError(Action action, string scenario)
