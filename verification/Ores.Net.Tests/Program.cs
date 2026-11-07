@@ -116,8 +116,24 @@ static void InvalidSend(Action action, string why)
             ?? throw new Exception("missing annotation source");
         Require(source.EndsWith('\n') && !source.Contains('\r') &&
             source.Contains('@'), "invalid candidate source boundaries: " + id);
-        Reject(() => OresParser.Parse(source), "v2 scalar annotation case " + id);
-        Reject(() => OresStructuredParser.Parse(source), "v2 structured annotation case " + id);
+        if (source.StartsWith('@'))
+        {
+            // Annotation was the first active source token; a generic parse
+            // failure is insufficient evidence for our typed-AOT rejection gate.
+            RejectDiagnostic(() => OresParser.Parse(source),
+                "Source annotations require typed compiler validation",
+                "v2 scalar annotation case " + id);
+            RejectDiagnostic(() => OresStructuredParser.Parse(source),
+                "Source annotations require typed compiler validation",
+                "v2 structured annotation case " + id);
+        }
+        else
+        {
+            // Class/actor lowering is currently unsupported; this is only
+            // an overall rejection, NOT proof of an annotation-specific gate.
+            Reject(() => OresParser.Parse(source), "v2 scalar nested case " + id);
+            Reject(() => OresStructuredParser.Parse(source), "v2 structured nested case " + id);
+        }
     }
     // All six common comment endings must not conceal a later live @Doc token.
     foreach (var eol in new[] { "\n", "\r", "\r\n", "\u0085", "\u2028", "\u2029" })
