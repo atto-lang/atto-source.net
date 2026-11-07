@@ -327,6 +327,7 @@ AsyncOnlyIoPolicyTests.Run();
 CapabilityIoLifecycleV1SelfTest.Run();
 SourceByteBudgetTests.Run();
 ElmCompositionAdmissionTests.Run();
+HeapContainerSourceBoundaryTests.Run(); // actual scalar compiler fail-closed heap/container checks
 StructuralPatternAdmissionTests.Run();
 AdtSourceAdmissionTests.Run();
 NumericSeparatorParityTests.Run();
