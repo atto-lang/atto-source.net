@@ -153,7 +153,7 @@ internal static class ActorFrameStackSelfTest
             var recycled = context.PushStackFrame(128, alignment: 64);
             context.ReadStackFrame(recycled, 0, sample);
             Require(sample.SequenceEqual(new byte[] { 0, 0 }),
-                "last-pop native slab reclamation erases the next generation");
+                "last-pop scrubbing and stack reuse erase the next generation");
             context.PopStackFrame(recycled);
             RejectInvalid(() =>
                 context.ReadStackFrame(root, 0, new byte[1]),
