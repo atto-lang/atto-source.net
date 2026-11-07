@@ -198,6 +198,7 @@ VmIsolateHostTests.Run();
 VmIsolateHostHardeningTests.Run();
 OptionResultTrapAdmissionTests.Run();
 AsyncOnlyIoPolicyTests.Run();
+CapabilityIoLifecycleV1SelfTest.Run();
 SourceByteBudgetTests.Run();
 ElmCompositionAdmissionTests.Run();
 StructuralPatternAdmissionTests.Run();
