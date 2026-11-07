@@ -8,6 +8,7 @@ static class CrossBackendCheckedI64ParityTests
     public static void Run()
     {
         RemovedPercentSourceOperator();
+        ReservedSourceOperatorsAndIr();
         foreach (var (name, expression, expected) in new (string, string, long)[]
         {
             ("precedence", "2 + 3 * 4", 14L),
@@ -56,6 +57,94 @@ static class CrossBackendCheckedI64ParityTests
             return;
         }
         throw new Exception("FAILED: int/int division was admitted without float lowering");
+    }
+
+    private static void ReservedSourceOperatorsAndIr()
+    {
+        // Actual shipping scalar/structured lexers must agree before they
+        // construct any typed SSA or CIL. Include both caret spellings.
+        var denied = new (string Expr, string Diagnostic)[]
+        {
+            ("7%3", "noncanonical '%' source operator"),
+            ("-7%-3", "noncanonical '%' source operator"),
+            ("(8%3)*2", "noncanonical '%' source operator"),
+            ("7 % (1+1)", "noncanonical '%' source operator"),
+            ("-9223372036854775808%-1", "noncanonical '%' source operator"),
+            ("7%0", "noncanonical '%' source operator"),
+            ("7^3", "Reserved AttoLang operator '^'"),
+            ("7 ^ 3", "Reserved AttoLang operator '^'"),
+            ("-7^3", "Reserved AttoLang operator '^'"),
+            ("7^(-3)", "Reserved AttoLang operator '^'"),
+            ("(7^3)", "Reserved AttoLang operator '^'"),
+            ("7^3^1", "Reserved AttoLang operator '^'"),
+            ("7^ ^3", "Reserved AttoLang operator '^'"),
+            ("9223372036854775807^1", "Reserved AttoLang operator '^'"),
+            ("7^^3", "Reserved AttoLang operator '^^'"),
+            ("7 ^^ 3", "Reserved AttoLang operator '^^'"),
+            ("-7^^3", "Reserved AttoLang operator '^^'"),
+            ("7^^(1+2)", "Reserved AttoLang operator '^^'"),
+            ("7^^3^^1", "Reserved AttoLang operator '^^'"),
+            ("-9223372036854775808^^-1", "Reserved AttoLang operator '^^'"),
+            ("(7^^3)", "Reserved AttoLang operator '^^'"),
+            ("7 ^^ -3", "Reserved AttoLang operator '^^'"),
+            ("20%6%3", "noncanonical '%' source operator"),
+            ("7%-(1+1)", "noncanonical '%' source operator")
+        };
+        foreach (var (expression, expected) in denied)
+        {
+            string source = "fnc main():int{return " + expression + ";}";
+            foreach (var (frontend, parse) in new (string, Action)[]
+            {
+                ("scalar", () => { _ = OresParser.Parse(source); }),
+                ("structured", () => { _ = OresStructuredParser.Parse(source); })
+            })
+            {
+                try { parse(); }
+                catch (FormatException error) when
+                    (error.Message.Contains(expected, StringComparison.Ordinal) &&
+                     error.Message.Contains("offset", StringComparison.Ordinal))
+                { continue; }
+                throw new Exception($"FAILED: {frontend} admitted reserved operator in {expression}");
+            }
+        }
+
+        // A pre-lexical substring gate would reject these legal sources.
+        foreach (string source in new[]
+        {
+            "fnc main():int{return 40+2;} // % ^ ^^\n",
+            "fnc main():int{return 40 /* % /* ^ ^^ */ % */ +2;}",
+            "fnc main():int{return 40+2;} // ^ ^^\u2028"
+        })
+        {
+            if (OresIrReferenceEvaluator.Evaluate(OresIrLowering.Lower(OresParser.Parse(source))) != 42)
+                throw new Exception("FAILED: reserved-operator scalar comment control");
+            if (OresStructuredParser.Parse(source).Body.Count != 1)
+                throw new Exception("FAILED: reserved-operator structured comment control");
+        }
+
+        foreach (char op in new[] { '%', '^' })
+        {
+            try { _ = OresIrLowering.Lower(new Binary(op, new Literal(7), new Literal(3))); }
+            catch (FormatException) { continue; }
+            throw new Exception($"FAILED: forged AST {op} reached verified OresIR");
+        }
+
+        // The old verifier accepted a nonzero literal RHS. Reject that as
+        // well as zero and -1 before any CIL/native code can be emitted.
+        foreach (long divisor in new long[] { 0, 3, -1 })
+        {
+            var instructions = new[]
+            {
+                new IrInstruction(0, IrOpcode.ConstantI64, IrValueType.I64, Constant: 7),
+                new IrInstruction(1, IrOpcode.ConstantI64, IrValueType.I64, Constant: divisor),
+                new IrInstruction(2, IrOpcode.SignedRemainderLiteral, IrValueType.I64, Left: 0, Right: 1)
+            };
+            try { _ = OresIrVerifier.Verify(new IrFunction("main", IrValueType.I64, instructions, 2)); }
+            catch (FormatException error) when
+                (error.Message.Contains("Removed Oreslang operator '%'", StringComparison.Ordinal))
+            { continue; }
+            throw new Exception("FAILED: retired IR opcode accepted divisor " + divisor);
+        }
     }
 
     private static void RemovedPercentSourceOperator()

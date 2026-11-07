@@ -217,6 +217,16 @@ public static class OresParser
             }
             if (ch == '%')
                 throw new FormatException($"noncanonical '%' source operator; use named Integer.rem/mod at offset {start}");
+            if (ch == '^')
+            {
+                // Reserved AttoLang syntax is rejected after lexical trivia and
+                // before any scalar instruction reaches typed IR or CIL.
+                bool doubleCaret = _i + 1 < text.Length && text[_i + 1] == '^';
+                string spelling = doubleCaret ? "^^" : "^";
+                string named = doubleCaret ? "Xor(a, b)" : "Integer.bitXor(a, b)";
+                throw new FormatException(
+                    $"Reserved AttoLang operator '{spelling}'; use {named} at offset {start}");
+            }
             throw new FormatException($"Invalid character at offset {start}");
         }
     }
