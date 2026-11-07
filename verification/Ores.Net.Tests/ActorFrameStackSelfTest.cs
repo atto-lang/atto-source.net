@@ -61,6 +61,20 @@ internal static class ActorFrameStackSelfTest
             context.ReadStackFrame(saved!, 0, original);
             Require(original.SequenceEqual(new byte[] { 0xA1, 0xA2 }),
                 "frame bytes persist across physical turns");
+            bool offCarrierDenied = Task.Run(() =>
+            {
+                try
+                {
+                    context.ReadStackFrame(saved!, 0, new byte[1]);
+                    return false;
+                }
+                catch (InvalidOperationException)
+                {
+                    return true;
+                }
+            }).GetAwaiter().GetResult();
+            Require(offCarrierDenied,
+                "another thread cannot read actor frame metadata or payload");
 
             var child = context.PushStackFrame(16, alignment: 16);
             Span<byte> zero = stackalloc byte[2];
