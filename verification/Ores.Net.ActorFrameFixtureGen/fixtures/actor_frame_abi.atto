@@ -1,0 +1,3 @@
+// Canonical .atto suffix; verified scalar CFG only, no define actor lowering.
+fnc plus_one(int x):int { return x+1; }
+fnc main():int { return plus_one(41); }
