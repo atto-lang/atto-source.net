@@ -761,6 +761,15 @@ public unsafe sealed class ActorArena : IDisposable
         }
     }
 
+    // An in-flight handler may still be unwinding after Stop has retired its
+    // actor arena. Its stack frames must be scrubbed on that same carrier,
+    // without opening new read/write or allocation admission.
+    internal void ValidateTurnForCleanup(ActorArenaTurn turn)
+    {
+        lock (_gate)
+            ValidateTurnLocked(turn);
+    }
+
     private void ValidateTurnLocked(ActorArenaTurn turn)
     {
         ArgumentNullException.ThrowIfNull(turn);
