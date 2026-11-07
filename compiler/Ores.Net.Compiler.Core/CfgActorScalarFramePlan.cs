@@ -30,6 +30,21 @@ public sealed class CfgActorScalarFramePlan
     public IReadOnlyList<IrValueType> SlotTypes => _types;
     public IReadOnlyList<string> BlockNames => _blocks;
 
+    // Stable wire-free ABI tags: 1=i64, 2=bool, copied so mutable caller
+    // arrays cannot change the verified layout's type authority.
+    public byte[] EncodeTypeTags()
+    {
+        var result = new byte[_types.Count];
+        for (int i = 0; i < result.Length; i++)
+            result[i] = _types[i] switch
+            {
+                IrValueType.I64 => 1,
+                IrValueType.Bool => 2,
+                _ => throw new FormatException("Unsupported actor scalar slot type")
+            };
+        return result;
+    }
+
     public static CfgActorScalarFramePlan Create(VerifiedCfgFunction function)
     {
         ArgumentNullException.ThrowIfNull(function);

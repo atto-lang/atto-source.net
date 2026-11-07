@@ -42,6 +42,7 @@ internal static class ActorScalarFrameAbiSelfTest
                 plan.SlotType(0) == IrValueType.Bool &&
                 plan.SlotType(1) == IrValueType.I64 &&
                 plan.FrameBytes == ActorScalarFrameAbiV1.FrameBytes(2) &&
+                plan.EncodeTypeTags().SequenceEqual(new byte[] { 2, 1 }) &&
                 plan.BlockIndex("entry") == 0,
             "verified CFG value IDs and native scalar ABI layout agree");
         RejectRange(() => ActorScalarFrameAbiV1.FrameBytes(0),
@@ -105,7 +106,7 @@ internal static class ActorScalarFrameAbiSelfTest
             if (data.Span[0] == 1)
             {
                 saved = ActorScalarFrameAbiV1.Push(context,
-                    plan.ValueSlots, plan.BlockCount);
+                    plan.EncodeTypeTags(), plan.BlockCount);
                 ActorScalarFrameAbiV1.WriteBool(context, saved, 0, true);
                 ActorScalarFrameAbiV1.WriteI64(context, saved, 1, 42);
                 ActorScalarFrameAbiV1.SetProgramCounter(context, saved,
@@ -120,8 +121,12 @@ internal static class ActorScalarFrameAbiSelfTest
                 "typed PC/bool/i64 native bytes survive carrier turn handoff");
             RejectInvalid(() => { _ = ActorScalarFrameAbiV1.ReadI64(context, saved!, 0); },
                 "bool slot cannot masquerade as int");
+            RejectInvalid(() => ActorScalarFrameAbiV1.WriteI64(context, saved!, 0, 11),
+                "verified bool slot cannot be rewritten as i64");
             RejectInvalid(() => { _ = ActorScalarFrameAbiV1.ReadBool(context, saved!, 1); },
                 "int slot cannot masquerade as bool");
+            RejectInvalid(() => ActorScalarFrameAbiV1.WriteBool(context, saved!, 1, false),
+                "verified i64 slot cannot be rewritten as bool");
             RejectRange(() => ActorScalarFrameAbiV1.SetProgramCounter(
                 context, saved!, plan.BlockCount),
                 "compiler PC bounds enforced");
@@ -132,8 +137,11 @@ internal static class ActorScalarFrameAbiSelfTest
             RejectInvalid(() => { _ = ActorScalarFrameAbiV1.ReadI64(context, saved!, 1); },
                 "stale popped activation denied");
 
+            RejectFormat(() => {
+                _ = ActorScalarFrameAbiV1.Push(context, new byte[] { 3 }, 1);
+            }, "unknown type tags are denied before native frame allocation");
             var reused = ActorScalarFrameAbiV1.Push(context,
-                plan.ValueSlots, plan.BlockCount);
+                plan.EncodeTypeTags(), plan.BlockCount);
             RejectInvalid(() => { _ = ActorScalarFrameAbiV1.ReadI64(context, reused, 1); },
                 "recycled native slot is uninitialized, not prior data");
             context.WriteStackFrame(reused, 0, new byte[] { 0 });

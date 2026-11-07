@@ -25,13 +25,19 @@ public static class ActorScalarFrameAbiV1
     }
 
     public static ActorStackFrameHandle Push(ActorContext context,
-        int valueSlots, int blockCount)
+        ReadOnlySpan<byte> declaredTypes, int blockCount)
     {
         ArgumentNullException.ThrowIfNull(context);
-        int bytes = FrameBytes(valueSlots);
+        int bytes = FrameBytes(declaredTypes.Length);
         if (blockCount <= 0 || blockCount > MaxBlocks)
             throw new ArgumentOutOfRangeException(nameof(blockCount));
 
+        // The compiler supplies immutable per-SSA-slot kinds. Validate them
+        // before native admission: callers cannot retype a slot on a later write.
+        foreach (byte kind in declaredTypes)
+            if (kind is not (I64Tag or BoolTag))
+                throw new FormatException("Unknown actor scalar ABI declared slot type");
+        int valueSlots = declaredTypes.Length;
         ActorStackFrameHandle frame = context.PushStackFrame(bytes, alignment: 8);
         try
         {
@@ -42,6 +48,14 @@ public static class ActorScalarFrameAbiV1
             BinaryPrimitives.WriteInt32LittleEndian(header[8..], blockCount);
             // Entry PC is initially 0; the compiler layout selects the entry.
             context.WriteStackFrame(frame, 0, header);
+            Span<byte> slot = stackalloc byte[SlotBytes];
+            for (int i = 0; i < valueSlots; i++)
+            {
+                slot.Clear();
+                slot[1] = declaredTypes[i];
+                context.WriteStackFrame(frame,
+                    checked(HeaderBytes + i * SlotBytes), slot);
+            }
             return frame;
         }
         catch
@@ -79,10 +93,11 @@ public static class ActorScalarFrameAbiV1
     public static void WriteI64(ActorContext context,
         ActorStackFrameHandle frame, int slot, long value)
     {
-        int offset = SlotOffset(context, frame, slot);
+        int offset = WritableSlotOffset(context, frame, slot, I64Tag);
         Span<byte> data = stackalloc byte[SlotBytes];
         data.Clear();
         data[0] = I64Tag;
+        data[1] = I64Tag;
         BinaryPrimitives.WriteInt64LittleEndian(data[8..], value);
         context.WriteStackFrame(frame, offset, data);
     }
@@ -99,10 +114,11 @@ public static class ActorScalarFrameAbiV1
     public static void WriteBool(ActorContext context,
         ActorStackFrameHandle frame, int slot, bool value)
     {
-        int offset = SlotOffset(context, frame, slot);
+        int offset = WritableSlotOffset(context, frame, slot, BoolTag);
         Span<byte> data = stackalloc byte[SlotBytes];
         data.Clear();
         data[0] = BoolTag;
+        data[1] = BoolTag;
         data[8] = value ? (byte)1 : (byte)0;
         context.WriteStackFrame(frame, offset, data);
     }
@@ -126,6 +142,23 @@ public static class ActorScalarFrameAbiV1
         Span<byte> header = stackalloc byte[HeaderBytes];
         ReadHeader(context, frame, header);
         context.PopStackFrame(frame);
+    }
+
+    private static int WritableSlotOffset(ActorContext context,
+        ActorStackFrameHandle frame, int slot, byte expected)
+    {
+        int offset = SlotOffset(context, frame, slot);
+        Span<byte> current = stackalloc byte[SlotBytes];
+        context.ReadStackFrame(frame, offset, current);
+        if (current[1] != expected ||
+            (current[0] != 0 && current[0] != expected))
+            throw new InvalidOperationException(
+                "Actor scalar slot write violates its declared CFG type");
+        for (int i = 2; i < 8; i++)
+            if (current[i] != 0)
+                throw new InvalidOperationException(
+                    "Noncanonical actor scalar slot padding");
+        return offset;
     }
 
     private static int SlotOffset(ActorContext context,
@@ -156,9 +189,9 @@ public static class ActorScalarFrameAbiV1
 
     private static void ValidateSlot(ReadOnlySpan<byte> data, byte expected)
     {
-        if (data[0] != expected)
+        if (data[0] != expected || data[1] != expected)
             throw new InvalidOperationException("Uninitialized or incorrectly typed actor scalar slot");
-        for (int i = 1; i < 8; i++)
+        for (int i = 2; i < 8; i++)
             if (data[i] != 0)
                 throw new InvalidOperationException("Noncanonical actor scalar slot padding");
     }

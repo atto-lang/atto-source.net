@@ -15,9 +15,10 @@ isolation or compiler-backed AttoLang actor execution.
   frame encoding. It reserves **16 + 16 × slotCount** bytes within the
   actor's existing native frame stack, not a separate heap.
 - Little-endian header: 32-bit magic `ATF1`, slot count, block count,
-  and checked block-index PC. Each 16-byte scalar slot contains a tag,
-  seven zero padding bytes, and an eight-byte scalar payload. An unwritten
-  slot has tag 0 and cannot be read; booleans must be exactly 0 or 1.
+  and checked block-index PC. Each 16-byte scalar slot contains an initialization tag, an immutable
+  compiler-declared type tag, six zero padding bytes, and an eight-byte
+  scalar payload. An unwritten slot has initialization tag 0 and cannot be
+  read or retyped; booleans must be exactly 0 or 1.
 - Every access goes through a **current** actor physical-turn context and
   the exact-issued stack handle. No raw native pointer, CLR call-stack
   capture, cross-actor authority, or wire serialization. On Pop, the
