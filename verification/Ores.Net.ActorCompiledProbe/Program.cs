@@ -41,11 +41,20 @@ using (var runtime = new ActorRuntime(Options(frameBytes: 32)))
 using (var siblingDone = new ManualResetEventSlim())
 {
     long siblingResult = 0;
+    int compiledQuotaObserved = 0;
+    int unexpectedCompiledReturn = 0;
     var faulted = runtime.Spawn(ActorKind.Shared, (ctx, _) =>
     {
-        _ = OresProgram.Run(ctx);
-        // Reaching this line would mean the actor frame quota was bypassed.
-        throw new InvalidOperationException("Compiled frame overflow failed to trap");
+        try
+        {
+            _ = OresProgram.Run(ctx);
+            Interlocked.Exchange(ref unexpectedCompiledReturn, 1);
+        }
+        catch (ActorFrameBudgetExceededException)
+        {
+            Interlocked.Exchange(ref compiledQuotaObserved, 1);
+            throw; // must remain terminal to this actor, not recovered
+        }
     });
     var sibling = runtime.Spawn(ActorKind.Shared, (ctx, _) =>
     {
@@ -67,6 +76,9 @@ using (var siblingDone = new ManualResetEventSlim())
         () => runtime.LiveActors == 1 && runtime.FaultedTurns == 1,
         TimeSpan.FromSeconds(10)),
         "compiled call did not fault and retire actor A with bounded frame memory");
+    Require(Volatile.Read(ref compiledQuotaObserved) == 1 &&
+            Volatile.Read(ref unexpectedCompiledReturn) == 0,
+        "actor A fault must specifically be compiled helper frame-budget overflow");
     Require(runtime.CompletedMessages == 1,
         "failed compiled actor was incorrectly marked a completed message");
     runtime.Stop(sibling);
