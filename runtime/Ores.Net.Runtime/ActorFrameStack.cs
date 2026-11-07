@@ -251,6 +251,21 @@ public unsafe sealed class ActorFrameStack : IDisposable
     }
 
     /// <summary>
+    /// A bounded guest interpreter must poison the actor if its semantic
+    /// execution budget is exhausted. Catching the original trap inside a
+    /// handler must never authorize another turn for that incarnation.
+    /// </summary>
+    internal void PoisonExecution(ActorArenaTurn turn)
+    {
+        _arena.ValidateTurnForCleanup(turn);
+        lock (_gate)
+        {
+            EnsureOpenLocked();
+            _poisoned = true;
+        }
+    }
+
+    /// <summary>
     /// Serialize STOP with frame allocations and data access. The actor
     /// arena's physical-turn check alone is insufficient because STOP may
     /// retire the arena between that check and the frame-stack lock.
