@@ -17,6 +17,9 @@ static async Task Until(Func<bool> condition)
 using var actors = new ActorRuntime(new ActorRuntimeOptions
 {
     MaxActors = 32, ActorPersistentBytes = 4096, ActorScratchBytes = 1024,
+    // Keep the 16-request HTTP stress budget bounded when each actor now has
+    // a separately reserved native frame stack in addition to its heap.
+    ActorStackBytes = 1024, ActorMaxStackFrames = 16,
     NativeBudgetBytes = 1024 * 1024,
     Dispatcher = new ActorDispatcherOptions
     { PrivateWorkers = 1, SharedWorkers = 1, UntrustedWorkers = 1, QueueCapacityPerDomain = 32 }
