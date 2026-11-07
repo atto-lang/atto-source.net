@@ -88,6 +88,32 @@ internal static class StructuredSourceTests
         RejectScalarStateInjection(
             "// skipped @Inject\n@StateBacked(MutableStateContainer())\nfnc main():int{return 7;}",
             "STATE_INJECTION_UNSUPPORTED: @StateBacked");
+
+        // Verify annotation offset after ignored comment trivia.
+        const string injectionOffsetProbe =
+            "/* inert @Inject(Fake()) */\n" +
+            "// inert @MutableStateContainer\n\n" +
+            " @StateBacked(MutableStateContainer())\n" +
+            "fnc main():int{return 7;}";
+        int injectionStart = injectionOffsetProbe.IndexOf("@StateBacked", StringComparison.Ordinal);
+        Require(injectionStart > 0, "missing executable annotation");
+        try {
+            _ = OresStructuredParser.Parse(injectionOffsetProbe);
+            throw new Exception("Structured parser admitted state injection");
+        } catch (FormatException error) {
+            Require(error.Message.Contains("STATE_INJECTION_UNSUPPORTED: @StateBacked", StringComparison.Ordinal)
+                && error.Message.Contains("offset " + injectionStart, StringComparison.Ordinal),
+                "structured parser used comment offset instead of executable annotation");
+        }
+        try {
+            _ = OresParser.Parse(injectionOffsetProbe);
+            throw new Exception("Scalar parser admitted state injection");
+        } catch (FormatException error) {
+            Require(error.Message.Contains("STATE_INJECTION_UNSUPPORTED: @StateBacked", StringComparison.Ordinal)
+                && error.Message.Contains("offset " + injectionStart, StringComparison.Ordinal),
+                "scalar parser used comment offset instead of executable annotation");
+        }
+
         // Unknown annotations must be explicit errors too, not silently
         // downgraded to scalar expression source.
         foreach (var unknown in new[] {"@NotRegistered", "@InjectExtra"})
