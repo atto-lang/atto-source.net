@@ -1,15 +1,19 @@
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Ores.Net.Runtime;
 
 /// <summary>An exact-issued, actor-local logical execution identity. Never a wire value.</summary>
+[JsonConverter(typeof(ActorFrameExecutionNoWireConverter))]
 public sealed class ActorFrameExecution
 {
     internal ActorFrameExecution() { }
 }
 
 /// <summary>An exact-issued frame capability; it never exposes the native address.</summary>
+[JsonConverter(typeof(ActorFrameHandleNoWireConverter))]
 public sealed class ActorFrameHandle
 {
     internal ActorFrameHandle(int length) => Length = length;
@@ -17,9 +21,46 @@ public sealed class ActorFrameHandle
 }
 
 /// <summary>One-shot continuation for a suspended logical actor stack.</summary>
+[JsonConverter(typeof(ActorFrameContinuationNoWireConverter))]
 public sealed class ActorFrameContinuation
 {
     internal ActorFrameContinuation() { }
+}
+
+// Host frame/continuation tokens must not become data. JSON rejection is
+// explicit even though these types expose no native pointer or public ctor.
+// Other codecs must enforce an equivalent no-authority boundary.
+public sealed class ActorFrameExecutionNoWireConverter : JsonConverter<ActorFrameExecution>
+{
+    public override ActorFrameExecution Read(ref Utf8JsonReader reader,
+        Type typeToConvert, JsonSerializerOptions options) =>
+        throw new NotSupportedException("Actor frame execution authority cannot be read from JSON");
+
+    public override void Write(Utf8JsonWriter writer, ActorFrameExecution value,
+        JsonSerializerOptions options) =>
+        throw new NotSupportedException("Actor frame execution authority cannot be written to JSON");
+}
+
+public sealed class ActorFrameHandleNoWireConverter : JsonConverter<ActorFrameHandle>
+{
+    public override ActorFrameHandle Read(ref Utf8JsonReader reader,
+        Type typeToConvert, JsonSerializerOptions options) =>
+        throw new NotSupportedException("Actor frame handle authority cannot be read from JSON");
+
+    public override void Write(Utf8JsonWriter writer, ActorFrameHandle value,
+        JsonSerializerOptions options) =>
+        throw new NotSupportedException("Actor frame handle authority cannot be written to JSON");
+}
+
+public sealed class ActorFrameContinuationNoWireConverter : JsonConverter<ActorFrameContinuation>
+{
+    public override ActorFrameContinuation Read(ref Utf8JsonReader reader,
+        Type typeToConvert, JsonSerializerOptions options) =>
+        throw new NotSupportedException("Actor continuation authority cannot be read from JSON");
+
+    public override void Write(Utf8JsonWriter writer, ActorFrameContinuation value,
+        JsonSerializerOptions options) =>
+        throw new NotSupportedException("Actor continuation authority cannot be written to JSON");
 }
 
 /// <summary>A terminal actor-local frame quota failure, not a CLR StackOverflowException.</summary>
