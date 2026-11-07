@@ -381,6 +381,87 @@ internal static class SourceModuleLinkingSelfTest
             Reject(()=>OresSourceModuleCompiler.Compile(
                 Path.Combine(root,"broken-do-fi.atto"),new[]{root}),
                 "missing fi cannot escape typed block validation");
+            // One canonical imported numeric .atto compile, three *real*
+            // compiler-emitted helper MethodDefs, and 30,000 parameterized
+            // CIL executions against an independent signed i64 reference.
+            Write("numeric-entry.atto",
+                "import module numeric from \"atto.core/numeric\"; " +
+                "pub fnc main():int{return numeric.clamp_int(50,0,42);}");
+            var numericBatch = OresSourceModuleCompiler.Compile(
+                Path.Combine(root, "numeric-entry.atto"), new[] { root });
+            string numericBatchFile = Path.Combine(root, "AttoCoreNumericBatch.dll");
+            CilEmitter.EmitLibrary(numericBatch.Module, numericBatchFile);
+            using (var numericImage = AssemblyDefinition.ReadAssembly(numericBatchFile))
+            {
+                var emitted = numericImage.MainModule.Types.Single(x => x.Name == "OresProgram");
+                long[] edges = {
+                    long.MinValue, long.MinValue+1, -43, -1, 0, 1, 42,
+                    long.MaxValue-1, long.MaxValue
+                };
+                foreach (string operation in new[] { "min_int", "max_int", "clamp_int" })
+                {
+                    string canonicalMethodName = "helper_m_" +
+                        Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(
+                            System.Text.Encoding.UTF8.GetBytes("@atto.core/numeric.atto\\0" + operation)));
+                    var helper = emitted.Methods.Single(x => x.Name == canonicalMethodName);
+                    Require(helper.IsPrivate && helper.IsStatic &&
+                        helper.Parameters.Count == (operation == "clamp_int" ? 3 : 2),
+                        "exact canonical numeric helper ABI missing: " + operation);
+                    ulong rng = 0x6a09e667f3bcc909UL;
+                    ulong NextNumericBits()
+                    {
+                        unchecked
+                        {
+                            ulong z = (rng += 0x9e3779b97f4a7c15UL);
+                            z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9UL;
+                            z = (z ^ (z >> 27)) * 0x94d049bb133111ebUL;
+                            return z ^ (z >> 31);
+                        }
+                    }
+                    ulong digest = 14695981039346656037UL;
+                    for (int i = 0; i < 10_000; i++)
+                    {
+                        long a, b, c;
+                        if (i < edges.Length * edges.Length * edges.Length)
+                        {
+                            a = edges[(i / (edges.Length * edges.Length)) % edges.Length];
+                            b = edges[(i / edges.Length) % edges.Length];
+                            c = edges[i % edges.Length];
+                        }
+                        else
+                        {
+                            a = unchecked((long)NextNumericBits());
+                            b = unchecked((long)NextNumericBits());
+                            c = unchecked((long)NextNumericBits());
+                        }
+                        long expected = operation switch
+                        {
+                            "min_int" => a < b ? a : b,
+                            "max_int" => a > b ? a : b,
+                            "clamp_int" => b > c ? b : (a < b ? b : (a > c ? c : a)),
+                            _ => throw new FormatException("Invalid numeric differential operation")
+                        };
+                        var inputs = operation == "clamp_int"
+                            ? new[] { a, b, c } : new[] { a, b };
+                        long actual = CfgCilTestInterpreter.Evaluate(helper, inputs);
+                        Require(actual == expected,
+                            "Compiler-emitted CIL numeric differential mismatch for " +
+                            operation + ", index " + i);
+                        digest = unchecked((digest ^ (ulong)actual) * 1099511628211UL);
+                    }
+                    string checksum = digest.ToString("x16");
+                    string expectedChecksum = operation switch
+                    {
+                        "min_int" => "a52c659779088c2b",
+                        "max_int" => "bb3870b3c10fd615",
+                        "clamp_int" => "e71b3e7766936548",
+                        _ => throw new FormatException("Invalid numeric differential operation")
+                    };
+                    Require(checksum == expectedChecksum,
+                        "Numeric CIL differential checksum disagrees with independent Forge oracle");
+                }
+            }
+            Console.WriteLine("PASS compiler-emitted canonical numeric CIL: 30000 parameterized signed-i64 differential results");
             Console.WriteLine("PASS canonical numeric.atto compiler-owned 12 CIL results, six aliases, shadowing and negative imports");
             Console.WriteLine("PASS canonical .atto negative imports, nested package authority, witness and path guards");
             Console.WriteLine("PASS AttoLang .atto real module-linking, typed CIL execution, source identity and negatives");

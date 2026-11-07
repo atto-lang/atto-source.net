@@ -11,6 +11,18 @@ internal static class CfgCilTestInterpreter
         return Execute(method, Array.Empty<long>(), ref maxSteps, 0);
     }
 
+    // Run a real compiler-emitted helper MethodDef with explicit guest i64
+    // arguments. This is a TEST-ONLY CIL interpreter, never the NativeAOT
+    // compiler/runtime and never an implicit host implementation of .atto.
+    public static long Evaluate(MethodDefinition method, long[] arguments, int maxSteps = 100_000)
+    {
+        ArgumentNullException.ThrowIfNull(method);
+        ArgumentNullException.ThrowIfNull(arguments);
+        if (arguments.Length > 16 || maxSteps <= 0)
+            throw new ArgumentOutOfRangeException(nameof(arguments));
+        return Execute(method, (long[])arguments.Clone(), ref maxSteps, 0);
+    }
+
     private static long Execute(MethodDefinition method, long[] arguments,
         ref int remainingSteps, int depth)
     {

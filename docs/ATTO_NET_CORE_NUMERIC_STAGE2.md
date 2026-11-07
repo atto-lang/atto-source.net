@@ -92,3 +92,21 @@ organizations. The compiler binary itself is still only a digest
 witness; stronger independent compiler provenance requires separately
 approved source-owned review. This remains unexecuted while GitHub
 runners are unavailable.
+
+## 30,000 compiler-emitted CIL numeric differential checks
+
+The verification-only Cecil interpreter now supports explicitly
+provided integer arguments to an emitted static CIL MethodDef.
+The module-linking self-test compiles the canonical, unchanged
+`numeric.atto` once, identifies the three exact compiler-owned
+numeric helper MethodDefs by SHA-256 names derived from their module
+identity and exported function names, then executes **10,000**
+deterministic signed-i64 input sets per method. The first 729
+cover combinations of nine i64 boundary values; later values use
+fixed-seed SplitMix64. All results are checked against an independent
+C# oracle and the same three checksums expected by the Forge
+native harness. No host implementation replaces the emitted
+CIL. These are **authored/locally unexecuted .NET test assertions**,
+not yet passed hosted JUnit/NativeAOT evidence. This does not
+establish 30,000 NativeAOT guest calls; only the parameterized
+CIL verifier is targeted by this test lane.
