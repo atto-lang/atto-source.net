@@ -75,6 +75,11 @@ ActorMessageHandler MakeHandler(int index)
         int count = Interlocked.Increment(ref counts[index]);
         if (count == 1) first.Signal();
         else if (count == 2) second.Signal();
+        else if (count == 3 && index == 1)
+        {
+            // Post-fault survivor message: publication is observed through
+            // native actor state/CompletedMessages, not a synthetic signal.
+        }
         else throw new InvalidOperationException("Unexpected actor mail count");
     };
 }
@@ -107,12 +112,22 @@ Require(values[0] == 3 && values[1] == 12,
 Require(Wait(() => runtime.CompletedMessages == 4 && runtime.FaultedTurns == 0),
     "no actor faults or lost messages during generated MethodDef execution");
 
-runtime.Stop(left);
+// Force checked add.ovf in *generated source CIL*, not in a host simulator.
+// The runtime must fault/retire only the overflowing actor incarnation.
+SendAmount(left, long.MaxValue);
+Require(Wait(() => runtime.FaultedTurns == 1 && runtime.LiveActors == 1),
+    "generated checked CIL overflow retires only actor A");
+SendAmount(right, 1);
+Require(Wait(() => runtime.CompletedMessages == 5 && values[1] == 13),
+    "actor B continues after actor A generated CIL overflow");
+Require(values[0] == 3 && runtime.FaultedTurns == 1,
+    "actor A fault did not corrupt actor B or signal extra success");
+
 runtime.Stop(right);
 Require(Wait(() => runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0),
     "both actor native heaps, frames and quotas return to zero");
 
 Console.WriteLine(
-    "ACTOR_M0_NATIVEAOT_GENERATED_CIL_EXECUTED|actors=2|left=3|right=12|frames=charged|heap=isolated");
+    "ACTOR_M0_NATIVEAOT_GENERATED_CIL_EXECUTED|actors=2|left=3|right=13|faulted=1|survivor=1|frames=charged|heap=isolated");
 Console.WriteLine(
     "ACTOR_M0_SCOPE=one_i64_field_one_checked_method|not_full_actor_lowering|not_physical_stack_isolation");
