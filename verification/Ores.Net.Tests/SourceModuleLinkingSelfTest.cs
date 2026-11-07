@@ -112,6 +112,26 @@ internal static class SourceModuleLinkingSelfTest
             Write("base.atto", "pub fnc twice(int n):int{return n * 2;} // atto body mutation");
             var changedAtto = OresSourceModuleCompiler.Compile(Path.Combine(root,"main.atto"),new[]{root});
             Require(changedAtto.GraphSha256 != attoHash,"mutated transitive .atto bytes change graph identity");
+            // Changing a source comment proves only the graph digest changes.
+            // Also mutate executable semantics and insist the REAL typed CIL
+            // emitter/interpreter reflects the new transitive module behavior.
+            Write("base.atto", "pub fnc twice(int n):int{return n * 3;}");
+            var changedBehavior = OresSourceModuleCompiler.Compile(
+                Path.Combine(root,"main.atto"),new[]{root});
+            Require(changedBehavior.GraphSha256 != attoHash,
+                "transitive semantic mutation must change graph identity");
+            string changedAssembly = Path.Combine(root, "AttoSemanticMutation.dll");
+            CilEmitter.EmitLibrary(changedBehavior.Module, changedAssembly);
+            using (var changedImage = AssemblyDefinition.ReadAssembly(changedAssembly))
+            {
+                var changedProgram = changedImage.MainModule.Types.Single(t => t.Name == "OresProgram");
+                Require(CfgCilTestInterpreter.Evaluate(
+                    changedProgram.Methods.Single(m => m.Name == "Run")) == 52,
+                    "real linked CIL must reflect mutated imported helper rather than stale result 42");
+            }
+            Require(!File.ReadAllBytes(attoAssembly).AsSpan().SequenceEqual(
+                File.ReadAllBytes(changedAssembly)),
+                "compiler must not return stale CIL when imported module behavior changes");
             Write("base.atto", "pub fnc twice(int n):int{return n * 2;}");
             Write("main.atto", "import fnc twice from \"./base.txt\"; fnc main():int{return twice(21);}");
             Reject(() => OresSourceModuleCompiler.Compile(Path.Combine(root,"main.atto"),new[]{root}),
@@ -148,6 +168,13 @@ internal static class SourceModuleLinkingSelfTest
             var mixed = OresSourceModuleCompiler.Compile(Path.Combine(root,"main.atto"),new[]{root});
             Require(mixed.Sources.Count==2 && mixed.Sources.Any(x=>x.Path.EndsWith("legacy-local.ores")),
                 "explicit legacy .ores import from canonical .atto graph admitted only by intent");
+            string mixedAssembly = Path.Combine(root,"AttoMixedLegacy.dll");
+            CilEmitter.EmitLibrary(mixed.Module, mixedAssembly);
+            using (var mixedImage = AssemblyDefinition.ReadAssembly(mixedAssembly))
+                Require(CfgCilTestInterpreter.Evaluate(
+                    mixedImage.MainModule.Types.Single(t => t.Name == "OresProgram")
+                        .Methods.Single(m => m.Name == "Run"))==42,
+                    "explicit mixed .atto→.ores import must execute through typed CIL");
             Write("main.atto",
                 "import fnc twice from \"./base\"; fnc main():int{return twice(21);}");
             Write("base.ores","pub fnc twice(int n):int{return n * 2;}");
@@ -155,6 +182,13 @@ internal static class SourceModuleLinkingSelfTest
             Require(suffix.Sources.Any(x=>x.Path.EndsWith("base.ores")) &&
                     !suffix.Sources.Any(x=>x.Path.EndsWith("base.atto")),
                 "unsuffixed import retains legacy .ores identity, never silent canonical fallback");
+            string suffixAssembly = Path.Combine(root,"AttoUnsuffixedLegacy.dll");
+            CilEmitter.EmitLibrary(suffix.Module, suffixAssembly);
+            using (var suffixImage = AssemblyDefinition.ReadAssembly(suffixAssembly))
+                Require(CfgCilTestInterpreter.Evaluate(
+                    suffixImage.MainModule.Types.Single(t => t.Name == "OresProgram")
+                        .Methods.Single(m => m.Name == "Run"))==42,
+                    "legacy extension fallback must be executable and preserve called semantics");
             string externalAtto = root+"-outside.atto";
             try
             {
