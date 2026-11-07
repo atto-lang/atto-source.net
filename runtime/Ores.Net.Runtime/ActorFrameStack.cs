@@ -238,12 +238,16 @@ public unsafe sealed class ActorFrameStack : IDisposable
     /// <summary>Detect a swallowed quota failure or forgotten synchronous unwind.</summary>
     public void ValidateTurnExit(ActorArenaTurn physicalTurn)
     {
+        // No new frame authority is granted here. In particular, a concurrent
+        // STOP may already have retired ActorArena while this handler unwinds.
+        // Calling ValidateActiveTurn here would incorrectly count that normal
+        // STOP as a handler fault even if no frames were ever entered.
+        ArgumentNullException.ThrowIfNull(physicalTurn);
         lock (_gate)
         {
-            EnsurePhysicalTurn(physicalTurn);
             if (_poisoned)
                 throw new InvalidOperationException("Actor frame storage has been poisoned");
-            if (ReferenceEquals(_physicalTurn, physicalTurn) && _execution is not null)
+            if (_execution is not null && _continuation is null)
             {
                 Poison();
                 throw new InvalidOperationException("Actor handler returned with live frames");
