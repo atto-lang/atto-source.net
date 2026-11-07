@@ -164,4 +164,27 @@ using (var sameTurn = owner.EnterTurn(7950, 1))
     Require(stack.IsPoisoned,
         "invalid same-turn resume is a terminal actor-local protocol fault");
 }
+// A successful later-turn claim must also be single use. Deliberately replay
+// while that later physical turn remains active: only its actor stack is
+// poisoned, and no CLR machine-stack or process-level exception is triggered.
+using (var owner = new ActorArena(7960, 1, 256, 128, 4, 2, 2))
+using (var stack = new ActorFrameStack(owner, new ActorArenaBudget(128), 4, 128))
+{
+    ActorFrameExecution execution;
+    ActorFrameContinuation ticket;
+    using (var first = owner.EnterTurn(7960, 1))
+    {
+        execution = stack.Begin(first);
+        _ = stack.PushTyped(first, execution, typedLayout);
+        ticket = stack.Suspend(first, execution);
+        stack.ValidateTurnExit(first);
+    }
+    using (var second = owner.EnterTurn(7960, 1))
+    {
+        stack.Resume(second, execution, ticket);
+        DenyFrame(() => stack.Resume(second, execution, ticket),
+            "replayed already-claimed continuation");
+        Require(stack.IsPoisoned, "native continuation ticket replay must poison actor stack");
+    }
+}
 Console.WriteLine("PASS actor-frame-nativeaot-resume-epoch: cross-turn ticket accepted once; same-turn denial poisons only logical actor stack");

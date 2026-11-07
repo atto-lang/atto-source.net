@@ -210,3 +210,14 @@ CFG-to-runtime actor host probe now uses this stricter gate, and
 `actor-memory-native-aot.yml` triggers on compiler-core changes too.
 This is source-level admission hardening, **not** generated guest CIL/await
 execution evidence.
+
+### Replayed continuation negative control
+
+The CoreCLR host suite and Linux/Windows native probe now each
+**consume a valid continuation ticket in a later authenticated physical
+turn and then attempt a second claim of that exact ticket**. They require
+an `InvalidOperationException` and terminal poisoning of that owning
+actor's frame stack. The host suite additionally verifies that a
+different actor's typed frame remains usable. This is a deliberately
+negative host scheduler-protocol test, not source-level `.atto`
+continuation execution.

@@ -19,6 +19,7 @@ internal static class ActorFrameStackSelfTest
         AsyncVoidHostHandlersFailAdmission();
         TypedActorSlotsDenyRawBypass();
         SameTurnContinuationResumePoisonsOnlyItsActor();
+        ReplayedContinuationPoisonsOnlyItsOwner();
         Console.WriteLine("PASS .NET actor frame slab host tests (NOT compiler-backed .atto or native stack isolation)");
     }
 
@@ -88,6 +89,46 @@ internal static class ActorFrameStackSelfTest
             "same-turn resume protocol violation is terminal for the owner");
         ExpectInvalid(() => frames.Read(turn, execution, root, 0, new byte[1]),
             "poisoned actor cannot recover canceled frame bytes");
+    }
+
+    private static void ReplayedContinuationPoisonsOnlyItsOwner()
+    {
+        using var owner = new ActorArena(7960, 1, 256, 128, 4, 2, 2);
+        using var sibling = new ActorArena(7961, 1, 256, 128, 4, 2, 2);
+        using var ownerFrames = new ActorFrameStack(
+            owner, new ActorArenaBudget(128), 4, 128);
+        using var siblingFrames = new ActorFrameStack(
+            sibling, new ActorArenaBudget(128), 4, 128);
+        ActorFrameExecution execution;
+        ActorFrameContinuation ticket;
+        using (var first = owner.EnterTurn(7960, 1))
+        {
+            execution = ownerFrames.Begin(first);
+            _ = ownerFrames.PushTyped(first, execution,
+                new ActorFrameTypedLayout(ActorFrameScalarKind.I64));
+            ticket = ownerFrames.Suspend(first, execution);
+            ownerFrames.ValidateTurnExit(first);
+        }
+        using (var next = owner.EnterTurn(7960, 1))
+        {
+            ownerFrames.Resume(next, execution, ticket);
+            ExpectInvalid(() => ownerFrames.Resume(next, execution, ticket),
+                "the same ticket cannot be consumed a second time");
+            Require(ownerFrames.IsPoisoned,
+                "replay invalidates only the actor whose ticket was reused");
+        }
+        using (var peer = sibling.EnterTurn(7961, 1))
+        {
+            var peerExecution = siblingFrames.Begin(peer);
+            var frame = siblingFrames.PushTyped(peer, peerExecution,
+                new ActorFrameTypedLayout(ActorFrameScalarKind.Bool));
+            siblingFrames.WriteBool(peer, peerExecution, frame, 0, true);
+            Require(siblingFrames.ReadBool(peer, peerExecution, frame, 0),
+                "another actor's frame remains operational after ticket replay");
+            siblingFrames.Pop(peer, peerExecution, frame);
+            siblingFrames.Finish(peer, peerExecution);
+            siblingFrames.ValidateTurnExit(peer);
+        }
     }
 
     private static void IndependentSlabsAndByteCopies()
