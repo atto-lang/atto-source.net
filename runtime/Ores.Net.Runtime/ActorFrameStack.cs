@@ -163,7 +163,8 @@ public unsafe sealed class ActorFrameStack : IDisposable
     {
         lock (_gate)
         {
-            EnsureExecution(physicalTurn, execution);
+            // STOP may close new admission while this physical turn unwinds.
+            EnsureExecution(physicalTurn, execution, allowRetiredCleanup: true);
             if (_depth == 0 || !ReferenceEquals(_frames[_depth - 1], frame))
             {
                 Poison();
@@ -182,7 +183,7 @@ public unsafe sealed class ActorFrameStack : IDisposable
     {
         lock (_gate)
         {
-            EnsureExecution(physicalTurn, execution);
+            EnsureExecution(physicalTurn, execution, allowRetiredCleanup: true);
             if (_depth != 0)
             {
                 Poison();
@@ -325,10 +326,16 @@ public unsafe sealed class ActorFrameStack : IDisposable
             throw new InvalidOperationException("Actor frame storage closed or poisoned");
     }
 
-    private void EnsureExecution(ActorArenaTurn turn, ActorFrameExecution execution)
+    private void EnsureExecution(ActorArenaTurn turn, ActorFrameExecution execution,
+        bool allowRetiredCleanup = false)
     {
-        EnsurePhysicalTurn(turn);
-        EnsureHealthy();
+        // Authenticate the exact physical carrier before metadata access.
+        if (allowRetiredCleanup)
+            _arena.ValidatePhysicalTurn(turn);
+        else
+            EnsurePhysicalTurn(turn);
+        if (_poisoned || (_retired && !allowRetiredCleanup))
+            throw new InvalidOperationException("Actor frame storage closed or poisoned");
         if (!ReferenceEquals(_physicalTurn, turn) ||
             !ReferenceEquals(_execution, execution) ||
             _continuation is not null)
