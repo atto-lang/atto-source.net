@@ -8,6 +8,8 @@ internal static class ActorFrameStackSelfTest
         IndependentSlabsAndByteCopies();
         StrictLifoAndQuotaAreTerminal();
         SuspensionResumesOnAnotherCarrier();
+        SynchronousHandlerCannotEscapeSuspension();
+        SuspendedTurnExitRequiresOriginalPhysicalTurn();
         StaleContinuationPoisonsOnlyItsActor();
         RetireScrubsAndRefundsExactlyOnce();
         IntegratedFaultKeepsSiblingAlive();
@@ -132,6 +134,45 @@ internal static class ActorFrameStackSelfTest
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error).Throw();
         Require(stack.Depth == 0 && stack.ChargedBytes == 0,
             "resumed frame pop refunds full logical stack charge");
+    }
+
+    private static void SynchronousHandlerCannotEscapeSuspension()
+    {
+        using var actor = new ActorArena(7250, 1, 128, 64, 4, 2, 2);
+        using var stack = new ActorFrameStack(actor, new ActorArenaBudget(64), 2, 64);
+        using var turn = actor.EnterTurn(7250, 1);
+        var execution = stack.Begin(turn);
+        _ = stack.Push(turn, execution, 8);
+        var continuation = stack.Suspend(turn, execution);
+        // A trusted scheduler handoff is a separate seam, not the shipping
+        // synchronous dispatcher contract.
+        stack.ValidateTurnExit(turn);
+        ExpectInvalid(() => stack.ValidateSynchronousTurnExit(turn),
+            "synchronous dispatcher must not admit suspended actor continuation");
+        Require(stack.IsPoisoned && !stack.IsSuspended && stack.Depth == 0,
+            "escaped suspension permanently poisons only this actor stack");
+        ExpectInvalid(() => stack.Resume(turn, execution, continuation),
+            "poisoned suspended execution cannot be resumed");
+    }
+
+    private static void SuspendedTurnExitRequiresOriginalPhysicalTurn()
+    {
+        using var actor = new ActorArena(7260, 1, 128, 64, 4, 2, 2);
+        using var stack = new ActorFrameStack(actor, new ActorArenaBudget(64), 2, 64);
+        using (var original = actor.EnterTurn(7260, 1))
+        {
+            var execution = stack.Begin(original);
+            _ = stack.Push(original, execution, 8);
+            _ = stack.Suspend(original, execution);
+            stack.ValidateTurnExit(original);
+        }
+        using (var foreignTurn = actor.EnterTurn(7260, 1))
+        {
+            ExpectInvalid(() => stack.ValidateTurnExit(foreignTurn),
+                "a fresh turn cannot attest the previous suspension origin");
+        }
+        Require(stack.IsPoisoned && stack.Depth == 0,
+            "mismatched continuation origin fails closed");
     }
 
     private static void StaleContinuationPoisonsOnlyItsActor()
