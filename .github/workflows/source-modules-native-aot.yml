@@ -65,6 +65,28 @@ jobs:
           if ($LASTEXITCODE -ne 1 -or $rejection -notmatch 'Nominal class/actor methods require' -or (Test-Path artifacts/module-rejected/OresGenerated.dll)) { throw 'Class rejection was not correctly classified' }
           $rejection
           $global:LASTEXITCODE = 0
+      - name: Compile canonical .atto source graph and execute NativeAOT guest
+        shell: pwsh
+        run: |
+          $compiler = Join-Path 'artifacts/module-compiler' 'oresnet${{ matrix.suffix }}'
+          $witness = & $compiler compile-modules examples/modules/atto-main.atto --root examples/modules --out artifacts/atto-module-generated/OresGenerated.dll
+          if ($LASTEXITCODE -ne 0) { throw 'Canonical AttoLang .atto module graph did not compile' }
+          $witness | Set-Content artifacts/atto-module-source-graph.json
+          $generated = (Resolve-Path artifacts/atto-module-generated/OresGenerated.dll).Path
+          dotnet publish host/Ores.Net.NativeHost -c Release -r '${{ matrix.rid }}' -p:PublishAot=true "-p:GeneratedAssembly=$generated" -o artifacts/atto-module-app -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'Canonical .atto Native AOT host publish failed' }
+          $binary = Join-Path 'artifacts/atto-module-app' 'oreslang-app${{ matrix.suffix }}'
+          $output = & $binary
+          if ($LASTEXITCODE -ne 0 -or "$output".Trim() -ne '42') { throw 'Canonical .atto NativeAOT linked guest did not return 42' }
+          @{scope='real-canonical-atto-local-module-graph-not-atto.core-namespace'; source_commit=(git rev-parse HEAD); source_tree=(git rev-parse 'HEAD^{tree}'); rid='${{ matrix.rid }}'; binary_sha256=(Get-FileHash $binary -Algorithm SHA256).Hash.ToLowerInvariant(); output=$output} | ConvertTo-Json | Set-Content artifacts/atto-module-app/receipt.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: atto-local-modules-${{ matrix.rid }}
+          path: |
+            artifacts/atto-module-app/
+            artifacts/atto-module-source-graph.json
+          if-no-files-found: warn
       - name: Publish and execute statically linked module application
         shell: pwsh
         run: |

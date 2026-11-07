@@ -143,13 +143,19 @@ public static class OresSourceModuleCompiler
                 specifier.Any(c => char.IsControl(c) || c is '\\' or ':'))
                 throw new FormatException("Module imports require explicit local ./ or ../ source paths");
             string path = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(importer)!, specifier));
+            // Unsuffixed legacy imports keep .ores for compatibility.
+            // Canonical .atto imports must explicitly name their extension
+            // until the package-level registry can bind one logical unit ID
+            // to both spellings (never silently create duplicate modules).
             if (Path.GetExtension(path).Length == 0) path += ".ores";
             return AdmitPath(path);
         }
 
         string AdmitPath(string path)
         {
-            if (Path.GetExtension(path) != ".ores" || !File.Exists(path)) throw new FormatException("Source import is missing or not .ores");
+            string suffix = Path.GetExtension(path);
+            if ((suffix != ".atto" && suffix != ".ores") || !File.Exists(path))
+                throw new FormatException("Source import is missing or not canonical .atto / legacy .ores");
             int owner = RootIndex(path);
             if (owner < 0) throw new FormatException("Source import escapes explicit source roots");
             string cursor = roots[owner];

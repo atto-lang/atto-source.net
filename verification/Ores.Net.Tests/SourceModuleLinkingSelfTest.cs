@@ -84,6 +84,46 @@ internal static class SourceModuleLinkingSelfTest
                 Write("main.ores", "import fnc twice from \"./alias\"; fnc main():int { return twice(21); }");
                 Reject(Compile, "reparse aliases rejected");
             }
+            // Canonical source files use the SAME real typed linker and CIL
+            // emitter, not a parallel snapshot validator or a fallback parser.
+            Write("main.atto",
+                "import module left from \"./left.atto\"; import module right from \"./right.atto\"; " +
+                "pub fnc main():int { return left.value(10) + right.value(11); }");
+            Write("left.atto",
+                "import fnc twice from \"./base.atto\"; " +
+                "define module left as pub fnc value(int n)->int{return twice(n);} end");
+            Write("right.atto",
+                "define module right as pub fnc value(int n):int{return n * 2;} end");
+            Write("base.atto","pub fnc twice(int n):int{return n * 2;}");
+            var canonical = OresSourceModuleCompiler.Compile(
+                Path.Combine(root,"main.atto"), new[] { root });
+            Require(canonical.Sources.Count == 4, "canonical .atto graph has four real parsed units");
+            Require(canonical.Sources.All(x => x.Path.EndsWith(".atto", StringComparison.Ordinal)),
+                "canonical imports never rewrite into legacy .ores files");
+            string attoAssembly = Path.Combine(root, "AttoGenerated.dll");
+            CilEmitter.EmitLibrary(canonical.Module, attoAssembly);
+            using (var image = AssemblyDefinition.ReadAssembly(attoAssembly))
+            {
+                var program = image.MainModule.Types.Single(t => t.Name == "OresProgram");
+                Require(CfgCilTestInterpreter.Evaluate(program.Methods.Single(m => m.Name == "Run")) == 42,
+                    "canonical .atto imported methods execute as typed CIL");
+            }
+            var attoHash = canonical.GraphSha256;
+            Write("base.atto", "pub fnc twice(int n):int{return n * 2;} // atto body mutation");
+            var changedAtto = OresSourceModuleCompiler.Compile(Path.Combine(root,"main.atto"),new[]{root});
+            Require(changedAtto.GraphSha256 != attoHash,"mutated transitive .atto bytes change graph identity");
+            Write("base.atto", "pub fnc twice(int n):int{return n * 2;}");
+            Write("main.atto", "import fnc twice from \"./base.txt\"; fnc main():int{return twice(21);}");
+            Reject(() => OresSourceModuleCompiler.Compile(Path.Combine(root,"main.atto"),new[]{root}),
+                "unknown source extension stays denied", "canonical .atto / legacy .ores");
+            Write("main.atto", "import fnc twice from \"./missing.atto\"; fnc main():int{return twice(21);}");
+            Reject(() => OresSourceModuleCompiler.Compile(Path.Combine(root,"main.atto"),new[]{root}),
+                "missing canonical source stays denied");
+            Write("main.atto", "import fnc twice from \"./base.atto\"; fnc main():int{return twice(21);}");
+            File.WriteAllBytes(Path.Combine(root,"base.atto"),new byte[]{0xff,0xfe});
+            Reject(() => OresSourceModuleCompiler.Compile(Path.Combine(root,"main.atto"),new[]{root}),
+                "invalid canonical UTF-8 stays denied", "strict UTF-8");
+            Console.WriteLine("PASS AttoLang .atto real module-linking, typed CIL execution, source identity and negatives");
             Console.WriteLine("PASS source module graph, scoped imports, typed calls, CIL, source identity and fail-closed boundaries");
         }
         finally { Directory.Delete(root, true); File.Delete(outside); }
