@@ -27,6 +27,25 @@ using var runtime = new ActorRuntime(new ActorRuntimeOptions
         QueueCapacityPerDomain = 2
     }
 });
+// Native AOT trimming must not turn the async-void admission guard into an
+// accidental no-op. Check it in the published native host, not only CoreCLR.
+ActorMessageHandler asyncVoid = async (_, _) => await Task.Yield();
+ActorMessageHandler synchronous = static (_, _) => { };
+static void RequireAsyncDenied(ActorRuntime runtime, ActorMessageHandler candidate)
+{
+    try { runtime.Spawn(ActorKind.Shared, candidate); }
+    catch (ArgumentException ex) when
+        (ex.ParamName == "handler" &&
+         ex.Message.Contains("scheduler-owned", StringComparison.Ordinal)) { return; }
+    throw new InvalidOperationException("Native AOT async-void actor handler escaped admission");
+}
+RequireAsyncDenied(runtime, asyncVoid);
+RequireAsyncDenied(runtime, synchronous + asyncVoid);
+RequireAsyncDenied(runtime, asyncVoid + synchronous);
+Require(runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0 &&
+    runtime.StartedCarrierThreads == 0,
+    "rejected native async-void handlers allocated actor resources");
+
 using var siblingDone = new ManualResetEventSlim();
 long observed = 0;
 var failed = runtime.Spawn(ActorKind.Shared, (context, _) =>
@@ -65,3 +84,4 @@ Require(SpinWait.SpinUntil(
     () => runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0,
     TimeSpan.FromSeconds(10)), "actor frames/heap native budget leaked after STOP");
 Console.WriteLine("PASS actor-frame-nativeaot-host: per-actor slabs, terminal budget fault, sibling survives on shared carrier, native quota reclaimed; NOT compiled .atto");
+Console.WriteLine("PASS actor-frame-nativeaot-async-guard: direct and multicast async-void admission denied before native allocation");
