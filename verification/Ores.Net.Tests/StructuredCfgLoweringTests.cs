@@ -118,6 +118,31 @@ internal static class StructuredCfgLoweringTests
         if (CfgTailCallCandidates.Inspect(nested.Main).Count != 1)
             throw new Exception("CFG must identify only the outer returned call");
 
+        // The structural call candidate is NOT automatically ABI compatible:
+        // a zero-parameter main cannot musttail a one-parameter helper.
+        if (CfgSameSignatureTailCandidates.Inspect(simpleTail).Count != 0 ||
+            CfgSameSignatureTailCandidates.Inspect(nested).Count != 0)
+            throw new Exception("CFG ABI probe admitted mismatched caller parameters");
+        var sameSignature = OresStructuredCfgLowering.LowerModule(
+            "fnc inc(int x):int{return x+1;}" +
+            "fnc bridge(int n):int{return inc(n);}" +
+            "fnc main():int{return bridge(41);}");
+        var compatible = CfgSameSignatureTailCandidates.Inspect(sameSignature);
+        if (compatible.Count != 1 ||
+            compatible[0].Caller != "bridge" ||
+            compatible[0].Target != "inc")
+            throw new Exception("CFG failed to identify exact same-signature helper return");
+        var sameSignatureZero = OresStructuredCfgLowering.LowerModule(
+            "fnc answer():int{return 42;}fnc main():int{return answer();}");
+        if (CfgSameSignatureTailCandidates.Inspect(sameSignatureZero).Count != 1)
+            throw new Exception("CFG zero-parameter scalar return ABI missing");
+        var mismatchedScalarType = OresStructuredCfgLowering.LowerModule(
+            "fnc pred(int x):bool{return x==0;}" +
+            "fnc bridge(bool b):bool{return pred(0);}" +
+            "fnc main():int{return 0;}");
+        if (CfgSameSignatureTailCandidates.Inspect(mismatchedScalarType).Count != 0)
+            throw new Exception("CFG ABI gate admitted mismatched boolean/int parameter types");
+
         Check("fnc twice(int x):int{return x*2;}fnc answer():int{return twice(21);}fnc main():int{return answer();}",
             42, "chained helper functions");
         Check("fnc sum(int x,int y):int{return x+y;}fnc main():int{return sum(19,23);}",
