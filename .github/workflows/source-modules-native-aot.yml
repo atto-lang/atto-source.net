@@ -40,6 +40,33 @@ jobs:
       - name: Install Linux native toolchain
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev binutils file
+      - name: Parse and adversarially check linked relational native evidence gate
+        shell: pwsh
+        run: |
+          $script = 'verification/assert-linked-relational-native.ps1'
+          $tokens = $null
+          $errors = $null
+          $null = [Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path -LiteralPath $script).Path, [ref]$tokens, [ref]$errors)
+          if ($errors.Count -ne 0) {
+            throw ("Native evidence gate PowerShell syntax is invalid: " + ($errors | Out-String))
+          }
+          # Wrong job identity must fail BEFORE attempting native compilation.
+          $job = $env:GITHUB_JOB
+          $denied = $false
+          try {
+            $env:GITHUB_JOB = 'spoofed-native-job'
+            try {
+              & (Resolve-Path -LiteralPath $script).Path -Compiler './nonexistent-compiler' -Rid '${{ matrix.rid }}' -ExpectedHead '${{ github.event.pull_request.head.sha || github.sha }}'
+            } catch {
+              $denied = $_.Exception.Message -match 'source-owned module workflow'
+            }
+          } finally {
+            $env:GITHUB_JOB = $job
+          }
+          if (-not $denied) {
+            throw 'Linked relational source-run admission did not fail closed for wrong job identity'
+          }
       - name: Existing compiler and module-linking regressions
         shell: pwsh
         env:
