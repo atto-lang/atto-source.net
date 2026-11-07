@@ -51,3 +51,11 @@ binary hash, target RID, graph/CIL/native digest, and result.
 
 These are source-authored CI checks, **NOT** observed NativeAOT
 execution as long as GitHub runner allocation remains blocked.
+
+## Stable CFG opcode identity
+
+`GreaterThanI64` was added **after**, rather than between,
+the existing CFG/AST enum cases. That avoids renumbering
+`Argument`, `Call`, `NotEqualI64` or earlier structured
+operators in any existing serialized or compared compiler evidence.
+A new opcode's value remains assigned only to the new semantics.

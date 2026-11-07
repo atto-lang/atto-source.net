@@ -13,10 +13,10 @@ public enum CfgOpcode
     CheckedDivide,
     EqualI64,
     LessThanI64,
-    GreaterThanI64,
     Argument,
     Call,
-    NotEqualI64
+    NotEqualI64,
+    GreaterThanI64
 }
 
 public readonly record struct CfgParameter(int Id, IrValueType Type);
