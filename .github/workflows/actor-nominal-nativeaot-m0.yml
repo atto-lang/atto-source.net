@@ -1,0 +1,100 @@
+name: Nominal actor M0 verified CIL + NativeAOT (source-backed)
+
+on:
+  pull_request:
+    paths:
+      - 'compiler/Ores.Net.Compiler.Core/**'
+      - 'compiler/Ores.Net.Compiler/Program.cs'
+      - 'contracts/actor-cil-v1/**'
+      - 'runtime/Ores.Net.Runtime/**'
+      - 'verification/Ores.Net.ActorCilProbe/**'
+      - 'verification/Ores.Net.Tests/**'
+      - '.github/workflows/actor-nominal-nativeaot-m0.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  actor-m0-native:
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            rid: linux-x64
+            compiler: oresnet
+            probe: oreslang-actor-cil-probe
+          - runner: windows-2022
+            rid: win-x64
+            compiler: oresnet.exe
+            probe: oreslang-actor-cil-probe.exe
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.x'
+      - name: Assert exact submitted head and run complete managed tests
+        shell: pwsh
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actual = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $actual -cne $env:EXPECTED_HEAD) { throw 'Checkout is not exact submitted PR head' }
+          $tree = (git rev-parse 'HEAD^{tree}').Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to resolve immutable tree' }
+          Write-Output "ACTOR_M0_EXACT_HEAD=$actual TREE=$tree RUN=$env:GITHUB_RUN_ID ATTEMPT=$env:GITHUB_RUN_ATTEMPT"
+          dotnet --info
+          if ($LASTEXITCODE -ne 0) { throw 'dotnet SDK unavailable' }
+          dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
+          if ($LASTEXITCODE -ne 0) { throw 'Managed actor M0 CIL regression tests failed' }
+      - name: Publish NativeAOT compiler and emit actor M0 CIL
+        shell: pwsh
+        env:
+          RID: ${{ matrix.rid }}
+          COMPILER: ${{ matrix.compiler }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $compilerRoot = Join-Path $env:RUNNER_TEMP 'actor-m0-compiler'
+          $generatedRoot = Join-Path $env:RUNNER_TEMP 'actor-m0-generated'
+          New-Item -ItemType Directory -Force -Path $compilerRoot,$generatedRoot | Out-Null
+          dotnet publish compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -r $env:RID -p:PublishAot=true -p:SelfContained=true -o $compilerRoot -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'NativeAOT compiler publish failed' }
+          $compiler = Join-Path $compilerRoot $env:COMPILER
+          if (-not (Test-Path $compiler)) { throw 'NativeAOT source compiler executable missing' }
+          $fixture = 'contracts/actor-cil-v1/counter.atto'
+          & $compiler check-actor-scalar $fixture
+          if ($LASTEXITCODE -ne 0) { throw 'Nominal actor M0 source admission failed' }
+          $generated = Join-Path $generatedRoot 'OresGenerated.dll'
+          & $compiler compile-actor-scalar $fixture --out $generated
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $generated)) { throw 'Generated actor CIL missing' }
+          Write-Output "ACTOR_M0_VERIFIED_GENERATED_CIL=$generated"
+      - name: Link and execute two actor heaps with generated NativeAOT CIL
+        shell: pwsh
+        env:
+          RID: ${{ matrix.rid }}
+          PROBE: ${{ matrix.probe }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $generated = Join-Path $env:RUNNER_TEMP 'actor-m0-generated/OresGenerated.dll'
+          $out = Join-Path $env:RUNNER_TEMP 'actor-m0-native'
+          dotnet publish verification/Ores.Net.ActorCilProbe/Ores.Net.ActorCilProbe.csproj -c Release -r $env:RID -p:PublishAot=true -p:SelfContained=true "-p:GeneratedAssembly=$generated" -o $out -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'Actor M0 NativeAOT link failed' }
+          $exe = Join-Path $out $env:PROBE
+          if (-not (Test-Path $exe)) { throw 'Actor M0 native executable missing' }
+          $output = @(& $exe)
+          if ($LASTEXITCODE -ne 0) { throw 'Generated CIL actor native execution failed' }
+          $output | Write-Output
+          if ($output -cnotcontains 'ACTOR_M0_NATIVEAOT_GENERATED_CIL_EXECUTED|actors=2|left=3|right=12|frames=charged|heap=isolated') {
+            throw 'Missing real two-actor native execution receipt'
+          }
+          if (Test-Path (Join-Path $out 'OresGenerated.dll')) {
+            throw 'Generated managed DLL unexpectedly shipped alongside native app'
+          }
+          Write-Output "ACTOR_M0_VERIFIED_NATIVE_EXECUTION=HOSTED RUNTIME=$env:RID RUN=$env:GITHUB_RUN_ID ATTEMPT=$env:GITHUB_RUN_ATTEMPT"
