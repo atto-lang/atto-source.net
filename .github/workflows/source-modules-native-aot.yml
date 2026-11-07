@@ -45,7 +45,7 @@ jobs:
           if ((git rev-parse HEAD) -ne $env:EXPECTED_HEAD) { throw 'Checkout identity mismatch' }
           dotnet run -c Release --project verification/Ores.Net.Tests
           if ($LASTEXITCODE -ne 0) { throw 'Compiler/module regressions failed' }
-          foreach ($source in (Get-ChildItem examples/modules -Filter '*.ores')) {
+          foreach ($source in (Get-ChildItem examples/modules -File | Where-Object { $_.Extension -in '.ores', '.atto' })) {
             $path = "examples/modules/$($source.Name)"
             if ((git hash-object --no-filters -- $path) -ne (git rev-parse "HEAD:$path")) { throw "Checkout changed source bytes: $path" }
           }
