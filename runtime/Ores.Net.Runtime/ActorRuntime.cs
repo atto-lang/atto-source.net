@@ -554,6 +554,9 @@ public sealed class ActorRuntime : IDisposable
 
         cell.Stopping = true;
         cell.Mailbox.Stop();
+        // Frame allocations/read admission and STOP linearize under the
+        // frame-stack gate, even if turn validation raced with retirement.
+        cell.Frames.RetireAdmission();
         cell.Arena.Retire();
     }
 
@@ -563,6 +566,7 @@ public sealed class ActorRuntime : IDisposable
             return;
 
         cell.Mailbox.Stop();
+        cell.Frames.RetireAdmission();
         cell.Arena.Retire();
         // Dispatch is quiescent here. Scrub actor-owned frame bytes before
         // reclaiming its heap; a lifetime pin may keep only heap bytes alive.
