@@ -182,7 +182,7 @@ internal static class ActorScalarFrameProgramSelfTest
         bool caught = false;
         var bad = runtime.Spawn(ActorKind.Shared, (ctx, _) =>
         {
-            try { _ = nested.Execute(ctx); }
+            try { nested.Execute(ctx); }
             catch (InvalidOperationException) { caught = true; }
         });
         var good = runtime.Spawn(ActorKind.Shared, (ctx, _) =>
