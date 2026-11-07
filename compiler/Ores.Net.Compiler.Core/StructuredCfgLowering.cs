@@ -213,6 +213,8 @@ public static class OresStructuredCfgLowering
                         StructuredOperator.NotEqualI64 => CfgOpcode.NotEqualI64,
                         StructuredOperator.LessThanI64 => CfgOpcode.LessThanI64,
                         StructuredOperator.GreaterThanI64 => CfgOpcode.GreaterThanI64,
+                        StructuredOperator.LessThanOrEqualI64 => CfgOpcode.LessThanOrEqualI64,
+                        StructuredOperator.GreaterThanOrEqualI64 => CfgOpcode.GreaterThanOrEqualI64,
                         _ => throw new FormatException("Unsupported structured operation")
                     };
                     return Emit(block, opcode, binary.Type, left: left, right: right);

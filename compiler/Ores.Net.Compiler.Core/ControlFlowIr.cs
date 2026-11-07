@@ -16,7 +16,9 @@ public enum CfgOpcode
     Argument,
     Call,
     NotEqualI64,
-    GreaterThanI64
+    GreaterThanI64,
+    LessThanOrEqualI64,
+    GreaterThanOrEqualI64
 }
 
 public readonly record struct CfgParameter(int Id, IrValueType Type);
@@ -338,8 +340,12 @@ public static class OresCfgVerifier
                     case CfgOpcode.NotEqualI64:
                     case CfgOpcode.LessThanI64:
                     case CfgOpcode.GreaterThanI64:
+                    case CfgOpcode.LessThanOrEqualI64:
+                    case CfgOpcode.GreaterThanOrEqualI64:
                         RequireType(op.Type,
-                            op.Opcode is CfgOpcode.EqualI64 or CfgOpcode.NotEqualI64 or CfgOpcode.LessThanI64 or CfgOpcode.GreaterThanI64
+                            op.Opcode is CfgOpcode.EqualI64 or CfgOpcode.NotEqualI64 or
+                                CfgOpcode.LessThanI64 or CfgOpcode.GreaterThanI64 or
+                                CfgOpcode.LessThanOrEqualI64 or CfgOpcode.GreaterThanOrEqualI64
                                 ? IrValueType.Bool : IrValueType.I64);
                         if (op.Left is null || op.Right is null ||
                             op.I64Constant is not null || op.BoolConstant is not null ||
