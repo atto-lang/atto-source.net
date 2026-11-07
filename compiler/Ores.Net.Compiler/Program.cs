@@ -9,14 +9,18 @@ bool validCompile = args.Length == 4 && args[0] == "compile" && args[2] == "--ou
 bool validStructuredCheck = args.Length == 2 && args[0] == "check-structured";
 bool validStructuredCompile = args.Length == 4 &&
     args[0] == "compile-structured" && args[2] == "--out";
+// Experimental single-state nominal actor CIL, never production scalar mode.
+bool validActorCheck = args.Length == 2 && args[0] == "check-actor-scalar";
+bool validActorCompile = args.Length == 4 &&
+    args[0] == "compile-actor-scalar" && args[2] == "--out";
 bool validEmitSource = args.Length == 4 && args[2] == "--out" &&
     (args[0] == "emit-csharp" || args[0] == "emit-fsharp");
 bool validStaticFacts = args.Length == 2 &&
     (args[0] == "static-facts" || args[0] == "static-facts-structured");
 bool moduleCommand = args.Length >= 1 && args[0] is "check-modules" or "compile-modules";
-if (!validCheck && !validCompile && !validStructuredCheck && !validStructuredCompile && !validStaticFacts && !validEmitSource && !moduleCommand)
+if (!validCheck && !validCompile && !validStructuredCheck && !validStructuredCompile && !validActorCheck && !validActorCompile && !validStaticFacts && !validEmitSource && !moduleCommand)
 {
-    Console.Error.WriteLine("usage: oresnet check input.atto|input.ores | oresnet compile input.atto|input.ores --out path/OresGenerated.dll | oresnet check-structured input.atto|input.ores | oresnet compile-structured input.atto|input.ores --out path/OresGenerated.dll | oresnet emit-csharp input.atto|input.ores --out path/OresProgram.cs | oresnet emit-fsharp input.atto|input.ores --out path/OresProgram.fs | oresnet static-facts input.atto|input.ores | oresnet static-facts-structured input.atto|input.ores");
+    Console.Error.WriteLine("usage: oresnet check input.atto|input.ores | oresnet compile input.atto|input.ores --out path/OresGenerated.dll | oresnet check-structured input.atto|input.ores | oresnet compile-structured input.atto|input.ores --out path/OresGenerated.dll | oresnet emit-csharp input.atto|input.ores --out path/OresProgram.cs | oresnet emit-fsharp input.atto|input.ores --out path/OresProgram.fs | oresnet check-actor-scalar input.atto | oresnet compile-actor-scalar input.atto --out path/OresGenerated.dll | oresnet static-facts input.atto|input.ores | oresnet static-facts-structured input.atto|input.ores");
     return 2;
 }
 
@@ -72,6 +76,25 @@ try
         Console.WriteLine(args[0] == "static-facts"
             ? StaticFactsV0Exporter.FromCompiledScalarSource(source)
             : StaticFactsV0Exporter.FromStructuredSource(source));
+        return 0;
+    }
+    if (validActorCheck || validActorCompile)
+    {
+        if (!string.Equals(Path.GetExtension(args[1]), ".atto",
+                StringComparison.OrdinalIgnoreCase))
+            throw new FormatException("Actor M0 compiler requires a .atto source file");
+        if (validActorCompile)
+        {
+            var result = ActorScalarSourceCompiler.EmitLibrary(source, args[3]);
+            Console.WriteLine("ACTOR_M0_TYPED_CIL_EMITTED|actor=" + result.ActorName +
+                "|method=" + result.MethodName + "|scope=single_i64_state_single_method");
+        }
+        else
+        {
+            var result = ActorScalarSourceCompiler.Parse(source);
+            Console.WriteLine("ACTOR_M0_SOURCE_ADMITTED|actor=" + result.ActorName +
+                "|method=" + result.MethodName + "|not_executed");
+        }
         return 0;
     }
     if (validStructuredCheck || validStructuredCompile)
