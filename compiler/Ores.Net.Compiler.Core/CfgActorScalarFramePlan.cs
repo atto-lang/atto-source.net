@@ -38,8 +38,8 @@ public sealed class CfgActorScalarFramePlan
         for (int i = 0; i < result.Length; i++)
             result[i] = _types[i] switch
             {
-                IrValueType.I64 => 1,
-                IrValueType.Bool => 2,
+                IrValueType.I64 => (byte)1,
+                IrValueType.Bool => (byte)2,
                 _ => throw new FormatException("Unsupported actor scalar slot type")
             };
         return result;

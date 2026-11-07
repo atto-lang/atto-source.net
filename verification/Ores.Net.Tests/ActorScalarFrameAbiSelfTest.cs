@@ -119,6 +119,17 @@ internal static class ActorScalarFrameAbiSelfTest
                     ActorScalarFrameAbiV1.ReadBool(context, saved!, 0) &&
                     ActorScalarFrameAbiV1.ReadI64(context, saved!, 1) == 42,
                 "typed PC/bool/i64 native bytes survive carrier turn handoff");
+            Span<byte> headerBytes = stackalloc byte[16];
+            context.ReadStackFrame(saved!, 0, headerBytes);
+            Require(headerBytes[0] == (byte)'A' && headerBytes[1] == (byte)'T' &&
+                    headerBytes[2] == (byte)'F' && headerBytes[3] == (byte)'1' &&
+                    headerBytes[4] == plan.ValueSlots && headerBytes[8] == plan.BlockCount,
+                "physical little-endian frame header agrees with verified CFG layout");
+            Span<byte> encodedBool = stackalloc byte[16];
+            context.ReadStackFrame(saved!, 16, encodedBool);
+            Require(encodedBool[0] == 2 && encodedBool[1] == 2 &&
+                    encodedBool[8] == 1,
+                "native boolean slot keeps separate initialized and declared type tags");
             RejectInvalid(() => { _ = ActorScalarFrameAbiV1.ReadI64(context, saved!, 0); },
                 "bool slot cannot masquerade as int");
             RejectInvalid(() => ActorScalarFrameAbiV1.WriteI64(context, saved!, 0, 11),
@@ -140,6 +151,12 @@ internal static class ActorScalarFrameAbiSelfTest
             RejectFormat(() => {
                 _ = ActorScalarFrameAbiV1.Push(context, new byte[] { 3 }, 1);
             }, "unknown type tags are denied before native frame allocation");
+            var multiBlock = ActorScalarFrameAbiV1.Push(context,
+                plan.EncodeTypeTags(), 3);
+            ActorScalarFrameAbiV1.SetProgramCounter(context, multiBlock, 2);
+            Require(ActorScalarFrameAbiV1.ReadProgramCounter(context, multiBlock) == 2,
+                "nonzero native PC persists through typed ABI");
+            ActorScalarFrameAbiV1.Pop(context, multiBlock);
             var reused = ActorScalarFrameAbiV1.Push(context,
                 plan.EncodeTypeTags(), plan.BlockCount);
             RejectInvalid(() => { _ = ActorScalarFrameAbiV1.ReadI64(context, reused, 1); },
