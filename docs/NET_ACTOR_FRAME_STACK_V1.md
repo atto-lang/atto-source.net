@@ -29,9 +29,13 @@ containment.
   seam only**; the synchronous shipping `ActorContext` deliberately exposes
   no suspension method, to avoid silently making handlers reentrant.
 - `ActorContext` offers synchronous frame begin/push/read/write/pop/finish
-  operations. After each handler returns, `ActorRuntime` checks the frame
-  stack, so a caught/swallowed quota exception or unbalanced frame escape
-  cannot turn a poisoned actor into a successful dispatch.
+  operations, but no guest suspension. After each handler returns,
+  `ActorRuntime` calls `ValidateSynchronousTurnExit`: swallowed quota
+  exceptions, live frames, and even parked continuations are terminal.
+  The separate `ValidateTurnExit` host-scheduler seam permits suspension
+  only for the exact physical turn that issued it, not a fresh/reused turn.
+  This prevents a fake suspended handler from accepting another mailbox
+  message before a verified scheduler exists.
 - `Stop` seals further frame admission. Actor finalization zeroes and frees
   the native slab, refunds its native quota exactly once, and leaves sibling
   stacks unchanged. No raw frame pointer is exported, so operations cannot
@@ -76,8 +80,9 @@ Native AOT actor-frame probe and the workflow assert the async guard receipt.
 independent slabs, copy semantics, zeroed frame reuse, strict LIFO, terminal
 quota failure, no swallowing of frame failures, cross-carrier
 suspend/resume, old-generation continuation rejection, idempotent
-retirement, aggregate budget refund, and actor-A failure with actor-B
-survival on one SHARED carrier.
+retirement, aggregate budget refund, synchronous-handler suspended escape
+denial, wrong-physical-turn suspension denial, and actor-A failure with
+actor-B survival on one SHARED carrier.
 
 `verification/Ores.Net.ActorFrameProbe` is a separate trim/AOT-safe host
 executable. The existing `actor-memory-native-aot.yml` source-local matrix
