@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>oreslang-actor-cil-probe</AssemblyName>
+    <PublishAot>true</PublishAot>
+    <SelfContained>true</SelfContained>
+    <PublishTrimmed>true</PublishTrimmed>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../runtime/Ores.Net.Runtime/Ores.Net.Runtime.csproj" />
+    <Reference Include="OresGenerated">
+      <HintPath>$(GeneratedAssembly)</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+  <Target Name="ValidateGeneratedActorCil" BeforeTargets="ResolveReferences">
+    <Error Condition="'$(GeneratedAssembly)' == ''" Text="Actor M0 requires -p:GeneratedAssembly=&lt;absolute OresGenerated.dll&gt;." />
+    <Error Condition="'$(GeneratedAssembly)' != '' and !Exists('$(GeneratedAssembly)')" Text="Actor M0 generated CIL missing: $(GeneratedAssembly)" />
+  </Target>
+  <Import Project="../../build/StrictNativeAot.targets" />
+</Project>
