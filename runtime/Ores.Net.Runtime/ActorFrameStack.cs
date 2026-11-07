@@ -60,6 +60,7 @@ public unsafe sealed class ActorFrameStack : IDisposable
     private bool _poisoned;
     private ActorFrameExecution? _execution;
     private ActorArenaTurn? _physicalTurn;
+    private ActorArenaTurn? _suspendedFromTurn;
     private ActorFrameContinuation? _continuation;
     private int _depth;
     private int _used;
@@ -189,6 +190,7 @@ public unsafe sealed class ActorFrameStack : IDisposable
                 throw new InvalidOperationException("Actor frame execution has unpopped frames");
             }
             _physicalTurn = null;
+            _suspendedFromTurn = null;
             _execution = null;
         }
     }
@@ -210,6 +212,7 @@ public unsafe sealed class ActorFrameStack : IDisposable
                 throw new InvalidOperationException("Cannot suspend an empty actor stack");
             }
             _continuation = new ActorFrameContinuation();
+            _suspendedFromTurn = physicalTurn;
             _physicalTurn = null;
             return _continuation;
         }
@@ -231,6 +234,7 @@ public unsafe sealed class ActorFrameStack : IDisposable
                 throw new InvalidOperationException("Stale or foreign actor frame continuation");
             }
             _physicalTurn = physicalTurn;
+            _suspendedFromTurn = null;
             _continuation = null;
         }
     }
@@ -261,7 +265,8 @@ public unsafe sealed class ActorFrameStack : IDisposable
             if (_poisoned)
                 throw new InvalidOperationException("Actor frame storage has been poisoned");
             if (_execution is not null &&
-                (_continuation is null || !permitSuspension))
+                (_continuation is null || !permitSuspension ||
+                 !ReferenceEquals(_suspendedFromTurn, physicalTurn)))
             {
                 Poison();
                 throw new InvalidOperationException(
@@ -373,6 +378,7 @@ public unsafe sealed class ActorFrameStack : IDisposable
     {
         _poisoned = true;
         _physicalTurn = null;
+        _suspendedFromTurn = null;
         _continuation = null;
         _execution = null;
         _depth = 0;
