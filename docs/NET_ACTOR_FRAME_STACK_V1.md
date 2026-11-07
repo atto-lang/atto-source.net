@@ -88,6 +88,23 @@ The workflow *must* be treated as **NOT_EXECUTED** when jobs have
 `runner_id=0`, `steps=[]`, `steps=null` or no successful test/publish steps.
 A source-only commit or artifact upload is not a NativeAOT execution receipt.
 
+## Compiler-owned typed frame layout planning (pre-lowering)
+
+The opt-in typed CFG compiler now exposes
+`CfgActorFrameLayoutPlanner.Plan(VerifiedCfgFunction, maximumFrameBytes)`.
+It accepts only frozen, already-verified SSA. Bool and i64 preserve their
+distinct types and use aligned, deterministic eight-byte slots indexed by
+dense SSA identity. Planning rejects excess frame bytes, missing/duplicate
+IDs and unsupported scalar kinds before any generated CIL is emitted.
+
+`CfgActorFrameLayoutSelfTest` exercises deterministic slot offsets,
+post-verification input mutation, and a configured frame-byte budget that
+fails closed. These are **compile-time layout tests**, not a guest compiler
+using `ActorFrameStack`. The actual CIL emitter still emits CLR locals and
+uses CLR carrier stacks. Future work must connect the plan to real typed
+spill/restore, ownership/drop scheduling, source `.atto` actor methods and
+continuations; `Plan` alone must never be recorded as guest parity.
+
 ## Parity not yet established
 
 1. The .NET scalar and structured frontends still reject actors, classes,
