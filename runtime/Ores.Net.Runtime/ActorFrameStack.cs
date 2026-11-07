@@ -1,3 +1,6 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
 namespace Ores.Net.Runtime;
 
 /// <summary>
@@ -5,6 +8,7 @@ namespace Ores.Net.Runtime;
 /// machine stack and cannot be used to resume a C# call stack. Only the
 /// originating actor's currently admitted physical turn can access its bytes.
 /// </summary>
+[JsonConverter(typeof(ActorStackFrameNoWireConverter))]
 public sealed class ActorStackFrameHandle
 {
     internal ActorStackFrameHandle(ActorFrameStack owner, int index,
@@ -20,6 +24,23 @@ public sealed class ActorStackFrameHandle
     internal int Index { get; }
     internal int Offset { get; }
     public int Length { get; }
+}
+
+/// <summary>
+/// Never turn local actor frame authority into user JSON data or accept it
+/// from the wire. Structured wire representations must be separate types.
+/// </summary>
+public sealed class ActorStackFrameNoWireConverter : JsonConverter<ActorStackFrameHandle>
+{
+    public override ActorStackFrameHandle Read(ref Utf8JsonReader reader,
+        Type typeToConvert, JsonSerializerOptions options) =>
+        throw new NotSupportedException(
+            "Actor logical frame authority cannot be deserialized from JSON");
+
+    public override void Write(Utf8JsonWriter writer, ActorStackFrameHandle value,
+        JsonSerializerOptions options) =>
+        throw new NotSupportedException(
+            "Actor logical frame authority cannot be serialized as JSON data");
 }
 
 /// <summary>
