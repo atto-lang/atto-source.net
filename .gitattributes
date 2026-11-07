@@ -3,4 +3,5 @@ contracts/** text eol=lf
 
 # Original source graphs must have identical bytes across native backends.
 *.ores text eol=lf
+*.atto text eol=lf
 *.json text eol=lf

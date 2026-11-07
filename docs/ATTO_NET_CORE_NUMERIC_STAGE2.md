@@ -59,3 +59,18 @@ the existing CFG/AST enum cases. That avoids renumbering
 `Argument`, `Call`, `NotEqualI64` or earlier structured
 operators in any existing serialized or compared compiler evidence.
 A new opcode's value remains assigned only to the new semantics.
+
+## Exact-head source blob read-back and Windows LF canonicalization
+
+The Linux/Windows NativeAOT source workflow now verifies that the
+**actual working-tree byte content** of each identity/numeric guest
+and its canonical library resource has the exact Git object ID
+recorded at `HEAD:path`, using `git hash-object --no-filters`
+before compilation and after executing the native guest. This
+prevents a modified working-tree source from being paired with an
+untouched committed source blob in a receipt. The repository now
+forces `*.atto text eol=lf` on checkout, including Windows, so
+the byte-level attestation is portable rather than accidentally
+rejecting legitimate Windows CRLF conversion. Graph, CIL,
+compiler-binary and native-artifact SHA-256 checks remain separate.
+No hosted run of these new checks is yet confirmed.

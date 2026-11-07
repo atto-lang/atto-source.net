@@ -155,7 +155,21 @@ jobs:
           if ($compilerHash -cne (Get-Content artifacts/module-app/compiler.sha256 -Raw).Trim()) {
             throw 'Core identity compiled with a different native compiler executable'
           }
+          # Attest actual checked-out bytes against immutable HEAD objects,
+          # not merely compiler-reported source digests or recorded Git names.
+          function Assert-CommittedCoreSource([string]$inputPath) {
+            $expectedBlob = (& git rev-parse "HEAD:$inputPath").Trim()
+            if ($LASTEXITCODE -ne 0 -or $expectedBlob -cnotmatch '^[0-9a-f]{40}$') {
+              throw "Missing exact-head Core source Git blob: $inputPath"
+            }
+            $actualBlob = (& git hash-object --no-filters -- "$inputPath").Trim()
+            if ($LASTEXITCODE -ne 0 -or $actualBlob -cne $expectedBlob) {
+              throw "Working tree Core source differs from exact HEAD blob: $inputPath"
+            }
+          }
           $source = 'examples/modules/atto-core-identity-main.atto'
+          $coreFiles = @($source, 'contracts/atto-core-v1/identity.atto')
+          foreach ($file in $coreFiles) { Assert-CommittedCoreSource $file }
           $generatedPath = 'artifacts/atto-core-identity-generated/OresGenerated.dll'
           $witness = & $compiler compile-modules $source --root examples/modules --out $generatedPath
           if ($LASTEXITCODE -ne 0) { throw 'Compiler-owned atto.core/identity graph did not compile' }
@@ -204,6 +218,7 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or "$output".Trim() -cne '42') {
             throw 'Compiler-owned atto.core/identity NativeAOT guest did not return 42'
           }
+          foreach ($file in $coreFiles) { Assert-CommittedCoreSource $file }
           @{
             scope='atto.core/identity-stage1-only-not-full-numeric';
             source_commit=(git rev-parse HEAD);
@@ -235,8 +250,22 @@ jobs:
             @{ label='base'; source='examples/modules/atto-core-numeric-main.atto'; expected='42' },
             @{ label='mutated'; source='examples/modules/atto-core-numeric-mutated.atto'; expected='43' }
           )
+          # Attest actual checked-out bytes against immutable HEAD objects,
+          # not merely compiler-reported source digests or recorded Git names.
+          function Assert-CommittedCoreSource([string]$inputPath) {
+            $expectedBlob = (& git rev-parse "HEAD:$inputPath").Trim()
+            if ($LASTEXITCODE -ne 0 -or $expectedBlob -cnotmatch '^[0-9a-f]{40}$') {
+              throw "Missing exact-head Core source Git blob: $inputPath"
+            }
+            $actualBlob = (& git hash-object --no-filters -- "$inputPath").Trim()
+            if ($LASTEXITCODE -ne 0 -or $actualBlob -cne $expectedBlob) {
+              throw "Working tree Core source differs from exact HEAD blob: $inputPath"
+            }
+          }
           $receipts = @()
           foreach ($case in $cases) {
+            $caseFiles = @($case.source, 'contracts/atto-core-v1/numeric.atto')
+            foreach ($file in $caseFiles) { Assert-CommittedCoreSource $file }
             $out = 'artifacts/atto-numeric-' + $case.label
             $generated = Join-Path $out 'OresGenerated.dll'
             $witness = & $compiler compile-modules $case.source --root examples/modules --out $generated
@@ -287,6 +316,7 @@ jobs:
             if ((Get-FileHash $compiler -Algorithm SHA256).Hash.ToLowerInvariant() -cne $compilerHash) {
               throw 'Compiler executable changed while building native numeric guests'
             }
+            foreach ($file in $caseFiles) { Assert-CommittedCoreSource $file }
             $receipt = @{
               scope='atto.core/numeric-stage2-not-five-backend-parity';
               label=$case.label;
