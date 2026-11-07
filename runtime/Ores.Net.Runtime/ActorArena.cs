@@ -761,6 +761,15 @@ public unsafe sealed class ActorArena : IDisposable
         }
     }
 
+    // STOP closes new allocation/continuation admission but cannot invalidate
+    // a live physical carrier's obligation to unwind existing frames. This
+    // issues no new capability and never admits another thread or old epoch.
+    internal void ValidatePhysicalTurn(ActorArenaTurn turn)
+    {
+        lock (_gate)
+            ValidateTurnLocked(turn);
+    }
+
     private void ValidateTurnLocked(ActorArenaTurn turn)
     {
         ArgumentNullException.ThrowIfNull(turn);
