@@ -148,6 +148,25 @@ public sealed class ActorMailbox
         }
     }
 
+    /// <summary>
+    /// AF07 generation- and nonce-pinned mailbox stop. A stale or foreign
+    /// local ActorRef cannot erase queued bytes or close a replacement
+    /// incarnation. This is host-runtime authority, not guest actor lowering.
+    /// </summary>
+    public bool TryStop(ActorRef expected)
+    {
+        lock (_gate)
+        {
+            if (expected.Id != _id || expected.Generation != _generation ||
+                expected.Nonce != _nonce)
+                return false;
+            _closed = true;
+            DiscardPending();
+            _queuedBytes = 0;
+            return true; // Repeated stop of the same incarnation is idempotent.
+        }
+    }
+
     public void Stop()
     {
         lock (_gate)
