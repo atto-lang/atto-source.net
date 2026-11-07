@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../runtime/Ores.Net.Runtime/Ores.Net.Runtime.csproj" />
+    <!-- Mandatory pre-generated, compiler-emitted managed PE. Missing output
+         is a build failure, never an in-memory fallback or Reflection.Emit. -->
+    <Reference Include="OresGenerated">
+      <HintPath>Generated/OresGenerated.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+  <Target Name="RequireCompiledActorCfgFixture" BeforeTargets="ResolveReferences">
+    <Error Condition="!Exists('Generated/OresGenerated.dll')"
+           Text="The compiled actor CFG PE is missing: run Ores.Net.ActorFrameFixtureGen before NativeAOT publishing." />
+  </Target>
+</Project>
