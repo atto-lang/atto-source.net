@@ -402,7 +402,7 @@ internal static class SourceModuleLinkingSelfTest
                 {
                     string canonicalMethodName = "helper_m_" +
                         Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(
-                            System.Text.Encoding.UTF8.GetBytes("@atto.core/numeric.atto\\0" + operation)));
+                            System.Text.Encoding.UTF8.GetBytes("@atto.core/numeric.atto\0" + operation)));
                     var helper = emitted.Methods.Single(x => x.Name == canonicalMethodName);
                     Require(helper.IsPrivate && helper.IsStatic &&
                         helper.Parameters.Count == (operation == "clamp_int" ? 3 : 2),
