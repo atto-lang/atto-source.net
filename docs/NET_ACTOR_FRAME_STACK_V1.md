@@ -105,6 +105,51 @@ uses CLR carrier stacks. Future work must connect the plan to real typed
 spill/restore, ownership/drop scheduling, source `.atto` actor methods and
 continuations; `Plan` alone must never be recorded as guest parity.
 
+## M1.7 opt-in verified-CFG-to-actor-owned CIL spill/restore
+
+**Authored only; compile and execution NOT_VERIFIED.** In addition to the
+nonexecuting layout planner, `CilEmitter.EmitActorFrameLibrary` now accepts
+a frozen verified CFG function or acyclic verified module and writes a separate
+metadata-only CIL assembly using the explicit
+`OresProgram.Run(ActorContext)` ABI. Helpers have the CIL signature
+`helper_name(ActorContext, ActorFrameExecution, source_parameters...)`.
+
+- The generated entry calls `BeginFrames` and `PushFrame`, every helper
+  inherits the same exact-issued execution ticket but pushes its own frame.
+  Each boolean/i64 SSA definition is stored through the corresponding typed
+  `WriteFrameBool`/`WriteFrameI64` host primitive, and subsequent operands
+  are restored via `ReadFrameBool`/`ReadFrameI64`. Both use fixed-size
+  canonical little-endian byte encoding, with no raw pointer export.
+- CFG edge transfer uses short-lived *typed carrier locals* for parallel
+  edge-argument staging (necessary for swaps); otherwise there is no CLR
+  SSA local table in the generated actor entry/helper. The context, execution
+  token, frame token, and return scalar also live in CLR locals.
+- Each method's successful frame admission precedes a real CIL
+  `try/finally` region. All CFG returns compile to `leave`. The `finally`
+  calls `PopFrame`; the entry also calls `FinishFrames`. Exceptions from
+  checked arithmetic and nested helper calls traverse the same cleanup.
+  Failed frame admission remains a terminal actor-local stack fault.
+- The source interpreter does not gain `define actor` admission from this
+  opt-in backend. Even this emitted CIL executes on a CLR physical carrier
+  stack and cannot contain arbitrary `StackOverflowException` or support
+  suspension and resumption. Static call linkage remains acyclic.
+- Frame budgets are checked before creating the output assembly; the native
+  frame slab is bounded at runtime by its configured byte/frame limits.
+  Method references and signatures are emitted statically, without reflection,
+  `Assembly.Load`, runtime JIT, or dynamically generated methods.
+
+`CfgActorFrameCilSelfTest` performs **metadata inspection only** on a
+generated two-argument helper fixture: it checks the explicit
+actor-context/execution ABI, emitted typed frame calls, real finally/EH
+regions, distinct helper frame scopes, checked-add opcode, byte-for-byte
+deterministic PE output, bool branches, and no-output rejection of an
+oversized verified frame. A separate synchronous host test exercises typed
+runtime roundtrips and exceptional frame cleanup. **Neither is a
+compiler-backed guest execution receipt**, and neither establishes full
+Native AOT app linkage. The existing source-local .NET 10 test workflow will
+have to execute these tests at the exact PR head before this milestone can
+be considered compiled/verified.
+
 ## Parity not yet established
 
 1. The .NET scalar and structured frontends still reject actors, classes,
