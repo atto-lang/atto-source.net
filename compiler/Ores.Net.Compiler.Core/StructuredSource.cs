@@ -324,6 +324,17 @@ public static class OresStructuredParser
                             $"execution task requires scheduler-aware Future/continuation lowering; no implicit inline execution at offset {offset}");
                 }
             }
+            else if (ch == '%')
+                throw new FormatException(
+                    $"noncanonical '%' source operator; use named Integer.rem/mod at offset {offset}");
+            else if (ch == '^')
+            {
+                bool doubleCaret = index + 1 < source.Length && source[index + 1] == '^';
+                string spelling = doubleCaret ? "^^" : "^";
+                string named = doubleCaret ? "Xor(a, b)" : "Integer.bitXor(a, b)";
+                throw new FormatException(
+                    $"Reserved AttoLang operator '{spelling}'; use {named} at offset {offset}");
+            }
             else if (ch == '=' && index + 1 < source.Length &&
                      source[index + 1] == '=') index += 2;
             else if (ch == '!' && index + 1 < source.Length &&
