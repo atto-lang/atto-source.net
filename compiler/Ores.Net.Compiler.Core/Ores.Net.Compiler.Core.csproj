@@ -7,6 +7,8 @@
          paths or a runtime directory, and available to NativeAOT builds. -->
     <EmbeddedResource Include="../../contracts/atto-core-v1/identity.atto"
                       LogicalName="Atto.Core.Identity" />
+    <EmbeddedResource Include="../../contracts/atto-core-v1/numeric.atto"
+                      LogicalName="Atto.Core.Numeric" />
   </ItemGroup>
   <!-- The production Native AOT compiler uses System.Reflection.Metadata only.
        Mono.Cecil remains a verification-only dependency, not a published runtime. -->

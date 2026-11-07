@@ -39,9 +39,10 @@ public static class OresSourceModuleCompiler
     private const int MaxGraphBytes = 8 * MaxFileBytes;
     private static readonly UTF8Encoding Utf8 = new(false, true);
     // Compiler-owned authority, never a path under --root or ORESLANG_PATH.
-    // This intentionally small Core slice does not claim numeric.atto support.
     private const string CoreIdentity = "@atto.core/identity.atto";
+    private const string CoreNumeric = "@atto.core/numeric.atto";
     private const string CoreResourceName = "Atto.Core.Identity";
+    private const string NumericResourceName = "Atto.Core.Numeric";
 
     private sealed record Unit(string PhysicalPath, string Identity, string Source,
         SourceUnitIdentity Witness, IReadOnlyList<SourceImport> Imports);
@@ -122,8 +123,8 @@ public static class OresSourceModuleCompiler
                 return;
             }
             if (units.Count >= MaxUnits) throw new FormatException("Source graph exceeds 64 units");
-            byte[] bytes = path == CoreIdentity
-                ? ReadBundledCoreIdentity()
+            byte[] bytes = path is CoreIdentity or CoreNumeric
+                ? ReadBundledCore(path)
                 : ReadBounded(path);
             totalBytes = checked(totalBytes + bytes.Length);
             if (totalBytes > MaxGraphBytes) throw new FormatException("Source graph exceeds 8 MiB");
@@ -131,8 +132,8 @@ public static class OresSourceModuleCompiler
             try { source = Utf8.GetString(bytes); }
             catch (DecoderFallbackException failure) { throw new FormatException("Source is not strict UTF-8", failure); }
             if (source.Contains('\0') || source.StartsWith('\uFEFF')) throw new FormatException("Source NUL/BOM is not admitted");
-            string identity = path == CoreIdentity
-                ? CoreIdentity
+            string identity = path is CoreIdentity or CoreNumeric
+                ? path
                 : Identity(path);
             var unit = new Unit(path, identity, source,
                 new SourceUnitIdentity(identity, Convert.ToHexStringLower(SHA256.HashData(bytes)), bytes.Length),
@@ -150,6 +151,10 @@ public static class OresSourceModuleCompiler
                 "atto.core/identity.ores" or "ores.core/identity" or
                 "ores.core/identity.atto" or "ores.core/identity.ores")
                 return CoreIdentity;
+            if (specifier is "atto.core/numeric" or "atto.core/numeric.atto" or
+                "atto.core/numeric.ores" or "ores.core/numeric" or
+                "ores.core/numeric.atto" or "ores.core/numeric.ores")
+                return CoreNumeric;
             if (specifier is "atto.core" or "ores.core" ||
                 specifier.StartsWith("atto.core/", StringComparison.Ordinal) ||
                 specifier.StartsWith("ores.core/", StringComparison.Ordinal))
@@ -161,7 +166,7 @@ public static class OresSourceModuleCompiler
                 specifier.StartsWith("ores.std/", StringComparison.Ordinal) ||
                 specifier.StartsWith("std/", StringComparison.Ordinal))
                 throw new FormatException("unsupported compiler-owned AttoLang library namespace");
-            if (importer == CoreIdentity)
+            if (importer is CoreIdentity or CoreNumeric)
                 throw new FormatException("compiler-owned Core module cannot import ambient source files");
             if (!(specifier.StartsWith("./", StringComparison.Ordinal) || specifier.StartsWith("../", StringComparison.Ordinal)) ||
                 specifier.Length > 4096 || specifier.EndsWith('/') || specifier.Contains("//", StringComparison.Ordinal) ||
@@ -219,12 +224,18 @@ public static class OresSourceModuleCompiler
 
     // Read the exact compiler-embedded canonical source, not a file resolved
     // from the current project, a user-controlled root, or the environment.
-    private static byte[] ReadBundledCoreIdentity()
+    private static byte[] ReadBundledCore(string unit)
     {
+        string name = unit switch
+        {
+            CoreIdentity => CoreResourceName,
+            CoreNumeric => NumericResourceName,
+            _ => throw new FormatException("unknown compiler-owned Core resource")
+        };
         using var stream = typeof(OresSourceModuleCompiler).Assembly
-            .GetManifestResourceStream(CoreResourceName);
+            .GetManifestResourceStream(name);
         if (stream is null)
-            throw new FormatException("compiler-owned atto.core/identity source resource is missing");
+            throw new FormatException("compiler-owned atto.core module source resource is missing");
         var data = new byte[MaxFileBytes + 1];
         int count = 0;
         while (count < data.Length)

@@ -20,7 +20,7 @@ public sealed record StructuredParameter(string Name, IrValueType Type);
 public sealed record StructuredFunction(string Name,
     IReadOnlyList<StructuredParameter> Parameters, IrValueType ResultType,
     StructuredExpr? ReturnValue, IReadOnlyList<StructuredStmt> Body);
-public enum StructuredOperator { Add, Subtract, Multiply, EqualI64, LessThanI64, NotEqualI64 }
+public enum StructuredOperator { Add, Subtract, Multiply, EqualI64, LessThanI64, GreaterThanI64, NotEqualI64 }
 public sealed record StructuredBinary(int At, StructuredOperator Operator,
     StructuredExpr Left, StructuredExpr Right, IrValueType ResultType)
     : StructuredExpr(At, ResultType);
@@ -568,6 +568,33 @@ public static class OresStructuredParser
             localTypeScopes.RemoveAt(localTypeScopes.Count - 1);
             return (Array.AsReadOnly(body.ToArray()), terminated);
         }
+        // Canonical AttoLang if/do/fi uses a checked branch scope, not a
+        // textual rewrite to host C# or to legacy brace syntax. Nested
+        // branches and early returns become the same typed CFG as brace if.
+        private (IReadOnlyList<StructuredStmt> Body, bool Returns) DoFiBlock(int depth)
+        {
+            Budget(depth);
+            Expect("do");
+            scopes.Add(new Dictionary<string, LocalBinding>(StringComparer.Ordinal));
+            localTypeScopes.Add(new HashSet<string>(StringComparer.Ordinal));
+            var body = new List<StructuredStmt>();
+            bool terminated = false;
+            while (Current.Text != "fi")
+            {
+                if (Current.Text.Length == 0) throw Error("Unterminated if/do/fi block");
+                if (terminated) throw Error("Unreachable statement in if/do/fi");
+                if (++statements > MaxStatements)
+                    throw Error("Structured statement budget exceeded");
+                var (statement, returns) = Statement(depth + 1);
+                body.Add(statement);
+                terminated = returns;
+            }
+            Expect("fi");
+            scopes.RemoveAt(scopes.Count - 1);
+            localTypeScopes.RemoveAt(localTypeScopes.Count - 1);
+            return (Array.AsReadOnly(body.ToArray()), terminated);
+        }
+
         private (StructuredStmt Statement, bool Returns) Statement(int depth)
         {
             Budget(depth);
@@ -664,6 +691,13 @@ public static class OresStructuredParser
             {
                 var condition = Expr(depth + 1);
                 Require(condition, IrValueType.Bool, "If condition must be bool");
+                if (Take(";"))
+                {
+                    var (canonicalThen, _) = DoFiBlock(depth + 1);
+                    // A missing else means fallthrough remains reachable,
+                    // even if the true branch always returns.
+                    return (new StructuredIf(at, condition, canonicalThen, null), false);
+                }
                 var (yes, yesReturns) = Block(depth + 1);
                 IReadOnlyList<StructuredStmt>? no = null;
                 bool noReturns = false;
@@ -742,6 +776,7 @@ public static class OresStructuredParser
                         StructuredOperator.EqualI64 => left == right ? 1L : 0L,
                         StructuredOperator.NotEqualI64 => left != right ? 1L : 0L,
                         StructuredOperator.LessThanI64 => left < right ? 1L : 0L,
+                        StructuredOperator.GreaterThanI64 => left > right ? 1L : 0L,
                         _ => throw new FormatException(
                             $"Unsupported const operator at offset {binary.Offset}")
                     };
@@ -771,14 +806,17 @@ public static class OresStructuredParser
         private StructuredExpr Compare(int depth)
         {
             var left = Add(depth + 1);
-            while (Current.Text == "<")
+            while (Current.Text is "<" or ">")
             {
                 int at = Current.Offset;
+                bool greater = Current.Text == ">";
                 index++;
                 var right = Add(depth + 1);
-                Require(left, IrValueType.I64, "Less-than requires int operands");
-                Require(right, IrValueType.I64, "Less-than requires int operands");
-                left = CheckedBinary(at, StructuredOperator.LessThanI64,
+                Require(left, IrValueType.I64, "Comparison requires int operands");
+                Require(right, IrValueType.I64, "Comparison requires int operands");
+                left = CheckedBinary(at, greater
+                    ? StructuredOperator.GreaterThanI64
+                    : StructuredOperator.LessThanI64,
                     left, right, IrValueType.Bool);
             }
             return left;
