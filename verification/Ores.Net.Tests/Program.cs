@@ -299,6 +299,30 @@ Require(OresParser.Parse(
 VmIsolateHostTests.Run();
 VmIsolateHostHardeningTests.Run();
 OptionResultTrapAdmissionTests.Run();
+// Shared TCP-pool capabilities are not guest-lowered by either .NET frontend.
+// Deny in both the shipping scalar CLI path and the structured CFG path;
+// a host-only HTTP/1.1 socket provider is not an actor-shared pool.
+Require(OresParser.Parse("fnc main():int{return 42;} // tcp.pool") is Literal,
+    "a TCP-pool marker in a source comment must not affect scalar execution");
+foreach (var source in new[] {
+    "fnc main():int{return tcp.pool(1);}",
+    "fnc main():int{return pool.acquire_async(1);}",
+    "fnc main():int{return lease.exchange_async(42);}",
+    "fnc main():int{return await pool.acquire_async(1);}",
+    "fnc main():int{return rt share payload;}"
+})
+{
+    foreach (var parse in new Action<string>[] {
+        text => { _ = OresParser.Parse(text); },
+        text => { _ = OresStructuredParser.Parse(text); }
+    })
+    {
+        try { parse(source); }
+        catch (FormatException ex) when (!string.IsNullOrWhiteSpace(ex.Message)) { continue; }
+        throw new Exception("Unsupported TCP-pool guest effect reached .NET lowering: " + source);
+    }
+}
+
 AsyncOnlyIoPolicyTests.Run();
 CapabilityIoLifecycleV1SelfTest.Run();
 SourceByteBudgetTests.Run();
