@@ -184,6 +184,11 @@ public static class ActorScalarSourceCompiler
                     (c is >= 'A' and <= 'Z') || (c is >= '0' and <= '9') ||
                     c == '_'))
                 throw Fail("expected identifier");
+            if (value is "define" or "actor" or "class" or "self" or "as"
+                or "fnc" or "routine" or "int" or "bool" or "return"
+                or "end" or "pub" or "let" or "mut" or "critical"
+                or "suspends" or "async" or "new")
+                throw Fail("reserved actor M0 identifier");
             _position++;
             return value;
         }
@@ -215,6 +220,8 @@ public static class ActorScalarSourceCompiler
             Take(";");
             Expect("fnc");
             string method = Name();
+            if (field == method)
+                throw Fail("actor M0 field and method names must be distinct");
             if (method != "increment")
                 throw Fail("unsupported actor method; only increment is admitted");
             Expect("(");
