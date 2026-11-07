@@ -28,3 +28,22 @@ Windows script remains scalar-only. The CIL test interpreter is NOT real
 CLR/Native AOT execution; runner-free or zero-step CI is
 NOT_EXECUTED for guest parity. Cross-backend execution on Java and LLVM
 requires independent exact-head binary/fixture receipts.
+
+## Exact-head evidence and release boundary
+
+The Linux and Windows source-owned workflows pin the guest fixture Git blob,
+verify the exact Git head and tree, then (only after real native execution)
+capture SHA-256 values for the Native AOT compiler, generated CIL, and the
+executed Native AOT guest image, together with the GitHub run ID/attempt and
+observed guest stdout. The Windows evidence artifact includes the actual
+native guest and compiler; the Linux evidence artifact retains all three
+compiler/CIL/guest inputs. The CIL opcode-shape tests independently reject
+unsigned `clt.un`/`cgt.un` substitutions for signed comparisons.
+
+A receipt is **not** an independent signature, and neither the CIL test
+interpreter nor host-only evaluation is a substitute for execution. Require
+nonempty workflow job steps, successful native job conclusions, exact-head
+artifact hash checks, and independent review before merge. If the source-org
+runner has zero executed steps, the guest parity state is **NOT_EXECUTED**.
+PR #381's separate module graph needs its own compatibility review; this
+change does not merge or certify it.
