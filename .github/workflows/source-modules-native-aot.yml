@@ -44,10 +44,11 @@ jobs:
         shell: pwsh
         run: |
           $script = 'verification/assert-linked-relational-native.ps1'
+          $scriptPath = (Resolve-Path -LiteralPath $script).Path
           $tokens = $null
           $errors = $null
           $null = [Management.Automation.Language.Parser]::ParseFile(
-            (Resolve-Path -LiteralPath $script).Path, [ref]$tokens, [ref]$errors)
+            $scriptPath, [ref]$tokens, [ref]$errors)
           if ($errors.Count -ne 0) {
             throw ("Native evidence gate PowerShell syntax is invalid: " + ($errors | Out-String))
           }
@@ -57,7 +58,7 @@ jobs:
           try {
             $env:GITHUB_JOB = 'spoofed-native-job'
             try {
-              & (Resolve-Path -LiteralPath $script).Path -Compiler './nonexistent-compiler' -Rid '${{ matrix.rid }}' -ExpectedHead '${{ github.event.pull_request.head.sha || github.sha }}'
+              & $scriptPath -Compiler './nonexistent-compiler' -Rid '${{ matrix.rid }}' -ExpectedHead '${{ github.event.pull_request.head.sha || github.sha }}'
             } catch {
               $denied = $_.Exception.Message -match 'source-owned module workflow'
             }
