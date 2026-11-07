@@ -224,6 +224,7 @@ ActorMailboxAuthorizationPrioritySelfTest.Run();
 ActorMailboxPrivateDataSelfTest.Run();
 ActorArenaSelfTest.Run();
 ActorFrameStackSelfTest.Run();
+CfgActorFrameLayoutSelfTest.Run(); // compile-time verified SSA layout only, no actor CIL spill
 ActorShardColumnsSelfTest.Run();
 SelectArbiterSelfTest.Run();
 SelectableI64ChannelSelfTest.Run();
