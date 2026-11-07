@@ -113,9 +113,12 @@ internal static class ActorScalarFrameProgramSelfTest
         using var runtime = new ActorRuntime(Options());
         using var done = new ManualResetEventSlim();
         long result = -1;
+        bool caughtTrap = false;
         var trapped = runtime.Spawn(ActorKind.Shared, (ctx, _) =>
         {
-            infinite.Execute(ctx, maxSteps: 64);
+            try { infinite.Execute(ctx, maxSteps: 64); }
+            catch (InvalidOperationException) { caughtTrap = true; }
+            // A caught execution-budget trap still poisons the actor incarnation.
         });
         var survivor = runtime.Spawn(ActorKind.Shared, (ctx, _) =>
         {
@@ -129,6 +132,8 @@ internal static class ActorScalarFrameProgramSelfTest
         Require(Wait(() => runtime.FaultedTurns == 1 &&
             runtime.CompletedMessages == 1 && runtime.LiveActors == 1),
             "unbounded CFG loop is trapped without native stack growth");
+        Require(caughtTrap,
+            "bounded-loop source trap was delivered but could not be suppressed");
         runtime.Stop(survivor);
         Require(Wait(() => runtime.NativeReservedBytes == 0),
             "step-budget trap must release native actor frames");
