@@ -34,6 +34,9 @@
     <None Include="../../contracts/actor-frame-v1/source-scalar-bridge.atto"
           Link="actor-frame-v1/source-scalar-bridge.atto"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/actor-cil-v1/counter.atto"
+          Link="actor-cil-v1/counter.atto"
+          CopyToOutputDirectory="PreserveNewest" />
     <!-- Independent metadata inspection runs only in the test process. -->
     <PackageReference Include="Mono.Cecil" Version="0.11.6" />
   </ItemGroup>
