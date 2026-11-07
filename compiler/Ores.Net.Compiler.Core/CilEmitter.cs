@@ -349,7 +349,7 @@ public static class CilEmitter
         int nextParameterRow = 1;
         for (int i = 0; i < methods.Length; i++)
         {
-            bool publicActorMethod = actorScalarExports && i is 1 or 2;
+            bool publicActorMethod = actorScalarExports && (i is 1 or 2);
             var exportName = i == 0 ? "Run" : publicActorMethod
                 ? (i == 1 ? "ActorInitial" : "ActorStep")
                 : "helper_" + methods[i].Name;
