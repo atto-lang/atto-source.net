@@ -297,7 +297,10 @@ public sealed class ActorScalarFrameProgram
         void Push(FunctionPlan plan, long[] args, int returnSlot)
         {
             if (stack.Count >= MaxCallDepth)
+            {
+                actor.PoisonFrameExecution();
                 throw new InvalidOperationException("Actor scalar call depth exhausted");
+            }
             if (args.Length != plan.Function.Parameters.Count)
                 throw new InvalidOperationException("Actor scalar call signature mismatch");
             var frame = actor.PushFrame(plan.FrameBytes);
