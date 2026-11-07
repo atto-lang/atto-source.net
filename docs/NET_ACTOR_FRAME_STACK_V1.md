@@ -39,6 +39,36 @@ containment.
 - `ActorFrameStack` is a privileged compiler/runtime primitive, not a
   guest-visible C# implementation of AttoLang core/std algorithms.
 
+## STOP, authority and synchronous-handler hardening
+
+This stacked integration preserves PR #385's terminal quota and single-claim
+continuation substrate while incorporating the useful boundary protections
+identified during the competing PR #384 review; it does **not** combine the
+two independent allocator implementations.
+
+- STOP permanently seals new frame admission. An already admitted physical
+  carrier can still `Pop` and `Finish` its existing execution frames after
+  `ActorArena.Retire` because these two cleanup operations validate the
+  *physical turn* without granting new allocation authority. `Begin`,
+  `Push`, `Read`, `Write`, `Suspend`, and `Resume` remain closed.
+- A foreign thread, expired turn, stale execution ticket or incorrect
+  incarnation cannot use the cleanup exception. The validated physical carrier
+  completes cleanup and then normal quiescence/reclaim occurs.
+- `ActorFrameExecution`, `ActorFrameHandle` and
+  `ActorFrameContinuation` explicitly deny JSON serialization and
+  deserialization. Other transports must maintain the same no-wire rule.
+- Host C# `async void` handlers are rejected at `Spawn` before allocating
+  actor resources, including when hidden inside multicast delegates. This
+  uses compiler-emitted `AsyncStateMachineAttribute` metadata: a **native
+  build must execute the guard test** before its behavior under trimming can
+  be relied upon. It does not prove every arbitrary asynchronous host
+  callback is safe.
+
+`ActorFrameStackSelfTest` now also checks STOP during a live frame turn,
+in-flight frame unwind, off-carrier cleanup denial, explicit JSON no-wire
+rejection, and direct/multicast async-void admission denial. The independent
+Native AOT actor-frame probe and the workflow assert the async guard receipt.
+
 ## Regression coverage
 
 `ActorFrameStackSelfTest` is called by the repository's canonical
