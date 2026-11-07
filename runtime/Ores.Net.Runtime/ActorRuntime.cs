@@ -105,6 +105,12 @@ public sealed class ActorContext
     public ActorFrame PushFrame(int bytes, int alignment = 8) =>
         _frames.Push(_turn, bytes, alignment);
 
+    /// <summary>
+    /// Mark a bounded guest execution trap as actor-terminal. A host handler
+    /// catching the immediate exception must not erase this poison.
+    /// </summary>
+    public void PoisonFrameExecution() => _frames.PoisonExecution(_turn);
+
     public void WriteFrame(ActorFrame frame, int offset,
         ReadOnlySpan<byte> source) =>
         _frames.Write(_turn, frame, offset, source);
