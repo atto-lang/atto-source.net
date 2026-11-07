@@ -7,6 +7,7 @@ on:
       - 'compiler/**'
       - 'examples/modules/**'
       - 'contracts/atto-core-v1/**'
+      - '.gitattributes'
       - 'verification/Ores.Net.Tests/**'
       - 'verification/Ores.Net.ModuleProbe/**'
       - '.github/workflows/source-modules-native-aot.yml'
