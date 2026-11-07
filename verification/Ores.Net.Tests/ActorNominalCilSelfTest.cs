@@ -99,7 +99,9 @@ internal static class ActorNominalCilSelfTest
                 "define actor Counter as int value:0 fnc increment(int amount):int {self.value=self.value+amount;return self.value;} end /* unclosed",
                 "/* " + ((char)0) + " */ " + source,
                 "/* " + ((char)0xD800) + " */ " + source,
-                "define actor Counter as int value:0 fnc increment(int amount):int {self.value=self.value+amount;return self.value;} end @unsafe"
+                "define actor Counter as int value:0 fnc increment(int amount):int {self.value=self.value+amount;return self.value;} end @unsafe",
+                "define actor fnc as int value:0 fnc increment(int amount):int {self.value=self.value+amount;return self.value;} end",
+                "define actor Counter as int increment:0 fnc increment(int amount):int {self.increment=self.increment+amount;return self.increment;} end"
             })
             {
                 string rejectedOutput = Path.Combine(root,
@@ -114,7 +116,7 @@ internal static class ActorNominalCilSelfTest
             ExpectRejected(() => ActorScalarSourceCompiler.EmitLibrary(
                 source, Path.Combine(root, "not-generated.dll")),
                 "noncanonical actor DLL filename must be rejected");
-            Console.WriteLine("PASS generated nominal actor M0 CIL signatures, checked-add, deterministic bytes and 15 rejection cases");
+            Console.WriteLine("PASS generated nominal actor M0 CIL signatures, checked-add, deterministic bytes and 17 rejection cases");
         }
         finally
         {
