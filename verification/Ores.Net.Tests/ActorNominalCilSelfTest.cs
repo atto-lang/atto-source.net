@@ -83,6 +83,32 @@ internal static class ActorNominalCilSelfTest
                 i.OpCode == OpCodes.Callvirt || i.OpCode == OpCodes.Newobj),
                 "actor M0 has no dynamic method dispatch or object creation");
 
+            // The normal structured path must not become an accidental
+            // public actor-method export even with similarly named helpers.
+            var structuredModule = OresStructuredCfgLowering.LowerModule(
+                "fnc actor_initial():int {return 0;}" +
+                " fnc actor_step(int current,int amount):int {return current + amount;}" +
+                " fnc main():int {return 0;}");
+            string ordinaryOutput = Path.Combine(root, "ordinary", "OresGenerated.dll");
+            CilEmitter.EmitLibrary(structuredModule, ordinaryOutput);
+            using (var ordinary = AssemblyDefinition.ReadAssembly(ordinaryOutput))
+            {
+                var ordinaryProgram = ordinary.MainModule.Types.Single(t =>
+                    t.Namespace == "Oreslang.Generated" && t.Name == "OresProgram");
+                Require(!ordinaryProgram.Methods.Any(m =>
+                    m.Name == "ActorInitial" || m.Name == "ActorStep"),
+                    "ordinary structured lowering never exports nominal actor ABI");
+                Require(ordinaryProgram.Methods.Where(m =>
+                    m.Name.StartsWith("helper_", StringComparison.Ordinal))
+                    .All(m => m.IsPrivate),
+                    "normal verified helpers remain private");
+            }
+            bool ordinaryRejectedActor = false;
+            try { _ = OresStructuredParser.Parse(source); }
+            catch (FormatException) { ordinaryRejectedActor = true; }
+            Require(ordinaryRejectedActor,
+                "production-adjacent structured frontend still rejects actor declarations");
+
             int caseNo = 0;
             foreach (string rejected in new[]
             {
