@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Runtime.CompilerServices;
 using System.Threading;
 
 namespace Ores.Net.Runtime;
@@ -262,6 +263,19 @@ public sealed class ActorRuntime : IDisposable
     public ActorRef Spawn(ActorKind kind, ActorMessageHandler handler)
     {
         ArgumentNullException.ThrowIfNull(handler);
+        // A C# async-void lambda may match a void delegate and yield outside
+        // our physical actor turn. Check *every* multicast invocation before
+        // allocating any actor/arena/carrier resource. This is a host admission
+        // guard, not a proof of arbitrary callback safety after Native AOT trim.
+        foreach (Delegate invocation in handler.GetInvocationList())
+        {
+            if (invocation.Method.IsDefined(
+                typeof(AsyncStateMachineAttribute), inherit: false))
+                throw new ArgumentException(
+                    "async/async-void actor handlers require scheduler-owned logical continuation lowering",
+                    nameof(handler));
+        }
+
         if (kind is not (ActorKind.Private or ActorKind.Shared or ActorKind.Untrusted))
             throw new ArgumentOutOfRangeException(nameof(kind));
 
