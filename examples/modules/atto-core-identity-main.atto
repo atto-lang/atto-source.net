@@ -1,0 +1,2 @@
+import module identity from "atto.core/identity";
+pub fnc main():int { return identity.passthrough(42); }
