@@ -151,7 +151,11 @@ jobs:
           bash scripts/publish-linux.sh "$source_file" artifacts/relational --structured
           app=artifacts/relational/linux-x64/oreslang-app
           bash verification/assert-linux-native-release.sh "$app"
-          test "$("$app")" = 42
+          # The assignment also preserves the native process exit status;
+          # testing a command substitution directly would mask a nonzero exit.
+          output="$("$app")"
+          test "$output" = 42
+          test "$(artifacts/structured/linux-x64/oreslang-app)" = 45
           echo 'LINUX_NET_NATIVE_AOT_SIGNED_RELATIONAL_ATTO_EXECUTED_42'
       - name: Negative test for managed sidecar rejection
         shell: bash
