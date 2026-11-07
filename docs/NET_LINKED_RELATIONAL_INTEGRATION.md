@@ -30,3 +30,23 @@ is NOT_EXECUTED, not passing. Do not export private source to unauthorized
 runner organizations, merge, or certify five-backend parity without real
 exact-head Linux/Windows guest execution, independent review, and
 Java/LLVM same-source comparisons.
+
+## Adversarial hardening addendum
+
+The integration fixture now exports `at_most` in addition to `at_least` so
+signed `<=` is exercised independently of the nested positive branch in the
+original four-file example. The C# self-test compiles and interprets **14**
+parameterized imported `.atto` comparison probes with true and false
+outcomes, signed minima/maxima, equality and negative boundary pairs. It also
+rejects bool/i64 call mismatches, malformed chained comparisons, and missing
+qualified imported functions. The CIL opcode-shape check now requires
+contiguous compare/zero/equals inversion **within one MethodDef**; patterns
+spanning distinct method bodies cannot produce a false pass.
+
+The executable Native AOT verifier denies receipts without source-owned
+`GITHUB_REPOSITORY`/`GITHUB_JOB`, positive run ID/attempt, and an OS matching
+the target RID. It rejects reused temp directories and symlinked
+`artifacts/` roots, deletes any prior target binary, and requires a new
+publish artifact. The source-module CI workflow independently parses the
+PowerShell script and verifies that a spoofed job identity is rejected before
+compilation. These are authored regression gates, **not execution results**.
