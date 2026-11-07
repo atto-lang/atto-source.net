@@ -24,7 +24,7 @@ internal static class CfgCilEmitter
         ArgumentNullException.ThrowIfNull(module);
         ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
         CilEmitter.EmitLibraryModuleCore(outputFile, module,
-            (graph, metadata, bodies, handles) =>
+            (graph, metadata, bodies, handles, _) =>
                 WriteMethod(graph, metadata, bodies, handles));
     }
 
