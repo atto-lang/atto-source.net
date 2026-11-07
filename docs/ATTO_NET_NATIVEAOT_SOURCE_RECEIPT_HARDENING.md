@@ -30,3 +30,18 @@ compiler's `graph_sha256`. A syntactically valid but forged graph digest
 cannot become a NativeAOT source receipt. The following source-owned
 NativeAOT execution and CIL byte hashes remain separate required checks.
 No hosted success is claimed while GitHub jobs have zero executed steps.
+
+## Native compiler binary identity bound to both AOT receipts
+
+The NativeAOT workflow now pins a SHA-256 digest of the compiled
+`oresnet` executable in `artifacts/module-app/compiler.sha256` when
+building the initial graph. The canonical `.atto` lane verifies the
+same executable before compiling, checks for changes after CIL emission,
+and records `compiler_binary_sha256` alongside exact head/tree,
+graph hash, generated CIL and final native application SHA-256.
+The legacy `.ores` lane verifies the same pinned compiler digest
+and includes it in its independent receipt. This is a compiler
+**binary** identity, not an independently trusted compiler **source**
+provenance assertion. The receipt still requires actual allocated
+Linux/Windows GitHub job execution and independent source/read-back
+review before qualification.
