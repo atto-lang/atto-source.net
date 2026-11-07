@@ -25,6 +25,9 @@
     <None Include="../../examples/structured-signed-comparisons.atto"
           Link="structured-signed-comparisons.atto"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../examples/modules/atto-relational-*.atto"
+          Link="module-fixtures/%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/attoxp-scalar-v1/**/*"
           Link="contracts/attoxp-scalar-v1/%(RecursiveDir)%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest" />

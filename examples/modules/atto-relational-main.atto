@@ -1,0 +1,11 @@
+import module limits from "./atto-relational-limits.atto";
+import module values from "./atto-relational-values.atto";
+
+pub fnc main(): int {
+  if limits.ordered(-9223372036854775808, 9223372036854775807) {
+    if limits.at_least(values.answer(21), 42) {
+      return values.answer(21);
+    }
+  }
+  return 0;
+}

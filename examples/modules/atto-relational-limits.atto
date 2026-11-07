@@ -1,0 +1,15 @@
+define module limits as
+  pub fnc ordered(int low, int high) -> bool {
+    if low < 0 {
+      if high > 0 {
+        if low <= high {
+          return high >= high;
+        }
+      }
+    }
+    return false;
+  }
+  pub fnc at_least(int value, int bound) -> bool {
+    return value >= bound;
+  }
+end
