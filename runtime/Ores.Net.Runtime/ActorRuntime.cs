@@ -105,6 +105,29 @@ public sealed class ActorContext
     public void FinishFrames(ActorFrameExecution execution) =>
         _frames.Finish(_turn, execution);
 
+    // Compiler-generated finally paths must preserve the ORIGINAL terminal
+    // budget exception. A failed nested PushFrame poisons/scrubs every frame,
+    // so an ordinary PopFrame would throw a secondary InvalidOperationException
+    // and hide ActorFrameBudgetExceededException during CIL unwinding.
+    // These functions authenticate the physical carrier FIRST, then permit
+    // cleanup to be a no-op only for an ALREADY poisoned actor. The synchronous
+    // dispatcher still rejects every poisoned actor at turn exit, even if
+    // guest/host code catches the original exception.
+    public void PopFrameOnUnwind(
+        ActorFrameExecution execution, ActorFrameHandle frame)
+    {
+        _arena.ValidatePhysicalTurn(_turn);
+        if (!_frames.IsPoisoned)
+            _frames.Pop(_turn, execution, frame);
+    }
+
+    public void FinishFramesOnUnwind(ActorFrameExecution execution)
+    {
+        _arena.ValidatePhysicalTurn(_turn);
+        if (!_frames.IsPoisoned)
+            _frames.Finish(_turn, execution);
+    }
+
     // These canonical little-endian scalar accessors are callable by
     // precompiled metadata-only CIL. The frame reference is still authenticated
     // for each physical turn by ActorFrameStack; there is no native pointer
