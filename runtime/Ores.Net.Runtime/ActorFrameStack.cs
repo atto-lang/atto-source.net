@@ -69,6 +69,7 @@ public unsafe sealed class ActorFrameStack : IDisposable
     private int _top;
     private int _depth;
     private bool _poisoned;
+    private bool _admissionRetired;
     private bool _reclaimed;
     private bool _processBudgetReserved;
     private bool _budgetRefunded;
@@ -152,6 +153,7 @@ public unsafe sealed class ActorFrameStack : IDisposable
         lock (_gate)
         {
             EnsureOpenLocked();
+            EnsureAdmissionOpenLocked();
             if (_poisoned)
                 throw new InvalidOperationException("Actor frame stack is poisoned");
             int start;
@@ -249,6 +251,17 @@ public unsafe sealed class ActorFrameStack : IDisposable
     }
 
     /// <summary>
+    /// Serialize STOP with frame allocations and data access. The actor
+    /// arena's physical-turn check alone is insufficient because STOP may
+    /// retire the arena between that check and the frame-stack lock.
+    /// </summary>
+    internal void RetireAdmission()
+    {
+        lock (_gate)
+            _admissionRetired = true;
+    }
+
+    /// <summary>
     /// Runtime-only physical cleanup after actor dispatch has quiesced.
     /// Orphaned frames are forcibly invalidated and the private native slab
     /// is fully zeroed before release. Never call while a handler is running.
@@ -275,6 +288,7 @@ public unsafe sealed class ActorFrameStack : IDisposable
     {
         ArgumentNullException.ThrowIfNull(frame);
         EnsureOpenLocked();
+        EnsureAdmissionOpenLocked();
         if (_poisoned)
             throw new InvalidOperationException("Actor frame stack is poisoned");
         if (!ReferenceEquals(frame.Owner, this) || frame.Released ||
@@ -294,10 +308,17 @@ public unsafe sealed class ActorFrameStack : IDisposable
             throw new ObjectDisposedException(nameof(ActorFrameStack));
     }
 
+    private void EnsureAdmissionOpenLocked()
+    {
+        if (_admissionRetired)
+            throw new InvalidOperationException("Actor frame stack admission is retired");
+    }
+
     private void ReclaimLocked()
     {
         if (_reclaimed)
             return;
+        _admissionRetired = true;
         if (_memory != null)
         {
             CryptographicOperations.ZeroMemory(new Span<byte>(_memory, _reservedBytes));
