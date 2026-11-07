@@ -18,3 +18,19 @@ execution. The currently blocked CI must compile the canonical numeric
 fixtures, verify source/graph/compiler/artifact digests, run Linux and
 Windows native guests, and reject shadowed or forged imports before
 claiming parity.
+
+## Real executable CIL numeric differential regression group
+
+The module-linking self-test now emits actual typed CIL and runs its
+verification interpreter for 12 canonical numerical operations:
+min/max (including equality), clamp low/high/midpoint, reversed
+bounds, equal bounds and extreme signed values. Six alias probes
+check the same embedded numeric source witness, and an ambient
+project shadow returning 99 must not change the CIL result 42.
+Seven negative namespace/path spellings, an invalid module alias
+and an unclosed do/fi scope must fail. The checked CIL verifier
+test interpreter now understands the signed `cgt` opcode, matching
+the compiler and independent CFG reference evaluator.
+
+These authored tests are NOT hosted execution results; the native
+Linux/Windows runner still needs to allocate and run them.

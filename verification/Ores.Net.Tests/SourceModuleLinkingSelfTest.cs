@@ -291,6 +291,97 @@ internal static class SourceModuleLinkingSelfTest
                 Path.Combine(root, "core-entry.atto"), new[] { root }),
                 "compiler-owned declared module alias mismatch");
             Console.WriteLine("PASS stage-1 compiler-owned atto.core/identity embedded source, CIL execution and namespace-shadow negatives");
+            // Canonical compiler-owned numeric.atto is linked unchanged,
+            // including if/; do/fi and early returns. It is NOT rewritten
+            // to host C# or silently replaced with built-in min/max methods.
+            var numericCases = new (string Expression, long Result)[] {
+                ("numeric.min_int(40,42)",40),
+                ("numeric.min_int(42,40)",40),
+                ("numeric.min_int(42,42)",42),
+                ("numeric.max_int(40,42)",42),
+                ("numeric.max_int(42,40)",42),
+                ("numeric.max_int(42,42)",42),
+                ("numeric.clamp_int(50,0,42)",42),
+                ("numeric.clamp_int(-10,0,42)",0),
+                ("numeric.clamp_int(20,0,42)",20),
+                ("numeric.clamp_int(2,10,5)",10),
+                ("numeric.clamp_int(5,5,5)",5),
+                ("numeric.max_int(-9223372036854775807,9223372036854775807)",
+                    9223372036854775807)
+            };
+            foreach (var (expression, expected) in numericCases)
+            {
+                Write("numeric-entry.atto",
+                    "import module numeric from \"atto.core/numeric\"; " +
+                    "pub fnc main():int{return " + expression + ";}");
+                var linkedNumeric = OresSourceModuleCompiler.Compile(
+                    Path.Combine(root, "numeric-entry.atto"), new[] { root });
+                Require(linkedNumeric.Sources.Count == 2 &&
+                    linkedNumeric.Sources.Count(x => x.Path=="@atto.core/numeric.atto")==1,
+                    "compiler-owned Core numeric source identity is bound to graph");
+                string executable = Path.Combine(root, "AttoCoreNumeric.dll");
+                CilEmitter.EmitLibrary(linkedNumeric.Module, executable);
+                using var image = AssemblyDefinition.ReadAssembly(executable);
+                var actual = CfgCilTestInterpreter.Evaluate(
+                    image.MainModule.Types.Single(x => x.Name=="OresProgram")
+                        .Methods.Single(x => x.Name=="Run"));
+                Require(actual==expected,
+                    "canonical numeric guest result mismatch: " + expression);
+            }
+            foreach (string alias in new[] {
+                "atto.core/numeric", "atto.core/numeric.atto",
+                "atto.core/numeric.ores", "ores.core/numeric",
+                "ores.core/numeric.atto", "ores.core/numeric.ores"
+            })
+            {
+                Write("numeric-entry.atto", "import module numeric from \"" + alias +
+                    "\"; pub fnc main():int{return numeric.max_int(40,42);}");
+                var linked = OresSourceModuleCompiler.Compile(
+                    Path.Combine(root, "numeric-entry.atto"), new[] { root });
+                Require(linked.Sources.Single(x => x.Path=="@atto.core/numeric.atto").Utf8Bytes > 0,
+                    "all canonical and legacy numeric imports bind bundled real source");
+            }
+            Directory.CreateDirectory(Path.Combine(root,"atto.core"));
+            Write("atto.core/numeric.atto",
+                "define module numeric as pub fnc max_int(int l,int r):int{return 99;} end");
+            Write("numeric-entry.atto",
+                "import module numeric from \"atto.core/numeric\"; " +
+                "pub fnc main():int{return numeric.max_int(40,42);}");
+            var numericShadow=OresSourceModuleCompiler.Compile(
+                Path.Combine(root,"numeric-entry.atto"),new[]{root});
+            Require(numericShadow.Sources.All(x=>x.Path!="0/atto.core/numeric.atto"),
+                "project-local numeric shadow path cannot claim canonical source");
+            CilEmitter.EmitLibrary(numericShadow.Module,Path.Combine(root,"NumericShadow.dll"));
+            using (var shadowImage = AssemblyDefinition.ReadAssembly(Path.Combine(root,"NumericShadow.dll")))
+                Require(CfgCilTestInterpreter.Evaluate(
+                    shadowImage.MainModule.Types.Single(x=>x.Name=="OresProgram")
+                        .Methods.Single(x=>x.Name=="Run"))==42,
+                    "project numeric shadow did not alter compiled Core guest");
+            foreach (string invalid in new[] {
+                "atto.core/numeric/", "atto.core/../numeric",
+                "atto.core/numeric//", "atto.core/unknown",
+                "atto.alloc/numeric", "atto.std/numeric",
+                "atto.runtime.actor/numeric"
+            })
+            {
+                Write("numeric-entry.atto", "import module numeric from \"" + invalid +
+                    "\"; pub fnc main():int{return numeric.max_int(40,42);}");
+                Reject(()=>OresSourceModuleCompiler.Compile(
+                    Path.Combine(root,"numeric-entry.atto"),new[]{root}),
+                    "invalid compiler-owned numeric import "+invalid);
+            }
+            Write("numeric-entry.atto",
+                "import module fake from \"atto.core/numeric\"; " +
+                "pub fnc main():int{return fake.max_int(40,42);}");
+            Reject(()=>OresSourceModuleCompiler.Compile(
+                Path.Combine(root,"numeric-entry.atto"),new[]{root}),
+                "numeric module alias mismatch must fail");
+            Write("broken-do-fi.atto",
+                "pub fnc main():int{if 1>0; do return 42; return 0;}");
+            Reject(()=>OresSourceModuleCompiler.Compile(
+                Path.Combine(root,"broken-do-fi.atto"),new[]{root}),
+                "missing fi cannot escape typed block validation");
+            Console.WriteLine("PASS canonical numeric.atto compiler-owned 12 CIL results, six aliases, shadowing and negative imports");
             Console.WriteLine("PASS canonical .atto negative imports, nested package authority, witness and path guards");
             Console.WriteLine("PASS AttoLang .atto real module-linking, typed CIL execution, source identity and negatives");
             Console.WriteLine("PASS source module graph, scoped imports, typed calls, CIL, source identity and fail-closed boundaries");
