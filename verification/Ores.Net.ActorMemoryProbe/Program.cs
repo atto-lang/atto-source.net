@@ -178,3 +178,4 @@ Require(SpinWait.SpinUntil(() => runtime.LiveActors == 0 &&
     "remaining actors did not independently retire and refund");
 Console.WriteLine("PASS actor-memory-survivor: same-pool peer reads and writes during pinned STOP and after physical reclaim");
 Console.WriteLine("PASS actor-memory-native-probe: four private heaps (two shared-pool actors), foreign handles denied, pooled carriers, stale context denied, pinned STOP and physical reclaim");
+Console.WriteLine("PASS actor-scalar-native-frame-source: typed .atto CFG interpreted inside NativeAOT actor frames; not generated actor CIL");
