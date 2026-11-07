@@ -197,3 +197,16 @@ published probe binary. These are **authored tests**, not native execution
 evidence until the exact-head workflows allocate a runner and execute them.
 Even when they pass, the probe remains trusted **host continuation logic**;
 the source compiler does not yet generate .atto actor call/await CIL frames.
+
+### Compiler/native typed slot-limit alignment
+
+The general CFG frame planner can still describe larger SSA graphs for
+non-actor consumers. A new `PlanCanonicalTyped` admission gate imposes the
+canonical actor spill ABI's **128 scalar slots / 1024 bytes** on compiler-owned
+typed layouts before a runtime frame can be allocated. An independently
+verified 129-definition CFG remains valid under the general CFG planner, but
+is rejected at canonical typed-frame planning. The source-derived
+CFG-to-runtime actor host probe now uses this stricter gate, and
+`actor-memory-native-aot.yml` triggers on compiler-core changes too.
+This is source-level admission hardening, **not** generated guest CIL/await
+execution evidence.

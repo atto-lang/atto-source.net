@@ -35,6 +35,21 @@ public static class CfgActorFrameLayoutPlanner
     public const int SlotBytes = 8;
     public const int DefaultFrameBytes = 64 * 1024;
     public const int MaximumFrameBytes = 4 * 1024 * 1024;
+    // Canonical runtime ActorFrameTypedLayout currently admits 1..128 slots.
+    // Keep generic CFG layouts independently flexible for other consumers,
+    // but fail closed before deriving a native typed-actor spill descriptor.
+    public const int MaximumCanonicalTypedSlots = 128;
+    public const int MaximumCanonicalTypedBytes = MaximumCanonicalTypedSlots * SlotBytes;
+
+    public static CfgActorFrameLayout PlanCanonicalTyped(
+        VerifiedCfgFunction verified,
+        int maximumFrameBytes = MaximumCanonicalTypedBytes)
+    {
+        ArgumentNullException.ThrowIfNull(verified);
+        if (maximumFrameBytes <= 0 || maximumFrameBytes > MaximumFrameBytes)
+            throw new ArgumentOutOfRangeException(nameof(maximumFrameBytes));
+        return Plan(verified, Math.Min(maximumFrameBytes, MaximumCanonicalTypedBytes));
+    }
 
     public static CfgActorFrameLayout Plan(
         VerifiedCfgFunction verified, int maximumFrameBytes = DefaultFrameBytes)

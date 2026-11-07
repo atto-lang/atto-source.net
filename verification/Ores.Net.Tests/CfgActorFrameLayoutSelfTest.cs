@@ -48,10 +48,40 @@ internal static class CfgActorFrameLayoutSelfTest
         catch (ArgumentOutOfRangeException) { rejectedLimit = true; }
         Require(rejectedLimit, "invalid maximum frame bound rejected before planning");
 
+        CanonicalTypedFrameBudgetIsIndependentOfGenericCFG();
         SourceVerifiedLayoutFeedsCanonicalActorSlab();
         Console.WriteLine(
             "PASS .NET compiler typed CFG actor-frame layout plan (no CIL spill or .atto actor guest executed)");
     }
+
+    private static void CanonicalTypedFrameBudgetIsIndependentOfGenericCFG()
+    {
+        var allSlots = Enumerable.Range(0, CfgActorFrameLayoutPlanner.MaximumCanonicalTypedSlots + 1)
+            .Select(i => new CfgInstruction(i, CfgOpcode.ConstantI64,
+                IrValueType.I64, I64Constant: i)).ToArray();
+        var verified = OresCfgVerifier.Verify(new CfgFunction(
+            "main", IrValueType.I64, "entry", new[]
+            {
+                new CfgBlock("entry", Array.Empty<CfgParameter>(), allSlots,
+                    new CfgReturn(allSlots.Length - 1))
+            }));
+        Require(CfgActorFrameLayoutPlanner.Plan(verified, 4096).Slots.Count == 129,
+            "generic verified CFG may retain more than 128 scalar values");
+        ExpectFrameError(() => CfgActorFrameLayoutPlanner.PlanCanonicalTyped(
+                verified, 4096),
+            "canonical typed actor frame rejects 129 values before runtime allocation");
+        bool rejectsInvalidMaximum = false;
+        try { _ = CfgActorFrameLayoutPlanner.PlanCanonicalTyped(
+            verified, CfgActorFrameLayoutPlanner.MaximumFrameBytes + 1); }
+        catch (ArgumentOutOfRangeException) { rejectsInvalidMaximum = true; }
+        Require(rejectsInvalidMaximum,
+            "canonical planner rejects invalid byte budget before layout construction");
+        Require(CfgActorFrameLayoutPlanner.MaximumCanonicalTypedBytes ==
+                8 * ActorFrameTypedLayoutMaximumSlots(),
+            "compiler canonical scalar slot contract matches the runtime 128-slot limit");
+    }
+
+    private static int ActorFrameTypedLayoutMaximumSlots() => 128;
 
     private static void SourceVerifiedLayoutFeedsCanonicalActorSlab()
     {
@@ -62,7 +92,8 @@ internal static class CfgActorFrameLayoutSelfTest
             }
             """;
         var verified = OresStructuredCfgLowering.Lower(source);
-        var plan = CfgActorFrameLayoutPlanner.Plan(verified, maximumFrameBytes: 2048);
+        var plan = CfgActorFrameLayoutPlanner.PlanCanonicalTyped(
+            verified, maximumFrameBytes: 2048);
         Require(plan.Slots.Any(slot => slot.Type == IrValueType.I64) &&
                 plan.Slots.Any(slot => slot.Type == IrValueType.Bool),
             "real typed source preserves scalar types through verified CFG");

@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - 'runtime/Ores.Net.Runtime/**'
+      - 'compiler/Ores.Net.Compiler.Core/**'
       - 'verification/Ores.Net.Tests/**'
       - 'verification/Ores.Net.ActorMemoryProbe/**'
       - 'verification/Ores.Net.ActorFrameProbe/**'
