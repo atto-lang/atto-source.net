@@ -43,7 +43,7 @@ public sealed class ActorRefNoWireConverter : JsonConverter<ActorRef>
         "ActorRef is local runtime authority and cannot be serialized as JSON data");
 }
 
-public sealed class ActorMailbox
+public sealed class ActorMailbox : IDisposable
 {
     public const int MaxMessageBytes = 1024 * 1024;
     public const int MaxMailboxMessages = 4096;
@@ -59,6 +59,7 @@ public sealed class ActorMailbox
     private Func<Guid> _nextNonce = Guid.NewGuid;
     private int _queuedBytes;
     private bool _closed;
+    private bool _disposed;
 
     public ActorMailbox(ulong id, int maxMessages = 1024, int maxQueuedBytes = 4 * MaxMessageBytes)
     {
@@ -187,11 +188,30 @@ public sealed class ActorMailbox
         _messages.Clear();
     }
 
+    /// <summary>
+    /// Permanently retire mailbox authority and erase pending owned messages.
+    /// Unlike Stop(), Dispose() must never allow a later Restart().
+    /// </summary>
+    public void Dispose()
+    {
+        lock (_gate)
+        {
+            if (_disposed) return;
+            _disposed = true;
+            _closed = true;
+            DiscardPending();
+            _queuedBytes = 0;
+        }
+    }
+
     /// <summary>Invalidate old references; local numeric IDs are not secure distributed capabilities.</summary>
     public ActorRef Restart()
     {
         lock (_gate)
         {
+            if (_disposed)
+                throw new ObjectDisposedException(nameof(ActorMailbox),
+                    "Disposed mailbox authority cannot be restarted");
             if (_generation == ulong.MaxValue)
                 throw new OverflowException("Actor generation exhausted");
             var nextNonce = _nextNonce();
