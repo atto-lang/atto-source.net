@@ -149,6 +149,7 @@ public unsafe sealed class ActorFrameStack : IDisposable
     private bool _poisoned;
     private ActorFrameExecution? _execution;
     private ActorArenaTurn? _physicalTurn;
+    private ActorArenaTurn? _suspendedFromTurn;
     private ActorFrameContinuation? _continuation;
     private ulong _suspendingEpoch;
     private int _depth;
@@ -363,6 +364,7 @@ public unsafe sealed class ActorFrameStack : IDisposable
                 throw new InvalidOperationException("Actor frame execution has unpopped frames");
             }
             _physicalTurn = null;
+            _suspendedFromTurn = null;
             _execution = null;
         }
     }
@@ -385,6 +387,7 @@ public unsafe sealed class ActorFrameStack : IDisposable
             }
             _continuation = new ActorFrameContinuation();
             _suspendingEpoch = physicalTurn.Epoch;
+            _suspendedFromTurn = physicalTurn;
             _physicalTurn = null;
             return _continuation;
         }
@@ -407,27 +410,44 @@ public unsafe sealed class ActorFrameStack : IDisposable
                 throw new InvalidOperationException("Stale or foreign actor frame continuation");
             }
             _physicalTurn = physicalTurn;
+            _suspendedFromTurn = null;
             _continuation = null;
             _suspendingEpoch = 0;
         }
     }
 
-    /// <summary>Detect a swallowed quota failure or forgotten synchronous unwind.</summary>
-    public void ValidateTurnExit(ActorArenaTurn physicalTurn)
+    /// <summary>
+    /// Trusted scheduler seam: an authenticated suspended execution may park
+    /// across a physical turn. Do not use for synchronous handler dispatch.
+    /// </summary>
+    public void ValidateTurnExit(ActorArenaTurn physicalTurn) =>
+        ValidateTurnExitCore(physicalTurn, permitSuspension: true);
+
+    /// <summary>
+    /// Shipping synchronous dispatcher boundary: no live execution, including
+    /// a suspended one, may escape without a scheduler-owned continuation.
+    /// An attempted escape terminates this actor's frame state.
+    /// </summary>
+    public void ValidateSynchronousTurnExit(ActorArenaTurn physicalTurn) =>
+        ValidateTurnExitCore(physicalTurn, permitSuspension: false);
+
+    private void ValidateTurnExitCore(ActorArenaTurn physicalTurn, bool permitSuspension)
     {
-        // No new frame authority is granted here. In particular, a concurrent
-        // STOP may already have retired ActorArena while this handler unwinds.
-        // Calling ValidateActiveTurn here would incorrectly count that normal
-        // STOP as a handler fault even if no frames were ever entered.
+        // No new frame authority is granted here. In particular, concurrent
+        // STOP may already have retired ActorArena while a handler unwinds.
+        // ValidateActiveTurn would count that normal STOP as a handler fault.
         ArgumentNullException.ThrowIfNull(physicalTurn);
         lock (_gate)
         {
             if (_poisoned)
                 throw new InvalidOperationException("Actor frame storage has been poisoned");
-            if (_execution is not null && _continuation is null)
+            if (_execution is not null &&
+                (_continuation is null || !permitSuspension ||
+                 !ReferenceEquals(_suspendedFromTurn, physicalTurn)))
             {
                 Poison();
-                throw new InvalidOperationException("Actor handler returned with live frames");
+                throw new InvalidOperationException(
+                    "Actor handler returned with a live or suspended logical stack");
             }
         }
     }
@@ -541,6 +561,7 @@ public unsafe sealed class ActorFrameStack : IDisposable
     {
         _poisoned = true;
         _physicalTurn = null;
+        _suspendedFromTurn = null;
         _continuation = null;
         _suspendingEpoch = 0;
         _execution = null;
