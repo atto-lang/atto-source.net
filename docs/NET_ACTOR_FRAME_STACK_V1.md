@@ -132,9 +132,16 @@ metadata-only CIL assembly using the explicit
   token, frame token, and return scalar also live in CLR locals.
 - Each method's successful frame admission precedes a real CIL
   `try/finally` region. All CFG returns compile to `leave`. The `finally`
-  calls `PopFrame`; the entry also calls `FinishFrames`. Exceptions from
-  checked arithmetic and nested helper calls traverse the same cleanup.
-  Failed frame admission remains a terminal actor-local stack fault.
+  calls `PopFrameOnUnwind`; the entry also calls
+  `FinishFramesOnUnwind`. Both validate the physical turn and permit a
+  cleanup-only no-op after the stack was already terminally poisoned, so a
+  nested frame quota failure does **not** get masked by a second cleanup
+  exception. Exceptions from checked arithmetic and nested helper calls
+  traverse the same cleanup. The synchronous dispatcher still rejects
+  poisoned actor state at turn exit even if a guest catches the first fault.
+- Managed host regressions also deliberately poison a nested frame stack,
+  then verify the original `ActorFrameBudgetExceededException` survives
+  compiler-style finally cleanup; off-carrier cleanup is still denied.
 - The source interpreter does not gain `define actor` admission from this
   opt-in backend. Even this emitted CIL executes on a CLR physical carrier
   stack and cannot contain arbitrary `StackOverflowException` or support
