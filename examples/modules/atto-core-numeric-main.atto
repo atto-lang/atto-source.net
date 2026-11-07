@@ -1,0 +1,2 @@
+import module numeric from "atto.core/numeric";
+pub fnc main():int { return numeric.clamp_int(50,0,42); }

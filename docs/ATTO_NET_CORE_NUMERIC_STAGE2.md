@@ -34,3 +34,20 @@ the compiler and independent CFG reference evaluator.
 
 These authored tests are NOT hosted execution results; the native
 Linux/Windows runner still needs to allocate and run them.
+
+## Linux/Windows exact source-head NativeAOT numeric 42-to-43 proof
+
+The existing `source-modules-native-aot.yml` job now has a
+compiler-backed canonical numeric stage-2 lane for Linux and
+Windows. It builds the canonical imported `clamp_int(50,0,42)`
+and an immutable `clamp_int(50,0,43)` mutation, rechecks both
+two-unit source graph inventories and UTF-8 byte hashes, recomputes
+their graph SHA-256 digests, compiles separate CIL and NativeAOT
+outputs, and requires observed results 42 and 43. Their graph,
+CIL and native artifact digests must differ; the pinned compiler
+binary SHA is rechecked before/after. Each receipt records the
+immutable commit/tree, exact library/entry Git blobs, compiler
+binary hash, target RID, graph/CIL/native digest, and result.
+
+These are source-authored CI checks, **NOT** observed NativeAOT
+execution as long as GitHub runner allocation remains blocked.
