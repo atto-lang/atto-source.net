@@ -16,3 +16,17 @@ trigger allows the source-owned workflow to attempt running without relying
 solely on a PR-workflow file that is not yet merged to `main`.
 The previous `jobs=[]` Actions runs are classified as workflow admission/
 configuration failures, not runner allocation or native test failures.
+
+## Independent compiler source-graph SHA-256 verification
+
+The NativeAOT source-local workflow now verifies both the four
+individual exact `.atto` source bytes *and* the aggregate graph
+digest reported by the compiler. The witness must have exactly the
+expected four `0/atto-*.atto` source identities, sorted using ordinal
+case-sensitive ordering with no duplication. PowerShell reconstructs
+the linker preimage as `path + NUL + lowercase SHA256 + LF` for each
+unit, SHA-256 hashes the UTF-8 bytes, and compares that value to the
+compiler's `graph_sha256`. A syntactically valid but forged graph digest
+cannot become a NativeAOT source receipt. The following source-owned
+NativeAOT execution and CIL byte hashes remain separate required checks.
+No hosted success is claimed while GitHub jobs have zero executed steps.

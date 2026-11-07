@@ -86,6 +86,36 @@ jobs:
               throw "Canonical source bytes differ from compiler witness: $file"
             }
           }
+          # The compiler's JSON graph digest is not independently trusted.
+          # Reconstruct its documented NUL/path/hash/LF preimage from exact
+          # source witnesses, verify deterministic ordinal order and enforce
+          # the complete expected canonical four-file source inventory.
+          $paths = [string[]]@($graph.sources | ForEach-Object { [string]$_.path })
+          $sortedPaths = [string[]]$paths.Clone()
+          [System.Array]::Sort($sortedPaths, [System.StringComparer]::Ordinal)
+          $expectedPaths = [string[]]@(
+            '0/atto-base.atto', '0/atto-left.atto',
+            '0/atto-main.atto', '0/atto-right.atto'
+          )
+          if ([string]::Join('|', $paths) -cne [string]::Join('|', $sortedPaths) -or
+              [string]::Join('|', $paths) -cne [string]::Join('|', $expectedPaths)) {
+            throw 'Noncanonical ordered source graph inventory or duplicated source identity'
+          }
+          $preimage = [System.Text.StringBuilder]::new()
+          foreach ($unit in @($graph.sources)) {
+            [void]$preimage.Append([string]$unit.path)
+            [void]$preimage.Append([char]0)
+            [void]$preimage.Append([string]$unit.sha256)
+            [void]$preimage.Append([char]10)
+          }
+          $actualGraphHash = [System.Convert]::ToHexString(
+            [System.Security.Cryptography.SHA256]::HashData(
+              [System.Text.Encoding]::UTF8.GetBytes($preimage.ToString())
+            )
+          ).ToLowerInvariant()
+          if ($actualGraphHash -cne $graph.graph_sha256) {
+            throw 'Canonical .atto graph SHA-256 does not match independently reconstructed witness'
+          }
           $generated = (Resolve-Path artifacts/atto-module-generated/OresGenerated.dll).Path
           $canonicalCilHash = (Get-FileHash $generated -Algorithm SHA256).Hash.ToLowerInvariant()
           dotnet clean host/Ores.Net.NativeHost -c Release -r '${{ matrix.rid }}' "-p:GeneratedAssembly=$generated"
