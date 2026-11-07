@@ -20,9 +20,11 @@ change does not add floating-point comparisons, actor semantics, dynamic
 dispatch, class/enum support, or general source parity with Java/LLVM.
 
 **Verification:** run
-`dotnet run --project verification/Ores.Net.Tests -c Release`, then publish
-the native compiler and native application using the repository's Linux and
-Windows Native AOT scripts with the `.atto` fixture. The CIL interpreter
-is NOT real CLR/Native AOT execution; runner-free or zero-step CI is
+`dotnet run --project verification/Ores.Net.Tests -c Release`, then execute `bash scripts/publish-linux.sh
+examples/structured-signed-comparisons.atto artifacts/relational --structured`
+and verify stdout 42. The Windows workflow uses `compile-structured`, a
+statically linked Native Host publish and actual PE execution; the generic
+Windows script remains scalar-only. The CIL test interpreter is NOT real
+CLR/Native AOT execution; runner-free or zero-step CI is
 NOT_EXECUTED for guest parity. Cross-backend execution on Java and LLVM
 requires independent exact-head binary/fixture receipts.

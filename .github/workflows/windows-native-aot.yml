@@ -234,6 +234,46 @@ jobs:
             throw "Structured Native AOT expected 45, got '$output'"
           }
 
+      - name: Execute canonical .atto signed relational source in Windows Native AOT
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $source = (Resolve-Path 'examples/structured-signed-comparisons.atto').Path
+          $actualBlob = (& git hash-object -- $source).Trim()
+          if ($LASTEXITCODE -ne 0 -or $actualBlob -cne '31a49e3087276f83aecb183c6d4813a1c3d1b1f1') {
+            throw "Signed comparison fixture blob mismatch: $actualBlob"
+          }
+          $compiler = (Resolve-Path './artifacts/compiler/win-x64/oresnet.exe').Path
+          $folder = Join-Path $env:RUNNER_TEMP 'ores-signed-relational-native'
+          New-Item -ItemType Directory -Path $folder -Force | Out-Null
+          $scalar = Join-Path $folder 'scalar/OresGenerated.dll'
+          New-Item -ItemType Directory -Path (Split-Path -Parent $scalar) -Force | Out-Null
+          Remove-Item -LiteralPath $scalar -Force -ErrorAction SilentlyContinue
+          & $compiler compile $source --out $scalar
+          if ($LASTEXITCODE -eq 0 -or (Test-Path -LiteralPath $scalar)) {
+            throw 'Shipping scalar compiler admitted relational .atto source'
+          }
+          & $compiler check-structured $source
+          if ($LASTEXITCODE -ne 0) { throw 'Structured signed comparison admission failed' }
+          $generated = Join-Path $folder 'OresGenerated.dll'
+          Remove-Item -LiteralPath $generated -Force -ErrorAction SilentlyContinue
+          & $compiler compile-structured $source --out $generated
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $generated)) {
+            throw 'Signed comparison CIL was not generated'
+          }
+          $project = 'host/Ores.Net.NativeHost/Ores.Net.NativeHost.csproj'
+          $out = 'artifacts/relational-native/win-x64'
+          dotnet clean $project -c Release -r win-x64 "-p:GeneratedAssembly=$generated"
+          if ($LASTEXITCODE -ne 0) { throw 'Relational Native AOT host clean failed' }
+          dotnet publish $project -c Release -r win-x64 -o $out "-p:GeneratedAssembly=$generated" -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'Relational Native AOT publish failed' }
+          $binary = Join-Path $out 'oreslang-app.exe'
+          ./verification/assert-native-release.ps1 -Binary $binary -Rid win-x64
+          $output = & $binary
+          if ($LASTEXITCODE -ne 0 -or ($output | Out-String).Trim() -cne '42') {
+            throw "Native signed comparison guest expected 42, got '$output'"
+          }
+          Write-Host 'WINDOWS_NET_NATIVE_AOT_SIGNED_RELATIONAL_ATTO_EXECUTED_42'
       - name: Execute typed source helper calls in real Windows Native AOT
         shell: pwsh
         run: |
