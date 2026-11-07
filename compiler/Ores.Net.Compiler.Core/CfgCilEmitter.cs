@@ -28,6 +28,17 @@ internal static class CfgCilEmitter
                 WriteMethod(graph, metadata, bodies, handles));
     }
 
+    internal static void EmitActorScalarLibrary(
+        VerifiedCfgModule module, string outputFile)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+        ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
+        CilEmitter.EmitLibraryModuleCore(outputFile, module,
+            (graph, metadata, bodies, handles) =>
+                WriteMethod(graph, metadata, bodies, handles),
+            actorScalarExports: true);
+    }
+
     private static (int BodyOffset, BlobBuilder Code, BlobBuilder? Locals) WriteMethod(
         VerifiedCfgFunction graph, MetadataBuilder metadata,
         MethodBodyStreamEncoder bodies,
