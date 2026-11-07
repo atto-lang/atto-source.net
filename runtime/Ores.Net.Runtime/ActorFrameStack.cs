@@ -237,7 +237,7 @@ public unsafe sealed class ActorFrameStack : IDisposable
     /// Called before a completed handler is accounted as successful, so that
     /// caught overflow/forgery attempts never let a poisoned actor continue.
     /// </summary>
-    internal void EnsureHealthy(ActorArenaTurn turn)
+    public void EnsureHealthy(ActorArenaTurn turn)
     {
         _arena.ValidateTurnForCleanup(turn);
         lock (_gate)
