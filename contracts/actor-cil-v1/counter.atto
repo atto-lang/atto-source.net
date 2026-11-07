@@ -1,0 +1,9 @@
+// M0 restricted nominal actor: exactly one private i64 field and one
+// non-suspending checked i64 method. Two instances must own separate heaps.
+define actor Counter as
+  int value: 0
+  fnc increment(int amount): int {
+    self.value = self.value + amount;
+    return self.value;
+  }
+end
