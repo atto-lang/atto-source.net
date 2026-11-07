@@ -27,6 +27,15 @@ inside actors, additional fields or methods, or recursive call graph is
 accepted. Source comments are lexed within strict limits, while invalid
 Unicode/NUL in *any* part of the input is rejected.
 
+**Nominal identity limitation:** actor name/field/parameter spellings are
+validated source metadata, but are not yet exported as first-class nominal
+type/field identifiers in the CIL ABI. There is one actor declaration per
+compilation unit; generated methods use the fixed `ActorInitial/ActorStep`
+bootstrap contract. Renaming the actor without changing its scalar behavior
+can currently yield identical generated method bytes. Do not treat this as
+full nominal type parity or permit cross-unit actor-type linkage until names,
+layouts, generation and capability identity are represented in a validated ABI.
+
 `ActorScalarSourceCompiler` maps the source to a closed, typed, independently
 verified scalar CFG consisting of:
 
