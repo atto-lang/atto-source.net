@@ -16,6 +16,8 @@ internal static class ActorRuntimeSelfTest
         HandlerFaultRetiresOnlyThatActor();
         ConcurrentDisposersAwaitCarrierQuiescence();
         FailedTurnAdmissionScrubsDequeuedMessage();
+        StackQuotaExhaustionFaultsOnlyTheOwningActor();
+        StackReservationFailureRollsBackHeapAdmission();
         Console.WriteLine(
             "PASS .NET integrated actor runtime mailbox, arena, domains, stop and fault isolation");
     }
@@ -66,7 +68,10 @@ internal static class ActorRuntimeSelfTest
             "rejected-message actor stops without native-memory leak");
     }
 
-    private static ActorRuntimeOptions Options() => new()
+    private static ActorRuntimeOptions Options(
+        int stackBytes = ActorFrameStack.DefaultStackBytes,
+        int maxStackFrames = ActorFrameStack.DefaultMaxFrames,
+        long nativeBudgetBytes = 1024 * 1024) => new()
     {
         MaxActors = 32,
         MessagesPerDispatch = 16,
@@ -74,10 +79,12 @@ internal static class ActorRuntimeSelfTest
         MailboxBytes = 1024 * 1024,
         ActorPersistentBytes = 4096,
         ActorScratchBytes = 512,
+        ActorStackBytes = stackBytes,
+        ActorMaxStackFrames = maxStackFrames,
         ActorMaxAllocations = 64,
         ActorMaxLifetimePins = 16,
         ActorMaxReadLoans = 16,
-        NativeBudgetBytes = 1024 * 1024,
+        NativeBudgetBytes = nativeBudgetBytes,
         Dispatcher = new ActorDispatcherOptions
         {
             PrivateWorkers = 2,
@@ -124,8 +131,9 @@ internal static class ActorRuntimeSelfTest
         Require(runtime.StartedCarrierThreads == 0,
             "spawning actors creates no carrier threads");
         Require(runtime.LiveActors == 3, "three actor cells registered");
-        Require(runtime.NativeReservedBytes == 3L * (4096 + 512),
-            "each actor reserves private native arena capacity");
+        Require(runtime.NativeReservedBytes ==
+                3L * (4096 + 512 + ActorFrameStack.DefaultStackBytes),
+            "each actor reserves a private native heap and separate frame stack");
 
         runtime.Send(privateActor, new byte[] { 7, 8, 9 });
         runtime.Send(sharedActor, new byte[] { 7, 8, 9 });
@@ -322,13 +330,13 @@ internal static class ActorRuntimeSelfTest
             "pinned actor turn completes");
 
         long reserved = runtime.NativeReservedBytes;
-        Require(reserved == 4096 + 512,
-            "one actor arena remains charged");
+        Require(reserved == 4096 + 512 + ActorFrameStack.DefaultStackBytes,
+            "actor heap and frame stack both remain charged before stop");
         runtime.Stop(actor);
         Require(WaitUntil(() => runtime.LiveActors == 0),
             "stopped pinned actor leaves live registry");
-        Require(runtime.NativeReservedBytes == reserved,
-            "lifetime pin delays physical arena reclaim after actor stop");
+        Require(runtime.NativeReservedBytes == 4096 + 512,
+            "stop scrubs actor stack immediately; lifetime pin delays only heap reclaim");
 
         Task.Run(() => lifetimePin!.Dispose()).GetAwaiter().GetResult();
         lifetimePin!.Dispose();
@@ -477,6 +485,74 @@ internal static class ActorRuntimeSelfTest
 
         Require(runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0,
             "both disposal callers observed complete native reclamation");
+    }
+
+    private static void StackQuotaExhaustionFaultsOnlyTheOwningActor()
+    {
+        using var runtime = new ActorRuntime(Options(stackBytes: 256,
+            maxStackFrames: 2));
+        using var healthyDone = new ManualResetEventSlim();
+        bool overflowCaught = false;
+
+        var failed = runtime.Spawn(ActorKind.Shared, (ctx, _) =>
+        {
+            try
+            {
+                // Every handler already owns a bounded 128-byte root frame.
+                // The next 200 bytes cannot fit within this actor's 256-byte
+                // private native stack, even if the user catches the error.
+                using var tooLarge = ctx.PushFrame(200);
+            }
+            catch (InvalidOperationException)
+            {
+                overflowCaught = true;
+            }
+        });
+        var healthy = runtime.Spawn(ActorKind.Shared, (ctx, _) =>
+        {
+            using var nested = ctx.PushFrame(64);
+            ctx.WriteFrame(nested, 0, new byte[] { 11, 22, 33 });
+            var output = new byte[3];
+            ctx.ReadFrame(nested, 0, output);
+            Require(output.AsSpan().SequenceEqual(new byte[] { 11, 22, 33 }),
+                "sibling actor frame memory remains independently usable");
+            healthyDone.Set();
+        });
+
+        runtime.Send(failed, new byte[] { 1 });
+        runtime.Send(healthy, new byte[] { 2 });
+        Require(healthyDone.Wait(TimeSpan.FromSeconds(5)),
+            "sibling actor must survive frame exhaustion");
+        Require(WaitUntil(() => runtime.FaultedTurns == 1 &&
+                runtime.LiveActors == 1),
+            "caught stack overflow still retires only poisoned actor");
+        Require(overflowCaught, "overflow was detected before managed stack overflow");
+        Require(WaitUntil(() => runtime.CompletedMessages == 1),
+            "healthy actor's message completed, poisoned actor did not");
+        runtime.Stop(healthy);
+        Require(WaitUntil(() => runtime.NativeReservedBytes == 0),
+            "both actor stacks and heaps are fully reclaimed");
+    }
+
+    private static void StackReservationFailureRollsBackHeapAdmission()
+    {
+        // The heap fits exactly, but the additional independent frame stack
+        // cannot enter the aggregate runtime native budget.
+        using var runtime = new ActorRuntime(
+            Options(nativeBudgetBytes: 4096 + 512));
+        bool rejected = false;
+        try
+        {
+            runtime.Spawn(ActorKind.Private, static (_, _) => { });
+        }
+        catch (InvalidOperationException)
+        {
+            rejected = true;
+        }
+        Require(rejected && runtime.LiveActors == 0 &&
+                runtime.NativeReservedBytes == 0 &&
+                runtime.StartedCarrierThreads == 0,
+            "failed actor stack reservation rolls back heap without carrier startup");
     }
 
     private static bool WaitUntil(Func<bool> condition) =>
