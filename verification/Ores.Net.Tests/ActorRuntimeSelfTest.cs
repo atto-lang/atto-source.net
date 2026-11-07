@@ -17,6 +17,7 @@ internal static class ActorRuntimeSelfTest
         ConcurrentDisposersAwaitCarrierQuiescence();
         FailedTurnAdmissionScrubsDequeuedMessage();
         StackQuotaExhaustionFaultsOnlyTheOwningActor();
+        StackStopRaceAllowsUnwindButNotFurtherReadsOrPushes();
         StackReservationFailureRollsBackHeapAdmission();
         Console.WriteLine(
             "PASS .NET integrated actor runtime mailbox, arena, domains, stop and fault isolation");
@@ -532,6 +533,48 @@ internal static class ActorRuntimeSelfTest
         runtime.Stop(healthy);
         Require(WaitUntil(() => runtime.NativeReservedBytes == 0),
             "both actor stacks and heaps are fully reclaimed");
+    }
+
+    private static void StackStopRaceAllowsUnwindButNotFurtherReadsOrPushes()
+    {
+        using var runtime = new ActorRuntime(Options(stackBytes: 256,
+            maxStackFrames: 3));
+        using var entered = new ManualResetEventSlim();
+        using var leave = new ManualResetEventSlim();
+        int deniedAfterStop = 0;
+
+        var actor = runtime.Spawn(ActorKind.Shared, (ctx, _) =>
+        {
+            using var child = ctx.PushFrame(16);
+            ctx.WriteFrame(child, 0, new byte[] { 55 });
+            entered.Set();
+            if (!leave.Wait(TimeSpan.FromSeconds(5)))
+                throw new InvalidOperationException("STOP race test barrier timed out");
+
+            try { ctx.ReadFrame(child, 0, new byte[1]); }
+            catch (InvalidOperationException) { Interlocked.Increment(ref deniedAfterStop); }
+            try { using var unexpected = ctx.PushFrame(16); }
+            catch (InvalidOperationException) { Interlocked.Increment(ref deniedAfterStop); }
+            // Disposing child and the runtime root frame after STOP must still
+            // scrub bytes on this exact carrier without admitting new work.
+        });
+
+        try
+        {
+            runtime.Send(actor, new byte[] { 1 });
+            Require(entered.Wait(TimeSpan.FromSeconds(5)),
+                "frame holding handler entered");
+            runtime.Stop(actor);
+        }
+        finally
+        {
+            leave.Set();
+        }
+        Require(WaitUntil(() => runtime.LiveActors == 0 &&
+                runtime.NativeReservedBytes == 0),
+            "STOP and frame unwind reclaim independent heap and stack memory");
+        Require(deniedAfterStop == 2 && runtime.FaultedTurns == 0,
+            "post-STOP frame access is denied but normal turn cleanup is not a fault");
     }
 
     private static void StackReservationFailureRollsBackHeapAdmission()
