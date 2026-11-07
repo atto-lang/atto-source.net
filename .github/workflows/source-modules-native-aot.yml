@@ -72,7 +72,118 @@ jobs:
           $witness = & $compiler compile-modules examples/modules/atto-main.atto --root examples/modules --out artifacts/atto-module-generated/OresGenerated.dll
           if ($LASTEXITCODE -ne 0) { throw 'Canonical AttoLang .atto module graph did not compile' }
           $witness | Set-Content artifacts/atto-module-source-graph.json
+          $graph = $witness | ConvertFrom-Json -ErrorAction Stop
+          if ($graph.graph_sha256 -notmatch '^[0-9a-f]{64}
+          dotnet publish host/Ores.Net.NativeHost -c Release -r '${{ matrix.rid }}' -p:PublishAot=true "-p:GeneratedAssembly=$generated" -o artifacts/atto-module-app -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'Canonical .atto Native AOT host publish failed' }
+          $binary = Join-Path 'artifacts/atto-module-app' 'oreslang-app${{ matrix.suffix }}'
+          $output = & $binary
+          if ($LASTEXITCODE -ne 0 -or "$output".Trim() -ne '42') { throw 'Canonical .atto NativeAOT linked guest did not return 42' }
+          @{scope='real-canonical-atto-local-module-graph-not-atto.core-namespace'; source_commit=(git rev-parse HEAD); source_tree=(git rev-parse 'HEAD^{tree}'); rid='${{ matrix.rid }}'; binary_sha256=(Get-FileHash $binary -Algorithm SHA256).Hash.ToLowerInvariant(); graph_sha256=$graph.graph_sha256; generated_cil_sha256=$canonicalCilHash; output=$output} | ConvertTo-Json | Set-Content artifacts/atto-module-app/receipt.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: atto-local-modules-${{ matrix.rid }}
+          path: |
+            artifacts/atto-module-app/
+            artifacts/atto-module-source-graph.json
+          if-no-files-found: warn
+      - name: Publish and execute statically linked module application
+        shell: pwsh
+        run: |
+          $generated = (Resolve-Path artifacts/module-generated/OresGenerated.dll).Path
+          $legacyCilHash = (Get-FileHash $generated -Algorithm SHA256).Hash.ToLowerInvariant()
+          $canonicalCilHash = (Get-FileHash artifacts/atto-module-generated/OresGenerated.dll -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($legacyCilHash -eq $canonicalCilHash) { throw 'Canonical and legacy CIL source graph outputs are indistinguishable' }
+          dotnet clean host/Ores.Net.NativeHost -c Release -r '${{ matrix.rid }}' "-p:GeneratedAssembly=$generated"
+          if ($LASTEXITCODE -ne 0) { throw 'Native AOT host clean before legacy build failed' }
+          dotnet publish host/Ores.Net.NativeHost -c Release -r '${{ matrix.rid }}' -p:PublishAot=true "-p:GeneratedAssembly=$generated" -o artifacts/module-app -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'Native module host publish failed' }
+          $binary = Join-Path 'artifacts/module-app' 'oreslang-app${{ matrix.suffix }}'
+          $output = & $binary
+          if ($LASTEXITCODE -ne 0 -or "$output".Trim() -ne '42') { throw 'Imported native methods did not produce 42' }
+          $output
+          @{scope='checked-int-bool-module-native-execution-not-full-Spin'; source_commit=(git rev-parse HEAD); source_tree=(git rev-parse 'HEAD^{tree}'); rid='${{ matrix.rid }}'; binary_sha256=(Get-FileHash $binary -Algorithm SHA256).Hash.ToLowerInvariant(); generated_cil_sha256=$legacyCilHash; output=$output} | ConvertTo-Json | Set-Content artifacts/module-app/receipt.json
+      - name: Imported helper preserves checked overflow
+        shell: pwsh
+        run: |
+          $compiler = Join-Path 'artifacts/module-compiler' 'oresnet${{ matrix.suffix }}'
+          & $compiler compile-modules examples/modules/overflow.ores --root examples/modules --out artifacts/module-overflow-generated/OresGenerated.dll
+          if ($LASTEXITCODE -ne 0) { throw 'Overflow graph compilation failed' }
+          $generated = (Resolve-Path artifacts/module-overflow-generated/OresGenerated.dll).Path
+          dotnet clean host/Ores.Net.NativeHost -c Release -r '${{ matrix.rid }}' "-p:GeneratedAssembly=$generated"
+          if ($LASTEXITCODE -ne 0) { throw 'Native host clean failed' }
+          dotnet publish host/Ores.Net.NativeHost -c Release -r '${{ matrix.rid }}' -p:PublishAot=true "-p:GeneratedAssembly=$generated" -o artifacts/module-overflow-app -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'Overflow host publish failed' }
+          $PSNativeCommandUseErrorActionPreference = $false
+          $binary = Join-Path 'artifacts/module-overflow-app' 'oreslang-app${{ matrix.suffix }}'
+          $output = & $binary 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 70 -or $output -notmatch 'Oreslang arithmetic overflow') { throw 'Imported arithmetic overflow semantics changed' }
+          $output
+          $global:LASTEXITCODE = 0
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: source-modules-${{ matrix.rid }}
+          path: artifacts/module-app/
+ -or @($graph.sources).Count -ne 4) { throw 'Invalid canonical module graph witness' }
+          foreach ($unit in @($graph.sources)) {
+            if ($unit.path -notmatch '^0/([A-Za-z0-9_-]+\.atto)
+          dotnet publish host/Ores.Net.NativeHost -c Release -r '${{ matrix.rid }}' -p:PublishAot=true "-p:GeneratedAssembly=$generated" -o artifacts/atto-module-app -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'Canonical .atto Native AOT host publish failed' }
+          $binary = Join-Path 'artifacts/atto-module-app' 'oreslang-app${{ matrix.suffix }}'
+          $output = & $binary
+          if ($LASTEXITCODE -ne 0 -or "$output".Trim() -ne '42') { throw 'Canonical .atto NativeAOT linked guest did not return 42' }
+          @{scope='real-canonical-atto-local-module-graph-not-atto.core-namespace'; source_commit=(git rev-parse HEAD); source_tree=(git rev-parse 'HEAD^{tree}'); rid='${{ matrix.rid }}'; binary_sha256=(Get-FileHash $binary -Algorithm SHA256).Hash.ToLowerInvariant(); output=$output} | ConvertTo-Json | Set-Content artifacts/atto-module-app/receipt.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: atto-local-modules-${{ matrix.rid }}
+          path: |
+            artifacts/atto-module-app/
+            artifacts/atto-module-source-graph.json
+          if-no-files-found: warn
+      - name: Publish and execute statically linked module application
+        shell: pwsh
+        run: |
+          $generated = (Resolve-Path artifacts/module-generated/OresGenerated.dll).Path
+          dotnet publish host/Ores.Net.NativeHost -c Release -r '${{ matrix.rid }}' -p:PublishAot=true "-p:GeneratedAssembly=$generated" -o artifacts/module-app -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'Native module host publish failed' }
+          $binary = Join-Path 'artifacts/module-app' 'oreslang-app${{ matrix.suffix }}'
+          $output = & $binary
+          if ($LASTEXITCODE -ne 0 -or "$output".Trim() -ne '42') { throw 'Imported native methods did not produce 42' }
+          $output
+          @{scope='checked-int-bool-module-native-execution-not-full-Spin'; source_commit=(git rev-parse HEAD); source_tree=(git rev-parse 'HEAD^{tree}'); rid='${{ matrix.rid }}'; binary_sha256=(Get-FileHash $binary -Algorithm SHA256).Hash.ToLowerInvariant(); output=$output} | ConvertTo-Json | Set-Content artifacts/module-app/receipt.json
+      - name: Imported helper preserves checked overflow
+        shell: pwsh
+        run: |
+          $compiler = Join-Path 'artifacts/module-compiler' 'oresnet${{ matrix.suffix }}'
+          & $compiler compile-modules examples/modules/overflow.ores --root examples/modules --out artifacts/module-overflow-generated/OresGenerated.dll
+          if ($LASTEXITCODE -ne 0) { throw 'Overflow graph compilation failed' }
+          $generated = (Resolve-Path artifacts/module-overflow-generated/OresGenerated.dll).Path
+          dotnet clean host/Ores.Net.NativeHost -c Release -r '${{ matrix.rid }}' "-p:GeneratedAssembly=$generated"
+          if ($LASTEXITCODE -ne 0) { throw 'Native host clean failed' }
+          dotnet publish host/Ores.Net.NativeHost -c Release -r '${{ matrix.rid }}' -p:PublishAot=true "-p:GeneratedAssembly=$generated" -o artifacts/module-overflow-app -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'Overflow host publish failed' }
+          $PSNativeCommandUseErrorActionPreference = $false
+          $binary = Join-Path 'artifacts/module-overflow-app' 'oreslang-app${{ matrix.suffix }}'
+          $output = & $binary 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 70 -or $output -notmatch 'Oreslang arithmetic overflow') { throw 'Imported arithmetic overflow semantics changed' }
+          $output
+          $global:LASTEXITCODE = 0
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: source-modules-${{ matrix.rid }}
+          path: artifacts/module-app/
+) { throw "Noncanonical module source identity: $($unit.path)" }
+            $file = Join-Path 'examples/modules' $Matches[1]
+            $digest = (Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant()
+            $count = (Get-Item $file).Length
+            if ($digest -ne $unit.sha256 -or $count -ne $unit.utf8_bytes) { throw "Source graph witness mismatch for $file" }
+          }
           $generated = (Resolve-Path artifacts/atto-module-generated/OresGenerated.dll).Path
+          $canonicalCilHash = (Get-FileHash $generated -Algorithm SHA256).Hash.ToLowerInvariant()
+          dotnet clean host/Ores.Net.NativeHost -c Release -r '${{ matrix.rid }}' "-p:GeneratedAssembly=$generated"
+          if ($LASTEXITCODE -ne 0) { throw 'Native AOT host clean before canonical build failed' }
           dotnet publish host/Ores.Net.NativeHost -c Release -r '${{ matrix.rid }}' -p:PublishAot=true "-p:GeneratedAssembly=$generated" -o artifacts/atto-module-app -warnaserror
           if ($LASTEXITCODE -ne 0) { throw 'Canonical .atto Native AOT host publish failed' }
           $binary = Join-Path 'artifacts/atto-module-app' 'oreslang-app${{ matrix.suffix }}'
