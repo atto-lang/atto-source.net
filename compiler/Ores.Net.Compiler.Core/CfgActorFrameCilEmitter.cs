@@ -278,13 +278,15 @@ internal static class CfgActorFrameCilEmitter
         if (code.Count > 4 * 1024 * 1024)
             throw new FormatException("Actor CFG CIL method byte budget exceeded");
 
-        // Header stack slots include 4 for WriteFrame*(context,execution,
-        // frame,offset), plus a nested helper call's (context,execution,args).
+        // The output WriteFrame* call holds four arguments while its
+        // expression is evaluated. In a nested helper call, source operands
+        // already on the stack coexist with four temporary ReadFrame*
+        // arguments. Bound that *transient peak*, not just final call arity.
         int mostArguments = blocks.SelectMany(b => b.Instructions)
             .Where(op => op.Opcode == CfgOpcode.Call)
             .Select(op => op.Arguments!.Count)
             .DefaultIfEmpty(0).Max();
-        int maxStack = Math.Max(8, checked(6 + mostArguments));
+        int maxStack = checked(12 + mostArguments);
         int offset = bodies.AddMethodBody(il, maxStack: maxStack,
             localVariablesSignature: signature,
             attributes: MethodBodyAttributes.InitLocals);
