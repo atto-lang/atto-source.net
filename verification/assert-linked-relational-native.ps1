@@ -43,6 +43,18 @@ if ($LASTEXITCODE -ne 0 -or $head -cne $ExpectedHead -or
 }
 $suffix = if ($Rid -eq 'win-x64') { '.exe' } else { '' }
 $nativeCompiler = (Resolve-Path -LiteralPath $Compiler).Path
+if (([IO.File]::GetAttributes($nativeCompiler) -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw 'Compiler binary must not be a symlink or reparse target'
+}
+# NativeAOT applies to the compiler as well as its generated guest image.
+if ($Rid -eq 'win-x64') {
+    & ./verification/assert-native-release.ps1 -Binary $nativeCompiler -Rid $Rid
+} else {
+    & bash verification/assert-linux-native-release.sh $nativeCompiler
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Published compiler failed strict native ELF release verification'
+    }
+}
 $compilerHash = (Get-FileHash -LiteralPath $nativeCompiler -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($compilerHash -cne (Get-Content artifacts/module-app/compiler.sha256 -Raw).Trim()) {
     throw 'Signed relational compiler differs from pinned Native AOT executable'
@@ -87,6 +99,11 @@ foreach ($case in @(
     @{ label = 'mutated'; root = $rootVariation; expected = '43' }
 )) {
     $outputRoot = 'artifacts/atto-linked-relational-' + $case.label
+    if (Test-Path -LiteralPath $outputRoot) {
+        if (([IO.File]::GetAttributes($outputRoot) -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw 'Relational generated output directory cannot be a symlink'
+        }
+    }
     New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null
     $cilFile = Join-Path $outputRoot 'OresGenerated.dll'
     Remove-Item -LiteralPath $cilFile -Force -ErrorAction SilentlyContinue
@@ -130,6 +147,11 @@ foreach ($case in @(
     $cilHash = (Get-FileHash -LiteralPath $generated -Algorithm SHA256).Hash.ToLowerInvariant()
     # Prevent a stale executable from satisfying a later output assertion.
     $appDir = Join-Path $outputRoot 'app'
+    if (Test-Path -LiteralPath $appDir) {
+        if (([IO.File]::GetAttributes($appDir) -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw 'Native guest output directory cannot be a symlink'
+        }
+    }
     $binary = Join-Path $appDir ("oreslang-app" + $suffix)
     if (Test-Path -LiteralPath $binary) {
         Remove-Item -LiteralPath $binary -Force
