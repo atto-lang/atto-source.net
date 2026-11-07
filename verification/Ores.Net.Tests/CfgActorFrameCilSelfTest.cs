@@ -11,6 +11,7 @@ internal static class CfgActorFrameCilSelfTest
         BoolBranchesSpillToTypedActorBytes();
         FrameBudgetRejectsBeforeEmittingArtifact();
         HostTypedSpillRestoreAndExceptionalUnwind();
+        PoisonedNestedFrameMustPreserveOriginalQuotaFault();
         Console.WriteLine(
             "PASS .NET actor-backed verified CFG CIL metadata and host typed frame tests " +
             "(NOT executed generated .atto actor or native AOT)");
@@ -195,6 +196,70 @@ internal static class CfgActorFrameCilSelfTest
             "typed exceptional-unwind frame bytes refunded on STOP");
     }
 
+    private static void PoisonedNestedFrameMustPreserveOriginalQuotaFault()
+    {
+        using var runtime = new ActorRuntime(new ActorRuntimeOptions
+        {
+            MaxActors = 2,
+            ActorPersistentBytes = 256,
+            ActorScratchBytes = 128,
+            ActorFrameBytes = 32,
+            ActorMaxFrames = 4,
+            NativeBudgetBytes = 8192,
+            Dispatcher = new ActorDispatcherOptions
+            {
+                PrivateWorkers = 1, SharedWorkers = 1, UntrustedWorkers = 1,
+                QueueCapacityPerDomain = 2
+            }
+        });
+        int observedQuota = 0;
+        int offCarrierDenied = 0;
+        var actor = runtime.Spawn(ActorKind.Private, (context, _) =>
+        {
+            var execution = context.BeginFrames();
+            var outer = context.PushFrame(execution, 16);
+            try
+            {
+                try
+                {
+                    _ = context.PushFrame(execution, 24);
+                    throw new Exception("Expected nested frame admission failure");
+                }
+                finally
+                {
+                    context.PopFrameOnUnwind(execution, outer);
+                    context.FinishFramesOnUnwind(execution);
+                    bool rejected = Task.Run(() =>
+                    {
+                        try
+                        {
+                            context.PopFrameOnUnwind(execution, outer);
+                            return false;
+                        }
+                        catch (InvalidOperationException) { return true; }
+                    }).GetAwaiter().GetResult();
+                    if (rejected) Interlocked.Exchange(ref offCarrierDenied, 1);
+                }
+            }
+            catch (ActorFrameBudgetExceededException)
+            {
+                Interlocked.Exchange(ref observedQuota, 1);
+                throw;
+            }
+        });
+        runtime.Send(actor, new byte[] { 1 });
+        Require(SpinWait.SpinUntil(
+            () => runtime.LiveActors == 0 && runtime.FaultedTurns == 1 &&
+                  runtime.NativeReservedBytes == 0,
+            TimeSpan.FromSeconds(5)),
+            "poisoned actor stopped and refunded frame/arena native allocation");
+        Require(Volatile.Read(ref observedQuota) == 1 &&
+                Volatile.Read(ref offCarrierDenied) == 1 &&
+                runtime.CompletedMessages == 0,
+            "compiler finally cleanup preserved the exact quota exception " +
+            "and refused an off-carrier no-op after poison");
+    }
+
     private static void CheckFinally(MethodDefinition method, bool isEntry)
     {
         Require(method.Body.ExceptionHandlers.Count == 1 &&
@@ -205,8 +270,8 @@ internal static class CfgActorFrameCilSelfTest
             "guest function return leaves the protected region");
         Require(method.Body.Instructions.Any(i => i.OpCode.Code == Code.Endfinally),
             "CIL finally terminates with endfinally");
-        Require(Calls(method, "PopFrame") == 1 &&
-                Calls(method, "FinishFrames") == (isEntry ? 1 : 0),
+        Require(Calls(method, "PopFrameOnUnwind") == 1 &&
+                Calls(method, "FinishFramesOnUnwind") == (isEntry ? 1 : 0),
             "nested helper unwinds its frame, only entry finishes execution");
     }
 
