@@ -124,6 +124,15 @@ internal static class ActorFrameStackSelfTest
         RejectInvalid(() =>
             previousTurn!.ReadStackFrame(saved!, 0, new byte[2]),
             "retained prior-turn context cannot dereference continuation frame");
+        RejectNoWire(() =>
+        {
+            _ = System.Text.Json.JsonSerializer.Serialize(saved!);
+        }, "actor frame authority cannot be serialized as JSON");
+        RejectNoWire(() =>
+        {
+            _ = System.Text.Json.JsonSerializer.Deserialize<ActorStackFrameHandle>(
+                "{\"Length\":16}");
+        }, "actor frame authority cannot be deserialized from JSON");
 
         runtime.Send(second, new byte[] { 1 });
         runtime.Send(first, new byte[] { 2 });
@@ -230,6 +239,13 @@ internal static class ActorFrameStackSelfTest
         try { action(); }
         catch (InvalidOperationException) { return; }
         throw new Exception("Expected actor frame rejection: " + scenario);
+    }
+
+    private static void RejectNoWire(Action action, string scenario)
+    {
+        try { action(); }
+        catch (NotSupportedException) { return; }
+        throw new Exception("Expected actor frame JSON denial: " + scenario);
     }
 
     private static void RejectRange(Action action, string scenario)
