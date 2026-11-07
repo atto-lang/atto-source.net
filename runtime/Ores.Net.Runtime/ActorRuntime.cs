@@ -486,9 +486,11 @@ public sealed class ActorRuntime : IDisposable
                         var context = new ActorContext(
                             cell.Reference, cell.Kind, cell.Arena, turn, cell.Frames);
                         cell.Handler(context, payload);
-                        // A handler cannot swallow terminal frame-budget or
-                        // misbinding failures and then keep the actor alive.
-                        cell.Frames.ValidateTurnExit(turn);
+                        // A handler cannot swallow terminal frame-budget,
+                        // misbinding, or suspension failures and keep the actor
+                        // alive. This synchronous dispatcher has no scheduler
+                        // that can own/resume a parked actor continuation.
+                        cell.Frames.ValidateSynchronousTurnExit(turn);
                     }
                     succeeded = true;
                 }
