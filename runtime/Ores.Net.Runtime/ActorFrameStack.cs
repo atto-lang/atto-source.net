@@ -102,34 +102,25 @@ internal sealed class ActorFrameStack
         if (!ReferenceEquals(_frames[_depth - 1], frame))
             throw new InvalidOperationException("Actor logical frames must be popped in LIFO order");
 
-        if (_depth == 1)
+        // The persistent slab lives for the actor incarnation. Never free a
+        // non-tail slab while other actor objects remain live: that would
+        // accumulate unfillable holes in ActorArena's non-compacting region.
+        // Scrub on every pop; native reclamation occurs at actor retirement.
+        Span<byte> zeros = stackalloc byte[256];
+        zeros.Clear();
+        int remaining = frame.Length;
+        int position = frame.Offset;
+        while (remaining != 0)
         {
-            // The arena scrubs the full slab and revokes its allocation before
-            // it can be reused by another guest allocation.
-            _arena.ReleasePersistent(turn, _backing!);
-            _backing = null;
-            _top = 0;
-        }
-        else
-        {
-            // The persistent slab lives across turns. Scrub popped frame bytes
-            // immediately, without a managed temporary array or raw pointer.
-            Span<byte> zeros = stackalloc byte[256];
-            zeros.Clear();
-            int remaining = frame.Length;
-            int position = frame.Offset;
-            while (remaining != 0)
-            {
-                int count = Math.Min(remaining, zeros.Length);
-                _arena.Write(turn, _backing!, position, zeros[..count]);
-                position += count;
-                remaining -= count;
-            }
-
-            var previous = _frames[_depth - 2]!;
-            _top = previous.Offset + previous.Length;
+            int count = Math.Min(remaining, zeros.Length);
+            _arena.Write(turn, _backing!, position, zeros[..count]);
+            position += count;
+            remaining -= count;
         }
 
+        _top = _depth == 1
+            ? 0
+            : _frames[_depth - 2]!.Offset + _frames[_depth - 2]!.Length;
         _frames[--_depth] = null;
         // Reusing the same offset never reissues a previously popped object.
     }
