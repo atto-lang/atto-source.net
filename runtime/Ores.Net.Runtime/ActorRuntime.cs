@@ -141,6 +141,21 @@ public sealed class ActorContext
     public void PopStackFrame(ActorStackFrameHandle frame) =>
         _stack.Pop(_turn, frame);
 
+    // Internal compiler/runtime ABI authority: never expose sealed type
+    // descriptors as guest values or permit caller-provided raw tags to mint
+    // type authority on an already-issued activation.
+    internal void SealScalarFrame(ActorStackFrameHandle frame,
+        ReadOnlySpan<byte> declaredTypes, int blockCount) =>
+        _stack.SealScalarFrame(_turn, frame, declaredTypes, blockCount);
+
+    internal void ValidateScalarFrameHeader(
+        ActorStackFrameHandle frame, int slots, int blocks) =>
+        _stack.ValidateScalarHeader(_turn, frame, slots, blocks);
+
+    internal void ValidateScalarFrameSlot(
+        ActorStackFrameHandle frame, int slot, byte kind) =>
+        _stack.ValidateScalarSlot(_turn, frame, slot, kind);
+
     public ActorShardColumns CreateShard(int rows, int fields,
         ActorDataLayout layout, int lanes = 1) =>
         new(_arena, _turn, rows, fields, layout, lanes);

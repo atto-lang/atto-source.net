@@ -24,6 +24,34 @@ public sealed class ActorStackFrameHandle
     internal int Index { get; }
     internal int Offset { get; }
     public int Length { get; }
+
+    // The compiler's declared scalar kinds and CFG block count are sealed to
+    // an exact-issued frame at the end of ABI initialization. Raw native bytes
+    // remain mutable for trusted host tests, but cannot retype a sealed ABI.
+    private byte[]? _scalarKinds;
+    private int _scalarBlocks;
+    internal int ScalarSlotCount => _scalarKinds?.Length ??
+        throw new InvalidOperationException("Unsealed actor scalar frame ABI");
+    internal int ScalarBlockCount => _scalarKinds is null
+        ? throw new InvalidOperationException("Unsealed actor scalar frame ABI")
+        : _scalarBlocks;
+
+    internal byte ScalarKind(int slot)
+    {
+        if (_scalarKinds is null)
+            throw new InvalidOperationException("Unsealed actor scalar frame ABI");
+        if ((uint)slot >= (uint)_scalarKinds.Length)
+            throw new ArgumentOutOfRangeException(nameof(slot));
+        return _scalarKinds[slot];
+    }
+
+    internal void SealScalarLayout(ReadOnlySpan<byte> kinds, int blocks)
+    {
+        if (_scalarKinds is not null)
+            throw new InvalidOperationException("Actor scalar frame ABI already sealed");
+        _scalarKinds = kinds.ToArray();
+        _scalarBlocks = blocks;
+    }
 }
 
 /// <summary>
@@ -147,6 +175,45 @@ internal sealed class ActorFrameStack
             : _frames[_depth - 2]!.Offset + _frames[_depth - 2]!.Length;
         _frames[--_depth] = null;
         // Reusing the same offset never reissues a previously popped object.
+    }
+
+    // Host-only compiler ABI control. These operations authenticate the same
+    // actor incarnation and active physical carrier as native frame accesses.
+    // A copied/forged native header or slot tag cannot redefine the frozen
+    // compiler schema after SealScalarFrame succeeds.
+    internal void SealScalarFrame(ActorArenaTurn turn,
+        ActorStackFrameHandle frame, ReadOnlySpan<byte> declaredTypes, int blocks)
+    {
+        _arena.ValidateActiveTurn(turn);
+        ValidateFrame(frame, 0, 0);
+        if (declaredTypes.Length is <= 0 or > ActorScalarFrameAbiV1.MaxValueSlots ||
+            blocks is <= 0 or > ActorScalarFrameAbiV1.MaxBlocks ||
+            frame.Length != ActorScalarFrameAbiV1.FrameBytes(declaredTypes.Length))
+            throw new FormatException("Invalid actor scalar ABI seal layout");
+        foreach (byte tag in declaredTypes)
+            if (tag is not (1 or 2))
+                throw new FormatException("Invalid actor scalar ABI sealed type");
+        frame.SealScalarLayout(declaredTypes, blocks);
+    }
+
+    internal void ValidateScalarHeader(ActorArenaTurn turn,
+        ActorStackFrameHandle frame, int slots, int blocks)
+    {
+        _arena.ValidatePhysicalTurn(turn);
+        ValidateFrame(frame, 0, 0);
+        if (frame.ScalarSlotCount != slots || frame.ScalarBlockCount != blocks)
+            throw new InvalidOperationException(
+                "Actor scalar frame header disagrees with immutable compiler layout");
+    }
+
+    internal void ValidateScalarSlot(ActorArenaTurn turn,
+        ActorStackFrameHandle frame, int slot, byte expected)
+    {
+        _arena.ValidatePhysicalTurn(turn);
+        ValidateFrame(frame, 0, 0);
+        if (frame.ScalarKind(slot) != expected)
+            throw new InvalidOperationException(
+                "Actor scalar frame slot retyping violates verified CFG schema");
     }
 
     private void ValidateFrame(ActorStackFrameHandle frame, int offset, int count)

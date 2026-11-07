@@ -56,6 +56,9 @@ public static class ActorScalarFrameAbiV1
                 context.WriteStackFrame(frame,
                     checked(HeaderBytes + i * SlotBytes), slot);
             }
+            // Seal verified source types only after every native ABI byte is
+            // initialized. The original caller span may be mutable or reused.
+            context.SealScalarFrame(frame, declaredTypes, blockCount);
             return frame;
         }
         catch
@@ -105,6 +108,7 @@ public static class ActorScalarFrameAbiV1
     public static long ReadI64(ActorContext context,
         ActorStackFrameHandle frame, int slot)
     {
+        context.ValidateScalarFrameSlot(frame, slot, I64Tag);
         Span<byte> data = stackalloc byte[SlotBytes];
         context.ReadStackFrame(frame, SlotOffset(context, frame, slot), data);
         ValidateSlot(data, I64Tag);
@@ -126,6 +130,7 @@ public static class ActorScalarFrameAbiV1
     public static bool ReadBool(ActorContext context,
         ActorStackFrameHandle frame, int slot)
     {
+        context.ValidateScalarFrameSlot(frame, slot, BoolTag);
         Span<byte> data = stackalloc byte[SlotBytes];
         context.ReadStackFrame(frame, SlotOffset(context, frame, slot), data);
         ValidateSlot(data, BoolTag);
@@ -147,6 +152,7 @@ public static class ActorScalarFrameAbiV1
     private static int WritableSlotOffset(ActorContext context,
         ActorStackFrameHandle frame, int slot, byte expected)
     {
+        context.ValidateScalarFrameSlot(frame, slot, expected);
         int offset = SlotOffset(context, frame, slot);
         Span<byte> current = stackalloc byte[SlotBytes];
         context.ReadStackFrame(frame, offset, current);
@@ -187,6 +193,7 @@ public static class ActorScalarFrameAbiV1
             pc < 0 || pc >= blocks ||
             frame.Length != HeaderBytes + slots * SlotBytes)
             throw new InvalidOperationException("Invalid actor scalar frame ABI header");
+        context.ValidateScalarFrameHeader(frame, slots, blocks);
     }
 
     private static void ValidateSlot(ReadOnlySpan<byte> data, byte expected)
