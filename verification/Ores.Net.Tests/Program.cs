@@ -223,6 +223,7 @@ ActorMailboxRestartAtomicitySelfTest.Run();
 ActorMailboxAuthorizationPrioritySelfTest.Run();
 ActorMailboxPrivateDataSelfTest.Run();
 ActorArenaSelfTest.Run();
+ActorFrameStackSelfTest.Run();
 ActorShardColumnsSelfTest.Run();
 SelectArbiterSelfTest.Run();
 SelectableI64ChannelSelfTest.Run();
