@@ -57,7 +57,7 @@ jobs:
           output="$RUNNER_TEMP/actor-memory-aot"
           dotnet publish verification/Ores.Net.ActorMemoryProbe/Ores.Net.ActorMemoryProbe.csproj -c Release -r "$RID" -p:PublishAot=true -p:SelfContained=true -o "$output"
           test -f "$output/$BINARY"
-          "$output/$BINARY" | tee "$RUNNER_TEMP/actor-memory-native.log"
+          "$output/$BINARY" | tr -d '\r' | tee "$RUNNER_TEMP/actor-memory-native.log"
           grep -Fx 'PASS actor-memory-survivor: same-pool peer reads and writes during pinned STOP and after physical reclaim' "$RUNNER_TEMP/actor-memory-native.log"
           grep -Fx 'PASS actor-memory-native-probe: four private heaps (two shared-pool actors), foreign handles denied, pooled carriers, stale context denied, pinned STOP and physical reclaim' "$RUNNER_TEMP/actor-memory-native.log"
       - name: Publish and execute independent actor frame NativeAOT host probe
@@ -71,7 +71,7 @@ jobs:
           binary="$output/Ores.Net.ActorFrameProbe"
           if [[ "$RID" == win-* ]]; then binary="$binary.exe"; fi
           test -f "$binary"
-          "$binary" | tee "$RUNNER_TEMP/actor-frame-native.log"
+          "$binary" | tr -d '\r' | tee "$RUNNER_TEMP/actor-frame-native.log"
           grep -Fx 'PASS actor-frame-nativeaot-host: per-actor slabs, terminal budget fault, sibling survives on shared carrier, native quota reclaimed; NOT compiled .atto' "$RUNNER_TEMP/actor-frame-native.log"
           grep -Fx 'PASS actor-frame-nativeaot-async-guard: direct and multicast async-void admission denied before native allocation' "$RUNNER_TEMP/actor-frame-native.log"
       - name: Compile immutable .atto scalar fixture into real actor-frame CIL
@@ -80,7 +80,7 @@ jobs:
           set -euo pipefail
           source="verification/Ores.Net.ActorFrameFixtureGen/fixtures/actor_frame_abi.atto"
           emitted="verification/Ores.Net.ActorCompiledProbe/Generated/OresGenerated.dll"
-          dotnet run --project verification/Ores.Net.ActorFrameFixtureGen/Ores.Net.ActorFrameFixtureGen.csproj -c Release -- "$source" "$emitted" | tee "$RUNNER_TEMP/actor-compiled-cfg-build.log"
+          dotnet run --project verification/Ores.Net.ActorFrameFixtureGen/Ores.Net.ActorFrameFixtureGen.csproj -c Release -- "$source" "$emitted" | tr -d '\r' | tee "$RUNNER_TEMP/actor-compiled-cfg-build.log"
           test -s "$emitted"
           grep -Fx 'PASS actor-compiled-cfg-build: verified .atto scalar source emitted deterministic opt-in actor-frame CIL; not yet executed' "$RUNNER_TEMP/actor-compiled-cfg-build.log"
           # Independently generate the same source to another path. The
@@ -98,5 +98,5 @@ jobs:
           binary="$output/Ores.Net.ActorCompiledProbe"
           if [[ "$RID" == win-* ]]; then binary="$binary.exe"; fi
           test -f "$binary"
-          "$binary" | tee "$RUNNER_TEMP/actor-compiled-native.log"
+          "$binary" | tr -d '\r' | tee "$RUNNER_TEMP/actor-compiled-native.log"
           grep -Fx 'PASS actor-compiled-cfg-nativeaot: emitted CIL Run(ActorContext) executed; bounded actor A overflow, shared-carrier B survives, actor C returns 42; NOT define actor' "$RUNNER_TEMP/actor-compiled-native.log"
