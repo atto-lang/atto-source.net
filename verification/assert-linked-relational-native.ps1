@@ -7,6 +7,34 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 
+# Fail closed: manual runs and missing GitHub run/job identities may produce
+# local diagnostic output but MUST NOT create a release evidence receipt.
+if ($env:GITHUB_REPOSITORY -cne 'ores-truffle-oreslang/oreslang-source.net' -or
+    $env:GITHUB_JOB -cne 'native-source-modules') {
+    throw 'Relational release evidence requires the source-owned module workflow'
+}
+[long]$verifiedRunId = 0
+[int]$verifiedAttempt = 0
+if (-not [long]::TryParse($env:GITHUB_RUN_ID, [ref]$verifiedRunId) -or
+    $verifiedRunId -le 0 -or
+    -not [int]::TryParse($env:GITHUB_RUN_ATTEMPT, [ref]$verifiedAttempt) -or
+    $verifiedAttempt -le 0) {
+    throw 'Relational release receipt requires valid GitHub run and attempt IDs'
+}
+if (($Rid -eq 'win-x64' -and $env:RUNNER_OS -cne 'Windows') -or
+    ($Rid -eq 'linux-x64' -and $env:RUNNER_OS -cne 'Linux')) {
+    throw 'NativeAOT target RID does not match actual runner operating system'
+}
+if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP) -or
+    -not (Test-Path -LiteralPath $env:RUNNER_TEMP -PathType Container)) {
+    throw 'Relational mutation needs an existing runner-local temporary directory'
+}
+$artifactsDir = Join-Path (Get-Location).Path 'artifacts'
+if (-not (Test-Path -LiteralPath $artifactsDir -PathType Container) -or
+    ([IO.File]::GetAttributes($artifactsDir) -band [IO.FileAttributes]::ReparsePoint)) {
+    throw 'Native AOT artifacts root must be a real checkout-owned directory'
+}
+
 $head = (& git rev-parse HEAD).Trim()
 $tree = (& git rev-parse 'HEAD^{tree}').Trim()
 if ($LASTEXITCODE -ne 0 -or $head -cne $ExpectedHead -or
@@ -38,7 +66,10 @@ foreach ($name in $names) {
 # The mutation is performed ONLY under a runner-local temporary directory.
 # A generated CIL or native image from the original graph cannot substitute.
 $rootVariation = Join-Path $env:RUNNER_TEMP 'atto-linked-relational-mutated'
-New-Item -ItemType Directory -Path $rootVariation -Force | Out-Null
+if (Test-Path -LiteralPath $rootVariation) {
+    throw 'Refusing reused or preexisting mutation directory'
+}
+New-Item -ItemType Directory -Path $rootVariation | Out-Null
 foreach ($name in $names) {
     Copy-Item -LiteralPath (Join-Path 'examples/modules' $name) -Destination (Join-Path $rootVariation $name)
 }
@@ -97,12 +128,19 @@ foreach ($case in @(
 
     $generated = (Resolve-Path -LiteralPath $cilFile).Path
     $cilHash = (Get-FileHash -LiteralPath $generated -Algorithm SHA256).Hash.ToLowerInvariant()
+    # Prevent a stale executable from satisfying a later output assertion.
+    $appDir = Join-Path $outputRoot 'app'
+    $binary = Join-Path $appDir ("oreslang-app" + $suffix)
+    if (Test-Path -LiteralPath $binary) {
+        Remove-Item -LiteralPath $binary -Force
+    }
     dotnet clean host/Ores.Net.NativeHost -c Release -r $Rid "-p:GeneratedAssembly=$generated"
     if ($LASTEXITCODE -ne 0) { throw "Native AOT clean failed: $($case.label)" }
-    $appDir = Join-Path $outputRoot 'app'
     dotnet publish host/Ores.Net.NativeHost -c Release -r $Rid -p:PublishAot=true "-p:GeneratedAssembly=$generated" -o $appDir -warnaserror
     if ($LASTEXITCODE -ne 0) { throw "Native AOT publish failed: $($case.label)" }
-    $binary = Join-Path $appDir ("oreslang-app" + $suffix)
+    if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) {
+        throw "Native AOT publish produced no new executable: $($case.label)"
+    }
     if ($Rid -eq 'win-x64') {
         & ./verification/assert-native-release.ps1 -Binary $binary -Rid $Rid
     } else {
@@ -121,8 +159,12 @@ foreach ($case in @(
         scope = 'four-file-local-atto-relational-not-full-backend-certification'
         source_head = $head
         source_tree = $tree
-        run_id = [long]$env:GITHUB_RUN_ID
-        run_attempt = [int]$env:GITHUB_RUN_ATTEMPT
+        run_id = $verifiedRunId
+        run_attempt = $verifiedAttempt
+        github_job = $env:GITHUB_JOB
+        github_repository = $env:GITHUB_REPOSITORY
+        runner_os = $env:RUNNER_OS
+        workflow_path = '.github/workflows/source-modules-native-aot.yml'
         rid = $Rid
         variant = $case.label
         graph_sha256 = $graphHash
