@@ -283,6 +283,7 @@ public sealed class ActorScalarFrameProgram
                             "Unverified actor scalar CFG terminator");
                 }
             }
+            actor.PoisonFrameExecution();
             throw new InvalidOperationException("Actor scalar execution step budget exhausted");
         }
         finally
