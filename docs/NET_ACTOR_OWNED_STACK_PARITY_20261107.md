@@ -91,6 +91,54 @@ runs exact PR head source with .NET 10 on Linux and Windows, then publishes and
 executes the real NativeAOT host memory probe. It **does not** compile an
 AttoLang source actor through the `.atto` frontend into these frames.
 
+## M2 — source-verified scalar helper bridge (experimental, November 7)
+
+This PR now contains a **separate experimental build-time compiler-facing
+project**, `compiler/Ores.Net.Compiler.ActorFrames`, which references the
+existing structured frontend/typed CFG verifier and the actor-native runtime.
+It does **not** alter production `oresnet compile` or admit `define actor`.
+
+- `ActorScalarFrameProgram.Compile(source)` parses and verifies a complete
+  closed, typed scalar `.atto` helper-call graph **before** execution.
+  Unsupported actor/class declarations, recursive helpers, unresolved targets
+  and unsupported opcodes fail closed.
+- `Execute(ActorContext)` is a **nonrecursive iterative interpreter** over
+  verified CFG blocks. Scalar parameter values, SSA slots, and a program-counter
+  descriptor are written into real actor-owned `ActorFrame` native bytes;
+  host-managed activation metadata remains separate. Each helper call
+  pushes a new native frame; return unwinds it in LIFO order. No CIL actor
+  method or closure lowering is claimed.
+- Checked i64 arithmetic, typed bool conditions, SSA branch-edge transfers,
+  loops, direct helper invocation, maximum 128 value slots/function, 32
+  nested calls and finite step budgets are bounded. Source parser itself
+  currently admits only **acyclic** helpers, so proper recursion/TCO remains
+  unimplemented. Exceeding the interpreter step or call depth bound poisons
+  the actor even when the immediate exception is caught.
+- `contracts/actor-frame-v1/source-scalar-bridge.atto` is the shared source
+  fixture exercised by managed actor dispatch and the Linux/Windows NativeAOT
+  actor-memory probe. The NativeAOT executable interprets its source-verified
+  CFG inside actor-native frames and emits an explicitly qualified
+  `actor-scalar-native-frame-source` receipt. This is **source-verified
+  interpreter execution inside a NativeAOT host**, **not** generated guest CIL
+  or an independently verified guest binary.
+- Tests added in `ActorScalarFrameProgramSelfTest` cover nested source calls,
+  CFG loop/branches, checked overflow, caught execution-budget traps,
+  intentionally exhausted actor-stack quota, sibling survival, rejection of
+  unsupported source, and reclamation. The CI workflow now requires the
+  qualified source-backed receipt from both Linux and Windows NativeAOT runs.
+
+**Verification requirement:** source tests and compiler/project files were
+committed, but none may be called *passing* until an exact-head runner has
+nonzero steps and prints actual `dotnet run` and NativeAOT probe evidence.
+The local environment does not contain `dotnet`. Existing
+`steps=[]`/null results are runner-admission failures.
+
+**Remaining P0:** integrate real `define actor` declaration lowering to
+typed CIL/native actor handlers, then implement compiler-driven stackless
+mutual recursion and proper tail-call reuse, source-owned suspension leases,
+and physical process stack-overflow containment. The current scalar bridge
+deliberately does **not** infer those properties.
+
 ## Remaining parity gates (priority order)
 
 **P0 — Run exact-head CI:** restore private GitHub Actions runner admission;
