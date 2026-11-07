@@ -35,8 +35,110 @@ internal static class StructuredSourceTests
         throw new Exception("Unsupported receiver/capture syntax was admitted");
     }
 
+    private static void RejectScalarStateInjection(string source, string expectedDiagnostic)
+    {
+        try { _ = OresParser.Parse(source); }
+        catch (FormatException error)
+        {
+            Require(error.Message.Contains(expectedDiagnostic, StringComparison.Ordinal),
+                "scalar compiler rejected injected state for wrong reason: " + error.Message);
+            Require(error.Message.Contains("offset", StringComparison.Ordinal),
+                "scalar injection diagnostic lacks an exact source offset");
+            return;
+        }
+        throw new Exception("Scalar compiler admitted unsupported state injection");
+    }
+
     public static void Run()
     {
+        // Injected mutable containers are not the current scalar backend's
+        // ordinary metadata. Require a feature-specific diagnostic, not a
+        // generic invalid-character parse rejection or fake CIL success.
+        foreach (var source in new[] {
+            "@Inject(MutableStateContainer())\ndefine class Foo as\nstate {}\nend\n",
+            "@Inject(MutableStateContainer(scope = #instance))\ndefine class Foo as\nend\n",
+            "@StateBacked(MutableStateContainer(scope = #shared))\ndefine class Foo as\nend\n",
+            "@MutableStateContainer()\ndefine actor A as\nend\n",
+            "@StateContainer()\ndefine singleton S as\nend\n",
+            "@Inject(SessionState)\nfnc main():int{return 7;}",
+            "@Inject\ndefine class Foo as\nend\n",
+            "@Inject<MutableStateContainer()>\ndefine class Foo as\nend\n",
+            "@StateContainer()\ndefine class Foo as\nend\n",
+            "@Inject(SessionState)\npub fnc main():int{return 42;}\n"
+        })
+        {
+            string annotation = source.StartsWith("@Inject", StringComparison.Ordinal)
+                ? "Inject"
+                : source.StartsWith("@StateBacked", StringComparison.Ordinal)
+                    ? "StateBacked"
+                    : source.StartsWith("@MutableStateContainer", StringComparison.Ordinal)
+                        ? "MutableStateContainer"
+                        : "StateContainer";
+            RejectFeature(source, "STATE_INJECTION_UNSUPPORTED: @" + annotation);
+            RejectScalarStateInjection(source, "STATE_INJECTION_UNSUPPORTED: @" + annotation);
+        }
+        var commentOnlyInjection = OresStructuredParser.Parse(
+            "// @Inject(MutableStateContainer()) is a comment\nfnc main():int{return 7;}");
+        Require(commentOnlyInjection is not null,
+            "injection spelling inside a comment is not executable syntax");
+        _ = OresParser.Parse(
+            "// @Inject(MutableStateContainer()) is a comment\nfnc main():int{return 7;}");
+        _ = OresParser.Parse(
+            "/* outer @Inject /* inner @StateBacked */ ignored */\nfnc main():int{return 7;}");
+        RejectScalarStateInjection(
+            "// skipped @Inject\n@StateBacked(MutableStateContainer())\nfnc main():int{return 7;}",
+            "STATE_INJECTION_UNSUPPORTED: @StateBacked");
+
+        // Verify annotation offset after ignored comment trivia.
+        const string injectionOffsetProbe =
+            "/* inert @Inject(Fake()) */\n" +
+            "// inert @MutableStateContainer\n\n" +
+            " @StateBacked(MutableStateContainer())\n" +
+            "fnc main():int{return 7;}";
+        int injectionStart = injectionOffsetProbe.IndexOf("@StateBacked", StringComparison.Ordinal);
+        Require(injectionStart > 0, "missing executable annotation");
+        try {
+            _ = OresStructuredParser.Parse(injectionOffsetProbe);
+            throw new Exception("Structured parser admitted state injection");
+        } catch (FormatException error) {
+            Require(error.Message.Contains("STATE_INJECTION_UNSUPPORTED: @StateBacked", StringComparison.Ordinal)
+                && error.Message.Contains("offset " + injectionStart, StringComparison.Ordinal),
+                "structured parser used comment offset instead of executable annotation");
+        }
+        try {
+            _ = OresParser.Parse(injectionOffsetProbe);
+            throw new Exception("Scalar parser admitted state injection");
+        } catch (FormatException error) {
+            Require(error.Message.Contains("STATE_INJECTION_UNSUPPORTED: @StateBacked", StringComparison.Ordinal)
+                && error.Message.Contains("offset " + injectionStart, StringComparison.Ordinal),
+                "scalar parser used comment offset instead of executable annotation");
+        }
+
+        // Unknown annotations must be explicit errors too, not silently
+        // downgraded to scalar expression source.
+        foreach (var unknown in new[] {"@NotRegistered", "@InjectExtra"})
+        {
+            try { _ = OresParser.Parse(unknown + "\nfnc main():int{return 7;}"); }
+            catch (FormatException error)
+            {
+                Require(error.Message.Contains("Annotations require verified compiler lowering", StringComparison.Ordinal),
+                    "unknown annotation was misclassified as a state effect");
+                continue;
+            }
+            throw new Exception("Unknown scalar annotation unexpectedly compiled");
+        }
+
+        var leadingComment = OresStructuredParser.Parse(
+            "// nested annotation @StateBacked(MutableStateContainer(scope = #instance)) is inert\n"
+            + "fnc main():int{return 7;}");
+        Require(leadingComment is not null,
+            "state backing in a comment must not trigger a false-positive capability denial");
+        var blockCommentOnly = OresStructuredParser.Parse(
+            "/* outer @Inject(SessionState) /* inner @StateBacked(MutableStateContainer(scope = #instance)) */ still comment */\n"
+            + "fnc main():int{return 7;}");
+        Require(blockCommentOnly is not null,
+            "nested block comments must not mint or falsely reject container capabilities");
+
         // Local value types are block-local declarations on the structured
         // frontend. They are admitted into the AST but deliberately rejected
         // by CFG/CIL lowering until value layout and construction are verified.
