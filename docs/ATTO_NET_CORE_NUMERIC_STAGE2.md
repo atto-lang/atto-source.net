@@ -79,7 +79,7 @@ No hosted run of these new checks is yet confirmed.
 
 The Linux/Windows numeric stage-2 workflow now binds both receipts
 to `GITHUB_RUN_ID`, `GITHUB_RUN_ATTEMPT`, the immutable workflow path,
-job ID, runner OS, exact Git source head/tree, canonical source blobs,
+logical job name, runner OS, exact Git source head/tree, canonical source blobs,
 and compiler binary digest. Both receipts must match on the shared
 run/attempt/head/compiler tuple while their graph/CIL/native outputs
 must differ. The source-owned Actions artifact now includes the
