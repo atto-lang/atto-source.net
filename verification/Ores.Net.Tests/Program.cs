@@ -395,6 +395,7 @@ foreach (var source in new[] {
 FrozenTcpSlabSelfTest.Run(); // host-only immutable shared-buffer parity
 TcpPoolLeaseLedgerSelfTest.Run(); // trusted TCP lease authority, no socket I/O
 await TcpPoolPhysicalCloseLoopbackSelfTest.RunAsync(); // host-only real TCP close fence
+ActorIoEnvelopeSelfTest.Run();
 ActorRefNoWireSelfTest.Run();
 ActorMailboxBoundsSelfTest.Run();
 SelectContinuationFenceSelfTest.Run();
