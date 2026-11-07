@@ -11,10 +11,18 @@ if (!File.Exists(source) || !source.EndsWith(".atto", StringComparison.Ordinal))
 if (string.Equals(source, generated, StringComparison.Ordinal))
     throw new ArgumentException("Compiler input and output must be different");
 var verified = OresStructuredCfgLowering.LowerModule(File.ReadAllText(source));
+if (verified.Helpers.Count != 1)
+    throw new FormatException("Native AOT probe requires exactly one verified helper");
+int mainFrame = CfgActorFrameLayoutPlanner.Plan(verified.Main).ByteLength;
+int helperFrame = CfgActorFrameLayoutPlanner.Plan(verified.Helpers[0]).ByteLength;
+if (mainFrame <= 0 || helperFrame <= 0 ||
+    mainFrame + helperFrame <= 32 || mainFrame + helperFrame > 128)
+    throw new FormatException("Fixture must overflow 32-byte actor stack, but fit in 128-byte actor stack");
 CilEmitter.EmitActorFrameLibrary(verified, generated);
 if (!File.Exists(generated) || new FileInfo(generated).Length == 0)
     throw new InvalidOperationException("Actor frame CIL emitter created no nonempty DLL");
 
+Console.WriteLine($"ACTOR_COMPILED_CFG_LAYOUT: main={mainFrame}, helper={helperFrame}, nested={mainFrame + helperFrame}");
 Console.WriteLine("ACTOR_COMPILED_CFG_INPUT_SHA256=" +
     Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(source))).ToLowerInvariant());
 Console.WriteLine("ACTOR_COMPILED_CFG_PE_SHA256=" +
