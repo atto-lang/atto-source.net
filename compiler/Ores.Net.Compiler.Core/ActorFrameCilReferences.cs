@@ -64,13 +64,13 @@ internal sealed class ActorFrameCilReferences
                     p.AddParameter().Type().Type(execution, isValueType: false);
                     p.AddParameter().Type().Int32();
                 }),
-            Pop = Method("PopFrame", 2, r => r.Void(),
+            Pop = Method("PopFrameOnUnwind", 2, r => r.Void(),
                 p =>
                 {
                     p.AddParameter().Type().Type(execution, isValueType: false);
                     p.AddParameter().Type().Type(frame, isValueType: false);
                 }),
-            Finish = Method("FinishFrames", 1, r => r.Void(),
+            Finish = Method("FinishFramesOnUnwind", 1, r => r.Void(),
                 p => p.AddParameter().Type().Type(execution, isValueType: false)),
             WriteI64 = Method("WriteFrameI64", 4, r => r.Void(),
                 p =>
