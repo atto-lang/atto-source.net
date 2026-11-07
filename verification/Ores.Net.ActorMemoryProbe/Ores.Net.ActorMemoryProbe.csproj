@@ -7,5 +7,9 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../runtime/Ores.Net.Runtime/Ores.Net.Runtime.csproj" />
+    <ProjectReference Include="../../compiler/Ores.Net.Compiler.ActorFrames/Ores.Net.Compiler.ActorFrames.csproj" />
+    <None Include="../../contracts/actor-frame-v1/source-scalar-bridge.atto"
+          Link="actor-frame-v1/source-scalar-bridge.atto"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
