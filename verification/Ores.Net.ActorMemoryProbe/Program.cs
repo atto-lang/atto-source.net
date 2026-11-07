@@ -19,6 +19,7 @@ var options = new ActorRuntimeOptions
     MaxActors = actorCount, MessagesPerDispatch = 1,
     MailboxMessages = 4, MailboxBytes = 64,
     ActorPersistentBytes = 128, ActorScratchBytes = 64,
+    ActorStackBytes = 256, ActorMaxStackFrames = 4,
     ActorMaxAllocations = 8, ActorMaxReadLoans = 8,
     ActorMaxLifetimePins = 8, NativeBudgetBytes = 4096,
     Dispatcher = new ActorDispatcherOptions
@@ -33,6 +34,7 @@ using var verified = new CountdownEvent(actorCount);
 using var survivorVerified = new AutoResetEvent(false);
 var errors = new ConcurrentQueue<Exception>();
 var handles = new ActorArenaHandle?[actorCount];
+var expiredFrames = new ActorFrame?[actorCount];
 var references = new ActorRef[actorCount];
 ActorArenaLifetimePin? pin = null;
 ActorContext? retained = null;
@@ -49,6 +51,29 @@ for (int i = 0; i < actorCount; ++i)
         bool first = phase == 0;
         try
         {
+            // Actor-owned frame bytes are independently allocated and
+            // capped even though all handlers execute on pooled CLR carriers.
+            using (var frame = context.PushFrame(16))
+            {
+                context.WriteFrame(frame, 0, new byte[] { (byte)(71 + index) });
+                var frameData = new byte[1];
+                context.ReadFrame(frame, 0, frameData);
+                Require(frameData[0] == 71 + index,
+                    "actor frame roundtrip in native executable");
+                if (first)
+                    expiredFrames[index] = frame;
+            }
+            if (!first)
+            {
+                // These stored frame capabilities are retired even when
+                // the next turn uses the same carrier and incarnation.
+                for (int other = 0; other < actorCount; other++)
+                {
+                    int candidate = other;
+                    Deny(() => context.ReadFrame(expiredFrames[candidate]!, 0,
+                        new byte[1]));
+                }
+            }
             if (first)
             {
                 handles[index] = context.AllocatePersistent(8);
@@ -120,8 +145,8 @@ long oneReserved = allReserved / actorCount;
 runtime.Stop(references[1]);
 Require(SpinWait.SpinUntil(() => runtime.LiveActors == actorCount - 1,
     TimeSpan.FromSeconds(10)), "pinned actor logical retirement did not complete");
-Require(runtime.NativeReservedBytes == allReserved,
-    "logical STOP must retain the pinned actor reservation");
+Require(runtime.NativeReservedBytes == allReserved - options.ActorStackBytes,
+    "logical STOP scrubs its actor frame stack while the pinned heap remains");
 runtime.Send(references[2], new byte[] { 2 });
 Require(survivorVerified.WaitOne(TimeSpan.FromSeconds(10)),
     "survivor did not execute while peer was pinned");
