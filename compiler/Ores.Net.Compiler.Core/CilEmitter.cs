@@ -229,6 +229,18 @@ public static class CilEmitter
     public static void EmitActorFrameLibrary(VerifiedCfgModule module, string outputFile) =>
         CfgActorFrameCilEmitter.EmitLibrary(module, outputFile);
 
+    // Standalone verified main entry, sharing the exact same NativeAOT frame
+    // emitter and fail-closed static link gate as the multi-method module.
+    public static void EmitActorFrameLibrary(VerifiedCfgFunction main, string outputFile)
+    {
+        ArgumentNullException.ThrowIfNull(main);
+        if (main.Name != "main" || main.Parameters.Count != 0 ||
+            main.ResultType != IrValueType.I64)
+            throw new FormatException("Actor frame CIL needs parameterless i64 main");
+        EmitActorFrameLibrary(new VerifiedCfgModule(
+            main, Array.Empty<VerifiedCfgFunction>()), outputFile);
+    }
+
     // Experimental multi-method Native AOT assembly. MethodDef handles are
     // reserved before body emission so statically resolved calls target only
     // verified methods in this exact module, never reflection/dynamic code.
