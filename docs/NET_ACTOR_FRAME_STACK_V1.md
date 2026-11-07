@@ -99,11 +99,12 @@ IDs and unsupported scalar kinds before any generated CIL is emitted.
 
 `CfgActorFrameLayoutSelfTest` exercises deterministic slot offsets,
 post-verification input mutation, and a configured frame-byte budget that
-fails closed. These are **compile-time layout tests**, not a guest compiler
-using `ActorFrameStack`. The actual CIL emitter still emits CLR locals and
-uses CLR carrier stacks. Future work must connect the plan to real typed
-spill/restore, ownership/drop scheduling, source `.atto` actor methods and
-continuations; `Plan` alone must never be recorded as guest parity.
+fails closed. These are **compile-time layout tests**, not executable guest
+proof. The legacy scalar CIL emitter still uses CLR locals; the new opt-in
+actor-frame CIL emitter below uses these typed slots for scalar SSA
+spill/restore, but still executes on CLR carrier stacks and does not yet
+lower ownership/drop, source `.atto` actor methods or continuations.
+`Plan` alone must never be recorded as guest parity.
 
 ## M1.7 opt-in verified-CFG-to-actor-owned CIL spill/restore
 
@@ -160,10 +161,11 @@ be considered compiled/verified.
    stack. Managed C# handler recursion and generated CIL still use a CLR
    carrier stack. An actual `StackOverflowException` may terminate the
    process; this implementation does not claim to catch it.
-3. The frame slab holds opaque bytes, not a generated typed frame layout,
-   return PCs, register roots, stack maps, checked affine loans, or
-   `SourceTask` continuations. Native/FFI execution and optimizer tail calls
-   need separate evidence.
+3. The optional verified scalar CFG path now generates a typed i64/bool
+   frame layout and synchronous spill/restore. It does **not** generate
+   return PCs, register roots, GC/stack maps, checked affine loans, or
+   `SourceTask` continuations. Native/FFI execution, optimizer tail calls,
+   non-scalar ownership, and finalizers still need separate evidence.
 4. Each actor stack is one logical execution at a time. A full multi-task
    scheduler must add compiler-owned task selection, parking and wakeup
    fencing, without executing another handler while its actor's turn is
@@ -176,10 +178,11 @@ be considered compiled/verified.
 - Run real `dotnet run --project verification/Ores.Net.Tests -c Release`
   and both platform NativeAOT host probes at the **exact PR head**, verifying
   nonzero executed steps, head SHA, tree SHA, and output logs.
-- Add compiler-owned frame descriptors, reserved before guest calls, and
-  actual guest local/return/spill lowering. Ensure all paths including
-  exceptions, cancellation, `defer`, actor STOP, and mutual tail calls
-  execute the correct stack discipline.
+- Extend the authored scalar verified CFG frame descriptors and synchronous
+  spills to **actual canonical `.atto` actor methods** and non-scalar
+  locals/return PCs/borrow/drop plans. Prove exception, cancellation,
+  `defer`, actor STOP, await/resume and mutual tail-call stack discipline
+  in executed Native AOT guests.
 - Prove a canonical `.atto` guest test: bounded recursion in actor A fails
   safely, actor B responds on its existing shared carrier, STOP/restart
   invalidates A's old frame tokens, and suspended frames resume on a distinct
