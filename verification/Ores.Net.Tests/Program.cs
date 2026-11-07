@@ -101,6 +101,108 @@ Require(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
     "mutated manifest must not retain approved source-free reference digest");
 Console.WriteLine("DURABLE_M0_REFERENCE_ONLY|sha256=" + durableM0PinnedSha +
     "|bytes=1671|not_guest_execution");
+// Cross-backend namespace/lifecycle parity: the NativeAOT compiler does
+// not yet implement manifest-indexed namespace import or once-only init.
+// Unreachable files do not enter the graph, and unsupported imports fail
+// before CIL emission rather than executing an ambient package.
+{
+    string root = Path.Combine(Path.GetTempPath(), "oreslang-ns-parity-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    try
+    {
+        string main = Path.Combine(root, "main.ores");
+        string startup = Path.Combine(root, "startup.ores");
+        string unrelated = Path.Combine(root, "unrelated.ores");
+        File.WriteAllText(unrelated, "not valid ores source");
+        File.WriteAllText(main, "fnc main()->int { return 1; }");
+        Require(OresSourceModuleCompiler.Compile(main, new[] { root }).Sources.Count == 1,
+            "unreferenced namespace provider must not enter NativeAOT module graph");
+
+        File.WriteAllText(main,
+            "import namespace billing as payments from \"checkout\"; fnc main()->int { return 1; }");
+        RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
+            "manifest-verified multi-file package linker",
+            "namespace import needs exact manifest ownership");
+
+        // Standalone compilation must also refuse lifecycle hooks; only
+        // checking linked dependency imports is insufficient.
+        File.WriteAllText(main, "fnc init()->int { return 9; } fnc main()->int { return 1; }");
+        RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
+            "once-only reachable initialization lowering",
+            "standalone private init cannot be compiled as an ordinary callable");
+        File.WriteAllText(main, "pub fnc init()->int { return 9; } fnc main()->int { return 1; }");
+        RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
+            "once-only reachable initialization lowering",
+            "standalone public init cannot be compiled as an ordinary callable");
+
+        File.WriteAllText(startup, "pub fnc init()->int { return 9; }");
+        File.WriteAllText(main,
+            "import fnc init from \"./startup.ores\"; fnc main()->int { return init(); }");
+        RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
+            "once-only reachable initialization lowering",
+            "lifecycle init cannot become an ordinary imported callable");
+
+        // Rejection must reach transitive linked sources and module wrappers:
+        // a caller cannot suppress init admission by changing the import kind.
+        File.WriteAllText(startup,
+            "define module Startup as pub fnc init()->int { return 9; } end");
+        File.WriteAllText(main,
+            "import module Startup from \"./startup.ores\"; fnc main()->int { return 1; }");
+        RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
+            "once-only reachable initialization lowering",
+            "linked module-scoped init requires a verified once-only lifecycle");
+
+        File.WriteAllText(startup,
+            "import namespace billing from \"checkout\"; pub fnc helper()->int { return 2; }");
+        File.WriteAllText(main,
+            "import fnc helper from \"./startup.ores\"; fnc main()->int { return helper(); }");
+        RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
+            "manifest-verified multi-file package linker",
+            "transitively linked namespace import must reject before CIL emission");
+
+        // Additional cross-backend regression #1: the same-package +/
+        // selector cannot bypass the missing manifest-owned namespace graph.
+        File.WriteAllText(main,
+            "import namespace billing from \"+/\"; fnc main()->int { return 1; }");
+        RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
+            "manifest-verified multi-file package linker",
+            "unverified same-package namespace import must fail before CIL");
+
+        // Regression #2: even a qualified scalar call cannot authorize an
+        // unpinned namespace import by satisfying a lexical name.
+        File.WriteAllText(main,
+            "import namespace billing as payments from \"checkout\"; " +
+            "fnc main()->int { return payments.answer(); }");
+        RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
+            "manifest-verified multi-file package linker",
+            "qualified namespace calls require package-authenticated providers");
+
+        // Regression #3: transitive imports with +/ are just as forbidden
+        // as direct imports until the NativeAOT namespace linker exists.
+        File.WriteAllText(startup,
+            "import namespace billing from \"+/\"; pub fnc helper()->int { return 2; }");
+        File.WriteAllText(main,
+            "import fnc helper from \"./startup.ores\"; fnc main()->int { return helper(); }");
+        RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
+            "manifest-verified multi-file package linker",
+            "transitive same-package namespace import must fail before CIL");
+
+        // Regression #4: an unreachable file containing forbidden namespace
+        // syntax must remain outside the reachable compilation closure.
+        File.WriteAllText(unrelated,
+            "import namespace billing from \"checkout\"; fnc bad()->int { return 999; }");
+        File.WriteAllText(main, "fnc main()->int { return 1; }");
+        Require(OresSourceModuleCompiler.Compile(main, new[] { root }).Sources.Count == 1,
+            "unreachable namespace source must not enter the NativeAOT linker");
+
+        // A failed admission must not contaminate a later independent
+        // compilation; unrelated files remain outside the reachable graph.
+        File.WriteAllText(main, "fnc main()->int { return 1; }");
+        Require(OresSourceModuleCompiler.Compile(main, new[] { root }).Sources.Count == 1,
+            "rejected import must not alter subsequent standalone compilation");
+    }
+    finally { Directory.Delete(root, true); }
+}
 
 // Opaque top types and value-producing conditionals are language-reserved,
  // but this i64-only bootstrap has no tagged dynamic-value ABI or typed CFG
