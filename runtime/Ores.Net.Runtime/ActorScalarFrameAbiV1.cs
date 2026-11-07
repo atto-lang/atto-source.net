@@ -180,9 +180,11 @@ public static class ActorScalarFrameAbiV1
         context.ReadStackFrame(frame, 0, header);
         int slots = BinaryPrimitives.ReadInt32LittleEndian(header[4..]);
         int blocks = BinaryPrimitives.ReadInt32LittleEndian(header[8..]);
+        int pc = BinaryPrimitives.ReadInt32LittleEndian(header[12..]);
         if (BinaryPrimitives.ReadUInt32LittleEndian(header) != Magic ||
             slots <= 0 || slots > MaxValueSlots ||
             blocks <= 0 || blocks > MaxBlocks ||
+            pc < 0 || pc >= blocks ||
             frame.Length != HeaderBytes + slots * SlotBytes)
             throw new InvalidOperationException("Invalid actor scalar frame ABI header");
     }

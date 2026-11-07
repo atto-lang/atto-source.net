@@ -161,6 +161,10 @@ internal static class ActorScalarFrameAbiSelfTest
                 plan.EncodeTypeTags(), plan.BlockCount);
             RejectInvalid(() => { _ = ActorScalarFrameAbiV1.ReadI64(context, reused, 1); },
                 "recycled native slot is uninitialized, not prior data");
+            context.WriteStackFrame(reused, 12, new byte[] { 255, 255, 255, 127 });
+            RejectInvalid(() => { _ = ActorScalarFrameAbiV1.ReadI64(context, reused, 1); },
+                "corrupt saved PC must deny even ordinary scalar slot access");
+            context.WriteStackFrame(reused, 12, new byte[] { 0, 0, 0, 0 });
             context.WriteStackFrame(reused, 0, new byte[] { 0 });
             RejectInvalid(() => { _ = ActorScalarFrameAbiV1.ReadBool(context, reused, 0); },
                 "corrupted native frame header cannot authorize reads");
