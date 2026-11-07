@@ -1,0 +1,5 @@
+// Source-compiled scalar functions executed within a real actor-owned frame
+// machine. This is not a define actor declaration or NativeAOT CIL lowering.
+fnc inc(int x):int { return x + 1; }
+fnc twice(int y):int { return inc(y) + 1; }
+fnc main():int { return twice(40); }
