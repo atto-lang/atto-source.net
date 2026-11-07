@@ -71,3 +71,6 @@ jobs:
           "$binary" | tee "$RUNNER_TEMP/actor-frame-native.log"
           grep -Fx 'PASS actor-frame-nativeaot-host: per-actor slabs, terminal budget fault, sibling survives on shared carrier, native quota reclaimed; NOT compiled .atto' "$RUNNER_TEMP/actor-frame-native.log"
           grep -Fx 'PASS actor-frame-nativeaot-async-guard: direct and multicast async-void admission denied before native allocation' "$RUNNER_TEMP/actor-frame-native.log"
+          grep -Fx 'PASS actor-frame-nativeaot-typed-spills: i64 and bool native slab values; raw access and wrong-type denied' "$RUNNER_TEMP/actor-frame-native.log"
+          grep -Fx 'PASS actor-frame-nativeaot-resume-epoch: cross-turn ticket accepted once; same-turn denial poisons only logical actor stack' "$RUNNER_TEMP/actor-frame-native.log"
+          sha256sum "$binary"

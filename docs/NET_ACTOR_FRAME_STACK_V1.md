@@ -179,3 +179,21 @@ negative unknown kinds, raw-byte type bypass attempts, wrong-kind and
 out-of-range accesses, untyped token confusion, and same-physical-turn
 continuation replay. Execution remains **NOT_EXECUTED** until SDK and
 exact-head NativeAOT runners actually run these tests.
+
+### Source-local NativeAOT typed-spill and continuation proof gate
+
+The source-owned `Ores.Net.ActorFrameProbe` now exercises the canonical typed
+`i64`/`bool` spill ABI **inside the published native host executable**.
+The surviving actor is checked against raw-byte typed-frame access, wrong
+slot kinds and caller-schema mutation. Separate native actor-frame executions
+exercise typed spill data across distinct authenticated physical turns and
+same-turn resume rejection with actor-local terminal poisoning.
+
+The Linux/Windows workflow requires exact full-line receipts
+`actor-frame-nativeaot-typed-spills` and
+`actor-frame-nativeaot-resume-epoch`, along with the existing actor memory,
+native quota and async-void guards. It also prints the actual SHA-256 of the
+published probe binary. These are **authored tests**, not native execution
+evidence until the exact-head workflows allocate a runner and execute them.
+Even when they pass, the probe remains trusted **host continuation logic**;
+the source compiler does not yet generate .atto actor call/await CIL frames.
