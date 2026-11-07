@@ -6,6 +6,9 @@ on:
       - 'verification/Ores.Net.Tests/**'
       - 'verification/Ores.Net.ActorMemoryProbe/**'
       - 'verification/Ores.Net.ActorFrameProbe/**'
+      - 'verification/Ores.Net.ActorFrameFixtureGen/**'
+      - 'verification/Ores.Net.ActorCompiledProbe/**'
+      - 'compiler/Ores.Net.Compiler.Core/**'
       - 'docs/NET_ACTOR_FRAME_STACK_V1.md'
       - '.github/workflows/actor-memory-native-aot.yml'
   workflow_dispatch:
@@ -71,3 +74,29 @@ jobs:
           "$binary" | tee "$RUNNER_TEMP/actor-frame-native.log"
           grep -Fx 'PASS actor-frame-nativeaot-host: per-actor slabs, terminal budget fault, sibling survives on shared carrier, native quota reclaimed; NOT compiled .atto' "$RUNNER_TEMP/actor-frame-native.log"
           grep -Fx 'PASS actor-frame-nativeaot-async-guard: direct and multicast async-void admission denied before native allocation' "$RUNNER_TEMP/actor-frame-native.log"
+      - name: Compile immutable .atto scalar fixture into real actor-frame CIL
+        shell: bash
+        run: |
+          set -euo pipefail
+          source="verification/Ores.Net.ActorFrameFixtureGen/fixtures/actor_frame_abi.atto"
+          emitted="verification/Ores.Net.ActorCompiledProbe/Generated/OresGenerated.dll"
+          dotnet run --project verification/Ores.Net.ActorFrameFixtureGen/Ores.Net.ActorFrameFixtureGen.csproj -c Release -- "$source" "$emitted" | tee "$RUNNER_TEMP/actor-compiled-cfg-build.log"
+          test -s "$emitted"
+          grep -Fx 'PASS actor-compiled-cfg-build: verified .atto scalar source emitted deterministic opt-in actor-frame CIL; not yet executed' "$RUNNER_TEMP/actor-compiled-cfg-build.log"
+          # Independently generate the same source to another path. The
+          # emitted PE must be byte-for-byte reproducible without any JIT.
+          dotnet run --project verification/Ores.Net.ActorFrameFixtureGen/Ores.Net.ActorFrameFixtureGen.csproj -c Release -- "$source" "$RUNNER_TEMP/actor-compiled-repro.dll"
+          cmp "$emitted" "$RUNNER_TEMP/actor-compiled-repro.dll"
+      - name: Publish and execute statically linked compiler-generated actor CIL on Native AOT
+        shell: bash
+        env:
+          RID: ${{ matrix.rid }}
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/actor-compiled-aot"
+          dotnet publish verification/Ores.Net.ActorCompiledProbe/Ores.Net.ActorCompiledProbe.csproj -c Release -r "$RID" -p:PublishAot=true -p:SelfContained=true -o "$output"
+          binary="$output/Ores.Net.ActorCompiledProbe"
+          if [[ "$RID" == win-* ]]; then binary="$binary.exe"; fi
+          test -f "$binary"
+          "$binary" | tee "$RUNNER_TEMP/actor-compiled-native.log"
+          grep -Fx 'PASS actor-compiled-cfg-nativeaot: emitted CIL Run(ActorContext) executed; bounded actor A overflow, shared-carrier B survives, actor C returns 42; NOT define actor' "$RUNNER_TEMP/actor-compiled-native.log"
