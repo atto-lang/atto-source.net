@@ -346,7 +346,7 @@ internal static class ActorFrameStackSelfTest
             _ = System.Text.Json.JsonSerializer.Deserialize<ActorFrameExecution>("{}"),
             "execution authority cannot be minted from JSON");
         ExpectJsonDenied(() =>
-            _ = System.Text.Json.JsonSerializer.Deserialize<ActorFrameHandle>("{\\"Length\\":16}"),
+            _ = System.Text.Json.JsonSerializer.Deserialize<ActorFrameHandle>("{\"Length\":16}"),
             "frame handle cannot be minted from JSON");
         ExpectJsonDenied(() =>
             _ = System.Text.Json.JsonSerializer.Deserialize<ActorFrameContinuation>("{}"),
