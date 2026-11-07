@@ -123,6 +123,77 @@ internal static class SourceModuleLinkingSelfTest
             File.WriteAllBytes(Path.Combine(root,"base.atto"),new byte[]{0xff,0xfe});
             Reject(() => OresSourceModuleCompiler.Compile(Path.Combine(root,"main.atto"),new[]{root}),
                 "invalid canonical UTF-8 stays denied", "strict UTF-8");
+            // Canonical source graph negative tests must go through the real
+            // compiler linker; no source-text substring-only policy oracle.
+            Write("base.atto", "pub fnc twice(int n):int{return n * 2;}");
+            Write("main.atto",
+                "import fnc twice from \"./base.atto\"; import fnc twice from \"./base.atto\"; " +
+                "fnc main():int{return twice(21);}");
+            Reject(() => OresSourceModuleCompiler.Compile(Path.Combine(root,"main.atto"),new[]{root}),
+                "canonical duplicate imported callable");
+            Write("base.atto","fnc hidden(int n):int{return n;}");
+            Write("main.atto",
+                "import fnc hidden from \"./base.atto\"; fnc main():int{return hidden(42);}");
+            Reject(() => OresSourceModuleCompiler.Compile(Path.Combine(root,"main.atto"),new[]{root}),
+                "canonical private callable cannot escape module");
+            Write("base.atto","pub fnc twice(int n):int{return n * 2;}");
+            Write("main.atto",
+                "import fnc twice from \"atto.core/numeric\"; fnc main():int{return twice(21);}");
+            Reject(() => OresSourceModuleCompiler.Compile(Path.Combine(root,"main.atto"),new[]{root}),
+                "canonical registry import cannot silently fall back to local files",
+                "explicit local");
+            Write("legacy-local.ores","pub fnc twice(int n):int{return n * 2;}");
+            Write("main.atto",
+                "import fnc twice from \"./legacy-local.ores\"; fnc main():int{return twice(21);}");
+            var mixed = OresSourceModuleCompiler.Compile(Path.Combine(root,"main.atto"),new[]{root});
+            Require(mixed.Sources.Count==2 && mixed.Sources.Any(x=>x.Path.EndsWith("legacy-local.ores")),
+                "explicit legacy .ores import from canonical .atto graph admitted only by intent");
+            Write("main.atto",
+                "import fnc twice from \"./base\"; fnc main():int{return twice(21);}");
+            Write("base.ores","pub fnc twice(int n):int{return n * 2;}");
+            var suffix = OresSourceModuleCompiler.Compile(Path.Combine(root,"main.atto"),new[]{root});
+            Require(suffix.Sources.Any(x=>x.Path.EndsWith("base.ores")) &&
+                    !suffix.Sources.Any(x=>x.Path.EndsWith("base.atto")),
+                "unsuffixed import retains legacy .ores identity, never silent canonical fallback");
+            string externalAtto = root+"-outside.atto";
+            try
+            {
+                File.WriteAllText(externalAtto,"pub fnc twice(int n):int{return n;}");
+                Write("main.atto",
+                    "import fnc twice from \"../"+Path.GetFileName(externalAtto)+
+                    "\"; fnc main():int{return twice(42);}");
+                Reject(() => OresSourceModuleCompiler.Compile(Path.Combine(root,"main.atto"),new[]{root}),
+                    "canonical .atto traversal beyond source root", "escapes explicit source roots");
+            }
+            finally { File.Delete(externalAtto); }
+            string dependencyAtto = Path.Combine(root,"atto-dep");
+            Directory.CreateDirectory(dependencyAtto);
+            Write("atto-dep/.ores.pkg.toml","schema_version=\"1\"");
+            Write("atto-dep/helper.atto","pub fnc twice(int n):int{return n*2;}");
+            Write("main.atto",
+                "import fnc twice from \"./atto-dep/helper.atto\"; fnc main():int{return twice(21);}");
+            Reject(() => OresSourceModuleCompiler.Compile(Path.Combine(root,"main.atto"),new[]{root}),
+                "nested canonical package requires explicit dependency root");
+            Require(OresSourceModuleCompiler.Compile(Path.Combine(root,"main.atto"),
+                new[]{root,dependencyAtto}).Sources.Count==2,
+                "explicit atto package dependency root admitted");
+            Write("main.atto",
+                "import fnc twice from \"./base.atto\"; fnc main():int{return twice(21);}");
+            File.WriteAllBytes(Path.Combine(root,"base.atto"),new byte[]{0xef,0xbb,0xbf});
+            Reject(() => OresSourceModuleCompiler.Compile(Path.Combine(root,"main.atto"),new[]{root}),
+                "canonical BOM source is not admitted", "BOM");
+            File.WriteAllBytes(Path.Combine(root,"base.atto"),new byte[1_048_577]);
+            Reject(() => OresSourceModuleCompiler.Compile(Path.Combine(root,"main.atto"),new[]{root}),
+                "canonical oversized source is not admitted", "1 MiB");
+            if (!OperatingSystem.IsWindows())
+            {
+                File.Delete(Path.Combine(root,"base.atto"));
+                File.CreateSymbolicLink(Path.Combine(root,"base.atto"),
+                    Path.Combine(root,"legacy-local.ores"));
+                Reject(() => OresSourceModuleCompiler.Compile(Path.Combine(root,"main.atto"),new[]{root}),
+                    "canonical .atto symlink import must not redirect to legacy source");
+            }
+            Console.WriteLine("PASS canonical .atto negative imports, nested package authority, witness and path guards");
             Console.WriteLine("PASS AttoLang .atto real module-linking, typed CIL execution, source identity and negatives");
             Console.WriteLine("PASS source module graph, scoped imports, typed calls, CIL, source identity and fail-closed boundaries");
         }
