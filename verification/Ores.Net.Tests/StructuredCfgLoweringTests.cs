@@ -87,6 +87,41 @@ internal static class StructuredCfgLoweringTests
             }
             """;
         Check(sum, 45, "two loop-carried SSA values sum 0..9");
+        // Signed relational source must execute through verified CFG and
+        // emitted CIL; parser-only acceptance is not parity evidence.
+        Check(File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
+            "structured-signed-comparisons.atto")), 42,
+            "canonical .atto signed comparisons and typed helper");
+        foreach (var (comparison, result) in new (string, bool)[] {
+            ("-7 > -8", true), ("-8 > -7", false),
+            ("7 >= 7", true), ("7 >= 8", false),
+            ("7 <= 7", true), ("8 <= 7", false),
+            ("-9223372036854775808 > -9223372036854775808", false),
+            ("9223372036854775807 > -9223372036854775808", true),
+            ("-9223372036854775808 <= -9223372036854775808", true),
+            ("9223372036854775807 >= 9223372036854775807", true),
+            ("-9223372036854775808 >= 9223372036854775807", false),
+            ("9223372036854775807 <= -9223372036854775808", false)
+        })
+            Check("fnc main():int{if " + comparison +
+                "{return 42;}else{return 0;}}", result ? 42 : 0,
+                "signed relational CIL: " + comparison);
+        Check("fnc main():int{const bool within = -9223372036854775808 <= " +
+            "9223372036854775807;if within{return 42;}return 0;}", 42,
+            "compile-time bool relational evaluation");
+        CheckOverflow(
+            "fnc main():int{if (9223372036854775807+1)>=0{return 1;}return 0;}",
+            "relational operand overflow must not wrap or be skipped");
+        Reject("fnc main():int{if true > 1{return 42;}return 0;}",
+            "bool/int greater-than type mismatch");
+        Reject("fnc main():int{if 1 <= false{return 42;}return 0;}",
+            "int/bool less-than-or-equal type mismatch");
+        Reject("fnc main():int{if 1 < 2 > 0{return 42;}return 0;}",
+            "relational chaining cannot coerce bool to int");
+        Reject("fnc main():int{if 1 => 0{return 42;}return 0;}",
+            "invalid arrow comparison");
+        Reject("fnc main():int{if 1 =< 0{return 42;}return 0;}",
+            "invalid reverse comparison");
         Check(File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
             "structured-bindings42.ores")),
             42, "real const/val/let source through verified CFG and CIL");

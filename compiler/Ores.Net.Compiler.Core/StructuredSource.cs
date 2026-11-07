@@ -20,7 +20,8 @@ public sealed record StructuredParameter(string Name, IrValueType Type);
 public sealed record StructuredFunction(string Name,
     IReadOnlyList<StructuredParameter> Parameters, IrValueType ResultType,
     StructuredExpr? ReturnValue, IReadOnlyList<StructuredStmt> Body);
-public enum StructuredOperator { Add, Subtract, Multiply, EqualI64, LessThanI64, NotEqualI64 }
+public enum StructuredOperator { Add, Subtract, Multiply, EqualI64, LessThanI64, NotEqualI64,
+    GreaterThanI64, LessThanOrEqualI64, GreaterThanOrEqualI64 }
 public sealed record StructuredBinary(int At, StructuredOperator Operator,
     StructuredExpr Left, StructuredExpr Right, IrValueType ResultType)
     : StructuredExpr(At, ResultType);
@@ -328,12 +329,14 @@ public static class OresStructuredParser
                      source[index + 1] == '=') index += 2;
             else if (ch == '!' && index + 1 < source.Length &&
                      source[index + 1] == '=') index += 2;
-            else if (moduleMode && index + 1 < source.Length &&
-                (source.Substring(index, 2) is "->" or "&&" or "||" or ">=" or "<=")) index += 2;
+            else if (index + 1 < source.Length &&
+                (((ch == '<' || ch == '>') && source[index + 1] == '=') ||
+                 (moduleMode && (source.Substring(index, 2) is "->" or "&&" or "||"))))
+                index += 2;
             else if (ch == '|' && !moduleMode)
                 throw new FormatException(
                     $"Lexical captures require checked closure lowering at offset {offset}");
-            else if ("()+-*{}:;=<.,?".IndexOf(ch) >= 0 ||
+            else if ("()+-*{}:;=<>.,?".IndexOf(ch) >= 0 ||
                 (moduleMode && "[]/>!|&".IndexOf(ch) >= 0)) index++;
             else throw new FormatException($"Invalid character at offset {offset}");
             var tokenText = source[offset..index];
@@ -742,6 +745,9 @@ public static class OresStructuredParser
                         StructuredOperator.EqualI64 => left == right ? 1L : 0L,
                         StructuredOperator.NotEqualI64 => left != right ? 1L : 0L,
                         StructuredOperator.LessThanI64 => left < right ? 1L : 0L,
+                        StructuredOperator.GreaterThanI64 => left > right ? 1L : 0L,
+                        StructuredOperator.LessThanOrEqualI64 => left <= right ? 1L : 0L,
+                        StructuredOperator.GreaterThanOrEqualI64 => left >= right ? 1L : 0L,
                         _ => throw new FormatException(
                             $"Unsupported const operator at offset {binary.Offset}")
                     };
@@ -771,15 +777,22 @@ public static class OresStructuredParser
         private StructuredExpr Compare(int depth)
         {
             var left = Add(depth + 1);
-            while (Current.Text == "<")
+            while (Current.Text is "<" or ">" or "<=" or ">=")
             {
                 int at = Current.Offset;
+                StructuredOperator comparison = Current.Text switch
+                {
+                    "<" => StructuredOperator.LessThanI64,
+                    ">" => StructuredOperator.GreaterThanI64,
+                    "<=" => StructuredOperator.LessThanOrEqualI64,
+                    ">=" => StructuredOperator.GreaterThanOrEqualI64,
+                    _ => throw Error("Unrecognized relational operator")
+                };
                 index++;
                 var right = Add(depth + 1);
-                Require(left, IrValueType.I64, "Less-than requires int operands");
-                Require(right, IrValueType.I64, "Less-than requires int operands");
-                left = CheckedBinary(at, StructuredOperator.LessThanI64,
-                    left, right, IrValueType.Bool);
+                Require(left, IrValueType.I64, "Comparison requires int operands");
+                Require(right, IrValueType.I64, "Comparison requires int operands");
+                left = CheckedBinary(at, comparison, left, right, IrValueType.Bool);
             }
             return left;
         }
