@@ -68,6 +68,38 @@ jobs:
           if (-not $denied) {
             throw 'Linked relational source-run admission did not fail closed for wrong job identity'
           }
+          # Nonpositive run attempts must not produce a receipt.
+          $savedAttempt = $env:GITHUB_RUN_ATTEMPT
+          $deniedAttempt = $false
+          try {
+            $env:GITHUB_RUN_ATTEMPT = '0'
+            try {
+              & $scriptPath -Compiler './nonexistent-compiler' -Rid '${{ matrix.rid }}' -ExpectedHead '${{ github.event.pull_request.head.sha || github.sha }}'
+            } catch {
+              $deniedAttempt = $_.Exception.Message -match 'valid GitHub run and attempt IDs'
+            }
+          } finally {
+            $env:GITHUB_RUN_ATTEMPT = $savedAttempt
+          }
+          if (-not $deniedAttempt) {
+            throw 'Linked relational evidence accepted invalid run attempt'
+          }
+          # Cross-target evidence cannot masquerade as execution on this host.
+          $savedOs = $env:RUNNER_OS
+          $deniedOs = $false
+          try {
+            $env:RUNNER_OS = if ($savedOs -ceq 'Windows') { 'Linux' } else { 'Windows' }
+            try {
+              & $scriptPath -Compiler './nonexistent-compiler' -Rid '${{ matrix.rid }}' -ExpectedHead '${{ github.event.pull_request.head.sha || github.sha }}'
+            } catch {
+              $deniedOs = $_.Exception.Message -match 'RID does not match'
+            }
+          } finally {
+            $env:RUNNER_OS = $savedOs
+          }
+          if (-not $deniedOs) {
+            throw 'Linked relational evidence accepted wrong target OS'
+          }
       - name: Existing compiler and module-linking regressions
         shell: pwsh
         env:
