@@ -18,6 +18,9 @@ public sealed class ActorRuntimeOptions
     public int MailboxBytes { get; init; } = 4 * ActorMailbox.MaxMessageBytes;
     public int ActorPersistentBytes { get; init; } = 1024 * 1024;
     public int ActorScratchBytes { get; init; } = 64 * 1024;
+    // An actor owns separate native logical frame storage, not a CLR fiber.
+    public int ActorStackBytes { get; init; } = ActorFrameStack.DefaultStackBytes;
+    public int ActorMaxStackFrames { get; init; } = ActorFrameStack.DefaultMaxFrames;
     public int ActorMaxAllocations { get; init; } = 4096;
     public int ActorMaxLifetimePins { get; init; } = 4096;
     public int ActorMaxReadLoans { get; init; } = 4096;
@@ -40,6 +43,12 @@ public sealed class ActorRuntimeOptions
             ActorScratchBytes > ActorArena.MaxArenaBytes ||
             ActorPersistentBytes > ActorArena.MaxArenaBytes - ActorScratchBytes)
             throw new ArgumentOutOfRangeException(nameof(ActorPersistentBytes));
+        if (ActorStackBytes < ActorFrameStack.HandlerRootBytes ||
+            ActorStackBytes > ActorFrameStack.MaxStackBytes)
+            throw new ArgumentOutOfRangeException(nameof(ActorStackBytes));
+        if (ActorMaxStackFrames <= 0 ||
+            ActorMaxStackFrames > ActorFrameStack.MaxFrameDepth)
+            throw new ArgumentOutOfRangeException(nameof(ActorMaxStackFrames));
         if (ActorMaxAllocations <= 0 ||
             ActorMaxAllocations > ActorArena.MaxAllocationSlots)
             throw new ArgumentOutOfRangeException(nameof(ActorMaxAllocations));
@@ -69,13 +78,15 @@ public sealed class ActorContext
 {
     private readonly ActorArena _arena;
     private readonly ActorArenaTurn _turn;
+    private readonly ActorFrameStack _frames;
 
     internal ActorContext(ActorRef self, ActorKind kind,
-        ActorArena arena, ActorArenaTurn turn)
+        ActorArena arena, ActorFrameStack frames, ActorArenaTurn turn)
     {
         Self = self;
         Kind = kind;
         _arena = arena;
+        _frames = frames;
         _turn = turn;
     }
 
@@ -85,6 +96,22 @@ public sealed class ActorContext
     // Host capability providers must enforce the same physical-turn authority
     // as actor memory access. A retained context is not a reusable credential.
     internal void ValidateActiveTurn() => _arena.ValidateActiveTurn(_turn);
+
+    /// <summary>
+    /// Allocate a bounded actor-owned frame for explicit stackless guest
+    /// lowering. Dispose/pop in strict LIFO order before the turn exits.
+    /// This does not move ordinary C# handler calls onto separate CLR stacks.
+    /// </summary>
+    public ActorFrame PushFrame(int bytes, int alignment = 8) =>
+        _frames.Push(_turn, bytes, alignment);
+
+    public void WriteFrame(ActorFrame frame, int offset,
+        ReadOnlySpan<byte> source) =>
+        _frames.Write(_turn, frame, offset, source);
+
+    public void ReadFrame(ActorFrame frame, int offset,
+        Span<byte> destination) =>
+        _frames.Read(_turn, frame, offset, destination);
 
     public ActorArenaHandle AllocatePersistent(int bytes, int alignment = 8) =>
         _arena.AllocatePersistent(_turn, bytes, alignment);
@@ -186,12 +213,14 @@ public sealed class ActorRuntime : IDisposable
         private readonly ActorRuntime _owner;
 
         internal ActorCell(ActorRuntime owner, ActorKind kind,
-            ActorMailbox mailbox, ActorArena arena, ActorMessageHandler handler)
+            ActorMailbox mailbox, ActorArena arena, ActorFrameStack frames,
+            ActorMessageHandler handler)
         {
             _owner = owner;
             Kind = kind;
             Mailbox = mailbox;
             Arena = arena;
+            Frames = frames;
             Handler = handler;
             Reference = mailbox.CurrentRef;
             DispatchAction = Dispatch;
@@ -201,6 +230,7 @@ public sealed class ActorRuntime : IDisposable
         internal ActorKind Kind { get; }
         internal ActorMailbox Mailbox { get; }
         internal ActorArena Arena { get; }
+        internal ActorFrameStack Frames { get; }
         internal ActorMessageHandler Handler { get; }
         internal ActorRef Reference { get; }
         internal Action DispatchAction { get; }
@@ -248,6 +278,7 @@ public sealed class ActorRuntime : IDisposable
 
             ulong candidateId = _nextActorId + 1;
             ActorArena? arena = null;
+            ActorFrameStack? frames = null;
             try
             {
                 var mailbox = new ActorMailbox(candidateId,
@@ -262,14 +293,18 @@ public sealed class ActorRuntime : IDisposable
                     _options.ActorMaxLifetimePins,
                     _options.ActorMaxReadLoans,
                     _nativeBudget);
+                frames = new ActorFrameStack(arena,
+                    _options.ActorStackBytes, _options.ActorMaxStackFrames,
+                    _nativeBudget);
 
-                var cell = new ActorCell(this, kind, mailbox, arena, handler);
+                var cell = new ActorCell(this, kind, mailbox, arena, frames, handler);
                 _actors.Add(candidateId, cell);
                 _nextActorId = candidateId;
                 return cell.Reference;
             }
             catch
             {
+                frames?.Dispose();
                 arena?.Dispose();
                 throw;
             }
@@ -438,9 +473,18 @@ public sealed class ActorRuntime : IDisposable
                 {
                     using (turn)
                     {
-                        var context = new ActorContext(
-                            cell.Reference, cell.Kind, cell.Arena, turn);
-                        cell.Handler(context, payload);
+                        // Each dispatch has an actor-private bounded root frame.
+                        // Nested explicitly lowered frames use this same stack.
+                        // In-flight retirement still permits LIFO cleanup.
+                        using (cell.Frames.Push(turn, ActorFrameStack.HandlerRootBytes))
+                        {
+                            var context = new ActorContext(
+                                cell.Reference, cell.Kind, cell.Arena,
+                                cell.Frames, turn);
+                            cell.Handler(context, payload);
+                            // Even a caught stack quota/forgery failure is terminal.
+                            cell.Frames.EnsureHealthy(turn);
+                        }
                     }
                     succeeded = true;
                 }
@@ -520,6 +564,9 @@ public sealed class ActorRuntime : IDisposable
 
         cell.Mailbox.Stop();
         cell.Arena.Retire();
+        // Dispatch is quiescent here. Scrub actor-owned frame bytes before
+        // reclaiming its heap; a lifetime pin may keep only heap bytes alive.
+        cell.Frames.ReclaimQuiescent();
         cell.Arena.TryReclaim();
 
         lock (_gate)
