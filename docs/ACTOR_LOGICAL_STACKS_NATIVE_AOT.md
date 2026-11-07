@@ -86,3 +86,33 @@ Required before parity certification:
 
 Until (1)-(4) execute, this implementation remains **NOT_CERTIFIED**
 for source guest, native-stack or end-to-end AOT actor parity.
+
+## Runtime typed spill and single-claim resume ABI (stacked follow-up)
+
+The runtime host additionally supplies immutable 1–128-slot `ActorStackFrameLayout`
+descriptors. Each slot is eight bytes, little-endian, and is exactly `I64`
+or `Bool`; bool values have canonical one-byte 0/1 encodings. Layouts copy
+caller-provided arrays so later mutation cannot change an already-issued frame.
+Raw `PushStackFrame` frames cannot be used as typed continuation spill frames.
+
+`SuspendStackFrame` only accepts the active LIFO top frame, freezes the entire
+actor stack, and returns an exact-issued JSON-nonserializable
+`ActorStackResumeTicket`. No frame reads, writes, pops, or further pushes are
+allowed while pending. `ResumeStackFrame` requires a **new authenticated
+physical turn** of the same actor incarnation and can claim the exact ticket
+**once**. Foreign actors, expired turns, same-turn resumption, ticket replay,
+and typed slot confusion fail closed. `CancelSuspendedStackFrame` scrubs the
+top frame and revokes its ticket, including in an in-flight physical turn
+while logical actor STOP prevents new frame admission.
+
+These are **runtime interfaces and host regression tests**, not emitted from
+AttoLang source. The compiler must still generate complete per-function frame
+layouts and explicit spill/restore/drop/unwind edges; guest actor lowering,
+verified await suspension, supervisor propagation, structured cancellation,
+and distinct Windows/Linux native execution receipts are pending.
+
+The `ActorTypedFrameResumeSelfTest` covers layout snapshotting, typed i64/bool
+round-trip across physical turns, noncanonical bool denial, stale/foreign
+tickets, same-turn denial, single-claim replay, cancellation and zeroed reuse,
+retirement unwind, and actor-local quota-fault containment with a surviving
+peer. Source-org CI without nonzero executed steps is **NOT_EXECUTED**.
