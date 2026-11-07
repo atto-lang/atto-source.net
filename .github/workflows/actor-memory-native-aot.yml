@@ -5,6 +5,8 @@ on:
       - 'runtime/Ores.Net.Runtime/**'
       - 'verification/Ores.Net.Tests/**'
       - 'verification/Ores.Net.ActorMemoryProbe/**'
+      - 'verification/Ores.Net.ActorFrameProbe/**'
+      - 'docs/NET_ACTOR_FRAME_STACK_V1.md'
       - '.github/workflows/actor-memory-native-aot.yml'
   workflow_dispatch:
 permissions:
@@ -55,3 +57,16 @@ jobs:
           "$output/$BINARY" | tee "$RUNNER_TEMP/actor-memory-native.log"
           grep -Fx 'PASS actor-memory-survivor: same-pool peer reads and writes during pinned STOP and after physical reclaim' "$RUNNER_TEMP/actor-memory-native.log"
           grep -Fx 'PASS actor-memory-native-probe: four private heaps (two shared-pool actors), foreign handles denied, pooled carriers, stale context denied, pinned STOP and physical reclaim' "$RUNNER_TEMP/actor-memory-native.log"
+      - name: Publish and execute independent actor frame NativeAOT host probe
+        shell: bash
+        env:
+          RID: ${{ matrix.rid }}
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/actor-frame-aot"
+          dotnet publish verification/Ores.Net.ActorFrameProbe/Ores.Net.ActorFrameProbe.csproj -c Release -r "$RID" -p:PublishAot=true -p:SelfContained=true -o "$output"
+          binary="$output/Ores.Net.ActorFrameProbe"
+          if [[ "$RID" == win-* ]]; then binary="$binary.exe"; fi
+          test -f "$binary"
+          "$binary" | tee "$RUNNER_TEMP/actor-frame-native.log"
+          grep -Fx 'PASS actor-frame-nativeaot-host: per-actor slabs, terminal budget fault, sibling survives on shared carrier, native quota reclaimed; NOT compiled .atto' "$RUNNER_TEMP/actor-frame-native.log"
