@@ -304,7 +304,11 @@ public unsafe sealed class ActorFrameStack : IDisposable
             EnsureExecution(turn, execution);
             int index = FindFrame(frame);
             int offset = CheckedTypedOffset(frame, slot, ActorFrameScalarKind.Bool);
-            _storage[_offsets[index] + offset] = value ? (byte)1 : (byte)0;
+            // An ABI bool owns a whole eight-byte scalar slot. Clear all
+            // padding on every write, not just on initial frame allocation.
+            var encoded = new Span<byte>(_storage + _offsets[index] + offset, 8);
+            encoded.Clear();
+            encoded[0] = value ? (byte)1 : (byte)0;
         }
     }
 
@@ -316,10 +320,19 @@ public unsafe sealed class ActorFrameStack : IDisposable
             EnsureExecution(turn, execution);
             int index = FindFrame(frame);
             int offset = CheckedTypedOffset(frame, slot, ActorFrameScalarKind.Bool);
-            byte value = _storage[_offsets[index] + offset];
-            if (value > 1)
+            var encoded = new ReadOnlySpan<byte>(
+                _storage + _offsets[index] + offset, 8);
+            bool canonical = encoded[0] <= 1;
+            for (int i = 1; i < 8 && canonical; i++)
+                canonical = encoded[i] == 0;
+            if (!canonical)
+            {
+                // Corrupt/native-forged boolean data invalidates the entire
+                // actor-local execution: it must not resume after detection.
+                Poison();
                 throw new FormatException("Noncanonical bool actor spill encoding");
-            return value == 1;
+            }
+            return encoded[0] == 1;
         }
     }
 

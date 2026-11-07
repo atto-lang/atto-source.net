@@ -50,6 +50,10 @@ internal static class ActorFrameStackSelfTest
         Require(frames.ReadI64(turn, execution, typed, 0) == long.MinValue &&
                 frames.ReadBool(turn, execution, typed, 1),
             "canonical typed spill slots survive native host read/write");
+        frames.WriteBool(turn, execution, typed, 1, false);
+        Require(!frames.ReadBool(turn, execution, typed, 1),
+            "canonical bool false clears the entire typed scalar slot");
+        frames.WriteBool(turn, execution, typed, 1, true);
         ExpectInvalid(() => frames.Write(turn, execution, typed, 8, new byte[] { 2 }),
             "raw bytes cannot forge a noncanonical typed bool");
         ExpectInvalid(() => frames.Read(turn, execution, typed, 0, new byte[8]),

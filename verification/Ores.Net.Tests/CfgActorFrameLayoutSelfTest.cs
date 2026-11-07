@@ -76,12 +76,20 @@ internal static class CfgActorFrameLayoutSelfTest
         catch (ArgumentOutOfRangeException) { rejectsInvalidMaximum = true; }
         Require(rejectsInvalidMaximum,
             "canonical planner rejects invalid byte budget before layout construction");
-        Require(CfgActorFrameLayoutPlanner.MaximumCanonicalTypedBytes ==
-                8 * ActorFrameTypedLayoutMaximumSlots(),
-            "compiler canonical scalar slot contract matches the runtime 128-slot limit");
+        var exactlyFull = new ActorFrameTypedLayout(
+            Enumerable.Repeat(ActorFrameScalarKind.I64, 128).ToArray());
+        Require(exactlyFull.ByteLength ==
+                CfgActorFrameLayoutPlanner.MaximumCanonicalTypedBytes,
+            "compiler canonical scalar slot limit matches the runtime ABI");
+        bool runtimeDenied129 = false;
+        try
+        {
+            _ = new ActorFrameTypedLayout(
+                Enumerable.Repeat(ActorFrameScalarKind.I64, 129).ToArray());
+        }
+        catch (ArgumentOutOfRangeException) { runtimeDenied129 = true; }
+        Require(runtimeDenied129, "runtime also denies 129 typed scalar slots");
     }
-
-    private static int ActorFrameTypedLayoutMaximumSlots() => 128;
 
     private static void SourceVerifiedLayoutFeedsCanonicalActorSlab()
     {

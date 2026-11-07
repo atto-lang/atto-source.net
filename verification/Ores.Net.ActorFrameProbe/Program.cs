@@ -87,6 +87,10 @@ var sibling = runtime.Spawn(ActorKind.Shared, (context, _) =>
     Require(context.ReadFrameI64(execution, typed, 0) == long.MinValue &&
             context.ReadFrameBool(execution, typed, 1),
         "NativeAOT typed scalar spill round-trip failed");
+    context.WriteFrameBool(execution, typed, 1, false);
+    Require(!context.ReadFrameBool(execution, typed, 1),
+        "NativeAOT typed bool false round-trip failed");
+    context.WriteFrameBool(execution, typed, 1, true);
     DenyFrame(() => context.ReadFrame(execution, typed, 0, new byte[8]),
         "typed frame bytes cannot be read through raw API");
     DenyFrame(() => context.WriteFrame(execution, typed, 8, new byte[] { 2 }),
