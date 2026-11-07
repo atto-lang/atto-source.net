@@ -84,7 +84,9 @@ internal static class ActorScalarFrameProgramSelfTest
         using var done = new ManualResetEventSlim();
         long answer = -1;
         var bad = runtime.Spawn(ActorKind.Shared, (ctx, _) =>
-            _ = overflow.Execute(ctx));
+        {
+            overflow.Execute(ctx);
+        });
         var good = runtime.Spawn(ActorKind.Shared, (ctx, _) =>
         {
             answer = healthy.Execute(ctx);
