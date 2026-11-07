@@ -11,6 +11,8 @@ internal static class ActorScalarFrameProgramSelfTest
     public static void Run()
     {
         SourceBackedNestedFunctionsRunInActorFrames();
+        SourceBackedCfgBranchAndLoopRemainInActorFrames();
+        BoundedSourceLoopExhaustionFaultsOnlyItsActor();
         CheckedOverflowFaultsOnlyItsActor();
         StackDepthQuotaFaultsOnlyItsActor();
         UnsupportedActorSourceIsRejectedBeforeExecution();
@@ -72,6 +74,64 @@ internal static class ActorScalarFrameProgramSelfTest
         Require(Wait(() => runtime.LiveActors == 0 &&
             runtime.NativeReservedBytes == 0),
             "compiled scalar call frames refund native actor memory");
+    }
+
+    private static void SourceBackedCfgBranchAndLoopRemainInActorFrames()
+    {
+        const string source = """
+            fnc main():int {
+                let int counter = 0;
+                while counter < 7 { counter = counter + 1; }
+                if counter == 7 { return counter * 6; } else { return 0; }
+            }
+            """;
+        var controlFlow = ActorScalarFrameProgram.Compile(source);
+        using var runtime = new ActorRuntime(Options());
+        using var done = new ManualResetEventSlim();
+        long answer = -1;
+        var actor = runtime.Spawn(ActorKind.Private, (ctx, _) =>
+        {
+            answer = controlFlow.Execute(ctx);
+            done.Set();
+        });
+        runtime.Send(actor, new byte[] { 2 });
+        Require(done.Wait(TimeSpan.FromSeconds(5)) && answer == 42,
+            "source CFG loop, parallel edge transfer and typed conditional");
+        Require(Wait(() => runtime.FaultedTurns == 0 && runtime.CompletedMessages == 1),
+            "bounded CFG loop completes without losing frame authority");
+        runtime.Stop(actor);
+        Require(Wait(() => runtime.NativeReservedBytes == 0),
+            "loop/branch scalar frames reclaim without a leaked native allocation");
+    }
+
+    private static void BoundedSourceLoopExhaustionFaultsOnlyItsActor()
+    {
+        var infinite = ActorScalarFrameProgram.Compile(
+            "fnc main():int { while true { } return 0; }");
+        var healthy = ActorScalarFrameProgram.Compile(
+            "fnc main():int { return 42; }");
+        using var runtime = new ActorRuntime(Options());
+        using var done = new ManualResetEventSlim();
+        long result = -1;
+        var trapped = runtime.Spawn(ActorKind.Shared, (ctx, _) =>
+        {
+            infinite.Execute(ctx, maxSteps: 64);
+        });
+        var survivor = runtime.Spawn(ActorKind.Shared, (ctx, _) =>
+        {
+            result = healthy.Execute(ctx);
+            done.Set();
+        });
+        runtime.Send(trapped, new byte[] { 1 });
+        runtime.Send(survivor, new byte[] { 2 });
+        Require(done.Wait(TimeSpan.FromSeconds(5)) && result == 42,
+            "bounded step trap leaves the sibling actor usable");
+        Require(Wait(() => runtime.FaultedTurns == 1 &&
+            runtime.CompletedMessages == 1 && runtime.LiveActors == 1),
+            "unbounded CFG loop is trapped without native stack growth");
+        runtime.Stop(survivor);
+        Require(Wait(() => runtime.NativeReservedBytes == 0),
+            "step-budget trap must release native actor frames");
     }
 
     private static void CheckedOverflowFaultsOnlyItsActor()
