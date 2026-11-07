@@ -223,6 +223,12 @@ public static class CilEmitter
         }
     }
 
+    // Explicit opt-in compiler backend: all verified SSA scalar values live
+    // in actor-owned native frames. Generated methods accept an authenticated
+    // ActorContext instead of making claims about CLR physical stack isolation.
+    public static void EmitActorFrameLibrary(VerifiedCfgModule module, string outputFile) =>
+        CfgActorFrameCilEmitter.EmitLibrary(module, outputFile);
+
     // Experimental multi-method Native AOT assembly. MethodDef handles are
     // reserved before body emission so statically resolved calls target only
     // verified methods in this exact module, never reflection/dynamic code.
@@ -230,7 +236,9 @@ public static class CilEmitter
         VerifiedCfgModule module,
         Func<VerifiedCfgFunction, MetadataBuilder, MethodBodyStreamEncoder,
             IReadOnlyDictionary<string, MethodDefinitionHandle>,
-            (int BodyOffset, BlobBuilder Code, BlobBuilder? Locals)> buildBody)
+            ActorFrameCilReferences?,
+            (int BodyOffset, BlobBuilder Code, BlobBuilder? Locals)> buildBody,
+        bool actorFrameAbi = false)
     {
         ArgumentNullException.ThrowIfNull(module);
         ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
@@ -257,6 +265,8 @@ public static class CilEmitter
         var ilStream = new BlobBuilder();
         var bodyStream = new MethodBodyStreamEncoder(ilStream);
         var metadata = new MetadataBuilder();
+        ActorFrameCilReferences? actorRefs = actorFrameAbi
+            ? ActorFrameCilReferences.Create(metadata) : null;
         var bodies = new List<(int Offset, BlobBuilder? Locals)>();
         long instructions = 0;
         foreach (var method in methods)
@@ -264,7 +274,8 @@ public static class CilEmitter
             instructions += method.Blocks.Sum(b => b.Parameters.Count + b.Instructions.Count);
             if (instructions > 100_000)
                 throw new FormatException("CFG module total instruction budget exceeded");
-            var (offset, _, locals) = buildBody(method, metadata, bodyStream, handles);
+            var (offset, _, locals) =
+                buildBody(method, metadata, bodyStream, handles, actorRefs);
             bodies.Add((offset, locals));
         }
         if (ilStream.Count > 8 * 1024 * 1024)
@@ -274,8 +285,12 @@ public static class CilEmitter
         foreach (var method in methods)
         {
             var blob = new BlobBuilder();
+            // Actor frame CIL uses Run(ActorContext) and
+            // helper_name(ActorContext, ActorFrameExecution, source args...).
+            int actorPrefix = actorFrameAbi
+                ? (method.Name == "main" ? 1 : 2) : 0;
             new BlobEncoder(blob).MethodSignature().Parameters(
-                method.Parameters.Count,
+                method.Parameters.Count + actorPrefix,
                 returnType =>
                 {
                     if (method.ResultType == IrValueType.I64) returnType.Type().Int64();
@@ -284,6 +299,14 @@ public static class CilEmitter
                 },
                 parameters =>
                 {
+                    if (actorFrameAbi)
+                    {
+                        parameters.AddParameter().Type()
+                            .Type(actorRefs!.Context, isValueType: false);
+                        if (method.Name != "main")
+                            parameters.AddParameter().Type()
+                                .Type(actorRefs.Execution, isValueType: false);
+                    }
                     foreach (var parameter in method.Parameters)
                     {
                         var encoded = parameters.AddParameter().Type();
@@ -335,10 +358,25 @@ public static class CilEmitter
                 bodies[i].Offset, MetadataTokens.ParameterHandle(nextParameterRow));
             if (handle != handles[methods[i].Name])
                 throw new FormatException("CFG method table token mismatch");
+            int actorPrefix = actorFrameAbi
+                ? (methods[i].Name == "main" ? 1 : 2) : 0;
+            if (actorFrameAbi)
+            {
+                metadata.AddParameter(ParameterAttributes.None,
+                    metadata.GetOrAddString("context"), 1);
+                nextParameterRow++;
+                if (actorPrefix == 2)
+                {
+                    metadata.AddParameter(ParameterAttributes.None,
+                        metadata.GetOrAddString("execution"), 2);
+                    nextParameterRow++;
+                }
+            }
             for (int argument = 0; argument < methods[i].Parameters.Count; argument++)
             {
                 metadata.AddParameter(ParameterAttributes.None,
-                    metadata.GetOrAddString("arg" + argument), argument + 1);
+                    metadata.GetOrAddString("arg" + argument),
+                    argument + actorPrefix + 1);
                 nextParameterRow++;
             }
         }
