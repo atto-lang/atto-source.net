@@ -14,6 +14,7 @@ internal static class ActorFrameStackSelfTest
         UnbalancedHandlerCannotSwallowStackEscape();
         StopDuringLiveTurnMustAllowAuthenticatedUnwind();
         FrameAuthorityIsNotJsonData();
+        AsyncVoidHostHandlersFailAdmission();
         Console.WriteLine("PASS .NET actor frame slab host tests (NOT compiler-backed .atto or native stack isolation)");
     }
 
@@ -351,6 +352,44 @@ internal static class ActorFrameStackSelfTest
         ExpectJsonDenied(() =>
             _ = System.Text.Json.JsonSerializer.Deserialize<ActorFrameContinuation>("{}"),
             "continuation authority cannot be minted from JSON");
+    }
+
+    private static void AsyncVoidHostHandlersFailAdmission()
+    {
+        using var runtime = new ActorRuntime(new ActorRuntimeOptions
+        {
+            MaxActors = 2,
+            ActorPersistentBytes = 256,
+            ActorScratchBytes = 128,
+            ActorFrameBytes = 128,
+            ActorMaxFrames = 4,
+            NativeBudgetBytes = 8192,
+            Dispatcher = new ActorDispatcherOptions
+            {
+                PrivateWorkers = 1, SharedWorkers = 1, UntrustedWorkers = 1,
+                QueueCapacityPerDomain = 2
+            }
+        });
+        ActorMessageHandler asyncVoid = async (_, _) => await Task.Yield();
+        ActorMessageHandler sync = static (_, _) => { };
+        void ExpectDenied(ActorMessageHandler candidate, string scenario)
+        {
+            try { runtime.Spawn(ActorKind.Private, candidate); }
+            catch (ArgumentException ex) when
+                (ex.ParamName == "handler" &&
+                 ex.Message.Contains("scheduler-owned", StringComparison.Ordinal))
+            {
+                return;
+            }
+            throw new Exception("async handler admission bypass: " + scenario);
+        }
+
+        ExpectDenied(asyncVoid, "direct async-void lambda");
+        ExpectDenied(sync + asyncVoid, "multicast synchronous then async-void");
+        ExpectDenied(asyncVoid + sync, "multicast async-void then synchronous");
+        Require(runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0 &&
+                runtime.StartedCarrierThreads == 0,
+            "async-void admission denial is failure-neutral before actor resources");
     }
 
     private static void ExpectJsonDenied(Action callback, string scenario)
