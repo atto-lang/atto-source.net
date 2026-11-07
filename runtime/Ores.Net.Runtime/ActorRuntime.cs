@@ -141,6 +141,32 @@ public sealed class ActorContext
     public void PopStackFrame(ActorStackFrameHandle frame) =>
         _stack.Pop(_turn, frame);
 
+    // Runtime ABI for compiler-owned typed continuation slots. The compiler
+    // does not yet emit this protocol for .atto actor/await source.
+    public ActorStackFrameHandle PushTypedStackFrame(ActorStackFrameLayout layout) =>
+        _stack.PushTyped(_turn, layout);
+
+    public long ReadStackI64(ActorStackFrameHandle frame, int slot) =>
+        _stack.ReadI64(_turn, frame, slot);
+
+    public void WriteStackI64(ActorStackFrameHandle frame, int slot, long value) =>
+        _stack.WriteI64(_turn, frame, slot, value);
+
+    public bool ReadStackBool(ActorStackFrameHandle frame, int slot) =>
+        _stack.ReadBool(_turn, frame, slot);
+
+    public void WriteStackBool(ActorStackFrameHandle frame, int slot, bool value) =>
+        _stack.WriteBool(_turn, frame, slot, value);
+
+    public ActorStackResumeTicket SuspendStackFrame(ActorStackFrameHandle frame) =>
+        _stack.Suspend(_turn, frame);
+
+    public ActorStackFrameHandle ResumeStackFrame(ActorStackResumeTicket ticket) =>
+        _stack.Resume(_turn, ticket);
+
+    public void CancelSuspendedStackFrame(ActorStackResumeTicket ticket) =>
+        _stack.CancelSuspended(_turn, ticket);
+
     public ActorShardColumns CreateShard(int rows, int fields,
         ActorDataLayout layout, int lanes = 1) =>
         new(_arena, _turn, rows, fields, layout, lanes);
