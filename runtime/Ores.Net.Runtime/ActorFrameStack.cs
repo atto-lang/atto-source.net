@@ -85,6 +85,7 @@ internal sealed class ActorFrameStack
     internal void Read(ActorArenaTurn turn, ActorStackFrameHandle frame,
         int offset, Span<byte> destination)
     {
+        _arena.ValidatePhysicalTurn(turn);
         ValidateFrame(frame, offset, destination.Length);
         _arena.Read(turn, _backing!, checked(frame.Offset + offset), destination);
     }
@@ -92,12 +93,14 @@ internal sealed class ActorFrameStack
     internal void Write(ActorArenaTurn turn, ActorStackFrameHandle frame,
         int offset, ReadOnlySpan<byte> source)
     {
+        _arena.ValidatePhysicalTurn(turn);
         ValidateFrame(frame, offset, source.Length);
         _arena.Write(turn, _backing!, checked(frame.Offset + offset), source);
     }
 
     internal void Pop(ActorArenaTurn turn, ActorStackFrameHandle frame)
     {
+        _arena.ValidatePhysicalTurn(turn);
         ValidateFrame(frame, 0, 0);
         if (!ReferenceEquals(_frames[_depth - 1], frame))
             throw new InvalidOperationException("Actor logical frames must be popped in LIFO order");
