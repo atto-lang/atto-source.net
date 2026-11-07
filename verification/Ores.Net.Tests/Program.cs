@@ -231,6 +231,7 @@ ActorDispatchDomainsSelfTest.Run();
 ActorRuntimeSelfTest.Run();
 ActorFrameStackSelfTest.Run(); // host-only actor logical frames; not guest/AOT evidence
 ActorTypedFrameResumeSelfTest.Run(); // host-only typed spills/single-claim continuation gate
+VerifiedActorFramePlannerSelfTest.Run(); // typed source -> verified CFG -> frame ABI metadata
 ProjectRootSourceTests.Run(); // host-only resolver, not linked .NET source imports
 
 // Import parity is deliberately not claimed for the .NET scalar compiler.

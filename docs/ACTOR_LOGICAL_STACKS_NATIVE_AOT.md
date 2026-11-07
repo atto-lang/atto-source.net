@@ -118,3 +118,20 @@ round-trip across physical turns, raw typed-frame access denial, stale/foreign
 tickets, same-turn denial, single-claim replay, cancellation and zeroed reuse,
 retirement unwind, and actor-local quota-fault containment with a surviving
 peer. Source-org CI without nonzero executed steps is **NOT_EXECUTED**.
+
+## Verified compiler CFG frame descriptors (metadata-only follow-up)
+
+`OresActorFramePlanner.Plan(VerifiedCfgFunction)` now derives a deterministic,
+immutable, at-most-128-slot `i64`/`bool` spill layout from the actual verified
+typed structured CFG, including SSA block parameters. The canonical offset is
+`resultId * 8` bytes. It rejects oversized/non-dense/unsupported definitions
+before any native allocation. The verification harness parses a real source
+module with a separately verified helper and typed bool path, derives its
+layout, and exercises the runtime's typed frame and single-claim resume ABI
+across two host actor turns. This connects **compiler-owned verified metadata**
+to the runtime layout without manually inventing a frame schema.
+
+**Not yet implemented:** CFG liveness at suspension, generated CIL spill and
+restore instructions, the scheduler's continuation-resume admission, actor
+source lowering, callee stack growth bounds, borrow/drop unwind, and native
+guest execution. The metadata/host test is not a .atto compiler-execution PASS.
