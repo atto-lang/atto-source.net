@@ -1,0 +1,7 @@
+// Experimental NativeAOT-imported, strictly typed BCL static calls.
+// Expected native process stdout: 42; no CLR reflection/JIT is permitted.
+import dotnet "System.Math" as Bcl;
+
+pub fnc main():int {
+    return Bcl.Max(Bcl.Min(42, 70), Bcl.Abs(-9));
+}
