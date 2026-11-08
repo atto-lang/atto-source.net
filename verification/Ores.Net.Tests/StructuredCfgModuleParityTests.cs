@@ -59,6 +59,10 @@ internal static class StructuredCfgModuleParityTests
 
     public static void Run()
     {
+        const string fixture = "contracts/logical-word-operators-v1/module-methoddef.atto";
+        Check(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, fixture)),
+            42, "pinned MethodDef logical guest matches native execution probe");
+
         // Exhaust the two-operand bool truth tables through independent CIL
         // MethodDefs and branch-sensitive SSA joining, not an AST simulation.
         foreach (bool lhs in new[] { false, true })
