@@ -1,2 +1,0 @@
-// Scalar source produces a verified native actor-frame layout, not an actor declaration.
-fnc main():int { return 42; }

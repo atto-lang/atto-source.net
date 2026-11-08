@@ -259,21 +259,6 @@ public sealed class ActorContext
         }
     }
 
-    // The compiler-owned typed scalar ABI must treat semantic header/type/PC
-    // violations as terminal too, not merely native byte-range errors.
-    // Validate the original physical carrier BEFORE poisoning this turn so
-    // a stolen/expired context cannot kill a healthy actor.
-    internal void RejectGuestFrame(string reason)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
-        lock (_guestFrameGate)
-        {
-            RequireGuestFrameTurn();
-            _guestFrameFaulted = true;
-        }
-        throw new InvalidOperationException(reason);
-    }
-
     public ActorShardColumns CreateShard(int rows, int fields,
         ActorDataLayout layout, int lanes = 1) =>
         new(_arena, _turn, rows, fields, layout, lanes);

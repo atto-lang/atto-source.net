@@ -22,9 +22,6 @@
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../examples/structured-bindings42.ores" Link="structured-bindings42.ores"
           CopyToOutputDirectory="PreserveNewest" />
-    <None Include="../../contracts/actor-guest-frame-seam/v1/scalar42.atto"
-          Link="contracts/actor-guest-frame-seam/v1/scalar42.atto"
-          CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/actor-scalar-execution-v1/*.atto"
           Link="contracts/actor-scalar-execution-v1/%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest" />

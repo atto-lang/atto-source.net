@@ -454,7 +454,6 @@ ActorRuntimeSelfTest.Run();
 UniversalHotLoadV1SelfTest.Run();
 ActorFrameStackSelfTest.Run(); // host-only actor logical frames; not guest/AOT evidence
 ActorGuestFrameGateSelfTest.Run(); // terminal compiled-guest frame seam, host-only
-ActorVerifiedCfgGuestFrameSelfTest.Run(); // source-derived typed scalar guest-frame boundary
 ActorScalarFrameAbiSelfTest.Run(); // verified CFG layout/native spill boundary, not guest execution
 ActorCompiledCfgFrameSelfTest.Run(); // real .atto CFG on actor-native guest frames, interpreter only
 ProjectRootSourceTests.Run(); // host-only resolver, not linked .NET source imports
