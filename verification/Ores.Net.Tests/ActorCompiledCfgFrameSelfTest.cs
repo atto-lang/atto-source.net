@@ -280,8 +280,8 @@ internal static class ActorCompiledCfgFrameSelfTest
                 throw new InvalidOperationException("CFG slot exceeds verified layout");
             return types[slot] switch
             {
-                1 => (1, ActorScalarGuestFrameAbiV1.ReadI64(context, frame, slot)),
-                2 => (2, ActorScalarGuestFrameAbiV1.ReadBool(context, frame, slot) ? 1L : 0L),
+                1 => ((byte)1, ActorScalarGuestFrameAbiV1.ReadI64(context, frame, slot)),
+                2 => ((byte)2, ActorScalarGuestFrameAbiV1.ReadBool(context, frame, slot) ? 1L : 0L),
                 _ => throw new InvalidOperationException(
                     "Verified compiler frame has an unsupported scalar type")
             };
