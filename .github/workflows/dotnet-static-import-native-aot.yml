@@ -28,6 +28,26 @@ jobs:
         run: bash scripts/publish-linux.sh examples/interop/dotnet-math-abs.atto artifacts/dotnetimport --structured
       - name: Publish second native guest with nested Min/Max/Abs
         run: bash scripts/publish-linux.sh examples/interop/dotnet-math-nested.atto artifacts/dotnetnested --structured
+      - name: Verify native compiler refuses unauthorized .NET imports without emitting CIL
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          compiler=artifacts/compiler/linux-x64/oresnet
+          mkdir -p artifacts/denied
+          output=artifacts/denied/OresGenerated.dll
+          for source in examples/interop/reject-unauthorized-file.atto examples/interop/reject-math-overload.atto examples/interop/reject-alias-shadow.atto; do
+            rm -f "$output"
+            if "$compiler" compile-structured "$source" --out "$output" > artifacts/denied/diagnostic.txt 2>&1; then
+              echo "unauthorized source unexpectedly compiled: $source" >&2
+              exit 1
+            fi
+            test ! -e "$output"
+            case "$source" in
+              *file.atto|*shadow.atto) grep -q DOTNET_IMPORT_UNSUPPORTED artifacts/denied/diagnostic.txt ;;
+              *overload.atto) grep -q 'requires int operands' artifacts/denied/diagnostic.txt ;;
+            esac
+          done
+          echo 'DOTNET_IMPORT_NATIVE_DENIALS_EXECUTED|cases=3|cil=none'
       - name: Execute both independent native guest binaries and verify output
         shell: bash
         run: |
