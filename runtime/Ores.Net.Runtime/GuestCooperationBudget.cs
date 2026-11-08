@@ -9,7 +9,8 @@ public sealed class GuestCooperationBudget
 {
     public const int PollInterval = 128;
     public const ulong MaxLogicalFuel = 100_000_000UL;
-    public const ulong MaxBlockWeight = 512UL;
+    // No generated charge may skip more than one sampling boundary.
+    public const ulong MaxBlockWeight = 128UL;
 
     private ulong _remainingFuel;
     private uint _ticks;
