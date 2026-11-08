@@ -31,7 +31,7 @@ public sealed class GuestCooperationBudget
     public bool ChargeBackedge(ulong weight = 1)
     {
         ChargeOperation(weight);
-        _ticks = (_ticks + 1) & (PollInterval - 1U);
+        _ticks = (_ticks + 1U) & ((uint)PollInterval - 1U);
         return _ticks == 0;
     }
 
