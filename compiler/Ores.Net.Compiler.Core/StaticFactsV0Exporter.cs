@@ -30,6 +30,12 @@ public static class StaticFactsV0Exporter
         if (function.Name != "main" || function.ResultType != IrValueType.I64 ||
             function.Instructions.Count == 0)
             throw Unsupported("non-main or unverified scalar function");
+        // The v0 analyzer reports zero call edges and zero sinks. A verified
+        // CLR method reference is still a foreign call and cannot be erased
+        // from those facts, even for a currently pure allowlisted Math method.
+        if (function.Instructions.Any(instruction =>
+                instruction.Opcode == IrOpcode.DotnetMathAbsI64))
+            throw Unsupported("CLR host imports and external method-call edges");
         return WriteFacts(source, Array.Empty<string>());
     }
 
