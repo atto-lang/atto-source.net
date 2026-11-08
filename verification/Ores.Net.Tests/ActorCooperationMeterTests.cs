@@ -107,6 +107,45 @@ public static class ActorCooperationMeterTests
             Require(observed == (int)(total / (ulong)interval), "no lost or duplicate polls");
         }
 
+        // Independent real threads race against a callback with a deliberately
+        // held physical turn. A logical actor's ownership must not transfer
+        // until the original scheduler callback has fully returned.
+        var concurrent = new ActorCooperationMeter();
+        using (var callbackEntered = new System.Threading.ManualResetEventSlim(false))
+        using (var callbackRelease = new System.Threading.ManualResetEventSlim(false))
+        {
+            var owner = System.Threading.Tasks.Task.Run(() =>
+                concurrent.CommitBatch(128, (_, _) =>
+                {
+                    callbackEntered.Set();
+                    if (!callbackRelease.Wait(TimeSpan.FromSeconds(10)))
+                        throw new Exception("Cooperation callback timed out");
+                }));
+            try
+            {
+                Require(callbackEntered.Wait(TimeSpan.FromSeconds(10)),
+                    "physical turn reached checkpoint callback");
+                bool crossChargeDenied = false, crossResetDenied = false;
+                try { concurrent.CommitBatch(1, (_, _) => {}); }
+                catch (InvalidOperationException) { crossChargeDenied = true; }
+                try { concurrent.BeginDispatch(); }
+                catch (InvalidOperationException) { crossResetDenied = true; }
+                Require(crossChargeDenied && crossResetDenied,
+                    "concurrent carrier cannot mutate an active actor");
+                Require(concurrent.Completed == 128 && concurrent.Phase == 0,
+                    "concurrent violation did not alter committed reductions");
+            }
+            finally
+            {
+                callbackRelease.Set();
+                Require(owner.Wait(TimeSpan.FromSeconds(10)),
+                    "owning carrier callback can complete");
+            }
+        }
+        concurrent.CommitBatch(1, (_, _) => throw new Exception("unexpected checkpoint"));
+        Require(concurrent.Completed == 129 && concurrent.Phase == 1,
+            "ownership is released after physical callback returns");
+
         bool rejectedInterval = false;
         try { _ = new ActorCooperationMeter(64); }
         catch (ArgumentOutOfRangeException) { rejectedInterval = true; }
