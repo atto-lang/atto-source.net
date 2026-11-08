@@ -889,6 +889,12 @@ public unsafe sealed class ActorArena : IDisposable
         if (required <= committed) return;
         if (!_demandBacked)
             throw new InvalidOperationException("Eager actor backing was not committed");
+        // A lifetime-only FFI/I/O pin does not expose a pointer through this
+        // API, but an integration may retain a native view under that pin.
+        // Never relocate any actor slab while such external work is live.
+        if (_externalPins != 0)
+            throw new InvalidOperationException(
+                "Actor native backing cannot grow while an external lifetime pin is live");
 
         int next = committed == 0 ? Math.Min(4096, maximumPhysicalBytes) : committed;
         while (next < required)
