@@ -2,7 +2,9 @@ param(
     [Parameter(Mandatory = $true)][string]$Source,
     [ValidateSet('win-x64', 'win-arm64')][string]$Rid = 'win-x64',
     [string]$Output = 'artifacts/apps',
-    [switch]$TenantIsolateSmoke
+    [switch]$TenantIsolateSmoke,
+    # Opt-in: keep legacy scalar native publication unchanged.
+    [switch]$Structured
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -26,7 +28,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Native compiler publish failed' }
 
 if (-not (Test-Path -LiteralPath $exe)) { throw 'Native compiler executable was not published' }
 & $checkNative -Binary $exe -Rid $Rid
-& $exe compile $sourcePath --out $generated
+$compileMode = if ($Structured) { 'compile-structured' } else { 'compile' }
+& $exe $compileMode $sourcePath --out $generated
 if ($LASTEXITCODE -ne 0) { throw 'Oreslang-to-CIL compilation failed' }
 
 # A previous publish of this same host project may have used another
