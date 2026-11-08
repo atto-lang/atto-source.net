@@ -33,6 +33,8 @@ internal static class CfgReferenceEvaluator
                     CfgOpcode.CheckedMultiply => checked(Left() * Right()),
                     CfgOpcode.CheckedDivide => DivideChecked(Left(), Right()),
                     CfgOpcode.DotnetMathAbs => Math.Abs(Left()),
+                    CfgOpcode.DotnetMathMax => Math.Max(Left(), Right()),
+                    CfgOpcode.DotnetMathMin => Math.Min(Left(), Right()),
                     CfgOpcode.EqualI64 => Left() == Right(),
                     CfgOpcode.NotEqualI64 => Left() != Right(),
                     CfgOpcode.LessThanI64 => Left() < Right(),
