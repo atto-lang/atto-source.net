@@ -39,6 +39,7 @@ public sealed unsafe class ActorNativeArena : IDisposable
     private readonly int[] _freeSlots;
     private byte* _memory;
     private readonly int _capacity;
+    private int _backingBytes;
     private int _cursor;
     private int _nextSlot;
     private int _freeCount;
@@ -59,12 +60,14 @@ public sealed unsafe class ActorNativeArena : IDisposable
         _tokens = new ulong[slots];
         _live = new bool[slots];
         _freeSlots = new int[slots];
-        _memory = (byte*)NativeMemory.AllocZeroed((nuint)bytes);
-        if (_memory == null) throw new OutOfMemoryException("actor native arena allocation failed");
+        // A maximum is a quota, not an eager native allocation. Actor storage
+        // is materialized only by the first successful object allocation.
         _capacity = bytes;
     }
 
     public int CapacityBytes => _capacity;
+    // Physically allocated native backing; unlike the logical quota, this starts at zero.
+    public int BackingBytes { get { lock (_gate) return _backingBytes; } }
     public int UsedBytes { get { lock (_gate) return _cursor; } }
     public int LiveAllocations { get { lock (_gate) return _liveCount; } }
     public bool IsDisposed { get { lock (_gate) return _disposed; } }
@@ -77,18 +80,17 @@ public sealed unsafe class ActorNativeArena : IDisposable
             || alignment > 64 || (_freeCount == 0 && _nextSlot >= _live.Length))
             return InvalidHandle;
 
-        nuint baseAddress = (nuint)_memory;
-        nuint currentAddress = baseAddress + (nuint)_cursor;
-        nuint mask = (nuint)(alignment - 1);
-        if (currentAddress > nuint.MaxValue - mask) return InvalidHandle;
-        nuint alignedAddress = (currentAddress + mask) & ~mask;
-        nuint alignedOffset = alignedAddress - baseAddress;
-        if (alignedOffset > int.MaxValue) return InvalidHandle;
-        int aligned = (int)alignedOffset;
+        // Every backing uses 64-byte alignment, so logical byte offsets do
+        // not depend on a process-width native base address. A relocated
+        // backing retains all slot offsets and 32-bit actor-local locations.
+        int mask = alignment - 1;
+        if (_cursor > int.MaxValue - mask) return InvalidHandle;
+        int aligned = (_cursor + mask) & ~mask;
         if (aligned > _capacity || bytes > _capacity - aligned) return InvalidHandle;
 
         ulong sequence = NextSequence();
         if (sequence == 0) return InvalidHandle;
+        EnsureBacking(aligned + bytes);
 
         int slot = _freeCount == 0 ? _nextSlot++ : _freeSlots[--_freeCount];
         ulong token = (sequence << SlotBits) | (uint)(slot + 1);
@@ -205,9 +207,10 @@ public sealed unsafe class ActorNativeArena : IDisposable
         if (_disposed) return;
         if (_memory != null)
         {
-            Zero(0, _capacity);
-            NativeMemory.Free(_memory);
+            Zero(0, _backingBytes);
+            NativeMemory.AlignedFree(_memory);
             _memory = null;
+            _backingBytes = 0;
         }
         Array.Clear(_live);
         Array.Clear(_tokens);
@@ -220,6 +223,32 @@ public sealed unsafe class ActorNativeArena : IDisposable
         _disposed = true;
     
         }
+    }
+
+    // Called only while _gate is held. No raw pointers or native-backed spans
+    // escape the arena, so a larger aligned block may replace the old one.
+    // The quota is still 64 MiB maximum; only consumed capacity is allocated.
+    private void EnsureBacking(int required)
+    {
+        if (required <= _backingBytes) return;
+        int next = _backingBytes == 0 ? Math.Min(_capacity, 4096) : _backingBytes;
+        while (next < required)
+            next = next > _capacity / 2 ? _capacity : next * 2;
+
+        byte* replacement = (byte*)NativeMemory.AlignedAlloc((nuint)next, 64);
+        if (replacement == null)
+            throw new OutOfMemoryException("actor native arena growth failed");
+
+        // An uninitialized/reused object must never observe stale host data.
+        new Span<byte>(replacement, next).Clear();
+        if (_memory != null)
+        {
+            Buffer.MemoryCopy(_memory, replacement, next, _cursor);
+            Zero(0, _backingBytes);
+            NativeMemory.AlignedFree(_memory);
+        }
+        _memory = replacement;
+        _backingBytes = next;
     }
 
     private int ValidSlot(ulong handle)
