@@ -30,8 +30,11 @@ constructors, instance methods, overload selection, generics, mutable objects,
   `Min`/`Max` with exactly two typed `int` operands can be used. Booleans,
   wrong arities, alias shadowing, missing imports and other APIs are rejected.
 - A distinct typed, SSA-verified host opcode lowers to a deterministic CIL
-  `MemberRef`. No ambient `System.Type`, runtime reflection or user-supplied
-  DLL paths may reach the emitted module.
+  `MemberRef`. All `System.Math` methods reuse exactly **one** `System.Runtime`
+  `AssemblyRef` with the pinned v10 strong-name token. The module MVID
+  incorporates the external method identity, so `Math.Min` cannot reuse an
+  otherwise-identical `Math.Max` module identity. No ambient `System.Type`,
+  runtime reflection or user-supplied DLL paths may reach the emitted module.
 - A `long.MinValue` argument raises the .NET `Math.Abs` overflow exception;
   it must not silently wrap. Any future exception-to-AttoLang mapping requires
   an explicit ABI contract and executable negative fixture.
@@ -57,7 +60,12 @@ with source HEAD, hashes, job-attempt provenance, exit status and output.
 `steps=null` / `steps=[]` means runner admission failure, not test proof.
 The native CI workflow publishes two distinct `.atto` fixtures (simple Abs
 and nested Min/Max/Abs), executes both native outputs and reruns the first
-after the second publish to check for stale CIL contamination.
+after the second publish to check for stale CIL contamination. The parallel
+Windows x64 lane uses `publish-windows.ps1 -Structured` to produce true
+NativeAOT PE binaries and execute the same two fixtures and three negative
+imports, then records source SHA/tree and native artifact SHA-256.
+Both Linux and Windows workflows are **verification requirements**, not
+claimed successful results while source-org CI has zero executed steps.
 
 ## Near-zero-GC / actor isolation contract
 
