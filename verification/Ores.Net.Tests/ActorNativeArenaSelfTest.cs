@@ -122,13 +122,13 @@ internal static class ActorNativeArenaSelfTest
 
     private static void OddQuotaBackingAlignment()
     {
-        using var actor = new ActorNativeArena(97, 3);
+        using var actor = new ActorNativeArena(129, 3);
         Require(actor.BackingBytes == 0, "odd actor quota has no initial native slab");
         ulong a = actor.Allocate(16, 16);
         ulong b = actor.Allocate(64, 64);
         Require(a != 0 && b != 0,
             "growth uses a 64-byte aligned physical slab even for odd logical quotas");
-        Require(actor.BackingBytes >= 97,
+        Require(actor.BackingBytes >= 129,
             "native backing is rounded to its allocator alignment");
         Require(actor.Allocate(32, 8) == ActorNativeArena.InvalidHandle,
             "physical alignment padding never increases logical actor quota");
