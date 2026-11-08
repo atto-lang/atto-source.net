@@ -30,6 +30,10 @@ and collection/object interfaces fail closed.
 6. A CI step checks the negative `System.IO.File` import produces no DLL
    and requires the positive guest's native executable to output `42`.
 
+The advisory zero-call-edge `static-facts` exporter and the C#/F#
+source generators explicitly reject this host-call opcode rather than
+silently reporting no foreign effects or generating incorrect source.
+
 The host-call boundary is presently **scalar i64 only**, with no references
 crossing actor heap ownership boundaries. The single allowlisted method is
 pure and does not grant filesystem, network, process or reflection access.
