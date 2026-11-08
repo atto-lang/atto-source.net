@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Threading;
@@ -182,6 +183,7 @@ public unsafe sealed class ActorArena : IDisposable
     public const int MaxOutstandingLifetimePins = 65_536;
     public const int MaxOutstandingReadLoans = 65_536;
     public const int MaxScratchCapabilitiesPerTurn = 65_536;
+    public const int MaxManagedRef32Edges = 65_536;
 
     private const int SlabAlignment = 64;
 
@@ -219,6 +221,13 @@ public unsafe sealed class ActorArena : IDisposable
         new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<ActorArenaLifetimePin> _issuedLifetimePins =
         new(ReferenceEqualityComparer.Instance);
+
+    // Guest object fields contain only 4-byte actor-local words. They are NOT
+    // capabilities. An original-generation target proof is retained out of
+    // line per issued parent/field; never reconstruct it from an offset.
+    private readonly Dictionary<ActorArenaHandle, Dictionary<int, ActorArenaHandle>>
+        _managedRef32Edges = new(ReferenceEqualityComparer.Instance);
+    private int _managedRef32EdgeCount;
 
     private byte* _persistent;
     private byte* _scratch;
@@ -497,6 +506,8 @@ public unsafe sealed class ActorArena : IDisposable
             Zero(_persistent + slot.Offset, slot.Length);
             _persistentLiveBytes -= slot.Length;
             _liveAllocations--;
+            if (_managedRef32Edges.Remove(handle, out var outgoing))
+                _managedRef32EdgeCount -= outgoing.Count;
             slot.Live = false;
             slot.Issued = null;
             slot.Offset = 0;
@@ -543,6 +554,112 @@ public unsafe sealed class ActorArena : IDisposable
             new ReadOnlySpan<byte>(_persistent + slot.Offset + offset, destination.Length)
                 .CopyTo(destination);
         }
+    }
+
+    /// <summary>
+    /// Store one guest-visible 32-bit actor-relative object reference.
+    /// `0` is null; other words encode (aligned target byte offset / 8) + 1.
+    /// The full target capability stays solely in the host sidecar ledger.
+    /// This is a checked host primitive, not .atto source field lowering.
+    /// </summary>
+    public void WriteManagedRef32(ActorArenaTurn turn, ActorArenaHandle parent,
+        int fieldOffset, ActorArenaHandle? target)
+    {
+        lock (_gate)
+        {
+            ValidateTurnLocked(turn);
+            ref Slot parentSlot = ref ValidateHandleLocked(parent);
+            ValidateManagedRef32Field(fieldOffset, parentSlot.Length);
+            if (parentSlot.ReadLoans != 0)
+                throw new InvalidOperationException(
+                    "Cannot mutate 32-bit reference field while parent read loan is live");
+
+            uint encoded = 0;
+            if (target is not null)
+            {
+                ref Slot targetSlot = ref ValidateHandleLocked(target);
+                // Ordinary arena bytes may be 1-aligned; managed object starts
+                // must be 8-aligned for the guest ref32 ABI.
+                if ((targetSlot.Offset & 7) != 0)
+                    throw new InvalidOperationException(
+                        "Managed reference target must be 8-byte aligned");
+                encoded = checked((uint)(targetSlot.Offset / 8 + 1));
+            }
+
+            // Publish an original-generation sidecar proof *before* bytes.
+            // Hash-table allocation failure must not forge a guest field.
+            if (target is not null)
+            {
+                if (!_managedRef32Edges.TryGetValue(parent, out var fields))
+                {
+                    fields = new Dictionary<int, ActorArenaHandle>();
+                    _managedRef32Edges.Add(parent, fields);
+                }
+                if (!fields.ContainsKey(fieldOffset))
+                {
+                    if (_managedRef32EdgeCount == MaxManagedRef32Edges)
+                        throw new InvalidOperationException(
+                            "Actor managed reference sidecar quota exhausted");
+                    fields.Add(fieldOffset, target);
+                    _managedRef32EdgeCount++;
+                }
+                else
+                    fields[fieldOffset] = target;
+            }
+            else if (_managedRef32Edges.TryGetValue(parent, out var fields))
+            {
+                if (fields.Remove(fieldOffset))
+                    _managedRef32EdgeCount--;
+                if (fields.Count == 0)
+                    _managedRef32Edges.Remove(parent);
+            }
+
+            BinaryPrimitives.WriteUInt32LittleEndian(
+                new Span<byte>(_persistent + parentSlot.Offset + fieldOffset, 4),
+                encoded);
+        }
+    }
+
+    /// <summary>
+    /// Decode an issued guest field only when its exact out-of-line original
+    /// target remains live. An equivalent offset or recreated handle is never
+    /// authority, including when a freed slot is recycled (ABA).
+    /// </summary>
+    public ActorArenaHandle? ReadManagedRef32(ActorArenaTurn turn,
+        ActorArenaHandle parent, int fieldOffset)
+    {
+        lock (_gate)
+        {
+            ValidateTurnLocked(turn);
+            ref Slot parentSlot = ref ValidateHandleLocked(parent);
+            ValidateManagedRef32Field(fieldOffset, parentSlot.Length);
+
+            uint word = BinaryPrimitives.ReadUInt32LittleEndian(
+                new ReadOnlySpan<byte>(_persistent + parentSlot.Offset + fieldOffset, 4));
+            bool hasProof = _managedRef32Edges.TryGetValue(parent, out var fields)
+                && fields!.TryGetValue(fieldOffset, out _);
+            if (word == 0 && !hasProof)
+                return null;
+            if (word == 0 || !hasProof ||
+                !fields!.TryGetValue(fieldOffset, out var original))
+                throw new InvalidOperationException(
+                    "Missing or corrupted original-generation 32-bit field proof");
+
+            ref Slot targetSlot = ref ValidateHandleLocked(original);
+            if ((targetSlot.Offset & 7) != 0 ||
+                word != checked((uint)(targetSlot.Offset / 8 + 1)))
+                throw new InvalidOperationException(
+                    "32-bit guest field does not match issued actor target");
+            return original;
+        }
+    }
+
+    private static void ValidateManagedRef32Field(int offset, int parentLength)
+    {
+        if (offset < 0 || (offset & 3) != 0 ||
+            offset > parentLength || 4 > parentLength - offset)
+            throw new ArgumentOutOfRangeException(nameof(offset),
+                "Managed guest reference field must be aligned and occupy exactly four bytes");
     }
 
     /// <summary>
@@ -867,6 +984,8 @@ public unsafe sealed class ActorArena : IDisposable
         _issuedScratch.Clear();
         _issuedReadLoans.Clear();
         _issuedLifetimePins.Clear();
+        _managedRef32Edges.Clear();
+        _managedRef32EdgeCount = 0;
         _activeTurn = null;
         _activeCarrier = null;
         _nextSlot = 0;
