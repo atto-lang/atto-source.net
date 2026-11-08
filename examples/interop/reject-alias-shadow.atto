@@ -1,0 +1,6 @@
+// Negative: guest locals cannot shadow an imported host alias.
+import dotnet "System.Math" as Math;
+fnc main():int {
+    let int Math = 2;
+    return Math.Abs(-42);
+}
