@@ -57,10 +57,10 @@ internal static class AttoSemanticNegativeGateTests
     {
         var bytes = new UTF8Encoding(false, true).GetBytes(source);
         var prefix = Encoding.ASCII.GetBytes("blob " + bytes.Length + "\0");
-        using var sha = SHA1.Create();
-        sha.TransformBlock(prefix, 0, prefix.Length, null, 0);
-        sha.TransformFinalBlock(bytes, 0, bytes.Length);
-        return Convert.ToHexString(sha.Hash!).ToLowerInvariant();
+        var buffer = new byte[prefix.Length + bytes.Length];
+        Buffer.BlockCopy(prefix, 0, buffer, 0, prefix.Length);
+        Buffer.BlockCopy(bytes, 0, buffer, prefix.Length, bytes.Length);
+        return Convert.ToHexString(SHA1.HashData(buffer)).ToLowerInvariant();
     }
 
     private static bool IsIntended(Case row, string diagnostic)
@@ -71,7 +71,6 @@ internal static class AttoSemanticNegativeGateTests
         var text = diagnostic.ToLowerInvariant();
         if (new[] { "unexpected token", "invalid character", "internal error",
             "unknown symbol", "stack overflow" }.Any(text.Contains)) return false;
-        var required = row.RequiredDiagnostic.ToLowerInvariant();
         return diagnostic.Contains(row.RequiredDiagnostic, StringComparison.Ordinal)
             && text.Contains("offset", StringComparison.Ordinal);
     }
