@@ -257,6 +257,8 @@ internal static class ActorFrameStackSelfTest
         Require(WaitUntil(() => runtime.LiveActors == 0 &&
             runtime.NativeReservedBytes == 0),
             "repeated frame reissuance does not strand actor native credits");
+        Console.WriteLine(
+            "PASS net-frame-reissue-integrated: 128 rounds|zeroed=1|stale=denied|native_refund=1");
     }
 
     private static void RetirementAllowsInFlightFrameCleanupButRejectsPush()
