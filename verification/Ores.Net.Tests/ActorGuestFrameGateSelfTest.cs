@@ -122,15 +122,24 @@ internal static class ActorGuestFrameGateSelfTest
 
             // An off-carrier stolen context must be rejected BEFORE it can
             // poison its legitimate owner, which is still in its live turn.
-            bool crossCarrierDenied = false;
+            int crossCarrierDenials = 0;
             var outsider = new Thread(() =>
             {
+                // A stolen physical turn must reject all guest operations,
+                // not merely reads. Rejections must not fault the owner.
                 try { context.GuestReadStackFrame(guest, 0, new byte[1]); }
-                catch (InvalidOperationException) { crossCarrierDenied = true; }
+                catch (InvalidOperationException) { crossCarrierDenials++; }
+                try { context.GuestWriteStackFrame(guest, 0, new byte[] { 99 }); }
+                catch (InvalidOperationException) { crossCarrierDenials++; }
+                try { context.GuestPopStackFrame(guest); }
+                catch (InvalidOperationException) { crossCarrierDenials++; }
             }) { IsBackground = true };
             outsider.Start();
-            Require(outsider.Join(TimeSpan.FromSeconds(5)) && crossCarrierDenied,
-                "off-carrier stolen guest context must fail without poisoning owner");
+            Require(outsider.Join(TimeSpan.FromSeconds(5)) && crossCarrierDenials == 3,
+                "off-carrier guest read/write/pop must all fail without poisoning owner");
+            context.GuestReadStackFrame(guest, 0, output);
+            Require(output[0] == 42,
+                "off-carrier denied write must preserve the owner's live guest frame");
 
             context.GuestPopStackFrame(guest);
             context.PopStackFrame(hostFrame);
