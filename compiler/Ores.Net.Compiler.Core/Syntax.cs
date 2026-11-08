@@ -8,6 +8,8 @@ public sealed record Unary(char Operator, Expression Value) : Expression;
 public sealed record Binary(char Operator, Expression Left, Expression Right) : Expression;
 // Named intrinsic only. The '^' operator remains forbidden in Oreslang.
 public sealed record NamedBitXor(Expression Left, Expression Right) : Expression;
+// Closed-world CLR intrinsic: exact System.Math.Abs(Int64), no dynamic binding.
+public sealed record DotnetMathAbsI64(Expression Value) : Expression;
 
 public static class OresParser
 {
@@ -195,7 +197,18 @@ public static class OresParser
                 // project-root, zed package or bare import declarations until
                 // a verified source graph / native AOT linker exists.
                 if (word == "import")
-                    throw new FormatException("source imports require verified module graph lowering");
+                {
+                    // General imports remain unsupported by this scalar compiler.
+                    // Only the pinned 'import dotnet' adapter may enter the reader.
+                    int next = _i;
+                    while (next < text.Length && char.IsWhiteSpace(text[next])) next++;
+                    const string hostKeyword = "dotnet";
+                    if (!text.AsSpan(next).StartsWith(hostKeyword, StringComparison.Ordinal) ||
+                        (next + hostKeyword.Length < text.Length &&
+                        (char.IsLetterOrDigit(text[next + hostKeyword.Length]) ||
+                         text[next + hostKeyword.Length] == '_')))
+                        throw new FormatException("source imports require verified module graph lowering");
+                }
                 if (word is "cpu" or "gpu" or "quantum" ||
                     (word == "nb" && !StaticSelectAdmission.FollowedByStaticSelect(text, _i)))
                     throw new FormatException(
@@ -230,6 +243,22 @@ public static class OresParser
                         $"generator declarations require iterator-frame and continuation lowering in .NET Native AOT backend at offset {start}");
                 return new Token(word, start);
             }
+            if (ch == '"')
+            {
+                // Host assembly/type names are literal-only. Reject interpolation,
+                // escapes, unclosed strings and line breaks before any resolution.
+                _i++;
+                while (_i < text.Length && text[_i] != '"')
+                {
+                    if (text[_i] is '\\' or '\n' or '\r' or '\u0085' or '\u2028' or '\u2029')
+                        throw new FormatException($"Invalid host import literal at offset {start}");
+                    _i++;
+                }
+                if (_i == text.Length)
+                    throw new FormatException($"Unterminated host import literal at offset {start}");
+                _i++;
+                return new Token(text[start.._i], start);
+            }
             // Recognize the contiguous operator as one token, but never
             // attempt a scalar-only approximation of named-call lowering.
             if (ch == '|' && _i + 1 < text.Length && text[_i + 1] == '>')
@@ -245,7 +274,7 @@ public static class OresParser
             // Lex assignment punctuation so unsupported declarations are rejected
             // at their declaration, rather than at a later initializer. The
             // arithmetic parser still has no assignment production.
-            if ("()+-*/{}:;.=?".IndexOf(ch) >= 0)
+            if ("()+-*/{}:;.,=?".IndexOf(ch) >= 0)
             {
                 _i++;
                 return new Token(text[start.._i], start);
@@ -269,6 +298,7 @@ public static class OresParser
     private sealed class Reader(List<Token> tokens)
     {
         private int _index;
+        private string? _dotnetMathAlias;
         private Token Current => tokens[_index];
 
         private bool Take(string value)
@@ -286,6 +316,24 @@ public static class OresParser
 
         public Expression ParseProgram()
         {
+            if (Take("import"))
+            {
+                Expect("dotnet");
+                // Explicit, finite v0 target. No dynamic assembly loading,
+                // arbitrary reflection, overload inference or host object escape.
+                if (Current.Text != "\"System.Math\"")
+                    throw new FormatException("DOTNET_INTEROP_UNSUPPORTED: only System.Math is allowlisted");
+                _index++;
+                Expect("as");
+                string alias = Current.Text;
+                if (alias.Length == 0 || alias[0] is not (>= 'A' and <= 'Z' or >= 'a' and <= 'z' or '_') ||
+                    alias.Any(ch => ch is not (>= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_')) ||
+                    alias is "Integer" or "main" or "int" or "fnc" or "return")
+                    throw new FormatException("Invalid or reserved dotnet import alias");
+                _index++;
+                _dotnetMathAlias = alias;
+                Expect(";");
+            }
             bool defined = false, exposed = false;
             while (Current.Text is "define" or "pub")
             {
@@ -392,6 +440,16 @@ public static class OresParser
 
                 throw new FormatException(
                     $"Runtime ownership operation requires typed lowering; unsupported in the .NET scalar backend at offset {at}");
+            }
+            if (_dotnetMathAlias is not null && Take(_dotnetMathAlias))
+            {
+                Expect(".");
+                if (!Take("Abs"))
+                    throw new FormatException($"DOTNET_INTEROP_UNSUPPORTED: only Math.Abs(i64) is allowlisted at offset {Current.Offset}");
+                Expect("(");
+                var value = ParseAdd(depth + 1);
+                Expect(")");
+                return new DotnetMathAbsI64(value);
             }
             // The scalar subset admits only this one typed Integer intrinsic.
             // Parser-owned name resolution rejects arbitrary Integer.* calls.
