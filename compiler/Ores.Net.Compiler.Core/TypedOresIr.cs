@@ -16,7 +16,9 @@ public enum IrOpcode
     CheckedMultiply,
     CheckedDivide,
     BitXor,
-    SignedRemainderLiteral
+    SignedRemainderLiteral,
+    // Exact framework API signature: System.Math.Abs(System.Int64) -> System.Int64.
+    DotnetMathAbsI64
 }
 
 /// <summary>
@@ -97,6 +99,16 @@ public static class OresIrVerifier
                 if (!instruction.Constant.HasValue ||
                     instruction.Left.HasValue || instruction.Right.HasValue)
                     throw new FormatException("Malformed IR constant");
+            }
+            else if (instruction.Opcode == IrOpcode.DotnetMathAbsI64)
+            {
+                // A host call is not arbitrary reflection or an opaque value.
+                // Type, arity, exact method and SSA ownership are verified.
+                if (instruction.Constant.HasValue || instruction.Right.HasValue ||
+                    !instruction.Left.HasValue || instruction.Left.Value < 0 ||
+                    instruction.Left.Value >= i ||
+                    verified[instruction.Left.Value].Type != IrValueType.I64)
+                    throw new FormatException("Malformed typed CLR Abs(i64) instruction");
             }
             else
             {
@@ -183,6 +195,16 @@ public static class OresIrLowering
             return id;
         }
 
+        int EmitDotnetAbs(int value)
+        {
+            if (instructions.Count >= OresIrVerifier.MaxInstructions)
+                throw new FormatException("IR instruction budget exceeded");
+            int id = instructions.Count;
+            instructions.Add(new IrInstruction(id, IrOpcode.DotnetMathAbsI64,
+                IrValueType.I64, Left: value));
+            return id;
+        }
+
         while (pending.Count > 0)
         {
             var current = pending.Pop();
@@ -201,6 +223,13 @@ public static class OresIrLowering
                         int operand = results.Pop();
                         results.Push(EmitBinary(IrOpcode.CheckedSubtract,
                             Constant(0), operand));
+                        break;
+                    }
+                    case DotnetMathAbsI64:
+                    {
+                        if (results.Count < 1)
+                            throw new FormatException("CLR intrinsic operand underflow");
+                        results.Push(EmitDotnetAbs(results.Pop()));
                         break;
                     }
                     case NamedBitXor:
@@ -241,6 +270,10 @@ public static class OresIrLowering
                 {
                     case Literal literal:
                         results.Push(Constant(literal.Value));
+                        break;
+                    case DotnetMathAbsI64 host:
+                        pending.Push(new Pending(node, true));
+                        pending.Push(new Pending(host.Value, false));
                         break;
                     case Unary { Operator: '+' or '-' } unary:
                         pending.Push(new Pending(node, true));
