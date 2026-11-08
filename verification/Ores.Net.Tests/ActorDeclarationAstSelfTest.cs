@@ -89,11 +89,16 @@ internal static class ActorDeclarationAstSelfTest
                 receive(bool enabled):void {
                     let int quoted = 1;
                     let bool marker = true;
+                    "literal brace } and text: define actor Fake as end await";
                 }
             end
             """;
-        Require(OresActorDeclarationParser.Parse(stringSource).Actors.Count == 1,
-            "supported body string/token boundaries preserve declaration framing");
+        ActorDeclarationUnit parsed = OresActorDeclarationParser.Parse(stringSource);
+        Require(parsed.Actors.Count == 1 &&
+                parsed.Actors[0].Handlers[0].BodySource.Contains(
+                    "literal brace } and text: define actor Fake as end await",
+                    StringComparison.Ordinal),
+            "string contents are opaque and cannot close bodies or declare actors");
     }
 
     private static void EnforcesInputAndNestingBudgets()
