@@ -72,6 +72,7 @@ internal static class CfgCilTestInterpreter
                     locals[((VariableDefinition)ins.Operand).Index] = stack.Pop();
                     break;
                 case Code.Add_Ovf:
+                case Code.Sub: // compiler-private metered block-entry counter
                 case Code.Sub_Ovf:
                 case Code.Mul_Ovf:
                 case Code.Div:
@@ -83,6 +84,7 @@ internal static class CfgCilTestInterpreter
                     stack.Push(ins.OpCode.Code switch
                     {
                         Code.Add_Ovf => checked(left + right),
+                        Code.Sub => checked(left - right),
                         Code.Sub_Ovf => checked(left - right),
                         Code.Mul_Ovf => checked(left * right),
                         Code.Div => DivideChecked(left, right),
@@ -132,6 +134,15 @@ internal static class CfgCilTestInterpreter
                     stack.Push(Execute(callee, callArguments, ref remainingSteps, depth + 1));
                     break;
                 }
+                case Code.Ldnull:
+                    // Test-only interpreter represents the null reference
+                    // with a sentinel; generated CIL immediately throws it.
+                    stack.Push(0);
+                    break;
+                case Code.Throw:
+                    if (stack.Count != 1 || stack.Pop() != 0)
+                        throw new FormatException("Unexpected CFG CIL thrown object");
+                    throw new InvalidOperationException("untrusted CIL hard fuel exhausted");
                 case Code.Ret:
                     if (stack.Count != 1)
                         throw new FormatException("Invalid CIL return stack");
