@@ -161,6 +161,8 @@ internal static class ActorDeclarationAstSelfTest
             "UTF-8 source byte bound");
         ExpectFormat(() => OresActorDeclarationParser.Parse("define actor A as receive(int x):void{/* never closed")),
             "unterminated comment");
+        ExpectFormat(() => OresActorDeclarationParser.Parse(""),
+            "empty actor unit");
     }
 
     private static void ExpectFormat(Action action, string description)
