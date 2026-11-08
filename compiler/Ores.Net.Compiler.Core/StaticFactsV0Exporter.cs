@@ -22,11 +22,12 @@ public static class StaticFactsV0Exporter
     /// Production compiler path: the same signed-i64 parser and frozen, verified
     /// SSA OresIR used by oresnet check/compile. Calls/loops cannot enter it.
     /// </summary>
-    public static string FromCompiledScalarSource(string source)
+    public static string FromCompiledScalarSource(string source,
+        DotnetHostImportPolicy? policy = null)
     {
         ValidateSource(source);
-        var expression = OresParser.Parse(source);
-        VerifiedIrFunction function = OresIrLowering.Lower(expression);
+        var expression = OresParser.Parse(source, policy);
+        VerifiedIrFunction function = OresIrLowering.Lower(expression, policy: policy);
         if (function.Name != "main" || function.ResultType != IrValueType.I64 ||
             function.Instructions.Count == 0)
             throw Unsupported("non-main or unverified scalar function");
@@ -34,7 +35,7 @@ public static class StaticFactsV0Exporter
         // CLR method reference is still a foreign call and cannot be erased
         // from those facts, even for a currently pure allowlisted Math method.
         if (function.Instructions.Any(instruction =>
-                instruction.Opcode == IrOpcode.DotnetMathAbsI64))
+                instruction.Opcode is IrOpcode.DotnetMathAbsI64 or IrOpcode.DotnetMathMaxI64))
             throw Unsupported("CLR host imports and external method-call edges");
         return WriteFacts(source, Array.Empty<string>());
     }
