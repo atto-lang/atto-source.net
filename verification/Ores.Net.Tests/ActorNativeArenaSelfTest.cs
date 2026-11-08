@@ -68,6 +68,7 @@ internal static class ActorNativeArenaSelfTest
         Require(!staleScope.CleanupOk && arena.LiveAllocations == 0,
             "stale tracked owner is reported without suppressing later cleanup");
 
+        AggregateLazyGrowthBudgetRefundsAfterNativeFree();
         LazyBackingGrowthPreservesActorOffsets();
         OddQuotaBackingAlignment();
         ConcurrentDisposeDoesNotRaceNativeAccess();
@@ -76,6 +77,39 @@ internal static class ActorNativeArenaSelfTest
         OutOfOrderDropsCoalesceNativeTail();
         SteadyStateManagedAllocationBudget();
         Console.WriteLine("PASS .NET unmanaged actor arena, primitive handles, stack cleanup scopes");
+    }
+
+    private static void AggregateLazyGrowthBudgetRefundsAfterNativeFree()
+    {
+        var quota = new ActorArenaBudget(256);
+        long processBefore = ActorArenaBudget.Process.ReservedBytes;
+        using var actorA = new ActorNativeArena(128, 2, quota);
+        using var actorB = new ActorNativeArena(128, 2, quota);
+        using var actorC = new ActorNativeArena(128, 2, quota);
+        Require(quota.ReservedBytes == 0, "constructors do not precharge native capacity");
+
+        ulong a = actorA.Allocate(8);
+        ulong b = actorB.Allocate(8);
+        Require(a != 0 && b != 0 && quota.ReservedBytes == 256,
+            "separate actors charge actual native backing to tenant quota");
+        Require(actorA.WriteInt64(a, 0, 101) && actorB.WriteInt64(b, 0, 202),
+            "both actors retain private bytes at aggregate budget limit");
+        RejectInvalid(() => _ = actorC.Allocate(8),
+            "third actor is rejected before native growth exceeds tenant quota");
+        Require(actorC.BackingBytes == 0 && quota.ReservedBytes == 256,
+            "rejected growth never publishes backing or leaks reservation");
+
+        actorA.Dispose();
+        Require(quota.ReservedBytes == 128 && actorB.ReadInt64(b) == 202,
+            "scrubbed actor A physically refunds quota while B survives");
+        ulong c = actorC.Allocate(8);
+        Require(c != 0 && actorC.ReadInt64(c) == 0,
+            "actor C can use returned capacity and sees only zeroed memory");
+        actorB.Dispose();
+        actorC.Dispose();
+        Require(quota.ReservedBytes == 0 &&
+                ActorArenaBudget.Process.ReservedBytes == processBefore,
+            "tenant and process budgets return to original values exactly once");
     }
 
     private static void LazyBackingGrowthPreservesActorOffsets()
