@@ -1,0 +1,3 @@
+// Negative: arbitrary host filesystem access is never implicit.
+import dotnet "System.IO.File" as File;
+fnc main():int { return 42; }
