@@ -64,6 +64,64 @@ public static class DotnetStaticInteropSelfTest
             Directory.Delete(temporary, recursive: true);
         }
 
+        const string nested = """
+            import dotnet "System.Math" as Bcl;
+            fnc main():int {
+                return Bcl.Max(Bcl.Min(42, 70), Bcl.Abs(-9));
+            }
+            """;
+        var nestedCfg = OresStructuredCfgLowering.LowerModule(nested);
+        Require(CfgReferenceEvaluator.Evaluate(nestedCfg.Main) == 42,
+            "nested host method lowering evaluates eager operands left-to-right");
+        var nestedTemp = Path.Combine(Path.GetTempPath(),
+            "atto-dotnet-nested-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(nestedTemp);
+        try
+        {
+            var nestedDll = Path.Combine(nestedTemp, "OresGenerated.dll");
+            CilEmitter.EmitLibrary(nestedCfg, nestedDll);
+            var first = File.ReadAllBytes(nestedDll);
+            CilEmitter.EmitLibrary(nestedCfg, nestedDll);
+            Require(first.AsSpan().SequenceEqual(File.ReadAllBytes(nestedDll)),
+                "nested BCL MemberRefs must be emitted deterministically");
+            using var nestedAssembly = AssemblyDefinition.ReadAssembly(nestedDll);
+            var nestedRun = nestedAssembly.MainModule.GetType("Oreslang.Generated.OresProgram")
+                .Methods.Single(m => m.Name == "Run");
+            Require(CfgCilTestInterpreter.Evaluate(nestedRun) == 42,
+                "CIL oracle must execute all three statically bound BCL methods");
+            var calls = nestedRun.Body.Instructions
+                .Where(i => i.OpCode == OpCodes.Call)
+                .Select(i => (MethodReference)i.Operand)
+                .ToArray();
+            Require(calls.Length == 3 &&
+                    calls.Select(m => m.Name).SequenceEqual(new[] {"Min", "Abs", "Max"}),
+                "nested host calls must preserve deterministic source evaluation order");
+            foreach (var call in calls)
+                Require(call.DeclaringType.FullName == "System.Math" &&
+                        call.DeclaringType.Scope is AssemblyNameReference assemblyRef &&
+                        assemblyRef.Name == "System.Runtime" &&
+                        call.ReturnType.FullName == "System.Int64" &&
+                        call.Parameters.Count == (call.Name == "Abs" ? 1 : 2) &&
+                        call.Parameters.All(p => p.ParameterType.FullName == "System.Int64") &&
+                        !call.HasThis,
+                    "only explicitly linked, typed static System.Math MemberRefs");
+        }
+        finally
+        {
+            Directory.Delete(nestedTemp, recursive: true);
+        }
+
+        Reject("import dotnet \"System.Math\" as Math; fnc main():int { return Math.Max(3); }",
+            "Expected ','");
+        Reject("import dotnet \"System.Math\" as Math; fnc main():int { return Math.Min(2, true); }",
+            "System.Math.Min requires int operands");
+        Reject("import dotnet \"System.Math\" as Math; fnc main():int { return Math.Max(1, 2, 3); }",
+            "Expected ')'");
+        Reject("import dotnet \"System.Math\" as Math; fnc main():int { let int Math = 1; return Math.Max(1,2); }",
+            "DOTNET_IMPORT_UNSUPPORTED");
+        Reject("import dotnet \"System.Math\" as Math; fnc helper(int Math):int { return Math; } fnc main():int { return helper(1); }",
+            "DOTNET_IMPORT_UNSUPPORTED");
+
         var overflow = OresStructuredCfgLowering.LowerModule(
             "import dotnet \"System.Math\" as Math; fnc main():int { return Math.Abs(-9223372036854775808); }");
         bool overflowed = false;
@@ -74,7 +132,7 @@ public static class DotnetStaticInteropSelfTest
             "DOTNET_IMPORT_UNSUPPORTED");
         Reject("import dotnet \"System.IO.File\" as File; fnc main():int { return 1; }",
             "DOTNET_IMPORT_UNSUPPORTED");
-        Reject("import dotnet \"System.Math\" as Math; fnc main():int { return Math.Max(3, 2); }",
+        Reject("import dotnet \"System.Math\" as Math; fnc main():int { return Math.Pow(3, 2); }",
             "DOTNET_IMPORT_UNSUPPORTED");
         Reject("import dotnet \"System.Math\" as Math; import dotnet \"System.Math\" as Other; fnc main():int { return 1; }",
             "DOTNET_IMPORT_UNSUPPORTED");
