@@ -113,6 +113,23 @@ internal static class CfgCilTestInterpreter
                 }
                 case Code.Call:
                 {
+                    // Verification-only closed .NET static host import. Validate
+                    // every signature bit before the test oracle runs Math.Abs;
+                    // never interpret an arbitrary external MemberRef.
+                    if (ins.Operand is MethodReference host &&
+                        host.MetadataToken.TokenType == TokenType.MemberRef &&
+                        host.DeclaringType.FullName == "System.Math" &&
+                        host.DeclaringType.Scope is AssemblyNameReference runtime &&
+                        runtime.Name == "System.Runtime" &&
+                        runtime.Version == new Version(10, 0, 0, 0) &&
+                        host.Name == "Abs" && !host.HasThis &&
+                        host.Parameters.Count == 1 &&
+                        host.Parameters[0].ParameterType.FullName == "System.Int64" &&
+                        host.ReturnType.FullName == "System.Int64" && stack.Count >= 1)
+                    {
+                        stack.Push(Math.Abs(stack.Pop()));
+                        break;
+                    }
                     // The emitted ABI promises an exact, in-module MethodDef
                     // token. Resolving by name/arity would let the test lane
                     // execute a different target from the actual CIL token.
