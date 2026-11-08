@@ -15,8 +15,8 @@ internal static class CfgCilEmitter
         ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
         if (graph.Parameters.Count != 0 || graph.ResultType != IrValueType.I64)
             throw new FormatException("Standalone CFG CIL requires parameterless i64 Run entry");
-        CilEmitter.EmitLibraryCore(outputFile, (metadata, bodies) =>
-            WriteMethod(graph, metadata, bodies, null));
+        CilEmitter.EmitLibraryCore(outputFile, (metadata, bodies, runtime) =>
+            WriteMethod(graph, metadata, bodies, null, runtime));
     }
 
     public static void EmitLibrary(VerifiedCfgModule module, string outputFile)
@@ -24,14 +24,15 @@ internal static class CfgCilEmitter
         ArgumentNullException.ThrowIfNull(module);
         ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
         CilEmitter.EmitLibraryModuleCore(outputFile, module,
-            (graph, metadata, bodies, handles) =>
-                WriteMethod(graph, metadata, bodies, handles));
+            (graph, metadata, bodies, handles, runtime) =>
+                WriteMethod(graph, metadata, bodies, handles, runtime));
     }
 
     private static (int BodyOffset, BlobBuilder Code, BlobBuilder? Locals) WriteMethod(
         VerifiedCfgFunction graph, MetadataBuilder metadata,
         MethodBodyStreamEncoder bodies,
-        IReadOnlyDictionary<string, MethodDefinitionHandle>? handles)
+        IReadOnlyDictionary<string, MethodDefinitionHandle>? handles,
+        AssemblyReferenceHandle runtime)
     {
             var blocks = graph.Blocks;
             int valueCount = blocks.Sum(b => b.Parameters.Count + b.Instructions.Count);
@@ -135,13 +136,13 @@ internal static class CfgCilEmitter
                             break;
                         case CfgOpcode.DotnetMathAbs:
                             il.LoadLocal(op.Left!.Value);
-                            il.Call(DotnetStaticImportMetadata.MathAbs(metadata));
+                            il.Call(DotnetStaticImportMetadata.MathAbs(metadata, runtime));
                             break;
                         case CfgOpcode.DotnetMathMax:
                         case CfgOpcode.DotnetMathMin:
                             il.LoadLocal(op.Left!.Value);
                             il.LoadLocal(op.Right!.Value);
-                            il.Call(DotnetStaticImportMetadata.MathBinary(metadata,
+                            il.Call(DotnetStaticImportMetadata.MathBinary(metadata, runtime,
                                 op.Opcode == CfgOpcode.DotnetMathMax ? "Max" : "Min"));
                             break;
                         case CfgOpcode.ConstantI64:
