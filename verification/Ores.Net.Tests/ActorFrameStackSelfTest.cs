@@ -7,6 +7,9 @@ internal static class ActorFrameStackSelfTest
     {
         IndependentSlabsAndByteCopies();
         StrictLifoAndQuotaAreTerminal();
+        DuplicateBeginPoisonsEvenWhenCaught();
+        SamePhysicalTurnCannotResume();
+        AggregateFrameQuotaRollbackAndSiblings();
         SuspensionResumesOnAnotherCarrier();
         SynchronousHandlerCannotEscapeSuspension();
         SuspendedTurnExitRequiresOriginalPhysicalTurn();
@@ -89,6 +92,77 @@ internal static class ActorFrameStackSelfTest
         Require(other.IsPoisoned, "byte exhaustion is terminal for the actor stack");
         ExpectInvalid(() => other.ValidateTurnExit(nextTurn),
             "swallowed quota error cannot convert to successful handler return");
+    }
+
+    private static void DuplicateBeginPoisonsEvenWhenCaught()
+    {
+        using var actor = new ActorArena(7150, 1, 128, 64, 4, 2, 2);
+        using var frames = new ActorFrameStack(actor, new ActorArenaBudget(64), 2, 64);
+        using var turn = actor.EnterTurn(7150, 1);
+        var execution = frames.Begin(turn);
+        _ = frames.Push(turn, execution, 8);
+        ExpectInvalid(() => frames.Begin(turn),
+            "reentrant Begin must fail even when the host catches the denial");
+        Require(frames.IsPoisoned && frames.Depth == 0,
+            "reentrant handler admission must permanently revoke prior frames");
+        ExpectInvalid(() => frames.ValidateSynchronousTurnExit(turn),
+            "caught reentrant Begin cannot be converted into a successful turn");
+        ExpectInvalid(() => frames.Push(turn, execution, 8),
+            "first execution token must not survive a second Begin");
+    }
+
+    private static void SamePhysicalTurnCannotResume()
+    {
+        using var actor = new ActorArena(7160, 1, 128, 64, 4, 2, 2);
+        using var frames = new ActorFrameStack(actor, new ActorArenaBudget(64), 2, 64);
+        using var turn = actor.EnterTurn(7160, 1);
+        var execution = frames.Begin(turn);
+        var frame = frames.Push(turn, execution, 8);
+        var continuation = frames.Suspend(turn, execution);
+        ExpectInvalid(() => frames.Resume(turn, execution, continuation),
+            "a continuation must not resume on its original physical turn");
+        Require(frames.IsPoisoned && frames.Depth == 0 && !frames.IsSuspended,
+            "same-turn continuation replay must be terminal");
+        ExpectInvalid(() => frames.Read(turn, execution, frame, 0, new byte[1]),
+            "same-turn replay must not expose old bytes");
+    }
+
+    private static void AggregateFrameQuotaRollbackAndSiblings()
+    {
+        var budget = new ActorArenaBudget(448);
+        using var a = new ActorArena(7170, 1, 128, 64, 4, 2, 2, budget);
+        using var b = new ActorArena(7171, 1, 128, 64, 4, 2, 2, budget);
+        using var fa = new ActorFrameStack(a, budget, 2, 64);
+        using var fb = new ActorFrameStack(b, budget, 2, 64);
+        Require(budget.ReservedBytes == 384,
+            "two independent heap arenas charged before stack admission");
+        using (var turnA = a.EnterTurn(7170, 1))
+        using (var turnB = b.EnterTurn(7171, 1))
+        {
+            var ea = fa.Begin(turnA);
+            var ha = fa.Push(turnA, ea, 8);
+            Require(budget.ReservedBytes == 448,
+                "first actor frame slab exhausts shared reservation capacity");
+            ExpectInvalid(() => fb.Begin(turnB),
+                "second actor must not overcommit native frame slab budget");
+            Require(fb.IsPoisoned && budget.ReservedBytes == 448,
+                "denied slab reservation is refunded and target actor fails closed");
+            byte[] answer = new byte[1];
+            fa.Write(turnA, ea, ha, 0, new byte[] { 42 });
+            fa.Read(turnA, ea, ha, 0, answer);
+            Require(answer[0] == 42 && !fa.IsPoisoned,
+                "failed sibling admission cannot corrupt the admitted actor");
+            fa.Pop(turnA, ea, ha);
+            fa.Finish(turnA, ea);
+        }
+        fa.Dispose();
+        fb.Dispose();
+        a.Retire();
+        b.Retire();
+        a.TryReclaim();
+        b.TryReclaim();
+        Require(budget.ReservedBytes == 0,
+            "both independent arena/slab reservations refunded on reclaim");
     }
 
     private static void SuspensionResumesOnAnotherCarrier()
