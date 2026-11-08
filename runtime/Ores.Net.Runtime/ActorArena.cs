@@ -644,13 +644,15 @@ public unsafe sealed class ActorArena : IDisposable
             uint word = BinaryPrimitives.ReadUInt32LittleEndian(
                 new ReadOnlySpan<byte>(_persistent + parentSlot.Offset + fieldOffset, 4));
             bool hasProof = _managedRef32Edges.TryGetValue(parent, out var fields)
-                && fields!.TryGetValue(fieldOffset, out _);
+                && fields!.ContainsKey(fieldOffset);
             if (word == 0 && !hasProof)
                 return null;
-            if (word == 0 || !hasProof ||
-                !fields!.TryGetValue(fieldOffset, out var original))
+            if (word == 0 || !hasProof)
                 throw new InvalidOperationException(
                     "Missing or corrupted original-generation 32-bit field proof");
+            if (!fields!.TryGetValue(fieldOffset, out var original))
+                throw new InvalidOperationException(
+                    "Original-generation 32-bit field proof disappeared");
 
             ref Slot targetSlot = ref ValidateHandleLocked(original);
             if ((targetSlot.Offset & 7) != 0 ||
