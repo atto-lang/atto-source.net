@@ -2,19 +2,23 @@
 
 **Status: experimental verified scalar CIL path; not general .NET/NuGet interop.**
 
-The first real compiler-owned, explicitly opted-in .NET import is:
+The first bounded compiler-owned, explicitly opted-in .NET import family is:
 
 ```atto
 import dotnet "System.Math" as Math;
 pub fnc main():int { return Math.Abs(-42); }
 ```
 
+The same allowlisted `System.Math` alias supports `Math.Min(a, b)` and
+`Math.Max(a, b)` for exactly two typed `int` operands. These three static
+methods can be nested with eager left-to-right evaluation.
+
 Compile using `oresnet compile-structured <source.atto> --out OresGenerated.dll`.
 This is deliberately separate from shipping `check`/`compile`, which still reject
 host imports. The generated CIL references `System.Runtime` and its declared
 `System.Math.Abs(Int64) -> Int64` static signature; it does not dynamically
 load assemblies or use reflection. The pinned NativeAOT host links the output
-statically. This is a **single allowlisted BCL method**; arbitrary packages,
+statically. This is a **three-method, single-type BCL allowlist**; arbitrary packages,
 constructors, instance methods, overload selection, generics, mutable objects,
 `Task<T>`, callbacks and source-import graphs are NOT supported.
 
@@ -22,8 +26,9 @@ constructors, instance methods, overload selection, generics, mutable objects,
 
 - The token-aware compiler parser accepts only one `System.Math` import with
   a local alias; all other host libraries and duplicate host imports fail closed.
-- Only `Abs` with one typed AttoLang `int` / CIL `Int64` argument can be used.
-  Booleans, other arities, missing aliases and unsupported methods are rejected.
+- Only `Abs` with one typed AttoLang `int` / CIL `Int64` argument, and
+  `Min`/`Max` with exactly two typed `int` operands can be used. Booleans,
+  wrong arities, alias shadowing, missing imports and other APIs are rejected.
 - A distinct typed, SSA-verified host opcode lowers to a deterministic CIL
   `MemberRef`. No ambient `System.Type`, runtime reflection or user-supplied
   DLL paths may reach the emitted module.
@@ -50,6 +55,9 @@ and native guest app under .NET 10, executes the ELF binary and emits SHAs.
 No success is asserted until the **exact PR head** has nonzero executed steps
 with source HEAD, hashes, job-attempt provenance, exit status and output.
 `steps=null` / `steps=[]` means runner admission failure, not test proof.
+The native CI workflow publishes two distinct `.atto` fixtures (simple Abs
+and nested Min/Max/Abs), executes both native outputs and reruns the first
+after the second publish to check for stale CIL contamination.
 
 ## Near-zero-GC / actor isolation contract
 
