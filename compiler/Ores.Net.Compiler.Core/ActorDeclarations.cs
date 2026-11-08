@@ -32,9 +32,15 @@ public sealed record ActorDeclaration(
     IReadOnlyList<ActorHandlerDeclaration> Handlers,
     int SourceOffset);
 
-public sealed record ActorDeclarationUnit(
-    IReadOnlyList<ActorDeclaration> Actors,
-    int SourceLength);
+public sealed record ActorHandlerSignature(
+    string Name, IReadOnlyList<ActorMessageType> ParameterTypes);
+
+public sealed record ActorTypeSignature(
+    string Name, bool IsPublic, string SignatureFingerprintSha256,
+    IReadOnlyList<ActorHandlerSignature> Handlers);
+
+public sealed record ActorDeclarationSignatureTable(
+    IReadOnlyList<ActorTypeSignature> Actors);
 
 /// <summary>
 /// Framing parser for top-level define actor declarations. It verifies actor
@@ -51,6 +57,86 @@ public static class OresActorDeclarationParser
     private const int MaxParameters = 16;
     private const int MaxNesting = 128;
     private const int MaxIdentifierLength = 128;
+
+    /// <summary>
+    /// Creates deterministic signature-only metadata from a parsed actor AST.
+    /// Handler bodies are intentionally excluded: this is not semantic
+    /// verification, executable Actor IR, or a runtime actor type ID.
+    /// </summary>
+    public static ActorDeclarationSignatureTable BuildSignatureTable(
+        ActorDeclarationUnit unit)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        if (unit.Actors.Count is <= 0 or > MaxActors)
+            throw new FormatException("E_ACTOR_SIGNATURE: invalid actor declaration count");
+
+        var actorNames = new HashSet<string>(StringComparer.Ordinal);
+        var fingerprints = new HashSet<string>(StringComparer.Ordinal);
+        var result = new List<ActorTypeSignature>(unit.Actors.Count);
+        foreach (ActorDeclaration actor in unit.Actors)
+        {
+            if (string.IsNullOrWhiteSpace(actor.Name) || !actorNames.Add(actor.Name) ||
+                actor.Handlers.Count is <= 0 or > MaxHandlersPerActor)
+                throw new FormatException("E_ACTOR_SIGNATURE: malformed or duplicate actor AST");
+
+            var handlerKeys = new HashSet<string>(StringComparer.Ordinal);
+            var handlers = new List<ActorHandlerSignature>(actor.Handlers.Count);
+            foreach (ActorHandlerDeclaration handler in actor.Handlers)
+            {
+                if (string.IsNullOrWhiteSpace(handler.Name) ||
+                    handler.Parameters.Count > MaxParameters ||
+                    handler.BodyOffset < 0 || handler.BodyLength < 0 ||
+                    handler.BodyOffset > unit.SourceLength ||
+                    handler.BodyLength > unit.SourceLength - handler.BodyOffset)
+                    throw new FormatException("E_ACTOR_SIGNATURE: invalid handler AST span");
+                string key = handler.Name + "/" +
+                    handler.Parameters.Count.ToString(CultureInfo.InvariantCulture);
+                if (!handlerKeys.Add(key))
+                    throw new FormatException("E_ACTOR_SIGNATURE: duplicate handler value arity");
+                var parameterTypes = handler.Parameters.Select(x => x.Type).ToArray();
+                if (parameterTypes.Any(x => x is not (ActorMessageType.I64 or ActorMessageType.Bool)))
+                    throw new FormatException("E_ACTOR_SIGNATURE: unsupported message parameter type");
+                handlers.Add(new ActorHandlerSignature(handler.Name,
+                    Array.AsReadOnly(parameterTypes)));
+            }
+
+            // Length-prefix every string and include visibility, handler name,
+            // value arity and parameter types. Sorting signatures makes the
+            // fingerprint independent of source handler declaration order.
+            var canonical = new StringBuilder();
+            AppendPart(canonical, actor.Name);
+            canonical.Append(actor.IsPublic ? "P;" : "I;");
+            foreach (var handler in handlers.OrderBy(x => x.Name, StringComparer.Ordinal)
+                         .ThenBy(x => x.ParameterTypes.Count))
+            {
+                AppendPart(canonical, handler.Name);
+                canonical.Append(handler.ParameterTypes.Count.ToString(CultureInfo.InvariantCulture));
+                canonical.Append(':');
+                foreach (ActorMessageType type in handler.ParameterTypes)
+                {
+                    canonical.Append(type == ActorMessageType.I64 ? 'i' : 'b');
+                }
+                canonical.Append(';');
+            }
+            string fingerprint = Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(
+                    Encoding.UTF8.GetBytes(canonical.ToString())));
+            if (!fingerprints.Add(fingerprint))
+                throw new FormatException("E_ACTOR_SIGNATURE: duplicate actor signature fingerprint");
+            result.Add(new ActorTypeSignature(actor.Name, actor.IsPublic, fingerprint,
+                new ReadOnlyCollection<ActorHandlerSignature>(handlers)));
+        }
+        return new ActorDeclarationSignatureTable(
+            new ReadOnlyCollection<ActorTypeSignature>(result));
+    }
+
+    private static void AppendPart(StringBuilder builder, string value)
+    {
+        builder.Append(value.Length.ToString(CultureInfo.InvariantCulture));
+        builder.Append(':');
+        builder.Append(value);
+        builder.Append(';');
+    }
 
     private readonly record struct Token(string Text, int Start, int End);
 
