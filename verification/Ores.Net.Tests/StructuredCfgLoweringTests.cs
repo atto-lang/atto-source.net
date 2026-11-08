@@ -127,6 +127,19 @@ internal static class StructuredCfgLoweringTests
             42, "xor boolean false result");
         Check("fnc main():int{if true != false{return 42;}else{return 7;}}",
             42, "typed bool inequality");
+        Check("fnc main():int{let int n=0;while (n<3) and (n<10) {n=n+1;}return n+39;}",
+            42, "loop condition short-circuits through SSA backedges");
+        Check("fnc inc(int x):int{return x+1;}" +
+            "fnc main():int{return inc((false xor true) ? 41 : 0);}",
+            42, "ternary and eager xor inside typed call argument");
+        Check("fnc main():int{if true or (false and true){return 42;}else{return 7;}}",
+            42, "nested logical short-circuit branches");
+        Check("fnc main():int{const bool b=false and (9223372036854775807+1>0);" +
+            "return b ? 7 : 42;}",
+            42, "compile-time false and skips unchecked RHS");
+        Check("fnc main():int{const bool b=true or (9223372036854775807+1>0);" +
+            "return b ? 42 : 7;}",
+            42, "compile-time true or skips unchecked RHS");
         Check("fnc main():int{let bool b=true; b=false;" +
             "if (b or true) and (true xor false) {return 42;}else{return 7;}}",
             42, "logical word expressions and assignments");

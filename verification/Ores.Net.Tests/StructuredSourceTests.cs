@@ -880,6 +880,15 @@ internal static class StructuredSourceTests
             "xor rejects non-boolean RHS");
         Reject("fnc main():int{if true==1{return 1;}else{return 2;}}",
             "bool/int equality mixing rejected");
+        Reject("fnc main():int{const bool b=false xor (9223372036854775807+1>0);" +
+            "return b ? 42 : 7;}",
+            "const XOR must evaluate overflowing right operand");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{/* and or xor */ let int android=42;return android;}").Body.Count == 2,
+            "comments and identifiers with operator substrings are not keywords");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{let int AND=42;return AND;}").Body.Count == 2,
+            "lowercase logical word reservation is case-sensitive");
         Reject("fnc main():int{let bool b=true;return b+1;}",
             "boolean arithmetic");
         Reject("fnc main():int{let int x=1/2;return x;}",
