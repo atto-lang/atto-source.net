@@ -55,6 +55,20 @@ internal static class BatchedCheckpointV1SelfTest
         for (int i = 0; i < 63; i++) recursive.CompletedWorkUnit();
         Reject(() => recursive.CompletedWorkUnit(), "reentrant");
         Reject(() => recursive.CompletedWorkUnit(), "terminal");
+        var siblingA = new BatchedCheckpointV1(129, (_, _) => { });
+        var siblingB = new BatchedCheckpointV1(257, (_, _) => { });
+        for (int i = 0; i < 129; i++)
+        {
+            siblingA.CompletedWorkUnit();
+            siblingB.CompletedWorkUnit();
+        }
+        Require(siblingA.RemainingFuel == 0 && siblingB.RemainingFuel == 128,
+            "logical siblings cannot refill each other");
+        Reject(() => siblingA.CompletedWorkUnit(), "fuel exhausted");
+        for (int i = 0; i < 128; i++) siblingB.CompletedWorkUnit();
+        Require(siblingB.RemainingFuel == 0, "sibling remaining quota");
+        Reject(() => siblingB.CompletedWorkUnit(), "fuel exhausted");
+
         RunDeterministicModelMatrix();
         Console.WriteLine("PASS batched checkpoint 64/128/256/512 + 204-case differential matrix (host-only; NOT guest execution)");
     }
