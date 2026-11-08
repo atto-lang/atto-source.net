@@ -15,7 +15,10 @@ public enum CfgOpcode
     LessThanI64,
     Argument,
     Call,
-    NotEqualI64
+    NotEqualI64,
+    // Two-word source Option<int>, selected from verified bool tag/i64
+    // payload and an eagerly evaluated i64 fallback. Not an opaque pointer.
+    OptionOrI64
 }
 
 public readonly record struct CfgParameter(int Id, IrValueType Type);
@@ -313,6 +316,19 @@ public static class OresCfgVerifier
                             throw new FormatException("Unverified CFG static call");
                         for (int arg = 0; arg < op.Arguments.Count; arg++)
                             Use(i, opIndex, op.Arguments[arg], callee.ParameterTypes[arg]);
+                        break;
+                    }
+                    case CfgOpcode.OptionOrI64:
+                    {
+                        RequireType(op.Type, IrValueType.I64);
+                        if (op.Left is null || op.Right is null ||
+                            op.Arguments is null || op.Arguments.Count != 1 ||
+                            op.I64Constant is not null || op.BoolConstant is not null ||
+                            op.Target is not null)
+                            throw new FormatException("Malformed CFG Option<int> selection");
+                        Use(i, opIndex, op.Left.Value, IrValueType.Bool);
+                        Use(i, opIndex, op.Right.Value, IrValueType.I64);
+                        Use(i, opIndex, op.Arguments[0], IrValueType.I64);
                         break;
                     }
                     case CfgOpcode.ConstantI64:
