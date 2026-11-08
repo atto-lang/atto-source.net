@@ -86,6 +86,14 @@ public static class CilEmitter
         CfgCilEmitter.EmitLibrary(program, outputFile);
     }
 
+    // This separate opt-in path instruments EVERY verified CFG block entry.
+    // 128 cheap countdown visits separate slow hard-fuel checks, and 4096
+    // visits cause a terminal CIL trap. It cannot suspend or preserve an
+    // actor turn across a native stack; keep it out of production paths.
+    public static void EmitMeteredUntrustedPrototypeLibrary(
+        VerifiedCfgFunction program, string outputFile) =>
+        CfgCilEmitter.EmitMeteredUntrustedPrototypeLibrary(program, outputFile);
+
     private static int WriteVerifiedIr(VerifiedIrFunction program, InstructionEncoder il)
     {
         int maxStack = 1;
