@@ -11,7 +11,7 @@
 
 ## Current backend status (2026-11-07)
 
-NativeAOT host cooperation uses a 128-tick countdown with million-tick tests and sibling isolation. The new opt-in `CilEmitter.EmitLoopFreeUntrustedPrototypeLibrary` accepts only a verified acyclic call-free CFG with <=4096 scalar instructions. Loop/call/oversize graphs fail before DLL publication; this is an admission fallback, NOT true compiler-injected guest safepoints or an OS sandbox.
+NativeAOT host cooperation uses a 128-tick countdown with million-tick tests and sibling isolation. The new opt-in `CilEmitter.EmitLoopFreeUntrustedPrototypeLibrary` accepts only a verified acyclic call-free CFG with <=4096 conservatively weighted emitted CIL operations. Loop/call/oversize graphs fail before DLL publication; this is an admission fallback, NOT true compiler-injected guest safepoints or an OS sandbox.
 
 ## Missing compiler-backed gate
 
