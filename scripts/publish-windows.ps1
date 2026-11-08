@@ -2,6 +2,7 @@ param(
     [Parameter(Mandatory = $true)][string]$Source,
     [ValidateSet('win-x64', 'win-arm64')][string]$Rid = 'win-x64',
     [string]$Output = 'artifacts/apps',
+    [switch]$Structured,
     [switch]$TenantIsolateSmoke
 )
 $ErrorActionPreference = 'Stop'
@@ -26,7 +27,10 @@ if ($LASTEXITCODE -ne 0) { throw 'Native compiler publish failed' }
 
 if (-not (Test-Path -LiteralPath $exe)) { throw 'Native compiler executable was not published' }
 & $checkNative -Binary $exe -Rid $Rid
-& $exe compile $sourcePath --out $generated
+# Structured source remains an explicit experimental lane. No auto
+# fallback from shipping scalar to the expanded host-import frontend.
+$compileCommand = if ($Structured) { 'compile-structured' } else { 'compile' }
+& $exe $compileCommand $sourcePath --out $generated
 if ($LASTEXITCODE -ne 0) { throw 'Oreslang-to-CIL compilation failed' }
 
 # A previous publish of this same host project may have used another
