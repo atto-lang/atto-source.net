@@ -1,0 +1,1 @@
+fnc main():int{let int n=0;while n<1{n=n+0;}return 42;}
