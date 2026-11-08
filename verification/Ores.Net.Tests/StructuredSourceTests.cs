@@ -505,6 +505,36 @@ internal static class StructuredSourceTests
             RejectFeature(source,
                 "Nominal class/actor methods require receiver-erased method slots");
         }
+        // Actor declarations are still unsupported by this scalar CFG/CIL
+        // backend. Every visibility spelling and declaration location must
+        // fail at the nominal capability gate, before partial IR or CIL.
+        foreach (var source in new[] {
+            "define actor Worker as receive(self, int value):void{return;} end",
+            "pub define actor Worker as receive(self, int value):void{return;} end",
+            "define pub actor Worker as receive(self, int value):void{return;} end",
+            "pub define pub actor Worker as receive(self, int value):void{return;} end",
+            "fnc main():int{return 42;} define actor Worker as end",
+            "define module Workers as define actor Worker as end end",
+            "define actor Worker extends Actor as receive(self, int value):void{return;} end",
+            "define actor Worker implements Sendable as receive(self, int value):void{return;} end",
+            "define actor Worker with MailboxPolicy as receive(self, int value):void{return;} end",
+            "define actor Worker as receive(self, int value):void{let int x=value;return;} end"
+        })
+            RejectFeature(source,
+                "Nominal class/actor methods require receiver-erased method slots");
+
+        // Actor spellings inside nested comments and string literals are
+        // inert and must not cause the global token admission check to reject
+        // otherwise supported scalar programs.
+        foreach (var source in new[] {
+            "/* define actor Fake as end */ fnc main():int{return 42;}",
+            "/* outer /* define actor Hidden as end */ still comment */ fnc main():int{return 42;}",
+            "fnc main():int{let int x=42; /* pub define actor Fake as end */ return x;}",
+            "fnc main():int{return 42;} // define actor Fake as end"
+        })
+            Require(OresStructuredParser.Parse(source).Body.Count == 1,
+                "inert actor syntax in comments must not alter CFG admission");
+
         // Keywords in comments must not become a global word-scanning gate.
         Require(OresStructuredParser.Parse(
             "fnc main():int{/* initialize -> void :: class val */return 42;}")
