@@ -167,8 +167,9 @@ public sealed class ActorArenaLifetimePin : IDisposable
 /// Persistent bytes survive actor turns. Scratch bytes are bulk-zeroed on every
 /// turn exit. Persistent slots are generation-fenced and partial frees never
 /// move live values. The byte bump pointer is recycled only after the last live
-/// persistent allocation is dropped, matching the native backend's simple,
-/// predictable non-compacting heap substrate.
+/// persistent allocation is dropped. In demand-backed mode the physical slab
+/// may relocate under the arena gate while *logical offsets and issued handle
+/// identities remain stable*. No guest/raw pointer escapes this API.
 ///
 /// This is a host-runtime substrate, not yet general Oreslang guest-object
 /// lowering and not a security sandbox. Managed control metadata remains on the
