@@ -1,4 +1,3 @@
-using System.Buffers.Binary;
 using System.Threading;
 using Ores.Net.Compiler;
 using Ores.Net.Runtime;
@@ -10,9 +9,6 @@ using Ores.Net.Runtime;
 // from the verified compiler CFG and its immutable frame layout.
 internal static class ActorCompiledCfgFrameSelfTest
 {
-    private const int HeaderBytes = CfgActorScalarFramePlan.HeaderBytes;
-    private const int SlotBytes = CfgActorScalarFramePlan.SlotBytes;
-
     public static void Run()
     {
         var scalar = Compile("scalar42.atto");
@@ -171,26 +167,13 @@ internal static class ActorCompiledCfgFrameSelfTest
         VerifiedCfgFunction graph, CfgActorScalarFramePlan plan)
     {
         byte[] types = plan.EncodeTypeTags();
-        var frame = context.GuestPushStackFrame(plan.FrameBytes, alignment: 8);
-        Span<byte> header = stackalloc byte[HeaderBytes];
-        header.Clear();
-        BinaryPrimitives.WriteUInt32LittleEndian(header, 0x31465441);
-        BinaryPrimitives.WriteInt32LittleEndian(header[4..], types.Length);
-        BinaryPrimitives.WriteInt32LittleEndian(header[8..], plan.BlockCount);
-        BinaryPrimitives.WriteInt32LittleEndian(header[12..], plan.EntryBlockIndex);
-        context.GuestWriteStackFrame(frame, 0, header);
-
-        Span<byte> uninitialized = stackalloc byte[SlotBytes];
-        for (int slot = 0; slot < types.Length; slot++)
-        {
-            uninitialized.Clear();
-            uninitialized[1] = types[slot];
-            context.GuestWriteStackFrame(frame,
-                checked(HeaderBytes + slot * SlotBytes), uninitialized);
-        }
+        // Compiler-verified scalar SSA layout now enters the runtime's
+        // terminal typed guest ABI. Do not manually encode native ATF1
+        // headers in the interpreter or use failure-neutral host writes.
+        var frame = ActorScalarGuestFrameAbiV1.Push(
+            context, types, plan.BlockCount, plan.EntryBlockIndex);
 
         int pc = plan.EntryBlockIndex;
-        Span<byte> pcBytes = stackalloc byte[4];
         (byte Tag, long Value)[] edgeValues = [];
         // A finite block fuel is required because bounded frame depth does
         // not bound a loop's total CPU consumption.
@@ -202,8 +185,7 @@ internal static class ActorCompiledCfgFrameSelfTest
             for (int i = 0; i < edgeValues.Length; i++)
                 WriteSlot(block.Parameters[i].Id, edgeValues[i]);
 
-            BinaryPrimitives.WriteInt32LittleEndian(pcBytes, pc);
-            context.GuestWriteStackFrame(frame, 12, pcBytes);
+            ActorScalarGuestFrameAbiV1.SetProgramCounter(context, frame, pc);
             foreach (var op in block.Instructions)
             {
                 long L() => ReadI64(op.Left!.Value);
@@ -259,7 +241,7 @@ internal static class ActorCompiledCfgFrameSelfTest
                     Require(ActorScalarFrameAbiV1.ReadI64(
                         context, frame, ret.ValueId) == result,
                         "runtime ABI disagrees with compiler CFG return bytes");
-                    context.GuestPopStackFrame(frame);
+                    ActorScalarGuestFrameAbiV1.Pop(context, frame);
                     return result;
                 }
                 case CfgJump jump:
@@ -296,17 +278,13 @@ internal static class ActorCompiledCfgFrameSelfTest
         {
             if (slot < 0 || slot >= types.Length)
                 throw new InvalidOperationException("CFG slot exceeds verified layout");
-            Span<byte> raw = stackalloc byte[SlotBytes];
-            context.GuestReadStackFrame(frame,
-                checked(HeaderBytes + slot * SlotBytes), raw);
-            if (raw[0] != types[slot] || raw[1] != types[slot] ||
-                raw[2] != 0 || raw[3] != 0 || raw[4] != 0 ||
-                raw[5] != 0 || raw[6] != 0 || raw[7] != 0)
-                throw new InvalidOperationException("Uninitialized or mistyped CFG scalar slot");
-            long value = BinaryPrimitives.ReadInt64LittleEndian(raw[8..]);
-            if (types[slot] == 2 && value is not (0 or 1))
-                throw new InvalidOperationException("Noncanonical CFG bool value");
-            return (types[slot], value);
+            return types[slot] switch
+            {
+                1 => (1, ActorScalarGuestFrameAbiV1.ReadI64(context, frame, slot)),
+                2 => (2, ActorScalarGuestFrameAbiV1.ReadBool(context, frame, slot) ? 1L : 0L),
+                _ => throw new InvalidOperationException(
+                    "Verified compiler frame has an unsupported scalar type")
+            };
         }
 
         void WriteSlot(int slot, (byte Tag, long Value) value)
@@ -315,12 +293,11 @@ internal static class ActorCompiledCfgFrameSelfTest
                 types[slot] != value.Tag ||
                 (value.Tag == 2 && value.Value is not (0 or 1)))
                 throw new InvalidOperationException("CFG SSA frame type mismatch");
-            Span<byte> raw = stackalloc byte[SlotBytes];
-            raw.Clear();
-            raw[0] = raw[1] = value.Tag;
-            BinaryPrimitives.WriteInt64LittleEndian(raw[8..], value.Value);
-            context.GuestWriteStackFrame(frame,
-                checked(HeaderBytes + slot * SlotBytes), raw);
+            if (value.Tag == 1)
+                ActorScalarGuestFrameAbiV1.WriteI64(context, frame, slot, value.Value);
+            else
+                ActorScalarGuestFrameAbiV1.WriteBool(context, frame, slot,
+                    value.Value == 1);
         }
 
         void Transfer(string destination, IReadOnlyList<int> sourceIds)
