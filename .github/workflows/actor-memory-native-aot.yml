@@ -45,6 +45,7 @@ jobs:
           grep -Fx 'PASS actor scalar frame ABI v1 host/compiler-boundary tests (NOT guest execution)' "$RUNNER_TEMP/actor-managed-tests.log"
           grep -Fx 'PASS net-frame-reissue-integrated: 128 rounds|zeroed=1|stale=denied|native_refund=1' "$RUNNER_TEMP/actor-managed-tests.log"
           grep -Fx 'PASS .NET terminal compiled guest-frame boundary host tests (NOT guest .atto or physical stack proof)' "$RUNNER_TEMP/actor-managed-tests.log"
+          grep -Fx 'PASS net-actor-guest-frame-eight-fault-matrix|faults=8|peer=42|admission=9|guest_atto=0' "$RUNNER_TEMP/actor-managed-tests.log"
       - name: Publish and execute actual host actor NativeAOT isolation probe
         shell: bash
         env:
