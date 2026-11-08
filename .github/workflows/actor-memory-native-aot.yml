@@ -4,6 +4,7 @@ on:
     paths:
       - 'runtime/Ores.Net.Runtime/**'
       - 'verification/Ores.Net.Tests/**'
+      - 'contracts/actor-guest-frame-seam/v1/**'
       - 'verification/Ores.Net.ActorMemoryProbe/**'
       - '.github/workflows/actor-memory-native-aot.yml'
   workflow_dispatch:
