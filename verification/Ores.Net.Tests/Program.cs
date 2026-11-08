@@ -1028,6 +1028,7 @@ CfgVerifierTests.Run();
 CfgCilStressTests.Run();
 SupervisorStopLedgerSelfTest.Run();
 StructuredSourceTests.Run();
+ActorDeclarationAstSelfTest.Run(); // parsed-only typed actor declarations; not executable actor lowering
 StructuredCfgLoweringTests.Run();
 StructuredStaticAbiTests.Run();
 StaticFactsV0Tests.Run();
