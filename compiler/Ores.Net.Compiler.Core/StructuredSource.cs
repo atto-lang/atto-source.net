@@ -16,6 +16,9 @@ public sealed record StructuredNegate(int At, StructuredExpr Value)
 public sealed record StructuredCall(int At, string Name,
     IReadOnlyList<StructuredExpr> Arguments, IrValueType ResultType)
     : StructuredExpr(At, ResultType);
+// AOT-only host call: no managed object, reflection, callback or pointer escapes.
+public sealed record StructuredDotnetMathAbs(int At, StructuredExpr Argument)
+    : StructuredExpr(At, IrValueType.I64);
 public sealed record StructuredParameter(string Name, IrValueType Type);
 public sealed record StructuredFunction(string Name,
     IReadOnlyList<StructuredParameter> Parameters, IrValueType ResultType,
@@ -118,7 +121,9 @@ public static class OresStructuredParser
         ValidateSourceInput(source);
         // No structural match lowering or readonly shape metadata in scalar CIL yet.
         StructuralShapeAdmission.RejectUnsupportedPatterns(source);
-        var lexer = new Lexer(source, linking is not null);
+        // Strings are needed for the explicit, narrowly bounded import dotnet header.
+        // The reader still rejects all unimplemented source constructs.
+        var lexer = new Lexer(source, moduleMode: true);
         var tokens = new List<Token>();
         // Distinguish a forbidden local nominal declaration from an
         // unsupported top-level class/actor before either reaches lowering.
@@ -447,6 +452,7 @@ public static class OresStructuredParser
         private readonly Dictionary<string, StructuredFunction> exports = new(StringComparer.Ordinal);
         private readonly List<string> functionOrder = linking is null ? new() : new(linking.MethodOrder);
         private string? declaredModule;
+        private string? dotnetAlias;
         private int index, statements;
         private IrValueType activeReturnType = IrValueType.I64;
         // Track actual AST height, not just grammar recursion depth. A flat
@@ -492,7 +498,25 @@ public static class OresStructuredParser
         {
             if (depth > MaxDepth) throw Error("Structured syntax nesting exceeds limit");
         }
-        public StructuredProgram ReadProgram() => ReadDeclarations(true);
+        public StructuredProgram ReadProgram()
+        {
+            // Opt-in compile-time-only .NET import, currently one trusted BCL
+            // type and one allocation-free i64 method. It never grants ambient
+            // reflection, NuGet discovery, filesystem or actor capabilities.
+            if (Take("import"))
+            {
+                Expect("dotnet");
+                if (Current.Text != "\"System.Math\"")
+                    throw Error("DOTNET_IMPORT_UNSUPPORTED: only System.Math is AOT-admitted");
+                index++;
+                Expect("as");
+                dotnetAlias = Name();
+                Expect(";");
+                if (Current.Text == "import")
+                    throw Error("DOTNET_IMPORT_UNSUPPORTED: multiple host imports require manifest validation");
+            }
+            return ReadDeclarations(true);
+        }
 
         internal IReadOnlyList<SourceImport> ReadImports()
         {
@@ -1023,6 +1047,23 @@ public static class OresStructuredParser
             }
             var name = Name();
             bool localBinding = scopes.Any(scope => scope.ContainsKey(name));
+            if (dotnetAlias == name && Take("."))
+            {
+                if (localBinding)
+                    throw Error("DOTNET_IMPORT_UNSUPPORTED: imported alias cannot be shadowed by a local");
+                string method = Name();
+                if (method != "Abs")
+                    throw Error("DOTNET_IMPORT_UNSUPPORTED: only System.Math.Abs(long) is AOT-admitted");
+                Expect("(");
+                var operand = Expr(depth + 1);
+                Expect(")");
+                Require(operand, IrValueType.I64, "System.Math.Abs requires one int");
+                int height = Height(operand) + 1;
+                if (height > MaxDepth) throw Error("Host call AST depth exceeds limit");
+                var hostCall = new StructuredDotnetMathAbs(offset, operand);
+                expressionHeights.Add(hostCall, height);
+                return hostCall;
+            }
             if (linking is not null)
                 while (Take("."))
                 {
