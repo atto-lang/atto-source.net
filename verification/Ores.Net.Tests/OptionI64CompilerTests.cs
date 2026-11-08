@@ -61,6 +61,39 @@ internal static class OptionI64CompilerTests
         finally { Directory.Delete(temp, recursive: true); }
     }
 
+    private static void CheckEagerFallbackOverflow()
+    {
+        // unwrap_or is eager in AttoLang. Both the verified CFG oracle and
+        // the exact emitted CIL must trap even when Some would be selected.
+        const string source =
+            "fnc main():int{return Some(42).unwrap_or(9223372036854775807+1);}";
+        var graph = OresStructuredCfgLowering.LowerModule(source);
+        bool referenceOverflow = false;
+        try { _ = CfgReferenceEvaluator.Evaluate(graph.Main); }
+        catch (OverflowException) { referenceOverflow = true; }
+        if (!referenceOverflow)
+            throw new Exception("Option<int> fallback was incorrectly evaluated lazily in CFG");
+
+        var temp = Path.Combine(Path.GetTempPath(),
+            "atto-option-eager-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(temp);
+        try
+        {
+            var output = Path.Combine(temp, "OresGenerated.dll");
+            CilEmitter.EmitLibrary(graph, output);
+            using var assembly = AssemblyDefinition.ReadAssembly(output);
+            var method = assembly.MainModule.Types.Single(type =>
+                type.FullName == "Oreslang.Generated.OresProgram")
+                .Methods.Single(candidate => candidate.Name == "Run");
+            bool emittedOverflow = false;
+            try { _ = CfgCilTestInterpreter.Evaluate(method); }
+            catch (OverflowException) { emittedOverflow = true; }
+            if (!emittedOverflow)
+                throw new Exception("Option<int> fallback was incorrectly evaluated lazily in CIL");
+        }
+        finally { Directory.Delete(temp, recursive: true); }
+    }
+
     private static void Reject(string source, string label)
     {
         try { _ = OresStructuredCfgLowering.LowerModule(source); }
@@ -116,6 +149,7 @@ internal static class OptionI64CompilerTests
             42, "loop-carried Option pair with two scalar phi values");
         CheckModuleHelper("fnc answer():int{val Option<int> x=Some(42);return x.unwrap_or(0);}fnc main():int{return answer();}",
             42, "Option local inside statically linked helper");
+        CheckEagerFallbackOverflow();
 
         // No unexpected re-entry into production scalar compiler.
         bool scalarRejected = false;
