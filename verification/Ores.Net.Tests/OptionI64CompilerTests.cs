@@ -36,6 +36,31 @@ internal static class OptionI64CompilerTests
         finally { Directory.Delete(temp, recursive: true); }
     }
 
+    private static void CheckModuleHelper(string source, long expected, string label)
+    {
+        // Statement-bodied helpers are real independent static MethodDefs;
+        // the legacy inlining-only reference evaluator intentionally cannot
+        // handle their call instruction. Verify the emitted method tokens.
+        var module = OresStructuredCfgLowering.LowerModule(source);
+        if (module.Helpers.Count != 1)
+            throw new Exception("Option helper definition was not independently linked");
+        var temp = Path.Combine(Path.GetTempPath(),
+            "atto-option-helper-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(temp);
+        try
+        {
+            var output = Path.Combine(temp, "OresGenerated.dll");
+            CilEmitter.EmitLibrary(module, output);
+            using var assembly = AssemblyDefinition.ReadAssembly(output);
+            var program = assembly.MainModule.Types.Single(type =>
+                type.FullName == "Oreslang.Generated.OresProgram");
+            var run = program.Methods.Single(method => method.Name == "Run");
+            if (CfgCilTestInterpreter.Evaluate(run) != expected)
+                throw new Exception("Option module helper CIL mismatch: " + label);
+        }
+        finally { Directory.Delete(temp, recursive: true); }
+    }
+
     private static void Reject(string source, string label)
     {
         try { _ = OresStructuredCfgLowering.LowerModule(source); }
@@ -89,17 +114,19 @@ internal static class OptionI64CompilerTests
             42, "one-branch Option pair join");
         Check("fnc main():int{let Option<int> x=None;let int n=0;while n<2{x=Some(21);n=n+1;}return x.unwrap_or(0)+21;}",
             42, "loop-carried Option pair with two scalar phi values");
-        Check("fnc answer():int{val Option<int> x=Some(42);return x.unwrap_or(0);}fnc main():int{return answer();}",
+        CheckModuleHelper("fnc answer():int{val Option<int> x=Some(42);return x.unwrap_or(0);}fnc main():int{return answer();}",
             42, "Option local inside statically linked helper");
 
         // No unexpected re-entry into production scalar compiler.
+        bool scalarRejected = false;
         try { _ = OresParser.Parse(some); }
-        catch (FormatException e) when (e.Message.Contains("Option/Result/trap", StringComparison.Ordinal))
+        catch (FormatException e) when (
+            e.Message.Contains("Option/Result/trap", StringComparison.Ordinal))
         {
-            goto ScalarClosed;
+            scalarRejected = true;
         }
-        throw new Exception("Option<int> silently admitted in shipping scalar frontend");
-        ScalarClosed:
+        if (!scalarRejected)
+            throw new Exception("Option<int> silently admitted in shipping scalar frontend");
 
         foreach (var (label, text) in new (string, string)[]
         {
