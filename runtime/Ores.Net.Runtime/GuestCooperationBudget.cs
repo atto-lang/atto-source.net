@@ -12,6 +12,7 @@ public sealed class GuestCooperationBudget
 
     private ulong _remainingFuel;
     private uint _ticks;
+    private ulong _dispatchTicks;
 
     public GuestCooperationBudget(ulong logicalFuel)
     {
@@ -21,9 +22,11 @@ public sealed class GuestCooperationBudget
     }
 
     public ulong RemainingFuel => _remainingFuel;
+    public ulong BackedgesThisDispatch => _dispatchTicks;
 
-    // A resumed carrier only gets a fresh fairness slice, not new fuel.
-    public void BeginDispatch() => _ticks = 0;
+    // Reset only dispatch fairness; never restart the poll phase or fuel.
+    // Otherwise repeated 127-step resumes could avoid every cold check.
+    public void BeginDispatch() => _dispatchTicks = 0;
 
     // Hot path: no clock, timer, task await, allocation or scheduler callback.
     // Must be emitted after committing loop-carried state. Returning true only
@@ -31,6 +34,7 @@ public sealed class GuestCooperationBudget
     public bool ChargeBackedge(ulong weight = 1)
     {
         ChargeOperation(weight);
+        _dispatchTicks++;
         _ticks = (_ticks + 1U) & ((uint)PollInterval - 1U);
         return _ticks == 0;
     }
