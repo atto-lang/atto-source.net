@@ -12,6 +12,14 @@ internal static class DotnetHostImportTests
         var typed = OresIrLowering.Lower(OresParser.Parse(source));
         Check(typed.Instructions.Count(x => x.Opcode == IrOpcode.DotnetMathAbsI64) == 1,
             "exactly one typed CLR call lowered through verified SSA");
+        // Advisory static facts v0 intentionally asserts an empty call graph.
+        // A verified external CLR call must not be misreported as zero edges.
+        Reject(() => StaticFactsV0Exporter.FromCompiledScalarSource(source),
+            "CLR host call erased from zero-edge static-facts exporter");
+        Reject(() => ManagedSourceEmitter.Emit(typed, ManagedSourceTarget.CSharp),
+            "host CLR call silently rewritten into unsupported C# source");
+        Reject(() => ManagedSourceEmitter.Emit(typed, ManagedSourceTarget.FSharp),
+            "host CLR call silently rewritten into unsupported F# source");
 
         string root = Path.Combine(Path.GetTempPath(),
             "atto-dotnet-import-" + Guid.NewGuid().ToString("N"));
