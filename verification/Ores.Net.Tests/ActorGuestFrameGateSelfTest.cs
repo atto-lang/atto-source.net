@@ -91,6 +91,17 @@ internal static class ActorGuestFrameGateSelfTest
             // The caught overflow must still stop this incarnation at exit.
         });
 
+        var staleGuestHandle = runtime.Spawn(ActorKind.Shared, (context, _) =>
+        {
+            var popped = context.GuestPushStackFrame(8);
+            context.GuestPopStackFrame(popped);
+            // A correct pop retires the exact guest capability. Catching
+            // a subsequent stale-use error must still fault this handler.
+            ExpectInvalid(() => context.GuestReadStackFrame(
+                popped, 0, new byte[1]),
+                "popped guest frame handle must never be reissued");
+        });
+
         var healthy = runtime.Spawn(ActorKind.Shared, (context, _) =>
         {
             retainedContext = context;
@@ -131,15 +142,16 @@ internal static class ActorGuestFrameGateSelfTest
         runtime.Send(foreign, new byte[] { 3 });
         runtime.Send(wrongLifo, new byte[] { 4 });
         runtime.Send(quota, new byte[] { 5 });
+        runtime.Send(staleGuestHandle, new byte[] { 7 });
         runtime.Send(healthy, new byte[] { 6 });
         Require(healthyDone.Wait(TimeSpan.FromSeconds(8)) &&
                 Volatile.Read(ref healthyResult) == 42,
-            "actor B could not return 42 after five guest-frame faults");
+            "actor B could not return 42 after six guest-frame faults");
         Require(SpinWait.SpinUntil(
-            () => runtime.FaultedTurns >= 5 && runtime.LiveActors == 1 &&
+            () => runtime.FaultedTurns == 6 && runtime.LiveActors == 1 &&
                   runtime.CompletedMessages == 1,
             TimeSpan.FromSeconds(8)),
-            "five terminal guest faults stop only offenders; only B completes");
+            "six terminal guest faults stop only offenders; only B completes");
         Require(runtime.CompletedMessages == 1,
             "caught guest frame faults must not count as completed messages");
 
