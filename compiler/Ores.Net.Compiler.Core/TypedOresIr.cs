@@ -15,6 +15,7 @@ public enum IrOpcode
     CheckedSubtract,
     CheckedMultiply,
     CheckedDivide,
+    BitXor,
     SignedRemainderLiteral
 }
 
@@ -200,6 +201,15 @@ public static class OresIrLowering
                         int operand = results.Pop();
                         results.Push(EmitBinary(IrOpcode.CheckedSubtract,
                             Constant(0), operand));
+                        break;
+                    }
+                    case NamedBitXor:
+                    {
+                        if (results.Count < 2)
+                            throw new FormatException("IR lowering bitXor operand underflow");
+                        int right = results.Pop();
+                        int left = results.Pop();
+                        results.Push(EmitBinary(IrOpcode.BitXor, left, right));
                         break;
                     }
                     case Binary binary:
