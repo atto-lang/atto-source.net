@@ -24,7 +24,8 @@ generation/turn-scoped guest-frame API.
    `ValidateGuestFrameExit` contract.
 
 The host test distinguishes a compiler-verified scalar workload from a
-compiled **actor declaration**. It is not dynamically executable .NET IL
+compiled **actor declaration**. The interpreter does not execute emitted
+guest machine code and its success marker explicitly records that limitation. It is not dynamically executable .NET IL
 guest code, NativeAOT guest code, a Cranelift backend, coroutine suspension,
 or an unsafe source-level function capability crossing an actor mailbox.
 
