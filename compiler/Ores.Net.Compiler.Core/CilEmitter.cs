@@ -22,7 +22,7 @@ public static class CilEmitter
         ArgumentNullException.ThrowIfNull(program);
         ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
 
-        EmitLibraryCore(outputFile, (metadata, bodies) =>
+        EmitLibraryCore(outputFile, (metadata, bodies, runtime) =>
         {
             var methodCode = new BlobBuilder();
             var instructions = new InstructionEncoder(methodCode);
@@ -44,7 +44,7 @@ public static class CilEmitter
         if (program.Instructions.Count > maxLocalSlots)
             throw new FormatException("OresIR CIL local slot budget exceeded");
 
-        EmitLibraryCore(outputFile, (metadata, bodies) =>
+        EmitLibraryCore(outputFile, (metadata, bodies, runtime) =>
         {
             int count = program.Instructions.Count;
             var localsBlob = new BlobBuilder();
@@ -113,13 +113,14 @@ public static class CilEmitter
     }
 
     internal static void EmitLibraryCore(string outputFile,
-        Func<MetadataBuilder, MethodBodyStreamEncoder,
+        Func<MetadataBuilder, MethodBodyStreamEncoder, AssemblyReferenceHandle,
             (int BodyOffset, BlobBuilder Code, BlobBuilder? Locals)> buildBody)
     {
         var ilStream = new BlobBuilder();
         var bodyStream = new MethodBodyStreamEncoder(ilStream);
         var metadata = new MetadataBuilder();
-        var (bodyOffset, _, localSignatureBlob) = buildBody(metadata, bodyStream);
+        var runtime = DotnetStaticImportMetadata.AddSystemRuntime(metadata);
+        var (bodyOffset, _, localSignatureBlob) = buildBody(metadata, bodyStream, runtime);
         // The finalized method body includes branch fixups and the signature
         // *token*, but the token number is not a fingerprint of its blob.
         // Two programs can have identical IL and signature token 0x11000001
@@ -144,15 +145,8 @@ public static class CilEmitter
             flags: default,
             hashAlgorithm: System.Reflection.AssemblyHashAlgorithm.None);
 
-        var runtime = metadata.AddAssemblyReference(
-            metadata.GetOrAddString("System.Runtime"),
-            new Version(10, 0, 0, 0),
-            culture: default,
-            // System.Runtime carries the Microsoft strong-name token; emitting a
-            // token-less reference prevents downstream C# and Native AOT binding.
-            publicKeyOrToken: metadata.GetOrAddBlob(new byte[] { 0xB0, 0x3F, 0x5F, 0x7F, 0x11, 0xD5, 0x0A, 0x3A }),
-            flags: default,
-            hashValue: default);
+        // All CLR calls and System.Object share this single, strongly named
+        // runtime facade reference. Never append duplicate AssemblyRef rows.
         var systemObject = metadata.AddTypeReference(
             runtime,
             metadata.GetOrAddString("System"),
@@ -217,7 +211,7 @@ public static class CilEmitter
     internal static void EmitLibraryModuleCore(string outputFile,
         VerifiedCfgModule module,
         Func<VerifiedCfgFunction, MetadataBuilder, MethodBodyStreamEncoder,
-            IReadOnlyDictionary<string, MethodDefinitionHandle>,
+            IReadOnlyDictionary<string, MethodDefinitionHandle>, AssemblyReferenceHandle,
             (int BodyOffset, BlobBuilder Code, BlobBuilder? Locals)> buildBody)
     {
         ArgumentNullException.ThrowIfNull(module);
@@ -245,6 +239,7 @@ public static class CilEmitter
         var ilStream = new BlobBuilder();
         var bodyStream = new MethodBodyStreamEncoder(ilStream);
         var metadata = new MetadataBuilder();
+        var runtime = DotnetStaticImportMetadata.AddSystemRuntime(metadata);
         var bodies = new List<(int Offset, BlobBuilder? Locals)>();
         long instructions = 0;
         foreach (var method in methods)
@@ -252,7 +247,7 @@ public static class CilEmitter
             instructions += method.Blocks.Sum(b => b.Parameters.Count + b.Instructions.Count);
             if (instructions > 100_000)
                 throw new FormatException("CFG module total instruction budget exceeded");
-            var (offset, _, locals) = buildBody(method, metadata, bodyStream, handles);
+            var (offset, _, locals) = buildBody(method, metadata, bodyStream, handles, runtime);
             bodies.Add((offset, locals));
         }
         if (ilStream.Count > 8 * 1024 * 1024)
@@ -289,21 +284,28 @@ public static class CilEmitter
             if (entry.Locals is not null) hash.AppendData(entry.Locals.ToArray());
         foreach (var signature in signatureBlobs)
             hash.AppendData(signature.ToArray());
-        // The MVID must also change when a method is renamed but its body
-        // and signature stay byte-for-byte identical.
+        // MemberRef tokens alone are not content-addressed: Min(Int64,Int64)
+        // and Max(Int64,Int64) both emit call to 0x0A000001 when first used.
+        // Include typed host symbol identity even if the CIL stream is identical.
+        // Never let a changed external method reuse the previous module MVID.
         foreach (var method in methods)
+        {
             hash.AppendData(System.Text.Encoding.UTF8.GetBytes(method.Name + "\0"));
+            foreach (var operation in method.Blocks.SelectMany(b => b.Instructions))
+            {
+                if (operation.Opcode is CfgOpcode.DotnetMathAbs or
+                    CfgOpcode.DotnetMathMin or CfgOpcode.DotnetMathMax)
+                    hash.AppendData(System.Text.Encoding.UTF8.GetBytes(
+                        "System.Runtime|System.Math|" + operation.Opcode + "|i64\0"));
+            }
+        }
         var mvid = new Guid(hash.GetHashAndReset().AsSpan(0, 16));
         metadata.AddModule(0, metadata.GetOrAddString("OresGenerated.dll"),
             metadata.GetOrAddGuid(mvid), default, default);
         metadata.AddAssembly(metadata.GetOrAddString("OresGenerated"),
             new Version(1, 0, 0, 0), default, default, default,
             System.Reflection.AssemblyHashAlgorithm.None);
-        var runtime = metadata.AddAssemblyReference(
-            metadata.GetOrAddString("System.Runtime"),
-            new Version(10, 0, 0, 0), default,
-            metadata.GetOrAddBlob(new byte[] { 0xB0, 0x3F, 0x5F, 0x7F, 0x11, 0xD5, 0x0A, 0x3A }),
-            default, default);
+        // Use the exact AssemblyRef selected before emitting method bodies.
         var systemObject = metadata.AddTypeReference(runtime,
             metadata.GetOrAddString("System"), metadata.GetOrAddString("Object"));
 
