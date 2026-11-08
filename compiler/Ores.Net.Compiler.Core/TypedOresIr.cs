@@ -5,7 +5,11 @@ namespace Ores.Net.Compiler;
 public enum IrValueType
 {
     I64,
-    Bool
+    Bool,
+    // Source-only tagged (is_some:bool, value:i64) pair in the closed
+    // structured Option<int> slice. It NEVER occupies a single CFG SSA slot
+    // or CIL local: only its verified primitive components can be emitted.
+    OptionI64
 }
 
 public enum IrOpcode
