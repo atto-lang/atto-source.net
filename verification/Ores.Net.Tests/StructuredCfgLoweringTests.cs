@@ -96,6 +96,40 @@ internal static class StructuredCfgLoweringTests
             6, "runtime val has independent SSA identity");
         Check("fnc main():int{const bool b=2<3;if b{return 42;}else{return 0;}}",
             42, "compile-time boolean branch in emitted CIL");
+        // Same byte-identical portable .atto fixture as Java #2648 and LLVM
+        // #1554; evaluate compiler-owned CFG AND actual emitted CIL.
+        const string logicalFixture = "contracts/logical-word-operators-v1/scalar-parity.atto";
+        var logicalBytes = File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, logicalFixture));
+        var blobHeader = System.Text.Encoding.ASCII.GetBytes("blob " + logicalBytes.Length + "\0");
+        var blobBytes = new byte[blobHeader.Length + logicalBytes.Length];
+        blobHeader.CopyTo(blobBytes, 0);
+        logicalBytes.CopyTo(blobBytes, blobHeader.Length);
+        var logicalBlobSha = Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(blobBytes))
+            .ToLowerInvariant();
+        if (logicalBlobSha != "9e3d2d230faaba5e1ccfeaf1c4449c0c2a120c34")
+            throw new Exception("Cross-backend logical .atto fixture blob drift");
+        Check(new System.Text.UTF8Encoding(false, true).GetString(logicalBytes),
+            42, "exact Java/LLVM logical truth-table fixture through typed CFG/CIL");
+        Check("fnc main():int{if false and true{return 7;}else{return 42;}}",
+            42, "logical and false branch");
+        Check("fnc main():int{if true or false{return 42;}else{return 7;}}",
+            42, "logical or true branch");
+        Check("fnc main():int{let int x=9223372036854775807;" +
+            "if false and x+1>0{return 7;}else{return 42;}}",
+            42, "and skips overflowing right operand");
+        Check("fnc main():int{let int x=9223372036854775807;" +
+            "if true or x+1>0{return 42;}else{return 7;}}",
+            42, "or skips overflowing right operand");
+        CheckOverflow("fnc main():int{let int x=9223372036854775807;" +
+            "if false xor x+1>0{return 42;}else{return 7;}}",
+            "xor eagerly evaluates overflowing right operand");
+        Check("fnc main():int{if true xor true{return 7;}else{return 42;}}",
+            42, "xor boolean false result");
+        Check("fnc main():int{if true != false{return 42;}else{return 7;}}",
+            42, "typed bool inequality");
+        Check("fnc main():int{let bool b=true; b=false;" +
+            "if (b or true) and (true xor false) {return 42;}else{return 7;}}",
+            42, "logical word expressions and assignments");
         // Actual typed source-call semantics are checked in the independent
         // reference evaluator, emitted CIL interpreter and deterministic PE.
         // This is an acyclic, expression-only helper milestone, not a

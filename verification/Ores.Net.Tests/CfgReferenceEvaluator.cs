@@ -24,6 +24,8 @@ internal static class CfgReferenceEvaluator
             {
                 long Left() => (long)values[op.Left!.Value];
                 long Right() => (long)values[op.Right!.Value];
+                bool BoolLeft() => (bool)values[op.Left!.Value];
+                bool BoolRight() => (bool)values[op.Right!.Value];
                 values[op.ResultId] = op.Opcode switch
                 {
                     CfgOpcode.ConstantI64 => op.I64Constant!.Value,
@@ -35,6 +37,9 @@ internal static class CfgReferenceEvaluator
                     CfgOpcode.EqualI64 => Left() == Right(),
                     CfgOpcode.NotEqualI64 => Left() != Right(),
                     CfgOpcode.LessThanI64 => Left() < Right(),
+                    CfgOpcode.EqualBool => BoolLeft() == BoolRight(),
+                    CfgOpcode.NotEqualBool => BoolLeft() != BoolRight(),
+                    CfgOpcode.XorBool => BoolLeft() ^ BoolRight(),
                     _ => throw new InvalidOperationException("Unexpected CFG opcode")
                 };
             }
