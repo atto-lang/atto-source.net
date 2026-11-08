@@ -9,6 +9,9 @@
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/v2/cpu-gpu-task-unsupported-v2.json" Link="cpu-gpu-task-unsupported-v2.json"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/actor-guest-frame-seam/v1/scalar42.atto"
+          Link="contracts/actor-guest-frame-seam/v1/scalar42.atto"
+          CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/durable-m0/v1/checkout.atto"
           Link="contracts/durable-m0/v1/checkout.atto"
           CopyToOutputDirectory="PreserveNewest" />
