@@ -104,3 +104,22 @@ A source-only commit or artifact upload is not a NativeAOT execution receipt.
   Java PR #2627, LLVM and Forge actor heap/runtime branches, and the shared
   platform-conformance actor-stack contract (#562). Retain independent
   approval and private-source CI export gates.
+
+## 7 November hardening: terminal source-frame protocol
+
+Additional runtime-source guards now poison the offending actor's logical
+stack, even if a host callback catches the exception, on:
+
+- duplicate `Begin` while an execution is live or suspended;
+- `Resume` attempting to reuse the original physical turn, instead of a
+  distinct admitted turn;
+- zero/negative compiler-issued frame size;
+- out-of-bounds frame reads/writes, including negative offsets and crossing
+  a frame boundary.
+
+The managed self-test adds targeted negative cases for each, plus a
+two-actor aggregate-budget overcommit/rollback test. A rejected actor's
+reservation cannot consume the surviving sibling's native memory credits.
+These are authored host-runtime regressions, **not executed .atto guest
+fixtures** or evidence of physical CLR stack-fault isolation. A stepful
+managed/NativeAOT exact-head run is still mandatory before readiness.
