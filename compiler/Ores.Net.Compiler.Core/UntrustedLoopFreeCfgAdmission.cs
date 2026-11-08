@@ -29,23 +29,41 @@ internal static class UntrustedLoopFreeCfgAdmission
             // Each CFG edge copies arguments into scratch slots and then into
             // target locals (four CIL accesses each). Both branch alternatives
             // are included so any executed path costs <= the admitted sum.
-            totalWeightedOperations = checked(
-                totalWeightedOperations + block.Instructions.Count + 2);
-            if (block.Instructions.Any(op => op.Opcode == CfgOpcode.Call))
-                throw new FormatException("Untrusted CFG calls need hard guest fuel instrumentation");
+            foreach (var op in block.Instructions)
+            {
+                // Real CfgCilEmitter opcode counts: loads + arithmetic/compare
+                // + final result store. Do not count an expensive i64 operation
+                // as just one instruction when claiming a bounded CIL path.
+                int cilCost = op.Opcode switch
+                {
+                    CfgOpcode.Argument or CfgOpcode.ConstantI64 or
+                    CfgOpcode.ConstantBool => 2,
+                    CfgOpcode.CheckedAdd or CfgOpcode.CheckedSubtract or
+                    CfgOpcode.CheckedMultiply or CfgOpcode.CheckedDivide or
+                    CfgOpcode.EqualI64 or CfgOpcode.LessThanI64 => 4,
+                    CfgOpcode.NotEqualI64 => 5,
+                    CfgOpcode.Call => throw new FormatException(
+                        "Untrusted CFG calls need hard guest fuel instrumentation"),
+                    _ => throw new FormatException("Untrusted CFG opcode unsupported")
+                };
+                totalWeightedOperations = checked(totalWeightedOperations + cilCost);
+            }
             string[] targets;
             IReadOnlyList<int>[] edgeArguments;
             switch (block.Terminator)
             {
                 case CfgReturn:
+                    totalWeightedOperations = checked(totalWeightedOperations + 2);
                     targets = Array.Empty<string>();
                     edgeArguments = Array.Empty<IReadOnlyList<int>>();
                     break;
                 case CfgJump jump:
+                    totalWeightedOperations = checked(totalWeightedOperations + 1);
                     targets = new[] { jump.Target };
                     edgeArguments = new[] { jump.Arguments };
                     break;
                 case CfgBranch branch:
+                    totalWeightedOperations = checked(totalWeightedOperations + 2);
                     targets = new[] { branch.TrueTarget, branch.FalseTarget };
                     edgeArguments = new[] { branch.TrueArguments, branch.FalseArguments };
                     break;
