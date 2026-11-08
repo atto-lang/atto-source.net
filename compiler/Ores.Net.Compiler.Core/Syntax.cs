@@ -10,13 +10,14 @@ public sealed record Binary(char Operator, Expression Left, Expression Right) : 
 public sealed record NamedBitXor(Expression Left, Expression Right) : Expression;
 // Closed-world CLR intrinsic: exact System.Math.Abs(Int64), no dynamic binding.
 public sealed record DotnetMathAbsI64(Expression Value) : Expression;
+public sealed record DotnetMathMaxI64(Expression Left, Expression Right) : Expression;
 
 public static class OresParser
 {
     private const int MaxDepth = 128;
     private const int MaxTokens = 100_000;
 
-    public static Expression Parse(string source)
+    public static Expression Parse(string source, DotnetHostImportPolicy? policy = null)
     {
         ArgumentNullException.ThrowIfNull(source);
         if (source.Length > 1_048_576)
@@ -88,7 +89,7 @@ public static class OresParser
                 throw new FormatException(
                     $"E_SUSPENDS_UNSUPPORTED: suspension requires .NET continuation/effect lowering at offset {tokens[i].Offset}");
         }
-        return new Reader(tokens).ParseProgram();
+        return new Reader(tokens, policy ?? DotnetHostImportPolicy.DenyAll).ParseProgram();
     }
 
     private readonly record struct Token(string Text, int Offset);
@@ -295,7 +296,7 @@ public static class OresParser
         }
     }
 
-    private sealed class Reader(List<Token> tokens)
+    private sealed class Reader(List<Token> tokens, DotnetHostImportPolicy policy)
     {
         private int _index;
         private string? _dotnetMathAlias;
@@ -319,6 +320,9 @@ public static class OresParser
             if (Take("import"))
             {
                 Expect("dotnet");
+                // An import is an authority request, not an authority grant.
+                // Deny before interpreting even a permitted System.Math alias.
+                policy.RequireMathI64();
                 // Explicit, finite v0 target. No dynamic assembly loading,
                 // arbitrary reflection, overload inference or host object escape.
                 if (Current.Text != "\"System.Math\"")
@@ -444,12 +448,24 @@ public static class OresParser
             if (_dotnetMathAlias is not null && Take(_dotnetMathAlias))
             {
                 Expect(".");
-                if (!Take("Abs"))
-                    throw new FormatException($"DOTNET_INTEROP_UNSUPPORTED: only Math.Abs(i64) is allowlisted at offset {Current.Offset}");
-                Expect("(");
-                var value = ParseAdd(depth + 1);
-                Expect(")");
-                return new DotnetMathAbsI64(value);
+                if (Take("Abs"))
+                {
+                    Expect("(");
+                    var value = ParseAdd(depth + 1);
+                    Expect(")");
+                    return new DotnetMathAbsI64(value);
+                }
+                if (Take("Max"))
+                {
+                    Expect("(");
+                    var left = ParseAdd(depth + 1);
+                    Expect(",");
+                    var right = ParseAdd(depth + 1);
+                    Expect(")");
+                    return new DotnetMathMaxI64(left, right);
+                }
+                throw new FormatException(
+                    $"DOTNET_INTEROP_UNSUPPORTED: only Math.Abs(i64) and Math.Max(i64,i64) are allowlisted at offset {Current.Offset}");
             }
             // The scalar subset admits only this one typed Integer intrinsic.
             // Parser-owned name resolution rejects arbitrary Integer.* calls.
