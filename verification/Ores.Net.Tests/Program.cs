@@ -32,6 +32,7 @@ static void InvalidSend(Action action, string why)
 
 // Host-only contract. This is not proof of compiler-injected untrusted CIL.
 AmortizedCooperationQuantumTests.Run();
+UntrustedLoopFreeCfgAdmissionTests.Run();
 
 // Durable M0 is not lowered by the .NET Native AOT compiler. Exercise the
 // real structured lexer/parser boundary, not a source-substring approximation.
