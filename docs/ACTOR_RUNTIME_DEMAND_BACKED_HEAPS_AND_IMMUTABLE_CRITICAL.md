@@ -47,9 +47,23 @@ Actor identity, incarnation, generation, publication, liveness, current
 turn and borrow authority are checked out of line, including after carrier
 migration. The 32-bit word alone is never an authority or wire value.
 
-The new demand-backed host allocation code **does not yet implement** checked
-source-generated `.atto` graph field loads/stores. Compiled guest integration
-is a separate acceptance gate, tracked by .NET #413.
+The draft now also provides **host checked ref32 field primitives** on the
+actual `ActorArena`: `WriteManagedRef32(turn, parent, fourByteOffset, target)`
+and `ReadManagedRef32(...)`. Each guest-visible field is a **4-byte
+little-endian** word, and an out-of-line bounded sidecar preserves the
+original issued target capability, actor/incarnation, slot generation and
+liveness. A release/reallocate at the same offset retains the same encoded
+word but cannot resurrect the old link (ABA): reading fails closed until the
+field is explicitly replaced with a new issued capability. Cross-actor
+capabilities, misaligned fields, unsafely forged byte fields, and mutation
+through a parent read loan are rejected. Sidecar proofs are cleared on
+parent release and arena retirement.
+
+These are C# host primitives, not native `.atto` frontend or MIR lowering.
+**Checked source-generated `.atto` class/array/record field lowering is not
+implemented or verified**; .NET #413 tracks that acceptance gate. The
+portable `.atto` compiler must choose this operation for managed reference
+typed fields, not permit arbitrary `Write` on a typed object layout.
 
 ## Immutable containers and critical sections
 
@@ -74,7 +88,9 @@ yet verified across GraalVM, LLVM and .NET NativeAOT.
 New `ActorArenaSelfTest` and `ActorRuntimeSelfTest` cases exercise the
 real runtime dispatch, growth under a read loan, two equal-offset private
 heaps, aggregate-denied allocation, failure neutrality, scratch epoch reset,
-pinned retirement, and quota return before reusing memory. These are host
+pinned retirement, quota return, 4-byte fields, null values, original-target
+generation ABA rejection, raw field tampering, cross-actor denial, parent loan
+freeze, and checked fields surviving native slab relocation. These are host
 tests, not guest execution. **No `dotnet` SDK is installed in this session,
 and GitHub Actions may fail with `steps=null`. Thus .NET host tests,
 NativeAOT and guest `.atto` parity are NOT_EXECUTED until proven at the exact
