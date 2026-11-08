@@ -11,7 +11,9 @@ public sealed class ActorCooperationMeter
     private readonly int _interval;
     private int _phase;
     private ulong _completed;
-    private bool _servicingCheckpoint;
+    // Fail closed if two carrier threads concurrently enter this task-owned
+    // meter. A scheduler handoff may migrate ownership only after return.
+    private int _mutating;
 
     public ActorCooperationMeter(int interval = 128)
     {
@@ -28,10 +30,14 @@ public sealed class ActorCooperationMeter
     // sections, recursive calls, or nested user loops.
     public void BeginDispatch()
     {
-        if (_servicingCheckpoint)
-            throw new InvalidOperationException("Reentrant cooperation dispatch reset");
-        _phase = 0;
-        _completed = 0;
+        if (Interlocked.CompareExchange(ref _mutating, 1, 0) != 0)
+            throw new InvalidOperationException("Reentrant or concurrent cooperation dispatch reset");
+        try
+        {
+            _phase = 0;
+            _completed = 0;
+        }
+        finally { Volatile.Write(ref _mutating, 0); }
     }
 
     /// <summary>
@@ -41,31 +47,27 @@ public sealed class ActorCooperationMeter
     /// </summary>
     public bool CommitBatch(int work, Action<ulong, bool> onCheckpoint)
     {
-        if (_servicingCheckpoint)
-            throw new InvalidOperationException("Reentrant cooperation charge");
         if (work <= 0 || work > _interval)
             throw new ArgumentOutOfRangeException(nameof(work));
         ArgumentNullException.ThrowIfNull(onCheckpoint);
-        int next = _phase + work;
-        bool due = next >= _interval;
-        _phase = next % _interval;
-        _completed = ulong.MaxValue - _completed < (ulong)work
-            ? ulong.MaxValue : _completed + (ulong)work;
-        if (due)
+        if (Interlocked.CompareExchange(ref _mutating, 1, 0) != 0)
+            throw new InvalidOperationException("Reentrant or concurrent cooperation charge");
+        try
         {
-            // Prevent an accidental scheduler callback from restarting or
-            // recursively charging the actor. The charge is committed even
-            // if the trusted slow path throws; no duplicate checkpoint replay.
-            _servicingCheckpoint = true;
-            try
+            int next = _phase + work; // <= 1024, no signed overflow
+            bool due = next >= _interval;
+            _phase = next % _interval;
+            _completed = ulong.MaxValue - _completed < (ulong)work
+                ? ulong.MaxValue : _completed + (ulong)work;
+            if (due)
             {
+                // The callback is synchronous; the atomic owner fence spans
+                // the callback so another carrier cannot reset or double
+                // charge this logical actor during a scheduler handoff.
                 onCheckpoint(_completed, _completed >= DefaultDispatchBudget);
             }
-            finally
-            {
-                _servicingCheckpoint = false;
-            }
+            return due;
         }
-        return due;
+        finally { Volatile.Write(ref _mutating, 0); }
     }
 }
