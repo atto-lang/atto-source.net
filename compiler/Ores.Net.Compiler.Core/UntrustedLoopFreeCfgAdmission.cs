@@ -10,7 +10,16 @@ internal static class UntrustedLoopFreeCfgAdmission
 {
     internal const int MaxInstructions = 4096;
 
-    internal static void Require(VerifiedCfgFunction graph)
+    internal static void Require(VerifiedCfgFunction graph) =>
+        RequireBounded(graph, allowLoops: false);
+
+    // The metered emitter may admit cycles only because it instruments EVERY
+    // CFG block entry and hard-traps after the fixed per-invocation budget.
+    // Still reject calls and graphs whose bounded static CIL cost is excessive.
+    internal static void RequireMetered(VerifiedCfgFunction graph) =>
+        RequireBounded(graph, allowLoops: true);
+
+    private static void RequireBounded(VerifiedCfgFunction graph, bool allowLoops)
     {
         ArgumentNullException.ThrowIfNull(graph);
         var blocks = graph.Blocks;
@@ -85,7 +94,11 @@ internal static class UntrustedLoopFreeCfgAdmission
         void Visit(int index)
         {
             if (state[index] == 1)
-                throw new FormatException("Untrusted CFG loop requires mandatory checkpoints");
+            {
+                if (!allowLoops)
+                    throw new FormatException("Untrusted CFG loop requires mandatory checkpoints");
+                return; // a real backedge, instrumented by metered block entry
+            }
             if (state[index] == 2) return;
             state[index] = 1;
             foreach (int next in edges[index]) Visit(next);
