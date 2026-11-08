@@ -39,6 +39,10 @@ internal static class ActorIsolationAccessV1SelfTest
             "ABA use-after-free fenced");
         a.Retire();
         Require(!a.TryCheckedOffset(fresh, 2, 8, out _), "retirement fences access");
+        var sibling = new ActorIsolationAccessV1(1, 99, 1, 64);
+        var siblingGrant = sibling.IssueAllocation(0, 8);
+        Require(sibling.TryCheckedOffset(siblingGrant, 1, 8, out at) && at == 0,
+            "retiring a peer leaves sibling grant live");
         bool retired = false;
         try { a.IssueAllocation(0, 8); }
         catch (InvalidOperationException) { retired = true; }
