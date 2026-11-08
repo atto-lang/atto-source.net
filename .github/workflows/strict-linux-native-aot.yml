@@ -147,6 +147,23 @@ jobs:
           bash verification/assert-linux-native-release.sh "$app"
           test "$("$app")" = 42
           echo "LINUX_NET_LOGICAL_WORDS_NATIVE_AOT_42|blob=$expected_blob"
+          # Independently linked bool helpers use real CIL MethodDef calls.
+          # This guest would overflow if the short-circuit RHS were executed.
+          module=contracts/logical-word-operators-v1/module-methoddef.atto
+          module_blob=e55a0c9a1c004f4b64d318c7cdd25cc4b5873d64
+          test "$(git hash-object -- "$module")" = "$module_blob" || {
+            echo "Pinned logical MethodDef fixture mismatch" >&2
+            exit 1
+          }
+          "$compiler" check-structured "$module"
+          bash scripts/publish-linux.sh "$module" artifacts/logical-word-module --structured
+          methoddef=artifacts/logical-word-module/linux-x64/oreslang-app
+          bash verification/assert-linux-native-release.sh "$methoddef"
+          test "$("$methoddef")" = 42
+          # Both previously published guests must remain source-isolated.
+          test "$("$app")" = 42
+          test "$(artifacts/structured/linux-x64/oreslang-app)" = 45
+          echo "LINUX_NET_LOGICAL_METHODDEF_NATIVE_AOT_42|blob=$module_blob"
       - name: Negative test for managed sidecar rejection
         shell: bash
         run: |
@@ -199,7 +216,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           tree="$(git rev-parse 'HEAD^{tree}')"
           mkdir -p artifacts/evidence
-          printf '{"schema":"oreslang.net.exact_head_native_aot_v1","repository":"%s","source_head_sha":"%s","tree_sha":"%s","run_id":%s,"run_attempt":%s,"runner_os":"Linux","target_rid":"linux-x64","checks":["managed-tests","native-compiler","native-app","negative-source-no-cil","source-isolation-4","flags2env-client-abi-status42","canonical-precedence","structured-ssa-cil-native45","logical-word-native42","sidecar-negative"],"source_only":false,"independently_verified":false}\n' \
+          printf '{"schema":"oreslang.net.exact_head_native_aot_v1","repository":"%s","source_head_sha":"%s","tree_sha":"%s","run_id":%s,"run_attempt":%s,"runner_os":"Linux","target_rid":"linux-x64","checks":["managed-tests","native-compiler","native-app","negative-source-no-cil","source-isolation-4","flags2env-client-abi-status42","canonical-precedence","structured-ssa-cil-native45","logical-word-native42","logical-word-methoddef-native42","sidecar-negative"],"source_only":false,"independently_verified":false}\n' \
             "$GITHUB_REPOSITORY" "$EXPECTED_HEAD" "$tree" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > artifacts/evidence/linux-native-aot.json
       - name: Upload Linux native executables and evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -214,6 +231,7 @@ jobs:
             artifacts/flags2env-client/linux-x64/oreslang-app
             artifacts/structured/linux-x64/oreslang-app
             artifacts/logical-word-parity/linux-x64/oreslang-app
+            artifacts/logical-word-module/linux-x64/oreslang-app
             artifacts/compiler/linux-x64/oresnet
           if-no-files-found: error
           retention-days: 14
