@@ -101,7 +101,7 @@ public static class ActorCooperationMeterTests
                 total += (ulong)work;
                 Require(due == (total / (ulong)interval != before / (ulong)interval),
                     "batch crossing oracle");
-                Require(meter.Completed == total && meter.Phase == total % (ulong)interval,
+                Require(meter.Completed == total && (ulong)meter.Phase == total % (ulong)interval,
                     "per-actor work and phase equal mathematical model");
             }
             Require(observed == (int)(total / (ulong)interval), "no lost or duplicate polls");
