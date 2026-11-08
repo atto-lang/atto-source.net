@@ -5,6 +5,7 @@ on:
       - 'runtime/Ores.Net.Runtime/**'
       - 'verification/Ores.Net.Tests/**'
       - 'verification/Ores.Net.ActorMemoryProbe/**'
+      - 'contracts/actor-scalar-execution-v1/**'
       - '.github/workflows/actor-memory-native-aot.yml'
   workflow_dispatch:
 permissions:
