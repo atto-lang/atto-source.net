@@ -41,7 +41,8 @@ public sealed class AotPublicTypeDescriptor
             if (fieldCopy.Count >= MaxFields)
                 throw new ArgumentException("public field descriptor quota exceeded", nameof(fields));
             if (field is null || !AotPublicTypeCatalog.IsCanonicalName(field.Name) ||
-                !Enum.IsDefined(field.Kind) || !seenFields.Add(field.Name))
+                field.Kind is not (AotPublicFieldKind.Int or AotPublicFieldKind.Bool or AotPublicFieldKind.Text) ||
+                !seenFields.Add(field.Name))
                 throw new ArgumentException("invalid/duplicate public field descriptor", nameof(fields));
             // Metadata kinds cannot carry private actor addresses, unmanaged
             // pointers, runtime handles or dynamic object references.
