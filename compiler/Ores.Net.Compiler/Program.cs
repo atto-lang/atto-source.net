@@ -1,6 +1,16 @@
 using Ores.Net.Compiler;
 using System.Text;
 
+// The bootstrap CLR capability is a deliberate compiler invocation grant,
+// not an authority inferred from host type names or environment variables.
+// It is valid only for scalar check/compile, never module/structured/facts paths.
+bool mathI64Granted = args.Length >= 4 &&
+    args[^2] == "--capability" && args[^1] == "interop.dotnet.math-i64";
+if (mathI64Granted) args = args[..^2];
+var dotnetPolicy = mathI64Granted
+    ? DotnetHostImportPolicy.MathI64V0
+    : DotnetHostImportPolicy.DenyAll;
+
 // Reject invalid shapes before indexing args[3]. Previously "compile file.ores"
 // passed validation then crashed with IndexOutOfRangeException instead of usage.
 bool validCheck = args.Length == 2 && args[0] == "check";
@@ -14,7 +24,8 @@ bool validEmitSource = args.Length == 4 && args[2] == "--out" &&
 bool validStaticFacts = args.Length == 2 &&
     (args[0] == "static-facts" || args[0] == "static-facts-structured");
 bool moduleCommand = args.Length >= 1 && args[0] is "check-modules" or "compile-modules";
-if (!validCheck && !validCompile && !validStructuredCheck && !validStructuredCompile && !validStaticFacts && !validEmitSource && !moduleCommand)
+if ((mathI64Granted && !validCheck && !validCompile) ||
+    (!validCheck && !validCompile && !validStructuredCheck && !validStructuredCompile && !validStaticFacts && !validEmitSource && !moduleCommand))
 {
     Console.Error.WriteLine("usage: oresnet check input.atto|input.ores | oresnet compile input.atto|input.ores --out path/OresGenerated.dll | oresnet check-structured input.atto|input.ores | oresnet compile-structured input.atto|input.ores --out path/OresGenerated.dll | oresnet emit-csharp input.atto|input.ores --out path/OresProgram.cs | oresnet emit-fsharp input.atto|input.ores --out path/OresProgram.fs | oresnet static-facts input.atto|input.ores | oresnet static-facts-structured input.atto|input.ores");
     return 2;
@@ -90,10 +101,10 @@ try
         else Console.WriteLine("Experimental structured source and verified CFG: OK");
         return 0;
     }
-    var expression = OresParser.Parse(source);
+    var expression = OresParser.Parse(source, dotnetPolicy);
     // Both check and compile require successfully verified typed IR.
     // Production CIL must not bypass SSA/type validation.
-    var verified = OresIrLowering.Lower(expression);
+    var verified = OresIrLowering.Lower(expression, policy: dotnetPolicy);
     if (args[0] == "compile")
     {
         if (!string.Equals(Path.GetFileName(args[3]), "OresGenerated.dll",
