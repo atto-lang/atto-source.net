@@ -121,9 +121,10 @@ internal static class ActorGuestFrameGateSelfTest
                 Volatile.Read(ref healthyResult) == 42,
             "actor B could not return 42 after four guest-frame faults");
         Require(SpinWait.SpinUntil(
-            () => runtime.FaultedTurns >= 4 && runtime.LiveActors == 1,
+            () => runtime.FaultedTurns >= 4 && runtime.LiveActors == 1 &&
+                  runtime.CompletedMessages == 1,
             TimeSpan.FromSeconds(8)),
-            "four terminal guest frame faults must stop only their own actors");
+            "four terminal guest faults stop only offenders; only B completes");
         Require(runtime.CompletedMessages == 1,
             "caught guest frame faults must not count as completed messages");
 
