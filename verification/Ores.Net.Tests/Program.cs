@@ -363,6 +363,7 @@ Require(OresParser.Parse(
     "model text in line comments remains inert");
 
 CriticalSuspendsBoundaryTests.Run(); // compiler-owned scalar admission, not runtime critical support
+AttoSemanticNegativeGateTests.Run(); // canonical .atto negatives + IR/CIL positive controls (not NativeAOT)
 AsyncOnlyIoPolicyTests.Run();
 CapabilityIoLifecycleV1SelfTest.Run();
 SourceByteBudgetTests.Run();
