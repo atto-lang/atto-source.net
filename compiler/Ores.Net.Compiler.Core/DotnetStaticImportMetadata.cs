@@ -11,7 +11,18 @@ namespace Ores.Net.Compiler;
 /// </summary>
 internal static class DotnetStaticImportMetadata
 {
-    internal static MemberReferenceHandle MathAbs(MetadataBuilder metadata)
+    internal static MemberReferenceHandle MathAbs(MetadataBuilder metadata) =>
+        CreateMathCall(metadata, "Abs", 1);
+
+    internal static MemberReferenceHandle MathBinary(MetadataBuilder metadata, string method)
+    {
+        if (method is not ("Max" or "Min"))
+            throw new FormatException("Unapproved .NET static host method");
+        return CreateMathCall(metadata, method, 2);
+    }
+
+    private static MemberReferenceHandle CreateMathCall(
+        MetadataBuilder metadata, string method, int arity)
     {
         ArgumentNullException.ThrowIfNull(metadata);
         var runtime = metadata.AddAssemblyReference(
@@ -24,10 +35,14 @@ internal static class DotnetStaticImportMetadata
             metadata.GetOrAddString("System"), metadata.GetOrAddString("Math"));
         var signature = new BlobBuilder();
         new BlobEncoder(signature).MethodSignature().Parameters(
-            1,
+            arity,
             returnType => returnType.Type().Int64(),
-            parameters => parameters.AddParameter().Type().Int64());
+            parameters =>
+            {
+                for (int i = 0; i < arity; i++)
+                    parameters.AddParameter().Type().Int64();
+            });
         return metadata.AddMemberReference(math,
-            metadata.GetOrAddString("Abs"), metadata.GetOrAddBlob(signature));
+            metadata.GetOrAddString(method), metadata.GetOrAddBlob(signature));
     }
 }
