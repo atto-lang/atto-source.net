@@ -1,0 +1,28 @@
+name: AOT public metadata host tests
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  descriptor-host-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Prove exact checked-out head
+        shell: bash
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          git rev-parse HEAD
+          git rev-parse 'HEAD^{tree}'
+      - name: Smoke current host SDK
+        run: dotnet --info
+      - name: Run host-only closed catalog negative tests
+        run: dotnet run --project verification/AotDescriptorSmoke/AotDescriptorSmoke.csproj -c Release
