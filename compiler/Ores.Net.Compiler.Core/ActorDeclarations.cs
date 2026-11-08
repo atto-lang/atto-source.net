@@ -324,6 +324,8 @@ public static class OresActorDeclarationParser
                 if (actors.Count > MaxActors)
                     throw Error($"actor declaration count exceeds {MaxActors}");
             }
+            if (actors.Count == 0)
+                throw Error("source must contain at least one actor declaration");
             return new ActorDeclarationUnit(
                 new ReadOnlyCollection<ActorDeclaration>(actors), source.Length);
         }
