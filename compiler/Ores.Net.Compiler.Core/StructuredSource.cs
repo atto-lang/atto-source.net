@@ -171,6 +171,16 @@ public static class OresStructuredParser
                 throw new FormatException(
                     $"Inverted class requires checked bracket-row and ownership lowering in the .NET backend at offset {token.Offset}");
             }
+            // A supervisor is a distinct compiler-owned CONTROL authority,
+            // not a class/actor or a scalar helper. Deny it before CFG/CIL
+            // emission, including module-local and pub/define spellings.
+            // Tokenization already excludes comments and string contents.
+            if (token.Text == "supervisor" && tokens.Count > 0 &&
+                (tokens[^1].Text == "define" ||
+                 (tokens[^1].Text == "pub" && tokens.Count > 1 &&
+                  tokens[^2].Text == "define")))
+                throw new FormatException(
+                    $"Source supervisors require typed Failure, owned CONTROL dispatch and Native AOT lowering; unsupported in .NET structured frontend at offset {token.Offset}");
             if ((token.Text == "class" || token.Text == "actor") &&
                 tokens.Count > 0 &&
                 (tokens[^1].Text == "define" ||

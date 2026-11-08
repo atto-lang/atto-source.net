@@ -274,6 +274,28 @@ foreach (var source in new[] {
     "define class X as foo(int x):int {return x;} foo(self,int x):int {return x;} end"
 })
     Reject(() => OresParser.Parse(source), "unimplemented class method receiver parity");
+// Source supervisors are not scalar functions. The shipping parser must
+// reject typed CONTROL authority before a generic fnc diagnostic or CIL.
+foreach (var source in new[] {
+    "define supervisor S1 as on_panic(f: Failure): void { return; } end",
+    "pub define supervisor S1 as end",
+    "define pub supervisor S1 as end",
+    "define supervisor S1 extends Actor as end",
+    "define supervisor S1 implements Observer as end",
+    "define supervisor S1 with RestartPolicy as end",
+    "define supervisor actor S1 as end",
+})
+    RejectDiagnostic(
+        () => OresParser.Parse(source),
+        "Source supervisors require typed Failure, owned CONTROL dispatch",
+        "shipping scalar source supervisor must fail before CIL");
+Require(OresParser.Parse(
+    "fnc main():int{return 42;} // define supervisor Fake extends Actor") is Literal,
+    "source supervisor words in scalar comments must not be CONTROL");
+Require(OresParser.Parse(
+    "fnc main():int{return 42;} /* define /* supervisor */ supervisor S1 */") is Literal,
+    "nested scalar source comments must not be CONTROL");
+
 // Nominal enum overloads require compiler-owned type identities and an
 // executable selected-slot ABI. The scalar .NET frontend must not accept
 // their source syntax before those paths exist (including case payloads).
@@ -1001,6 +1023,7 @@ SharedScalarParityConformance.Run();
 AttoXpScalarParityTests.Run(); // pinned .atto scalar IR + CIL evaluator only
 CfgVerifierTests.Run();
 CfgCilStressTests.Run();
+SupervisorStopLedgerSelfTest.Run();
 StructuredSourceTests.Run();
 StructuredCfgLoweringTests.Run();
 StructuredStaticAbiTests.Run();

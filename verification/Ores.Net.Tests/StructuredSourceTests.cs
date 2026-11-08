@@ -160,6 +160,25 @@ internal static class StructuredSourceTests
         Require(OresStructuredParser.Parse(
             "fnc main():int{return 42;} // define model Fake as Identity() end").Body.Count == 1,
             "line comment model syntax is lexically inert");
+        // No executable supervisor/CONTROL source lowering exists in the
+        // scalar NativeAOT compiler. A nominal supervisor must not downgrade
+        // to an ordinary class, actor, trait, or exported helper.
+        foreach (var source in new[] {
+            "define supervisor S1 as on_panic(f: Failure): void { return; } end",
+            "pub define supervisor S1 as on_panic(f: Failure): void { return; } end",
+            "define pub supervisor S1 as on_panic(f: Failure): void { return; } end",
+            "define supervisor S1 extends Actor as on_panic(f: Failure): void {} end",
+            "define supervisor S1 implements Observer as on_panic(f: Failure): void {} end",
+            "define supervisor S1 with RestartPolicy as on_panic(f: Failure): void {} end",
+            "define module Workers as define supervisor S1 as on_panic(f: Failure): void {} end end",
+            "fnc main():int{define supervisor Local as on_panic(f: Failure): void {} end return 42;}"
+        })
+            RejectFeature(source, "Source supervisors require typed Failure, owned CONTROL dispatch");
+        // Identical text in comments and quoted strings is not executable syntax.
+        var supervisorComment = OresStructuredParser.Parse(
+            "fnc main():int{return 42;} // define supervisor S1 extends Actor");
+        Require(supervisorComment.Body.Count == 1,
+            "comments must not create supervisor admission failures");
 
         // Local value types are block-local declarations on the structured
         // frontend. They are admitted into the AST but deliberately rejected
