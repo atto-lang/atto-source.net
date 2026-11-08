@@ -56,7 +56,7 @@ public static class CilEmitter
 
             var methodCode = new BlobBuilder();
             var il = new InstructionEncoder(methodCode);
-            int maxStack = WriteVerifiedIr(program, il);
+            int maxStack = WriteVerifiedIr(program, il, metadata);
             int bodyOffset = bodies.AddMethodBody(il, maxStack: maxStack,
                 localVariablesSignature: localSignature,
                 attributes: MethodBodyAttributes.InitLocals);
@@ -74,8 +74,27 @@ public static class CilEmitter
     public static void EmitLibrary(VerifiedCfgModule module, string outputFile) =>
         CfgCilEmitter.EmitLibrary(module, outputFile);
 
-    private static int WriteVerifiedIr(VerifiedIrFunction program, InstructionEncoder il)
+    private static int WriteVerifiedIr(VerifiedIrFunction program, InstructionEncoder il,
+        MetadataBuilder metadata)
     {
+        // Only the compiler-pinned, exact System.Math.Abs(Int64) signature is
+        // available. No Assembly.Load, reflection, dynamic invocation or
+        // general CLR object handles are emitted into Native AOT applications.
+        MemberReferenceHandle mathAbs = default;
+        if (program.Instructions.Any(instruction =>
+                instruction.Opcode == IrOpcode.DotnetMathAbsI64))
+        {
+            var math = metadata.AddTypeReference(
+                MetadataTokens.AssemblyReferenceHandle(1),
+                metadata.GetOrAddString("System"), metadata.GetOrAddString("Math"));
+            var signature = new BlobBuilder();
+            new BlobEncoder(signature).MethodSignature().Parameters(
+                1, result => result.Type().Int64(),
+                parameters => parameters.AddParameter().Type().Int64());
+            mathAbs = metadata.AddMemberReference(math,
+                metadata.GetOrAddString("Abs"), metadata.GetOrAddBlob(signature));
+        }
+
         int maxStack = 1;
         foreach (var operation in program.Instructions)
         {
@@ -86,6 +105,11 @@ public static class CilEmitter
                     break;
                 case IrOpcode.SignedRemainderLiteral:
                     throw new FormatException("Removed Oreslang operator '%' cannot reach CIL emission");
+                case IrOpcode.DotnetMathAbsI64:
+                    il.LoadLocal(operation.Left!.Value);
+                    il.OpCode(ILOpCode.Call);
+                    il.Token(mathAbs);
+                    break;
                 case IrOpcode.CheckedAdd:
                 case IrOpcode.CheckedSubtract:
                 case IrOpcode.CheckedMultiply:
@@ -119,6 +143,17 @@ public static class CilEmitter
         var ilStream = new BlobBuilder();
         var bodyStream = new MethodBodyStreamEncoder(ilStream);
         var metadata = new MetadataBuilder();
+        // Reserve the exact framework AssemblyRef before verified method bodies
+        // are emitted, so host MemberRefs can use the same pinned reference
+        // that OresProgram uses for System.Object.
+        var runtime = metadata.AddAssemblyReference(
+            metadata.GetOrAddString("System.Runtime"),
+            new Version(10, 0, 0, 0),
+            culture: default,
+            publicKeyOrToken: metadata.GetOrAddBlob(
+                new byte[] { 0xB0, 0x3F, 0x5F, 0x7F, 0x11, 0xD5, 0x0A, 0x3A }),
+            flags: default,
+            hashValue: default);
         var (bodyOffset, _, localSignatureBlob) = buildBody(metadata, bodyStream);
         // The finalized method body includes branch fixups and the signature
         // *token*, but the token number is not a fingerprint of its blob.
@@ -144,15 +179,6 @@ public static class CilEmitter
             flags: default,
             hashAlgorithm: System.Reflection.AssemblyHashAlgorithm.None);
 
-        var runtime = metadata.AddAssemblyReference(
-            metadata.GetOrAddString("System.Runtime"),
-            new Version(10, 0, 0, 0),
-            culture: default,
-            // System.Runtime carries the Microsoft strong-name token; emitting a
-            // token-less reference prevents downstream C# and Native AOT binding.
-            publicKeyOrToken: metadata.GetOrAddBlob(new byte[] { 0xB0, 0x3F, 0x5F, 0x7F, 0x11, 0xD5, 0x0A, 0x3A }),
-            flags: default,
-            hashValue: default);
         var systemObject = metadata.AddTypeReference(
             runtime,
             metadata.GetOrAddString("System"),
