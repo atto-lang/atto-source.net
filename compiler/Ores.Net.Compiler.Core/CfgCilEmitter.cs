@@ -28,10 +28,26 @@ internal static class CfgCilEmitter
                 WriteMethod(graph, metadata, bodies, handles));
     }
 
+    // A separate experimental entry point for untrusted loop-capable code.
+    // It does NOT suspend, schedule or grant lifetime fuel; it traps after
+    // bounded block visits. Recursion and calls stay denied by admission.
+    public static void EmitMeteredUntrustedPrototypeLibrary(
+        VerifiedCfgFunction graph, string outputFile)
+    {
+        ArgumentNullException.ThrowIfNull(graph);
+        ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
+        if (graph.Parameters.Count != 0 || graph.ResultType != IrValueType.I64)
+            throw new FormatException("Untrusted metered CIL requires parameterless i64 Run");
+        UntrustedLoopFreeCfgAdmission.RequireMetered(graph);
+        CilEmitter.EmitLibraryCore(outputFile, (metadata, bodies) =>
+            WriteMethod(graph, metadata, bodies, null, metered: true));
+    }
+
     private static (int BodyOffset, BlobBuilder Code, BlobBuilder? Locals) WriteMethod(
         VerifiedCfgFunction graph, MetadataBuilder metadata,
         MethodBodyStreamEncoder bodies,
-        IReadOnlyDictionary<string, MethodDefinitionHandle>? handles)
+        IReadOnlyDictionary<string, MethodDefinitionHandle>? handles,
+        bool metered = false)
     {
             var blocks = graph.Blocks;
             int valueCount = blocks.Sum(b => b.Parameters.Count + b.Instructions.Count);
@@ -44,7 +60,15 @@ internal static class CfgCilEmitter
             // The second part reserves *target-typed* edge scratch slots.
             // Capturing all source values before touching block parameters
             // makes edge assignments simultaneous, including swaps.
-            var types = new IrValueType[valueCount + scratchCount];
+            int originalLocals = valueCount + scratchCount;
+            var types = new IrValueType[originalLocals + (metered ? 2 : 0)];
+            int countdownSlot = originalLocals;
+            int hardFuelSlot = originalLocals + 1;
+            if (metered)
+            {
+                types[countdownSlot] = IrValueType.I64;
+                types[hardFuelSlot] = IrValueType.I64;
+            }
             var targetScratch = new Dictionary<string, int[]>(StringComparer.Ordinal);
             var targetParameters = new Dictionary<string, IReadOnlyList<CfgParameter>>(
                 StringComparer.Ordinal);
@@ -65,7 +89,7 @@ internal static class CfgCilEmitter
                 targetScratch.Add(block.Name, slots);
                 targetParameters.Add(block.Name, block.Parameters);
             }
-            if (nextScratch != types.Length)
+            if (nextScratch != originalLocals)
                 throw new FormatException("CFG local layout is inconsistent");
 
             var signatureBlob = new BlobBuilder();
@@ -89,9 +113,48 @@ internal static class CfgCilEmitter
             foreach (var block in blocks)
                 labels.Add(block.Name, il.DefineLabel());
 
+            if (metered)
+            {
+                // Both counters are compiler-private CIL local slots, never
+                // addressable from the guest CFG. Fairness and hard fuel use
+                // distinct slots. No host call on the hot block-entry path.
+                il.LoadConstantI8(128);
+                il.StoreLocal(countdownSlot);
+                il.LoadConstantI8(4096);
+                il.StoreLocal(hardFuelSlot);
+            }
+
             // The input list is not required to put its entry block first.
             // A jump to the entry is explicit; there is no implicit fallthrough.
             il.Branch(ILOpCode.Br, labels[graph.Entry]);
+
+            void MeterBlockEntry()
+            {
+                // One decrement/branch per verified CFG block visitation.
+                // This charges cycles, including nested CFG loops; not a
+                // source-level "every 128 backedges" parity claim. Once per
+                // 128 visits update the hard per-call quota. At depletion,
+                // throw null: CLR raises NullReferenceException and does
+                // NOT expose an unowned resumable guest stack to a scheduler.
+                var continueEntry = il.DefineLabel();
+                il.LoadLocal(countdownSlot);
+                il.LoadConstantI8(1);
+                il.OpCode(ILOpCode.Sub);
+                il.StoreLocal(countdownSlot);
+                il.LoadLocal(countdownSlot);
+                il.Branch(ILOpCode.Brtrue, continueEntry);
+                il.LoadConstantI8(128);
+                il.StoreLocal(countdownSlot);
+                il.LoadLocal(hardFuelSlot);
+                il.LoadConstantI8(128);
+                il.OpCode(ILOpCode.Sub);
+                il.StoreLocal(hardFuelSlot);
+                il.LoadLocal(hardFuelSlot);
+                il.Branch(ILOpCode.Brtrue, continueEntry);
+                il.OpCode(ILOpCode.Ldnull);
+                il.OpCode(ILOpCode.Throw);
+                il.MarkLabel(continueEntry);
+            }
 
             void Transfer(string destination, IReadOnlyList<int> arguments)
             {
@@ -117,6 +180,7 @@ internal static class CfgCilEmitter
             foreach (var block in blocks)
             {
                 il.MarkLabel(labels[block.Name]);
+                if (metered) MeterBlockEntry();
                 foreach (var op in block.Instructions)
                 {
                     switch (op.Opcode)
