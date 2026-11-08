@@ -152,6 +152,9 @@ public static class OresStructuredCfgLowering
                         variable.Type != read.Type)
                         throw new FormatException("Unbound structured CFG local");
                     return variable.ValueId;
+                case StructuredDotnetMathAbs hostAbs:
+                    return Emit(block, CfgOpcode.DotnetMathAbs, IrValueType.I64,
+                        left: Expression(hostAbs.Argument, block, variables));
                 case StructuredCall call:
                 {
                     if (emitCalls)
