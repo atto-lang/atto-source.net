@@ -139,6 +139,24 @@ internal static class CfgCilEmitter
                         case CfgOpcode.ConstantBool:
                             il.LoadConstantI4(op.BoolConstant!.Value ? 1 : 0);
                             break;
+                        case CfgOpcode.OptionOrI64:
+                        {
+                            // All three operands were type/SSA/dominance checked.
+                            // On both paths, store exactly one i64 result with
+                            // an empty evaluation stack at the join label.
+                            var some = il.DefineLabel();
+                            var end = il.DefineLabel();
+                            il.LoadLocal(op.Left!.Value);
+                            il.Branch(ILOpCode.Brtrue, some);
+                            il.LoadLocal(op.Arguments![0]);
+                            il.StoreLocal(op.ResultId);
+                            il.Branch(ILOpCode.Br, end);
+                            il.MarkLabel(some);
+                            il.LoadLocal(op.Right!.Value);
+                            il.StoreLocal(op.ResultId);
+                            il.MarkLabel(end);
+                            continue;
+                        }
                         case CfgOpcode.CheckedAdd:
                         case CfgOpcode.CheckedSubtract:
                         case CfgOpcode.CheckedMultiply:
