@@ -9,6 +9,7 @@ internal static class ActorFrameStackSelfTest
         StrictLifoAndQuotaAreTerminal();
         DuplicateBeginPoisonsEvenWhenCaught();
         SamePhysicalTurnCannotResume();
+        BadFrameSizeAndBoundsAreTerminal();
         AggregateFrameQuotaRollbackAndSiblings();
         SuspensionResumesOnAnotherCarrier();
         SynchronousHandlerCannotEscapeSuspension();
@@ -125,6 +126,47 @@ internal static class ActorFrameStackSelfTest
             "same-turn continuation replay must be terminal");
         ExpectInvalid(() => frames.Read(turn, execution, frame, 0, new byte[1]),
             "same-turn replay must not expose old bytes");
+    }
+
+    private static void BadFrameSizeAndBoundsAreTerminal()
+    {
+        using var zeroActor = new ActorArena(7180, 1, 128, 64, 4, 2, 2);
+        using var writeActor = new ActorArena(7181, 1, 128, 64, 4, 2, 2);
+        using var readActor = new ActorArena(7182, 1, 128, 64, 4, 2, 2);
+        using var survivorActor = new ActorArena(7183, 1, 128, 64, 4, 2, 2);
+        using var zero = new ActorFrameStack(zeroActor, new ActorArenaBudget(64), 2, 64);
+        using var writer = new ActorFrameStack(writeActor, new ActorArenaBudget(64), 2, 64);
+        using var reader = new ActorFrameStack(readActor, new ActorArenaBudget(64), 2, 64);
+        using var survivor = new ActorFrameStack(survivorActor, new ActorArenaBudget(64), 2, 64);
+        using var t0 = zeroActor.EnterTurn(7180, 1);
+        using var t1 = writeActor.EnterTurn(7181, 1);
+        using var t2 = readActor.EnterTurn(7182, 1);
+        using var t3 = survivorActor.EnterTurn(7183, 1);
+        var e0 = zero.Begin(t0);
+        var e1 = writer.Begin(t1);
+        var e2 = reader.Begin(t2);
+        var e3 = survivor.Begin(t3);
+        var f1 = writer.Push(t1, e1, 8);
+        var f2 = reader.Push(t2, e2, 8);
+        var f3 = survivor.Push(t3, e3, 8);
+
+        ExpectOutOfRange(() => zero.Push(t0, e0, 0),
+            "a zero-length compiler-issued frame must terminate its actor");
+        ExpectOutOfRange(() => writer.Write(t1, e1, f1, 7, new byte[] { 1, 2 }),
+            "frame write cannot cross into a sibling allocation");
+        ExpectOutOfRange(() => reader.Read(t2, e2, f2, -1, new byte[1]),
+            "negative offset frame reads must terminate the actor");
+        Require(zero.IsPoisoned && writer.IsPoisoned && reader.IsPoisoned,
+            "caught invalid frame size and byte bounds cannot preserve their actor");
+        ExpectInvalid(() => writer.ValidateSynchronousTurnExit(t1),
+            "swallowed frame bounds error must not pass handler-exit validation");
+        survivor.Write(t3, e3, f3, 0, new byte[] { 42 });
+        var result = new byte[1];
+        survivor.Read(t3, e3, f3, 0, result);
+        Require(result[0] == 42 && !survivor.IsPoisoned,
+            "invalid frame operation in actor A must not corrupt actor B");
+        survivor.Pop(t3, e3, f3);
+        survivor.Finish(t3, e3);
     }
 
     private static void AggregateFrameQuotaRollbackAndSiblings()
@@ -376,6 +418,13 @@ internal static class ActorFrameStackSelfTest
         try { callback(); }
         catch (InvalidOperationException) { return; }
         throw new Exception("Expected actor frame denial: " + scenario);
+    }
+
+    private static void ExpectOutOfRange(Action callback, string scenario)
+    {
+        try { callback(); }
+        catch (ArgumentOutOfRangeException) { return; }
+        throw new Exception("Expected terminal frame bounds denial: " + scenario);
     }
 
     private static void Require(bool condition, string scenario)
