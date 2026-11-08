@@ -82,6 +82,31 @@ internal static class GuestCooperationBudgetSelfTest
         Require(denied && rejected.RemainingFuel == 2, "atomic rejected charge");
         Require(rejected.ChargeBackedge(2) && rejected.RemainingFuel == 0,
             "next successful charge must reach exactly tick 128");
+        // Pure recursion must advance the same logical polling cadence.
+        var recursion = new GuestCooperationBudget(600);
+        int recursionPolls = 0;
+        for (int i = 0; i < 256; i++)
+            if (recursion.ChargeOperation(1)) recursionPolls++;
+        Require(recursionPolls == 2 && recursion.RemainingFuel == 344,
+            "recursive-only calls must request slow checkpoints");
+        Require(recursion.BackedgesThisDispatch == 0,
+            "call checks must not invent loop backedges");
+
+        var weighted = new GuestCooperationBudget(800);
+        Require(!weighted.ChargeOperation(127), "first weighted charge");
+        Require(weighted.ChargeOperation(2), "weighted crossing at tick 128");
+        Require(weighted.ChargeOperation(512), "large bounded basic block");
+        Require(weighted.RemainingFuel == 159, "weighted quota accounting");
+        bool invalidWeight = false;
+        try { weighted.ChargeOperation(513); }
+        catch (ArgumentOutOfRangeException) { invalidWeight = true; }
+        Require(invalidWeight && weighted.RemainingFuel == 159,
+            "oversized basic block must fail without spending fuel");
+        bool insufficient = false;
+        try { weighted.ChargeOperation(160); }
+        catch (InvalidOperationException) { insufficient = true; }
+        Require(insufficient && weighted.RemainingFuel == 159,
+            "failed charge is atomic");
         Console.WriteLine("PASS .NET guest cooperation budget: 128 ticks, persistent fuel (host-only)");
     }
 }
