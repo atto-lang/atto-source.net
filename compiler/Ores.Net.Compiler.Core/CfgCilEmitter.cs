@@ -137,6 +137,13 @@ internal static class CfgCilEmitter
                             il.LoadLocal(op.Left!.Value);
                             il.Call(DotnetStaticImportMetadata.MathAbs(metadata));
                             break;
+                        case CfgOpcode.DotnetMathMax:
+                        case CfgOpcode.DotnetMathMin:
+                            il.LoadLocal(op.Left!.Value);
+                            il.LoadLocal(op.Right!.Value);
+                            il.Call(DotnetStaticImportMetadata.MathBinary(metadata,
+                                op.Opcode == CfgOpcode.DotnetMathMax ? "Max" : "Min"));
+                            break;
                         case CfgOpcode.ConstantI64:
                             il.LoadConstantI8(op.I64Constant!.Value);
                             break;
@@ -212,8 +219,9 @@ internal static class CfgCilEmitter
             // stores its result immediately, and the maximum temporary depth
             // is two (binary operation); control-flow edges never merge stacks.
             int maxStack = Math.Max(2, blocks.SelectMany(b => b.Instructions)
-                .Where(op => op.Opcode == CfgOpcode.Call)
-                .Select(op => op.Arguments!.Count).DefaultIfEmpty(0).Max());
+                .Where(op => op.Opcode is CfgOpcode.Call or CfgOpcode.DotnetMathMax or CfgOpcode.DotnetMathMin)
+                .Select(op => op.Opcode == CfgOpcode.Call ? op.Arguments!.Count : 2)
+                .DefaultIfEmpty(0).Max());
             int offset = bodies.AddMethodBody(il, maxStack: maxStack,
                 localVariablesSignature: signature,
                 attributes: MethodBodyAttributes.InitLocals);
