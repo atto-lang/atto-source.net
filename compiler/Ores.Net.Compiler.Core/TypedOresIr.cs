@@ -9,7 +9,10 @@ public enum IrValueType
     // Source-only tagged (is_some:bool, value:i64) pair in the closed
     // structured Option<int> slice. It NEVER occupies a single CFG SSA slot
     // or CIL local: only its verified primitive components can be emitted.
-    OptionI64
+    OptionI64,
+    // Source-only bounded, immutable Array<int>: its elements are distinct
+    // verified i64 SSA values, not CLR arrays or native guest pointers.
+    FixedArrayI64
 }
 
 public enum IrOpcode
