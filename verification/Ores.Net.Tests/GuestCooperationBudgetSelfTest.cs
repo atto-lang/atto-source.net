@@ -95,10 +95,11 @@ internal static class GuestCooperationBudgetSelfTest
         var weighted = new GuestCooperationBudget(800);
         Require(!weighted.ChargeOperation(127), "first weighted charge");
         Require(weighted.ChargeOperation(2), "weighted crossing at tick 128");
-        Require(weighted.ChargeOperation(512), "large bounded basic block");
+        for (int i = 0; i < 4; i++)
+            Require(weighted.ChargeOperation(128), "split bounded basic block");
         Require(weighted.RemainingFuel == 159, "weighted quota accounting");
         bool invalidWeight = false;
-        try { weighted.ChargeOperation(513); }
+        try { weighted.ChargeOperation(129); }
         catch (ArgumentOutOfRangeException) { invalidWeight = true; }
         Require(invalidWeight && weighted.RemainingFuel == 159,
             "oversized basic block must fail without spending fuel");
