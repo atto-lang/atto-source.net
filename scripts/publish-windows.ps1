@@ -2,7 +2,8 @@ param(
     [Parameter(Mandatory = $true)][string]$Source,
     [ValidateSet('win-x64', 'win-arm64')][string]$Rid = 'win-x64',
     [string]$Output = 'artifacts/apps',
-    [switch]$TenantIsolateSmoke
+    [switch]$TenantIsolateSmoke,
+    [switch]$DotnetMath
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -26,7 +27,10 @@ if ($LASTEXITCODE -ne 0) { throw 'Native compiler publish failed' }
 
 if (-not (Test-Path -LiteralPath $exe)) { throw 'Native compiler executable was not published' }
 & $checkNative -Binary $exe -Rid $Rid
-& $exe compile $sourcePath --out $generated
+# Capability is not inferred from source names or environment variables.
+$capabilityArgs = @()
+if ($DotnetMath) { $capabilityArgs = @('--capability', 'interop.dotnet.math-i64') }
+& $exe compile $sourcePath --out $generated @capabilityArgs
 if ($LASTEXITCODE -ne 0) { throw 'Oreslang-to-CIL compilation failed' }
 
 # A previous publish of this same host project may have used another
