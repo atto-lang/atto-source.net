@@ -85,6 +85,9 @@ public static class DotnetStaticInteropSelfTest
             Require(first.AsSpan().SequenceEqual(File.ReadAllBytes(nestedDll)),
                 "nested BCL MemberRefs must be emitted deterministically");
             using var nestedAssembly = AssemblyDefinition.ReadAssembly(nestedDll);
+            Require(nestedAssembly.MainModule.AssemblyReferences
+                .Count(a => a.Name == "System.Runtime") == 1,
+                "nested host import must share exactly one System.Runtime AssemblyRef");
             var nestedRun = nestedAssembly.MainModule.GetType("Oreslang.Generated.OresProgram")
                 .Methods.Single(m => m.Name == "Run");
             Require(CfgCilTestInterpreter.Evaluate(nestedRun) == 42,
@@ -109,6 +112,39 @@ public static class DotnetStaticInteropSelfTest
         finally
         {
             Directory.Delete(nestedTemp, recursive: true);
+        }
+
+        // A MemberRef token is just a table row number. A one-call Max and
+        // one-call Min can emit identical IL bytes but have different method
+        // names in the MemberRef table; the module identity MUST differ.
+        var identityDirectory = Path.Combine(Path.GetTempPath(),
+            "atto-dotnet-identity-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(identityDirectory);
+        try
+        {
+            var maxSource = OresStructuredCfgLowering.LowerModule(
+                "import dotnet \"System.Math\" as Math; fnc main():int { return Math.Max(3, 2); }");
+            var minSource = OresStructuredCfgLowering.LowerModule(
+                "import dotnet \"System.Math\" as Math; fnc main():int { return Math.Min(3, 2); }");
+            var maxDll = Path.Combine(identityDirectory, "max.dll");
+            var minDll = Path.Combine(identityDirectory, "min.dll");
+            CilEmitter.EmitLibrary(maxSource, maxDll);
+            CilEmitter.EmitLibrary(minSource, minDll);
+            using var maxAssembly = AssemblyDefinition.ReadAssembly(maxDll);
+            using var minAssembly = AssemblyDefinition.ReadAssembly(minDll);
+            Require(maxAssembly.MainModule.Mvid != minAssembly.MainModule.Mvid,
+                "different external BCL methods cannot share the same deterministic module MVID");
+            Require(!File.ReadAllBytes(maxDll).AsSpan().SequenceEqual(File.ReadAllBytes(minDll)),
+                "different imported method identities cannot emit byte-identical modules");
+            Require(maxAssembly.MainModule.AssemblyReferences
+                .Count(a => a.Name == "System.Runtime") == 1 &&
+                    minAssembly.MainModule.AssemblyReferences
+                .Count(a => a.Name == "System.Runtime") == 1,
+                "every statically imported BCL member must share one System.Runtime AssemblyRef");
+        }
+        finally
+        {
+            Directory.Delete(identityDirectory, recursive: true);
         }
 
         Reject("import dotnet \"System.Math\" as Math; fnc main():int { return Math.Max(3); }",
