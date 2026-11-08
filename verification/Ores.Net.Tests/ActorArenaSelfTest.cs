@@ -5,6 +5,8 @@ internal static class ActorArenaSelfTest
 {
     public static void Run()
     {
+        CheckedFourByteRefsRejectForeignAndStaleTargets();
+        CheckedRef32SurvivesDynamicBackingGrowth();
         DemandBackedGrowthPreservesActorRootsAndBudget();
         DemandBackedGrowthDeniedDuringFfiPin();
         DemandBackedScratchAndQuiescentPin();
@@ -21,6 +23,102 @@ internal static class ActorArenaSelfTest
         ActiveTurnRequiresExactTokenAndCarrier();
         ForgedLoanAndPinCannotPrematurelyReclaim();
         Console.WriteLine("PASS .NET actor-owned unmanaged arena, loans, pins and quiescent reclaim");
+    }
+
+    private static void CheckedFourByteRefsRejectForeignAndStaleTargets()
+    {
+        using var owner = new ActorArena(85001, 1, 4096, 512, 8, 2, 2);
+        using var foreign = new ActorArena(85002, 1, 4096, 512, 8, 2, 2);
+
+        ActorArenaHandle foreignObject;
+        using (var otherTurn = foreign.EnterTurn(85002, 1))
+            foreignObject = foreign.AllocatePersistent(otherTurn, 8);
+
+        using (var turn = owner.EnterTurn(85001, 1))
+        {
+            var parent = owner.AllocatePersistent(turn, 16);
+            var original = owner.AllocatePersistent(turn, 8);
+            Require(owner.ReadManagedRef32(turn, parent, 0) is null,
+                "uninitialized guest 32-bit field reads as null");
+            owner.WriteManagedRef32(turn, parent, 0, original);
+
+            var raw = new byte[4];
+            owner.Read(turn, parent, 0, raw);
+            // Parent occupies 0..15; target starts at byte 16 => (16/8)+1.
+            Require(raw[0] == 3 && raw[1] == 0 && raw[2] == 0 && raw[3] == 0,
+                "guest field is exactly four little-endian bytes, not a 64-bit pointer");
+            Require(ReferenceEquals(owner.ReadManagedRef32(turn, parent, 0), original),
+                "host ledger restores exact original issued target capability");
+
+            ExpectInvalid(() => owner.WriteManagedRef32(turn, parent, 4, foreignObject),
+                "foreign actor handle is not authority to create a ref32 edge");
+            Require(owner.ReadManagedRef32(turn, parent, 4) is null,
+                "denied foreign reference leaves target field null");
+
+            using (var frozenParent = owner.BorrowRead(turn, parent))
+            {
+                ExpectInvalid(() => owner.WriteManagedRef32(turn, parent, 0, null),
+                    "immutable read loan blocks reference field mutation");
+                Require(ReferenceEquals(owner.ReadManagedRef32(turn, parent, 0), original),
+                    "read-only parent snapshot retains original target");
+            }
+
+            owner.ReleasePersistent(turn, original);
+            ExpectInvalid(() => owner.ReadManagedRef32(turn, parent, 0),
+                "released target is stale even though its 32-bit offset remains");
+            var recycled = owner.AllocatePersistent(turn, 8);
+            owner.Read(turn, parent, 0, raw);
+            Require(raw[0] == 3,
+                "slot/offset recycling can reproduce the same raw ref32 word");
+            ExpectInvalid(() => owner.ReadManagedRef32(turn, parent, 0),
+                "sidecar original-generation proof prevents ref32 ABA resurrection");
+            owner.WriteManagedRef32(turn, parent, 0, recycled);
+            Require(ReferenceEquals(owner.ReadManagedRef32(turn, parent, 0), recycled),
+                "explicitly replacing field refreshes exact generation proof");
+
+            owner.Write(turn, parent, 0, new byte[] { 255, 255, 255, 255 });
+            ExpectInvalid(() => owner.ReadManagedRef32(turn, parent, 0),
+                "forged raw 32-bit field cannot authorize a different target");
+            owner.WriteManagedRef32(turn, parent, 0, null);
+            Require(owner.ReadManagedRef32(turn, parent, 0) is null,
+                "clearing a reference writes null and removes original-generation proof");
+
+            bool rejectedMisalignment = false;
+            try { owner.ReadManagedRef32(turn, parent, 2); }
+            catch (ArgumentOutOfRangeException) { rejectedMisalignment = true; }
+            Require(rejectedMisalignment,
+                "guest reference slot must occupy a naturally 4-byte-aligned field");
+            owner.ReleasePersistent(turn, recycled);
+            owner.ReleasePersistent(turn, parent);
+        }
+        Require(owner.Retire() && foreign.Retire(),
+            "parent and foreign heap release without cross-actor ref32 escape");
+    }
+
+    private static void CheckedRef32SurvivesDynamicBackingGrowth()
+    {
+        using var actor = new ActorArena(86001, 1, 16384, 512, 8, 2, 2,
+            demandBacked: true);
+        ActorArenaHandle parent;
+        ActorArenaHandle child;
+        using (var turn = actor.EnterTurn(86001, 1))
+        {
+            parent = actor.AllocatePersistent(turn, 16);
+            child = actor.AllocatePersistent(turn, 8);
+            actor.WriteManagedRef32(turn, parent, 0, child);
+            var enlarged = actor.AllocatePersistent(turn, 6000);
+            Require(enlarged.Length == 6000 && actor.ReservedNativeBytes == 8192,
+                "ref32 field remains four bytes when physical heap grows");
+            Require(ReferenceEquals(actor.ReadManagedRef32(turn, parent, 0), child),
+                "logical guest field and sidecar proof survive native slab relocation");
+        }
+        using (var resumed = actor.EnterTurn(86001, 1))
+        {
+            Require(ReferenceEquals(actor.ReadManagedRef32(resumed, parent, 0), child),
+                "carrier-independent logical ref32 remains checked in new actor turn");
+        }
+        Require(actor.Retire() && actor.ReservedNativeBytes == 0,
+            "post-growth actor retirement scrubs and refunds ref32 sidecar + backing");
     }
 
     private static void DemandBackedGrowthPreservesActorRootsAndBudget()
