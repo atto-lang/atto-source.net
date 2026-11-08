@@ -5,6 +5,7 @@ internal static class ActorDeclarationAstSelfTest
     public static void Run()
     {
         ParsesBoundedActorSignaturesAndOpaqueBodies();
+        BuildsDeterministicSignatureOnlyMetadata();
         RejectsDuplicateAndUnsupportedDeclarations();
         KeepsCommentsAndStringsLexicallyInert();
         EnforcesInputAndNestingBudgets();
@@ -44,6 +45,56 @@ internal static class ActorDeclarationAstSelfTest
             "zero-value-argument handler accepted");
         Require(unit.Actors[1].Handlers[0].Parameters[0].Type == ActorMessageType.Bool,
             "bool message type retained");
+    }
+
+    private static void BuildsDeterministicSignatureOnlyMetadata()
+    {
+        const string first = """
+            define actor Meter as
+                receive(self, int amount):void { let int local = amount; }
+                reset():void { }
+            end
+            """;
+        const string reorderedAndDifferentBody = """
+            define actor Meter as
+                reset():void { let bool local = true; }
+                receive(int amount):void { /* another opaque body */ }
+            end
+            """;
+        ActorDeclarationSignatureTable a =
+            OresActorDeclarationParser.BuildSignatureTable(
+                OresActorDeclarationParser.Parse(first));
+        ActorDeclarationSignatureTable b =
+            OresActorDeclarationParser.BuildSignatureTable(
+                OresActorDeclarationParser.Parse(reorderedAndDifferentBody));
+        Require(a.Actors.Count == 1 && b.Actors.Count == 1 &&
+                a.Actors[0].SignatureFingerprintSha256.Length == 64 &&
+                a.Actors[0].SignatureFingerprintSha256 ==
+                    b.Actors[0].SignatureFingerprintSha256,
+            "signature fingerprint ignores body and declaration-order changes");
+        Require(a.Actors[0].Handlers.Count == 2 &&
+                a.Actors[0].Handlers[0].ParameterTypes.Count == 1 &&
+                a.Actors[0].Handlers[0].ParameterTypes[0] == ActorMessageType.I64,
+            "handler signature metadata retains receiver-erased value types");
+
+        var original = OresActorDeclarationParser.Parse(first);
+        ActorDeclaration oldActor = original.Actors[0];
+        var changedVisibility = new ActorDeclarationUnit(
+            new[] { oldActor with { IsPublic = true } }, original.SourceLength);
+        var visibilityTable = OresActorDeclarationParser.BuildSignatureTable(changedVisibility);
+        Require(visibilityTable.Actors[0].SignatureFingerprintSha256 !=
+                a.Actors[0].SignatureFingerprintSha256,
+            "visibility is part of deterministic actor declaration signature");
+
+        var invalidSpanHandler = oldActor.Handlers[0] with {
+            BodyOffset = original.SourceLength + 1
+        };
+        var invalidSpan = new ActorDeclarationUnit(
+            new[] { oldActor with {
+                Handlers = new[] { invalidSpanHandler, oldActor.Handlers[1] }
+            } }, original.SourceLength);
+        ExpectFormat(() => OresActorDeclarationParser.BuildSignatureTable(invalidSpan),
+            "manually constructed actor AST cannot forge an out-of-source body span");
     }
 
     private static void RejectsDuplicateAndUnsupportedDeclarations()
