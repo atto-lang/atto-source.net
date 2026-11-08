@@ -35,6 +35,10 @@ internal static class CfgReferenceEvaluator
                     CfgOpcode.EqualI64 => Left() == Right(),
                     CfgOpcode.NotEqualI64 => Left() != Right(),
                     CfgOpcode.LessThanI64 => Left() < Right(),
+                    CfgOpcode.OptionOrI64 =>
+                        (bool)values[op.Left!.Value]
+                            ? (long)values[op.Right!.Value]
+                            : (long)values[op.Arguments![0]],
                     _ => throw new InvalidOperationException("Unexpected CFG opcode")
                 };
             }
