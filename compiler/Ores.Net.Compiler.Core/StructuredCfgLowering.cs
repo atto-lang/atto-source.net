@@ -155,6 +155,18 @@ public static class OresStructuredCfgLowering
                 case StructuredDotnetMathAbs hostAbs:
                     return Emit(block, CfgOpcode.DotnetMathAbs, IrValueType.I64,
                         left: Expression(hostAbs.Argument, block, variables));
+                case StructuredDotnetMathBinary hostBinary:
+                {
+                    // Preserve AttoLang eager left-to-right call evaluation.
+                    int left = Expression(hostBinary.Left, block, variables);
+                    int right = Expression(hostBinary.Right, block, variables);
+                    return Emit(block, hostBinary.Method switch
+                    {
+                        "Max" => CfgOpcode.DotnetMathMax,
+                        "Min" => CfgOpcode.DotnetMathMin,
+                        _ => throw new FormatException("Unverified .NET static host method")
+                    }, IrValueType.I64, left: left, right: right);
+                }
                 case StructuredCall call:
                 {
                     if (emitCalls)
