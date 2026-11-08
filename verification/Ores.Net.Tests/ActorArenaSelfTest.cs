@@ -6,6 +6,7 @@ internal static class ActorArenaSelfTest
     public static void Run()
     {
         DemandBackedGrowthPreservesActorRootsAndBudget();
+        DemandBackedGrowthDeniedDuringFfiPin();
         DemandBackedScratchAndQuiescentPin();
         PersistentAndScratchLifetimes();
         ReadLoanFreezesAllocationAcrossTurns();
@@ -97,6 +98,36 @@ internal static class ActorArenaSelfTest
             "physical retirement refunds tenant and process exactly once");
         Require(c.Retire() && c.IsReclaimed && c.ReservedNativeBytes == 0,
             "never-allocated actor also retires without a phantom refund");
+    }
+
+    private static void DemandBackedGrowthDeniedDuringFfiPin()
+    {
+        var budget = new ActorArenaBudget(32 * 1024);
+        var arena = new ActorArena(83001, 1, 16 * 1024, 1024, 8, 2, 2,
+            budget: budget, demandBacked: true);
+        ActorArenaHandle root;
+        ActorArenaLifetimePin external;
+        using (var turn = arena.EnterTurn(83001, 1))
+        {
+            root = arena.AllocatePersistent(turn, 8);
+            arena.Write(turn, root, 0, new byte[] { 49 });
+            external = arena.AcquireLifetimePin(turn);
+            ExpectInvalid(() => arena.AllocatePersistent(turn, 6000),
+                "possible raw FFI pointer makes native slab relocation unsafe");
+            Require(arena.ReservedNativeBytes == 4096 && budget.ReservedBytes == 4096,
+                "denied growth under pin does not change native commitment");
+        }
+        external.Dispose();
+        using (var resumed = arena.EnterTurn(83001, 1))
+        {
+            var grown = arena.AllocatePersistent(resumed, 6000);
+            var result = new byte[1];
+            arena.Read(resumed, root, 0, result);
+            Require(result[0] == 49 && grown.Length == 6000,
+                "growth becomes safe after last external FFI pin is released");
+        }
+        Require(arena.Retire() && budget.ReservedBytes == 0,
+            "physically released heap is fully refunded after pin and turn exit");
     }
 
     private static void DemandBackedScratchAndQuiescentPin()
