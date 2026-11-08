@@ -17,6 +17,9 @@ internal static class ActorCompiledCfgFrameSelfTest
     {
         var scalar = Compile("scalar42.atto");
         var loop = Compile("loop42.atto");
+        var endless = Compile("fuel-denial.atto");
+        Reject(() => { _ = CfgReferenceEvaluator.Evaluate(endless.Graph, maxSteps: 16); },
+            "source verifier failed to retain the deliberate infinite loop");
         Require(CfgReferenceEvaluator.Evaluate(scalar.Graph) == 42 &&
                 CfgReferenceEvaluator.Evaluate(loop.Graph) == 42,
             "compiled source oracle disagrees with canonical fixtures");
@@ -44,6 +47,7 @@ internal static class ActorCompiledCfgFrameSelfTest
         ActorContext? expired = null;
         ActorStackFrameHandle? stale = null;
         bool quotaDenied = false;
+        bool fuelDenied = false;
         long simpleAnswer = -1;
         long loopAnswer = -1;
 
@@ -87,6 +91,27 @@ internal static class ActorCompiledCfgFrameSelfTest
         Reject(() => { _ = expired!.GuestPushStackFrame(8); },
             "expired physical turn reused its guest-frame authority");
 
+        // A compiler-verified nonterminating source loop must exhaust the
+        // interpreter's finite block budget and fault only its own actor.
+        // This is not preemptive interruption of arbitrary NativeAOT code.
+        var fuelActor = runtime.Spawn(ActorKind.Shared, (ctx, _) =>
+        {
+            try
+            {
+                _ = ExecuteVerified(ctx, endless.Graph, endless.Plan);
+            }
+            catch (InvalidOperationException ex)
+                when (ex.Message.Contains("bounded fuel", StringComparison.Ordinal))
+            {
+                fuelDenied = true;
+            }
+        });
+        runtime.Send(fuelActor, new byte[] { 3 });
+        Require(SpinWait.SpinUntil(
+            () => runtime.FaultedTurns == 2 && runtime.LiveActors == 1,
+            TimeSpan.FromSeconds(8)) && fuelDenied,
+            "compiled infinite CFG did not terminate under bounded fuel");
+
         // A foreign actor cannot import the former actor's frame handle.
         // The terminal stale-handle fault must stop only this probe actor.
         var staleProbe = runtime.Spawn(ActorKind.Shared, (ctx, _) =>
@@ -96,7 +121,7 @@ internal static class ActorCompiledCfgFrameSelfTest
         });
         runtime.Send(staleProbe, new byte[] { 4 });
         Require(SpinWait.SpinUntil(
-            () => runtime.FaultedTurns == 2 && runtime.LiveActors == 1,
+            () => runtime.FaultedTurns == 3 && runtime.LiveActors == 1,
             TimeSpan.FromSeconds(8)),
             "stale capability fault did not stop only the receiving actor");
 
@@ -111,7 +136,7 @@ internal static class ActorCompiledCfgFrameSelfTest
         Require(loopDone.Wait(TimeSpan.FromSeconds(8)) &&
                 SpinWait.SpinUntil(
                     () => runtime.CompletedMessages == 2 &&
-                          runtime.FaultedTurns == 2 && runtime.LiveActors == 2,
+                          runtime.FaultedTurns == 3 && runtime.LiveActors == 2,
                     TimeSpan.FromSeconds(8)),
             "compiled loop CFG did not finish after failure and stale-handle rejection");
         Require(loopAnswer == 42 && runtime.NativeReservedBytes > 0,
@@ -125,7 +150,7 @@ internal static class ActorCompiledCfgFrameSelfTest
             "actor-owned native frames leaked after both healthy actors STOP");
 
         Console.WriteLine(
-            "PASS net-source-cfg-actor-frames-v1|source=2|faults=2|peer=42|loop=42|native_refund=1|guest_machine_code=0");
+            "PASS net-source-cfg-actor-frames-v1|source=3|faults=3|peer=42|loop=42|fuel=bounded|native_refund=1|guest_machine_code=0");
     }
 
     private static (VerifiedCfgFunction Graph, CfgActorScalarFramePlan Plan) Compile(
