@@ -15,6 +15,7 @@ public enum CfgOpcode
     LessThanI64,
     Argument,
     Call,
+    DotnetMathAbs,
     NotEqualI64
 }
 
@@ -315,6 +316,14 @@ public static class OresCfgVerifier
                             Use(i, opIndex, op.Arguments[arg], callee.ParameterTypes[arg]);
                         break;
                     }
+                    case CfgOpcode.DotnetMathAbs:
+                        RequireType(op.Type, IrValueType.I64);
+                        if (op.Left is null || op.Right is not null ||
+                            op.I64Constant is not null || op.BoolConstant is not null ||
+                            op.Target is not null || op.Arguments is not null)
+                            throw new FormatException("Malformed .NET AOT host call");
+                        Use(i, opIndex, op.Left.Value, IrValueType.I64);
+                        break;
                     case CfgOpcode.ConstantI64:
                         RequireType(op.Type, IrValueType.I64);
                         if (op.I64Constant is null || op.BoolConstant is not null ||
