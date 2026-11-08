@@ -1,0 +1,5 @@
+// Must never compile: mutable/privileged CLR host APIs are not allowed.
+import dotnet "System.IO.File" as File;
+pub fnc main() -> int {
+    return 42;
+}
