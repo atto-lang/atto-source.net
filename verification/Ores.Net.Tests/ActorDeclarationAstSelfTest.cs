@@ -9,7 +9,7 @@ internal static class ActorDeclarationAstSelfTest
         RejectsDuplicateAndUnsupportedDeclarations();
         KeepsCommentsAndStringsLexicallyInert();
         EnforcesInputAndNestingBudgets();
-        Console.WriteLine("PASS actor-declaration-ast-v1|actors=2|handlers=3|negative=10|execution=0");
+        Console.WriteLine("PASS actor-declaration-ast-v1|actors=2|handlers=3|negative=17|execution=0");
     }
 
     private static void ParsesBoundedActorSignaturesAndOpaqueBodies()
