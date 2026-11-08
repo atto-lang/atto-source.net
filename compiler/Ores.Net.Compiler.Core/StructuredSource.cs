@@ -133,6 +133,16 @@ public static class OresStructuredParser
             // The scalar bootstrap does not have class/actor dispatch or
             // ownership-aware lexical closures. Refuse these at source admission
             // with a stable capability diagnostic, not an accidental parse error.
+            // Structured CFG, module linking and NativeAOT have no nominal
+            // ModelGraph lowering. Reject before any source can reach SSA/CIL.
+            // Match contextual declaration modifiers, never an ordinary
+            // parameter or source comment containing the word "model".
+            if (token.Text == "model" && tokens.Count > 0 &&
+                (tokens[^1].Text == "define" ||
+                 (tokens[^1].Text == "pub" && tokens.Count > 1 &&
+                  tokens[^2].Text == "define")))
+                throw new FormatException(
+                    $"MODEL_LOWERING_UNSUPPORTED: .NET structured frontend requires typed nominal ModelGraph lowering at offset {token.Offset}");
             if (token.Text == "abstract" && tokens.Count > 0 &&
                 (tokens[^1].Text == "define" ||
                  (tokens[^1].Text == "pub" && tokens.Count > 1 &&

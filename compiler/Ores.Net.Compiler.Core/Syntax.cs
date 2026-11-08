@@ -270,6 +270,11 @@ public static class OresParser
                 throw new FormatException($"STATE_CONTAINER_BACKEND_UNSUPPORTED: protected heap region and critical guard lowering required at offset {Current.Offset}");
             if (Current.Text == "virtual" && _index + 1 < tokens.Count && tokens[_index + 1].Text == "actor")
                 throw new FormatException($"VIRTUAL_ACTOR_BACKEND_UNSUPPORTED: logical key and activation fencing required at offset {Current.Offset}");
+            // Scalar CIL and NativeAOT do not lower nominal ModelGraphs.
+            // 'model' is contextual, not globally reserved.
+            if (Current.Text == "model")
+                throw new FormatException(
+                    $"MODEL_LOWERING_UNSUPPORTED: .NET requires typed nominal ModelGraph lowering at offset {Current.Offset}");
             Expect("fnc");
             Expect("main");
             Expect("(");

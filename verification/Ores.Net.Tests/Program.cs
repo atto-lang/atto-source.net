@@ -322,6 +322,23 @@ foreach (var source in new[] {
         throw new Exception("Unsupported TCP-pool guest effect reached .NET lowering: " + source);
     }
 }
+// A model declaration must be explicitly denied before scalar IR/CIL emission.
+// Both public declaration orders share the same unsupported diagnostic.
+foreach (var source in new[] {
+    "define model PriceEstimate() as AddTax(10) end",
+    "define model x as Identity() end",
+    "define pub model PriceEstimate() as AddTax(10) end",
+    "pub define model PriceEstimate() as AddTax(10) end",
+    "define /* comment */ model PriceEstimate() as AddTax(10) end"
+})
+    RejectDiagnostic(() => OresParser.Parse(source), "MODEL_LOWERING_UNSUPPORTED",
+        "unlowered .NET nominal ModelGraph");
+Require(OresParser.Parse(
+    "fnc main():int{return 42;} /* define model Fake as Op() end */") is Literal,
+    "commented-out model declarations are inert");
+Require(OresParser.Parse(
+    "fnc main():int{return 42;} // define model Fake as Op() end") is Literal,
+    "model text in line comments remains inert");
 
 AsyncOnlyIoPolicyTests.Run();
 CapabilityIoLifecycleV1SelfTest.Run();
