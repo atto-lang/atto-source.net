@@ -1,0 +1,41 @@
+name: dotnet static import NativeAOT proof
+on:
+  pull_request:
+    paths:
+      - 'compiler/**'
+      - 'host/**'
+      - 'runtime/**'
+      - 'verification/**'
+      - 'examples/interop/**'
+      - '.github/workflows/dotnet-static-import-native-aot.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-aot-import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Executed compiler and runtime tests
+        run: dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
+      - name: Publish native compiler and host with statically imported .NET method
+        run: bash scripts/publish-linux.sh examples/interop/dotnet-math-abs.atto artifacts/dotnetimport --structured
+      - name: Execute exact native artifact and verify output
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          binary=artifacts/dotnetimport/linux-x64/oreslang-app
+          file "$binary"
+          readelf -h "$binary" >/dev/null
+          output="$("$binary")"
+          test "$output" = '42'
+          sha256sum "$binary" artifacts/compiler/linux-x64/oresnet artifacts/generated/linux-x64/OresGenerated.dll
+          git rev-parse HEAD
+          git status --porcelain
+          echo 'DOTNET_IMPORT_NATIVE_AOT_EXECUTED|value=42'
