@@ -66,10 +66,10 @@ public static class DotnetStaticInteropSelfTest
 
         var overflow = OresStructuredCfgLowering.LowerModule(
             "import dotnet \"System.Math\" as Math; fnc main():int { return Math.Abs(-9223372036854775808); }");
+        bool overflowed = false;
         try { CfgReferenceEvaluator.Evaluate(overflow.Main); }
-        catch (OverflowException) { goto OverflowVerified; }
-        throw new Exception("DOTNET_IMPORT_V0: Math.Abs(long.MinValue) must overflow");
-    OverflowVerified:
+        catch (OverflowException) { overflowed = true; }
+        Require(overflowed, "Math.Abs(long.MinValue) must overflow");
         Reject("import dotnet \"System.Math\" as Math; fnc Math():int { return 1; } fnc main():int { return 1; }",
             "DOTNET_IMPORT_UNSUPPORTED");
         Reject("import dotnet \"System.IO.File\" as File; fnc main():int { return 1; }",
