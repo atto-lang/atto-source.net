@@ -48,7 +48,8 @@ public static class OresStructuredCfgLowering
 
     // A closed Option<int> is represented by two separately verified SSA IDs.
     // Its tag occupies ValueId (Bool), payload occupies PayloadId (I64).
-    private readonly record struct Binding(IrValueType Type, int ValueId, int? PayloadId = null);
+    private readonly record struct Binding(IrValueType Type, int ValueId,
+        int? PayloadId = null, IReadOnlyList<int>? Elements = null);
 
     private sealed class Block(string name)
     {
@@ -138,6 +139,41 @@ public static class OresStructuredCfgLowering
             return id;
         }
 
+        // Each fixed-array element is its own previously verified SSA i64.
+        // This prevents guest pointers, unchecked native loads, aliases,
+        // resize or managed CLR arrays in the first immutable value slice.
+        private IReadOnlyList<int> ArrayElements(StructuredExpr array, Block block,
+            Dictionary<string, Binding> variables)
+        {
+            switch (array)
+            {
+                case StructuredFixedArray literal:
+                {
+                    if (literal.Elements.Count > OresCfgVerifier.MaxFixedArrayElements)
+                        throw new FormatException("E_ARRAY_SIZE: fixed array exceeds compiler limit");
+                    var values = new int[literal.Elements.Count];
+                    for (int i = 0; i < values.Length; i++)
+                    {
+                        if (literal.Elements[i].Type != IrValueType.I64)
+                            throw new FormatException("E_ARRAY_TYPE: expected int value");
+                        values[i] = Expression(literal.Elements[i], block, variables);
+                    }
+                    return Array.AsReadOnly(values);
+                }
+                case StructuredRead read when read.Type == IrValueType.FixedArrayI64:
+                {
+                    if (!variables.TryGetValue(read.Name, out var binding) ||
+                        binding.Type != IrValueType.FixedArrayI64 ||
+                        binding.Elements is null ||
+                        binding.Elements.Count > OresCfgVerifier.MaxFixedArrayElements)
+                        throw new FormatException("E_ARRAY_OWNER: missing immutable fixed array SSA snapshot");
+                    return binding.Elements;
+                }
+                default:
+                    throw new FormatException("E_ARRAY_I64_ONLY: unsupported array expression");
+            }
+        }
+
         // Explicit tagged Option<int> representation: no all-bits-value
         // sentinel, nullable managed heap object or implicit flattening.
         private (int Tag, int Payload) OptionParts(StructuredExpr option, Block block,
@@ -159,6 +195,30 @@ public static class OresStructuredCfgLowering
                     int payload = Emit(block, CfgOpcode.ConstantI64, IrValueType.I64,
                         value: 0);
                     return (tag, payload);
+                }
+                case StructuredArrayGet get:
+                {
+                    // Evaluate the array elements first, then index once.
+                    // Every element is a value, never an address/loan.
+                    var elements = ArrayElements(get.Array, block, variables);
+                    if (get.Index.Type != IrValueType.I64)
+                        throw new FormatException("E_ARRAY_INDEX_TYPE: expected int index");
+                    int index = Expression(get.Index, block, variables);
+                    int tag = Emit(block, CfgOpcode.ArrayIndexValidI64,
+                        IrValueType.Bool, left: index, value: elements.Count);
+                    int selected = Emit(block, CfgOpcode.ConstantI64,
+                        IrValueType.I64, value: 0);
+                    for (int i = 0; i < elements.Count; i++)
+                    {
+                        int candidate = Emit(block, CfgOpcode.ConstantI64,
+                            IrValueType.I64, value: i);
+                        int equal = Emit(block, CfgOpcode.EqualI64,
+                            IrValueType.Bool, left: index, right: candidate);
+                        selected = Emit(block, CfgOpcode.OptionOrI64,
+                            IrValueType.I64, left: equal, right: elements[i],
+                            arguments: new[] { selected });
+                    }
+                    return (tag, selected);
                 }
                 case StructuredRead read when read.Type == IrValueType.OptionI64:
                 {
@@ -287,6 +347,16 @@ public static class OresStructuredCfgLowering
             foreach (string name in names)
             {
                 var type = source[name].Type;
+                if (type == IrValueType.FixedArrayI64)
+                {
+                    // val-only immutable arrays cannot change on either
+                    // control-flow edge. Their scalar SSA elements dominate
+                    // the branch/loop and require no phis or aliases.
+                    if (source[name].Elements is null)
+                        throw new FormatException("E_ARRAY_OWNER: unbound immutable array at join");
+                    result[name] = source[name];
+                    continue;
+                }
                 int id = NextValue();
                 if (type == IrValueType.OptionI64)
                 {
@@ -311,6 +381,8 @@ public static class OresStructuredCfgLowering
             foreach (string name in names)
             {
                 var value = variables[name];
+                if (value.Type == IrValueType.FixedArrayI64)
+                    continue; // immutable scalar SSA values dominate the edge
                 ids.Add(value.ValueId);
                 if (value.Type == IrValueType.OptionI64)
                 {
@@ -345,6 +417,14 @@ public static class OresStructuredCfgLowering
                             variables.Add(declaration.Name, new Binding(
                                 IrValueType.OptionI64, option.Tag, option.Payload));
                         }
+                        else if (declaration.ValueType == IrValueType.FixedArrayI64)
+                        {
+                            if (declaration.Kind != StructuredBindingKind.Val)
+                                throw new FormatException("E_ARRAY_IMMUTABLE_ONLY: fixed array must be val");
+                            var elements = ArrayElements(declaration.Initializer, current, variables);
+                            variables.Add(declaration.Name, new Binding(
+                                IrValueType.FixedArrayI64, -1, Elements: elements));
+                        }
                         else
                         {
                             int value = Expression(declaration.Initializer, current, variables);
@@ -356,6 +436,8 @@ public static class OresStructuredCfgLowering
                     {
                         if (!variables.TryGetValue(assignment.Name, out var original))
                             throw new FormatException("Unknown structured CFG assignment");
+                        if (original.Type == IrValueType.FixedArrayI64)
+                            throw new FormatException("E_ARRAY_IMMUTABLE_ONLY: fixed arrays cannot be reassigned");
                         if (original.Type == IrValueType.OptionI64)
                         {
                             var option = OptionParts(assignment.Value, current, variables);
