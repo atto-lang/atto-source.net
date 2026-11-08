@@ -26,7 +26,9 @@ internal static class GuestCooperationBudgetSelfTest
         {
             resumed.BeginDispatch();
             for (int i = 0; i < 32; i++)
-                Require(!resumed.ChargeBackedge(), "unexpected slow path");
+                Require(resumed.ChargeBackedge() == (turn % 4 == 3 && i == 31),
+                    "global phase must survive short resumptions");
+            Require(resumed.BackedgesThisDispatch == 32, "dispatch fairness reset");
         }
         Require(resumed.RemainingFuel == 0,
             "a new dispatch must not refill logical fuel");
@@ -51,6 +53,35 @@ internal static class GuestCooperationBudgetSelfTest
             catch (ArgumentOutOfRangeException) { rejected = true; }
             Require(rejected, "invalid budget must fail");
         }
+        // Eight 127-step turns cannot defeat the lifetime sampling cadence.
+        var shortTurns = new GuestCooperationBudget(10_000);
+        int charged = 0, polls = 0;
+        for (int turn = 0; turn < 8; turn++)
+        {
+            shortTurns.BeginDispatch();
+            for (int i = 0; i < 127; i++)
+            {
+                charged++;
+                bool due = shortTurns.ChargeBackedge();
+                Require(due == (charged % 128 == 0), "short-turn evasion");
+                if (due) polls++;
+            }
+            Require(shortTurns.BackedgesThisDispatch == 127,
+                "dispatch fairness count");
+        }
+        Require(polls == 7 && shortTurns.RemainingFuel == 10_000 - 8UL * 127,
+            "short-turn sampling and fuel conservation");
+
+        // A rejected weighted charge must not advance the slow-poll counter.
+        var rejected = new GuestCooperationBudget(129);
+        for (int i = 0; i < 127; i++)
+            Require(!rejected.ChargeBackedge(), "unexpected early poll");
+        bool denied = false;
+        try { rejected.ChargeBackedge(3); }
+        catch (InvalidOperationException) { denied = true; }
+        Require(denied && rejected.RemainingFuel == 2, "atomic rejected charge");
+        Require(rejected.ChargeBackedge(2) && rejected.RemainingFuel == 0,
+            "next successful charge must reach exactly tick 128");
         Console.WriteLine("PASS .NET guest cooperation budget: 128 ticks, persistent fuel (host-only)");
     }
 }
