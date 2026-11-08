@@ -74,6 +74,18 @@ public static class CilEmitter
     public static void EmitLibrary(VerifiedCfgModule module, string outputFile) =>
         CfgCilEmitter.EmitLibrary(module, outputFile);
 
+    // Until the untrusted 128-backedge safepoint emitter is complete, only a
+    // statically bounded, call-free, acyclic verified CFG may reach this
+    // explicitly opt-in prototype path. Never silently fall back to the
+    // normal (trusted) CFG emitter on an unsafe untrusted graph.
+    // This is a compiler admission gate, NOT a hostile-process sandbox.
+    public static void EmitLoopFreeUntrustedPrototypeLibrary(
+        VerifiedCfgFunction program, string outputFile)
+    {
+        UntrustedLoopFreeCfgAdmission.Require(program);
+        CfgCilEmitter.EmitLibrary(program, outputFile);
+    }
+
     private static int WriteVerifiedIr(VerifiedIrFunction program, InstructionEncoder il)
     {
         int maxStack = 1;
