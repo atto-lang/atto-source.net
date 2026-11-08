@@ -1,0 +1,5 @@
+// Experimental compile-structured import dotnet v0; no runtime reflection.
+import dotnet "System.Math" as Math;
+pub fnc main():int {
+    return Math.Abs(-42);
+}
