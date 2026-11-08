@@ -27,7 +27,7 @@ internal static class ActorGuestFrameGateSelfTest
             PrivateWorkers = 1,
             SharedWorkers = 1,
             UntrustedWorkers = 1,
-            QueueCapacityPerDomain = 8
+            QueueCapacityPerDomain = 16
         }
     };
 
