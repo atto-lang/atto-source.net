@@ -179,6 +179,37 @@ internal static class StructuredSourceTests
             "fnc main():int{return 42;} // define supervisor S1 extends Actor");
         Require(supervisorComment.Body.Count == 1,
             "comments must not create supervisor admission failures");
+        // Linked import discovery runs before full source parsing and must not
+        // inspect dependency paths for malformed input hidden in comments.
+        // The production entry point is internal; reflection is test-only.
+        var readLinkedImports = typeof(OresStructuredParser).GetMethod(
+            "ReadLinkedImports",
+            System.Reflection.BindingFlags.Static |
+            System.Reflection.BindingFlags.NonPublic)
+            ?? throw new Exception("Linked import admission entry point missing");
+        foreach (var (source, expectedError) in new (string, string)[] {
+            ("/* hidden " + '\0' + " */", "Source contains NUL"),
+            ("/* hidden " + (char)0xD800 + " */", "Invalid UTF-16"),
+            ("// hidden " + (char)0xDC00 + "\n", "Invalid UTF-16"),
+            ("/* hidden " + (char)0xDC00 + " */", "Invalid UTF-16")
+        })
+        {
+            try
+            {
+                _ = readLinkedImports.Invoke(null, new object?[] { source });
+            }
+            catch (System.Reflection.TargetInvocationException failure)
+                when (failure.InnerException is FormatException error &&
+                      error.Message.Contains(expectedError, StringComparison.Ordinal) &&
+                      error.Message.Contains("offset", StringComparison.Ordinal))
+            {
+                continue;
+            }
+            throw new Exception(
+                "Linked import discovery admitted malformed source before full parse: " +
+                expectedError);
+        }
+        _ = readLinkedImports.Invoke(null, new object?[] { "/* valid \uD83D\uDD12 */" });
 
         // Local value types are block-local declarations on the structured
         // frontend. They are admitted into the AST but deliberately rejected
