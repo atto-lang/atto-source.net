@@ -11,6 +11,7 @@ public sealed class ActorCooperationMeter
     private readonly int _interval;
     private int _phase;
     private ulong _completed;
+    private bool _servicingCheckpoint;
 
     public ActorCooperationMeter(int interval = 128)
     {
@@ -27,6 +28,8 @@ public sealed class ActorCooperationMeter
     // sections, recursive calls, or nested user loops.
     public void BeginDispatch()
     {
+        if (_servicingCheckpoint)
+            throw new InvalidOperationException("Reentrant cooperation dispatch reset");
         _phase = 0;
         _completed = 0;
     }
@@ -38,6 +41,8 @@ public sealed class ActorCooperationMeter
     /// </summary>
     public bool CommitBatch(int work, Action<ulong, bool> onCheckpoint)
     {
+        if (_servicingCheckpoint)
+            throw new InvalidOperationException("Reentrant cooperation charge");
         if (work <= 0 || work > _interval)
             throw new ArgumentOutOfRangeException(nameof(work));
         ArgumentNullException.ThrowIfNull(onCheckpoint);
@@ -47,7 +52,20 @@ public sealed class ActorCooperationMeter
         _completed = ulong.MaxValue - _completed < (ulong)work
             ? ulong.MaxValue : _completed + (ulong)work;
         if (due)
-            onCheckpoint(_completed, _completed >= DefaultDispatchBudget);
+        {
+            // Prevent an accidental scheduler callback from restarting or
+            // recursively charging the actor. The charge is committed even
+            // if the trusted slow path throws; no duplicate checkpoint replay.
+            _servicingCheckpoint = true;
+            try
+            {
+                onCheckpoint(_completed, _completed >= DefaultDispatchBudget);
+            }
+            finally
+            {
+                _servicingCheckpoint = false;
+            }
+        }
         return due;
     }
 }
