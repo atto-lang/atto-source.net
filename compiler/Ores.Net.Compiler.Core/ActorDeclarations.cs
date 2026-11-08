@@ -281,6 +281,7 @@ public static class OresActorDeclarationParser
             // Receive signatures are data-only. Function/closure and arbitrary
             // nominal values cannot be sent through mailboxes or pub-sub.
             Expect(":");
+            int returnOffset = Current.Start;
             if (!Take("void"))
                 throw Error("actor handler declaration AST v1 requires an explicit void result");
             Token open = Expect("{");
@@ -311,7 +312,7 @@ public static class OresActorDeclarationParser
             // validation or code generation is implied by this parsed AST.
             return new ActorHandlerDeclaration(name,
                 new ReadOnlyCollection<ActorHandlerParameter>(parameters),
-                Current.Start, bodyStart, bodyEnd - bodyStart,
+                returnOffset, bodyStart, bodyEnd - bodyStart,
                 source[bodyStart..bodyEnd], nameToken.Start);
         }
     }
