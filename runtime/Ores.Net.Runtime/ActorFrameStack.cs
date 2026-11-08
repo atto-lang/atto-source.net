@@ -96,7 +96,14 @@ public unsafe sealed class ActorFrameStack : IDisposable
             EnsurePhysicalTurn(physicalTurn);
             EnsureHealthy();
             if (_execution is not null)
-                throw new InvalidOperationException("An actor already owns a live frame execution");
+            {
+                // A second Begin is evidence of reentrant handler admission,
+                // even if the host catches the exception. It must not leave
+                // the original execution resumable.
+                Poison();
+                throw new InvalidOperationException(
+                    "Actor already has a live or suspended frame execution");
+            }
             try
             {
                 ReserveOnDemand();
@@ -228,11 +235,14 @@ public unsafe sealed class ActorFrameStack : IDisposable
             if (_continuation is null ||
                 !ReferenceEquals(_execution, execution) ||
                 !ReferenceEquals(_continuation, continuation) ||
-                _physicalTurn is not null)
+                _physicalTurn is not null ||
+                ReferenceEquals(_suspendedFromTurn, physicalTurn))
             {
                 Poison();
                 throw new InvalidOperationException("Stale or foreign actor frame continuation");
             }
+            // The original turn must have ended before this new physical
+            // carrier lease can regain logical frame authority.
             _physicalTurn = physicalTurn;
             _suspendedFromTurn = null;
             _continuation = null;
