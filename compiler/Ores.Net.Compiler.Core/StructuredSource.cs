@@ -598,6 +598,8 @@ public static class OresStructuredParser
                 Expect("fnc");
                 int at = Current.Offset;
                 string name = Name();
+                if (dotnetAlias is not null && name == dotnetAlias)
+                    throw Error("DOTNET_IMPORT_UNSUPPORTED: callable shadows imported .NET alias");
                 // This NativeAOT slice does not lower once-only initialization
                 // barriers. Do not silently compile a lifecycle hook into an
                 // ordinary public CIL method reachable through imports.
