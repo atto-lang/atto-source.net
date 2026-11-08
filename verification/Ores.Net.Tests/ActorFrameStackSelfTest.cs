@@ -308,8 +308,16 @@ internal static class ActorFrameStackSelfTest
     private static void RejectNoWire(Action action, string scenario)
     {
         try { action(); }
-        catch (NotSupportedException) { return; }
-        throw new Exception("Expected actor frame JSON denial: " + scenario);
+        catch (NotSupportedException denied)
+            when (denied.Message.Contains(
+                "Actor logical frame authority cannot be",
+                StringComparison.Ordinal))
+        {
+            // A generic NativeAOT serializer-metadata failure is NOT evidence
+            // that the actor handle's deliberate no-wire converter ran.
+            return;
+        }
+        throw new Exception("Expected explicit actor frame JSON denial: " + scenario);
     }
 
     private static void RejectRange(Action action, string scenario)
