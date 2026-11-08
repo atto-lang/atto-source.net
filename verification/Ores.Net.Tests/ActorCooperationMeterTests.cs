@@ -55,6 +55,58 @@ public static class ActorCooperationMeterTests
         catch (ArgumentNullException) { rejectedNull = true; }
         Require(rejectedNull, "missing callback rejected");
 
+        var guarded = new ActorCooperationMeter();
+        bool deniedNestedCharge = false, deniedNestedReset = false;
+        guarded.CommitBatch(128, (_, _) =>
+        {
+            try { guarded.CommitBatch(1, (_, _) => {}); }
+            catch (InvalidOperationException) { deniedNestedCharge = true; }
+            try { guarded.BeginDispatch(); }
+            catch (InvalidOperationException) { deniedNestedReset = true; }
+        });
+        Require(deniedNestedCharge && deniedNestedReset, "callback reentrancy denied");
+        Require(guarded.Completed == 128 && guarded.Phase == 0, "reentrancy cannot mutate state");
+
+        bool callbackFailed = false;
+        try { guarded.CommitBatch(128, (_, _) => throw new InvalidOperationException("scheduler")); }
+        catch (InvalidOperationException) { callbackFailed = true; }
+        Require(callbackFailed && guarded.Completed == 256 && guarded.Phase == 0,
+            "exception leaves committed work with no replayable checkpoint");
+        int retries = 0;
+        guarded.CommitBatch(127, (_, _) => retries++);
+        Require(retries == 0, "callback exception cannot force early retry");
+        guarded.CommitBatch(1, (_, _) => retries++);
+        Require(retries == 1, "checkpoint guard restored on exceptional path");
+
+        // Deterministic 10k batch differential against an arithmetic oracle.
+        foreach (int interval in new[] {128, 512})
+        {
+            var meter = new ActorCooperationMeter(interval);
+            uint seed = 0x12345678u;
+            ulong total = 0;
+            int observed = 0;
+            for (int i = 0; i < 10000; ++i)
+            {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                int work = (int)(seed % (uint)interval) + 1;
+                ulong before = total;
+                bool due = meter.CommitBatch(work, (amount, overdue) =>
+                {
+                    observed++;
+                    Require(amount == before + (ulong)work, "checkpoint amount matches committed batch");
+                    Require(overdue == (amount >= 512), "batch overdue flag");
+                });
+                total += (ulong)work;
+                Require(due == (total / (ulong)interval != before / (ulong)interval),
+                    "batch crossing oracle");
+                Require(meter.Completed == total && meter.Phase == total % (ulong)interval,
+                    "per-actor work and phase equal mathematical model");
+            }
+            Require(observed == (int)(total / (ulong)interval), "no lost or duplicate polls");
+        }
+
         bool rejectedInterval = false;
         try { _ = new ActorCooperationMeter(64); }
         catch (ArgumentOutOfRangeException) { rejectedInterval = true; }
