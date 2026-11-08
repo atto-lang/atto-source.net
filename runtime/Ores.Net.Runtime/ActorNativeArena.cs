@@ -235,12 +235,15 @@ public sealed unsafe class ActorNativeArena : IDisposable
         while (next < required)
             next = next > _capacity / 2 ? _capacity : next * 2;
 
-        byte* replacement = (byte*)NativeMemory.AlignedAlloc((nuint)next, 64);
+        // C aligned_alloc requires a multiple of the requested alignment.
+        // Physical tail padding cannot increase the actor's logical quota.
+        int physicalBytes = checked((int)((next + 63L) & ~63L));
+        byte* replacement = (byte*)NativeMemory.AlignedAlloc((nuint)physicalBytes, 64);
         if (replacement == null)
             throw new OutOfMemoryException("actor native arena growth failed");
 
         // An uninitialized/reused object must never observe stale host data.
-        new Span<byte>(replacement, next).Clear();
+        new Span<byte>(replacement, physicalBytes).Clear();
         if (_memory != null)
         {
             Buffer.MemoryCopy(_memory, replacement, next, _cursor);
@@ -248,7 +251,7 @@ public sealed unsafe class ActorNativeArena : IDisposable
             NativeMemory.AlignedFree(_memory);
         }
         _memory = replacement;
-        _backingBytes = next;
+        _backingBytes = physicalBytes;
     }
 
     private int ValidSlot(ulong handle)
