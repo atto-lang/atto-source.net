@@ -126,7 +126,11 @@ public unsafe sealed class ActorFrameStack : IDisposable
         {
             EnsureExecution(physicalTurn, execution);
             if (bytes <= 0)
-                throw new ArgumentOutOfRangeException(nameof(bytes));
+            {
+                Poison();
+                throw new ArgumentOutOfRangeException(nameof(bytes),
+                    "Invalid compiler-issued actor frame size is terminal");
+            }
             if (_depth == _frames.Length || bytes > _maxBytes - _used)
             {
                 Poison();
@@ -377,11 +381,17 @@ public unsafe sealed class ActorFrameStack : IDisposable
         throw new InvalidOperationException("Stale or foreign actor frame capability");
     }
 
-    private static void CheckRange(int length, int offset, int size)
+    private void CheckRange(int length, int offset, int size)
     {
         if (offset < 0 || size < 0 || offset > length || size > length - offset)
+        {
+            // An invalid guest frame access is an actor-local runtime fault.
+            // The synchronous dispatcher must not accept it as a successful
+            // turn if an outer host callback swallows the thrown exception.
+            Poison();
             throw new ArgumentOutOfRangeException(nameof(offset),
                 "Actor frame byte access exceeds frame bounds");
+        }
     }
 
     private void Poison()
