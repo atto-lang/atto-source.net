@@ -6,9 +6,10 @@ on:
 permissions:
   contents: read
 jobs:
-  descriptor-host-only:
+  descriptor-host-and-native-aot:
+    name: Compile metadata catalog and execute Linux native binary (NOT GUEST)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -21,9 +22,37 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED"
-          git rev-parse HEAD
-          git rev-parse 'HEAD^{tree}'
-      - name: Smoke current host SDK
-        run: dotnet --info
-      - name: Run host-only closed catalog negative tests
-        run: dotnet run --project verification/AotDescriptorSmoke/AotDescriptorSmoke.csproj -c Release
+          printf 'EXACT_HEAD=%s\n' "$(git rev-parse HEAD)"
+          printf 'EXACT_TREE=%s\n' "$(git rev-parse 'HEAD^{tree}')"
+      - uses: actions/setup-dotnet@d4c94342e560b34958eacfc5d055d21461ed1c5d
+        with:
+          dotnet-version: '10.0.x'
+      - name: Print installed SDK and compiler context
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet --info
+          clang --version
+      - name: Compile and run JIT-hosted closed catalog negative tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet run --project verification/AotDescriptorSmoke/AotDescriptorSmoke.csproj -c Release
+      - name: Publish actual Linux x64 NativeAOT binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet publish verification/AotDescriptorSmoke/AotDescriptorSmoke.csproj \
+            -c Release -r linux-x64 -p:PublishAot=true -p:SelfContained=true \
+            -o "$RUNNER_TEMP/atto-metadata-native"
+          test -x "$RUNNER_TEMP/atto-metadata-native/AotDescriptorSmoke"
+          file "$RUNNER_TEMP/atto-metadata-native/AotDescriptorSmoke"
+      - name: Execute NativeAOT closed catalog negative tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          ATTO_EXPECT_NATIVE_AOT=1 "$RUNNER_TEMP/atto-metadata-native/AotDescriptorSmoke"
+          echo "NATIVE_AOT_METADATA_SMOKE=PASS"
+          echo "ATTO_GUEST_COMPILED=NO"
+          echo "TRIM_GRAPH_INSPECTED=NO"
+          echo "WINDOWS_NATIVE_AOT=NOT_EXECUTED"
