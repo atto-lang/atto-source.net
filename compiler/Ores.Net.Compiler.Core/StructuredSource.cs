@@ -17,8 +17,11 @@ public sealed record StructuredCall(int At, string Name,
     IReadOnlyList<StructuredExpr> Arguments, IrValueType ResultType)
     : StructuredExpr(At, ResultType);
 // AOT-only host call: no managed object, reflection, callback or pointer escapes.
+// Closed BCL static calls: only i64 -> i64 and (i64,i64) -> i64.
 public sealed record StructuredDotnetMathAbs(int At, StructuredExpr Argument)
     : StructuredExpr(At, IrValueType.I64);
+public sealed record StructuredDotnetMathBinary(int At, string Method,
+    StructuredExpr Left, StructuredExpr Right) : StructuredExpr(At, IrValueType.I64);
 public sealed record StructuredParameter(string Name, IrValueType Type);
 public sealed record StructuredFunction(string Name,
     IReadOnlyList<StructuredParameter> Parameters, IrValueType ResultType,
@@ -501,7 +504,7 @@ public static class OresStructuredParser
         public StructuredProgram ReadProgram()
         {
             // Opt-in compile-time-only .NET import, currently one trusted BCL
-            // type and one allocation-free i64 method. It never grants ambient
+            // type and three allocation-free i64 methods. It never grants ambient
             // reflection, NuGet discovery, filesystem or actor capabilities.
             if (Take("import"))
             {
@@ -618,6 +621,8 @@ public static class OresStructuredParser
                             throw Error("Typed helper parameter budget exceeded");
                         IrValueType type = Type();
                         string parameter = Name();
+                        if (dotnetAlias is not null && parameter == dotnetAlias)
+                            throw Error("DOTNET_IMPORT_UNSUPPORTED: parameter shadows imported .NET alias");
                         if (!parameterTypes.TryAdd(parameter,
                             new LocalBinding(type, StructuredBindingKind.Val, null)))
                             throw Error("Duplicate typed helper parameter");
@@ -787,6 +792,8 @@ public static class OresStructuredParser
                 var type = Type();
                 int nameAt = Current.Offset;
                 string name = Name();
+                if (dotnetAlias is not null && name == dotnetAlias)
+                    throw Error("DOTNET_IMPORT_UNSUPPORTED: local shadows imported .NET alias");
                 if (scopes.Any(scope => scope.ContainsKey(name)))
                     throw new FormatException($"Duplicate local binding at offset {nameAt}");
                 Expect("=");
@@ -1054,17 +1061,29 @@ public static class OresStructuredParser
                 if (localBinding)
                     throw Error("DOTNET_IMPORT_UNSUPPORTED: imported alias cannot be shadowed by a local");
                 string method = Name();
-                if (method != "Abs")
-                    throw Error("DOTNET_IMPORT_UNSUPPORTED: only System.Math.Abs(long) is AOT-admitted");
+                if (method is not ("Abs" or "Max" or "Min"))
+                    throw Error("DOTNET_IMPORT_UNSUPPORTED: only System.Math.Abs/Max/Min(long) are AOT-admitted");
                 Expect("(");
-                var operand = Expr(depth + 1);
+                var first = Expr(depth + 1);
+                Require(first, IrValueType.I64, $"System.Math.{method} requires int operands");
+                if (method == "Abs")
+                {
+                    Expect(")");
+                    int unaryHeight = Height(first) + 1;
+                    if (unaryHeight > MaxDepth) throw Error("Host call AST depth exceeds limit");
+                    var hostAbs = new StructuredDotnetMathAbs(offset, first);
+                    expressionHeights.Add(hostAbs, unaryHeight);
+                    return hostAbs;
+                }
+                Expect(",");
+                var second = Expr(depth + 1);
+                Require(second, IrValueType.I64, $"System.Math.{method} requires int operands");
                 Expect(")");
-                Require(operand, IrValueType.I64, "System.Math.Abs requires one int");
-                int height = Height(operand) + 1;
+                int height = Math.Max(Height(first), Height(second)) + 1;
                 if (height > MaxDepth) throw Error("Host call AST depth exceeds limit");
-                var hostCall = new StructuredDotnetMathAbs(offset, operand);
-                expressionHeights.Add(hostCall, height);
-                return hostCall;
+                var hostBinary = new StructuredDotnetMathBinary(offset, method, first, second);
+                expressionHeights.Add(hostBinary, height);
+                return hostBinary;
             }
             if (linking is not null)
                 while (Take("."))
