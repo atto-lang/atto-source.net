@@ -18,8 +18,10 @@ memory commitment. In demand-backed mode the actor starts with no native
 payload committed. Persistent and scratch regions grow independently in bounded
 64-byte-aligned blocks (initial growth at most 4 KiB). This preserves the
 existing actor's root bytes across growth, including when a read-only loan is
-live. All operations and slab replacements are serialized under the arena
-gate. No pointer or native-backed span escapes through this arena API.
+live. Growth is **denied while any external lifetime/FFI pin is live**, since
+an integration may otherwise retain an undisclosed physical pointer. All
+operations and slab replacements are serialized under the arena gate. No
+pointer or native-backed span escapes through this arena API.
 
 Before new native backing is installed, its *delta* is reserved against the
 runtime/tenant and process budgets. Failure to reserve or allocate is neutral:
