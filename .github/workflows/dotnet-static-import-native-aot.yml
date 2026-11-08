@@ -7,6 +7,7 @@ on:
       - 'runtime/**'
       - 'verification/**'
       - 'examples/interop/**'
+      - 'scripts/publish-windows.ps1'
       - '.github/workflows/dotnet-static-import-native-aot.yml'
   workflow_dispatch:
 permissions:
@@ -78,3 +79,105 @@ jobs:
           git rev-parse HEAD
           git status --porcelain
           echo 'DOTNET_IMPORT_NATIVE_AOT_EXECUTED|abs=42|nested=42'
+
+  native-aot-import-windows:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exactly the reviewed source head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Reject a stale or modified checkout before publication
+        shell: pwsh
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actual = (& git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $actual -cne $env:EXPECTED_HEAD) {
+            throw "Wrong source HEAD: expected $env:EXPECTED_HEAD, got $actual"
+          }
+          if (@(git status --porcelain --untracked-files=all).Count -ne 0) {
+            throw 'Source checkout was dirty before Windows NativeAOT admission'
+          }
+          Write-Host "DOTNET_IMPORT_WIN_EXACT_SOURCE_HEAD=$actual"
+          git rev-parse 'HEAD^{tree}'
+      - name: Install pinned .NET SDK 10
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Execute actual managed compiler and CIL verifier tests
+        shell: pwsh
+        run: |
+          dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
+          if ($LASTEXITCODE -ne 0) { throw 'NativeAOT imported library verifier failed' }
+      - name: Publish and execute native Windows Abs guest
+        shell: pwsh
+        run: |
+          ./scripts/publish-windows.ps1 -Source examples/interop/dotnet-math-abs.atto -Rid win-x64 -Output artifacts/dotnetimport -Structured
+          $binary = 'artifacts/dotnetimport/win-x64/oreslang-app.exe'
+          ./verification/assert-native-release.ps1 -Binary $binary -Rid win-x64
+          $output = (& $binary | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or $output -cne '42') {
+            throw "NativeAOT Abs returned '$output' rather than 42"
+          }
+          Write-Host 'DOTNET_IMPORT_WIN_ABS_EXECUTED=42'
+      - name: Publish and execute independently linked nested native guest
+        shell: pwsh
+        run: |
+          ./scripts/publish-windows.ps1 -Source examples/interop/dotnet-math-nested.atto -Rid win-x64 -Output artifacts/dotnetnested -Structured
+          $binary = 'artifacts/dotnetnested/win-x64/oreslang-app.exe'
+          ./verification/assert-native-release.ps1 -Binary $binary -Rid win-x64
+          $output = (& $binary | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or $output -cne '42') {
+            throw "NativeAOT nested Min/Max/Abs returned '$output' rather than 42"
+          }
+          $previous = 'artifacts/dotnetimport/win-x64/oreslang-app.exe'
+          $again = (& $previous | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or $again -cne '42') {
+            throw 'Second publish contaminated the first NativeAOT imported application'
+          }
+          Write-Host 'DOTNET_IMPORT_WIN_NESTED_EXECUTED=42'
+      - name: Refuse three unauthorized host imports in native compiler
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $compiler = 'artifacts/compiler/win-x64/oresnet.exe'
+          $out = 'artifacts/denied/OresGenerated.dll'
+          New-Item -ItemType Directory -Force (Split-Path $out -Parent) | Out-Null
+          $fixtures = @(
+            'examples/interop/reject-unauthorized-file.atto',
+            'examples/interop/reject-math-overload.atto',
+            'examples/interop/reject-alias-shadow.atto'
+          )
+          foreach ($source in $fixtures) {
+            Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue
+            $diagnostic = (& $compiler compile-structured $source --out $out 2>&1 | Out-String)
+            $exitCode = $LASTEXITCODE
+            if ($exitCode -eq 0 -or (Test-Path -LiteralPath $out)) {
+              throw "NativeAOT compiler accepted invalid host import '$source'"
+            }
+            if ($diagnostic -notmatch 'DOTNET_IMPORT_UNSUPPORTED|requires int operands') {
+              throw "Host import rejection lacked audited diagnostic: $diagnostic"
+            }
+          }
+          $global:LASTEXITCODE = 0
+          Write-Host 'DOTNET_IMPORT_WIN_DENIALS_EXECUTED=3'
+      - name: Emit exact source tree and actual Windows native artifact hashes
+        shell: pwsh
+        run: |
+          git rev-parse HEAD
+          git rev-parse 'HEAD^{tree}'
+          foreach ($path in @(
+            'artifacts/compiler/win-x64/oresnet.exe',
+            'artifacts/dotnetimport/win-x64/oreslang-app.exe',
+            'artifacts/dotnetnested/win-x64/oreslang-app.exe'
+          )) {
+            if (-not (Test-Path -LiteralPath $path)) { throw "Missing native artifact: $path" }
+            $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            Write-Host "DOTNET_IMPORT_WIN_NATIVE_SHA256=$path $hash"
+          }
+          Write-Host 'DOTNET_IMPORT_WINDOWS_NATIVE_AOT_EXECUTED|abs=42|nested=42|denials=3'
