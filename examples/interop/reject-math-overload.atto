@@ -1,0 +1,3 @@
+// Negative: no implicit overload or bool -> int conversion.
+import dotnet "System.Math" as Math;
+fnc main():int { return Math.Max(42, true); }
