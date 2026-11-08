@@ -76,6 +76,32 @@ internal static class UntrustedLoopFreeCfgAdmissionTests
                 (error.Message.Contains("instruction budget", StringComparison.Ordinal)) { }
             if (File.Exists(largeOut))
                 throw new Exception("Untrusted static-quota rejection emitted a DLL");
+
+            // Fewer than 4096 *IR* operations can still emit >4096 CIL
+            // instructions. This negative mutation fails an op-count-only
+            // implementation but passes after actual CIL cost accounting.
+            var costlyOps = new List<CfgInstruction> {
+                new(0, CfgOpcode.ConstantI64, IrValueType.I64, I64Constant: 1),
+                new(1, CfgOpcode.ConstantI64, IrValueType.I64, I64Constant: 2)
+            };
+            for (int i = 2; i < 1300; ++i)
+                costlyOps.Add(new CfgInstruction(i, CfgOpcode.CheckedAdd,
+                    IrValueType.I64, Left: i - 1, Right: 1));
+            var costly = OresCfgVerifier.Verify(new CfgFunction(
+                "main", IrValueType.I64, "entry", new[] {
+                    new CfgBlock("entry", Array.Empty<CfgParameter>(),
+                        costlyOps.ToArray(), new CfgReturn(1299))
+                }));
+            string costOut = Path.Combine(folder, "must-not-emit-costly.dll");
+            try
+            {
+                CilEmitter.EmitLoopFreeUntrustedPrototypeLibrary(costly, costOut);
+                throw new Exception("Untrusted CIL undercounted checked arithmetic");
+            }
+            catch (FormatException error) when
+                (error.Message.Contains("instruction budget", StringComparison.Ordinal)) { }
+            if (File.Exists(costOut))
+                throw new Exception("Weighted CIL budget rejection emitted a DLL");
         }
         finally { Directory.Delete(folder, recursive: true); }
     }
