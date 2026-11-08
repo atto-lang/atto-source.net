@@ -32,7 +32,7 @@ Require(descriptor.Fields.Count == 1, "caller cannot mutate copied public metada
 Require(descriptor.Fields[0].Name == "value", "public field retention");
 
 Reject(() => new AotPublicTypeCatalog(new[] { descriptor, descriptor }), "duplicate types");
-Reject(() => new AotPublicTypeCatalog(new AotPublicTypeDescriptor?[] { descriptor, null! }!),
+Reject(() => new AotPublicTypeCatalog(new AotPublicTypeDescriptor[] { descriptor, null! }),
     "null type descriptors");
 Reject(() => new AotPublicTypeDescriptor("Example.PublicCounter",
     new[] { new AotPublicField("value", AotPublicFieldKind.Int),
