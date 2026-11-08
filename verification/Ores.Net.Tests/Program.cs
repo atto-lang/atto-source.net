@@ -453,6 +453,7 @@ ActorDispatchDomainsSelfTest.Run();
 ActorRuntimeSelfTest.Run();
 UniversalHotLoadV1SelfTest.Run();
 ActorFrameStackSelfTest.Run(); // host-only actor logical frames; not guest/AOT evidence
+ActorGuestFrameGateSelfTest.Run(); // terminal compiled-guest frame seam, host-only
 ActorScalarFrameAbiSelfTest.Run(); // verified CFG layout/native spill boundary, not guest execution
 ProjectRootSourceTests.Run(); // host-only resolver, not linked .NET source imports
 ActorNativeArenaSelfTest.Run();
