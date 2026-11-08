@@ -137,6 +137,8 @@ public static class OresParser
             var start = _i;
             if (_i == text.Length) return new Token("", start);
             var ch = text[_i];
+            // No unchecked array access can enter the shipping scalar CIL path.
+            SafeCollectionSourceAdmission.RejectUnverifiedBracket(ch, start);
             // Scalar and structured CIL frontends must agree: state-changing
             // annotations are compiler effects, never inert metadata. Check
             // only lexed tokens, after comments have been skipped.
