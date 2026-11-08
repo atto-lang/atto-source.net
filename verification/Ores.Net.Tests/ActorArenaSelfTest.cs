@@ -5,6 +5,8 @@ internal static class ActorArenaSelfTest
 {
     public static void Run()
     {
+        DemandBackedGrowthPreservesActorRootsAndBudget();
+        DemandBackedScratchAndQuiescentPin();
         PersistentAndScratchLifetimes();
         ReadLoanFreezesAllocationAcrossTurns();
         PairedLoanAndRetirementLeavePeerWritable();
@@ -18,6 +20,120 @@ internal static class ActorArenaSelfTest
         ActiveTurnRequiresExactTokenAndCarrier();
         ForgedLoanAndPinCannotPrematurelyReclaim();
         Console.WriteLine("PASS .NET actor-owned unmanaged arena, loans, pins and quiescent reclaim");
+    }
+
+    private static void DemandBackedGrowthPreservesActorRootsAndBudget()
+    {
+        var budget = new ActorArenaBudget(10 * 1024);
+        long processBefore = ActorArenaBudget.Process.ReservedBytes;
+        var a = new ActorArena(81001, 1, 16 * 1024, 4096, 8, 2, 2,
+            budget: budget, demandBacked: true);
+        var b = new ActorArena(81002, 1, 16 * 1024, 4096, 8, 2, 2,
+            budget: budget, demandBacked: true);
+        var c = new ActorArena(81003, 1, 16 * 1024, 4096, 8, 2, 2,
+            budget: budget, demandBacked: true);
+        Require(a.DemandBacked && a.ReservedNativeBytes == 0 &&
+                b.ReservedNativeBytes == 0 && c.ReservedNativeBytes == 0 &&
+                budget.ReservedBytes == 0,
+            "logical actor heaps must not commit or charge maximum at spawn");
+
+        ActorArenaHandle rootA;
+        ActorArenaHandle rootB;
+        ActorArenaReadLoan loan;
+        using (var turnA = a.EnterTurn(81001, 1))
+        {
+            rootA = a.AllocatePersistent(turnA, 8);
+            a.Write(turnA, rootA, 0, new byte[] { 81 });
+            loan = a.BorrowRead(turnA, rootA);
+        }
+        using (var turnB = b.EnterTurn(81002, 1))
+        {
+            rootB = b.AllocatePersistent(turnB, 8);
+            b.Write(turnB, rootB, 0, new byte[] { 82 });
+            ExpectInvalid(() => b.Read(turnB, rootA, 0, new byte[1]),
+                "foreign actor cannot dereference matching logical offset");
+        }
+        Require(a.ReservedNativeBytes == 4096 && b.ReservedNativeBytes == 4096 &&
+                budget.ReservedBytes == 8192,
+            "tenant charge matches two physical slabs rather than both maxima");
+        using (var turnC = c.EnterTurn(81003, 1))
+            ExpectInvalid(() => c.AllocatePersistent(turnC, 8),
+                "aggregate quota denies third actor before native backing allocation");
+        Require(c.ReservedNativeBytes == 0 && budget.ReservedBytes == 8192,
+            "denied third actor leaves native accounting and contents unchanged");
+
+        using (var turnA = a.EnterTurn(81001, 1))
+        {
+            ExpectInvalid(() => a.AllocatePersistent(turnA, 6000),
+                "growth rejects if physical delta cannot be charged");
+            var unchanged = new byte[1];
+            a.Read(turnA, rootA, 0, unchanged);
+            Require(unchanged[0] == 81 && a.ReservedNativeBytes == 4096,
+                "denied growth does not revoke live immutable borrowed root");
+        }
+        Require(b.Retire(), "unborrowed peer can reclaim independently");
+        Require(b.ReservedNativeBytes == 0 && budget.ReservedBytes == 4096,
+            "peer release restores tenant capacity");
+        using (var turnA = a.EnterTurn(81001, 1))
+        {
+            var enlarged = a.AllocatePersistent(turnA, 6000);
+            var unchanged = new byte[1];
+            a.Read(turnA, rootA, 0, unchanged);
+            Require(unchanged[0] == 81 && a.ReservedNativeBytes == 8192,
+                "demand growth preserves old actor root under a live read loan");
+            a.Write(turnA, enlarged, 0, new byte[] { 83 });
+            a.Read(turnA, enlarged, 0, unchanged);
+            Require(unchanged[0] == 83, "grown allocation is writable by owner");
+            ExpectInvalid(() => a.Write(turnA, rootA, 0, new byte[] { 0 }),
+                "immutable read loan still forbids mutation after slab relocation");
+        }
+        Require(!a.Retire(), "loan must delay physically freeing enlarged actor heap");
+        Require(budget.ReservedBytes == 8192 && a.ReservedNativeBytes == 8192,
+            "logical stop retains charged heap until last borrower exits");
+        loan.Dispose();
+        Require(a.IsReclaimed && a.ReservedNativeBytes == 0 &&
+                budget.ReservedBytes == 0 &&
+                ActorArenaBudget.Process.ReservedBytes == processBefore,
+            "physical retirement refunds tenant and process exactly once");
+        Require(c.Retire() && c.IsReclaimed && c.ReservedNativeBytes == 0,
+            "never-allocated actor also retires without a phantom refund");
+    }
+
+    private static void DemandBackedScratchAndQuiescentPin()
+    {
+        var budget = new ActorArenaBudget(32 * 1024);
+        var arena = new ActorArena(82001, 1, 8 * 1024, 8 * 1024, 8, 2, 2,
+            budget: budget, demandBacked: true);
+        Require(arena.ReservedNativeBytes == 0, "dynamic scratch starts uncommitted");
+        ActorArenaLifetimePin pin;
+        ActorScratchHandle stale;
+        using (var turn = arena.EnterTurn(82001, 1))
+        {
+            stale = arena.AllocateScratch(turn, 16, 8);
+            arena.WriteScratch(turn, stale, 0, new byte[] { 17 });
+            var expanded = arena.AllocateScratch(turn, 5000, 64);
+            var buffer = new byte[1];
+            arena.ReadScratch(turn, stale, 0, buffer);
+            Require(buffer[0] == 17, "scratch growth preserves earlier allocations");
+            arena.ReadScratch(turn, expanded, 0, buffer);
+            Require(buffer[0] == 0 && arena.ReservedNativeBytes == 8192,
+                "fresh grown scratch bytes are zeroed and charged");
+            pin = arena.AcquireLifetimePin(turn);
+        }
+        using (var turn = arena.EnterTurn(82001, 1))
+        {
+            ExpectInvalid(() => arena.ReadScratch(turn, stale, 0, new byte[1]),
+                "scratch handle from previous turn cannot survive an epoch change");
+            var scratch = arena.AllocateScratch(turn, 8);
+            var bytes = new byte[1];
+            arena.ReadScratch(turn, scratch, 0, bytes);
+            Require(bytes[0] == 0, "new turn receives scrubbed scratch");
+        }
+        Require(!arena.Retire() && arena.ReservedNativeBytes == 8192,
+            "lifetime-only pin prevents native release after turn exit");
+        pin.Dispose();
+        Require(arena.IsReclaimed && budget.ReservedBytes == 0,
+            "async/FFI lifetime pin defers and then permits physical refund");
     }
 
     private static void PersistentAndScratchLifetimes()
