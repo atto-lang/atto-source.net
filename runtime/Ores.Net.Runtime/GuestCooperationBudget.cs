@@ -9,6 +9,7 @@ public sealed class GuestCooperationBudget
 {
     public const int PollInterval = 128;
     public const ulong MaxLogicalFuel = 100_000_000UL;
+    public const ulong MaxBlockWeight = 512UL;
 
     private ulong _remainingFuel;
     private uint _ticks;
@@ -33,18 +34,22 @@ public sealed class GuestCooperationBudget
     // authorizes a slow poll, never suspension under critical/borrow guards.
     public bool ChargeBackedge(ulong weight = 1)
     {
-        ChargeOperation(weight);
+        bool due = ChargeOperation(weight);
         _dispatchTicks++;
-        _ticks = (_ticks + 1U) & ((uint)PollInterval - 1U);
-        return _ticks == 0;
+        return due;
     }
 
-    public void ChargeOperation(ulong weight)
+    // Function/recursive entry can return a checkpoint ticket, but cannot
+    // suspend a synchronous native stack or a protected critical scope.
+    public bool ChargeOperation(ulong weight)
     {
-        if (weight == 0 || weight > MaxLogicalFuel)
+        if (weight == 0 || weight > MaxBlockWeight)
             throw new ArgumentOutOfRangeException(nameof(weight));
         if (weight > _remainingFuel)
             throw new InvalidOperationException("logical guest fuel exhausted");
         _remainingFuel -= weight;
+        ulong total = _ticks + weight;
+        _ticks = (uint)(total & ((ulong)PollInterval - 1UL));
+        return total >= PollInterval;
     }
 }
