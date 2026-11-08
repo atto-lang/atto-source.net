@@ -133,6 +133,10 @@ internal static class CfgCilEmitter
                                 il.LoadLocal(argument);
                             il.Call(callee);
                             break;
+                        case CfgOpcode.DotnetMathAbs:
+                            il.LoadLocal(op.Left!.Value);
+                            il.Call(DotnetStaticImportMetadata.MathAbs(metadata));
+                            break;
                         case CfgOpcode.ConstantI64:
                             il.LoadConstantI8(op.I64Constant!.Value);
                             break;
