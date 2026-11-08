@@ -190,6 +190,7 @@ jobs:
           name: oreslang-net-linux-x64-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             artifacts/evidence/linux-native-aot.json
+            artifacts/evidence/portable-six-native.txt
             artifacts/apps/linux-x64/oreslang-app
             artifacts/parity/linux-x64/oreslang-app
             artifacts/parity-precedence/linux-x64/oreslang-app
