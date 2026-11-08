@@ -9,17 +9,32 @@ internal static class DotnetHostImportTests
         const string source =
             "import dotnet \"System.Math\" as HostMath; " +
             "pub fnc main() -> int { return HostMath.Abs(-42); }";
-        var typed = OresIrLowering.Lower(OresParser.Parse(source));
+        var grant = DotnetHostImportPolicy.MathI64V0;
+        Reject(() => OresParser.Parse(source), "host import admitted without capability");
+        Reject(() => OresIrLowering.Lower(new DotnetMathAbsI64(new Literal(7))),
+            "forged CLR AST admitted without capability");
+        var typed = OresIrLowering.Lower(OresParser.Parse(source, grant), policy: grant);
         Check(typed.Instructions.Count(x => x.Opcode == IrOpcode.DotnetMathAbsI64) == 1,
             "exactly one typed CLR call lowered through verified SSA");
         // Advisory static facts v0 intentionally asserts an empty call graph.
         // A verified external CLR call must not be misreported as zero edges.
-        Reject(() => StaticFactsV0Exporter.FromCompiledScalarSource(source),
+        Reject(() => StaticFactsV0Exporter.FromCompiledScalarSource(source, grant),
             "CLR host call erased from zero-edge static-facts exporter");
         Reject(() => ManagedSourceEmitter.Emit(typed, ManagedSourceTarget.CSharp),
             "host CLR call silently rewritten into unsupported C# source");
         Reject(() => ManagedSourceEmitter.Emit(typed, ManagedSourceTarget.FSharp),
             "host CLR call silently rewritten into unsupported F# source");
+
+        const string maxSource =
+            "import dotnet \"System.Math\" as Math; " +
+            "pub fnc main() -> int { return Math.Max(10,42); }";
+        Reject(() => OresParser.Parse(maxSource), "Math.Max admitted without capability");
+        var maxTyped = OresIrLowering.Lower(OresParser.Parse(maxSource, grant),
+            policy: grant);
+        Check(maxTyped.Instructions.Count(x => x.Opcode == IrOpcode.DotnetMathMaxI64) == 1,
+            "exactly one typed CLR Max(i64,i64) call lowered through verified SSA");
+        Reject(() => StaticFactsV0Exporter.FromCompiledScalarSource(maxSource, grant),
+            "Max CLR host call erased from zero-edge static facts");
 
         string root = Path.Combine(Path.GetTempPath(),
             "atto-dotnet-import-" + Guid.NewGuid().ToString("N"));
@@ -32,6 +47,10 @@ internal static class DotnetHostImportTests
             CilEmitter.EmitLibrary(typed, second);
             Check(File.ReadAllBytes(first).AsSpan().SequenceEqual(File.ReadAllBytes(second)),
                 "CLR host import must emit byte-identical deterministic CIL");
+            string maxOutput = Path.Combine(root, "max.dll");
+            CilEmitter.EmitLibrary(maxTyped, maxOutput);
+            Check(!File.ReadAllBytes(first).AsSpan().SequenceEqual(File.ReadAllBytes(maxOutput)),
+                "Distinct CLR methods must affect deterministic generated assembly identity");
 
             // Mono.Cecil is test-only: the compiler itself must never load or
             // reflect over generated or foreign assemblies at runtime.
@@ -59,6 +78,23 @@ internal static class DotnetHostImportTests
             Check(!run.Body.Instructions.Any(x =>
                 x.OpCode == OpCodes.Callvirt || x.OpCode == OpCodes.Newobj),
                 "host call must not allocate or dispatch through arbitrary CLR objects");
+
+            using var maxAssembly = AssemblyDefinition.ReadAssembly(maxOutput);
+            var maxRun = maxAssembly.MainModule.Types.Single(x =>
+                x.FullName == "Oreslang.Generated.OresProgram")
+                .Methods.Single(x => x.Name == "Run");
+            var maxCalls = maxRun.Body.Instructions.Where(x => x.OpCode == OpCodes.Call)
+                .Select(x => x.Operand as MethodReference).ToArray();
+            Check(maxCalls.Length == 1 && maxCalls[0] is not null &&
+                  maxCalls[0]!.Name == "Max" &&
+                  maxCalls[0]!.DeclaringType.FullName == "System.Math" &&
+                  maxCalls[0]!.ReturnType.FullName == "System.Int64" &&
+                  maxCalls[0]!.Parameters.Count == 2 &&
+                  maxCalls[0]!.Parameters.All(p =>
+                      p.ParameterType.FullName == "System.Int64"),
+                "CIL must statically pin exact Math.Max(Int64,Int64) overload");
+            Check(assembly.MainModule.Mvid != maxAssembly.MainModule.Mvid,
+                "Distinct CLR method contracts must not reuse the generated module identity");
         }
         finally
         {
@@ -78,9 +114,13 @@ internal static class DotnetHostImportTests
             "import jvm \"java.lang.Math\" as Math; fnc main():int{return 1;}",
             "import fnc abs from \"dotnet:System.Math\"; fnc main():int{return 1;}",
             "fnc main():int{return Math.Abs(7);}",
+            "import dotnet \"System.Math\" as Math; fnc main():int{return Math.Max(1);}",
+            "import dotnet \"System.Math\" as Math; fnc main():int{return Math.Max(1,2,3);}",
+            "import dotnet \"System.Math\" as Math; fnc main():int{return Math.Max(1.5,2);}",
         })
         {
-            Reject(() => OresIrLowering.Lower(OresParser.Parse(rejected)),
+            Reject(() => OresIrLowering.Lower(OresParser.Parse(rejected, grant),
+                policy: grant),
                 "unsupported host surface admitted: " + rejected);
         }
         Check(OresParser.Parse("fnc main():int{return 42;} // import dotnet \"System.IO.File\"") is Literal,
@@ -92,10 +132,35 @@ internal static class DotnetHostImportTests
                 new IrInstruction(0, IrOpcode.ConstantI64, IrValueType.I64, Constant: 42),
                 new IrInstruction(1, IrOpcode.DotnetMathAbsI64, IrValueType.I64,
                     Left: 0, Right: 0)
-            }, 1)), "unverified extra CLR argument allowed");
+            }, 1), grant), "unverified extra CLR argument allowed");
         Reject(() => OresIrVerifier.Verify(new IrFunction("main", IrValueType.I64,
             new[] { new IrInstruction(0, IrOpcode.DotnetMathAbsI64,
-                IrValueType.I64, Left: 99) }, 0)), "forged CLR SSA predecessor allowed");
+                IrValueType.I64, Left: 99) }, 0), grant), "forged CLR SSA predecessor allowed");
+
+        Reject(() => OresIrVerifier.Verify(new IrFunction("main", IrValueType.I64,
+            new[] {
+                new IrInstruction(0, IrOpcode.ConstantI64, IrValueType.I64, Constant: 2),
+                new IrInstruction(1, IrOpcode.DotnetMathAbsI64, IrValueType.I64, Left: 0)
+            }, 1)), "direct untrusted SSA CLR call bypassed capability");
+        Reject(() => OresIrVerifier.Verify(new IrFunction("main", IrValueType.I64,
+            new[] {
+                new IrInstruction(0, IrOpcode.ConstantI64, IrValueType.I64, Constant: 1),
+                new IrInstruction(1, IrOpcode.ConstantI64, IrValueType.I64, Constant: 2),
+                new IrInstruction(2, IrOpcode.DotnetMathMaxI64, IrValueType.I64,
+                    Left: 0, Right: 1)
+            }, 2)), "direct untrusted SSA Max call bypassed capability");
+        Reject(() => OresIrVerifier.Verify(new IrFunction("main", IrValueType.I64,
+            new[] {
+                new IrInstruction(0, IrOpcode.ConstantI64, IrValueType.I64, Constant: 2),
+                new IrInstruction(1, IrOpcode.DotnetMathMaxI64, IrValueType.I64,
+                    Left: 0)
+            }, 1), grant), "malformed CLR Max arity allowed");
+        Reject(() => OresIrVerifier.Verify(new IrFunction("main", IrValueType.I64,
+            new[] {
+                new IrInstruction(0, IrOpcode.ConstantI64, IrValueType.I64, Constant: 2),
+                new IrInstruction(1, IrOpcode.DotnetMathMaxI64, IrValueType.I64,
+                    Left: 0, Right: 4)
+            }, 1), grant), "forged forward SSA Max argument allowed");
     }
 
     private static void Check(bool ok, string description)
