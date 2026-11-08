@@ -40,13 +40,14 @@ public sealed unsafe class ActorNativeArena : IDisposable
     private byte* _memory;
     private readonly int _capacity;
     private int _backingBytes;
+    private readonly ActorArenaBudget _budget;
     private int _cursor;
     private int _nextSlot;
     private int _freeCount;
     private int _liveCount;
     private bool _disposed;
 
-    public ActorNativeArena(int bytes, int slots)
+    public ActorNativeArena(int bytes, int slots, ActorArenaBudget? budget = null)
     {
         if (bytes <= 0 || bytes > MaximumCapacityBytes)
             throw new ArgumentOutOfRangeException(nameof(bytes),
@@ -63,6 +64,7 @@ public sealed unsafe class ActorNativeArena : IDisposable
         // A maximum is a quota, not an eager native allocation. Actor storage
         // is materialized only by the first successful object allocation.
         _capacity = bytes;
+        _budget = budget ?? ActorArenaBudget.Process;
     }
 
     public int CapacityBytes => _capacity;
@@ -210,6 +212,10 @@ public sealed unsafe class ActorNativeArena : IDisposable
             Zero(0, _backingBytes);
             NativeMemory.AlignedFree(_memory);
             _memory = null;
+            // Refund only after physical scrubbing and release, not logical drop.
+            if (!ReferenceEquals(_budget, ActorArenaBudget.Process))
+                ActorArenaBudget.Process.Refund(_backingBytes);
+            _budget.Refund(_backingBytes);
             _backingBytes = 0;
         }
         Array.Clear(_live);
@@ -238,20 +244,46 @@ public sealed unsafe class ActorNativeArena : IDisposable
         // C aligned_alloc requires a multiple of the requested alignment.
         // Physical tail padding cannot increase the actor's logical quota.
         int physicalBytes = checked((int)((next + 63L) & ~63L));
-        byte* replacement = (byte*)NativeMemory.AlignedAlloc((nuint)physicalBytes, 64);
-        if (replacement == null)
-            throw new OutOfMemoryException("actor native arena growth failed");
-
-        // An uninitialized/reused object must never observe stale host data.
-        new Span<byte>(replacement, physicalBytes).Clear();
-        if (_memory != null)
+        int additionalBytes = physicalBytes - _backingBytes;
+        // Admission is charged for physical backing before any native call.
+        // A custom tenant limit cannot bypass the global process limit.
+        _budget.Reserve(additionalBytes);
+        bool processReserved = false;
+        byte* replacement = null;
+        try
         {
-            Buffer.MemoryCopy(_memory, replacement, next, _cursor);
-            Zero(0, _backingBytes);
-            NativeMemory.AlignedFree(_memory);
+            if (!ReferenceEquals(_budget, ActorArenaBudget.Process))
+            {
+                ActorArenaBudget.Process.Reserve(additionalBytes);
+                processReserved = true;
+            }
+            replacement = (byte*)NativeMemory.AlignedAlloc((nuint)physicalBytes, (nuint)64);
+            if (replacement == null)
+                throw new OutOfMemoryException("actor native arena growth failed");
+
+            // An uninitialized/reused object must never observe stale host data.
+            new Span<byte>(replacement, physicalBytes).Clear();
+            if (_memory != null)
+            {
+                Buffer.MemoryCopy(_memory, replacement, physicalBytes, _cursor);
+                Zero(0, _backingBytes);
+                NativeMemory.AlignedFree(_memory);
+            }
+            _memory = replacement;
+            _backingBytes = physicalBytes;
         }
-        _memory = replacement;
-        _backingBytes = physicalBytes;
+        catch
+        {
+            if (replacement != null)
+            {
+                CryptographicOperations.ZeroMemory(new Span<byte>(replacement, physicalBytes));
+                NativeMemory.AlignedFree(replacement);
+            }
+            if (processReserved)
+                ActorArenaBudget.Process.Refund(additionalBytes);
+            _budget.Refund(additionalBytes);
+            throw;
+        }
     }
 
     private int ValidSlot(ulong handle)
