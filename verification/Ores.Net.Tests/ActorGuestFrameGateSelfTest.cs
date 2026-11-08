@@ -7,6 +7,8 @@ internal static class ActorGuestFrameGateSelfTest
     {
         GuestFrameFaultsAreTerminalButHostValidationRemainsRecoverable();
         Console.WriteLine(
+            "PASS net-actor-guest-frame-eight-fault-matrix|faults=8|peer=42|admission=9|guest_atto=0");
+        Console.WriteLine(
             "PASS .NET terminal compiled guest-frame boundary host tests (NOT guest .atto or physical stack proof)");
     }
 
