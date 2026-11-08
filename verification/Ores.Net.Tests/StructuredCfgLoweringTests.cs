@@ -143,6 +143,12 @@ internal static class StructuredCfgLoweringTests
         Check("fnc main():int{let bool b=true; b=false;" +
             "if (b or true) and (true xor false) {return 42;}else{return 7;}}",
             42, "logical word expressions and assignments");
+        // Lower() intentionally inlines simple helper bodies. Exercise the
+        // *shipping* --structured linked-MethodDef path independently so a
+        // passing reference interpreter cannot masquerade as NativeAOT ABI
+        // evidence. The platform CI additionally executes the native binary.
+        StructuredCfgModuleParityTests.Run();
+
         // Actual typed source-call semantics are checked in the independent
         // reference evaluator, emitted CIL interpreter and deterministic PE.
         // This is an acyclic, expression-only helper milestone, not a
