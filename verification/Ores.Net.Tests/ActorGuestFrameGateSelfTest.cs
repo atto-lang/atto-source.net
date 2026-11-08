@@ -91,6 +91,29 @@ internal static class ActorGuestFrameGateSelfTest
             // The caught overflow must still stop this incarnation at exit.
         });
 
+        var badRead = runtime.Spawn(ActorKind.Shared, (context, _) =>
+        {
+            var frame = context.GuestPushStackFrame(8);
+            try
+            {
+                context.GuestReadStackFrame(frame, 7, new byte[2]);
+                throw new Exception("Guest frame read overflow was accepted");
+            }
+            catch (ArgumentOutOfRangeException) { }
+            // A swallowed read fault must remain terminal at dispatch exit.
+        });
+
+        var badAlignment = runtime.Spawn(ActorKind.Shared, (context, _) =>
+        {
+            try
+            {
+                _ = context.GuestPushStackFrame(8, alignment: 3);
+                throw new Exception("Guest misaligned frame was accepted");
+            }
+            catch (ArgumentOutOfRangeException) { }
+            // Failed allocation did not issue a handle, but did poison turn.
+        });
+
         var healthy = runtime.Spawn(ActorKind.Shared, (context, _) =>
         {
             retainedContext = context;
@@ -131,15 +154,17 @@ internal static class ActorGuestFrameGateSelfTest
         runtime.Send(foreign, new byte[] { 3 });
         runtime.Send(wrongLifo, new byte[] { 4 });
         runtime.Send(quota, new byte[] { 5 });
+        runtime.Send(badRead, new byte[] { 7 });
+        runtime.Send(badAlignment, new byte[] { 8 });
         runtime.Send(healthy, new byte[] { 6 });
         Require(healthyDone.Wait(TimeSpan.FromSeconds(8)) &&
                 Volatile.Read(ref healthyResult) == 42,
-            "actor B could not return 42 after five guest-frame faults");
+            "actor B could not return 42 after seven guest-frame faults");
         Require(SpinWait.SpinUntil(
-            () => runtime.FaultedTurns >= 5 && runtime.LiveActors == 1 &&
+            () => runtime.FaultedTurns >= 7 && runtime.LiveActors == 1 &&
                   runtime.CompletedMessages == 1,
             TimeSpan.FromSeconds(8)),
-            "five terminal guest faults stop only offenders; only B completes");
+            "seven terminal guest faults stop only offenders; only B completes");
         Require(runtime.CompletedMessages == 1,
             "caught guest frame faults must not count as completed messages");
 
