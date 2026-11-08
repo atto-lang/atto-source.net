@@ -114,7 +114,7 @@ internal static class CfgCilTestInterpreter
                 case Code.Call:
                 {
                     // Verification-only closed .NET static host import. Validate
-                    // every signature bit before the test oracle runs Math.Abs;
+                    // every signature bit before the test oracle runs Math.Abs/Max/Min;
                     // never interpret an arbitrary external MemberRef.
                     if (ins.Operand is MethodReference host &&
                         host.MetadataToken.TokenType == TokenType.MemberRef &&
@@ -122,12 +122,19 @@ internal static class CfgCilTestInterpreter
                         host.DeclaringType.Scope is AssemblyNameReference runtime &&
                         runtime.Name == "System.Runtime" &&
                         runtime.Version.Equals(new Version(10, 0, 0, 0)) &&
-                        host.Name == "Abs" && !host.HasThis &&
-                        host.Parameters.Count == 1 &&
-                        host.Parameters[0].ParameterType.FullName == "System.Int64" &&
-                        host.ReturnType.FullName == "System.Int64" && stack.Count >= 1)
+                        host.Name is "Abs" or "Max" or "Min" && !host.HasThis &&
+                        host.Parameters.Count == (host.Name == "Abs" ? 1 : 2) &&
+                        host.Parameters.All(p => p.ParameterType.FullName == "System.Int64") &&
+                        host.ReturnType.FullName == "System.Int64" &&
+                        stack.Count >= host.Parameters.Count)
                     {
-                        stack.Push(Math.Abs(stack.Pop()));
+                        if (host.Name == "Abs") stack.Push(Math.Abs(stack.Pop()));
+                        else
+                        {
+                            long right = stack.Pop();
+                            long left = stack.Pop();
+                            stack.Push(host.Name == "Max" ? Math.Max(left, right) : Math.Min(left, right));
+                        }
                         break;
                     }
                     // The emitted ABI promises an exact, in-module MethodDef
