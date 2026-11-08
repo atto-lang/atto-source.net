@@ -61,7 +61,9 @@ public static class CilEmitter
                 localVariablesSignature: localSignature,
                 attributes: MethodBodyAttributes.InitLocals);
             return (bodyOffset, methodCode, localsBlob);
-        });
+        }, hostCallIdentity: string.Join(";", program.Instructions
+            .Where(op => op.Opcode is IrOpcode.DotnetMathAbsI64 or IrOpcode.DotnetMathMaxI64)
+            .Select(op => op.Opcode.ToString()).Distinct().Order(StringComparer.Ordinal)));
     }
 
     // Experimental CFG entry point. Only a verified function is accepted;
@@ -77,22 +79,39 @@ public static class CilEmitter
     private static int WriteVerifiedIr(VerifiedIrFunction program, InstructionEncoder il,
         MetadataBuilder metadata)
     {
-        // Only the compiler-pinned, exact System.Math.Abs(Int64) signature is
-        // available. No Assembly.Load, reflection, dynamic invocation or
-        // general CLR object handles are emitted into Native AOT applications.
+        // Only two exact, pure scalar framework signatures are available.
+        // Reference assembly lookup is pinned to the existing System.Runtime
+        // identity, never dynamic reflection or host object construction.
         MemberReferenceHandle mathAbs = default;
-        if (program.Instructions.Any(instruction =>
-                instruction.Opcode == IrOpcode.DotnetMathAbsI64))
+        MemberReferenceHandle mathMax = default;
+        bool hasAbs = program.Instructions.Any(op => op.Opcode == IrOpcode.DotnetMathAbsI64);
+        bool hasMax = program.Instructions.Any(op => op.Opcode == IrOpcode.DotnetMathMaxI64);
+        if (hasAbs || hasMax)
         {
             var math = metadata.AddTypeReference(
                 MetadataTokens.AssemblyReferenceHandle(1),
                 metadata.GetOrAddString("System"), metadata.GetOrAddString("Math"));
-            var signature = new BlobBuilder();
-            new BlobEncoder(signature).MethodSignature().Parameters(
-                1, result => result.Type().Int64(),
-                parameters => parameters.AddParameter().Type().Int64());
-            mathAbs = metadata.AddMemberReference(math,
-                metadata.GetOrAddString("Abs"), metadata.GetOrAddBlob(signature));
+            if (hasAbs)
+            {
+                var signature = new BlobBuilder();
+                new BlobEncoder(signature).MethodSignature().Parameters(
+                    1, result => result.Type().Int64(),
+                    parameters => parameters.AddParameter().Type().Int64());
+                mathAbs = metadata.AddMemberReference(math,
+                    metadata.GetOrAddString("Abs"), metadata.GetOrAddBlob(signature));
+            }
+            if (hasMax)
+            {
+                var signature = new BlobBuilder();
+                new BlobEncoder(signature).MethodSignature().Parameters(
+                    2, result => result.Type().Int64(), parameters =>
+                    {
+                        parameters.AddParameter().Type().Int64();
+                        parameters.AddParameter().Type().Int64();
+                    });
+                mathMax = metadata.AddMemberReference(math,
+                    metadata.GetOrAddString("Max"), metadata.GetOrAddBlob(signature));
+            }
         }
 
         int maxStack = 1;
@@ -107,8 +126,13 @@ public static class CilEmitter
                     throw new FormatException("Removed Oreslang operator '%' cannot reach CIL emission");
                 case IrOpcode.DotnetMathAbsI64:
                     il.LoadLocal(operation.Left!.Value);
-                    il.OpCode(ILOpCode.Call);
-                    il.Token(mathAbs);
+                    il.Call(mathAbs);
+                    break;
+                case IrOpcode.DotnetMathMaxI64:
+                    il.LoadLocal(operation.Left!.Value);
+                    il.LoadLocal(operation.Right!.Value);
+                    il.Call(mathMax);
+                    maxStack = 2;
                     break;
                 case IrOpcode.CheckedAdd:
                 case IrOpcode.CheckedSubtract:
@@ -138,7 +162,8 @@ public static class CilEmitter
 
     internal static void EmitLibraryCore(string outputFile,
         Func<MetadataBuilder, MethodBodyStreamEncoder,
-            (int BodyOffset, BlobBuilder Code, BlobBuilder? Locals)> buildBody)
+            (int BodyOffset, BlobBuilder Code, BlobBuilder? Locals)> buildBody,
+        string hostCallIdentity = "")
     {
         var ilStream = new BlobBuilder();
         var bodyStream = new MethodBodyStreamEncoder(ilStream);
@@ -163,6 +188,12 @@ public static class CilEmitter
         contentHash.AppendData(ilStream.ToArray());
         if (localSignatureBlob is not null)
             contentHash.AppendData(localSignatureBlob.ToArray());
+        // MemberRef tokens are not sufficient to distinguish similarly shaped
+        // CLR calls: e.g. changing Abs to another unary method can preserve
+        // identical instruction bytes. MVID must cover imported method identity.
+        if (hostCallIdentity.Length > 0)
+            contentHash.AppendData(System.Text.Encoding.UTF8.GetBytes(
+                "attolang-dotnet-host-v0:" + hostCallIdentity));
         byte[] hash = contentHash.GetHashAndReset();
         var moduleId = new Guid(hash.AsSpan(0, 16));
         metadata.AddModule(
