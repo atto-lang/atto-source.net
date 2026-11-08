@@ -18,7 +18,10 @@ public enum CfgOpcode
     NotEqualI64,
     // Two-word source Option<int>, selected from verified bool tag/i64
     // payload and an eagerly evaluated i64 fallback. Not an opaque pointer.
-    OptionOrI64
+    OptionOrI64,
+    // Bounds proof for a fixed-size inline i64 array. Signed comparison
+    // only, no guest/native pointer operations. Returns exact Bool.
+    ArrayIndexValidI64
 }
 
 public readonly record struct CfgParameter(int Id, IrValueType Type);
@@ -95,6 +98,8 @@ public static class OresCfgVerifier
     // Edge payloads are not SSA definitions, so they need a separate global
     // bound before copying any untrusted list into the immutable proof.
     public const int MaxEdgeArguments = 2 * MaxValues;
+    // Bounds the inline immutable Array<int> SSA expansion and code size.
+    public const int MaxFixedArrayElements = 8;
 
     private readonly record struct Definition(int Block, int Instruction, IrValueType Type);
 
@@ -316,6 +321,18 @@ public static class OresCfgVerifier
                             throw new FormatException("Unverified CFG static call");
                         for (int arg = 0; arg < op.Arguments.Count; arg++)
                             Use(i, opIndex, op.Arguments[arg], callee.ParameterTypes[arg]);
+                        break;
+                    }
+                    case CfgOpcode.ArrayIndexValidI64:
+                    {
+                        RequireType(op.Type, IrValueType.Bool);
+                        if (op.Left is null || op.I64Constant is null ||
+                            op.I64Constant < 0 ||
+                            op.I64Constant > MaxFixedArrayElements ||
+                            op.Right is not null || op.BoolConstant is not null ||
+                            op.Target is not null || op.Arguments is not null)
+                            throw new FormatException("E_ARRAY_BOUNDS_IR: forged inline array length or index");
+                        Use(i, opIndex, op.Left.Value, IrValueType.I64);
                         break;
                     }
                     case CfgOpcode.OptionOrI64:
