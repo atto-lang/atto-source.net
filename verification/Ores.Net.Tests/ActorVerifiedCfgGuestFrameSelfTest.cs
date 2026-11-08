@@ -70,6 +70,17 @@ internal static class ActorVerifiedCfgGuestFrameSelfTest
         {
             var frame = ActorScalarGuestFrameAbiV1.Push(
                 context, types, plan.BlockCount, plan.EntryBlockIndex);
+            // Source-derived frame bytes must agree with the existing ATF1
+            // scalar ABI rather than inventing a second native format.
+            byte[] wireFreeHeader = new byte[HeaderBytes];
+            context.GuestReadStackFrame(frame, 0, wireFreeHeader);
+            Require(wireFreeHeader[0] == (byte)'A' &&
+                    wireFreeHeader[1] == (byte)'T' &&
+                    wireFreeHeader[2] == (byte)'F' &&
+                    wireFreeHeader[3] == (byte)'1' &&
+                    wireFreeHeader[4] == plan.ValueSlots &&
+                    wireFreeHeader[8] == plan.BlockCount,
+                "guest frame ATF1 header differs from host scalar ABI");
             ActorScalarGuestFrameAbiV1.WriteI64(
                 context, frame, valueSlot, sourceConstant);
             ActorScalarGuestFrameAbiV1.SetProgramCounter(
@@ -80,6 +91,14 @@ internal static class ActorVerifiedCfgGuestFrameSelfTest
                 context, frame) == plan.EntryBlockIndex && result == 42,
                 "actor B failed typed native guest frame round trip");
             ActorScalarGuestFrameAbiV1.Pop(context, frame);
+            // The common scalar guest codec must also round-trip an
+            // explicitly declared bool without retyping the parsed i64 slot.
+            var boolFrame = ActorScalarGuestFrameAbiV1.Push(
+                context, new byte[] { 2 }, blockCount: 1);
+            ActorScalarGuestFrameAbiV1.WriteBool(context, boolFrame, 0, true);
+            Require(ActorScalarGuestFrameAbiV1.ReadBool(context, boolFrame, 0),
+                "verified guest bool slot failed canonical encoding");
+            ActorScalarGuestFrameAbiV1.Pop(context, boolFrame);
             Volatile.Write(ref survivorValue, checked((int)result));
             survivorDone.Set();
         });
