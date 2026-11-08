@@ -155,9 +155,9 @@ internal static class ActorCompiledCfgFrameSelfTest
         BinaryPrimitives.WriteInt32LittleEndian(header[12..], plan.EntryBlockIndex);
         context.GuestWriteStackFrame(frame, 0, header);
 
+        Span<byte> uninitialized = stackalloc byte[SlotBytes];
         for (int slot = 0; slot < types.Length; slot++)
         {
-            Span<byte> uninitialized = stackalloc byte[SlotBytes];
             uninitialized.Clear();
             uninitialized[1] = types[slot];
             context.GuestWriteStackFrame(frame,
@@ -165,6 +165,7 @@ internal static class ActorCompiledCfgFrameSelfTest
         }
 
         int pc = plan.EntryBlockIndex;
+        Span<byte> pcBytes = stackalloc byte[4];
         (byte Tag, long Value)[] edgeValues = [];
         // A finite block fuel is required because bounded frame depth does
         // not bound a loop's total CPU consumption.
@@ -176,7 +177,6 @@ internal static class ActorCompiledCfgFrameSelfTest
             for (int i = 0; i < edgeValues.Length; i++)
                 WriteSlot(block.Parameters[i].Id, edgeValues[i]);
 
-            Span<byte> pcBytes = stackalloc byte[4];
             BinaryPrimitives.WriteInt32LittleEndian(pcBytes, pc);
             context.GuestWriteStackFrame(frame, 12, pcBytes);
             foreach (var op in block.Instructions)
@@ -275,7 +275,8 @@ internal static class ActorCompiledCfgFrameSelfTest
             context.GuestReadStackFrame(frame,
                 checked(HeaderBytes + slot * SlotBytes), raw);
             if (raw[0] != types[slot] || raw[1] != types[slot] ||
-                raw[2..8].IndexOfAnyExcept((byte)0) >= 0)
+                raw[2] != 0 || raw[3] != 0 || raw[4] != 0 ||
+                raw[5] != 0 || raw[6] != 0 || raw[7] != 0)
                 throw new InvalidOperationException("Uninitialized or mistyped CFG scalar slot");
             long value = BinaryPrimitives.ReadInt64LittleEndian(raw[8..]);
             if (types[slot] == 2 && value is not (0 or 1))
