@@ -234,8 +234,13 @@ public static class OresActorDeclarationParser
             }
             else
             {
-                if ("(){}:,;".IndexOf(c) < 0)
-                    throw new FormatException($"E_ACTOR_SOURCE: unsupported punctuation '{c}' at {i}");
+                // Handler bodies are opaque in AST v1. Lex punctuation
+                // as individual tokens so ordinary operators and delimiters
+                // inside the body do not prevent exact source-span capture.
+                // The actor declaration grammar below still accepts only its
+                // explicit punctuation at the declaration/signature boundary.
+                if (!char.IsPunctuation(c) || c == '_' || c == '"')
+                    throw new FormatException($"E_ACTOR_SOURCE: unsupported character U+{(int)c:X4} at {i}");
                 i++;
                 tokens.Add(new Token(source[tokenStart..i], tokenStart, i));
             }
