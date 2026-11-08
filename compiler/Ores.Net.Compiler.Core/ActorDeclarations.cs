@@ -184,13 +184,14 @@ public static class OresActorDeclarationParser
             return tokens[index++];
         }
 
-        private string ReadName()
+        private string ReadName(bool allowReceive = false)
         {
             Token token = Current;
             if (token.Text.Length == 0 || !IsIdentifierStart(token.Text[0]) ||
                 token.Text is "define" or "pub" or "actor" or "class" or "as" or
-                    "receive" or "self" or "int" or "bool" or "void" or "await" or
-                    "suspends" or "critical")
+                    "self" or "int" or "bool" or "void" or "await" or
+                    "suspends" or "critical" ||
+                (!allowReceive && token.Text == "receive"))
                 throw Error("expected actor/handler identifier");
             index++;
             return token.Text;
@@ -244,7 +245,7 @@ public static class OresActorDeclarationParser
         private ActorHandlerDeclaration ReadHandler()
         {
             Token nameToken = Current;
-            string name = ReadName();
+            string name = ReadName(allowReceive: true);
             Expect("(");
             var parameters = new List<ActorHandlerParameter>();
             bool receiverSeen = false;
