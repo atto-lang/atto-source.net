@@ -239,7 +239,7 @@ public static class OresActorDeclarationParser
                 // inside the body do not prevent exact source-span capture.
                 // The actor declaration grammar below still accepts only its
                 // explicit punctuation at the declaration/signature boundary.
-                if (!char.IsPunctuation(c) || c == '_' || c == '"')
+                if (!(char.IsPunctuation(c) || char.IsSymbol(c)) || c == '_' || c == '"')
                     throw new FormatException($"E_ACTOR_SOURCE: unsupported character U+{(int)c:X4} at {i}");
                 i++;
                 tokens.Add(new Token(source[tokenStart..i], tokenStart, i));
