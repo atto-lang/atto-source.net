@@ -79,9 +79,13 @@ internal static class UntrustedMeteredCfgTests
                 "{i=i+1;}return i;}";
             Check("fnc main():int{return 42;}", FileAt("acyclic"),
                 expected: 42, mustTrap: false);
-            foreach (int iterations in new[] { 1, 127, 128, 129, 511, 512, 513 })
+            foreach (int iterations in new[] { 0, 1, 127, 128, 129, 511, 512, 513 })
                 Check(Loop(iterations), FileAt("loop-" + iterations),
                     expected: iterations, mustTrap: false);
+            Check("fnc main():int{let int i=0;let int total=0;" +
+                "while i<3{let int j=0;while j<3{total=total+1;j=j+1;}" +
+                "i=i+1;}return total;}", FileAt("nested-loops"),
+                expected: 9, mustTrap: false);
             Check(Loop(100_000), FileAt("exhausted"),
                 expected: null, mustTrap: true);
 
