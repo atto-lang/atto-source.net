@@ -362,6 +362,7 @@ Require(OresParser.Parse(
     "fnc main():int{return 42;} // define model Fake as Op() end") is Literal,
     "model text in line comments remains inert");
 
+CriticalSuspendsBoundaryTests.Run(); // compiler-owned scalar admission, not runtime critical support
 AsyncOnlyIoPolicyTests.Run();
 CapabilityIoLifecycleV1SelfTest.Run();
 SourceByteBudgetTests.Run();
