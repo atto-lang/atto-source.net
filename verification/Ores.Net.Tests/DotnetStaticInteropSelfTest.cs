@@ -24,6 +24,8 @@ public static class DotnetStaticInteropSelfTest
             pub fnc main():int { return Math.Abs(-42); }
             """;
         var verified = OresStructuredCfgLowering.LowerModule(source);
+        Require(CfgReferenceEvaluator.Evaluate(verified.Main) == 42,
+            "verified CFG evaluator runs typed host scalar semantics");
         Require(verified.Main.Blocks.SelectMany(b => b.Instructions)
             .Count(op => op.Opcode == CfgOpcode.DotnetMathAbs) == 1,
             "source import must produce a verified, typed host opcode");
@@ -42,6 +44,8 @@ public static class DotnetStaticInteropSelfTest
             using var assembly = AssemblyDefinition.ReadAssembly(output);
             var method = assembly.MainModule.GetType("Oreslang.Generated.OresProgram")
                 .Methods.Single(m => m.Name == "Run");
+            Require(CfgCilTestInterpreter.Evaluate(method) == 42,
+                "test-only CIL interpreter executes the exact host MemberRef");
             var calls = method.Body.Instructions
                 .Where(i => i.OpCode == OpCodes.Call).ToArray();
             Require(calls.Length == 1 && calls[0].Operand is MethodReference,
@@ -60,6 +64,14 @@ public static class DotnetStaticInteropSelfTest
             Directory.Delete(temporary, recursive: true);
         }
 
+        var overflow = OresStructuredCfgLowering.LowerModule(
+            "import dotnet \"System.Math\" as Math; fnc main():int { return Math.Abs(-9223372036854775808); }");
+        try { CfgReferenceEvaluator.Evaluate(overflow.Main); }
+        catch (OverflowException) { goto OverflowVerified; }
+        throw new Exception("DOTNET_IMPORT_V0: Math.Abs(long.MinValue) must overflow");
+    OverflowVerified:
+        Reject("import dotnet \"System.Math\" as Math; fnc Math():int { return 1; } fnc main():int { return 1; }",
+            "DOTNET_IMPORT_UNSUPPORTED");
         Reject("import dotnet \"System.IO.File\" as File; fnc main():int { return 1; }",
             "DOTNET_IMPORT_UNSUPPORTED");
         Reject("import dotnet \"System.Math\" as Math; fnc main():int { return Math.Max(3, 2); }",
