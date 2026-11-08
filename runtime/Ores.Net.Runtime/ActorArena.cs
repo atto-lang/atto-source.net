@@ -590,6 +590,13 @@ public unsafe sealed class ActorArena : IDisposable
             // Hash-table allocation failure must not forge a guest field.
             if (target is not null)
             {
+                // Check quota *before* creating a new sidecar dictionary.
+                // Repeated denied stores must not populate empty metadata.
+                bool updatingEdge = _managedRef32Edges.TryGetValue(parent, out var current)
+                    && current.ContainsKey(fieldOffset);
+                if (!updatingEdge && _managedRef32EdgeCount == MaxManagedRef32Edges)
+                    throw new InvalidOperationException(
+                        "Actor managed reference sidecar quota exhausted");
                 if (!_managedRef32Edges.TryGetValue(parent, out var fields))
                 {
                     fields = new Dictionary<int, ActorArenaHandle>();
