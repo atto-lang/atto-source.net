@@ -318,6 +318,7 @@ Require(OresParser.Parse(
     "fnc main():int{return 1;} /* enum Color /* enum Mode */ end */") is Literal,
     "nested block-comment enum words must not trigger overload admission");
 
+DotnetHostImportTests.Run(); // compiled System.Math.Abs(i64) CIL metadata and fail-closed imports
 VmIsolateHostTests.Run();
 VmIsolateHostHardeningTests.Run();
 OptionResultTrapAdmissionTests.Run();
