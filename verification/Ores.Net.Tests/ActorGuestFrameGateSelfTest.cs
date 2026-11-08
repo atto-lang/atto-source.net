@@ -12,7 +12,7 @@ internal static class ActorGuestFrameGateSelfTest
 
     private static ActorRuntimeOptions Options() => new()
     {
-        MaxActors = 8,
+        MaxActors = 10,
         MessagesPerDispatch = 4,
         ActorPersistentBytes = 4096,
         ActorScratchBytes = 256,
@@ -102,6 +102,29 @@ internal static class ActorGuestFrameGateSelfTest
                 "popped guest frame handle must never be reissued");
         });
 
+        var badRead = runtime.Spawn(ActorKind.Shared, (context, _) =>
+        {
+            var frame = context.GuestPushStackFrame(8);
+            try
+            {
+                context.GuestReadStackFrame(frame, 7, new byte[2]);
+                throw new Exception("Guest frame read overflow was accepted");
+            }
+            catch (ArgumentOutOfRangeException) { }
+            // A swallowed read fault must remain terminal at dispatch exit.
+        });
+
+        var badAlignment = runtime.Spawn(ActorKind.Shared, (context, _) =>
+        {
+            try
+            {
+                _ = context.GuestPushStackFrame(8, alignment: 3);
+                throw new Exception("Guest misaligned frame was accepted");
+            }
+            catch (ArgumentOutOfRangeException) { }
+            // Failed allocation did not issue a handle, but did poison turn.
+        });
+
         var healthy = runtime.Spawn(ActorKind.Shared, (context, _) =>
         {
             retainedContext = context;
@@ -152,15 +175,17 @@ internal static class ActorGuestFrameGateSelfTest
         runtime.Send(wrongLifo, new byte[] { 4 });
         runtime.Send(quota, new byte[] { 5 });
         runtime.Send(staleGuestHandle, new byte[] { 7 });
+        runtime.Send(badRead, new byte[] { 8 });
+        runtime.Send(badAlignment, new byte[] { 9 });
         runtime.Send(healthy, new byte[] { 6 });
         Require(healthyDone.Wait(TimeSpan.FromSeconds(8)) &&
                 Volatile.Read(ref healthyResult) == 42,
-            "actor B could not return 42 after six guest-frame faults");
+            "actor B could not return 42 after eight guest-frame faults");
         Require(SpinWait.SpinUntil(
-            () => runtime.FaultedTurns == 6 && runtime.LiveActors == 1 &&
+            () => runtime.FaultedTurns == 8 && runtime.LiveActors == 1 &&
                   runtime.CompletedMessages == 1,
             TimeSpan.FromSeconds(8)),
-            "six terminal guest faults stop only offenders; only B completes");
+            "eight terminal guest faults stop only offenders; only B completes");
         Require(runtime.CompletedMessages == 1,
             "caught guest frame faults must not count as completed messages");
 
