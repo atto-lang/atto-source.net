@@ -55,7 +55,48 @@ internal static class BatchedCheckpointV1SelfTest
         for (int i = 0; i < 63; i++) recursive.CompletedWorkUnit();
         Reject(() => recursive.CompletedWorkUnit(), "reentrant");
         Reject(() => recursive.CompletedWorkUnit(), "terminal");
-        Console.WriteLine("PASS batched checkpoint 64/128/256/512 host-only tests (NOT guest execution)");
+        RunDeterministicModelMatrix();
+        Console.WriteLine("PASS batched checkpoint 64/128/256/512 + 204-case differential matrix (host-only; NOT guest execution)");
+    }
+
+    private static void RunDeterministicModelMatrix()
+    {
+        int[] intervals = { 64, 128, 256, 512 };
+        ulong[] lengths = { 0, 1, 2, 63, 64, 65, 127, 128, 129,
+            255, 256, 257, 511, 512, 513, 1023, 1024, 1025, 4097 };
+        uint seed = 0x1eaf4b37;
+        foreach (int interval in intervals)
+        {
+            foreach (ulong fuel in lengths) CheckOne(interval, fuel);
+            for (int i = 0; i < 32; i++)
+            {
+                seed = unchecked(seed * 1664525u + 1013904223u);
+                CheckOne(interval, seed % 2049u);
+            }
+        }
+    }
+
+    private static void CheckOne(int interval, ulong fuel)
+    {
+        var receipts = new List<(ulong Charge, ulong Remaining)>();
+        var quota = new BatchedCheckpointV1(fuel,
+            (charge, remaining) => receipts.Add((charge, remaining)), interval);
+        for (ulong completed = 1; completed <= fuel; completed++)
+        {
+            bool expected = completed % (ulong)interval == 0 || completed == fuel;
+            Require(quota.CompletedWorkUnit() == expected, "incorrect poll boundary");
+            Require(quota.RemainingFuel == fuel - completed, "fuel drift");
+        }
+        var model = new List<(ulong Charge, ulong Remaining)>();
+        for (ulong boundary = (ulong)interval; boundary < fuel; boundary += (ulong)interval)
+            model.Add(((ulong)interval, fuel - boundary));
+        if (fuel > 0)
+            model.Add((fuel % (ulong)interval == 0 ? (ulong)interval :
+                fuel % (ulong)interval, 0));
+        Require(receipts.SequenceEqual(model), "slow poll model mismatch");
+        Reject(() => quota.CompletedWorkUnit(), "fuel exhausted");
+        Reject(() => quota.CompletedWorkUnit(), "terminal");
+        Require(receipts.SequenceEqual(model), "exhaustion called trusted poll");
     }
 
     private static void Require(bool result, string what)
