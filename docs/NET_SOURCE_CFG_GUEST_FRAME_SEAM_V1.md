@@ -38,6 +38,23 @@ actor declaration lowering. The numeric scalar value is extracted from
 **verified compiler IR**, not hardcoded into the actor handler. The handler
 itself remains C# trusted host code.
 
+## Integration with the existing verified CFG interpreter
+
+The parent integration PR #411 now contains a test-only bounded CFG
+executor for a scalar source expression, a loop returning 42, and a
+fuel-exhaustion negative fixture. This stacked PR also updates that
+executor to use `ActorScalarGuestFrameAbiV1` for frame admission, SSA
+i64/bool reads and writes, program-counter updates and terminal frame
+cleanup. It removes the interpreter's duplicate ad-hoc header/slot
+encoding so compiler-planned and runtime-validated bytes share one
+checked guest ABI. The existing host ABI decoder remains an independent
+positive cross-check.
+
+This proves interpreted **verified compiler CFG** can access actor-owned
+logical native frames through terminal guest operations. It still is not
+emitted CIL/NativeAOT machine-code execution of a `define actor`
+declaration; that production lowering is a separate requirement.
+
 ## Deliberate compatibility / limitations
 
 - `ActorScalarFrameAbiV1` still exposes its explicitly failure-neutral
