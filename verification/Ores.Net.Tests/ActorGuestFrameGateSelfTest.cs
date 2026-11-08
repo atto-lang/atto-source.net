@@ -77,6 +77,20 @@ internal static class ActorGuestFrameGateSelfTest
                 "guest frame pop must be strict LIFO");
         });
 
+        var quota = runtime.Spawn(ActorKind.Shared, (context, _) =>
+        {
+            _ = context.GuestPushStackFrame(8);
+            _ = context.GuestPushStackFrame(8);
+            _ = context.GuestPushStackFrame(8);
+            try
+            {
+                _ = context.GuestPushStackFrame(8);
+                throw new Exception("Guest frame-count quota was bypassed");
+            }
+            catch (InvalidOperationException) { }
+            // The caught overflow must still stop this incarnation at exit.
+        });
+
         var healthy = runtime.Spawn(ActorKind.Shared, (context, _) =>
         {
             retainedContext = context;
@@ -116,15 +130,16 @@ internal static class ActorGuestFrameGateSelfTest
         runtime.Send(leaked, new byte[] { 2 });
         runtime.Send(foreign, new byte[] { 3 });
         runtime.Send(wrongLifo, new byte[] { 4 });
-        runtime.Send(healthy, new byte[] { 5 });
+        runtime.Send(quota, new byte[] { 5 });
+        runtime.Send(healthy, new byte[] { 6 });
         Require(healthyDone.Wait(TimeSpan.FromSeconds(8)) &&
                 Volatile.Read(ref healthyResult) == 42,
-            "actor B could not return 42 after four guest-frame faults");
+            "actor B could not return 42 after five guest-frame faults");
         Require(SpinWait.SpinUntil(
-            () => runtime.FaultedTurns >= 4 && runtime.LiveActors == 1 &&
+            () => runtime.FaultedTurns >= 5 && runtime.LiveActors == 1 &&
                   runtime.CompletedMessages == 1,
             TimeSpan.FromSeconds(8)),
-            "four terminal guest faults stop only offenders; only B completes");
+            "five terminal guest faults stop only offenders; only B completes");
         Require(runtime.CompletedMessages == 1,
             "caught guest frame faults must not count as completed messages");
 
