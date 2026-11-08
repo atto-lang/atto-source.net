@@ -26,11 +26,11 @@ internal static class ActorArenaSelfTest
     {
         var budget = new ActorArenaBudget(10 * 1024);
         long processBefore = ActorArenaBudget.Process.ReservedBytes;
-        var a = new ActorArena(81001, 1, 16 * 1024, 4096, 8, 2, 2,
+        using var a = new ActorArena(81001, 1, 16 * 1024, 4096, 8, 2, 2,
             budget: budget, demandBacked: true);
-        var b = new ActorArena(81002, 1, 16 * 1024, 4096, 8, 2, 2,
+        using var b = new ActorArena(81002, 1, 16 * 1024, 4096, 8, 2, 2,
             budget: budget, demandBacked: true);
-        var c = new ActorArena(81003, 1, 16 * 1024, 4096, 8, 2, 2,
+        using var c = new ActorArena(81003, 1, 16 * 1024, 4096, 8, 2, 2,
             budget: budget, demandBacked: true);
         Require(a.DemandBacked && a.ReservedNativeBytes == 0 &&
                 b.ReservedNativeBytes == 0 && c.ReservedNativeBytes == 0 &&
