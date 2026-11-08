@@ -16,6 +16,8 @@ public enum CfgOpcode
     Argument,
     Call,
     DotnetMathAbs,
+    DotnetMathMax,
+    DotnetMathMin,
     NotEqualI64
 }
 
@@ -338,6 +340,8 @@ public static class OresCfgVerifier
                             op.Target is not null || op.Arguments is not null)
                             throw new FormatException("Malformed CFG bool constant");
                         break;
+                    case CfgOpcode.DotnetMathMax:
+                    case CfgOpcode.DotnetMathMin:
                     case CfgOpcode.CheckedAdd:
                     case CfgOpcode.CheckedSubtract:
                     case CfgOpcode.CheckedMultiply:
