@@ -3,7 +3,7 @@ namespace Ores.Net.Compiler;
 /// <summary>
 /// Fail-closed prototype admission for untrusted scalar CIL until the
 /// 128-backedge checkpoint pass has been verified. Only an acyclic, call-free,
-/// <=4096-instruction verified CFG can be emitted by this opt-in entry.
+/// <=4096-weighted-operation verified CFG can be emitted by this opt-in entry.
 /// This is NOT an OS security boundary or a substitute for a tenant watchdog.
 /// </summary>
 internal static class UntrustedLoopFreeCfgAdmission
@@ -20,23 +20,43 @@ internal static class UntrustedLoopFreeCfgAdmission
         for (int i = 0; i < blocks.Count; i++)
             if (!positions.TryAdd(blocks[i].Name, i))
                 throw new FormatException("Duplicate untrusted CFG block");
-        int totalInstructions = 0;
+        int totalWeightedOperations = 0;
         var edges = new int[blocks.Count][];
         for (int i = 0; i < blocks.Count; i++)
         {
             var block = blocks[i];
-            totalInstructions = checked(totalInstructions + block.Instructions.Count);
-            if (totalInstructions > MaxInstructions)
-                throw new FormatException("Untrusted CFG instruction budget exceeded");
+            // Account conservatively for *emitted* work, not only SSA ops.
+            // Each CFG edge copies arguments into scratch slots and then into
+            // target locals (four CIL accesses each). Both branch alternatives
+            // are included so any executed path costs <= the admitted sum.
+            totalWeightedOperations = checked(
+                totalWeightedOperations + block.Instructions.Count + 2);
             if (block.Instructions.Any(op => op.Opcode == CfgOpcode.Call))
                 throw new FormatException("Untrusted CFG calls need hard guest fuel instrumentation");
-            string[] targets = block.Terminator switch
+            string[] targets;
+            IReadOnlyList<int>[] edgeArguments;
+            switch (block.Terminator)
             {
-                CfgReturn => Array.Empty<string>(),
-                CfgJump jump => new[] { jump.Target },
-                CfgBranch branch => new[] { branch.TrueTarget, branch.FalseTarget },
-                _ => throw new FormatException("Untrusted CFG terminator unsupported")
-            };
+                case CfgReturn:
+                    targets = Array.Empty<string>();
+                    edgeArguments = Array.Empty<IReadOnlyList<int>>();
+                    break;
+                case CfgJump jump:
+                    targets = new[] { jump.Target };
+                    edgeArguments = new[] { jump.Arguments };
+                    break;
+                case CfgBranch branch:
+                    targets = new[] { branch.TrueTarget, branch.FalseTarget };
+                    edgeArguments = new[] { branch.TrueArguments, branch.FalseArguments };
+                    break;
+                default:
+                    throw new FormatException("Untrusted CFG terminator unsupported");
+            }
+            foreach (var arguments in edgeArguments)
+                totalWeightedOperations = checked(
+                    totalWeightedOperations + 4 * arguments.Count + 1);
+            if (totalWeightedOperations > MaxInstructions)
+                throw new FormatException("Untrusted CFG instruction budget exceeded");
             edges[i] = targets.Select(target => positions.TryGetValue(target, out var position)
                 ? position : throw new FormatException("Untrusted CFG target not verified")).ToArray();
         }
