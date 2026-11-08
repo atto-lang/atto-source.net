@@ -18,7 +18,8 @@ public enum IrOpcode
     BitXor,
     SignedRemainderLiteral,
     // Exact framework API signature: System.Math.Abs(System.Int64) -> System.Int64.
-    DotnetMathAbsI64
+    DotnetMathAbsI64,
+    DotnetMathMaxI64
 }
 
 /// <summary>
@@ -68,9 +69,11 @@ public static class OresIrVerifier
     // Match its hard bound so 'check' cannot accept a program 'compile' rejects.
     public const int MaxInstructions = 16_384;
 
-    public static VerifiedIrFunction Verify(IrFunction function)
+    public static VerifiedIrFunction Verify(IrFunction function,
+        DotnetHostImportPolicy? policy = null)
     {
         ArgumentNullException.ThrowIfNull(function);
+        policy ??= DotnetHostImportPolicy.DenyAll;
         if (string.IsNullOrWhiteSpace(function.Name) || function.Name.Length > 128 ||
             !IsIdentifier(function.Name))
             throw new FormatException("Invalid IR function name");
@@ -102,6 +105,7 @@ public static class OresIrVerifier
             }
             else if (instruction.Opcode == IrOpcode.DotnetMathAbsI64)
             {
+                policy.RequireMathI64();
                 // A host call is not arbitrary reflection or an opaque value.
                 // Type, arity, exact method and SSA ownership are verified.
                 if (instruction.Constant.HasValue || instruction.Right.HasValue ||
@@ -109,6 +113,17 @@ public static class OresIrVerifier
                     instruction.Left.Value >= i ||
                     verified[instruction.Left.Value].Type != IrValueType.I64)
                     throw new FormatException("Malformed typed CLR Abs(i64) instruction");
+            }
+            else if (instruction.Opcode == IrOpcode.DotnetMathMaxI64)
+            {
+                policy.RequireMathI64();
+                if (instruction.Constant.HasValue || !instruction.Left.HasValue ||
+                    !instruction.Right.HasValue ||
+                    instruction.Left.Value < 0 || instruction.Left.Value >= i ||
+                    instruction.Right.Value < 0 || instruction.Right.Value >= i ||
+                    verified[instruction.Left.Value].Type != IrValueType.I64 ||
+                    verified[instruction.Right.Value].Type != IrValueType.I64)
+                    throw new FormatException("Malformed typed CLR Max(i64,i64) instruction");
             }
             else
             {
@@ -166,7 +181,8 @@ public static class OresIrLowering
     private const int MaxPendingValues = 256;
     private readonly record struct Pending(Expression Node, bool Finish);
 
-    public static VerifiedIrFunction Lower(Expression root, string name = "main")
+    public static VerifiedIrFunction Lower(Expression root, string name = "main",
+        DotnetHostImportPolicy? policy = null)
     {
         ArgumentNullException.ThrowIfNull(root);
         var pending = new Stack<Pending>();
@@ -232,6 +248,15 @@ public static class OresIrLowering
                         results.Push(EmitDotnetAbs(results.Pop()));
                         break;
                     }
+                    case DotnetMathMaxI64:
+                    {
+                        if (results.Count < 2)
+                            throw new FormatException("CLR Max intrinsic operand underflow");
+                        int right = results.Pop();
+                        int left = results.Pop();
+                        results.Push(EmitBinary(IrOpcode.DotnetMathMaxI64, left, right));
+                        break;
+                    }
                     case NamedBitXor:
                     {
                         if (results.Count < 2)
@@ -275,6 +300,11 @@ public static class OresIrLowering
                         pending.Push(new Pending(node, true));
                         pending.Push(new Pending(host.Value, false));
                         break;
+                    case DotnetMathMaxI64 hostMax:
+                        pending.Push(new Pending(node, true));
+                        pending.Push(new Pending(hostMax.Right, false));
+                        pending.Push(new Pending(hostMax.Left, false));
+                        break;
                     case Unary { Operator: '+' or '-' } unary:
                         pending.Push(new Pending(node, true));
                         pending.Push(new Pending(unary.Value, false));
@@ -294,6 +324,6 @@ public static class OresIrLowering
         if (results.Count != 1)
             throw new FormatException("IR lowering must yield exactly one result");
         return OresIrVerifier.Verify(new IrFunction(name, IrValueType.I64,
-            instructions, results.Pop()));
+            instructions, results.Pop()), policy);
     }
 }
