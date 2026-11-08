@@ -103,6 +103,21 @@ internal static class UntrustedMeteredCfgTests
                 "fnc helper(int x):int{return x+1;}" +
                 "fnc main():int{return helper(41);}");
             MustReject(module.Main, FileAt("call-rejected"), "guest helper call");
+            // Even unreachable recursive helpers are forbidden by the
+            // verified source/module admission layer; they cannot borrow
+            // the caller's metering locals through a hidden call cycle.
+            try
+            {
+                var recursive = OresStructuredCfgLowering.LowerModule(
+                    "fnc recurse(int x):int{return recurse(x);}" +
+                    "fnc main():int{return 42;}");
+                CilEmitter.EmitMeteredUntrustedPrototypeLibrary(
+                    recursive.Main, FileAt("recursion-rejected"));
+                throw new Exception("Recursive helper entered untrusted metered CIL");
+            }
+            catch (FormatException) { }
+            if (File.Exists(FileAt("recursion-rejected")))
+                throw new Exception("Recursive helper published untrusted CIL");
 
             // Positive support for cyclic CFG is opt-in; the older
             // loop-free admission remains fail-closed on the same graph.
