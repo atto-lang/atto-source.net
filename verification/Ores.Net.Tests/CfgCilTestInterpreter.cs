@@ -121,7 +121,7 @@ internal static class CfgCilTestInterpreter
                         host.DeclaringType.FullName == "System.Math" &&
                         host.DeclaringType.Scope is AssemblyNameReference runtime &&
                         runtime.Name == "System.Runtime" &&
-                        runtime.Version == new Version(10, 0, 0, 0) &&
+                        runtime.Version.Equals(new Version(10, 0, 0, 0)) &&
                         host.Name == "Abs" && !host.HasThis &&
                         host.Parameters.Count == 1 &&
                         host.Parameters[0].ParameterType.FullName == "System.Int64" &&
