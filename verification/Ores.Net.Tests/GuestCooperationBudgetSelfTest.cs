@@ -92,21 +92,21 @@ internal static class GuestCooperationBudgetSelfTest
         Require(recursion.BackedgesThisDispatch == 0,
             "call checks must not invent loop backedges");
 
-        var weighted = new GuestCooperationBudget(800);
+        var weighted = new GuestCooperationBudget(650);
         Require(!weighted.ChargeOperation(127), "first weighted charge");
         Require(weighted.ChargeOperation(2), "weighted crossing at tick 128");
         for (int i = 0; i < 4; i++)
             Require(weighted.ChargeOperation(128), "split bounded basic block");
-        Require(weighted.RemainingFuel == 159, "weighted quota accounting");
+        Require(weighted.RemainingFuel == 9, "weighted quota accounting");
         bool invalidWeight = false;
         try { weighted.ChargeOperation(129); }
         catch (ArgumentOutOfRangeException) { invalidWeight = true; }
-        Require(invalidWeight && weighted.RemainingFuel == 159,
+        Require(invalidWeight && weighted.RemainingFuel == 9,
             "oversized basic block must fail without spending fuel");
         bool insufficient = false;
-        try { weighted.ChargeOperation(160); }
+        try { weighted.ChargeOperation(10); }
         catch (InvalidOperationException) { insufficient = true; }
-        Require(insufficient && weighted.RemainingFuel == 159,
+        Require(insufficient && weighted.RemainingFuel == 9,
             "failed charge is atomic");
         Console.WriteLine("PASS .NET guest cooperation budget: 128 ticks, persistent fuel (host-only)");
     }
