@@ -115,6 +115,14 @@ internal sealed class ActorGuestHeap32
             _arena.Write(turn, _handles[ValidateSlot(reference)]!, offset, source);
     }
 
+    // Guest read loans use the same underlying arena loan accounting and may
+    // survive a physical turn, but never grant out-of-turn byte access.
+    internal ActorArenaReadLoan BorrowRead(ActorArenaTurn turn, uint reference)
+    {
+        lock (_gate)
+            return _arena.BorrowRead(turn, _handles[ValidateSlot(reference)]!);
+    }
+
     /// <summary>Store one local reference in canonical little-endian form.</summary>
     internal void WriteReference(ActorArenaTurn turn, uint owner, int offset,
         uint target)
