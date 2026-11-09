@@ -20,7 +20,10 @@ internal static class HeapContainerSourceBoundaryTests
             ("pub fnc main():int{return Tuple.of(11, 23)[1] + 19;}", 42),
             ("pub fnc main():int{return ~tuple(11, 23)[1] + 19;}", 42),
             ("pub fnc main():int{return Tuple.of<int,int>(11, 23)[0] + 31;}", 42),
-            ("pub fnc main():int{return Tuple.of(-9223372036854775808, 42)[1];}", 42)
+            ("pub fnc main():int{return Tuple.of(-9223372036854775808, 42)[1];}", 42),
+            ("pub fnc main():int{return Record.of(low: 11, high: 23).high + 19;}", 42),
+            ("pub fnc main():int{return ~record(low: 11, high: 23).high + 19;}", 42),
+            ("pub fnc main():int{return Record.of(a: -9223372036854775808, b: 42).b;}", 42)
         };
         string folder = Path.Combine(Path.GetTempPath(),
             "atto-tuple-scalar-cil-" + Guid.NewGuid().ToString("N"));
@@ -64,7 +67,13 @@ internal static class HeapContainerSourceBoundaryTests
             "List.of(1,2)",
             "Vector.of(1,2)",
             "Set.of(1,2)",
-            "Record.of(ready: true)",
+            "Record.of(ready: true)",  // bool values not in i64 scalar-only subset
+            "Record.of(x: 1)",         // record cannot escape
+            "Record.of(x: 1).y",       // no unknown/prototype-backed field
+            "Record.of(x: 1, x: 2).x", // duplicate static field
+            "Record.of(x: 1+1).x",     // non-pure nonliteral initializer
+            "Record.of(x: 1).x.foo",   // no dynamic member dispatch
+            "~record(x: 1).missing",
             "~map(1 => 2)",
             "~array(1,2)"
         };
@@ -81,7 +90,8 @@ internal static class HeapContainerSourceBoundaryTests
         // Structured frontend must not reinterpret a nominal product or
         // dynamic collection as a scalar helper call.
         foreach (string factory in new[] {
-            "Tuple.of(11,23)[1]", "Map.of()", "~tuple(11,23)[0]", "~array(11,23)"
+            "Tuple.of(11,23)[1]", "Record.of(x:11).x",
+            "Map.of()", "~tuple(11,23)[0]", "~record(x:11).x", "~array(11,23)"
         })
         {
             try
