@@ -174,6 +174,33 @@ public sealed class ActorArenaLifetimePin : IDisposable
 /// lowering and not a security sandbox. Managed control metadata remains on the
 /// CLR heap; actor payload bytes live in NativeMemory allocations.
 /// </summary>
+/// <summary>
+/// Internal non-boxing capability for compiler-owned guest payloads. Unlike
+/// an ActorArenaHandle this is a value type: steady-state guest allocation
+/// does not mint an object on the CLR heap. The issuing arena and active
+/// physical turn must still authenticate every operation.
+/// </summary>
+internal readonly struct ActorArenaNativeAllocation
+{
+    internal readonly Guid Authority;
+    internal readonly ulong ActorId;
+    internal readonly ulong Incarnation;
+    internal readonly int Slot;
+    internal readonly ulong Generation;
+    internal readonly int Length;
+
+    internal ActorArenaNativeAllocation(Guid authority, ulong actorId,
+        ulong incarnation, int slot, ulong generation, int length)
+    {
+        Authority = authority;
+        ActorId = actorId;
+        Incarnation = incarnation;
+        Slot = slot;
+        Generation = generation;
+        Length = length;
+    }
+}
+
 public unsafe sealed class ActorArena : IDisposable
 {
     public const int MaxArenaBytes = 64 * 1024 * 1024;
@@ -191,6 +218,7 @@ public unsafe sealed class ActorArena : IDisposable
         internal ulong Generation;
         internal int ReadLoans;
         internal bool Live;
+        internal bool NativeGuest;
         internal ActorArenaHandle? Issued;
     }
 
@@ -424,7 +452,7 @@ public unsafe sealed class ActorArena : IDisposable
                 ? _freeSlots[_freeSlotCount - 1]
                 : _nextSlot;
             ref Slot slot = ref _slots[slotId];
-            if (slot.Live || slot.Issued is not null)
+            if (slot.Live || slot.Issued is not null || slot.NativeGuest)
                 throw new InvalidOperationException("Actor arena slot accounting is corrupt");
 
             ulong generation = slot.Generation == 0 ? 1 : slot.Generation;
@@ -441,11 +469,147 @@ public unsafe sealed class ActorArena : IDisposable
             slot.Length = bytes;
             slot.ReadLoans = 0;
             slot.Issued = issued;
+            slot.NativeGuest = false;
             slot.Live = true;
             _persistentHighWater = checked(aligned + bytes);
             _persistentLiveBytes = checked(_persistentLiveBytes + bytes);
             _liveAllocations++;
             return issued;
+        }
+    }
+
+    /// <summary>
+    /// Allocate guest payload bytes in this actor's *existing* persistent slab.
+    /// No ActorArenaHandle object is created for this primitive path.
+    /// Shared slot accounting and native budget apply to both host and guest.
+    /// </summary>
+    internal ActorArenaNativeAllocation AllocateNativeGuest(ActorArenaTurn turn,
+        int bytes, int alignment = 8)
+    {
+        if (bytes <= 0)
+            throw new ArgumentOutOfRangeException(nameof(bytes));
+        ValidateAlignment(alignment);
+        lock (_gate)
+        {
+            ValidateTurnLocked(turn);
+            EnsureAdmissionOpenLocked();
+            int aligned = AlignUp(_persistentHighWater, alignment);
+            if (aligned > _persistentCapacity ||
+                bytes > _persistentCapacity - aligned)
+                throw new InvalidOperationException("Actor persistent arena capacity exhausted");
+            if (_freeSlotCount == 0 && _nextSlot == _slots.Length)
+                throw new InvalidOperationException("Actor persistent allocation slots exhausted");
+
+            int slotId = _freeSlotCount != 0
+                ? _freeSlots[_freeSlotCount - 1] : _nextSlot;
+            ref Slot slot = ref _slots[slotId];
+            if (slot.Live || slot.Issued is not null || slot.NativeGuest)
+                throw new InvalidOperationException("Actor arena slot accounting is corrupt");
+            ulong generation = slot.Generation == 0 ? 1 : slot.Generation;
+            // Initialize without publishing a slot; failed admission remains neutral.
+            Zero(_persistent + aligned, bytes);
+            var value = new ActorArenaNativeAllocation(_authority, _actorId,
+                _incarnation, slotId, generation, bytes);
+            if (_freeSlotCount != 0)
+                _freeSlotCount--;
+            else
+                _nextSlot++;
+            slot.Offset = aligned;
+            slot.Length = bytes;
+            slot.Generation = generation;
+            slot.ReadLoans = 0;
+            slot.Issued = null;
+            slot.NativeGuest = true;
+            slot.Live = true;
+            _persistentHighWater = checked(aligned + bytes);
+            _persistentLiveBytes = checked(_persistentLiveBytes + bytes);
+            _liveAllocations++;
+            return value;
+        }
+    }
+
+    internal void DropNativeGuest(ActorArenaTurn turn,
+        ActorArenaNativeAllocation allocation)
+    {
+        lock (_gate)
+        {
+            ValidateTurnLocked(turn);
+            ref Slot slot = ref ValidateNativeGuestLocked(allocation);
+            if (slot.ReadLoans != 0)
+                throw new InvalidOperationException(
+                    "Cannot drop guest allocation while a read loan is live");
+            if (slot.Generation == ulong.MaxValue)
+                throw new OverflowException("Actor allocation generation exhausted");
+
+            bool wasTail = slot.Offset + slot.Length == _persistentHighWater;
+            int freedOffset = slot.Offset;
+            Zero(_persistent + slot.Offset, slot.Length);
+            _persistentLiveBytes -= slot.Length;
+            _liveAllocations--;
+            slot.Live = false;
+            slot.NativeGuest = false;
+            slot.Offset = 0;
+            slot.Length = 0;
+            slot.Generation++;
+            _freeSlots[_freeSlotCount++] = allocation.Slot;
+            if (wasTail)
+                _persistentHighWater = freedOffset;
+            if (_liveAllocations == 0)
+            {
+                Zero(_persistent, _persistentPhysicalBytes);
+                _persistentHighWater = 0;
+                _persistentLiveBytes = 0;
+            }
+        }
+    }
+
+    internal void WriteNativeGuest(ActorArenaTurn turn,
+        ActorArenaNativeAllocation allocation, int offset,
+        ReadOnlySpan<byte> source)
+    {
+        lock (_gate)
+        {
+            ValidateTurnLocked(turn);
+            ref Slot slot = ref ValidateNativeGuestLocked(allocation);
+            if (slot.ReadLoans != 0)
+                throw new InvalidOperationException(
+                    "Cannot mutate guest allocation while a read loan is live");
+            ValidateRange(offset, source.Length, slot.Length);
+            source.CopyTo(new Span<byte>(_persistent + slot.Offset + offset, source.Length));
+        }
+    }
+
+    internal void ReadNativeGuest(ActorArenaTurn turn,
+        ActorArenaNativeAllocation allocation, int offset,
+        Span<byte> destination)
+    {
+        lock (_gate)
+        {
+            ValidateTurnLocked(turn);
+            ref Slot slot = ref ValidateNativeGuestLocked(allocation);
+            ValidateRange(offset, destination.Length, slot.Length);
+            new ReadOnlySpan<byte>(_persistent + slot.Offset + offset, destination.Length)
+                .CopyTo(destination);
+        }
+    }
+
+    internal ActorArenaReadLoan BorrowNativeGuestRead(ActorArenaTurn turn,
+        ActorArenaNativeAllocation allocation)
+    {
+        lock (_gate)
+        {
+            ValidateTurnLocked(turn);
+            EnsureAdmissionOpenLocked();
+            if (_readLoans == _maxReadLoans)
+                throw new InvalidOperationException("Actor read-loan quota exhausted");
+            ref Slot slot = ref ValidateNativeGuestLocked(allocation);
+            var loan = new ActorArenaReadLoan(this, _authority, allocation.Slot,
+                allocation.Generation, _actorId, _incarnation, allocation.Length);
+            if (!_issuedReadLoans.Add(loan))
+                throw new InvalidOperationException("Duplicate read-loan issuance");
+            slot.ReadLoans = checked(slot.ReadLoans + 1);
+            _readLoans++;
+            return loan;
         }
     }
 
@@ -722,6 +886,22 @@ public unsafe sealed class ActorArena : IDisposable
             _externalPins--;
             TryReclaimLocked();
         }
+    }
+
+    private ref Slot ValidateNativeGuestLocked(ActorArenaNativeAllocation allocation)
+    {
+        EnsureNotReclaimedLocked();
+        if (allocation.Authority != _authority ||
+            allocation.ActorId != _actorId ||
+            allocation.Incarnation != _incarnation ||
+            allocation.Slot < 0 || allocation.Slot >= _nextSlot)
+            throw new InvalidOperationException("Foreign actor native guest capability");
+        ref Slot slot = ref _slots[allocation.Slot];
+        if (!slot.Live || !slot.NativeGuest || slot.Issued is not null ||
+            allocation.Generation == 0 || slot.Generation != allocation.Generation ||
+            slot.Length != allocation.Length)
+            throw new InvalidOperationException("Stale actor native guest capability");
+        return ref slot;
     }
 
     private ref Slot ValidateHandleLocked(ActorArenaHandle handle)
