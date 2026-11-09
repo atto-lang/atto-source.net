@@ -132,7 +132,8 @@ internal static class ActorGuestHeap32SelfTest
         if (failure is not null) throw new Exception("guest ref32 actor fixture failed", failure);
         Require(leftRoot == rightRoot && leftRoot != 0,
             "the same actor-local reference word can map to independent storage");
-        Require(runtime.FaultedTurns == 0 && runtime.CompletedMessages == 4,
+        Require(SpinWait.SpinUntil(() => runtime.CompletedMessages == 4,
+            TimeSpan.FromSeconds(10)) && runtime.FaultedTurns == 0,
             "four actual host actor message turns completed");
 
         Require(expiredContext is not null, "retained-context fixture");
