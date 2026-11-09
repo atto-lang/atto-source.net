@@ -6,6 +6,7 @@ internal static class ActorGuestHeap32SelfTest
     {
         PerActorReferencesSurviveTurnsAndDenyStaleAccess();
         GenerationExhaustionFailsClosedWithoutWrapping();
+        GuestPayloadFastPathDoesNotAllocateClrObjects();
         Console.WriteLine("PASS .NET actor-local 32-bit guest refs (host runtime only; not compiled guest)");
     }
 
@@ -196,6 +197,72 @@ internal static class ActorGuestHeap32SelfTest
             runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0,
             TimeSpan.FromSeconds(10)),
             "exhausted slot still permits deterministic native arena retirement");
+    }
+
+    // This measures the actual ActorRuntime -> ActorContext -> ActorGuestHeap32
+    // native payload path, not the separate ActorNativeArena allocator.
+    // It excludes per-turn ActorContext creation and borrowing/loan creation:
+    // those are metadata operations and are not zero-GC-certified here.
+    private static void GuestPayloadFastPathDoesNotAllocateClrObjects()
+    {
+        using var runtime = new ActorRuntime(Options(slots: 4));
+        using var finished = new ManualResetEventSlim();
+        Exception? failure = null;
+        var actor = runtime.Spawn(ActorKind.Private, (context, _) =>
+        {
+            try
+            {
+                Span<byte> data = stackalloc byte[8];
+                // Warm JIT, lazy guest metadata, locks, and primitive APIs.
+                for (int i = 0; i < 128; i++)
+                {
+                    uint warm = context.AllocateGuestObject32(8);
+                    data[0] = (byte)i;
+                    context.WriteGuestObject32(warm, 0, data);
+                    context.ReadGuestObject32(warm, 0, data);
+                    context.DropGuestObject32(warm);
+                }
+
+                bool correct = true;
+                long before = GC.GetAllocatedBytesForCurrentThread();
+                for (int i = 0; i < 4096; i++)
+                {
+                    uint reference = context.AllocateGuestObject32(8);
+                    if (reference == 0)
+                    {
+                        correct = false;
+                        break;
+                    }
+                    data[0] = (byte)i;
+                    context.WriteGuestObject32(reference, 0, data);
+                    data[0] = 0;
+                    context.ReadGuestObject32(reference, 0, data);
+                    if (data[0] != (byte)i)
+                        correct = false;
+                    context.DropGuestObject32(reference);
+                    if (!correct)
+                        break;
+                }
+                long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+                Require(correct, "guest payload read/write/drop preserved values");
+                Require(allocated == 0,
+                    "steady-state guest payload allocation must not allocate CLR objects");
+            }
+            catch (Exception error) { failure = error; }
+            finally { finished.Set(); }
+        });
+        runtime.Send(actor, new byte[] { 1 });
+        Require(finished.Wait(TimeSpan.FromSeconds(20)),
+            "primitive guest payload allocation probe completed");
+        if (failure is not null)
+            throw new Exception("guest payload allocation probe failed", failure);
+        Require(SpinWait.SpinUntil(() => runtime.CompletedMessages == 1,
+            TimeSpan.FromSeconds(10)) && runtime.FaultedTurns == 0,
+            "fast-path actor turn completed without host fault");
+        runtime.Stop(actor);
+        Require(SpinWait.SpinUntil(() => runtime.LiveActors == 0 &&
+            runtime.NativeReservedBytes == 0, TimeSpan.FromSeconds(10)),
+            "native fast-path arena reclaimed without retained payloads");
     }
 
     private static void Require(bool condition, string why)
