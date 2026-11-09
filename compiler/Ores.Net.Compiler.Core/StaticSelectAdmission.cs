@@ -39,14 +39,6 @@ internal static class StaticSelectAdmission
         return IsStaticSelectFollower(source[start..i]);
     }
 
-    // Called at the end of a lexed "select" token, before either frontend
-    // can emit an unrelated invalid-character diagnostic for '<'.
-    internal static bool HasTypedSelectFollower(string source, int afterSelect)
-    {
-        int i = afterSelect;
-        return SkipTrivia(source, ref i) && i < source.Length && source[i] == '<';
-    }
-
     private static bool SkipTrivia(string source, ref int i)
     {
         while (i < source.Length)
