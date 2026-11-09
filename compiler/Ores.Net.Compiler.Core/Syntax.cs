@@ -245,7 +245,7 @@ public static class OresParser
             // Lex assignment punctuation so unsupported declarations are rejected
             // at their declaration, rather than at a later initializer. The
             // arithmetic parser still has no assignment production.
-            if ("()+-*/{}:;.=?".IndexOf(ch) >= 0)
+            if ("()+-*/{}:;,.=?[]<>~".IndexOf(ch) >= 0)
             {
                 _i++;
                 return new Token(text[start.._i], start);
@@ -395,6 +395,33 @@ public static class OresParser
             }
             // The scalar subset admits only this one typed Integer intrinsic.
             // Parser-owned name resolution rejects arbitrary Integer.* calls.
+            // A first native, escaping-free product construction slice:
+            // Tuple.of(<i64 literals...>)[constant_slot] / ~tuple(...)[slot].
+            // All operands are pure checked constants, so projecting the
+            // selected SSA scalar preserves the exact source evaluation
+            // behavior without allocating a host tuple or losing an effect.
+            if (Current.Text == "Tuple" || Current.Text == "~")
+            {
+                int at = Current.Offset;
+                bool tilde = Take("~");
+                if (tilde)
+                {
+                    if (!Take("tuple"))
+                        throw new FormatException(
+                            $"E_COLLECTION_FACTORY_UNSUPPORTED: ~kind requires verified owned collection lowering at offset {at}");
+                }
+                else
+                {
+                    Expect("Tuple");
+                    Expect(".");
+                    Expect("of");
+                }
+                return ParseScalarizedTupleFactory(depth + 1, at);
+            }
+            if (Current.Text is "Map" or "Entry" or "Pair" or "Array" or "List"
+                or "Vector" or "Set" or "Record")
+                throw new FormatException(
+                    $"E_COLLECTION_FACTORY_UNSUPPORTED: {Current.Text}.of requires owned typed aggregate and NativeAOT CIL lowering at offset {Current.Offset}");
             if (Take("Integer"))
             {
                 Expect(".");
@@ -433,6 +460,76 @@ public static class OresParser
                 NumberStyles.None, CultureInfo.InvariantCulture, out long result))
                 throw new FormatException($"Invalid i64 at offset {tokens[_index - 1].Offset}");
             return new Literal(result);
+        }
+
+        // This is not an escaped Tuple<T...> value: the scalar bootstrap
+        // emits an i64 result, not an owning container. Require an immediate
+        // constant-index projection, bounded arity, and pure literal operands.
+        // If any operand may execute guest code or overflow, refuse the
+        // scalarization instead of silently dropping its evaluation.
+        private Expression ParseScalarizedTupleFactory(int depth, int at)
+        {
+            CheckDepth(depth);
+            int? explicitArity = null;
+            if (Take("<"))
+            {
+                int count = 0;
+                do
+                {
+                    Expect("int");
+                    if (++count > 32)
+                        throw new FormatException($"E_TUPLE_BUDGET: over 32 tuple type slots at offset {at}");
+                }
+                while (Take(","));
+                Expect(">");
+                explicitArity = count;
+            }
+
+            Expect("(");
+            var values = new List<long>();
+            if (Current.Text != ")")
+            {
+                do
+                {
+                    if (values.Count >= 32)
+                        throw new FormatException($"E_TUPLE_BUDGET: over 32 elements at offset {at}");
+                    int operandAt = Current.Offset;
+                    string sign = "";
+                    if (Current.Text is "+" or "-")
+                    {
+                        sign = Current.Text;
+                        _index++;
+                    }
+                    string raw = Current.Text;
+                    if (raw.Length == 0 || raw[0] is < '0' or > '9')
+                        throw new FormatException(
+                            $"E_TUPLE_LITERAL_ONLY: scalarized tuple requires side-effect-free i64 literal operands at offset {operandAt}");
+                    _index++;
+                    if (!long.TryParse(sign + raw.Replace("_", "", StringComparison.Ordinal),
+                            NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out long n))
+                        throw new FormatException($"E_TUPLE_RANGE: invalid signed i64 at offset {operandAt}");
+                    values.Add(n);
+                }
+                while (Take(",") && Current.Text != ")");
+            }
+            Expect(")");
+            if (explicitArity.HasValue && explicitArity.Value != values.Count)
+                throw new FormatException($"E_TUPLE_ARITY: tuple witness/operand count mismatch at offset {at}");
+
+            if (!Take("["))
+                throw new FormatException(
+                    $"E_TUPLE_ESCAPE_UNSUPPORTED: tuple value requires native product storage; only immediate constant-index projection is admitted at offset {at}");
+            string indexText = Current.Text;
+            int indexAt = Current.Offset;
+            if (indexText.Length == 0 || indexText[0] is < '0' or > '9' ||
+                !int.TryParse(indexText.Replace("_", "", StringComparison.Ordinal),
+                    NumberStyles.None, CultureInfo.InvariantCulture, out int index))
+                throw new FormatException($"E_TUPLE_INDEX: tuple projection needs nonnegative constant index at offset {indexAt}");
+            _index++;
+            Expect("]");
+            if (index >= values.Count)
+                throw new FormatException($"E_TUPLE_BOUNDS: tuple index out of range at offset {indexAt}");
+            return new Literal(values[index]);
         }
 
         private static void CheckDepth(int depth)
