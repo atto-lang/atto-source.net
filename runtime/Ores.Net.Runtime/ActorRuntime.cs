@@ -108,6 +108,9 @@ public sealed class ActorContext
     public void DropGuestObject32(uint reference) =>
         _guestHeap.Drop(_turn, reference);
 
+    public ActorArenaReadLoan BorrowGuestObjectRead32(uint reference) =>
+        _guestHeap.BorrowRead(_turn, reference);
+
     public void ReadGuestObject32(uint reference, int offset,
         Span<byte> destination) => _guestHeap.Read(_turn, reference, offset, destination);
 
