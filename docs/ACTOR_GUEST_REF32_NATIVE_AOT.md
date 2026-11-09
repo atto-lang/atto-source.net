@@ -29,6 +29,8 @@ raw offset is a safe object capability.
 
 There can be at most 65,535 guest slots per actor, further capped by
 `ActorMaxAllocations` (shared with other arena persistent allocations).
+The managed guest slot table is allocated lazily on first guest-object use,
+not at actor spawn; actors running only legacy host APIs avoid the extra table.
 A slot is permanently retired after generation 65,535 rather than wrapping
 to 1. Exhaustion is explicit and cannot revive a stale reference. The
 32-bit value is **only meaningful with its owning actor's execution context**;
