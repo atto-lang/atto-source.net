@@ -400,26 +400,29 @@ public static class OresParser
             // All operands are pure checked constants, so projecting the
             // selected SSA scalar preserves the exact source evaluation
             // behavior without allocating a host tuple or losing an effect.
-            if (Current.Text == "Tuple" || Current.Text == "~")
+            if (Current.Text == "Tuple" || Current.Text == "Record" || Current.Text == "~")
             {
                 int at = Current.Offset;
-                bool tilde = Take("~");
-                if (tilde)
+                if (Take("~"))
                 {
-                    if (!Take("tuple"))
-                        throw new FormatException(
-                            $"E_COLLECTION_FACTORY_UNSUPPORTED: ~kind requires verified owned collection lowering at offset {at}");
+                    if (Take("tuple")) return ParseScalarizedTupleFactory(depth + 1, at);
+                    if (Take("record")) return ParseScalarizedRecordFactory(depth + 1, at);
+                    throw new FormatException(
+                        $"E_COLLECTION_FACTORY_UNSUPPORTED: ~kind requires verified owned collection lowering at offset {at}");
                 }
-                else
+                if (Take("Tuple"))
                 {
-                    Expect("Tuple");
                     Expect(".");
                     Expect("of");
+                    return ParseScalarizedTupleFactory(depth + 1, at);
                 }
-                return ParseScalarizedTupleFactory(depth + 1, at);
+                Expect("Record");
+                Expect(".");
+                Expect("of");
+                return ParseScalarizedRecordFactory(depth + 1, at);
             }
             if (Current.Text is "Map" or "Entry" or "Pair" or "Array" or "List"
-                or "Vector" or "Set" or "Record")
+                or "Vector" or "Set")
                 throw new FormatException(
                     $"E_COLLECTION_FACTORY_UNSUPPORTED: {Current.Text}.of requires owned typed aggregate and NativeAOT CIL lowering at offset {Current.Offset}");
             if (Take("Integer"))
@@ -530,6 +533,69 @@ public static class OresParser
             if (index >= values.Count)
                 throw new FormatException($"E_TUPLE_BOUNDS: tuple index out of range at offset {indexAt}");
             return new Literal(values[index]);
+        }
+
+        // Readonly record scalarization is legal only for an immediate static
+        // field projection of a closed, all-literal shape. No record reference
+        // enters the scalar SSA, so the projection cannot escape or alias a
+        // host object. All field values are pure checked i64 literals.
+        private Expression ParseScalarizedRecordFactory(int depth, int at)
+        {
+            CheckDepth(depth);
+            Expect("(");
+            var fields = new Dictionary<string, long>(StringComparer.Ordinal);
+            if (Current.Text != ")")
+            {
+                do
+                {
+                    if (fields.Count >= 32)
+                        throw new FormatException($"E_RECORD_BUDGET: over 32 fields at offset {at}");
+                    string field = Current.Text;
+                    int fieldAt = Current.Offset;
+                    if (field.Length == 0 ||
+                        !(field[0] is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or '_') ||
+                        field.Any(c => !(c is >= 'a' and <= 'z' or >= 'A' and <= 'Z'
+                            or >= '0' and <= '9' or '_')))
+                        throw new FormatException(
+                            $"E_RECORD_STATIC_FIELD: record field must be static ASCII identifier at offset {fieldAt}");
+                    _index++;
+                    Expect(":");
+                    long value = ReadPureI64Literal();
+                    if (!fields.TryAdd(field, value))
+                        throw new FormatException($"E_RECORD_DUPLICATE: duplicate field at offset {fieldAt}");
+                }
+                while (Take(",") && Current.Text != ")");
+            }
+            Expect(")");
+            if (!Take("."))
+                throw new FormatException(
+                    $"E_RECORD_ESCAPE_UNSUPPORTED: record requires typed storage; only immediate field projection is admitted at offset {at}");
+            int nameAt = Current.Offset;
+            string member = Current.Text;
+            _index++;
+            if (!fields.TryGetValue(member, out long projected))
+                throw new FormatException($"E_RECORD_FIELD: unknown or inaccessible record field at offset {nameAt}");
+            return new Literal(projected);
+        }
+
+        private long ReadPureI64Literal()
+        {
+            int at = Current.Offset;
+            string sign = "";
+            if (Current.Text is "+" or "-")
+            {
+                sign = Current.Text;
+                _index++;
+            }
+            string raw = Current.Text;
+            if (raw.Length == 0 || raw[0] is < '0' or > '9')
+                throw new FormatException(
+                    $"E_AGGREGATE_LITERAL_ONLY: scalarized fields require pure i64 literals at offset {at}");
+            _index++;
+            if (!long.TryParse(sign + raw.Replace("_", "", StringComparison.Ordinal),
+                    NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out long value))
+                throw new FormatException($"E_AGGREGATE_I64_RANGE: invalid signed i64 at offset {at}");
+            return value;
         }
 
         private static void CheckDepth(int depth)
