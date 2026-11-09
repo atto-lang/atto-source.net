@@ -102,7 +102,7 @@ internal static class ActorGuestHeap32SelfTest
                         "stale guest write cannot mutate new allocation");
                     ExpectInvalid(() => context.DropGuestObject32(stale),
                         "double drop of stale guest reference denied");
-                    ExpectInvalid(() => context.ReadGuestObject32(root, 16, data),
+                    ExpectOutOfRange(() => context.ReadGuestObject32(root, 16, data),
                         "guest reads must be allocation-bounded");
                     ExpectInvalid(() => context.DropGuestObject32(0),
                         "zero cannot be dropped");
@@ -201,6 +201,13 @@ internal static class ActorGuestHeap32SelfTest
     private static void Require(bool condition, string why)
     {
         if (!condition) throw new Exception("ActorGuestHeap32 FAILED: " + why);
+    }
+
+    private static void ExpectOutOfRange(Action action, string why)
+    {
+        try { action(); }
+        catch (ArgumentOutOfRangeException) { return; }
+        throw new Exception("ActorGuestHeap32 expected bounds rejection: " + why);
     }
 
     private static void ExpectInvalid(Action action, string why)
