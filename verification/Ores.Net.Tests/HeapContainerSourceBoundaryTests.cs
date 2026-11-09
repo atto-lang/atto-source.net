@@ -23,7 +23,13 @@ internal static class HeapContainerSourceBoundaryTests
             ("pub fnc main():int{return Tuple.of(-9223372036854775808, 42)[1];}", 42),
             ("pub fnc main():int{return Record.of(low: 11, high: 23).high + 19;}", 42),
             ("pub fnc main():int{return ~record(low: 11, high: 23).high + 19;}", 42),
-            ("pub fnc main():int{return Record.of(a: -9223372036854775808, b: 42).b;}", 42)
+            ("pub fnc main():int{return Record.of(a: -9223372036854775808, b: 42).b;}", 42),
+            ("pub fnc main():int{return Entry.of(11, 23).value + 19;}", 42),
+            ("pub fnc main():int{return ~entry(11, 23).key + 31;}", 42),
+            ("pub fnc main():int{return Pair.of(11, 23).second + 19;}", 42),
+            ("pub fnc main():int{return ~pair(11, 23).first + 31;}", 42),
+            ("pub fnc main():int{return Entry.of<int,int>(-9223372036854775808, 42).value;}", 42),
+            ("pub fnc main():int{return Pair.of<int,int>(11, 23).first + 31;}", 42)
         };
         string folder = Path.Combine(Path.GetTempPath(),
             "atto-tuple-scalar-cil-" + Guid.NewGuid().ToString("N"));
@@ -61,8 +67,16 @@ internal static class HeapContainerSourceBoundaryTests
             "Tuple.of(true,3)[0]",    // scalar i64-only type gate
             "Tuple.of(1,2)[0].foo",   // no dynamic guest object member
             "Map.of<string,int>()",   // owned Map remains unsupported
-            "Entry.of(1,2)",
-            "Pair.of(1,2)",
+            "Entry.of(1,2)",      // first-class nominal Entry cannot escape
+            "Pair.of(1,2)",       // first-class nominal Pair cannot escape
+            "Entry.of(1,2).first", // Entry and Pair projections remain distinct
+            "Pair.of(1,2).key",
+            "~entry(1,2).missing",
+            "~pair(1,2).value",
+            "Entry.of(1,2).key.foo", // no dynamic member fallback
+            "Pair.of(1,true).second",
+            "Entry.of<int>(1,2).key", // both type slots required, int-only
+            "~entry(1+2,3).key", // no unproven effects
             "Array.of(1,2)",
             "List.of(1,2)",
             "Vector.of(1,2)",
@@ -91,7 +105,9 @@ internal static class HeapContainerSourceBoundaryTests
         // dynamic collection as a scalar helper call.
         foreach (string factory in new[] {
             "Tuple.of(11,23)[1]", "Record.of(x:11).x",
-            "Map.of()", "~tuple(11,23)[0]", "~record(x:11).x", "~array(11,23)"
+            "Entry.of(11,23).key", "Pair.of(11,23).first",
+            "Map.of()", "~tuple(11,23)[0]", "~record(x:11).x", "~array(11,23)",
+            "~entry(11,23).value", "~pair(11,23).second"
         })
         {
             try
