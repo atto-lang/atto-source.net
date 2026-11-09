@@ -34,6 +34,7 @@ using var verified = new CountdownEvent(actorCount);
 using var survivorVerified = new AutoResetEvent(false);
 var errors = new ConcurrentQueue<Exception>();
 var handles = new ActorArenaHandle?[actorCount];
+var compressed = new uint[actorCount];
 var frames = new ActorStackFrameHandle?[actorCount];
 var references = new ActorRef[actorCount];
 ActorArenaLifetimePin? pin = null;
@@ -56,6 +57,9 @@ for (int i = 0; i < actorCount; ++i)
                 handles[index] = context.AllocatePersistent(8);
                 context.Write(handles[index]!, 0,
                     new byte[] { (byte)(11 + index), 0, 0, 0, 0, 0, 0, 0 });
+                compressed[index] = context.AllocateGuestObject32(8);
+                context.WriteGuestObject32(compressed[index], 0,
+                    new byte[] { (byte)(41 + index) });
                 frames[index] = context.PushStackFrame(8);
                 context.WriteStackFrame(frames[index]!, 0,
                     new byte[] { (byte)(31 + index) });
@@ -64,6 +68,10 @@ for (int i = 0; i < actorCount; ++i)
             {
                 Require(index == 2 && (phase == 2 || phase == 3),
                     "unexpected survivor probe phase or actor");
+                var guestValue = new byte[1];
+                context.ReadGuestObject32(compressed[index], 0, guestValue);
+                Require(guestValue[0] == 41 + index,
+                    "survivor compressed ref lost private guest payload");
                 var output = new byte[8];
                 context.Read(handles[index]!, 0, output);
                 Require(output[0] == (phase == 2 ? 13 : 14),
@@ -85,6 +93,10 @@ for (int i = 0; i < actorCount; ++i)
                 var output = new byte[8];
                 context.Read(handles[index]!, 0, output);
                 Require(output[0] == 11 + index, "persistent actor value changed");
+                var guestValue = new byte[1];
+                context.ReadGuestObject32(compressed[index], 0, guestValue);
+                Require(guestValue[0] == 41 + index,
+                    "compressed actor-local ref must survive turn rollover");
                 var frameValue = new byte[1];
                 context.ReadStackFrame(frames[index]!, 0, frameValue);
                 Require(frameValue[0] == (byte)(31 + index),
@@ -127,6 +139,7 @@ Require(SpinWait.SpinUntil(() => runtime.CompletedMessages == 2 * actorCount,
 Require(errors.IsEmpty, "actor isolation check failed");
 Require(runtime.StartedCarrierThreads == 3, "carrier pools exceeded configured bounds");
 Deny(() => retained!.AllocateScratch(8));
+Deny(() => retained!.AllocateGuestObject32(8));
 // Retire one SHARED actor while its same-pool peer continues taking turns.
 long allReserved = runtime.NativeReservedBytes;
 Require(allReserved > 0 && allReserved % actorCount == 0,
@@ -161,3 +174,4 @@ Require(SpinWait.SpinUntil(() => runtime.LiveActors == 0 &&
 Console.WriteLine("PASS actor-memory-survivor: same-pool peer reads and writes during pinned STOP and after physical reclaim");
 Console.WriteLine("PASS actor-memory-native-probe: four private heaps (two shared-pool actors), foreign handles denied, pooled carriers, stale context denied, pinned STOP and physical reclaim");
 Console.WriteLine("PASS actor-logical-stack-native-probe: four distinct actor-owned frames, cross-turn reads and foreign-handle denial");
+Console.WriteLine("PASS actor-ref32-native-probe: four actor-local uint32 guest refs, distinct native payloads, retained-turn denial (host only; not compiled guest)");
