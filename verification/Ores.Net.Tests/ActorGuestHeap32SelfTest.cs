@@ -7,6 +7,7 @@ internal static class ActorGuestHeap32SelfTest
         PerActorReferencesSurviveTurnsAndDenyStaleAccess();
         GenerationExhaustionFailsClosedWithoutWrapping();
         GuestPayloadFastPathDoesNotAllocateClrObjects();
+        GuestReadLoanDelaysArenaReclaimAfterStop();
         Console.WriteLine("PASS .NET actor-local 32-bit guest refs (host runtime only; not compiled guest)");
     }
 
@@ -217,6 +218,46 @@ internal static class ActorGuestHeap32SelfTest
     // native payload path, not the separate ActorNativeArena allocator.
     // It excludes per-turn ActorContext creation and borrowing/loan creation:
     // those are metadata operations and are not zero-GC-certified here.
+    private static void GuestReadLoanDelaysArenaReclaimAfterStop()
+    {
+        using var runtime = new ActorRuntime(Options(slots: 4));
+        using var entered = new ManualResetEventSlim();
+        ActorArenaReadLoan? outstanding = null;
+        Exception? failure = null;
+        ActorRef actor = runtime.Spawn(ActorKind.Private, (context, _) =>
+        {
+            try
+            {
+                uint guest = context.AllocateGuestObject32(8);
+                context.WriteGuestObject32(guest, 0, new byte[] { 0x5A });
+                outstanding = context.BorrowGuestObjectRead32(guest);
+            }
+            catch (Exception error) { failure = error; }
+            finally { entered.Set(); }
+        });
+
+        long reserved = runtime.NativeReservedBytes;
+        Require(reserved == 2048 + 128, "single actor uses one native arena budget");
+        runtime.Send(actor, new byte[] { 1 });
+        Require(entered.Wait(TimeSpan.FromSeconds(10)),
+            "read loan was acquired in admitted host actor turn");
+        if (failure is not null)
+            throw new Exception("guest loan STOP fixture failed", failure);
+        Require(SpinWait.SpinUntil(() => runtime.CompletedMessages == 1,
+            TimeSpan.FromSeconds(10)), "loan holder physical turn exited");
+        Require(outstanding is not null, "read loan created by guest payload");
+        runtime.Stop(actor);
+        Require(SpinWait.SpinUntil(() => runtime.LiveActors == 0,
+            TimeSpan.FromSeconds(10)), "actor logically retired after STOP");
+        Require(runtime.NativeReservedBytes == reserved,
+            "guest read loan pins native backing after logical actor STOP");
+        Task.Run(outstanding!.Dispose).GetAwaiter().GetResult();
+        outstanding.Dispose();
+        Require(SpinWait.SpinUntil(() => runtime.NativeReservedBytes == 0,
+            TimeSpan.FromSeconds(10)),
+            "off-carrier guest read-loan release permits exactly-once native refund");
+    }
+
     private static void GuestPayloadFastPathDoesNotAllocateClrObjects()
     {
         using var runtime = new ActorRuntime(Options(slots: 4));
