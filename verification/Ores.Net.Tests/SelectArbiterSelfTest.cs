@@ -180,6 +180,72 @@ internal static class SelectArbiterSelfTest
         Require(second.TryWin(), "another case can still win after rejected reentry");
     }
 
+    private static void MutatingCommitReentryFailsBeforeChangingTerminalState()
+    {
+        using var select = new SelectArbiter(2);
+        var first = select.RegisterCase(0);
+        var second = select.RegisterCase(1);
+        var revoked = 0;
+        first.Arm(() => revoked++);
+        second.Arm(() => revoked++);
+
+        void ExpectRejected(Action attempt)
+        {
+            var rejected = false;
+            try
+            {
+                _ = first.TryWin(() =>
+                {
+                    attempt();
+                    return true;
+                });
+            }
+            catch (InvalidOperationException error) when (
+                error.Message.Contains("must not re-enter", StringComparison.Ordinal))
+            {
+                rejected = true;
+            }
+
+            Require(rejected && select.Winner is null && !select.IsCancelled,
+                "reentrant mutation must fail without terminalizing select");
+            Require(revoked == 0, "rejected commit cannot revoke live cases");
+        }
+
+        ExpectRejected(() => { _ = first.TryWin(); });
+        ExpectRejected(() => { _ = select.Cancel(); });
+        ExpectRejected(() => { _ = select.RegisterCase(0); });
+        ExpectRejected(() => first.Arm(() => { }));
+
+        Require(second.TryWin(), "selection still makes progress after reentry rejection");
+        Require(select.Winner == 1 && revoked == 1,
+            "winning case commits once and revokes one loser");
+    }
+
+    private static void NestedDifferentArbitersPreserveReentryIsolation()
+    {
+        using var outer = new SelectArbiter(1);
+        using var inner = new SelectArbiter(1);
+        var outerCase = outer.RegisterCase(0);
+        var innerCase = inner.RegisterCase(0);
+        outerCase.Arm(() => { });
+        innerCase.Arm(() => { });
+
+        var cyclicReentryRejected = false;
+        Require(outerCase.TryWin(() => innerCase.TryWin(() =>
+        {
+            try { _ = outer.Cancel(); }
+            catch (InvalidOperationException error) when (
+                error.Message.Contains("must not re-enter", StringComparison.Ordinal))
+            {
+                cyclicReentryRejected = true;
+            }
+            return true;
+        })), "distinct nested arbiter commits must remain legal");
+        Require(cyclicReentryRejected, "A-to-B-to-A callback reentry is forbidden");
+        Require(outer.Winner == 0 && inner.Winner == 0,
+            "both distinct commits settle once");
+    }
+
     private static void DisposeCancelsLiveRegistrations()
     {
         var select = new SelectArbiter(1);
@@ -223,6 +289,8 @@ internal static class SelectArbiterSelfTest
         ConditionalCommitControlsLinearization();
         CleanupFailureCannotRollbackWinner();
         CommitCannotReenterArbiter();
+        MutatingCommitReentryFailsBeforeChangingTerminalState();
+        NestedDifferentArbitersPreserveReentryIsolation();
         DisposeCancelsLiveRegistrations();
         ValidationFailsClosed();
     }
