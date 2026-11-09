@@ -57,3 +57,4 @@ jobs:
           grep -Fx 'PASS actor-memory-survivor: same-pool peer reads and writes during pinned STOP and after physical reclaim' "$RUNNER_TEMP/actor-memory-native.log"
           grep -Fx 'PASS actor-memory-native-probe: four private heaps (two shared-pool actors), foreign handles denied, pooled carriers, stale context denied, pinned STOP and physical reclaim' "$RUNNER_TEMP/actor-memory-native.log"
           grep -Fx 'PASS actor-logical-stack-native-probe: four distinct actor-owned frames, cross-turn reads and foreign-handle denial' "$RUNNER_TEMP/actor-memory-native.log"
+          grep -Fx 'PASS actor-ref32-native-probe: four actor-local uint32 guest refs, distinct native payloads, retained-turn denial (host only; not compiled guest)' "$RUNNER_TEMP/actor-memory-native.log"
