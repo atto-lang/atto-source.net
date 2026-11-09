@@ -78,11 +78,11 @@ public sealed class ActorContext
     private readonly ActorArena _arena;
     private readonly ActorArenaTurn _turn;
     private readonly ActorFrameStack _stack;
-    private readonly ActorGuestHeap32 _guestHeap;
+    private readonly Lazy<ActorGuestHeap32> _guestHeap;
 
     internal ActorContext(ActorRef self, ActorKind kind,
         ActorArena arena, ActorArenaTurn turn, ActorFrameStack stack,
-        ActorGuestHeap32 guestHeap)
+        Lazy<ActorGuestHeap32> guestHeap)
     {
         Self = self;
         Kind = kind;
@@ -103,25 +103,25 @@ public sealed class ActorContext
     // reference; payloads stay in this actor's existing native arena.
     // These words must never cross an actor/mailbox/FFI boundary as authority.
     public uint AllocateGuestObject32(int bytes, int alignment = 8) =>
-        _guestHeap.Allocate(_turn, bytes, alignment);
+        _guestHeap.Value.Allocate(_turn, bytes, alignment);
 
     public void DropGuestObject32(uint reference) =>
-        _guestHeap.Drop(_turn, reference);
+        _guestHeap.Value.Drop(_turn, reference);
 
     public ActorArenaReadLoan BorrowGuestObjectRead32(uint reference) =>
-        _guestHeap.BorrowRead(_turn, reference);
+        _guestHeap.Value.BorrowRead(_turn, reference);
 
     public void ReadGuestObject32(uint reference, int offset,
-        Span<byte> destination) => _guestHeap.Read(_turn, reference, offset, destination);
+        Span<byte> destination) => _guestHeap.Value.Read(_turn, reference, offset, destination);
 
     public void WriteGuestObject32(uint reference, int offset,
-        ReadOnlySpan<byte> source) => _guestHeap.Write(_turn, reference, offset, source);
+        ReadOnlySpan<byte> source) => _guestHeap.Value.Write(_turn, reference, offset, source);
 
     public uint ReadGuestReference32(uint owner, int offset) =>
-        _guestHeap.ReadReference(_turn, owner, offset);
+        _guestHeap.Value.ReadReference(_turn, owner, offset);
 
     public void WriteGuestReference32(uint owner, int offset, uint target) =>
-        _guestHeap.WriteReference(_turn, owner, offset, target);
+        _guestHeap.Value.WriteReference(_turn, owner, offset, target);
 
     public ActorArenaHandle AllocatePersistent(int bytes, int alignment = 8) =>
         _arena.AllocatePersistent(_turn, bytes, alignment);
@@ -245,7 +245,12 @@ public sealed class ActorRuntime : IDisposable
             Mailbox = mailbox;
             Arena = arena;
             Stack = new ActorFrameStack(arena, stackBytes, maxStackFrames);
-            GuestHeap = new ActorGuestHeap32(arena, Math.Min(guestSlots, ActorGuestHeap32.MaxSlots));
+            // Do not allocate a second managed slot table for actors that
+            // never use the guest object ABI (default is 4096 slots per actor).
+            GuestHeap = new Lazy<ActorGuestHeap32>(
+                () => new ActorGuestHeap32(arena,
+                    Math.Min(guestSlots, ActorGuestHeap32.MaxSlots)),
+                LazyThreadSafetyMode.ExecutionAndPublication);
             Handler = handler;
             Reference = mailbox.CurrentRef;
             DispatchAction = Dispatch;
@@ -256,7 +261,7 @@ public sealed class ActorRuntime : IDisposable
         internal ActorMailbox Mailbox { get; }
         internal ActorArena Arena { get; }
         internal ActorFrameStack Stack { get; }
-        internal ActorGuestHeap32 GuestHeap { get; }
+        internal Lazy<ActorGuestHeap32> GuestHeap { get; }
         internal ActorMessageHandler Handler { get; }
         internal ActorRef Reference { get; }
         internal Action DispatchAction { get; }
