@@ -66,10 +66,14 @@ certified isolate/process protection boundary.
 - No source-level `define actor` object/class, string, tuple, map, array or
   record lowering into this table.
 - No source ownership/borrow-checker path-to-heap proof or typed field map.
-- No zero managed allocations in the production `ActorArena` path: each
-  `AllocatePersistent` currently creates a managed capability object.
-  Existing `ActorNativeArena` has a separate primitive-handle low-allocation
-  path, but this patch does **not** silently substitute that allocator.
+- The new `ActorArena.AllocateNativeGuest`/`ReadNativeGuest`/
+  `WriteNativeGuest`/`DropNativeGuest` path uses **value-type native allocation
+  capabilities** within the same arena. Unlike legacy `AllocatePersistent`,
+  it creates no per-object CLR handle. A newly authored 4096-cycle host test
+  asserts zero thread-local managed bytes in the warmed guest payload fast
+  path; this is **NOT_EXECUTED** and not yet an actual compiled AttoLang guest.
+  Turn/context construction, lazy metadata, read loans and other runtime paths
+  still allocate CLR objects. This is not whole-actor zero-GC certification.
 - No lowering of compiler-generated async suspension, unwinding, destructor
   schedules, CPU/GPU layouts, or an AOT full-source actor guest.
 - No promise of cross-actor authorization based on the 32-bit number alone;
@@ -79,7 +83,7 @@ certified isolate/process protection boundary.
 
 The existing `verification/Ores.Net.Tests` runner now calls
 `ActorGuestHeap32SelfTest` and covers two actual host actor cells, multiple
-physical turns, independent private values at equal local reference words,
+physical turns, a 4096-iteration no-managed-allocation guest payload probe, independent private values at equal local reference words,
 malformed/forged/stale/null references, bounds and double-drop denial,
 generation wrap exhaustion, retained-context rejection and native-budget
 refund after STOP.
@@ -107,3 +111,15 @@ objects and a four-byte child-reference field, execute it after physical turn
 migration, then prove forged cross-actor references and stale references
 cannot escape typing/transport/borrow rules. Run the same canonical fixture
 on Java/GraalVM and LLVM before any parity claim.
+
+## Blocked source Actions at November 9, 2026
+
+The exact-head source-org actor-memory workflow consistently reports job
+failure with `runner=null` and **zero steps** (Linux and Windows). No test
+or build result can be inferred from that failure. The repository's
+`AGENTS.md` requires independent security review, source-side authorization
+and an approved private destination before mirroring private Git objects to
+another organization; runner capacity alone is not authorization.
+Do not transfer source files to an unapproved CI carrier. Keep this PR draft,
+verify source-side runner admission or obtain separately approved private CI
+transfer authorization, then execute the tests on the exact PR head.
