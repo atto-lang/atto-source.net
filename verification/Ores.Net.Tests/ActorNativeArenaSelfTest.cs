@@ -69,6 +69,7 @@ internal static class ActorNativeArenaSelfTest
             "stale tracked owner is reported without suppressing later cleanup");
 
         AggregateLazyGrowthBudgetRefundsAfterNativeFree();
+        GrowthChargesFullPeakBackingAndRollsBackOnQuotaDenial();
         LazyBackingGrowthPreservesActorOffsets();
         OddQuotaBackingAlignment();
         ConcurrentDisposeDoesNotRaceNativeAccess();
@@ -170,6 +171,54 @@ internal static class ActorNativeArenaSelfTest
             "odd quota is scrubbed and reclaimed");
         actor.Dispose();
         Require(actor.BackingBytes == 0, "disposing actor returns native backing");
+    }
+
+    private static void GrowthChargesFullPeakBackingAndRollsBackOnQuotaDenial()
+    {
+        // Replacing a 4 KiB native slab with 8 KiB temporarily owns 12 KiB.
+        // A tenant budget equal to final capacity must reject this peak, not
+        // silently count only the 4 KiB delta while both blocks are resident.
+        var deniedBudget = new ActorArenaBudget(8192);
+        long processBefore = ActorArenaBudget.Process.ReservedBytes;
+        using (var actor = new ActorNativeArena(8192, 2, deniedBudget))
+        {
+            ulong root = actor.Allocate(4096, 8);
+            Require(root != 0 && actor.BackingBytes == 4096 &&
+                    deniedBudget.ReservedBytes == 4096,
+                "first backing uses only its physical slab");
+            Require(actor.WriteInt64(root, 0, 0x11223344), "root value initialized");
+            RejectInvalid(() => _ = actor.Allocate(4096, 8),
+                "growth rejected when transient physical peak exceeds tenant budget");
+            Require(actor.BackingBytes == 4096 &&
+                    actor.UsedBytes == 4096 && actor.LiveAllocations == 1 &&
+                    deniedBudget.ReservedBytes == 4096 &&
+                    ActorArenaBudget.Process.ReservedBytes == processBefore + 4096,
+                "failed growth does not mutate published backing, live count or ledger");
+            Require(actor.ReadInt64(root) == 0x11223344,
+                "denied relocation preserves live actor contents");
+        }
+        Require(deniedBudget.ReservedBytes == 0 &&
+                ActorArenaBudget.Process.ReservedBytes == processBefore,
+            "disposal scrubs and refunds rejected-growth actor");
+
+        var sufficientBudget = new ActorArenaBudget(12_288);
+        using (var actor = new ActorNativeArena(8192, 2, sufficientBudget))
+        {
+            ulong root = actor.Allocate(4096, 8);
+            Require(root != 0 && actor.WriteInt64(root, 0, 0x55667788),
+                "successful growth fixture initialized");
+            ulong tail = actor.Allocate(4096, 8);
+            Require(tail != 0 && actor.BackingBytes == 8192 &&
+                    sufficientBudget.ReservedBytes == 8192 &&
+                    ActorArenaBudget.Process.ReservedBytes == processBefore + 8192,
+                "peak 12 KiB charged before relocation, old 4 KiB refunded after free");
+            Require(actor.ReadInt64(root) == 0x55667788 &&
+                    actor.ReadInt64(tail) == 0,
+                "growth preserves prior contents and zeroes newly admitted bytes");
+        }
+        Require(sufficientBudget.ReservedBytes == 0 &&
+                ActorArenaBudget.Process.ReservedBytes == processBefore,
+            "successful growth eventually refunds all physical backing");
     }
 
     private static void SteadyStateManagedAllocationBudget()
