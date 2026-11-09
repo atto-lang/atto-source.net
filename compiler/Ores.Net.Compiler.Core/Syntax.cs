@@ -400,13 +400,15 @@ public static class OresParser
             // All operands are pure checked constants, so projecting the
             // selected SSA scalar preserves the exact source evaluation
             // behavior without allocating a host tuple or losing an effect.
-            if (Current.Text == "Tuple" || Current.Text == "Record" || Current.Text == "~")
+            if (Current.Text is "Tuple" or "Record" or "Entry" or "Pair" or "~")
             {
                 int at = Current.Offset;
                 if (Take("~"))
                 {
                     if (Take("tuple")) return ParseScalarizedTupleFactory(depth + 1, at);
                     if (Take("record")) return ParseScalarizedRecordFactory(depth + 1, at);
+                    if (Take("entry")) return ParseScalarizedBinaryProductFactory(depth + 1, at, isEntry: true);
+                    if (Take("pair")) return ParseScalarizedBinaryProductFactory(depth + 1, at, isEntry: false);
                     throw new FormatException(
                         $"E_COLLECTION_FACTORY_UNSUPPORTED: ~kind requires verified owned collection lowering at offset {at}");
                 }
@@ -416,13 +418,19 @@ public static class OresParser
                     Expect("of");
                     return ParseScalarizedTupleFactory(depth + 1, at);
                 }
-                Expect("Record");
+                if (Take("Record"))
+                {
+                    Expect(".");
+                    Expect("of");
+                    return ParseScalarizedRecordFactory(depth + 1, at);
+                }
+                bool isEntry = Take("Entry");
+                if (!isEntry) Expect("Pair");
                 Expect(".");
                 Expect("of");
-                return ParseScalarizedRecordFactory(depth + 1, at);
+                return ParseScalarizedBinaryProductFactory(depth + 1, at, isEntry);
             }
-            if (Current.Text is "Map" or "Entry" or "Pair" or "Array" or "List"
-                or "Vector" or "Set")
+            if (Current.Text is "Map" or "Array" or "List" or "Vector" or "Set")
                 throw new FormatException(
                     $"E_COLLECTION_FACTORY_UNSUPPORTED: {Current.Text}.of requires owned typed aggregate and NativeAOT CIL lowering at offset {Current.Offset}");
             if (Take("Integer"))
@@ -463,6 +471,44 @@ public static class OresParser
                 NumberStyles.None, CultureInfo.InvariantCulture, out long result))
                 throw new FormatException($"Invalid i64 at offset {tokens[_index - 1].Offset}");
             return new Literal(result);
+        }
+
+        // A nominal Entry<K,V> and a Pair<A,B> remain different source
+        // families: an Entry exposes only .key/.value; a Pair exposes only
+        // .first/.second. The scalar bootstrap can represent neither as an
+        // escaping object. A checked pure literal immediate projection is
+        // valid without silently allocating a host tuple/dictionary or
+        // introducing unproven ownership/actor-heap transport.
+        private Expression ParseScalarizedBinaryProductFactory(int depth, int at, bool isEntry)
+        {
+            CheckDepth(depth);
+            if (Take("<"))
+            {
+                Expect("int");
+                Expect(",");
+                Expect("int");
+                Expect(">");
+            }
+            Expect("(");
+            long first = ReadPureI64Literal();
+            Expect(",");
+            long second = ReadPureI64Literal();
+            Expect(")");
+            if (!Take("."))
+                throw new FormatException(
+                    $"E_BINARY_PRODUCT_ESCAPE_UNSUPPORTED: Entry/Pair requires an owned nominal aggregate at offset {at}");
+            string field = Current.Text;
+            int fieldAt = Current.Offset;
+            _index++;
+            if (isEntry)
+            {
+                if (field == "key") return new Literal(first);
+                if (field == "value") return new Literal(second);
+                throw new FormatException($"E_ENTRY_FIELD: only key/value projections are supported at offset {fieldAt}");
+            }
+            if (field == "first") return new Literal(first);
+            if (field == "second") return new Literal(second);
+            throw new FormatException($"E_PAIR_FIELD: only first/second projections are supported at offset {fieldAt}");
         }
 
         // This is not an escaped Tuple<T...> value: the scalar bootstrap
