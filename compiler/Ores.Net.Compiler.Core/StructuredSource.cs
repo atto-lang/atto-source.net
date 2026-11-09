@@ -385,6 +385,9 @@ public static class OresStructuredParser
                 do { index++; } while (index < source.Length &&
                     (Alpha(source[index]) || Digit(source[index]) || source[index] == '_'));
                 string word = source[offset..index];
+                if (word == "select" &&
+                    StaticSelectAdmission.HasTypedSelectFollower(source, index))
+                    throw StaticSelectAdmission.Unsupported(offset);
                 // Reject before the condition is lexed: `guard 1>0` contains
                 // characters this lexer refuses outside module mode.
                 if (word == "guard")
