@@ -11,6 +11,90 @@ internal static class HeapContainerSourceBoundaryTests
         if (OresIrReferenceEvaluator.Evaluate(scalar) != 42)
             throw new Exception("heap-container boundary scalar positive control failed");
 
+        // This is genuine AttoLang source lowered by OresParser into the
+        // checked scalar OresIR and emitted as CIL. A Tuple value is permitted
+        // only when an immediate constant-index projection proves it cannot
+        // escape: no unverified owning heap representation is manufactured.
+        var closedProducts = new (string Source, long Expected)[]
+        {
+            ("pub fnc main():int{return Tuple.of(11, 23)[1] + 19;}", 42),
+            ("pub fnc main():int{return ~tuple(11, 23)[1] + 19;}", 42),
+            ("pub fnc main():int{return Tuple.of<int,int>(11, 23)[0] + 31;}", 42),
+            ("pub fnc main():int{return Tuple.of(-9223372036854775808, 42)[1];}", 42)
+        };
+        string folder = Path.Combine(Path.GetTempPath(),
+            "atto-tuple-scalar-cil-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            for (int i = 0; i < closedProducts.Length; i++)
+            {
+                var (source, expected) = closedProducts[i];
+                var nativeIr = OresIrLowering.Lower(OresParser.Parse(source));
+                if (OresIrReferenceEvaluator.Evaluate(nativeIr) != expected)
+                    throw new Exception("Native scalarized tuple OresIR returned wrong result");
+                string output = Path.Combine(folder, "tuple-" + i + ".dll");
+                CilEmitter.EmitLibrary(nativeIr, output);
+                using var assembly = Mono.Cecil.AssemblyDefinition.ReadAssembly(output);
+                var entry = assembly.MainModule.Types.Single(t =>
+                    t.FullName == "Oreslang.Generated.OresProgram").Methods.Single(
+                        m => m.Name == "Run");
+                if (CilReferenceEvaluator.Evaluate(entry) != expected)
+                    throw new Exception("Native scalarized tuple CIL returned wrong result");
+            }
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+
+        var forbiddenFactories = new[]
+        {
+            "Tuple.of(1,2)",           // cannot escape as a first-class value
+            "Tuple.of(1,2)[2]",        // exact arity and bounds
+            "Tuple.of(1,2)[-1]",       // checked nonnegative slot only
+            "Tuple.of(1+2,3)[0]",     // not statically proven side-effect-free literal
+            "Tuple.of<int>(1,2)[0]",  // wrong witness arity
+            "Tuple.of(true,3)[0]",    // scalar i64-only type gate
+            "Tuple.of(1,2)[0].foo",   // no dynamic guest object member
+            "Map.of<string,int>()",   // owned Map remains unsupported
+            "Entry.of(1,2)",
+            "Pair.of(1,2)",
+            "Array.of(1,2)",
+            "List.of(1,2)",
+            "Vector.of(1,2)",
+            "Set.of(1,2)",
+            "Record.of(ready: true)",
+            "~map(1 => 2)",
+            "~array(1,2)"
+        };
+        foreach (var factory in forbiddenFactories)
+        {
+            string source = "pub fnc main():int{return " + factory + ";}";
+            try
+            {
+                _ = OresIrLowering.Lower(OresParser.Parse(source));
+                throw new Exception("Unverified native collection factory emitted IR: " + factory);
+            }
+            catch (FormatException) { }
+        }
+        // Structured frontend must not reinterpret a nominal product or
+        // dynamic collection as a scalar helper call.
+        foreach (string factory in new[] {
+            "Tuple.of(11,23)[1]", "Map.of()", "~tuple(11,23)[0]", "~array(11,23)"
+        })
+        {
+            try
+            {
+                _ = OresStructuredParser.Parse(
+                    "pub fnc main():int{return " + factory + ";}");
+                throw new Exception("Unverified structured collection admitted: " + factory);
+            }
+            catch (FormatException ex) when
+                (ex.Message.Contains("E_COLLECTION_FACTORY_UNSUPPORTED", StringComparison.Ordinal))
+            { }
+        }
+
         var unsupported = new (string Name, string Source)[]
         {
             ("box-owner", "pub fnc main():int{val Box<int> b=Box<int>(42);return 42;}"),
