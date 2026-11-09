@@ -188,6 +188,9 @@ public static class OresParser
                     (text[_i] is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_'))
                     _i++;
                 var word = text[start.._i];
+                if (word == "select" &&
+                    StaticSelectAdmission.HasTypedSelectFollower(text, _i))
+                    throw StaticSelectAdmission.Unsupported(start);
                 if (word is "any" or "unknown" or "Any" or "Unknown")
                     throw new FormatException(
                         "any/unknown requires tagged opaque-value ABI and Native AOT runtime descriptors");
