@@ -45,7 +45,10 @@ allocation-bounded byte access. `ReadGuestReference32` /
 `WriteGuestReference32` validate typed local reference fields. A nonzero
 stale, unknown or malformed reference fails closed. `DropGuestObject32`
 drops the underlying persistent arena allocation before recycling the slot.
-Existing arena loans still block mutation/drop. Retained contexts cannot
+`BorrowGuestObjectRead32` returns the existing arena read-loan capability,
+which blocks guest object mutation and drop until released, including across
+physical turns. Failed over-capacity admissions do not consume guest slots.
+Retained contexts cannot
 create or dereference objects after the physical actor turn.
 
 **Important:** Raw `uint` values are not cryptographically authenticated
