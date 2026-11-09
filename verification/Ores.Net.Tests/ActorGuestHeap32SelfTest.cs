@@ -57,6 +57,8 @@ internal static class ActorGuestHeap32SelfTest
                         "nested pointer occupies one little-endian uint32 word");
                     ExpectInvalid(() => context.WriteGuestReference32(root, 8, uint.MaxValue),
                         "forged target cannot enter a typed field");
+                    Require(context.ReadGuestReference32(root, 8) == child,
+                        "failed invalid-target write leaves child pointer unchanged");
                     context.DropGuestObject32(child);
                     ExpectInvalid(() => context.ReadGuestReference32(root, 8),
                         "dropped child pointer read must fail");
@@ -82,6 +84,16 @@ internal static class ActorGuestHeap32SelfTest
                     Require(data[0] == (left ? (byte)0xA1 : (byte)0xB2),
                         "actor-private object survives physical turn migration");
 
+                    ExpectInvalid(() => context.AllocateGuestObject32(2049),
+                        "over-capacity native request cannot consume guest reference slot");
+                    using (var loan = context.BorrowGuestObjectRead32(root))
+                    {
+                        ExpectInvalid(() => context.WriteGuestObject32(root, 0,
+                            new byte[] { 77 }),
+                            "read loan freezes guest object mutation");
+                        ExpectInvalid(() => context.DropGuestObject32(root),
+                            "read loan freezes guest object drop");
+                    }
                     uint fresh = context.AllocateGuestObject32(8);
                     Require(fresh != stale, "slot reuse increments 16-bit generation");
                     ExpectInvalid(() => context.ReadGuestObject32(stale, 0, data),
