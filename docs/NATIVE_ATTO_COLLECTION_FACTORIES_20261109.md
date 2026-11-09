@@ -13,6 +13,11 @@ pub fnc main(): int {
 ```
 
 Also admits `Tuple.of(11,23)[1]` and `~tuple(11,23)[1]`.
+An equivalent closed readonly-record slice admits
+`Record.of(low: 11, high: 23).high` and
+`~record(low: 11, high: 23).high`; duplicate fields, unknown field
+names and non-literal values fail before CIL. The record projection is
+also statically scalarized and cannot escape as an object.
 This is a *closed, escaping-free scalarized tuple projection*, not a first-class
 heap/aggregate value. The parser recognizes the actual AttoLang tokens,
 checks that every element is a pure, signed i64 literal, validates optional
@@ -32,8 +37,8 @@ layout or emit collection ABI from its current i64/bool-only SSA nodes.
 
 ## Not implemented
 
-**Map.of / Entry.of / Pair.of / Array.of / List.of / Vector.of / Set.of /
-Record.of, mutable arrays, real heterogenous tuple storage, tuple variables,
+**Map.of / Entry.of / Pair.of / Array.of / List.of / Vector.of / Set.of,
+general Record.of values, mutable arrays, real heterogenous tuple storage, tuple variables,
 non-literal tuple members, guest collection ownership and actor transport are
 not implemented on .NET.** All require a real typed aggregate and ownership
 representation in HIR, verified CFG, CIL and full NativeAOT execution.
@@ -51,7 +56,8 @@ reference model is substituted to claim native AttoLang guest support.
 - Source lexer does not reinterpret strings/comments as guest constructors.
 - Up to 32 elements / type witnesses, UTF-8 source and AST depth budgets.
 - Negative tests: arity, out-of-range, negative/nonconstant index, malformed
-  types, unsupported values, escape, other factories, no silent CIL fallback.
+  types, duplicate/unknown record fields, unsupported values, escape,
+  other factories, no silent CIL fallback.
 - Authored test performs `OresParser.Parse` → `OresIrLowering.Lower` →
   `CilEmitter.EmitLibrary` → inspection and independent CIL evaluator.
   **Authored does not mean executed**.
