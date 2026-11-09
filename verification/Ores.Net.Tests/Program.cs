@@ -38,7 +38,10 @@ foreach (string source in new[] {
     "select /* trivia */ <int> over default: -> { return 42; } end",
     "nb select<int> over default: -> { return 42; } end",
     "try select<int> over default: -> { return 42; } end",
-    "do select<int> over default: -> { return 42; } end"
+    "do select<int> over default: -> { return 42; } end",
+    "do select over default: -> { return 42; } end",
+    "nb select over default: -> { return 42; } end",
+    "select { default: -> { return 42; } }"
 })
 {
     RejectDiagnostic(() => OresParser.Parse(source),
