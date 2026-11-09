@@ -78,15 +78,18 @@ public sealed class ActorContext
     private readonly ActorArena _arena;
     private readonly ActorArenaTurn _turn;
     private readonly ActorFrameStack _stack;
+    private readonly ActorGuestHeap32 _guestHeap;
 
     internal ActorContext(ActorRef self, ActorKind kind,
-        ActorArena arena, ActorArenaTurn turn, ActorFrameStack stack)
+        ActorArena arena, ActorArenaTurn turn, ActorFrameStack stack,
+        ActorGuestHeap32 guestHeap)
     {
         Self = self;
         Kind = kind;
         _arena = arena;
         _turn = turn;
         _stack = stack;
+        _guestHeap = guestHeap;
     }
 
     public ActorRef Self { get; }
@@ -95,6 +98,27 @@ public sealed class ActorContext
     // Host capability providers must enforce the same physical-turn authority
     // as actor memory access. A retained context is not a reusable credential.
     internal void ValidateActiveTurn() => _arena.ValidateActiveTurn(_turn);
+
+    // NativeAOT guest-object substrate: one uint32 generation/slot word per
+    // reference; payloads stay in this actor's existing native arena.
+    // These words must never cross an actor/mailbox/FFI boundary as authority.
+    public uint AllocateGuestObject32(int bytes, int alignment = 8) =>
+        _guestHeap.Allocate(_turn, bytes, alignment);
+
+    public void DropGuestObject32(uint reference) =>
+        _guestHeap.Drop(_turn, reference);
+
+    public void ReadGuestObject32(uint reference, int offset,
+        Span<byte> destination) => _guestHeap.Read(_turn, reference, offset, destination);
+
+    public void WriteGuestObject32(uint reference, int offset,
+        ReadOnlySpan<byte> source) => _guestHeap.Write(_turn, reference, offset, source);
+
+    public uint ReadGuestReference32(uint owner, int offset) =>
+        _guestHeap.ReadReference(_turn, owner, offset);
+
+    public void WriteGuestReference32(uint owner, int offset, uint target) =>
+        _guestHeap.WriteReference(_turn, owner, offset, target);
 
     public ActorArenaHandle AllocatePersistent(int bytes, int alignment = 8) =>
         _arena.AllocatePersistent(_turn, bytes, alignment);
@@ -211,13 +235,14 @@ public sealed class ActorRuntime : IDisposable
 
         internal ActorCell(ActorRuntime owner, ActorKind kind,
             ActorMailbox mailbox, ActorArena arena, ActorMessageHandler handler,
-            int stackBytes, int maxStackFrames)
+            int stackBytes, int maxStackFrames, int guestSlots)
         {
             _owner = owner;
             Kind = kind;
             Mailbox = mailbox;
             Arena = arena;
             Stack = new ActorFrameStack(arena, stackBytes, maxStackFrames);
+            GuestHeap = new ActorGuestHeap32(arena, Math.Min(guestSlots, ActorGuestHeap32.MaxSlots));
             Handler = handler;
             Reference = mailbox.CurrentRef;
             DispatchAction = Dispatch;
@@ -228,6 +253,7 @@ public sealed class ActorRuntime : IDisposable
         internal ActorMailbox Mailbox { get; }
         internal ActorArena Arena { get; }
         internal ActorFrameStack Stack { get; }
+        internal ActorGuestHeap32 GuestHeap { get; }
         internal ActorMessageHandler Handler { get; }
         internal ActorRef Reference { get; }
         internal Action DispatchAction { get; }
@@ -294,7 +320,8 @@ public sealed class ActorRuntime : IDisposable
                     ? Math.Min(64 * 1024, Math.Max(1, _options.ActorPersistentBytes / 4))
                     : _options.ActorStackBytes;
                 var cell = new ActorCell(this, kind, mailbox, arena, handler,
-                    stackBytes, _options.ActorMaxStackFrames);
+                    stackBytes, _options.ActorMaxStackFrames,
+                    _options.ActorMaxAllocations);
                 _actors.Add(candidateId, cell);
                 _nextActorId = candidateId;
                 return cell.Reference;
@@ -480,7 +507,8 @@ public sealed class ActorRuntime : IDisposable
                     using (turn)
                     {
                         var context = new ActorContext(
-                            cell.Reference, cell.Kind, cell.Arena, turn, cell.Stack);
+                            cell.Reference, cell.Kind, cell.Arena, turn,
+                            cell.Stack, cell.GuestHeap);
                         cell.Handler(context, payload);
                     }
                     succeeded = true;
