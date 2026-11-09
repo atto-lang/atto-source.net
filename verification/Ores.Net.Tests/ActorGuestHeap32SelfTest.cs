@@ -40,6 +40,7 @@ internal static class ActorGuestHeap32SelfTest
         uint leftRoot = 0, rightRoot = 0;
         uint leftStale = 0, rightStale = 0;
         ActorContext? expiredContext = null;
+        ActorArenaReadLoan? carriedReadLoan = null;
 
         ActorMessageHandler Handler(bool left) => (context, message) =>
         {
@@ -69,6 +70,7 @@ internal static class ActorGuestHeap32SelfTest
                         leftRoot = root;
                         leftStale = child;
                         expiredContext = context;
+                        carriedReadLoan = context.BorrowGuestObjectRead32(root);
                     }
                     else
                     {
@@ -82,6 +84,18 @@ internal static class ActorGuestHeap32SelfTest
                     uint stale = left ? leftStale : rightStale;
                     byte[] data = new byte[1];
                     context.ReadGuestObject32(root, 0, data);
+                    if (left)
+                    {
+                        Require(carriedReadLoan is not null,
+                            "read loan must survive the preceding physical actor turn");
+                        ExpectInvalid(() => context.WriteGuestObject32(root, 0,
+                            new byte[] { 99 }),
+                            "cross-turn read loan must prohibit guest writes");
+                        ExpectInvalid(() => context.DropGuestObject32(root),
+                            "cross-turn read loan must prohibit guest drop");
+                        carriedReadLoan!.Dispose();
+                        carriedReadLoan = null;
+                    }
                     Require(data[0] == (left ? (byte)0xA1 : (byte)0xB2),
                         "actor-private object survives physical turn migration");
 
