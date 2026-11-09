@@ -27,7 +27,7 @@ internal sealed class ActorGuestHeap32
 
     private readonly object _gate = new();
     private readonly ActorArena _arena;
-    private readonly ActorArenaHandle?[] _handles;
+    private readonly ActorArenaNativeAllocation[] _handles;
     private readonly ushort[] _generations;
     private readonly int[] _freeSlots;
     private int _nextSlot;
@@ -40,7 +40,7 @@ internal sealed class ActorGuestHeap32
         if (slots <= 0 || slots > MaxSlots)
             throw new ArgumentOutOfRangeException(nameof(slots));
         _arena = arena;
-        _handles = new ActorArenaHandle?[slots];
+        _handles = new ActorArenaNativeAllocation[slots];
         _generations = new ushort[slots];
         _freeSlots = new int[slots];
     }
@@ -66,7 +66,7 @@ internal sealed class ActorGuestHeap32
 
             // Allocation is failure-neutral for both the existing arena and
             // the guest reference table: commit the slot only after success.
-            ActorArenaHandle handle = _arena.AllocatePersistent(turn, bytes, alignment);
+            ActorArenaNativeAllocation handle = _arena.AllocateNativeGuest(turn, bytes, alignment);
             if (_freeCount != 0)
                 _freeCount--;
             else
@@ -85,8 +85,8 @@ internal sealed class ActorGuestHeap32
             int slot = ValidateSlot(reference);
             // This can reject on an active read loan or expired turn; leave
             // reference metadata intact until the native drop really commits.
-            _arena.ReleasePersistent(turn, _handles[slot]!);
-            _handles[slot] = null;
+            _arena.DropNativeGuest(turn, _handles[slot]);
+            _handles[slot] = default;
             _liveCount--;
             if (_generations[slot] == ushort.MaxValue)
             {
@@ -105,14 +105,14 @@ internal sealed class ActorGuestHeap32
         Span<byte> destination)
     {
         lock (_gate)
-            _arena.Read(turn, _handles[ValidateSlot(reference)]!, offset, destination);
+            _arena.ReadNativeGuest(turn, _handles[ValidateSlot(reference)], offset, destination);
     }
 
     internal void Write(ActorArenaTurn turn, uint reference, int offset,
         ReadOnlySpan<byte> source)
     {
         lock (_gate)
-            _arena.Write(turn, _handles[ValidateSlot(reference)]!, offset, source);
+            _arena.WriteNativeGuest(turn, _handles[ValidateSlot(reference)], offset, source);
     }
 
     // Guest read loans use the same underlying arena loan accounting and may
@@ -120,7 +120,7 @@ internal sealed class ActorGuestHeap32
     internal ActorArenaReadLoan BorrowRead(ActorArenaTurn turn, uint reference)
     {
         lock (_gate)
-            return _arena.BorrowRead(turn, _handles[ValidateSlot(reference)]!);
+            return _arena.BorrowNativeGuestRead(turn, _handles[ValidateSlot(reference)]);
     }
 
     /// <summary>Store one local reference in canonical little-endian form.</summary>
@@ -134,7 +134,7 @@ internal sealed class ActorGuestHeap32
                 ValidateSlot(target);
             Span<byte> encoded = stackalloc byte[sizeof(uint)];
             BinaryPrimitives.WriteUInt32LittleEndian(encoded, target);
-            _arena.Write(turn, _handles[slot]!, offset, encoded);
+            _arena.WriteNativeGuest(turn, _handles[slot], offset, encoded);
         }
     }
 
@@ -145,7 +145,7 @@ internal sealed class ActorGuestHeap32
         {
             int slot = ValidateSlot(owner);
             Span<byte> encoded = stackalloc byte[sizeof(uint)];
-            _arena.Read(turn, _handles[slot]!, offset, encoded);
+            _arena.ReadNativeGuest(turn, _handles[slot], offset, encoded);
             uint reference = BinaryPrimitives.ReadUInt32LittleEndian(encoded);
             if (reference != Null)
                 ValidateSlot(reference);
@@ -162,7 +162,7 @@ internal sealed class ActorGuestHeap32
             throw new InvalidOperationException("Null, forged or stale guest reference");
 
         int slot = checked((int)encodedSlot - 1);
-        if (_handles[slot] is null || _generations[slot] != generation)
+        if (_handles[slot].Generation == 0 || _generations[slot] != generation)
             throw new InvalidOperationException("Foreign, dropped or stale guest reference");
         return slot;
     }
