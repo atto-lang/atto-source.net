@@ -60,6 +60,36 @@ for (int i = 0; i < actorCount; ++i)
                 compressed[index] = context.AllocateGuestObject32(8);
                 context.WriteGuestObject32(compressed[index], 0,
                     new byte[] { (byte)(41 + index) });
+                if (index == 0)
+                {
+                    // Measured inside a real NativeAOT actor turn, after the
+                    // one-time lazy metadata/locking paths have been warmed.
+                    Span<byte> value = stackalloc byte[8];
+                    for (int warm = 0; warm < 128; warm++)
+                    {
+                        uint temporary = context.AllocateGuestObject32(8);
+                        value[0] = (byte)warm;
+                        context.WriteGuestObject32(temporary, 0, value);
+                        context.ReadGuestObject32(temporary, 0, value);
+                        context.DropGuestObject32(temporary);
+                    }
+                    bool correct = true;
+                    long before = GC.GetAllocatedBytesForCurrentThread();
+                    for (int cycle = 0; cycle < 4096; cycle++)
+                    {
+                        uint temporary = context.AllocateGuestObject32(8);
+                        value[0] = (byte)cycle;
+                        context.WriteGuestObject32(temporary, 0, value);
+                        value[0] = 0;
+                        context.ReadGuestObject32(temporary, 0, value);
+                        if (value[0] != (byte)cycle) correct = false;
+                        context.DropGuestObject32(temporary);
+                        if (!correct) break;
+                    }
+                    long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+                    Require(correct && allocated == 0,
+                        "NativeAOT actor guest payload steady-state must allocate zero CLR bytes");
+                }
                 frames[index] = context.PushStackFrame(8);
                 context.WriteStackFrame(frames[index]!, 0,
                     new byte[] { (byte)(31 + index) });
@@ -175,3 +205,4 @@ Console.WriteLine("PASS actor-memory-survivor: same-pool peer reads and writes d
 Console.WriteLine("PASS actor-memory-native-probe: four private heaps (two shared-pool actors), foreign handles denied, pooled carriers, stale context denied, pinned STOP and physical reclaim");
 Console.WriteLine("PASS actor-logical-stack-native-probe: four distinct actor-owned frames, cross-turn reads and foreign-handle denial");
 Console.WriteLine("PASS actor-ref32-native-probe: four actor-local uint32 guest refs, distinct native payloads, retained-turn denial (host only; not compiled guest)");
+Console.WriteLine("PASS actor-ref32-native-no-clr-allocation: 4096 warmed guest payload cycles allocated zero managed bytes (host only)");
