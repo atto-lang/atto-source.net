@@ -27,7 +27,9 @@ internal static class StaticSelectAdmission
 
         i = end;
         if (!SkipTrivia(source, ref i) || i >= source.Length) return false;
-        if (source[i] == '{') return true;
+        // Typed select<T> is deliberately unsupported too; do not misclassify
+        // "nb select<T>" as an unrelated execution region.
+        if (source[i] is '{' or '<') return true;
         if (!(char.IsLetter(source[i]) || source[i] == '_')) return false;
 
         int start = i++;
@@ -35,6 +37,14 @@ internal static class StaticSelectAdmission
                (char.IsLetterOrDigit(source[i]) || source[i] == '_'))
             i++;
         return IsStaticSelectFollower(source[start..i]);
+    }
+
+    // Called at the end of a lexed "select" token, before either frontend
+    // can emit an unrelated invalid-character diagnostic for '<'.
+    internal static bool HasTypedSelectFollower(string source, int afterSelect)
+    {
+        int i = afterSelect;
+        return SkipTrivia(source, ref i) && i < source.Length && source[i] == '<';
     }
 
     private static bool SkipTrivia(string source, ref int i)
