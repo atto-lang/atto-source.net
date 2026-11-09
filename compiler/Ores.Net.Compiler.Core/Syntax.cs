@@ -189,7 +189,7 @@ public static class OresParser
                     _i++;
                 var word = text[start.._i];
                 if (word == "select" &&
-                    StaticSelectAdmission.HasTypedSelectFollower(text, _i))
+                    StaticSelectAdmission.FollowedByStaticSelect(text, start))
                     throw StaticSelectAdmission.Unsupported(start);
                 if (word is "any" or "unknown" or "Any" or "Unknown")
                     throw new FormatException(
