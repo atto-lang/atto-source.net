@@ -257,6 +257,21 @@ public static class OresStructuredParser
             if (tokens[i].Text == "select" &&
                 StaticSelectAdmission.IsStaticSelectFollower(tokens[i + 1].Text))
                 throw StaticSelectAdmission.Unsupported(tokens[i].Offset);
+            // The structured/CIL CFG backend has no value-typed collection
+            // IR yet. The separate scalar OresParser admits only immediate,
+            // pure literal Tuple.of(...)[const] projections. Do not silently
+            // reinterpret an owning aggregate as an i64 helper invocation.
+            if (i + 2 < tokens.Count && tokens[i + 1].Text == "." &&
+                tokens[i + 2].Text == "of" &&
+                tokens[i].Text is "Tuple" or "Map" or "Array" or "List" or
+                    "Vector" or "Set" or "Entry" or "Pair" or "Record")
+                throw new FormatException(
+                    $"E_COLLECTION_FACTORY_UNSUPPORTED: {tokens[i].Text}.of requires typed product/collection CFG and NativeAOT CIL lowering at offset {tokens[i].Offset}");
+            if (tokens[i].Text == "~" && i + 1 < tokens.Count &&
+                tokens[i + 1].Text is "tuple" or "map" or "array" or "list" or
+                    "vector" or "set" or "entry" or "pair" or "record")
+                throw new FormatException(
+                    $"E_COLLECTION_FACTORY_UNSUPPORTED: ~{tokens[i + 1].Text} requires typed product/collection CFG and NativeAOT CIL lowering at offset {tokens[i].Offset}");
             if ((tokens[i].Text is "tuple" or "structural") &&
                 tokens[i + 1].Text == "(")
                 throw new FormatException(
@@ -421,7 +436,7 @@ public static class OresStructuredParser
             else if (ch == '|' && !moduleMode)
                 throw new FormatException(
                     $"Lexical captures require checked closure lowering at offset {offset}");
-            else if ("()+-*{}:;=<.,?".IndexOf(ch) >= 0 ||
+            else if ("()+-*{}:;=<.,?~".IndexOf(ch) >= 0 ||
                 (moduleMode && "[]/>!|&".IndexOf(ch) >= 0)) index++;
             else throw new FormatException($"Invalid character at offset {offset}");
             var tokenText = source[offset..index];
