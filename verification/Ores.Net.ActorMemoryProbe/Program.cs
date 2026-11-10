@@ -13,6 +13,19 @@ static void Deny(Action operation)
     throw new InvalidOperationException("foreign actor memory authority admitted");
 }
 
+static void VerifyReceiveFrame(ActorContext context, ActorStackFrameHandle previous, byte value)
+{
+    Deny(() => context.ReadStackFrame(previous, 0, new byte[1]));
+    var frame = context.PushStackFrame(8);
+    var bytes = new byte[1];
+    context.ReadStackFrame(frame, 0, bytes);
+    Require(bytes[0] == 0, "new receive stack contains prior invocation bytes");
+    context.WriteStackFrame(frame, 0, new byte[] { value });
+    context.ReadStackFrame(frame, 0, bytes);
+    Require(bytes[0] == value, "fresh receive frame is not writable");
+    context.PopStackFrame(frame);
+}
+
 // Keep all probe actor cardinalities and dispatcher admission capacity in lockstep.
 const int actorCount = 4;
 var options = new ActorRuntimeOptions
@@ -36,6 +49,7 @@ using var survivorVerified = new AutoResetEvent(false);
 var errors = new ConcurrentQueue<Exception>();
 var handles = new ActorArenaHandle?[actorCount];
 var frames = new ActorStackFrameHandle?[actorCount];
+var executions = new ActorExecutionContext?[actorCount];
 var references = new ActorRef[actorCount];
 ActorArenaLifetimePin? pin = null;
 ActorContext? retained = null;
@@ -52,6 +66,13 @@ for (int i = 0; i < actorCount; ++i)
         bool first = phase == 0;
         try
         {
+            Require(context.Execution.Actor == context.Self,
+                "receive execution identity disagrees with actor incarnation");
+            if (!first)
+                Require(!ReferenceEquals(executions[index], context.Execution) &&
+                    context.Execution.InvocationSequence > executions[index]!.InvocationSequence,
+                    "new DATA reused an earlier receive execution identity");
+            executions[index] = context.Execution;
             if (first)
             {
                 handles[index] = context.AllocatePersistent(8);
@@ -70,9 +91,7 @@ for (int i = 0; i < actorCount; ++i)
                 Require(output[0] == (phase == 2 ? 13 : 14),
                     "survivor state changed during peer retirement");
                 var frameValue = new byte[1];
-                context.ReadStackFrame(frames[index]!, 0, frameValue);
-                Require(frameValue[0] == (byte)(31 + index),
-                    "survivor logical frame changed during peer retirement");
+                VerifyReceiveFrame(context, frames[index]!, (byte)(31 + index));
                 Deny(() => context.Read(handles[1]!, 0, output));
                 Deny(() => context.Write(handles[1]!, 0, output));
                 output[0]++;
@@ -87,9 +106,7 @@ for (int i = 0; i < actorCount; ++i)
                 context.Read(handles[index]!, 0, output);
                 Require(output[0] == 11 + index, "persistent actor value changed");
                 var frameValue = new byte[1];
-                context.ReadStackFrame(frames[index]!, 0, frameValue);
-                Require(frameValue[0] == (byte)(31 + index),
-                    "actor-owned logical frame did not survive physical turn");
+                VerifyReceiveFrame(context, frames[index]!, (byte)(31 + index));
                 for (int j = 0; j < actorCount; ++j)
                 {
                     if (j == index) continue;
@@ -161,7 +178,7 @@ Require(SpinWait.SpinUntil(() => runtime.LiveActors == 0 &&
     "remaining actors did not independently retire and refund");
 Console.WriteLine("PASS actor-memory-survivor: same-pool peer reads and writes during pinned STOP and after physical reclaim");
 Console.WriteLine("PASS actor-memory-native-probe: four private heaps (two shared-pool actors), foreign handles denied, pooled carriers, stale context denied, pinned STOP and physical reclaim");
-Console.WriteLine("PASS actor-logical-stack-native-probe: four distinct actor-owned frames, cross-turn reads and foreign-handle denial");
+Console.WriteLine("PASS actor-logical-stack-native-probe: four actor-private heaps, per-receive stack cleanup and foreign-handle denial");
 
 // The first production typed-frame backend uses this same native actor-owned
 // stack slab. Check the immutable *trusted compiler schema* in a published
@@ -195,9 +212,13 @@ var guardedActor = typedRuntime.Spawn(ActorKind.Private, (ctx, message) =>
     }
 
     Require(message.Span[0] == 2, "unexpected scalar ABI probe phase");
+    Deny(() => { _ = ActorScalarFrameAbiV1.ReadI64(ctx, typedActivation!, 0); });
+    typedActivation = ActorScalarFrameAbiV1.Push(ctx, new byte[] { 1, 2 }, blockCount: 1);
+    ActorScalarFrameAbiV1.WriteI64(ctx, typedActivation, 0, long.MinValue);
+    ActorScalarFrameAbiV1.WriteBool(ctx, typedActivation, 1, true);
     Require(ActorScalarFrameAbiV1.ReadI64(ctx, typedActivation!, 0) ==
             long.MinValue && ActorScalarFrameAbiV1.ReadBool(ctx, typedActivation!, 1),
-        "typed scalar frame failed cross-turn read with sealed source kinds");
+        "fresh invocation typed scalar frame disagrees with sealed source kinds");
     byte[] original = new byte[ActorScalarFrameAbiV1.SlotBytes];
     ctx.ReadStackFrame(typedActivation!, ActorScalarFrameAbiV1.HeaderBytes, original);
     byte[] forged = new byte[ActorScalarFrameAbiV1.SlotBytes];
@@ -248,7 +269,7 @@ typedRuntime.Stop(guardedActor);
 Require(SpinWait.SpinUntil(() =>
     typedRuntime.LiveActors == 0 && typedRuntime.NativeReservedBytes == 0,
     TimeSpan.FromSeconds(10)), "native typed scalar frame was not reclaimed");
-Console.WriteLine("PASS actor-scalar-sealed-schema-native-probe: immutable i64/bool layout, forged tags and block counts denied across turns; NOT compiled .atto");
+Console.WriteLine("PASS actor-scalar-sealed-schema-native-probe: immutable i64/bool layout, forged tags, block counts and stale receive frames denied; NOT compiled .atto");
 Console.WriteLine("PASS actor-scalar-nativeaot-parallel-transfer: i64 swap is simultaneous, malformed second destination is failure-atomic; NOT compiled .atto");
 
 // Separate published-native regression for terminal logical actor quotas.

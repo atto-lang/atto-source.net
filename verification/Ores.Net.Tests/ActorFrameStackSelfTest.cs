@@ -6,7 +6,7 @@ internal static class ActorFrameStackSelfTest
     public static void Run()
     {
         InvalidConfigurationFailsBeforeCarrierAdmission();
-        IndependentStacksSurviveTurnsAndRejectForeignAndStaleHandles();
+        IndependentInvocationStacksRejectForeignAndStaleHandles();
         InvalidArgumentsAndLifoDenialsAreFailureNeutral();
         TerminalQuotaFaultsAndSiblingSurvival();
         RetirementAllowsInFlightFrameCleanupButRejectsPush();
@@ -43,12 +43,13 @@ internal static class ActorFrameStackSelfTest
             "actor stack frame count has a hard upper bound");
     }
 
-    private static void IndependentStacksSurviveTurnsAndRejectForeignAndStaleHandles()
+    private static void IndependentInvocationStacksRejectForeignAndStaleHandles()
     {
         using var runtime = new ActorRuntime(Options());
         using var finished = new CountdownEvent(2);
         ActorStackFrameHandle? saved = null;
         ActorContext? previousTurn = null;
+        ActorArenaHandle? persistent = null;
 
         var first = runtime.Spawn(ActorKind.Private, (context, message) =>
         {
@@ -57,13 +58,23 @@ internal static class ActorFrameStackSelfTest
                 saved = context.PushStackFrame(16, alignment: 16);
                 context.WriteStackFrame(saved, 0, new byte[] { 0xA1, 0xA2 });
                 previousTurn = context;
+                persistent = context.AllocatePersistent(2);
+                context.Write(persistent, 0, new byte[] { 0xA1, 0xA2 });
                 return;
             }
 
             Span<byte> original = stackalloc byte[2];
-            context.ReadStackFrame(saved!, 0, original);
+            RejectInvalid(() => context.ReadStackFrame(saved!, 0, new byte[2]),
+                "a new receive cannot acquire an earlier invocation stack");
+            Require(!ReferenceEquals(context.Execution, previousTurn!.Execution) &&
+                context.Execution.InvocationSequence > previousTurn.Execution.InvocationSequence &&
+                context.Execution.Actor == context.Self, "receive has fresh actor-bound execution identity");
+            context.Read(persistent!, 0, original);
             Require(original.SequenceEqual(new byte[] { 0xA1, 0xA2 }),
-                "frame bytes persist across physical turns");
+                "persistent heap survives independently of receive stacks");
+            saved = context.PushStackFrame(16, alignment: 16);
+            context.ReadStackFrame(saved, 0, original);
+            Require(original.SequenceEqual(new byte[] { 0, 0 }), "next invocation stack is scrubbed");
             bool offCarrierDenied = Task.Run(() =>
             {
                 try
@@ -135,6 +146,14 @@ internal static class ActorFrameStackSelfTest
             _ = System.Text.Json.JsonSerializer.Deserialize<ActorStackFrameHandle>(
                 "{\"Length\":16}");
         }, "actor frame authority cannot be deserialized from JSON");
+        RejectNoWire(() =>
+        {
+            _ = System.Text.Json.JsonSerializer.Serialize(previousTurn!.Execution);
+        }, "actor execution authority cannot be serialized as JSON");
+        RejectNoWire(() =>
+        {
+            _ = System.Text.Json.JsonSerializer.Deserialize<ActorExecutionContext>("{}");
+        }, "actor execution authority cannot be reconstructed from JSON");
 
         runtime.Send(second, new byte[] { 1 });
         runtime.Send(first, new byte[] { 2 });

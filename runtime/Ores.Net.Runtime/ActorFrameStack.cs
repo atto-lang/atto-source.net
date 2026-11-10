@@ -11,16 +11,18 @@ namespace Ores.Net.Runtime;
 [JsonConverter(typeof(ActorStackFrameNoWireConverter))]
 public sealed class ActorStackFrameHandle
 {
-    internal ActorStackFrameHandle(ActorFrameStack owner, int index,
+    internal ActorStackFrameHandle(ActorFrameStack owner, ActorExecutionContext execution, int index,
         int offset, int length)
     {
         Owner = owner;
+        Execution = execution;
         Index = index;
         Offset = offset;
         Length = length;
     }
 
     internal ActorFrameStack Owner { get; }
+    internal ActorExecutionContext Execution { get; }
     internal int Index { get; }
     internal int Offset { get; }
     public int Length { get; }
@@ -72,13 +74,15 @@ public sealed class ActorStackFrameNoWireConverter : JsonConverter<ActorStackFra
 }
 
 /// <summary>
-/// Bounded logical frame stack, private to one actor incarnation. Payload bytes
-/// reside in its ActorArena, not in CLR frame objects or a separate allocator.
-/// A suspended compiler continuation may retain opaque frame handles between
-/// physical actor turns, then read them only after a new owner turn is admitted.
+/// Bounded receive-invocation frame storage within one actor incarnation.
+/// Payload bytes reside in its ActorArena, not in CLR frame objects or a
+/// separate allocator. Each synchronous receive has a fresh execution context;
+/// completion scrubs and invalidates its stack before another DATA invocation.
 ///
 /// This is a runtime substrate for future compiler-generated async frames:
 /// it does NOT switch native stacks or implement guest await/actor lowering.
+/// Future suspension needs an authenticated continuation retaining the original
+/// execution identity; a subsequent ordinary DATA message is not that resume.
 /// </summary>
 /// <summary>
 /// An actor-local logical frame budget exceeded its admitted bounds. Catching
@@ -100,6 +104,37 @@ internal sealed class ActorFrameStack
     private int _depth;
     private int _top;
     private bool _quotaPoisoned;
+    private ActorExecutionContext? _execution;
+
+    internal void BeginInvocation(ActorArenaTurn turn, ActorExecutionContext execution)
+    {
+        _arena.ValidateActiveTurn(turn);
+        EnsureUsable();
+        if (_execution is not null || _depth != 0 || _top != 0 ||
+            execution.Actor.Id != turn.ActorId || execution.Actor.Generation != turn.Incarnation)
+            throw new InvalidOperationException("Actor invocation stack identity mismatch");
+        _execution = execution;
+    }
+
+    internal void EndInvocation(ActorArenaTurn turn, ActorExecutionContext execution)
+    {
+        _arena.ValidatePhysicalTurn(turn);
+        if (!ReferenceEquals(_execution, execution))
+            throw new InvalidOperationException("Foreign actor invocation cleanup");
+        // Also runs on handler failure or quota poisoning. The persistent slab
+        // stays actor-owned; only this completed receive's bytes are retired.
+        Span<byte> zeros = stackalloc byte[256];
+        zeros.Clear();
+        for (int position = 0; position < _top;)
+        {
+            int count = Math.Min(_top - position, zeros.Length);
+            _arena.Write(turn, _backing!, position, zeros[..count]);
+            position += count;
+        }
+        Array.Clear(_frames, 0, _depth);
+        _depth = _top = 0;
+        _execution = null;
+    }
 
     internal ActorFrameStack(ActorArena arena, int capacity, int maxFrames)
     {
@@ -134,7 +169,9 @@ internal sealed class ActorFrameStack
 
         // Construct the capability before native admission. A failed allocation
         // cannot increment depth, publish a frame, or change the stack top.
-        var frame = new ActorStackFrameHandle(this, _depth, offset, bytes);
+        var frame = new ActorStackFrameHandle(this,
+            _execution ?? throw new InvalidOperationException("No admitted actor invocation"),
+            _depth, offset, bytes);
         if (_backing is null)
             _backing = _arena.AllocatePersistent(turn, _capacity, alignment: 64);
 
@@ -236,7 +273,8 @@ internal sealed class ActorFrameStack
     }
 
     // Synchronous dispatch must check this after the host handler returns.
-    // Persistent frames can span turns, but swallowed quota faults cannot.
+    // A synchronous receive completes here; retaining a frame cannot grant
+    // the next DATA invocation continuation authority.
     internal void ValidateSynchronousTurnExit(ActorArenaTurn turn)
     {
         _arena.ValidatePhysicalTurn(turn);
@@ -261,6 +299,7 @@ internal sealed class ActorFrameStack
     {
         ArgumentNullException.ThrowIfNull(frame);
         if (!ReferenceEquals(frame.Owner, this) ||
+            !ReferenceEquals(frame.Execution, _execution) ||
             frame.Index < 0 || frame.Index >= _depth ||
             !ReferenceEquals(_frames[frame.Index], frame))
             throw new InvalidOperationException("Foreign or stale actor logical frame");

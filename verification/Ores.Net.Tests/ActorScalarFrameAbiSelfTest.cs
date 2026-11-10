@@ -118,10 +118,15 @@ internal static class ActorScalarFrameAbiSelfTest
                 return;
             }
 
+            RejectInvalid(() => { _ = ActorScalarFrameAbiV1.ReadI64(context, saved!, 1); },
+                "new DATA cannot read an earlier invocation typed frame");
+            saved = ActorScalarFrameAbiV1.Push(context, plan.EncodeTypeTags(), plan.BlockCount);
+            ActorScalarFrameAbiV1.WriteBool(context, saved, 0, true);
+            ActorScalarFrameAbiV1.WriteI64(context, saved, 1, 42);
             Require(ActorScalarFrameAbiV1.ReadProgramCounter(context, saved!) == 0 &&
                     ActorScalarFrameAbiV1.ReadBool(context, saved!, 0) &&
                     ActorScalarFrameAbiV1.ReadI64(context, saved!, 1) == 42,
-                "typed PC/bool/i64 native bytes survive carrier turn handoff");
+                "fresh invocation owns its typed PC/bool/i64 native bytes");
             Span<byte> headerBytes = stackalloc byte[16];
             context.ReadStackFrame(saved!, 0, headerBytes);
             Require(headerBytes[0] == (byte)'A' && headerBytes[1] == (byte)'T' &&

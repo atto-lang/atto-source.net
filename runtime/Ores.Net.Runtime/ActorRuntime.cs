@@ -80,17 +80,20 @@ public sealed class ActorContext
     private readonly ActorFrameStack _stack;
 
     internal ActorContext(ActorRef self, ActorKind kind,
-        ActorArena arena, ActorArenaTurn turn, ActorFrameStack stack)
+        ActorArena arena, ActorArenaTurn turn, ActorFrameStack stack,
+        ActorExecutionContext execution)
     {
         Self = self;
         Kind = kind;
         _arena = arena;
         _turn = turn;
         _stack = stack;
+        Execution = execution;
     }
 
     public ActorRef Self { get; }
     public ActorKind Kind { get; }
+    public ActorExecutionContext Execution { get; }
 
     // Host capability providers must enforce the same physical-turn authority
     // as actor memory access. A retained context is not a reusable credential.
@@ -243,6 +246,7 @@ public sealed class ActorRuntime : IDisposable
         internal ActorMailbox Mailbox { get; }
         internal ActorArena Arena { get; }
         internal ActorFrameStack Stack { get; }
+        internal ulong NextInvocationSequence;
         internal ActorMessageHandler Handler { get; }
         internal ActorRef Reference { get; }
         internal Action DispatchAction { get; }
@@ -494,13 +498,21 @@ public sealed class ActorRuntime : IDisposable
                 {
                     using (turn)
                     {
+                        if (cell.NextInvocationSequence == ulong.MaxValue)
+                            throw new InvalidOperationException("Actor invocation identity exhausted");
+                        var execution = new ActorExecutionContext(
+                            cell.Reference, ++cell.NextInvocationSequence);
+                        cell.Stack.BeginInvocation(turn, execution);
                         var context = new ActorContext(
-                            cell.Reference, cell.Kind, cell.Arena, turn, cell.Stack);
-                        cell.Handler(context, payload);
-                        // A handler may catch a frame-quota exception, but
-                        // terminal logical stack failure must still retire its
-                        // actor rather than report a completed message.
-                        cell.Stack.ValidateSynchronousTurnExit(turn);
+                            cell.Reference, cell.Kind, cell.Arena, turn, cell.Stack, execution);
+                        try
+                        {
+                            cell.Handler(context, payload);
+                            // Swallowing a quota fault cannot turn this receive
+                            // into successful completion of its actor generation.
+                            cell.Stack.ValidateSynchronousTurnExit(turn);
+                        }
+                        finally { cell.Stack.EndInvocation(turn, execution); }
                     }
                     succeeded = true;
                 }
