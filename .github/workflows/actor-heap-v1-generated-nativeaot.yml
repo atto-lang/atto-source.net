@@ -1,0 +1,82 @@
+name: .NET AttoLang actor heap V1 generated NativeAOT guest
+on:
+  pull_request:
+    paths:
+      - 'compiler/Ores.Net.Compiler.Core/ActorHeapV1Compiler.cs'
+      - 'compiler/Ores.Net.Compiler/Program.cs'
+      - 'verification/Ores.Net.ActorGuestV1Probe/**'
+      - 'verification/Ores.Net.Tests/ActorHeapV1CompilerSelfTest.cs'
+      - 'verification/Ores.Net.Tests/Program.cs'
+      - 'contracts/actor-guest-heap/v1/**'
+      - 'runtime/Ores.Net.Runtime/**'
+      - '.github/workflows/actor-heap-v1-generated-nativeaot.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  generated-guest-nativeaot:
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            rid: linux-x64
+            binary: Ores.Net.ActorGuestV1Probe
+          - os: windows-2022
+            rid: win-x64
+            binary: Ores.Net.ActorGuestV1Probe.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.x'
+      - name: Verify exact source and compile real AttoLang guest source
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          source_tree="$(git rev-parse 'HEAD^{tree}')"
+          printf 'ATTO_ACTOR_HEAP_SOURCE_HEAD=%s\n' "$EXPECTED_HEAD"
+          printf 'ATTO_ACTOR_HEAP_SOURCE_TREE=%s\n' "$source_tree"
+          dotnet --info
+          dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release |
+            tee "$RUNNER_TEMP/actor-heap-managed-tests.log"
+          grep -Fx 'PASS actor heap v1 .atto checked compiler parser/emitter (source-only; no guest execution)' "$RUNNER_TEMP/actor-heap-managed-tests.log"
+          dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -- \
+            emit-actor-heap-v1 contracts/actor-guest-heap/v1/node_graph.atto \
+            --out verification/Ores.Net.ActorGuestV1Probe/ActorHeapV1.g.cs |
+            tee "$RUNNER_TEMP/actor-heap-emission.log"
+          grep -Fx 'ACTOR_HEAP_V1_SOURCE_GENERATED|NOT_EXECUTED|NOT_CERTIFIED' "$RUNNER_TEMP/actor-heap-emission.log"
+          test -s verification/Ores.Net.ActorGuestV1Probe/ActorHeapV1.g.cs
+          sha256sum contracts/actor-guest-heap/v1/node_graph.atto |
+            tee "$RUNNER_TEMP/actor-heap-atto-sha256.txt"
+          sha256sum verification/Ores.Net.ActorGuestV1Probe/ActorHeapV1.g.cs |
+            tee "$RUNNER_TEMP/actor-heap-generated-csharp-sha256.txt"
+          # The generated file must be gitignored and may not replace
+          # a committed source blob or other tracked file.
+          test -z "$(git status --porcelain)"
+      - name: Publish and execute compiler-generated native actor guest
+        shell: bash
+        env:
+          RID: ${{ matrix.rid }}
+          BINARY: ${{ matrix.binary }}
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/atto-actor-heap-v1-nativeaot"
+          dotnet publish verification/Ores.Net.ActorGuestV1Probe/Ores.Net.ActorGuestV1Probe.csproj \
+            -c Release -r "$RID" -p:PublishAot=true -p:SelfContained=true -o "$output"
+          test -f "$output/$BINARY"
+          "$output/$BINARY" | tee "$RUNNER_TEMP/actor-heap-nativeaot-guest.log"
+          grep -Fx 'PASS attolang-actor-heap-v1-nativeaot: generated .atto Node graph executed in two independent actor heaps (narrow guest subset)' "$RUNNER_TEMP/actor-heap-nativeaot-guest.log"
+          sha256sum "$output/$BINARY" | tee "$RUNNER_TEMP/actor-heap-native-binary-sha256.txt"
