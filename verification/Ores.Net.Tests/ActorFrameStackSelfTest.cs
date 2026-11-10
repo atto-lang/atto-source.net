@@ -226,14 +226,18 @@ internal static class ActorFrameStackSelfTest
         });
         var bytes = runtime.Spawn(ActorKind.Shared, (context, _) =>
         {
-            // Aggregate bytes exhausted only by the second admitted frame.
-            _ = context.PushStackFrame(56);
+            // A typed ABI frame loses its authority after cumulative quota
+            // exhaustion; the host cannot recover by catching the exception.
+            var typed = ActorScalarFrameAbiV1.Push(context, new byte[] { 1, 2 }, 1);
+            ActorScalarFrameAbiV1.WriteI64(context, typed, 0, 42);
             bool caught = false;
-            try { context.PushStackFrame(16); }
+            try { context.PushStackFrame(24); }
             catch (ActorStackQuotaExceededException) { caught = true; }
             Require(caught, "cumulative byte quota must throw exact typed fault");
             RejectInvalid(() => context.PushStackFrame(8),
                 "caught byte quota failure must revoke new admission");
+            RejectInvalid(() => { _ = ActorScalarFrameAbiV1.ReadI64(context, typed, 0); },
+                "typed scalar spill cannot be read from terminally poisoned stack");
             validatedFaults.Enqueue("aggregate");
         });
         var singleFrame = runtime.Spawn(ActorKind.Shared, (context, _) =>
