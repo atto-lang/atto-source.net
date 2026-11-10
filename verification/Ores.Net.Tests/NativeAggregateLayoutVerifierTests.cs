@@ -56,6 +56,10 @@ internal static class NativeAggregateLayoutVerifierTests
                 HasExplicitElementWitness: true));
         Require(emptyArray.ByteLength == 24, "typed empty array has a bounded header");
 
+        Require(NativeAggregateLayoutVerifier.MaximumArrayElements ==
+                ActorNativeAggregateStore.MaximumElements,
+            "compiler and actor arena must enforce the identical allocation budget");
+
         // Compiler and unmanaged actor runtime must agree on ABI tag values.
         foreach (var (compilerKind, nativeKind) in new[] {
             (NativeAggregateValueKind.Tuple, NativeAggregateKind.Tuple),
