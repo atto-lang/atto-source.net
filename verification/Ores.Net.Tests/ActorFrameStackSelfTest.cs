@@ -224,7 +224,7 @@ internal static class ActorFrameStackSelfTest
                 // *host test*, not the compiled guest PANIC contract.
                 try
                 {
-                    _ = context.PushStackFrame(64);
+                    context.PushStackFrame(64);
                 }
                 catch (ActorLogicalStackOverflowException overflow)
                 {
