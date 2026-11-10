@@ -9,6 +9,7 @@ internal static class ActorDeclarationAstSelfTest
         RejectsDuplicateAndUnsupportedDeclarations();
         KeepsCommentsAndStringsLexicallyInert();
         EnforcesInputAndNestingBudgets();
+        RejectsReservedActorFailureHooksAndForgedSignatureMetadata();
         Console.WriteLine("PASS actor-declaration-ast-v1|actors=2|handlers=3|negative=17|execution=0");
     }
 
@@ -163,6 +164,69 @@ internal static class ActorDeclarationAstSelfTest
             "unterminated comment");
         ExpectFormat(() => OresActorDeclarationParser.Parse(""),
             "empty actor unit");
+    }
+
+    // Actor failure hooks are runtime/supervisor capabilities, not ordinary
+    // opaque actor methods. A forged AST must not bypass this admission rule.
+    private static void RejectsReservedActorFailureHooksAndForgedSignatureMetadata()
+    {
+        string[] reservedNames =
+        {
+            "on_panic", "on_throw", "on_raise", "tear_down",
+            "on_recover", "on_throws"
+        };
+        foreach (string name in reservedNames)
+        {
+            string expected = name == "on_panic"
+                ? "E_ACTOR_PANIC_HOOK_FORBIDDEN"
+                : "E_ACTOR_FAILURE_HOOK_UNLOWERED";
+            string source = "define actor A as " + name + "():void{} end";
+            ExpectExactActorDiagnostic(
+                () => OresActorDeclarationParser.Parse(source),
+                expected, "declared actor hook " + name);
+        }
+
+        const string allowed = """
+            define actor A as
+                receive(int value):void {
+                    "on_panic on_throw on_raise";
+                    /* on_panic() { } on_raise() { } */
+                }
+            end
+            """;
+        var parsed = OresActorDeclarationParser.Parse(allowed);
+        Require(parsed.Actors.Count == 1 &&
+                parsed.Actors[0].Handlers[0].Name == "receive",
+            "hook lookalikes inside strings/comments must stay inert");
+
+        var original = OresActorDeclarationParser.Parse(
+            "define actor A as receive(int value):void{} end");
+        foreach (string name in reservedNames)
+        {
+            var forged = original.Actors[0].Handlers[0] with { Name = name };
+            var unit = new ActorDeclarationUnit(
+                new[] { original.Actors[0] with {
+                    Handlers = new[] { forged }
+                } }, original.SourceLength);
+            string expected = name == "on_panic"
+                ? "E_ACTOR_PANIC_HOOK_FORBIDDEN"
+                : "E_ACTOR_FAILURE_HOOK_UNLOWERED";
+            ExpectExactActorDiagnostic(
+                () => OresActorDeclarationParser.BuildSignatureTable(unit),
+                expected, "forged AST actor hook " + name);
+        }
+        Console.WriteLine("NET_ACTOR_FAILURE_HOOK_ADMISSION_SOURCE_TESTS|cases=13|guest=NOT_EXECUTED");
+    }
+
+    private static void ExpectExactActorDiagnostic(
+        Action action, string expectedCode, string description)
+    {
+        try { action(); }
+        catch (FormatException ex) when
+            (ex.Message.Contains(expectedCode, StringComparison.Ordinal))
+        { return; }
+        throw new Exception("Actor failure hook admission did not reject: " +
+            description + " with " + expectedCode);
     }
 
     private static void ExpectFormat(Action action, string description)
