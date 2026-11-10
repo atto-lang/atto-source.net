@@ -50,6 +50,9 @@ jobs:
           printf 'ATTO_ACTOR_HEAP_SOURCE_HEAD=%s\n' "$EXPECTED_HEAD"
           printf 'ATTO_ACTOR_HEAP_SOURCE_TREE=%s\n' "$source_tree"
           fixture=contracts/actor-guest-heap/v1/node_graph.atto
+          test -f "$fixture"
+          test ! -L "$fixture"
+          test "$(git ls-files -s -- "$fixture" | awk '{print $1}')" = 100644
           expected_blob="$(git rev-parse "HEAD:$fixture")"
           actual_blob="$(git hash-object "$fixture")"
           [[ "$expected_blob" =~ ^[0-9a-f]{40}$ ]]
@@ -63,6 +66,7 @@ jobs:
             exit 1
           fi
           test ! -e "$generated"
+          test ! -L "$generated"
           git check-ignore -q "$generated"
           dotnet --info
           dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release |
