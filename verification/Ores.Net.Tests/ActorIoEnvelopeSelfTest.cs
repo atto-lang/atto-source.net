@@ -110,9 +110,9 @@ internal static class ActorIoEnvelopeSelfTest
         Require(retireIo.TryWriteOutput(retireActor, new byte[] { 98 }), "retirement output setup");
         Require(retireIo.TryEmitError(retireActor, new ActorIoDiagnostic("E", "owned")),
             "retirement diagnostic setup");
-        retireMailbox.Stop();
-        retireIo.Retire();
-        retireIo.Retire(); // idempotent trusted-host cleanup
+        retireMailbox.Stop(); // must automatically retire the bound I/O generation
+        ExpectStale(() => retireIo.InputAtEof(retireActor), "mailbox STOP retires input");
+        retireIo.Retire(); // repeated explicit trusted-host cleanup remains harmless
         ExpectStale(() => retireIo.InputAtEof(retireActor), "retired input is inaccessible");
         ExpectStale(() => retireIo.OutputAtEof(retireActor), "retired output is inaccessible");
         var retireFresh = retireMailbox.Restart();
@@ -122,6 +122,58 @@ internal static class ActorIoEnvelopeSelfTest
         Require(retireFreshIo.TryWriteOutput(retireFresh, new byte[] { 1 }),
             "fresh incarnation gets separate output");
         retireFreshIo.Retire();
+
+        // Direct restart without prior Stop must scrub the old generation's
+        // logical I/O records and disallow its queued output reopening.
+        var restartMailbox = new ActorMailbox(91003);
+        var restartActor = restartMailbox.CurrentRef;
+        var restartIo = new ActorIoEnvelope(restartMailbox);
+        Require(restartIo.TryWriteOutput(restartActor, new byte[] { 0x40 }),
+            "restart test output setup");
+        var restarted = restartMailbox.Restart();
+        ExpectStale(() => restartIo.TryReadOutput(restartActor, out _),
+            "restart automatically retires old output");
+        ExpectStale(() => restartIo.TryWriteOutput(restarted, new byte[] { 1 }),
+            "restart cannot revive old envelope");
+        var restartedIo = new ActorIoEnvelope(restartMailbox);
+        Require(restartedIo.TryWriteOutput(restarted, new byte[] { 0x41 }),
+            "restart creates independent live I/O generation");
+
+        // Rejected foreign TryStop may not retire someone else's I/O.
+        var authMailbox = new ActorMailbox(91004);
+        var authActor = authMailbox.CurrentRef;
+        var authIo = new ActorIoEnvelope(authMailbox);
+        Require(!authMailbox.TryStop(restarted), "foreign TryStop is rejected");
+        Require(authIo.TryWriteOutput(authActor, new byte[] { 20 }),
+            "foreign stop must preserve live I/O");
+        Require(authMailbox.TryStop(authActor), "owned generation TryStop");
+        ExpectStale(() => authIo.TryWriteOutput(authActor, new byte[] { 21 }),
+            "owned TryStop must retire I/O");
+        authMailbox.Dispose();
+
+        // Dispose is terminal and revokes all logical streams even when
+        // there is no previously issued Stop().
+        var disposeMailbox = new ActorMailbox(91005);
+        var disposeActor = disposeMailbox.CurrentRef;
+        var disposeIo = new ActorIoEnvelope(disposeMailbox);
+        Require(disposeIo.TryFeedInput(disposeActor, new byte[] { 9 }),
+            "dispose input setup");
+        disposeMailbox.Dispose();
+        ExpectStale(() => disposeIo.TryReadInput(disposeActor, out _),
+            "mailbox Dispose retires I/O");
+        try
+        {
+            disposeMailbox.Restart();
+            throw new Exception("disposed mailbox restart was admitted");
+        }
+        catch (ObjectDisposedException) { }
+
+        // Explicit retirement before mailbox stop is safe and callback
+        // re-entry stays idempotent under STOP.
+        restartedIo.Retire();
+        restartMailbox.Stop();
+        ExpectStale(() => restartedIo.OutputAtEof(restarted),
+            "explicitly retired output remains retired under STOP");
 
         var stale = actor;
         mailbox.Stop();
