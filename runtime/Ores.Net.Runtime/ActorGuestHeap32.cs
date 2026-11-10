@@ -155,8 +155,10 @@ internal sealed class ActorGuestHeap32
     internal ActorArenaReadLoan BorrowRead(ActorArenaTurn turn, uint reference)
     {
         lock (_gate)
+        {
             _arena.ValidatePhysicalTurn(turn);
             return _arena.BorrowNativeGuestRead(turn, _handles[ValidateSlot(reference)]);
+        }
     }
 
     /// <summary>Store one local reference in canonical little-endian form.</summary>
