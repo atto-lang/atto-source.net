@@ -41,8 +41,26 @@ define pub actor FaultWorker as
   @Implements
   receive(ActorMail<int> mail): void {
     const snapshot = self.handle_state(critical-read |s| -> s.value);
+    if mail.value == 90 then
+      // A recovered actor retains the committed mutation from the failed
+      // turn, proving it did NOT silently roll back or replay its mail.
+      if snapshot != 1007 then
+        panic FaultError("recovered actor state was lost");
+      fi
+      self.send(snapshot);
+      return;
+    fi
     if snapshot != 7 then
       panic FaultError("fault-worker heap corrupted");
+    fi
+    // Mutate ONLY the faulting actor's sealed heap before every fault.
+    // Witness has its own untouched state and must still emit 42.
+    const changed = self.handle_state(critical-write |s| -> {
+      s.value = s.value + 1000;
+      return s.value;
+    });
+    if changed != 1007 then
+      panic FaultError("fault-worker heap write failed");
     fi
 
     if mail.value == 0 then
@@ -77,18 +95,30 @@ define pub actor FaultWorker as
       raise FaultError("uncaught raise");
     fi
     if mail.value == 4 then
-      // No actor-local callback may observe, suppress or downgrade panic.
-      panic FaultError("terminal panic");
+      // Even an explicit catch must NEVER intercept actor panic.
+      try {
+        panic FaultError("terminal panic");
+      } catch (FaultError ignored) {
+        self.send(999);
+      }
+      return;
     fi
     if mail.value == 5 then
       // Budget rejection must happen BEFORE native/carrier stack exhaustion.
-      const impossible = non_tail_fault(100000);
-      self.send(impossible);
+      // A preinstalled lexical recover and catch are both forbidden.
+      defer recover |failure| -> {
+        self.send(998);
+        return FailureDisposition.recover;
+      };
+      try {
+        const impossible = non_tail_fault(100000);
+        self.send(impossible);
+      } catch (FaultError ignored) {
+        self.send(999);
+      }
       return;
     fi
-    // A previously recovered actor can take a subsequent healthy turn.
-    self.send(snapshot);
-    return;
+    panic FaultError("unrecognized fault mode");
   }
 
   @Implements
@@ -128,7 +158,8 @@ pub async routine main(): void {
   val witness = await root.spawn_child(Witness());
   await witness.get_ready();
 
-  for mode in 0..6 do
+  let int mode = 0;
+  while mode < 6 do
     val worker = await root.spawn_child(FaultWorker());
     await worker.get_ready();
     worker.send(mode);
@@ -150,7 +181,7 @@ pub async routine main(): void {
       // Recovery resumes NEXT message only; does not replay failing mail.
       worker.send(90);
       val healthy = (await worker.outputs.next()).value.unwrap();
-      if healthy.value != 7 then
+      if healthy.value != 1007 then
         panic FaultError("actor not healthy after recovery");
       fi
       worker.end();
@@ -190,14 +221,16 @@ pub async routine main(): void {
     if observed.value != 42 then
       panic FaultError("witness actor isolation failure");
     fi
+    mode = mode + 1;
   end
 
   // The independent runner must ALSO inspect hook count/absence, actor heap
   // provenance, reserved CONTROL job receipt, bounded native stack, timeout,
   // non-replay and cleanup telemetry. Guest stdout alone is insufficient.
-  stdio.stdout.println("ACTOR_TWO_PEER_V1_OK|6|42");
   witness.end();
   await witness.get_done();
+  root.stop();
   await root.get_done();
+  stdio.stdout.println("ACTOR_TWO_PEER_V1_OK|6|42");
   return;
 }
