@@ -59,3 +59,4 @@ jobs:
           grep -Fx 'PASS actor-logical-stack-native-probe: four distinct actor-owned frames, cross-turn reads and foreign-handle denial' "$RUNNER_TEMP/actor-memory-native.log"
           grep -Fx 'PASS actor-ref32-native-probe: four actor-local uint32 guest refs, distinct native payloads, retained-turn denial (host only; not compiled guest)' "$RUNNER_TEMP/actor-memory-native.log"
           grep -Fx 'PASS actor-ref32-native-no-clr-allocation: 4096 warmed guest payload cycles allocated zero managed bytes (host only)' "$RUNNER_TEMP/actor-memory-native.log"
+          grep -Fx 'PASS actor-ref32-native-typed-nodegraph: four typed native graphs survive actor turns with guarded reference fields (host only; not compiled guest)' "$RUNNER_TEMP/actor-memory-native.log"
