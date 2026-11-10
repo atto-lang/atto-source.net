@@ -57,7 +57,9 @@ internal static class ActorRuntimeGracefulDrainSelfTest
             Require(entered.Wait(TimeSpan.FromSeconds(5)),
                 "handler entered before graceful terminal barrier");
             runtime.Send(actor, new byte[] { 2 });
-            runtime.DrainAndStop(actor);
+            Task drained = runtime.DrainAndStop(actor);
+            Require(!drained.IsCompleted,
+                "generation-bound completion cannot precede active-turn exit");
 
             bool denied = false;
             try { runtime.Send(actor, new byte[] { 3 }); }
@@ -98,14 +100,15 @@ internal static class ActorRuntimeGracefulDrainSelfTest
         });
 
         runtime.Send(producer, BitConverter.GetBytes(2));
-        runtime.DrainAndStop(producer);
+        Task upstreamDone = runtime.DrainAndStop(producer);
 
-        // Without this barrier, sealing the sink before the producer's
-        // forwarding turn completes can reject an already accepted input.
-        Require(WaitUntil(() => runtime.LiveActors == 1),
+        // Without this authenticated completion barrier, sealing the sink
+        // before the producer forwards can reject already accepted input.
+        Require(upstreamDone.Wait(TimeSpan.FromSeconds(5)),
             "producer has finished its forwarded turn before sink is sealed");
-        runtime.DrainAndStop(consumer);
-        Require(WaitUntil(() => runtime.LiveActors == 0),
+        Task sinkDone = runtime.DrainAndStop(consumer);
+        Require(sinkDone.Wait(TimeSpan.FromSeconds(5)) &&
+                runtime.LiveActors == 0,
             "consumer drained before terminal retirement");
         Require(runtime.CompletedMessages == 2 &&
                 runtime.FaultedTurns == 0 && result == 6,
@@ -128,8 +131,9 @@ internal static class ActorRuntimeGracefulDrainSelfTest
         Require(rejected && runtime.LiveActors == 1,
             "foreign authority cannot change graceful admission/teardown");
         runtime.Send(actor, new byte[] { 7 });
-        runtime.DrainAndStop(actor);
-        Require(WaitUntil(() => runtime.LiveActors == 0 &&
+        Task legitimateDone = runtime.DrainAndStop(actor);
+        Require(legitimateDone.Wait(TimeSpan.FromSeconds(5)) &&
+                WaitUntil(() => runtime.LiveActors == 0 &&
                                runtime.CompletedMessages == 1),
             "authorized incarnation retains mailbox admission and drains");
     }
