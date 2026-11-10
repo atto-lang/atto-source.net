@@ -56,10 +56,18 @@ jobs:
             fi
           done
           for fixture in contracts/collections/v1/reject-array-{mutable,unsafe-index,oversize}.atto contracts/collections/v1/reject-array-get-copy-bool-index.atto; do
-            if dotnet run --project "$project" -c Release -- check-structured "$fixture" > array-negative.log 2>&1; then
+            if dotnet run --project "$project" -c Release -- check-structured "$fixture" > array-negative.stdout 2> array-negative.stderr; then
               echo "Array negative source accepted: $fixture" >&2
               exit 1
+            else
+              compiler_exit=$?
             fi
+            # Reject process crashes and toolchain admission failures: the
+            # structured compiler's FormatException path returns exactly 1.
+            # A parsed negative candidate may not produce an executable,
+            # but an unrelated nonzero dotnet CLI failure is not semantic proof.
+            test "$compiler_exit" -eq 1
+            test ! -s array-negative.stdout
             # An unrelated CLI crash or parser failure must never masquerade
             # as the intended compiler rejection.
             case "$fixture" in
@@ -68,8 +76,8 @@ jobs:
               *reject-array-oversize.atto) expected=E_ARRAY_SIZE ;;
               *reject-array-get-copy-bool-index.atto) expected="Array<int>.get_copy index must be int" ;;
             esac
-            grep -F "oresnet: " array-negative.log
-            grep -F "$expected" array-negative.log
+            grep -F "oresnet: " array-negative.stderr
+            grep -F "$expected" array-negative.stderr
           done
       - name: Publish and run real Linux NativeAOT guest binaries
         shell: bash
