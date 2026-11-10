@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - 'runtime/Ores.Net.Runtime/**'
+      - 'compiler/Ores.Net.Compiler.Core/**'
       - 'verification/Ores.Net.Tests/**'
       - 'verification/Ores.Net.ActorMemoryProbe/**'
       - '.github/workflows/actor-memory-native-aot.yml'
@@ -43,6 +44,7 @@ jobs:
           dotnet --info
           dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release | tee "$RUNNER_TEMP/actor-managed-tests.log"
           grep -Fx 'PASS actor scalar frame ABI v1 host/compiler-boundary tests (NOT guest execution)' "$RUNNER_TEMP/actor-managed-tests.log"
+          grep -Fx 'PASS .NET verified CFG scalar live-spill boundary plan (NOT generated actor CIL or guest execution)' "$RUNNER_TEMP/actor-managed-tests.log"
       - name: Publish and execute actual host actor NativeAOT isolation probe
         shell: bash
         env:
