@@ -210,30 +210,40 @@ internal static class ActorFrameStackSelfTest
             }
         });
         using var survivorCompleted = new ManualResetEventSlim();
+        var validatedFaults = new System.Collections.Concurrent.ConcurrentQueue<string>();
         var depth = runtime.Spawn(ActorKind.Shared, (context, _) =>
         {
             var root = context.PushStackFrame(16);
             _ = context.PushStackFrame(8);
-            try { _ = context.PushStackFrame(8); }
-            catch (ActorStackQuotaExceededException) { }
+            bool caught = false;
+            try { context.PushStackFrame(8); }
+            catch (ActorStackQuotaExceededException) { caught = true; }
+            Require(caught, "depth quota must throw the exact typed exception");
             RejectInvalid(() => context.ReadStackFrame(root, 0, new byte[1]),
                 "caught depth quota failure must revoke stack reads");
+            validatedFaults.Enqueue("depth");
         });
         var bytes = runtime.Spawn(ActorKind.Shared, (context, _) =>
         {
             // Aggregate bytes exhausted only by the second admitted frame.
             _ = context.PushStackFrame(56);
-            try { _ = context.PushStackFrame(16); }
-            catch (ActorStackQuotaExceededException) { }
+            bool caught = false;
+            try { context.PushStackFrame(16); }
+            catch (ActorStackQuotaExceededException) { caught = true; }
+            Require(caught, "cumulative byte quota must throw exact typed fault");
             RejectInvalid(() => context.PushStackFrame(8),
                 "caught byte quota failure must revoke new admission");
+            validatedFaults.Enqueue("aggregate");
         });
         var singleFrame = runtime.Spawn(ActorKind.Shared, (context, _) =>
         {
-            try { _ = context.PushStackFrame(65); }
-            catch (ActorStackQuotaExceededException) { }
+            bool caught = false;
+            try { context.PushStackFrame(65); }
+            catch (ActorStackQuotaExceededException) { caught = true; }
+            Require(caught, "oversized single frame must throw exact typed fault");
             RejectInvalid(() => context.PushStackFrame(1),
                 "single oversized frame poisons only its own actor");
+            validatedFaults.Enqueue("oversized");
         });
         var sibling = runtime.Spawn(ActorKind.Shared, (context, _) =>
         {
@@ -256,6 +266,11 @@ internal static class ActorFrameStackSelfTest
                 runtime.FaultedTurns == 3 && runtime.CompletedMessages == 1 &&
                 runtime.LiveActors == 1, TimeSpan.FromSeconds(10)),
             "caught quota faults must not count as successful actor messages");
+        Require(validatedFaults.Count == 3 &&
+                validatedFaults.Contains("depth") &&
+                validatedFaults.Contains("aggregate") &&
+                validatedFaults.Contains("oversized"),
+            "all quota paths must execute and prove terminal denial after catch");
         Require(runtime.StartedCarrierThreads == 1 &&
                 runtime.NativeReservedBytes > 0,
             "single shared carrier and sibling native arena remain available");
