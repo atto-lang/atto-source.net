@@ -52,6 +52,10 @@ public sealed class ActorIoEnvelope
         if (!_mailbox.Authorizes(_boundActor))
             throw new InvalidOperationException(
                 "Actor I/O envelope requires a live actor generation");
+        // Registration is generation-checked again under the mailbox lock.
+        // Mailbox STOP, Dispose and Restart detach and invoke this retirement
+        // callback outside that lock to avoid I/O -> mailbox inversion.
+        _mailbox.RegisterIoRetirement(_boundActor, Retire);
     }
 
     public bool TryFeedInput(ActorRef actor, ReadOnlySpan<byte> data)
