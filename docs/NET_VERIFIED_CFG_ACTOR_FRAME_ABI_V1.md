@@ -1,8 +1,12 @@
 # .NET verified CFG scalar activation → actor-owned native frame ABI v1
 
-**Status: candidate only — source-authored, not executed.** Stacked on .NET
-actor logical stack PR #384. This does not certify native machine stack
-isolation or compiler-backed AttoLang actor execution.
+**Evidence status: source-authored; exact-head execution not yet proven.**
+The arena-backed logical frame stack and `ActorScalarFrameAbiV1` already exist
+on current .NET main. Draft PR #395 seals scalar type/block metadata; this
+follow-up strengthens actor-local quota failure handling. The older #384 was
+closed without merging and the separate native-slab stack proposed in
+#385/#389/#393 remains a competing draft (tracked in issue #396). This does
+not certify physical CLR stack isolation or compiler-backed AttoLang actors.
 
 ## Contract
 
@@ -42,3 +46,34 @@ isolation or compiler-backed AttoLang actor execution.
 No compiler success, source-guest parity, or process-safe actor stack
 overflow claim may be inferred from stage 1. Zero-step CI is
 `RUNNER_ADMISSION_FAILURE`, never a test result.
+
+## Terminal actor-local logical stack quota (hardening draft)
+
+- `ActorStackBytes` and `ActorMaxStackFrames` limit frames inside the
+  existing **actor-owned arena**. A valid request that exceeds the frame
+  count, total stack bytes (including alignment), or single-frame stack
+  capacity throws `ActorStackQuotaExceededException` and permanently
+  poisons that actor's logical stack instance. **No second allocator** is
+  introduced.
+- A host handler is permitted to catch an exception for its own cleanup,
+  but cannot resume frame reads/writes, admit more frames, or count the
+  enclosing physical turn as successful. Synchronous dispatch checks the
+  poison state **after the handler returns** and retires the affected
+  actor. Native arena bytes are reclaimed through existing STOP and
+  physical-quiescence logic. Malformed zero-size and invalid-alignment
+  requests continue to fail argument validation without consuming quota.
+- Managed regression covers three separate negative paths: depth limit,
+  cumulative byte limit, and one oversized frame. In each case a handler
+  deliberately catches the terminal exception, then verifies revoked
+  frame authority. A fourth actor on the **same shared-carrier pool**
+  must complete normally, with native reservation eventually refunded.
+- The published Linux and Windows NativeAOT **host** probe repeats those
+  three fault paths and sibling survival, requiring the exact output
+  receipt `PASS actor-stack-nativeaot-terminal-quota`. This is NOT
+  generated guest `.atto` CIL and cannot establish protection against
+  uncontrolled physical CLR call-stack overflow.
+- Release gate: source-identity and tree receipt, nonzero executed job
+  steps, managed host tests, published native probe binary + SHA-256,
+  independent review, and post-merge smoke verification. A GitHub
+  `steps=null` or `steps=[]` job is **RUNNER_ADMISSION_FAILURE**, not
+  passing or failing runtime evidence.
