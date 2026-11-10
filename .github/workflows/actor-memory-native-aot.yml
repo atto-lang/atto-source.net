@@ -58,4 +58,5 @@ jobs:
           grep -Fx 'PASS actor-memory-native-probe: four private heaps (two shared-pool actors), foreign handles denied, pooled carriers, stale context denied, pinned STOP and physical reclaim' "$RUNNER_TEMP/actor-memory-native.log"
           grep -Fx 'PASS actor-logical-stack-native-probe: four distinct actor-owned frames, cross-turn reads and foreign-handle denial' "$RUNNER_TEMP/actor-memory-native.log"
           grep -Fx 'PASS actor-scalar-sealed-schema-native-probe: immutable i64/bool layout, forged tags and block counts denied across turns; NOT compiled .atto' "$RUNNER_TEMP/actor-memory-native.log"
+          grep -Fx 'PASS actor-stack-nativeaot-terminal-quota: depth, aggregate bytes, oversized frame all terminal after catch; sibling survives; no native budget leak; NOT compiled .atto' "$RUNNER_TEMP/actor-memory-native.log"
           sha256sum "$output/$BINARY"
