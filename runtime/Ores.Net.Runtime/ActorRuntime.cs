@@ -105,6 +105,11 @@ public sealed class ActorContext
     public uint AllocateGuestObject32(int bytes, int alignment = 8) =>
         _guestHeap.Value.Allocate(_turn, bytes, alignment);
 
+    // Compiler-produced nominal types use immutable layouts so raw writes
+    // cannot bypass typed object-reference fields. Source lowering is pending.
+    public uint AllocateTypedGuestObject32(ActorGuestLayout32 layout) =>
+        _guestHeap.Value.AllocateTyped(_turn, layout);
+
     public void DropGuestObject32(uint reference) =>
         _guestHeap.Value.Drop(_turn, reference);
 
