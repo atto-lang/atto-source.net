@@ -452,6 +452,7 @@ SelectableI64FutureSelfTest.Run();
 ActorDispatchDomainsSelfTest.Run();
 ActorRuntimeSelfTest.Run();
 ActorPipeAdmissionTests.Run(); // compiler gate only; no executable actor guest yet
+ActorPipeSourcePlanV1SelfTest.Run(); // checked scalar CIL oracle, not actor delivery
 UniversalHotLoadV1SelfTest.Run();
 ActorFrameStackSelfTest.Run(); // host-only actor logical frames; not guest/AOT evidence
 ActorScalarFrameAbiSelfTest.Run(); // verified CFG layout/native spill boundary, not guest execution
