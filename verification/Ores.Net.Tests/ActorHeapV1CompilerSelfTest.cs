@@ -64,6 +64,9 @@ internal static class ActorHeapV1CompilerSelfTest
         {
             source.Replace("Node? next", "Other? next", StringComparison.Ordinal),
             source.Replace("let second =", "let first =", StringComparison.Ordinal),
+            source.Replace("let first =", "let return =", StringComparison.Ordinal)
+                  .Replace("new Node(99, first)", "new Node(99, return)",
+                      StringComparison.Ordinal),
             source.Replace("new Node(99, first)", "new Node(99, message)",
                 StringComparison.Ordinal),
             source.Replace("assert(second.next?.value == 42)",
