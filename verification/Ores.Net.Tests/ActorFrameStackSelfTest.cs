@@ -198,21 +198,22 @@ internal static class ActorFrameStackSelfTest
     {
         using var runtime = new ActorRuntime(new ActorRuntimeOptions
         {
-            MaxActors = 3, MessagesPerDispatch = 1,
+            MaxActors = 4, MessagesPerDispatch = 1,
             MailboxMessages = 4, MailboxBytes = 128,
             ActorPersistentBytes = 256, ActorScratchBytes = 64,
-            ActorStackBytes = 64, ActorMaxStackFrames = 1,
+            ActorStackBytes = 64, ActorMaxStackFrames = 2,
             NativeBudgetBytes = 8192,
             Dispatcher = new ActorDispatcherOptions
             {
                 PrivateWorkers = 1, SharedWorkers = 1, UntrustedWorkers = 1,
-                QueueCapacityPerDomain = 3
+                QueueCapacityPerDomain = 4
             }
         });
         using var survivorCompleted = new ManualResetEventSlim();
         var depth = runtime.Spawn(ActorKind.Shared, (context, _) =>
         {
             var root = context.PushStackFrame(16);
+            _ = context.PushStackFrame(8);
             try { _ = context.PushStackFrame(8); }
             catch (ActorStackQuotaExceededException) { }
             RejectInvalid(() => context.ReadStackFrame(root, 0, new byte[1]),
@@ -220,12 +221,19 @@ internal static class ActorFrameStackSelfTest
         });
         var bytes = runtime.Spawn(ActorKind.Shared, (context, _) =>
         {
-            // A single request larger than the actor's stack budget must be
-            // terminal, even though it does not allocate any frame.
-            try { _ = context.PushStackFrame(65); }
+            // Aggregate bytes exhausted only by the second admitted frame.
+            _ = context.PushStackFrame(56);
+            try { _ = context.PushStackFrame(16); }
             catch (ActorStackQuotaExceededException) { }
             RejectInvalid(() => context.PushStackFrame(8),
                 "caught byte quota failure must revoke new admission");
+        });
+        var singleFrame = runtime.Spawn(ActorKind.Shared, (context, _) =>
+        {
+            try { _ = context.PushStackFrame(65); }
+            catch (ActorStackQuotaExceededException) { }
+            RejectInvalid(() => context.PushStackFrame(1),
+                "single oversized frame poisons only its own actor");
         });
         var sibling = runtime.Spawn(ActorKind.Shared, (context, _) =>
         {
@@ -240,11 +248,12 @@ internal static class ActorFrameStackSelfTest
         });
         runtime.Send(depth, new byte[] { 1 });
         runtime.Send(bytes, new byte[] { 2 });
-        runtime.Send(sibling, new byte[] { 3 });
+        runtime.Send(singleFrame, new byte[] { 3 });
+        runtime.Send(sibling, new byte[] { 4 });
         Require(survivorCompleted.Wait(TimeSpan.FromSeconds(10)),
             "healthy actor failed to execute after poisoned actors");
         Require(SpinWait.SpinUntil(() =>
-                runtime.FaultedTurns == 2 && runtime.CompletedMessages == 1 &&
+                runtime.FaultedTurns == 3 && runtime.CompletedMessages == 1 &&
                 runtime.LiveActors == 1, TimeSpan.FromSeconds(10)),
             "caught quota faults must not count as successful actor messages");
         Require(runtime.StartedCarrierThreads == 1 &&
