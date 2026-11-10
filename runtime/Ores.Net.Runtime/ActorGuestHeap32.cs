@@ -99,6 +99,7 @@ internal sealed class ActorGuestHeap32
     {
         lock (_gate)
         {
+            _arena.ValidatePhysicalTurn(turn);
             int slot = ValidateSlot(reference);
             // This can reject on an active read loan or expired turn; leave
             // reference metadata intact until the native drop really commits.
@@ -124,6 +125,7 @@ internal sealed class ActorGuestHeap32
     {
         lock (_gate)
         {
+            _arena.ValidatePhysicalTurn(turn);
             int slot = ValidateSlot(reference);
             if (_layouts[slot] is { } typed &&
                 !typed.AllowsScalarAccess(offset, destination.Length))
@@ -138,6 +140,7 @@ internal sealed class ActorGuestHeap32
     {
         lock (_gate)
         {
+            _arena.ValidatePhysicalTurn(turn);
             int slot = ValidateSlot(reference);
             if (_layouts[slot] is { } typed &&
                 !typed.AllowsScalarAccess(offset, source.Length))
@@ -152,6 +155,7 @@ internal sealed class ActorGuestHeap32
     internal ActorArenaReadLoan BorrowRead(ActorArenaTurn turn, uint reference)
     {
         lock (_gate)
+            _arena.ValidatePhysicalTurn(turn);
             return _arena.BorrowNativeGuestRead(turn, _handles[ValidateSlot(reference)]);
     }
 
@@ -161,6 +165,7 @@ internal sealed class ActorGuestHeap32
     {
         lock (_gate)
         {
+            _arena.ValidatePhysicalTurn(turn);
             int slot = ValidateSlot(owner);
             uint requiredType = _layouts[slot]?.RequiredReferenceTarget(offset) ?? 0;
             if (target != Null)
@@ -181,11 +186,13 @@ internal sealed class ActorGuestHeap32
     {
         lock (_gate)
         {
+            _arena.ValidatePhysicalTurn(turn);
             int slot = ValidateSlot(owner);
+            // Validate the typed field before touching native bytes.
+            uint requiredType = _layouts[slot]?.RequiredReferenceTarget(offset) ?? 0;
             Span<byte> encoded = stackalloc byte[sizeof(uint)];
             _arena.ReadNativeGuest(turn, _handles[slot], offset, encoded);
             uint reference = BinaryPrimitives.ReadUInt32LittleEndian(encoded);
-            uint requiredType = _layouts[slot]?.RequiredReferenceTarget(offset) ?? 0;
             if (reference != Null)
             {
                 int targetSlot = ValidateSlot(reference);
