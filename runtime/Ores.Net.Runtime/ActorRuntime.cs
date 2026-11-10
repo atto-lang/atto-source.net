@@ -205,7 +205,7 @@ public enum ActorTerminalFaultKind
 
 public readonly record struct ActorTerminalFaultNotice(
     ulong Sequence, ulong ActorId, ulong Generation,
-    ActorRuntime.ActorKind ActorKind, ActorTerminalFaultKind Kind,
+    ActorKind ActorKind, ActorTerminalFaultKind Kind,
     ActorLogicalStackLimit? StackLimit);
 
 public sealed class ActorRuntime : IDisposable
