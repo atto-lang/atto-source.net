@@ -60,6 +60,15 @@ internal sealed class ActorFrameStack
     private ActorArenaHandle? _backing;
     private int _depth;
     private int _top;
+    private ActorLogicalStackLimit? _terminalCompilerOverflow;
+
+    // A compiler-owned frame quota failure is terminal even if host code
+    // catches the managed exception. Ordinary host frame probes remain
+    // failure-neutral until compiler-controlled source lowering is wired.
+    internal ActorLogicalStackLimit? TerminalCompilerOverflow => _terminalCompilerOverflow;
+
+    internal ActorStackFrameHandle PushCompilerFrame(ActorArenaTurn turn,
+        int bytes, int alignment = 8) => Push(turn, bytes, alignment, compilerOwned: true);
 
     internal ActorFrameStack(ActorArena arena, int capacity, int maxFrames)
     {
@@ -75,21 +84,34 @@ internal sealed class ActorFrameStack
     }
 
     internal ActorStackFrameHandle Push(ActorArenaTurn turn,
-        int bytes, int alignment = 8)
+        int bytes, int alignment = 8, bool compilerOwned = false)
     {
         // Unlike cleanup, new frame admission is forbidden after retirement.
         _arena.ValidateActiveTurn(turn);
-        if (bytes <= 0 || bytes > _capacity)
+        if (compilerOwned && _terminalCompilerOverflow is { } previous)
+            throw new ActorLogicalStackOverflowException(previous);
+        if (bytes <= 0)
             throw new ArgumentOutOfRangeException(nameof(bytes));
+        if (bytes > _capacity)
+        {
+            if (compilerOwned) _terminalCompilerOverflow = ActorLogicalStackLimit.ByteCapacity;
+            throw new ActorLogicalStackOverflowException(ActorLogicalStackLimit.ByteCapacity);
+        }
         if (alignment <= 0 || alignment > 64 ||
             (alignment & (alignment - 1)) != 0)
             throw new ArgumentOutOfRangeException(nameof(alignment));
         if (_depth == _frames.Length)
+        {
+            if (compilerOwned) _terminalCompilerOverflow = ActorLogicalStackLimit.FrameCount;
             throw new ActorLogicalStackOverflowException(ActorLogicalStackLimit.FrameCount);
+        }
 
         int offset = checked((_top + alignment - 1) & ~(alignment - 1));
         if (offset > _capacity || bytes > _capacity - offset)
+        {
+            if (compilerOwned) _terminalCompilerOverflow = ActorLogicalStackLimit.ByteCapacity;
             throw new ActorLogicalStackOverflowException(ActorLogicalStackLimit.ByteCapacity);
+        }
 
         // Construct the capability before native admission. A failed allocation
         // cannot increment depth, publish a frame, or change the stack top.
