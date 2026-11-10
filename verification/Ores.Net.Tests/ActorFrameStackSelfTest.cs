@@ -1,4 +1,5 @@
 using Ores.Net.Runtime;
+using System.Text.Json.Serialization;
 
 internal static class ActorFrameStackSelfTest
 {
@@ -127,12 +128,13 @@ internal static class ActorFrameStackSelfTest
             "retained prior-turn context cannot dereference continuation frame");
         RejectNoWire(() =>
         {
-            _ = System.Text.Json.JsonSerializer.Serialize(saved!);
+            _ = System.Text.Json.JsonSerializer.Serialize(
+                saved!, ActorFrameStackJsonContext.Default.ActorStackFrameHandle);
         }, "actor frame authority cannot be serialized as JSON");
         RejectNoWire(() =>
         {
-            _ = System.Text.Json.JsonSerializer.Deserialize<ActorStackFrameHandle>(
-                "{\"Length\":16}");
+            _ = System.Text.Json.JsonSerializer.Deserialize(
+                "{\"Length\":16}", ActorFrameStackJsonContext.Default.ActorStackFrameHandle);
         }, "actor frame authority cannot be deserialized from JSON");
 
         runtime.Send(second, new byte[] { 1 });
@@ -354,4 +356,11 @@ internal static class ActorFrameStackSelfTest
         if (!condition)
             throw new Exception("Actor logical frame stack regression: " + scenario);
     }
+}
+
+// NativeAOT-safe proof: issue conversion metadata at compile time, never
+// enable reflection-based JSON serialization of actor frame capabilities.
+[JsonSerializable(typeof(ActorStackFrameHandle))]
+internal partial class ActorFrameStackJsonContext : JsonSerializerContext
+{
 }
