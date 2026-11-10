@@ -72,7 +72,8 @@ and malformed field kinds are checked before native allocation.
 
 `ActorContext.AllocateTypedGuestObject32(layout)` allocates a typed guest
 object on the **same** native slab. All raw object reads/writes on typed
-objects are restricted to the declared scalar field range. Typed reference
+objects are restricted to **exact, aligned eight-byte I64 field accesses**;
+partial reads and writes are rejected so a guest cannot tear a typed scalar. Typed reference
 fields can be touched only by `ReadGuestReference32` /
 `WriteGuestReference32`, which require the exact field offset, a live
 reference and a matching nominal target type. Null remains 0.
