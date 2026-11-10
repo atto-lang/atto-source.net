@@ -3,6 +3,7 @@ param(
     [ValidateSet('win-x64', 'win-arm64')][string]$Rid = 'win-x64',
     [string]$Output = 'artifacts/apps',
     [switch]$Structured,
+    [switch]$InteropMathI64,
     [switch]$TenantIsolateSmoke
 )
 $ErrorActionPreference = 'Stop'
@@ -30,7 +31,10 @@ if (-not (Test-Path -LiteralPath $exe)) { throw 'Native compiler executable was 
 # Structured source remains an explicit experimental lane. No auto
 # fallback from shipping scalar to the expanded host-import frontend.
 $compileCommand = if ($Structured) { 'compile-structured' } else { 'compile' }
-& $exe $compileCommand $sourcePath --out $generated
+if ($InteropMathI64 -and -not $Structured) { throw 'InteropMathI64 requires -Structured' }
+$compileArgs = @($compileCommand, $sourcePath, '--out', $generated)
+if ($InteropMathI64) { $compileArgs += @('--capability', 'interop.dotnet.math-i64') }
+& $exe @compileArgs
 if ($LASTEXITCODE -ne 0) { throw 'Oreslang-to-CIL compilation failed' }
 
 # A previous publish of this same host project may have used another

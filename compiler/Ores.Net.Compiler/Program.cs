@@ -1,6 +1,15 @@
 using Ores.Net.Compiler;
 using System.Text;
 
+// An import requests host authority; the trusted compiler invocation grants it.
+// Only the experimental structured lane accepts this restricted BCL capability.
+bool mathI64Granted = args.Length >= 4 &&
+    args[^2] == "--capability" && args[^1] == "interop.dotnet.math-i64";
+if (mathI64Granted) args = args[..^2];
+var dotnetHostPolicy = mathI64Granted
+    ? DotnetHostImportPolicy.MathI64V0
+    : DotnetHostImportPolicy.DenyAll;
+
 // Reject invalid shapes before indexing args[3]. Previously "compile file.ores"
 // passed validation then crashed with IndexOutOfRangeException instead of usage.
 bool validCheck = args.Length == 2 && args[0] == "check";
@@ -14,7 +23,8 @@ bool validEmitSource = args.Length == 4 && args[2] == "--out" &&
 bool validStaticFacts = args.Length == 2 &&
     (args[0] == "static-facts" || args[0] == "static-facts-structured");
 bool moduleCommand = args.Length >= 1 && args[0] is "check-modules" or "compile-modules";
-if (!validCheck && !validCompile && !validStructuredCheck && !validStructuredCompile && !validStaticFacts && !validEmitSource && !moduleCommand)
+if ((mathI64Granted && !validStructuredCheck && !validStructuredCompile) ||
+    (!validCheck && !validCompile && !validStructuredCheck && !validStructuredCompile && !validStaticFacts && !validEmitSource && !moduleCommand))
 {
     Console.Error.WriteLine("usage: oresnet check input.atto|input.ores | oresnet compile input.atto|input.ores --out path/OresGenerated.dll | oresnet check-structured input.atto|input.ores | oresnet compile-structured input.atto|input.ores --out path/OresGenerated.dll | oresnet emit-csharp input.atto|input.ores --out path/OresProgram.cs | oresnet emit-fsharp input.atto|input.ores --out path/OresProgram.fs | oresnet static-facts input.atto|input.ores | oresnet static-facts-structured input.atto|input.ores");
     return 2;
@@ -78,7 +88,7 @@ try
     {
         // Experimental typed source -> verified CFG -> deterministic CIL.
         // Never enter the shipping scalar path or accept unsupported effects.
-        var verifiedCfg = OresStructuredCfgLowering.LowerModule(source);
+        var verifiedCfg = OresStructuredCfgLowering.LowerModule(source, dotnetHostPolicy);
         if (validStructuredCompile)
         {
             if (!string.Equals(Path.GetFileName(args[3]), "OresGenerated.dll",

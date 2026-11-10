@@ -37,9 +37,9 @@ jobs:
       - name: Executed compiler and runtime tests
         run: dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
       - name: Publish native compiler and host with statically imported .NET method
-        run: bash scripts/publish-linux.sh examples/interop/dotnet-math-abs.atto artifacts/dotnetimport --structured
+        run: bash scripts/publish-linux.sh examples/interop/dotnet-math-abs.atto artifacts/dotnetimport --structured --interop-math-i64
       - name: Publish second native guest with nested Min/Max/Abs
-        run: bash scripts/publish-linux.sh examples/interop/dotnet-math-nested.atto artifacts/dotnetnested --structured
+        run: bash scripts/publish-linux.sh examples/interop/dotnet-math-nested.atto artifacts/dotnetnested --structured --interop-math-i64
       - name: Verify native compiler refuses unauthorized .NET imports without emitting CIL
         shell: bash
         run: |
@@ -49,7 +49,7 @@ jobs:
           output=artifacts/denied/OresGenerated.dll
           for source in examples/interop/reject-unauthorized-file.atto examples/interop/reject-math-overload.atto examples/interop/reject-alias-shadow.atto; do
             rm -f "$output"
-            if "$compiler" compile-structured "$source" --out "$output" > artifacts/denied/diagnostic.txt 2>&1; then
+            if "$compiler" compile-structured "$source" --out "$output" --capability interop.dotnet.math-i64 > artifacts/denied/diagnostic.txt 2>&1; then
               echo "unauthorized source unexpectedly compiled: $source" >&2
               exit 1
             fi
@@ -59,7 +59,15 @@ jobs:
               *overload.atto) grep -q 'requires int operands' artifacts/denied/diagnostic.txt ;;
             esac
           done
-          echo 'DOTNET_IMPORT_NATIVE_DENIALS_EXECUTED|cases=3|cil=none'
+          # Positive input must fail without the grant, before emitting CIL.
+          rm -f "$output"
+          if "$compiler" compile-structured examples/interop/dotnet-math-abs.atto --out "$output" > artifacts/denied/diagnostic.txt 2>&1; then
+            echo 'import compiled without capability' >&2
+            exit 1
+          fi
+          test ! -e "$output"
+          grep -q DOTNET_INTEROP_CAPABILITY_DENIED artifacts/denied/diagnostic.txt
+          echo 'DOTNET_IMPORT_NATIVE_DENIALS_EXECUTED|cases=4|cil=none'
       - name: Execute both independent native guest binaries and verify output
         shell: bash
         run: |
@@ -116,7 +124,7 @@ jobs:
       - name: Publish and execute native Windows Abs guest
         shell: pwsh
         run: |
-          ./scripts/publish-windows.ps1 -Source examples/interop/dotnet-math-abs.atto -Rid win-x64 -Output artifacts/dotnetimport -Structured
+          ./scripts/publish-windows.ps1 -Source examples/interop/dotnet-math-abs.atto -Rid win-x64 -Output artifacts/dotnetimport -Structured -InteropMathI64
           $binary = 'artifacts/dotnetimport/win-x64/oreslang-app.exe'
           ./verification/assert-native-release.ps1 -Binary $binary -Rid win-x64
           $output = (& $binary | Out-String).Trim()
@@ -127,7 +135,7 @@ jobs:
       - name: Publish and execute independently linked nested native guest
         shell: pwsh
         run: |
-          ./scripts/publish-windows.ps1 -Source examples/interop/dotnet-math-nested.atto -Rid win-x64 -Output artifacts/dotnetnested -Structured
+          ./scripts/publish-windows.ps1 -Source examples/interop/dotnet-math-nested.atto -Rid win-x64 -Output artifacts/dotnetnested -Structured -InteropMathI64
           $binary = 'artifacts/dotnetnested/win-x64/oreslang-app.exe'
           ./verification/assert-native-release.ps1 -Binary $binary -Rid win-x64
           $output = (& $binary | Out-String).Trim()
@@ -155,7 +163,7 @@ jobs:
           )
           foreach ($source in $fixtures) {
             Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue
-            $diagnostic = (& $compiler compile-structured $source --out $out 2>&1 | Out-String)
+            $diagnostic = (& $compiler compile-structured $source --out $out --capability interop.dotnet.math-i64 2>&1 | Out-String)
             $exitCode = $LASTEXITCODE
             if ($exitCode -eq 0 -or (Test-Path -LiteralPath $out)) {
               throw "NativeAOT compiler accepted invalid host import '$source'"
@@ -164,8 +172,13 @@ jobs:
               throw "Host import rejection lacked audited diagnostic: $diagnostic"
             }
           }
+          Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue
+          $diagnostic = (& $compiler compile-structured examples/interop/dotnet-math-abs.atto --out $out 2>&1 | Out-String)
+          if ($LASTEXITCODE -eq 0 -or (Test-Path -LiteralPath $out) -or $diagnostic -notmatch 'DOTNET_INTEROP_CAPABILITY_DENIED') {
+            throw 'Host import without explicit capability did not fail closed'
+          }
           $global:LASTEXITCODE = 0
-          Write-Host 'DOTNET_IMPORT_WIN_DENIALS_EXECUTED=3'
+          Write-Host 'DOTNET_IMPORT_WIN_DENIALS_EXECUTED=4'
       - name: Emit exact source tree and actual Windows native artifact hashes
         shell: pwsh
         run: |
@@ -180,4 +193,4 @@ jobs:
             $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
             Write-Host "DOTNET_IMPORT_WIN_NATIVE_SHA256=$path $hash"
           }
-          Write-Host 'DOTNET_IMPORT_WINDOWS_NATIVE_AOT_EXECUTED|abs=42|nested=42|denials=3'
+          Write-Host 'DOTNET_IMPORT_WINDOWS_NATIVE_AOT_EXECUTED|abs=42|nested=42|denials=4'

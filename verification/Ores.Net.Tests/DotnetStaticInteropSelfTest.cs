@@ -11,7 +11,7 @@ public static class DotnetStaticInteropSelfTest
 
     private static void Reject(string source, string diagnostic)
     {
-        try { OresStructuredCfgLowering.LowerModule(source); }
+        try { OresStructuredCfgLowering.LowerModule(source, DotnetHostImportPolicy.MathI64V0); }
         catch (FormatException ex) when (ex.Message.Contains(diagnostic, StringComparison.OrdinalIgnoreCase))
         { return; }
         throw new Exception("DOTNET_IMPORT_V0: must reject " + diagnostic);
@@ -23,7 +23,25 @@ public static class DotnetStaticInteropSelfTest
             import dotnet "System.Math" as Math;
             pub fnc main():int { return Math.Abs(-42); }
             """;
-        var verified = OresStructuredCfgLowering.LowerModule(source);
+        // A source import cannot authorize itself, even when only trusted Math is named.
+        bool parserDenied = false, lowererDenied = false, cfgVerifierDenied = false;
+        try { OresStructuredParser.Parse(source); }
+        catch (FormatException e) when (e.Message.Contains("DOTNET_INTEROP_CAPABILITY_DENIED"))
+        { parserDenied = true; }
+        try { OresStructuredCfgLowering.LowerModule(source); }
+        catch (FormatException e) when (e.Message.Contains("DOTNET_INTEROP_CAPABILITY_DENIED"))
+        { lowererDenied = true; }
+        Require(parserDenied && lowererDenied,
+            "structured .NET host import must be denied without explicit compiler grant");
+        var grant = DotnetHostImportPolicy.MathI64V0;
+        var verified = OresStructuredCfgLowering.LowerModule(source, grant);
+        var forged = new CfgFunction(verified.Main.Name, verified.Main.ResultType,
+            verified.Main.Entry, verified.Main.Blocks, verified.Main.Parameters);
+        try { OresCfgVerifier.Verify(forged); }
+        catch (FormatException e) when (e.Message.Contains("DOTNET_INTEROP_CAPABILITY_DENIED"))
+        { cfgVerifierDenied = true; }
+        Require(cfgVerifierDenied,
+            "independent CFG verifier must deny a forged CLR call without capability");
         Require(CfgReferenceEvaluator.Evaluate(verified.Main) == 42,
             "verified CFG evaluator runs typed host scalar semantics");
         Require(verified.Main.Blocks.SelectMany(b => b.Instructions)
@@ -70,7 +88,7 @@ public static class DotnetStaticInteropSelfTest
                 return Bcl.Max(Bcl.Min(42, 70), Bcl.Abs(-9));
             }
             """;
-        var nestedCfg = OresStructuredCfgLowering.LowerModule(nested);
+        var nestedCfg = OresStructuredCfgLowering.LowerModule(nested, grant);
         Require(CfgReferenceEvaluator.Evaluate(nestedCfg.Main) == 42,
             "nested host method lowering evaluates eager operands left-to-right");
         var nestedTemp = Path.Combine(Path.GetTempPath(),
@@ -123,9 +141,9 @@ public static class DotnetStaticInteropSelfTest
         try
         {
             var maxSource = OresStructuredCfgLowering.LowerModule(
-                "import dotnet \"System.Math\" as Math; fnc main():int { return Math.Max(3, 2); }");
+                "import dotnet \"System.Math\" as Math; fnc main():int { return Math.Max(3, 2); }", grant);
             var minSource = OresStructuredCfgLowering.LowerModule(
-                "import dotnet \"System.Math\" as Math; fnc main():int { return Math.Min(3, 2); }");
+                "import dotnet \"System.Math\" as Math; fnc main():int { return Math.Min(3, 2); }", grant);
             var maxDll = Path.Combine(identityDirectory, "max.dll");
             var minDll = Path.Combine(identityDirectory, "min.dll");
             CilEmitter.EmitLibrary(maxSource, maxDll);
@@ -159,12 +177,16 @@ public static class DotnetStaticInteropSelfTest
             "DOTNET_IMPORT_UNSUPPORTED");
 
         var overflow = OresStructuredCfgLowering.LowerModule(
-            "import dotnet \"System.Math\" as Math; fnc main():int { return Math.Abs(-9223372036854775808); }");
+            "import dotnet \"System.Math\" as Math; fnc main():int { return Math.Abs(-9223372036854775808); }", grant);
         bool overflowed = false;
         try { CfgReferenceEvaluator.Evaluate(overflow.Main); }
         catch (OverflowException) { overflowed = true; }
         Require(overflowed, "Math.Abs(long.MinValue) must overflow");
         Reject("import dotnet \"System.Math\" as Math; fnc Math():int { return 1; } fnc main():int { return 1; }",
+            "DOTNET_IMPORT_UNSUPPORTED");
+        Reject("import dotnet \"System.Math\"; fnc main():int { return 1; }",
+            "Expected 'as'");
+        Reject("import dotnet \"System.Reflection.Assembly\" as Assembly; fnc main():int { return 1; }",
             "DOTNET_IMPORT_UNSUPPORTED");
         Reject("import dotnet \"System.IO.File\" as File; fnc main():int { return 1; }",
             "DOTNET_IMPORT_UNSUPPORTED");

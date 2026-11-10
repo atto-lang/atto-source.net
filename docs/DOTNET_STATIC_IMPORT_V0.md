@@ -13,7 +13,9 @@ The same allowlisted `System.Math` alias supports `Math.Min(a, b)` and
 `Math.Max(a, b)` for exactly two typed `int` operands. These three static
 methods can be nested with eager left-to-right evaluation.
 
-Compile using `oresnet compile-structured <source.atto> --out OresGenerated.dll`.
+Compile using `oresnet compile-structured <source.atto> --out OresGenerated.dll --capability interop.dotnet.math-i64`.
+By default, `check-structured` and `compile-structured` reject `import dotnet`;
+`check`, `compile`, module loading and static-facts export never accept this grant.
 This is deliberately separate from shipping `check`/`compile`, which still reject
 host imports. The generated CIL references `System.Runtime` and its declared
 `System.Math.Abs(Int64) -> Int64` static signature; it does not dynamically
@@ -24,8 +26,10 @@ constructors, instance methods, overload selection, generics, mutable objects,
 
 ## What is gated
 
-- The token-aware compiler parser accepts only one `System.Math` import with
-  a local alias; all other host libraries and duplicate host imports fail closed.
+- The token-aware compiler parser requires the explicit trusted `interop.dotnet.math-i64`
+  grant for the single `System.Math` import. The independent CFG verifier requires
+  that grant again for every `DotnetMathAbs`, `DotnetMathMin` and `DotnetMathMax`
+  opcode, including forged IR; other host libraries and duplicate imports fail closed.
 - Only `Abs` with one typed AttoLang `int` / CIL `Int64` argument, and
   `Min`/`Max` with exactly two typed `int` operands can be used. Booleans,
   wrong arities, alias shadowing, missing imports and other APIs are rejected.
