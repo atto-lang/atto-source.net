@@ -94,7 +94,9 @@ internal sealed class ActorFrameStack
             throw new ArgumentOutOfRangeException(nameof(bytes));
         if (bytes > _capacity)
         {
-            if (compilerOwned) _terminalCompilerOverflow = ActorLogicalStackLimit.ByteCapacity;
+            if (!compilerOwned)
+                throw new ArgumentOutOfRangeException(nameof(bytes));
+            _terminalCompilerOverflow = ActorLogicalStackLimit.ByteCapacity;
             throw new ActorLogicalStackOverflowException(ActorLogicalStackLimit.ByteCapacity);
         }
         if (alignment <= 0 || alignment > 64 ||
