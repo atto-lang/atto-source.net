@@ -85,11 +85,11 @@ internal sealed class ActorFrameStack
             (alignment & (alignment - 1)) != 0)
             throw new ArgumentOutOfRangeException(nameof(alignment));
         if (_depth == _frames.Length)
-            throw new InvalidOperationException("Actor logical frame limit exhausted");
+            throw new ActorLogicalStackOverflowException(ActorLogicalStackLimit.FrameCount);
 
         int offset = checked((_top + alignment - 1) & ~(alignment - 1));
         if (offset > _capacity || bytes > _capacity - offset)
-            throw new InvalidOperationException("Actor logical stack capacity exhausted");
+            throw new ActorLogicalStackOverflowException(ActorLogicalStackLimit.ByteCapacity);
 
         // Construct the capability before native admission. A failed allocation
         // cannot increment depth, publish a frame, or change the stack top.
