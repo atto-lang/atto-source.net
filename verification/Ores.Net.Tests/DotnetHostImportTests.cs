@@ -36,6 +36,15 @@ internal static class DotnetHostImportTests
         Reject(() => StaticFactsV0Exporter.FromCompiledScalarSource(maxSource, grant),
             "Max CLR host call erased from zero-edge static facts");
 
+        const string nestedSource =
+            "import dotnet \"System.Math\" as Math; " +
+            "pub fnc main() -> int { return Math.Max(Math.Abs(-42), 10); }";
+        var nestedTyped = OresIrLowering.Lower(OresParser.Parse(nestedSource, grant),
+            policy: grant);
+        Check(nestedTyped.Instructions.Count(x => x.Opcode == IrOpcode.DotnetMathAbsI64) == 1 &&
+              nestedTyped.Instructions.Count(x => x.Opcode == IrOpcode.DotnetMathMaxI64) == 1,
+            "nested Math.Abs -> Math.Max must preserve two independently typed host calls");
+
         string root = Path.Combine(Path.GetTempPath(),
             "atto-dotnet-import-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -79,6 +88,24 @@ internal static class DotnetHostImportTests
                 x.OpCode == OpCodes.Callvirt || x.OpCode == OpCodes.Newobj),
                 "host call must not allocate or dispatch through arbitrary CLR objects");
 
+            string nestedOutput = Path.Combine(root, "nested.dll");
+            CilEmitter.EmitLibrary(nestedTyped, nestedOutput);
+            using (var nestedAssembly = AssemblyDefinition.ReadAssembly(nestedOutput))
+            {
+                var nestedRun = nestedAssembly.MainModule.Types.Single(x =>
+                    x.FullName == "Oreslang.Generated.OresProgram")
+                    .Methods.Single(x => x.Name == "Run");
+                var nestedCalls = nestedRun.Body.Instructions
+                    .Where(x => x.OpCode == OpCodes.Call)
+                    .Select(x => x.Operand as MethodReference).ToArray();
+                Check(nestedCalls.Length == 2 &&
+                      nestedCalls[0]?.Name == "Abs" &&
+                      nestedCalls[1]?.Name == "Max" &&
+                      nestedCalls.All(x => x?.DeclaringType.FullName == "System.Math" &&
+                          x.ReturnType.FullName == "System.Int64"),
+                    "nested CIL must call exact Math.Abs then Math.Max without dynamic dispatch");
+            }
+
             using var maxAssembly = AssemblyDefinition.ReadAssembly(maxOutput);
             var maxRun = maxAssembly.MainModule.Types.Single(x =>
                 x.FullName == "Oreslang.Generated.OresProgram")
@@ -103,6 +130,8 @@ internal static class DotnetHostImportTests
 
         foreach (var rejected in new[]
         {
+            "import dotnet \"System.Math\"; fnc main():int{return 42;}",
+            "import dotnet \"System.Reflection.Assembly\" as Reflect; fnc main():int{return 42;}",
             "import dotnet \"System.IO.File\" as File; fnc main():int{return 42;}",
             "import dotnet \"System.Math\" as Math; fnc main():int{return Math.Pow(2,3);}",
             "import dotnet \"System.Math\" as Math; fnc main():int{return Math.Abs(1,2);}",
