@@ -20,6 +20,16 @@ public static class ActorHeapV1Compiler
     public const int MaxSourceBytes = 16 * 1024;
     private const int MaxTokens = 256;
     private const int MaxCommentDepth = 16;
+    private static readonly HashSet<string> ReservedIdentifiers = new(
+        new[]
+        {
+            "define", "pub", "class", "actor", "as", "end", "int", "bool",
+            "receive", "let", "val", "const", "new", "none", "assert",
+            "return", "fnc", "method", "self", "true", "false", "null",
+            "if", "then", "else", "fi", "while", "do", "await", "suspends",
+            "critical", "rt", "borrow", "take", "share", "raise", "throw",
+            "panic", "recover"
+        }, StringComparer.Ordinal);
 
     public sealed record Plan(
         string ClassName, string ActorName, string ValueField,
@@ -198,7 +208,8 @@ public static class ActorHeapV1Compiler
             Token token = Current;
             if (token.Text.Length is < 1 or > 128 ||
                 !IsIdentifierStart(token.Text[0]) ||
-                token.Text.Skip(1).Any(c => !IsIdentifierContinue(c)))
+                token.Text.Skip(1).Any(c => !IsIdentifierContinue(c)) ||
+                ReservedIdentifiers.Contains(token.Text))
                 throw new FormatException(
                     $"E_ACTOR_HEAP_V1_NAME: invalid identifier at offset {token.Offset}");
             _index++;
