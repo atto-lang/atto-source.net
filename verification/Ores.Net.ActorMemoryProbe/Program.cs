@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Linq;
 using Ores.Net.Runtime;
 
 static void Require(bool ok, string why)
@@ -252,9 +253,9 @@ var validatedQuotaCases = new ConcurrentQueue<string>();
 var tooDeep = quotaRuntime.Spawn(ActorKind.Shared, (ctx, _) =>
 {
     var root = ctx.PushStackFrame(16);
-    _ = ctx.PushStackFrame(8);
+    ctx.PushStackFrame(8);
     bool caught = false;
-    try { _ = ctx.PushStackFrame(8); }
+    try { ctx.PushStackFrame(8); }
     catch (ActorStackQuotaExceededException) { caught = true; }
     Require(caught, "native frame-count fault did not raise quota exception");
     Deny(() => ctx.ReadStackFrame(root, 0, new byte[1]));
@@ -262,9 +263,9 @@ var tooDeep = quotaRuntime.Spawn(ActorKind.Shared, (ctx, _) =>
 });
 var aggregateBytes = quotaRuntime.Spawn(ActorKind.Shared, (ctx, _) =>
 {
-    _ = ctx.PushStackFrame(56);
+    ctx.PushStackFrame(56);
     bool caught = false;
-    try { _ = ctx.PushStackFrame(16); }
+    try { ctx.PushStackFrame(16); }
     catch (ActorStackQuotaExceededException) { caught = true; }
     Require(caught, "native aggregate byte quota did not raise exception");
     Deny(() => ctx.PushStackFrame(1));
@@ -273,7 +274,7 @@ var aggregateBytes = quotaRuntime.Spawn(ActorKind.Shared, (ctx, _) =>
 var oversizedFrame = quotaRuntime.Spawn(ActorKind.Shared, (ctx, _) =>
 {
     bool caught = false;
-    try { _ = ctx.PushStackFrame(65); }
+    try { ctx.PushStackFrame(65); }
     catch (ActorStackQuotaExceededException) { caught = true; }
     Require(caught, "native oversized single-frame quota did not raise exception");
     Deny(() => ctx.PushStackFrame(1));
