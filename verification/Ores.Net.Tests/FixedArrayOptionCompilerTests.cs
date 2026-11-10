@@ -76,6 +76,25 @@ internal static class FixedArrayOptionCompilerTests
             diagnostic);
     }
 
+    // A generic syntax error is not evidence that checked/unchecked access
+    // was classified by the collection compiler. Both scalar and linked
+    // parsing lanes must reject the precise unsafe operation before any CFG.
+    private static void DenyBracketInBothModes(string source, string label)
+    {
+        const string diagnostic = "E_UNCHECKED_COLLECTION_ACCESS";
+        bool scalarDenied = false, linkedDenied = false;
+        try { _ = OresStructuredCfgLowering.Lower(source); }
+        catch (FormatException error) when
+            (error.Message.Contains(diagnostic, StringComparison.Ordinal))
+        { scalarDenied = true; }
+        try { _ = OresStructuredCfgLowering.LowerModule(source); }
+        catch (FormatException error) when
+            (error.Message.Contains(diagnostic, StringComparison.Ordinal))
+        { linkedDenied = true; }
+        if (!scalarDenied || !linkedDenied)
+            throw new Exception("Unchecked collection bracket lacked exact compiler diagnostic in both modes: " + label);
+    }
+
     private static CfgFunction Forge(CfgInstruction probe)
     {
         return new CfgFunction("main", IrValueType.I64, "entry",
@@ -117,6 +136,13 @@ internal static class FixedArrayOptionCompilerTests
             ("copy-and-get-agree", "fnc main():int{val Array<int> a=Array.of(7);return a.get_copy(0).unwrap_or(0)-a.get(0).unwrap_or(0)+42;}", 42),
             ("copy-inline", "fnc main():int{return Array.of(42).get_copy(0).unwrap_or(0);}", 42),
             ("copy-empty-local", "fnc main():int{val Array<int> a=Array.of();val Option<int> r=a.get_copy(0);if r.is_some(){return 0;}return 42;}", 42),
+            ("copy-loop-carried-option", "fnc main():int{val Array<int> a=Array.of(0,42);let Option<int> r=None;let int i=0;while i<2{r=a.get_copy(i);i=i+1;}return r.unwrap_or(0);}", 42),
+            ("copy-branch-join-option", "fnc main():int{val Array<int> a=Array.of(0,42);let Option<int> r=None;if true{r=a.get_copy(1);}else{r=a.get_copy(-1);}return r.unwrap_or(0);}", 42),
+            ("copy-branch-retains-none", "fnc main():int{val Array<int> a=Array.of(42);let Option<int> r=None;if false{r=a.get_copy(0);}return r.unwrap_or(42);}", 42),
+            ("copy-immutable-snapshot-alias", "fnc main():int{val Array<int> a=Array.of(42);val Array<int> b=a;val Option<int> r=b.get_copy(0);return r.unwrap_or(0);}", 42),
+            ("copy-two-independent-reads", "fnc main():int{val Array<int> a=Array.of(21);return a.get_copy(0).unwrap_or(0)+a.get_copy(0).unwrap_or(0);}", 42),
+            ("copy-computed-negative-miss", "fnc main():int{val Array<int> a=Array.of(42);let int i=0;return a.get_copy(i-1).unwrap_or(42);}", 42),
+            ("copy-comment-does-not-grant-unsafe-index", "fnc main():int{val Array<int> a=Array.of(42);/* a[0] must remain forbidden */return a.get_copy(0).unwrap_or(0);}", 42),
             ("second", "fnc main():int{val Array<int> a=Array.of(0,42);return a.get(1).unwrap_or(0);}", 42),
             ("empty", "fnc main():int{val Array<int> a=Array.of();return a.get(0).unwrap_or(42);}", 42),
             ("negative-index", "fnc main():int{val Array<int> a=Array.of(5);return a.get(-1).unwrap_or(42);}", 42),
@@ -163,6 +189,12 @@ internal static class FixedArrayOptionCompilerTests
             ("index-no-args", "fnc main():int{val Array<int> a=Array.of(42);return a.get().unwrap_or(0);}"),
             ("index-extra-args", "fnc main():int{val Array<int> a=Array.of(42);return a.get(0,1).unwrap_or(0);}"),
             ("unchecked-index", "fnc main():int{val Array<int> a=Array.of(42);return a[0];}"),
+            ("unchecked-negative-index", "fnc main():int{val Array<int> a=Array.of(42);return a[-1];}"),
+            ("unchecked-equal-length-index", "fnc main():int{val Array<int> a=Array.of(42);return a[1];}"),
+            ("unchecked-i64-max-index", "fnc main():int{val Array<int> a=Array.of(42);return a[9223372036854775807];}"),
+            ("unchecked-inline-array", "fnc main():int{return Array.of(42)[0];}"),
+            ("unchecked-array-write", "fnc main():int{val Array<int> a=Array.of(42);a[0]=9;return 42;}"),
+            ("unchecked-double-index", "fnc main():int{val Array<int> a=Array.of(42);return a[0][0];}"),
             ("unchecked-array-literal", "fnc main():int{return [42][0];}"),
             ("array-append", "fnc main():int{val Array<int> a=Array.of(42);return a.append(1);}"),
             ("array-resize", "fnc main():int{val Array<int> a=Array.of(42);return a.resize(1);}"),
@@ -180,6 +212,18 @@ internal static class FixedArrayOptionCompilerTests
         DenyDiagnostic(
             "fnc main():int{val Array<int> a=Array.of(42);return a.get_copy(true).unwrap_or(0);}",
             "Array<int>.get_copy index must be int");
+        DenyDiagnostic(
+            "fnc main():int{let Array<int> a=Array.of(42);return 42;}",
+            "E_ARRAY_IMMUTABLE_ONLY");
+        DenyDiagnostic(
+            "fnc main():int{val Array<int> a=Array.of(0,1,2,3,4,5,6,7,8);return 42;}",
+            "E_ARRAY_SIZE");
+        foreach (var (name, source) in negatives.Where(entry => entry.Name.StartsWith("unchecked-", StringComparison.Ordinal)
+            && entry.Name != "unchecked-array-literal"))
+            DenyBracketInBothModes(source, name);
+        DenyBracketInBothModes(
+            "fnc main():int{val Array<int> a=Array.of(42);return a.get_copy(0).unwrap_or(0)+a[0];}",
+            "bracket after a checked Option access");
 
         var valid = OresCfgVerifier.Verify(Forge(new CfgInstruction(2,
             CfgOpcode.ArrayIndexValidI64, IrValueType.Bool, Left: 0, I64Constant: 8)));
