@@ -56,7 +56,7 @@ jobs:
             fi
           done
           for fixture in contracts/collections/v1/reject-array-{mutable,unsafe-index,oversize}.atto contracts/collections/v1/reject-array-get-copy-bool-index.atto; do
-            if dotnet run --project "$project" -c Release -- check-structured "$fixture" > array-negative.stdout 2> array-negative.stderr; then
+            if dotnet run --no-build --project "$project" -c Release -- check-structured "$fixture" > array-negative.stdout 2> array-negative.stderr; then
               echo "Array negative source accepted: $fixture" >&2
               exit 1
             else
