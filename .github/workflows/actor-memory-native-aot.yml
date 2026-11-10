@@ -43,7 +43,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED"
           test -z "$(git status --porcelain)"
           git rev-parse 'HEAD^{tree}'
-          test "$(git hash-object contracts/actor-two-peer-failure-v1/two-peer-failure-matrix.atto)" = 003983eb9475d7fd680ea5b31804df02f1843f19
+          test "$(git hash-object contracts/actor-two-peer-failure-v1/two-peer-failure-matrix.atto)" = eaac813262ca184930ba124180ed692e21329969
           dotnet --info
           dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release | tee "$RUNNER_TEMP/actor-managed-tests.log"
           grep -Fx 'PASS actor scalar frame ABI v1 host/compiler-boundary tests (NOT guest execution)' "$RUNNER_TEMP/actor-managed-tests.log"
