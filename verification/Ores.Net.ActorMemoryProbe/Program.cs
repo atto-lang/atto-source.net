@@ -229,3 +229,89 @@ Require(SpinWait.SpinUntil(() =>
     typedRuntime.LiveActors == 0 && typedRuntime.NativeReservedBytes == 0,
     TimeSpan.FromSeconds(10)), "native typed scalar frame was not reclaimed");
 Console.WriteLine("PASS actor-scalar-sealed-schema-native-probe: immutable i64/bool layout, forged tags and block counts denied across turns; NOT compiled .atto");
+
+// Separate published-native regression for terminal logical actor quotas.
+// The same carrier must continue processing a healthy actor after three
+// hostile actors swallow frame-count/byte exceptions. The native host must
+// never confuse this logical-stack behavior with CLR machine-stack isolation.
+using var quotaRuntime = new ActorRuntime(new ActorRuntimeOptions
+{
+    MaxActors = 4, MessagesPerDispatch = 1,
+    MailboxMessages = 4, MailboxBytes = 128,
+    ActorPersistentBytes = 256, ActorScratchBytes = 64,
+    ActorStackBytes = 64, ActorMaxStackFrames = 2,
+    NativeBudgetBytes = 8192,
+    Dispatcher = new ActorDispatcherOptions
+    {
+        PrivateWorkers = 1, SharedWorkers = 1, UntrustedWorkers = 1,
+        QueueCapacityPerDomain = 4
+    }
+});
+using var survivingQuotaTurn = new ManualResetEventSlim();
+var validatedQuotaCases = new ConcurrentQueue<string>();
+var tooDeep = quotaRuntime.Spawn(ActorKind.Shared, (ctx, _) =>
+{
+    var root = ctx.PushStackFrame(16);
+    _ = ctx.PushStackFrame(8);
+    bool caught = false;
+    try { _ = ctx.PushStackFrame(8); }
+    catch (ActorStackQuotaExceededException) { caught = true; }
+    Require(caught, "native frame-count fault did not raise quota exception");
+    Deny(() => ctx.ReadStackFrame(root, 0, new byte[1]));
+    validatedQuotaCases.Enqueue("depth");
+});
+var aggregateBytes = quotaRuntime.Spawn(ActorKind.Shared, (ctx, _) =>
+{
+    _ = ctx.PushStackFrame(56);
+    bool caught = false;
+    try { _ = ctx.PushStackFrame(16); }
+    catch (ActorStackQuotaExceededException) { caught = true; }
+    Require(caught, "native aggregate byte quota did not raise exception");
+    Deny(() => ctx.PushStackFrame(1));
+    validatedQuotaCases.Enqueue("aggregate");
+});
+var oversizedFrame = quotaRuntime.Spawn(ActorKind.Shared, (ctx, _) =>
+{
+    bool caught = false;
+    try { _ = ctx.PushStackFrame(65); }
+    catch (ActorStackQuotaExceededException) { caught = true; }
+    Require(caught, "native oversized single-frame quota did not raise exception");
+    Deny(() => ctx.PushStackFrame(1));
+    validatedQuotaCases.Enqueue("oversized");
+});
+var quotaSibling = quotaRuntime.Spawn(ActorKind.Shared, (ctx, _) =>
+{
+    var handle = ctx.PushStackFrame(8);
+    ctx.WriteStackFrame(handle, 0, new byte[] { 0x5A });
+    byte[] seen = new byte[1];
+    ctx.ReadStackFrame(handle, 0, seen);
+    Require(seen[0] == 0x5A, "quota sibling frame storage was corrupted");
+    ctx.PopStackFrame(handle);
+    survivingQuotaTurn.Set();
+});
+quotaRuntime.Send(tooDeep, new byte[] { 1 });
+quotaRuntime.Send(aggregateBytes, new byte[] { 2 });
+quotaRuntime.Send(oversizedFrame, new byte[] { 3 });
+quotaRuntime.Send(quotaSibling, new byte[] { 4 });
+Require(survivingQuotaTurn.Wait(TimeSpan.FromSeconds(10)),
+    "native sibling failed to run after terminal actor quotas");
+Require(SpinWait.SpinUntil(() =>
+        quotaRuntime.FaultedTurns == 3 &&
+        quotaRuntime.CompletedMessages == 1 &&
+        quotaRuntime.LiveActors == 1,
+    TimeSpan.FromSeconds(10)),
+    "caught native stack quota faults counted as successful actor turns");
+Require(validatedQuotaCases.Count == 3 &&
+        validatedQuotaCases.Contains("depth") &&
+        validatedQuotaCases.Contains("aggregate") &&
+        validatedQuotaCases.Contains("oversized"),
+    "native quota negatives did not exercise all terminal fault branches");
+Require(quotaRuntime.StartedCarrierThreads == 1 &&
+        quotaRuntime.NativeReservedBytes > 0,
+    "single native shared carrier or surviving actor reserve lost");
+quotaRuntime.Stop(quotaSibling);
+Require(SpinWait.SpinUntil(() =>
+        quotaRuntime.LiveActors == 0 &&
+        quotaRuntime.NativeReservedBytes == 0, TimeSpan.FromSeconds(10)),
+    "native actor quota and frame region were not reclaimed");
+Console.WriteLine("PASS actor-stack-nativeaot-terminal-quota: depth, aggregate bytes, oversized frame all terminal after catch; sibling survives; no native budget leak; NOT compiled .atto");
