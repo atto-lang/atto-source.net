@@ -66,6 +66,25 @@ try
         !string.Equals(Path.GetExtension(args[1]), ".ores", StringComparison.OrdinalIgnoreCase))
         throw new FormatException("Static-facts export requires a .atto or .ores source file");
     var source = ReadBoundedSource(args[1], rejectBom: validStaticFacts);
+    if (validActorPipePlan)
+    {
+        string extension = Path.GetExtension(args[1]);
+        if (!string.Equals(extension, ".atto", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(extension, ".ores", StringComparison.OrdinalIgnoreCase))
+            throw new FormatException("Actor pipe plan requires an .atto or legacy .ores source file");
+        var plan = OresStructuredParser.PlanActorPipeV1(source);
+        Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new
+        {
+            status = ActorPipeGraphV1.Evidence,
+            executable_actor_guest = false,
+            native_aot_verified = false,
+            stage_count = plan.Stages.Count,
+            edge = new { source = plan.Edge.ProducerBinding,
+                destination = plan.Edge.ConsumerBinding },
+            message = plan.InputMessage
+        }));
+        return 0;
+    }
     if (validStaticFacts)
     {
         // The production command uses the exact verified scalar IR gate.
