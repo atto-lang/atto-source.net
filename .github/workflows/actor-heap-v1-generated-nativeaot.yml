@@ -49,6 +49,21 @@ jobs:
           source_tree="$(git rev-parse 'HEAD^{tree}')"
           printf 'ATTO_ACTOR_HEAP_SOURCE_HEAD=%s\n' "$EXPECTED_HEAD"
           printf 'ATTO_ACTOR_HEAP_SOURCE_TREE=%s\n' "$source_tree"
+          fixture=contracts/actor-guest-heap/v1/node_graph.atto
+          expected_blob="$(git rev-parse "HEAD:$fixture")"
+          actual_blob="$(git hash-object "$fixture")"
+          [[ "$expected_blob" =~ ^[0-9a-f]{40}$ ]]
+          test "$expected_blob" = "$actual_blob"
+          printf 'ATTO_ACTOR_HEAP_FIXTURE_BLOB=%s\n' "$actual_blob"
+          # Fail closed if the generated file is already tracked or
+          # masquerading as a historical checked-in guest stub.
+          generated=verification/Ores.Net.ActorGuestV1Probe/ActorHeapV1.g.cs
+          if git ls-files --error-unmatch "$generated" >/dev/null 2>&1; then
+            echo "Generated guest file must never be tracked" >&2
+            exit 1
+          fi
+          test ! -e "$generated"
+          git check-ignore -q "$generated"
           dotnet --info
           dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release |
             tee "$RUNNER_TEMP/actor-heap-managed-tests.log"
@@ -63,6 +78,9 @@ jobs:
             tee "$RUNNER_TEMP/actor-heap-atto-sha256.txt"
           sha256sum verification/Ores.Net.ActorGuestV1Probe/ActorHeapV1.g.cs |
             tee "$RUNNER_TEMP/actor-heap-generated-csharp-sha256.txt"
+          # Verify the fixture itself was not rewritten by the compiler.
+          test "$(git hash-object "$fixture")" = "$expected_blob"
+          test -z "$(git diff --name-only HEAD --)"
           # The generated file must be gitignored and may not replace
           # a committed source blob or other tracked file.
           test -z "$(git status --porcelain)"
