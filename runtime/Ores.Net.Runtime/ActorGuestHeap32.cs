@@ -28,6 +28,7 @@ internal sealed class ActorGuestHeap32
     private readonly object _gate = new();
     private readonly ActorArena _arena;
     private readonly ActorArenaNativeAllocation[] _handles;
+    private readonly ActorGuestLayout32?[] _layouts;
     private readonly ushort[] _generations;
     private readonly int[] _freeSlots;
     private int _nextSlot;
@@ -41,6 +42,7 @@ internal sealed class ActorGuestHeap32
             throw new ArgumentOutOfRangeException(nameof(slots));
         _arena = arena;
         _handles = new ActorArenaNativeAllocation[slots];
+        _layouts = new ActorGuestLayout32?[slots];
         _generations = new ushort[slots];
         _freeSlots = new int[slots];
     }
@@ -72,9 +74,24 @@ internal sealed class ActorGuestHeap32
             else
                 _nextSlot++;
             _handles[slot] = handle;
+            _layouts[slot] = null;
             _generations[slot] = generation;
             _liveCount++;
             return ((uint)generation << SlotBits) | (uint)(slot + 1);
+        }
+    }
+
+    /// <summary>Allocate a statically described guest object with nominal type identity.</summary>
+    internal uint AllocateTyped(ActorArenaTurn turn, ActorGuestLayout32 layout)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+        lock (_gate)
+        {
+            // The native allocation is committed before publishing the type;
+            // layout already validated all field bounds and alignment.
+            uint reference = Allocate(turn, layout.SizeBytes, 8);
+            _layouts[checked((int)(reference & SlotMask) - 1)] = layout;
+            return reference;
         }
     }
 
@@ -87,6 +104,7 @@ internal sealed class ActorGuestHeap32
             // reference metadata intact until the native drop really commits.
             _arena.DropNativeGuest(turn, _handles[slot]);
             _handles[slot] = default;
+            _layouts[slot] = null;
             _liveCount--;
             if (_generations[slot] == ushort.MaxValue)
             {
@@ -105,14 +123,28 @@ internal sealed class ActorGuestHeap32
         Span<byte> destination)
     {
         lock (_gate)
-            _arena.ReadNativeGuest(turn, _handles[ValidateSlot(reference)], offset, destination);
+        {
+            int slot = ValidateSlot(reference);
+            if (_layouts[slot] is { } typed &&
+                !typed.AllowsScalarAccess(offset, destination.Length))
+                throw new InvalidOperationException(
+                    "Typed guest raw reads may only access declared scalar fields");
+            _arena.ReadNativeGuest(turn, _handles[slot], offset, destination);
+        }
     }
 
     internal void Write(ActorArenaTurn turn, uint reference, int offset,
         ReadOnlySpan<byte> source)
     {
         lock (_gate)
-            _arena.WriteNativeGuest(turn, _handles[ValidateSlot(reference)], offset, source);
+        {
+            int slot = ValidateSlot(reference);
+            if (_layouts[slot] is { } typed &&
+                !typed.AllowsScalarAccess(offset, source.Length))
+                throw new InvalidOperationException(
+                    "Typed guest raw writes may only access declared scalar fields");
+            _arena.WriteNativeGuest(turn, _handles[slot], offset, source);
+        }
     }
 
     // Guest read loans use the same underlying arena loan accounting and may
@@ -130,8 +162,14 @@ internal sealed class ActorGuestHeap32
         lock (_gate)
         {
             int slot = ValidateSlot(owner);
+            uint requiredType = _layouts[slot]?.RequiredReferenceTarget(offset) ?? 0;
             if (target != Null)
-                ValidateSlot(target);
+            {
+                int targetSlot = ValidateSlot(target);
+                if (requiredType != 0 && _layouts[targetSlot]?.TypeId != requiredType)
+                    throw new InvalidOperationException(
+                        "Guest reference target nominal type mismatch");
+            }
             Span<byte> encoded = stackalloc byte[sizeof(uint)];
             BinaryPrimitives.WriteUInt32LittleEndian(encoded, target);
             _arena.WriteNativeGuest(turn, _handles[slot], offset, encoded);
@@ -147,8 +185,14 @@ internal sealed class ActorGuestHeap32
             Span<byte> encoded = stackalloc byte[sizeof(uint)];
             _arena.ReadNativeGuest(turn, _handles[slot], offset, encoded);
             uint reference = BinaryPrimitives.ReadUInt32LittleEndian(encoded);
+            uint requiredType = _layouts[slot]?.RequiredReferenceTarget(offset) ?? 0;
             if (reference != Null)
-                ValidateSlot(reference);
+            {
+                int targetSlot = ValidateSlot(reference);
+                if (requiredType != 0 && _layouts[targetSlot]?.TypeId != requiredType)
+                    throw new InvalidOperationException(
+                        "Guest reference target nominal type mismatch");
+            }
             return reference;
         }
     }
