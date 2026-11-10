@@ -34,6 +34,8 @@ internal static class ActorHeapV1CompilerSelfTest
                 generated.Contains("DropGuestObject32(second)", StringComparison.Ordinal) &&
                 generated.Contains("DropGuestObject32(first)", StringComparison.Ordinal),
             "AOT C# is derived from typed AttoLang source and scoped cleanup");
+        Require(generated.Split("finally", StringSplitOptions.None).Length >= 4,
+            "generated nested finally guards must attempt both native drops");
 
         string changed = source.Replace("new Node(42, none)", "new Node(-7, none)",
                 StringComparison.Ordinal)
