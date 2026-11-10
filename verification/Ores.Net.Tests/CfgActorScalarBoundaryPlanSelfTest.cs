@@ -7,6 +7,7 @@ internal static class CfgActorScalarBoundaryPlanSelfTest
         SingleSourceReturnRequiresNoBoundarySpill();
         DiamondEdgesPreserveParallelTypedArguments();
         LoopBackedgeHasBoundedLiveScalarState();
+        ParallelSwapTransfersAreNotOrderedStores();
         DominatingScalarWithoutEdgeParameterRemainsLive();
         HostCallIsDeniedBeforeBoundaryPlanning();
         Console.WriteLine(
@@ -133,6 +134,49 @@ internal static class CfgActorScalarBoundaryPlanSelfTest
         Require(plan.Block("done").LiveOutValueIds.Count == 0 &&
                 plan.Block("body").Edges.Single().Target == "loop",
             "loop backedge remains a bounded, single-scalar transfer");
+    }
+
+    private static void ParallelSwapTransfersAreNotOrderedStores()
+    {
+        // A loop carries two independently typed scalar parameters. Its
+        // backedge swaps them. An emitter must stage the complete input edge
+        // before updating either destination slot; sequential writes corrupt.
+        var verified = OresCfgVerifier.Verify(new CfgFunction(
+            "main", IrValueType.I64, "entry", new[]
+            {
+                new CfgBlock("entry", Array.Empty<CfgParameter>(),
+                    new[]
+                    {
+                        new CfgInstruction(0, CfgOpcode.ConstantI64,
+                            IrValueType.I64, I64Constant: 41),
+                        new CfgInstruction(1, CfgOpcode.ConstantI64,
+                            IrValueType.I64, I64Constant: 42)
+                    }, new CfgJump("loop", new[] { 0, 1 })),
+                new CfgBlock("loop", new[]
+                    {
+                        new CfgParameter(2, IrValueType.I64),
+                        new CfgParameter(3, IrValueType.I64)
+                    }, new[]
+                    {
+                        new CfgInstruction(4, CfgOpcode.ConstantBool,
+                            IrValueType.Bool, BoolConstant: false)
+                    }, new CfgBranch(4, "loop", new[] { 3, 2 },
+                        "done", new[] { 3 })),
+                new CfgBlock("done", new[] { new CfgParameter(5, IrValueType.I64) },
+                    Array.Empty<CfgInstruction>(), new CfgReturn(5))
+            }));
+        var plan = CfgActorScalarBoundaryPlan.Create(verified);
+        Sequence(plan.Block("entry").LiveOutValueIds, 0, 1);
+        Sequence(plan.Block("loop").LiveOutValueIds, 2, 3);
+        var swap = plan.Block("loop").Edges[0];
+        Require(swap.Kind == "true" && swap.Target == "loop",
+            "self-edge identity must survive immutable CFG lowering");
+        Sequence(swap.SourceValueIds, 3, 2);
+        Sequence(swap.DestinationParameterIds, 2, 3);
+        Require(plan.Block("loop").Edges[1].Kind == "false",
+            "a self-loop must not erase its independent exit edge");
+        Sequence(plan.Block("loop").Edges[1].SourceValueIds, 3);
+        Sequence(plan.Block("loop").Edges[1].DestinationParameterIds, 5);
     }
 
     private static void DominatingScalarWithoutEdgeParameterRemainsLive()
