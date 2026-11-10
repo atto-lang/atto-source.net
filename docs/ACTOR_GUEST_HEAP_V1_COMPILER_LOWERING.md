@@ -54,8 +54,12 @@ For the accepted graph, generated `ActorHeapV1.g.cs` contains:
 4. A typed dereference and signed-integer equality assertion matching
    the source. The checked runtime rejects stale, forged and wrong-type
    object references.
-5. Structured `finally` cleanup which zeros the link and drops both
-   native objects even if the source assertion fails.
+5. Nested `finally` cleanup which zeros the link and attempts the
+   second object's release, then always attempts the first object's release
+   even if reference clearing or a prior drop throws. Source assertion
+   failures therefore cannot simply skip the owned-root cleanup paths.
+   A fatal native allocation/arena fault still requires dedicated execution
+   evidence; source-only coverage does not certify successful reclamation.
 
 The generated file lives at
 `verification/Ores.Net.ActorGuestV1Probe/ActorHeapV1.g.cs`,
