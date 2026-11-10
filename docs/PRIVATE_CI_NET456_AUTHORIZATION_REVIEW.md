@@ -21,6 +21,8 @@
 
 The source-local failure does **not** establish billing exhaustion: GitHub Actions annotations, organization/private-repository eligibility and billing data require administrator read-back. A successful carrier canary does **not** establish source-export authority or compiler guest parity.
 
+**Administrative control-plane read-back (2026-11-10):** GitHub source branch API reported `main.protected=false` at `3f3606cc3ef81dad117047b4cb57609ad1a92672`. GitHub returned **403 `Resource not accessible by integration`** for classic branch-protection details, and **403 `Upgrade to GitHub Pro or make this repository public to enable this feature`** for repository rulesets. These are separate integration/entitlement boundaries. The exact effective protection state must be verified by an authorized admin; **do not make the private repository public, purchase a plan automatically or weaken review checks**.
+
 ## Review prerequisites / no bypass
 
 1. A separate reviewer with actual write-or-higher permission, whose immutable GitHub ID is **neither** `11139560` nor `2148448`, must be provisioned/verified. Neither candidate identity may self-approve.
