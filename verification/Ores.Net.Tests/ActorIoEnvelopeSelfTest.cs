@@ -175,6 +175,34 @@ internal static class ActorIoEnvelopeSelfTest
         ExpectStale(() => restartedIo.OutputAtEof(restarted),
             "explicitly retired output remains retired under STOP");
 
+        // Race the retirement callback against a bounded producer. The
+        // mailbox and I/O monitors must never be held in inverted order.
+        var raceMailbox = new ActorMailbox(91006);
+        var raceActor = raceMailbox.CurrentRef;
+        var raceIo = new ActorIoEnvelope(raceMailbox);
+        using (var started = new ManualResetEventSlim())
+        {
+            var writer = Task.Run(() =>
+            {
+                started.Set();
+                for (int i = 0; i < 2048; i++)
+                {
+                    try
+                    {
+                        raceIo.TryFeedInput(raceActor, new byte[] { (byte)i });
+                        raceIo.TryReadInput(raceActor, out _);
+                    }
+                    catch (InvalidOperationException) { return; }
+                }
+            });
+            Require(started.Wait(TimeSpan.FromSeconds(5)), "race producer admission");
+            var stopper = Task.Run(() => raceMailbox.Stop());
+            Require(Task.WaitAll(new Task[] { writer, stopper },
+                TimeSpan.FromSeconds(10)), "mailbox/I-O retirement lock-order deadlock");
+            ExpectStale(() => raceIo.TryFeedInput(raceActor, new byte[] { 1 }),
+                "concurrent stop must retire all queued logical I/O");
+        }
+
         var stale = actor;
         mailbox.Stop();
         var fresh = mailbox.Restart();
