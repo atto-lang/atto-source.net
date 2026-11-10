@@ -437,6 +437,13 @@ public static class OresStructuredParser
             else if (ch == '|' && !moduleMode)
                 throw new FormatException(
                     $"Lexical captures require checked closure lowering at offset {offset}");
+            // The scalar frontend does not lex collection brackets. Give a
+            // compiler-owned denial instead of an incidental invalid-character
+            // error: no future bracket spelling may accidentally fall back
+            // to unchecked CLR/native element access.
+            else if (ch == '[' && !moduleMode)
+                throw new FormatException(
+                    $"E_UNCHECKED_COLLECTION_ACCESS: use typed checked get/get_copy; [] lowering is unsupported at offset {offset}");
             else if ("()+-*{}:;=<.,?".IndexOf(ch) >= 0 ||
                 (moduleMode && "[]/>!|&".IndexOf(ch) >= 0)) index++;
             else throw new FormatException($"Invalid character at offset {offset}");
@@ -968,7 +975,15 @@ public static class OresStructuredParser
         // LLVM's full actor-owned dynamic collection semantics.
         private StructuredExpr ArrayPostfix(StructuredExpr array, int depth)
         {
-            if (array.Type != IrValueType.FixedArrayI64 || !Take("."))
+            if (array.Type != IrValueType.FixedArrayI64)
+                return array;
+            // Linked/module parsing tokenizes brackets for unrelated syntax.
+            // A fixed array must never slip past the typed Option access
+            // verifier through an indexed postfix, even on an out-of-bounds
+            // miss. Keep this negative compiler-owned, not a parse accident.
+            if (Current.Text == "[")
+                throw Error("E_UNCHECKED_COLLECTION_ACCESS: use typed checked get/get_copy; [] lowering is unsupported");
+            if (!Take("."))
                 return array;
             int at = Current.Offset;
             string operation = Current.Text;
