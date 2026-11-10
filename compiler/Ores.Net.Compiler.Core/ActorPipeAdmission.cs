@@ -14,11 +14,16 @@ internal static class ActorPipeAdmission
     {
         if (current is "pipe" or "connect")
         {
-            // The Java compiler reserves the Actor namespace factories,
-            // including qualified Actor::pipe / Actor::connect spellings.
-            bool actorFactory = (left == "." && twoBack == "Actor") ||
-                                (left == ":" && twoBack == ":" && threeBack == "Actor");
-            if (actorFactory && right is "(" or "<")
+            // The Java compiler reserves Actor.pipe/connect; LLVM also
+            // compiles ActorUtils.pipe and ActorUtils::pipe. Do not let these
+            // names silently fall through into dynamic or scalar invocation.
+            bool actorNamespace = twoBack == "Actor" ||
+                                  (twoBack == "ActorUtils" && current == "pipe");
+            bool staticNamespace = threeBack == "Actor" ||
+                                   (threeBack == "ActorUtils" && current == "pipe");
+            bool actorFactory = (left == "." && actorNamespace) ||
+                                (left == ":" && twoBack == ":" && staticNamespace);
+            if (actorFactory && (right is "(" or "<"))
                 return true;
         }
 
