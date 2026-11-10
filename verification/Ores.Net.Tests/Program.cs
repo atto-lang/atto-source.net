@@ -456,6 +456,7 @@ ActorFrameStackSelfTest.Run(); // host-only actor logical frames; not guest/AOT 
 ActorScalarFrameAbiSelfTest.Run(); // verified CFG layout/native spill boundary, not guest execution
 ProjectRootSourceTests.Run(); // host-only resolver, not linked .NET source imports
 ActorNativeArenaSelfTest.Run();
+ActorNativeAggregateStoreTests.Run(); // unmanaged per-actor aggregate values, not compiler guest parity
 
 // Import parity is deliberately not claimed for the .NET scalar compiler.
 // Each form must fail at lexical admission with a specific import diagnostic,
