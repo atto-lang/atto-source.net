@@ -207,4 +207,143 @@ static class CrossBackendCheckedI64ParityTests
             throw new Exception("Untrusted remainder IR escaped literal divisor gate");
         }
     }
+    private static void OresllmScalarIntersectionCases()
+    {
+        // Actual .NET parser -> OresIR -> CIL reference interpreter, NOT NativeAOT.
+        // These 28 expressions match contracts/oresllm-parity/v1/scalar.json.
+        foreach (var (expression, expected) in new (string, long)[]
+        {
+            ("0", 0L),
+            ("42", 42L),
+            ("2 + 3 * 4", 14L),
+            ("(2 + 3) * 4", 20L),
+            ("-7 + 3", -4L),
+            ("-7 * -6", 42L),
+            ("9223372036854775807", long.MaxValue),
+            ("-9223372036854775808", long.MinValue),
+            ("9223372036854775807 - 1", long.MaxValue - 1L),
+            ("-9223372036854775808 + 1", long.MinValue + 1L),
+            ("1 - 9", -8L),
+            ("(-5) * (3 + 4)", -35L),
+            ("(17 - 2) * 3", 45L),
+            ("0 - (4 * 5)", -20L),
+            ("1 + (2 * (3 + 4))", 15L),
+            ("-(-5)", 5L),
+            ("0 * 9223372036854775807", 0L),
+        })
+        {
+            var source = Header + "pub fnc main():int{return " + expression + ";}";
+            var ast = OresParser.Parse(source);
+            var ir = OresIrLowering.Lower(ast);
+            long fromIr = OresIrReferenceEvaluator.Evaluate(ir);
+            if (fromIr != expected)
+                throw new Exception($"OresLLM i64 managed IR mismatch: {expression}: {fromIr} vs {expected}");
+            var folder = Path.Combine(Path.GetTempPath(), "oresnet-oresllm-" +
+                Guid.NewGuid().ToString("N"));
+            var file = Path.Combine(folder, "OresGenerated.dll");
+            try
+            {
+                CilEmitter.EmitLibrary(ir, file);
+                using var assembly = AssemblyDefinition.ReadAssembly(file);
+                var method = assembly.MainModule.Types
+                    .Single(t => t.FullName == "Oreslang.Generated.OresProgram")
+                    .Methods.Single(f => f.Name == "Run");
+                long fromCil = CilReferenceEvaluator.Evaluate(method);
+                if (fromCil != expected)
+                    throw new Exception($"OresLLM i64 CIL mismatch: {expression}: {fromCil} vs {expected}");
+            }
+            finally
+            {
+                if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+            }
+        }
+
+        foreach (string expression in new[]
+        {
+            "9223372036854775807 + 1",
+            "-9223372036854775808 - 1",
+            "9223372036854775807 * 2",
+            "-(-9223372036854775808)",
+            "(9223372036854775807 + 1) * 0",
+            "0 - (9223372036854775807 + 1)",
+        })
+        {
+            var ast = OresParser.Parse(Header + "pub fnc main():int{return " + expression + ";}");
+            var ir = OresIrLowering.Lower(ast);
+            bool irTrapped = false;
+            try { _ = OresIrReferenceEvaluator.Evaluate(ir); }
+            catch (OverflowException) { irTrapped = true; }
+            if (!irTrapped)
+                throw new Exception("OresLLM checked overflow admitted in IR: " + expression);
+
+            // Independent emitted-CIL interpretation must also trap. IR-only
+            // overflow evidence cannot certify the managed backend lowering.
+            var folder = Path.Combine(Path.GetTempPath(), "oresnet-overflow-" +
+                Guid.NewGuid().ToString("N"));
+            var file = Path.Combine(folder, "OresGenerated.dll");
+            try
+            {
+                CilEmitter.EmitLibrary(ir, file);
+                using var assembly = AssemblyDefinition.ReadAssembly(file);
+                var method = assembly.MainModule.Types
+                    .Single(t => t.FullName == "Oreslang.Generated.OresProgram")
+                    .Methods.Single(f => f.Name == "Run");
+                bool cilTrapped = false;
+                try { _ = CilReferenceEvaluator.Evaluate(method); }
+                catch (OverflowException) { cilTrapped = true; }
+                if (!cilTrapped)
+                    throw new Exception("OresLLM checked overflow admitted in CIL: " + expression);
+            }
+            finally
+            {
+                if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+            }
+        }
+
+        foreach (string expression in new[]
+        {
+            "unknown_value", "7 / 2", "5 ^ 3", "5 ^^ 3", "1__0"
+        })
+        {
+            try { _ = OresParser.Parse(Header + "pub fnc main():int{return " + expression + ";}"); }
+            catch (FormatException) { continue; }
+            throw new Exception("OresLLM unsupported expression admitted: " + expression);
+        }
+    }
+
+    private static void SupplementalScalarArithmeticCases()
+    {
+        // Supplemental parser -> verified IR -> emitted CIL reference checks.
+        // Not counted as NativeAOT or shared-manifest execution.
+        foreach (var (expression, expected) in new (string, long)[]
+        {
+            ("-7 * 0", 0L),
+            ("2 * ((5 * 3 + 1) - 9) * 3", 42L), // OresLLM scalar gradient (not autograd)
+            ("(2 + 3) * (10 - 2)", 40L),
+            ("9223372036854775807 - 9223372036854775807", 0L),
+        })
+        {
+            var ast = OresParser.Parse(Header + "pub fnc main():int{return " + expression + ";}");
+            var ir = OresIrLowering.Lower(ast);
+            if (OresIrReferenceEvaluator.Evaluate(ir) != expected)
+                throw new Exception("Supplemental OresLLM IR mismatch: " + expression);
+            var folder = Path.Combine(Path.GetTempPath(), "oresnet-supplemental-" +
+                Guid.NewGuid().ToString("N"));
+            var file = Path.Combine(folder, "OresGenerated.dll");
+            try
+            {
+                CilEmitter.EmitLibrary(ir, file);
+                using var assembly = AssemblyDefinition.ReadAssembly(file);
+                var method = assembly.MainModule.Types
+                    .Single(t => t.FullName == "Oreslang.Generated.OresProgram")
+                    .Methods.Single(f => f.Name == "Run");
+                if (CilReferenceEvaluator.Evaluate(method) != expected)
+                    throw new Exception("Supplemental OresLLM CIL mismatch: " + expression);
+            }
+            finally
+            {
+                if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+            }
+        }
+    }
 }

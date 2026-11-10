@@ -138,6 +138,78 @@ internal static class StructuredSourceTests
             + "fnc main():int{return 7;}");
         Require(blockCommentOnly is not null,
             "nested block comments must not mint or falsely reject container capabilities");
+        // All .NET compilation routes must fail closed on nominal ModelGraphs.
+        // The structured parser backs CFG/CIL and linked-module compilation,
+        // not only the shipping scalar expression parser.
+        foreach (var source in new[] {
+            "define model x as Identity() end",
+            "define model PriceEstimate() as Identity() end",
+            "define pub model x as Identity() end",
+            "pub define model x as Identity() end",
+            "define /* inert */ model x as Identity() end",
+            "fnc main():int{return 42;} define model x as Identity() end",
+            "fnc main():int{define model Local as Identity() end return 42;}"
+        })
+            RejectFeature(source, "MODEL_LOWERING_UNSUPPORTED");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{let int model=41;return model+1;}").Body.Count == 2,
+            "contextual model remains a valid scalar local identifier");
+        Require(OresStructuredParser.Parse(
+            "/* define model Fake as Identity() end */ fnc main():int{return 42;}").Body.Count == 1,
+            "commented-out model declarations are lexically inert");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{return 42;} // define model Fake as Identity() end").Body.Count == 1,
+            "line comment model syntax is lexically inert");
+        // No executable supervisor/CONTROL source lowering exists in the
+        // scalar NativeAOT compiler. A nominal supervisor must not downgrade
+        // to an ordinary class, actor, trait, or exported helper.
+        foreach (var source in new[] {
+            "define supervisor S1 as on_panic(f: Failure): void { return; } end",
+            "pub define supervisor S1 as on_panic(f: Failure): void { return; } end",
+            "define pub supervisor S1 as on_panic(f: Failure): void { return; } end",
+            "define supervisor S1 extends Actor as on_panic(f: Failure): void {} end",
+            "define supervisor S1 implements Observer as on_panic(f: Failure): void {} end",
+            "define supervisor S1 with RestartPolicy as on_panic(f: Failure): void {} end",
+            "define module Workers as define supervisor S1 as on_panic(f: Failure): void {} end end",
+            "fnc main():int{define supervisor Local as on_panic(f: Failure): void {} end return 42;}"
+        })
+            RejectFeature(source, "Source supervisors require typed Failure, owned CONTROL dispatch");
+        // Identical text in comments and quoted strings is not executable syntax.
+        var supervisorComment = OresStructuredParser.Parse(
+            "fnc main():int{return 42;} // define supervisor S1 extends Actor");
+        Require(supervisorComment.Body.Count == 1,
+            "comments must not create supervisor admission failures");
+        // Linked import discovery runs before full source parsing and must not
+        // inspect dependency paths for malformed input hidden in comments.
+        // The production entry point is internal; reflection is test-only.
+        var readLinkedImports = typeof(OresStructuredParser).GetMethod(
+            "ReadLinkedImports",
+            System.Reflection.BindingFlags.Static |
+            System.Reflection.BindingFlags.NonPublic)
+            ?? throw new Exception("Linked import admission entry point missing");
+        foreach (var (source, expectedError) in new (string, string)[] {
+            ("/* hidden " + '\0' + " */", "Source contains NUL"),
+            ("/* hidden " + (char)0xD800 + " */", "Invalid UTF-16"),
+            ("// hidden " + (char)0xDC00 + "\n", "Invalid UTF-16"),
+            ("/* hidden " + (char)0xDC00 + " */", "Invalid UTF-16")
+        })
+        {
+            try
+            {
+                _ = readLinkedImports.Invoke(null, new object?[] { source });
+            }
+            catch (System.Reflection.TargetInvocationException failure)
+                when (failure.InnerException is FormatException error &&
+                      error.Message.Contains(expectedError, StringComparison.Ordinal) &&
+                      error.Message.Contains("offset", StringComparison.Ordinal))
+            {
+                continue;
+            }
+            throw new Exception(
+                "Linked import discovery admitted malformed source before full parse: " +
+                expectedError);
+        }
+        _ = readLinkedImports.Invoke(null, new object?[] { "/* valid \uD83D\uDD12 */" });
 
         // Local value types are block-local declarations on the structured
         // frontend. They are admitted into the AST but deliberately rejected
@@ -737,6 +809,20 @@ internal static class StructuredSourceTests
         }
         Require(rejectedMutations >= 128,
             "adversarial mutation corpus must exercise substantial parser rejection");
+        // Until typed aggregate/callable lowering lands, structural source must
+        // fail closed rather than silently compiling as scalar-only CIL.
+        Reject("structural fnc main():int{return 1;}",
+            "structural declaration unsupported in bootstrap");
+        Reject("fnc main(structural Shape value):int{return 1;}",
+            "structural parameters unsupported in bootstrap");
+        Reject("fnc main():int{match 1 over on _ -> {return 1;} end}",
+            "match-over unsupported in bootstrap");
+        Reject("fnc take(tuple (int, int, string?) v):int{return 1;}",
+            "omittable positional tuple is not lowered by CIL bootstrap");
+        Reject("fnc take((int, int, string?) v):int{return 1;}",
+            "tuple shorthand is not lowered by CIL bootstrap");
+        Reject("fnc take(structural (int, int, string?) v):int{return 1;}",
+            "structural positional width view is not lowered by CIL bootstrap");
 
         // The shipping arithmetic frontend is intentionally unchanged.
         // Stage-one binding names must remain unambiguous.

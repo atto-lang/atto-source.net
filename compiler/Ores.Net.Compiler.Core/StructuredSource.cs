@@ -75,21 +75,9 @@ public static class OresStructuredParser
         return reader.ReadImports();
     }
 
-    private static List<Token> LexLinked(string source)
-    {
-        if (source.Length > MaxChars || System.Text.Encoding.UTF8.GetByteCount(source) > MaxChars)
-            throw new FormatException("Source exceeds 1 MiB UTF-8 parser limit");
-        var lexer = new Lexer(source, true);
-        var tokens = new List<Token>();
-        do
-        {
-            tokens.Add(lexer.Read());
-            if (tokens.Count > MaxTokens) throw new FormatException("Structured token budget exceeded");
-        } while (tokens[^1].Text.Length != 0);
-        return tokens;
-    }
-
-    private static StructuredLinkedUnit ParseCore(string source, LinkedModuleContext? linking)
+    // Import discovery must enforce the same byte, NUL and UTF-16 admission
+    // as full parsing BEFORE it can resolve or probe another module.
+    private static void ValidateSourceInput(string source)
     {
         ArgumentNullException.ThrowIfNull(source);
         if (source.Length > MaxChars)
@@ -110,6 +98,24 @@ public static class OresStructuredParser
         // UTF-8 bytes, matching the disk/CLI boundary, not code-unit count.
         if (System.Text.Encoding.UTF8.GetByteCount(source) > 1_048_576)
             throw new FormatException("Source exceeds 1 MiB UTF-8 parser limit");
+    }
+
+    private static List<Token> LexLinked(string source)
+    {
+        ValidateSourceInput(source);
+        var lexer = new Lexer(source, true);
+        var tokens = new List<Token>();
+        do
+        {
+            tokens.Add(lexer.Read());
+            if (tokens.Count > MaxTokens) throw new FormatException("Structured token budget exceeded");
+        } while (tokens[^1].Text.Length != 0);
+        return tokens;
+    }
+
+    private static StructuredLinkedUnit ParseCore(string source, LinkedModuleContext? linking)
+    {
+        ValidateSourceInput(source);
         // No structural match lowering or readonly shape metadata in scalar CIL yet.
         StructuralShapeAdmission.RejectUnsupportedPatterns(source);
         var lexer = new Lexer(source, linking is not null);
@@ -133,6 +139,16 @@ public static class OresStructuredParser
             // The scalar bootstrap does not have class/actor dispatch or
             // ownership-aware lexical closures. Refuse these at source admission
             // with a stable capability diagnostic, not an accidental parse error.
+            // Structured CFG, module linking and NativeAOT have no nominal
+            // ModelGraph lowering. Reject before any source can reach SSA/CIL.
+            // Match contextual declaration modifiers, never an ordinary
+            // parameter or source comment containing the word "model".
+            if (token.Text == "model" && tokens.Count > 0 &&
+                (tokens[^1].Text == "define" ||
+                 (tokens[^1].Text == "pub" && tokens.Count > 1 &&
+                  tokens[^2].Text == "define")))
+                throw new FormatException(
+                    $"MODEL_LOWERING_UNSUPPORTED: .NET structured frontend requires typed nominal ModelGraph lowering at offset {token.Offset}");
             if (token.Text == "abstract" && tokens.Count > 0 &&
                 (tokens[^1].Text == "define" ||
                  (tokens[^1].Text == "pub" && tokens.Count > 1 &&
@@ -161,6 +177,16 @@ public static class OresStructuredParser
                 throw new FormatException(
                     $"Inverted class requires checked bracket-row and ownership lowering in the .NET backend at offset {token.Offset}");
             }
+            // A supervisor is a distinct compiler-owned CONTROL authority,
+            // not a class/actor or a scalar helper. Deny it before CFG/CIL
+            // emission, including module-local and pub/define spellings.
+            // Tokenization already excludes comments and string contents.
+            if (token.Text == "supervisor" && tokens.Count > 0 &&
+                (tokens[^1].Text == "define" ||
+                 (tokens[^1].Text == "pub" && tokens.Count > 1 &&
+                  tokens[^2].Text == "define")))
+                throw new FormatException(
+                    $"Source supervisors require typed Failure, owned CONTROL dispatch and Native AOT lowering; unsupported in .NET structured frontend at offset {token.Offset}");
             if ((token.Text == "class" || token.Text == "actor") &&
                 tokens.Count > 0 &&
                 (tokens[^1].Text == "define" ||
@@ -210,6 +236,24 @@ public static class OresStructuredParser
                     throw new FormatException(
                         $"VIRTUAL_ACTOR_BACKEND_UNSUPPORTED: logical key and activation fencing required at offset {tokens[j].Offset}");
             }
+            // The separately exposed check-structured / compile-structured
+            // pipeline must not bypass the shipping scalar concurrency gate.
+            // This lexer has already removed comments, so no raw regex scan.
+            string word = tokens[i].Text;
+            string next = tokens[i + 1].Text;
+            if (word == "async" && next == "fnc")
+                throw new FormatException(
+                    $"E_CALLABLE_MODIFIERS: async fnc is removed; use suspends at offset {tokens[i].Offset}");
+            if ((word == "critical" && next == "suspends") ||
+                (word == "suspends" && next == "critical"))
+                throw new FormatException(
+                    $"E_CALLABLE_MODIFIERS: critical suspends fnc is forbidden at offset {tokens[i].Offset}");
+            if (word == "critical")
+                throw new FormatException(
+                    $"E_CRITICAL_UNSUPPORTED: structured CIL has no authenticated guard owner or FIFO continuation lowering at offset {tokens[i].Offset}");
+            if (word is "suspends" or "await")
+                throw new FormatException(
+                    $"E_SUSPENDS_UNSUPPORTED: structured CIL lacks typed suspension/continuation lowering at offset {tokens[i].Offset}");
             if (tokens[i].Text == "select" &&
                 StaticSelectAdmission.IsStaticSelectFollower(tokens[i + 1].Text))
                 throw StaticSelectAdmission.Unsupported(tokens[i].Offset);
