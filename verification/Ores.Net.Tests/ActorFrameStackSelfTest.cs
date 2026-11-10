@@ -160,6 +160,8 @@ internal static class ActorFrameStackSelfTest
             var child = context.PushStackFrame(8);
             RejectRange(() => context.PushStackFrame(0),
                 "malformed zero-length frame is rejected without poisoning");
+            RejectRange(() => context.PushStackFrame(8, alignment: 3),
+                "invalid non-power-of-two alignment is nonterminal");
             RejectRange(() =>
                 context.WriteStackFrame(child, 7, new byte[] { 1, 2 }),
                 "frame write cannot cross its issued length");
@@ -238,6 +240,8 @@ internal static class ActorFrameStackSelfTest
                 "caught byte quota failure must revoke new admission");
             RejectInvalid(() => { ActorScalarFrameAbiV1.ReadI64(context, typed, 0); },
                 "typed scalar spill cannot be read from terminally poisoned stack");
+            RejectInvalid(() => context.PopStackFrame(typed),
+                "terminal stack fault must not permit trusted raw Pop bypass");
             validatedFaults.Enqueue("aggregate");
         });
         var singleFrame = runtime.Spawn(ActorKind.Shared, (context, _) =>
