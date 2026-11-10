@@ -270,7 +270,8 @@ var aggregateBytes = quotaRuntime.Spawn(ActorKind.Shared, (ctx, _) =>
     catch (ActorStackQuotaExceededException) { caught = true; }
     Require(caught, "native aggregate byte quota did not raise exception");
     Deny(() => ctx.PushStackFrame(1));
-    Deny(() => { _ = ActorScalarFrameAbiV1.ReadI64(ctx, typed, 0); });
+    Deny(() => { ActorScalarFrameAbiV1.ReadI64(ctx, typed, 0); });
+    Deny(() => ctx.PopStackFrame(typed));
     validatedQuotaCases.Enqueue("aggregate");
 });
 var oversizedFrame = quotaRuntime.Spawn(ActorKind.Shared, (ctx, _) =>
