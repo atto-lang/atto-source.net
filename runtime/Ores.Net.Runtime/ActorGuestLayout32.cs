@@ -81,6 +81,22 @@ public sealed class ActorGuestLayout32
     }
 
     /// <summary>
+    /// One nominal type identifier must have one immutable shape for the
+    /// actor lifetime, including after every instance has been dropped.
+    /// </summary>
+    internal bool SameShape(ActorGuestLayout32 other)
+    {
+        ArgumentNullException.ThrowIfNull(other);
+        if (TypeId != other.TypeId || SizeBytes != other.SizeBytes ||
+            _fields.Length != other._fields.Length)
+            return false;
+        for (int i = 0; i < _fields.Length; i++)
+            if (_fields[i] != other._fields[i])
+                return false;
+        return true;
+    }
+
+    /// <summary>
     /// Raw byte reads/writes on typed objects are restricted to data fields.
     /// Reference fields can only be accessed through checked Ref32 methods.
     /// </summary>
