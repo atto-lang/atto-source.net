@@ -17,8 +17,10 @@ public enum NativeAggregateKind : byte
 /// <summary>
 /// Owned fixed-shape i64 aggregates backed exclusively by ActorNativeArena.
 /// Per-object headers and payload live in unmanaged actor-private bytes, not
-/// CLR ValueTuple, List, Dictionary, or object[]. Tokens are unforgeable
-/// generational arena handles; foreign/stale handles fail closed.
+/// CLR ValueTuple, List, Dictionary, or object[]. Tokens are opaque
+/// generation-fenced, store-local handles, not cryptographic capabilities.
+/// Only a trusted actor host may retain the store reference; foreign/stale
+/// handles fail closed when presented to a different store.
 ///
 /// A compiler may lower typed values to this ABI only after proving a scalar
 /// i64-only payload, exact kind and record schema, and cleanup on all paths.
