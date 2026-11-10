@@ -8,6 +8,7 @@ internal static class ActorRuntimeGracefulDrainSelfTest
     {
         PreservesAcceptedMessagesAndRejectsLateAdmission();
         TwoActorHostForwardingRequiresUpstreamFirstDrain();
+        AbortOverridesGracefulWithoutProcessingQueuedData();
         ForgedRefCannotSealSomeoneElsesMailbox();
         Console.WriteLine("PASS .NET host actor graceful drain, admission and " +
             "two-actor forwarding (NOT SOURCE GUEST/NATIVE AOT EVIDENCE)");
@@ -60,6 +61,8 @@ internal static class ActorRuntimeGracefulDrainSelfTest
             Task drained = runtime.DrainAndStop(actor);
             Require(!drained.IsCompleted,
                 "generation-bound completion cannot precede active-turn exit");
+            Require(ReferenceEquals(drained, runtime.DrainAndStop(actor)),
+                "repeated graceful seal retains one terminal receipt");
 
             bool denied = false;
             try { runtime.Send(actor, new byte[] { 3 }); }
@@ -115,6 +118,42 @@ internal static class ActorRuntimeGracefulDrainSelfTest
             "two host DATA turns deliver 2 -> 3 -> 6 without loss");
         Require(runtime.NativeReservedBytes == 0,
             "two independent actor arenas release their budgets");
+    }
+
+    private static void AbortOverridesGracefulWithoutProcessingQueuedData()
+    {
+        using var runtime = new ActorRuntime(Options());
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        int handled = 0;
+        var actor = runtime.Spawn(ActorKind.Private, (_, payload) =>
+        {
+            if (payload.Span[0] == 1)
+            {
+                entered.Set();
+                if (!release.Wait(TimeSpan.FromSeconds(10)))
+                    throw new Exception("timed out waiting for hard-stop override");
+            }
+            Interlocked.Increment(ref handled);
+        });
+        runtime.Send(actor, new byte[] { 1 });
+        try
+        {
+            Require(entered.Wait(TimeSpan.FromSeconds(5)),
+                "hard-stop override first turn has entered");
+            runtime.Send(actor, new byte[] { 2 });
+            Task pendingGraceful = runtime.DrainAndStop(actor);
+            runtime.Stop(actor); // intentional abort: erase queued DATA
+            Require(!pendingGraceful.IsCompleted,
+                "active turn still controls physical retirement");
+        }
+        finally { release.Set(); }
+
+        Require(WaitUntil(() => runtime.LiveActors == 0),
+            "hard stop overrides graceful close without stalled carrier");
+        Require(handled == 1 && runtime.CompletedMessages == 1 &&
+                runtime.NativeReservedBytes == 0,
+            "hard stop scrubs queued DATA rather than processing it");
     }
 
     private static void ForgedRefCannotSealSomeoneElsesMailbox()
