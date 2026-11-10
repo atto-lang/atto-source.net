@@ -451,6 +451,7 @@ SelectableI64ChannelSelfTest.Run();
 SelectableI64FutureSelfTest.Run();
 ActorDispatchDomainsSelfTest.Run();
 ActorRuntimeSelfTest.Run();
+ActorRuntimeGracefulDrainSelfTest.Run(); // HOST only; not guest pipe lowering
 ActorPipeAdmissionTests.Run(); // compiler gate only; no executable actor guest yet
 ActorPipeSourcePlanV1SelfTest.Run(); // checked scalar CIL oracle, not actor delivery
 UniversalHotLoadV1SelfTest.Run();
