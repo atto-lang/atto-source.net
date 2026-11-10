@@ -16,8 +16,9 @@ public sealed class DotnetHostImportPolicy
     public static DotnetHostImportPolicy DenyAll { get; } = new(false);
 
     /// <summary>
-    /// Permits only System.Math.Abs(Int64) and System.Math.Max(Int64, Int64).
-    /// This is a pure scalar host adapter, not arbitrary CLR interop.
+    /// Permits only System.Math.Abs(Int64), Min(Int64, Int64), and Max(Int64, Int64)
+    /// in the experimental structured compiler. This is a pure scalar-method
+    /// host adapter, not arbitrary CLR interop or an actor heap guarantee.
     /// </summary>
     public static DotnetHostImportPolicy MathI64V0 { get; } = new(true);
 
