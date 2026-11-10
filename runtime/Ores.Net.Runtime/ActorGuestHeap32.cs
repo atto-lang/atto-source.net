@@ -22,6 +22,7 @@ internal sealed class ActorGuestHeap32
 {
     internal const uint Null = 0;
     internal const int MaxSlots = ushort.MaxValue;
+    internal const int MaxNominalLayouts = 256;
     private const uint SlotMask = ushort.MaxValue;
     private const int SlotBits = 16;
 
@@ -29,6 +30,8 @@ internal sealed class ActorGuestHeap32
     private readonly ActorArena _arena;
     private readonly ActorArenaNativeAllocation[] _handles;
     private readonly ActorGuestLayout32?[] _layouts;
+    // Fixed nominal type identity across the lifetime of an actor incarnation.
+    private readonly Dictionary<uint, ActorGuestLayout32> _knownTypes = new();
     private readonly ushort[] _generations;
     private readonly int[] _freeSlots;
     private int _nextSlot;
@@ -87,11 +90,33 @@ internal sealed class ActorGuestHeap32
         ArgumentNullException.ThrowIfNull(layout);
         lock (_gate)
         {
-            // The native allocation is committed before publishing the type;
-            // layout already validated all field bounds and alignment.
-            uint reference = Allocate(turn, layout.SizeBytes, 8);
-            _layouts[checked((int)(reference & SlotMask) - 1)] = layout;
-            return reference;
+            _arena.ValidateActiveTurn(turn);
+            bool newType = !_knownTypes.TryGetValue(layout.TypeId, out var registered);
+            if (!newType && !registered!.SameShape(layout))
+                throw new InvalidOperationException(
+                    "Nominal guest type ID conflicts with an existing actor layout");
+            if (newType && _knownTypes.Count == MaxNominalLayouts)
+                throw new InvalidOperationException(
+                    "Actor nominal guest type registry exhausted");
+
+            // Register before native allocation so no throw after a slot is
+            // committed can leave a partially typed object. Restore metadata
+            // on failed allocation; the type ID remains fixed after success,
+            // including when the last instance is dropped.
+            if (newType)
+                _knownTypes.Add(layout.TypeId, layout);
+            try
+            {
+                uint reference = Allocate(turn, layout.SizeBytes, 8);
+                _layouts[checked((int)(reference & SlotMask) - 1)] = layout;
+                return reference;
+            }
+            catch
+            {
+                if (newType)
+                    _knownTypes.Remove(layout.TypeId);
+                throw;
+            }
         }
     }
 
