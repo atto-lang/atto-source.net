@@ -1,0 +1,3 @@
+# Generated exclusively from the pinned .atto source by the checked CLI.
+# Do not commit generated C# as hand-authored guest execution evidence.
+ActorHeapV1.g.cs
