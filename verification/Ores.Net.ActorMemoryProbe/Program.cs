@@ -70,7 +70,7 @@ for (int i = 0; i < actorCount; ++i)
                 "receive execution identity disagrees with actor incarnation");
             if (!first)
                 Require(!ReferenceEquals(executions[index], context.Execution) &&
-                    context.Execution.InvocationSequence > executions[index]!.InvocationSequence,
+                    context.Execution.ExecutionSequence > executions[index]!.ExecutionSequence,
                     "new DATA reused an earlier receive execution identity");
             executions[index] = context.Execution;
             if (first)

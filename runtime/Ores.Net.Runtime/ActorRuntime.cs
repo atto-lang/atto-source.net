@@ -77,17 +77,17 @@ public sealed class ActorContext
 {
     private readonly ActorArena _arena;
     private readonly ActorArenaTurn _turn;
-    private readonly ActorFrameStack _stack;
+    private readonly ActorExecutionStack _stack;
 
     internal ActorContext(ActorRef self, ActorKind kind,
-        ActorArena arena, ActorArenaTurn turn, ActorFrameStack stack,
+        ActorArena arena, ActorArenaTurn turn,
         ActorExecutionContext execution)
     {
         Self = self;
         Kind = kind;
         _arena = arena;
         _turn = turn;
-        _stack = stack;
+        _stack = execution.Stack;
         Execution = execution;
     }
 
@@ -235,7 +235,7 @@ public sealed class ActorRuntime : IDisposable
             Kind = kind;
             Mailbox = mailbox;
             Arena = arena;
-            Stack = new ActorFrameStack(arena, stackBytes, maxStackFrames);
+            FrameStorage = new ActorFrameStorage(arena, stackBytes, maxStackFrames);
             Handler = handler;
             Reference = mailbox.CurrentRef;
             DispatchAction = Dispatch;
@@ -245,8 +245,8 @@ public sealed class ActorRuntime : IDisposable
         internal ActorKind Kind { get; }
         internal ActorMailbox Mailbox { get; }
         internal ActorArena Arena { get; }
-        internal ActorFrameStack Stack { get; }
-        internal ulong NextInvocationSequence;
+        internal ActorFrameStorage FrameStorage { get; }
+        internal ulong NextExecutionSequence;
         internal ActorMessageHandler Handler { get; }
         internal ActorRef Reference { get; }
         internal Action DispatchAction { get; }
@@ -498,21 +498,21 @@ public sealed class ActorRuntime : IDisposable
                 {
                     using (turn)
                     {
-                        if (cell.NextInvocationSequence == ulong.MaxValue)
+                        if (cell.NextExecutionSequence == ulong.MaxValue)
                             throw new InvalidOperationException("Actor invocation identity exhausted");
                         var execution = new ActorExecutionContext(
-                            cell.Reference, ++cell.NextInvocationSequence);
-                        cell.Stack.BeginInvocation(turn, execution);
+                            cell.Reference, ++cell.NextExecutionSequence, cell.FrameStorage);
+                        execution.Stack.Begin(turn);
                         var context = new ActorContext(
-                            cell.Reference, cell.Kind, cell.Arena, turn, cell.Stack, execution);
+                            cell.Reference, cell.Kind, cell.Arena, turn, execution);
                         try
                         {
                             cell.Handler(context, payload);
                             // Swallowing a quota fault cannot turn this receive
                             // into successful completion of its actor generation.
-                            cell.Stack.ValidateSynchronousTurnExit(turn);
+                            execution.Stack.ValidateSynchronousTurnExit(turn);
                         }
-                        finally { cell.Stack.EndInvocation(turn, execution); }
+                        finally { execution.Stack.Complete(turn); }
                     }
                     succeeded = true;
                 }

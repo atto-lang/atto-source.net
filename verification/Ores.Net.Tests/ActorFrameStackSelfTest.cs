@@ -67,7 +67,8 @@ internal static class ActorFrameStackSelfTest
             RejectInvalid(() => context.ReadStackFrame(saved!, 0, new byte[2]),
                 "a new receive cannot acquire an earlier invocation stack");
             Require(!ReferenceEquals(context.Execution, previousTurn!.Execution) &&
-                context.Execution.InvocationSequence > previousTurn.Execution.InvocationSequence &&
+                !ReferenceEquals(context.Execution.Stack, previousTurn.Execution.Stack) &&
+                context.Execution.ExecutionSequence > previousTurn.Execution.ExecutionSequence &&
                 context.Execution.Actor == context.Self, "receive has fresh actor-bound execution identity");
             context.Read(persistent!, 0, original);
             Require(original.SequenceEqual(new byte[] { 0xA1, 0xA2 }),

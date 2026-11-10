@@ -11,7 +11,7 @@ namespace Ores.Net.Runtime;
 [JsonConverter(typeof(ActorStackFrameNoWireConverter))]
 public sealed class ActorStackFrameHandle
 {
-    internal ActorStackFrameHandle(ActorFrameStack owner, ActorExecutionContext execution, int index,
+    internal ActorStackFrameHandle(ActorFrameStorage owner, ActorExecutionContext execution, int index,
         int offset, int length)
     {
         Owner = owner;
@@ -21,7 +21,7 @@ public sealed class ActorStackFrameHandle
         Length = length;
     }
 
-    internal ActorFrameStack Owner { get; }
+    internal ActorFrameStorage Owner { get; }
     internal ActorExecutionContext Execution { get; }
     internal int Index { get; }
     internal int Offset { get; }
@@ -95,7 +95,7 @@ public sealed class ActorStackQuotaExceededException : InvalidOperationException
         base("Actor logical stack frame/byte budget exhausted") { }
 }
 
-internal sealed class ActorFrameStack
+internal sealed class ActorFrameStorage
 {
     private readonly ActorArena _arena;
     private readonly int _capacity;
@@ -106,7 +106,14 @@ internal sealed class ActorFrameStack
     private bool _quotaPoisoned;
     private ActorExecutionContext? _execution;
 
-    internal void BeginInvocation(ActorArenaTurn turn, ActorExecutionContext execution)
+    internal void ValidateExecution(ActorArenaTurn turn, ActorExecutionContext execution)
+    {
+        _arena.ValidatePhysicalTurn(turn);
+        if (!ReferenceEquals(_execution, execution))
+            throw new InvalidOperationException("Foreign or completed execution stack");
+    }
+
+    internal void BeginExecution(ActorArenaTurn turn, ActorExecutionContext execution)
     {
         _arena.ValidateActiveTurn(turn);
         EnsureUsable();
@@ -116,7 +123,7 @@ internal sealed class ActorFrameStack
         _execution = execution;
     }
 
-    internal void EndInvocation(ActorArenaTurn turn, ActorExecutionContext execution)
+    internal void EndExecution(ActorArenaTurn turn, ActorExecutionContext execution)
     {
         _arena.ValidatePhysicalTurn(turn);
         if (!ReferenceEquals(_execution, execution))
@@ -136,7 +143,7 @@ internal sealed class ActorFrameStack
         _execution = null;
     }
 
-    internal ActorFrameStack(ActorArena arena, int capacity, int maxFrames)
+    internal ActorFrameStorage(ActorArena arena, int capacity, int maxFrames)
     {
         ArgumentNullException.ThrowIfNull(arena);
         if (capacity <= 0 || capacity > arena.PersistentCapacityBytes)

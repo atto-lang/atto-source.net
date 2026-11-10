@@ -4,7 +4,7 @@ using System.Text.Json.Serialization;
 namespace Ores.Net.Runtime;
 
 /// <summary>
-/// Runtime-issued identity of one logical receive invocation, independent of
+/// Runtime-issued identity of one logical execution, independent of
 /// its physical carrier. Future suspension must retain this exact context;
 /// unrelated DATA must never acquire its frames. This is local authority,
 /// not a serialized message or a CLR ExecutionContext capture.
@@ -12,15 +12,17 @@ namespace Ores.Net.Runtime;
 [JsonConverter(typeof(ActorExecutionContextNoWireConverter))]
 public sealed class ActorExecutionContext
 {
-    internal ActorExecutionContext(ActorRef actor, ulong invocationSequence)
+    internal ActorExecutionContext(ActorRef actor, ulong executionSequence, ActorFrameStorage storage)
     {
-        if (invocationSequence == 0) throw new ArgumentOutOfRangeException(nameof(invocationSequence));
+        if (executionSequence == 0) throw new ArgumentOutOfRangeException(nameof(executionSequence));
         Actor = actor;
-        InvocationSequence = invocationSequence;
+        ExecutionSequence = executionSequence;
+        Stack = new ActorExecutionStack(storage, this);
     }
 
     public ActorRef Actor { get; }
-    public ulong InvocationSequence { get; }
+    public ulong ExecutionSequence { get; }
+    internal ActorExecutionStack Stack { get; }
 }
 
 public sealed class ActorExecutionContextNoWireConverter : JsonConverter<ActorExecutionContext>

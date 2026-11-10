@@ -1,16 +1,27 @@
-# Receive execution contexts and actor-private native memory
+# Execution-context stacks and actor-private native memory
 
-Each logical receive invocation needs one independent stack, owned by an
-execution context rather than by a thread. Nested synchronous calls push frames
-on that invocation's stack. A future authenticated await/resume must retain the
-same context; unrelated DATA must receive a new context. Concurrent receives
-will need disjoint live stack regions under the actor's aggregate quota.
+Each logical execution context owns exactly one logical stack, independently of
+which function or method started it. A receive invocation is one current entry
+point for a new context, not the definition of stack ownership. Nested
+synchronous calls push frames on their caller's execution stack. Independently
+scheduled work needs a distinct context/stack. A future authenticated await/resume
+must retain the original context and stack across carrier migration; unrelated
+DATA must not acquire them. Concurrent live contexts will need disjoint live
+stack regions under the actor's aggregate quota.
 
 This branch integrates #395 → #453 → #454 onto current main
 `3f3606cc3ef81dad117047b4cb57609ad1a92672`, preserving those histories and
 the existing native ActorArena as the sole actor storage allocator.
 
 ## Implemented synchronous receive boundary
+
+`ActorExecutionContext.Stack` owns a distinct `ActorExecutionStack` object.
+The actor owns `ActorFrameStorage`, which supplies bounded native storage and
+actor-terminal quota state. Logical stack authority and completion are private
+to the execution context. A completed context cannot reopen its stack or acquire
+a subsequent context's frames; physical arena bytes may be reused only after
+completion and scrubbing. The implementation currently creates these contexts
+at synchronous receive entry; the relationship itself is execution-based.
 
 - `ActorRuntime.RunCell` mints an exact-issued `ActorExecutionContext` for each
   admitted receive, binding its ActorRef incarnation and non-wrapping local
@@ -47,7 +58,7 @@ physical release, sealed typed schemas, parallel scalar transfers, all three
 terminal stack-quota branches and complete native-budget return.
 
 Binary SHA-256:
-`4b90269d9e2014ff6ef7703142e0004481f66784363710e8969bfb12dc64427e`.
+`c7225b1f38087b744cefdfb6b8bd5fe52f58255f5ef463e15b6364330461dff4`.
 The probe pins runtime and ILCompiler **10.0.14**. The initial SDK-default 10.0.0
 restore failed vulnerability admission; it was not bypassed. Version 10.0.14 is
 the patched release for [GHSA-p3jp-9v83-76w9](https://github.com/advisories/GHSA-p3jp-9v83-76w9).
