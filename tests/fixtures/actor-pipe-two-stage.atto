@@ -1,5 +1,7 @@
-// Future .NET guest-execution contract. AttoLang .NET must reject this
-// until compiler-owned actor graph lowering and Native AOT execution exist.
+// Future .NET GUEST EXECUTION contract. Normal check/compile must reject
+// until compiler-owned actor graph lowering and NativeAOT execution exist.
+// The opt-in plan-actor-pipe command may type-check this source, but its
+// scalar-only CIL oracle is NOT authenticated mailbox or actor execution.
 // Expected when implemented: Producer(2) -> 3 -> Consumer(3) -> 6.
 define actor Producer as
     on_message(int n): int { return n + 1; }
