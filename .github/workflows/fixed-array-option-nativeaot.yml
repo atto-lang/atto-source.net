@@ -26,6 +26,8 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           test -z "$(git status --porcelain)"
           test "$(git hash-object contracts/collections/v1/array-inline-some42.atto)" = 25b31e47b22cbe9a6670a0d493591438c75bec46
+          test "$(git hash-object contracts/collections/v1/array-get-copy-immutable42.atto)" = d934d5b494406b7e3753173a445af1c0d446a763
+          test "$(git hash-object contracts/collections/v1/reject-array-get-copy-bool-index.atto)" = 55649e692ddfae4346d4de5ef4d8cded5e4874fb
           test "$(git hash-object contracts/collections/v1/array-inline-none42.atto)" = ab483900d565f26854db6cf600caaebe897787c1
           test "$(git hash-object contracts/collections/v1/array-inline-empty42.atto)" = 4bd862d443281d4b09d668f709417ed1f1a87f77
           test "$(git hash-object contracts/collections/v1/reject-array-mutable.atto)" = 6dce211769d08e5f3244abc79249a27ff2dda154
@@ -42,16 +44,16 @@ jobs:
             cat array-tests.log >&2
             exit 1
           }
-          grep -F 'NET_FIXED_ARRAY_OPTION_GET_TESTS_EXECUTED|positive=21|negative=24|ssa_mutants=11' array-tests.log
+          grep -F 'NET_FIXED_ARRAY_OPTION_GET_TESTS_EXECUTED|positive=31|negative=32|ssa_mutants=11' array-tests.log
           project=compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj
-          for fixture in contracts/collections/v1/array-inline-{some42,none42,empty42}.atto; do
+          for fixture in contracts/collections/v1/array-inline-{some42,none42,empty42}.atto contracts/collections/v1/array-get-copy-immutable42.atto; do
             dotnet run --project "$project" -c Release -- check-structured "$fixture"
             if dotnet run --project "$project" -c Release -- check "$fixture"; then
               echo "Shipping i64 compiler incorrectly admitted experimental array: $fixture" >&2
               exit 1
             fi
           done
-          for fixture in contracts/collections/v1/reject-array-{mutable,unsafe-index,oversize}.atto; do
+          for fixture in contracts/collections/v1/reject-array-{mutable,unsafe-index,oversize}.atto contracts/collections/v1/reject-array-get-copy-bool-index.atto; do
             if dotnet run --project "$project" -c Release -- check-structured "$fixture"; then
               echo "Array negative source accepted: $fixture" >&2
               exit 1
@@ -63,8 +65,12 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y clang zlib1g-dev binutils file
-          for variant in some42 none42 empty42; do
-            source=contracts/collections/v1/array-inline-$variant.atto
+          for variant in some42 none42 empty42 getcopy42; do
+            if [[ "$variant" == "getcopy42" ]]; then
+              source=contracts/collections/v1/array-get-copy-immutable42.atto
+            else
+              source=contracts/collections/v1/array-inline-$variant.atto
+            fi
             output=artifacts/fixed-array-$variant
             bash scripts/publish-linux.sh "$source" "$output" --structured
             binary=$output/linux-x64/oreslang-app
@@ -73,8 +79,7 @@ jobs:
             sha256sum "$binary"
           done
           compiler=artifacts/compiler/linux-x64/oresnet
-          for kind in mutable unsafe-index oversize; do
-            source=contracts/collections/v1/reject-array-$kind.atto
+          for source in contracts/collections/v1/reject-array-{mutable,unsafe-index,oversize}.atto contracts/collections/v1/reject-array-get-copy-bool-index.atto; do
             denied=artifacts/rejected-fixed-array/OresGenerated.dll
             mkdir -p "$(dirname "$denied")"
             rm -f -- "$denied"
@@ -85,7 +90,7 @@ jobs:
             test ! -e "$denied"
           done
           sha256sum "$compiler"
-          echo "NET_FIXED_ARRAY_LINUX_NATIVE_AOT_GUEST_42|head=$(git rev-parse HEAD)|variants=3"
+          echo "NET_FIXED_ARRAY_LINUX_NATIVE_AOT_GUEST_42|head=$(git rev-parse HEAD)|variants=4"
 
   windows-fixed-array:
     runs-on: windows-2022
@@ -106,6 +111,8 @@ jobs:
           }
           $expected = @{
             'contracts/collections/v1/array-inline-some42.atto' = '25b31e47b22cbe9a6670a0d493591438c75bec46'
+            'contracts/collections/v1/array-get-copy-immutable42.atto' = 'd934d5b494406b7e3753173a445af1c0d446a763'
+            'contracts/collections/v1/reject-array-get-copy-bool-index.atto' = '55649e692ddfae4346d4de5ef4d8cded5e4874fb'
             'contracts/collections/v1/array-inline-none42.atto' = 'ab483900d565f26854db6cf600caaebe897787c1'
             'contracts/collections/v1/array-inline-empty42.atto' = '4bd862d443281d4b09d668f709417ed1f1a87f77'
             'contracts/collections/v1/reject-array-mutable.atto' = '6dce211769d08e5f3244abc79249a27ff2dda154'
@@ -126,13 +133,15 @@ jobs:
         run: |
           dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
           if ($LASTEXITCODE -ne 0) { throw 'Managed compiler/CFG/CIL regression failed' }
-          dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -- check-structured contracts/collections/v1/array-inline-some42.atto
-          if ($LASTEXITCODE -ne 0) { throw 'Experimental checked array source rejected' }
+          foreach ($source in @('contracts/collections/v1/array-inline-some42.atto', 'contracts/collections/v1/array-get-copy-immutable42.atto')) {
+            dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -- check-structured $source
+            if ($LASTEXITCODE -ne 0) { throw "Experimental checked array source rejected: $source" }
+          }
       - name: Publish Linux-independent Windows NativeAOT guest binaries
         shell: pwsh
         run: |
-          foreach ($variant in @('some42','none42','empty42')) {
-            $source = "contracts/collections/v1/array-inline-$variant.atto"
+          foreach ($variant in @('some42','none42','empty42','getcopy42')) {
+            $source = if ($variant -eq 'getcopy42') { 'contracts/collections/v1/array-get-copy-immutable42.atto' } else { "contracts/collections/v1/array-inline-$variant.atto" }
             $output = "artifacts/fixed-array-$variant"
             ./scripts/publish-windows.ps1 -Source $source -Rid win-x64 -Output $output -Structured
             if ($LASTEXITCODE -ne 0) { throw "NativeAOT publish failed: $variant" }
@@ -145,8 +154,12 @@ jobs:
             (Get-FileHash $binary -Algorithm SHA256).Hash
           }
           $compiler = 'artifacts/compiler/win-x64/oresnet.exe'
-          foreach ($variant in @('mutable','unsafe-index','oversize')) {
-            $source = "contracts/collections/v1/reject-array-$variant.atto"
+          foreach ($source in @(
+            'contracts/collections/v1/reject-array-mutable.atto',
+            'contracts/collections/v1/reject-array-unsafe-index.atto',
+            'contracts/collections/v1/reject-array-oversize.atto',
+            'contracts/collections/v1/reject-array-get-copy-bool-index.atto'
+          )) {
             $denied = 'artifacts/generated/RejectedArray.dll'
             Remove-Item -LiteralPath $denied -Force -ErrorAction SilentlyContinue
             & $compiler compile-structured $source --out $denied
@@ -155,4 +168,4 @@ jobs:
             }
           }
           (Get-FileHash $compiler -Algorithm SHA256).Hash
-          Write-Host "NET_FIXED_ARRAY_WINDOWS_NATIVE_AOT_GUEST_42|head=$((& git rev-parse HEAD).Trim())|variants=3"
+          Write-Host "NET_FIXED_ARRAY_WINDOWS_NATIVE_AOT_GUEST_42|head=$((& git rev-parse HEAD).Trim())|variants=4"
