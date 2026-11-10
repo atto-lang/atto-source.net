@@ -70,6 +70,10 @@ internal static class ActorNativeAggregateStoreTests
         Require(owner.Drop(tuple), "tuple drop");
         Require(!owner.Drop(tuple), "double drop");
         Reject(() => owner.Read(tuple, NativeAggregateKind.Tuple, 0), "stale handle");
+        Require(!owner.TryWriteArray(otherActorTuple, 0, 7),
+            "foreign actor forged mutable aggregate write fails closed");
+        Require(!owner.TryWriteArray(tuple, 0, 7),
+            "dropped stale tuple token cannot mutate recycled storage");
         Require(!owner.Drop(otherActorTuple), "cannot drop another actor's allocation");
         Require(neighbor.Read(otherActorTuple, NativeAggregateKind.Tuple, 2) == 42,
             "foreign actor unaffected by forged drop");
