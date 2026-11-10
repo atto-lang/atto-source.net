@@ -60,6 +60,11 @@ public sealed class ActorMailbox : IDisposable
     private int _queuedBytes;
     private bool _closed;
     private bool _disposed;
+    // Host-owned logical actor I/O envelopes are revoked when this mailbox
+    // generation stops. Callbacks run OUTSIDE _gate to avoid the lock order
+    // inversion (I/O gate -> mailbox gate) used by envelope reads/writes.
+    private readonly List<Action> _ioRetireCallbacks = new();
+    private const int MaxIoRetireCallbacks = 64;
 
     public ActorMailbox(ulong id, int maxMessages = 1024, int maxQueuedBytes = 4 * MaxMessageBytes)
     {
@@ -97,6 +102,34 @@ public sealed class ActorMailbox : IDisposable
                 destination.Generation == _generation &&
                 destination.Nonce == _nonce;
         }
+    }
+
+    internal void RegisterIoRetirement(ActorRef generation, Action retire)
+    {
+        ArgumentNullException.ThrowIfNull(retire);
+        lock (_gate)
+        {
+            if (_disposed || _closed || generation.Id != _id ||
+                generation.Generation != _generation || generation.Nonce != _nonce)
+                throw new InvalidOperationException("Actor I/O cannot bind a stale or stopped mailbox");
+            if (_ioRetireCallbacks.Count >= MaxIoRetireCallbacks)
+                throw new InvalidOperationException("Actor I/O envelope registration quota exceeded");
+            _ioRetireCallbacks.Add(retire);
+        }
+    }
+
+    // Call only while _gate is held; invocation MUST happen after the lock.
+    private Action[] DetachIoRetireCallbacksLocked()
+    {
+        Action[] callbacks = _ioRetireCallbacks.ToArray();
+        _ioRetireCallbacks.Clear();
+        return callbacks;
+    }
+
+    private static void RetireIo(Action[] callbacks)
+    {
+        foreach (Action callback in callbacks)
+            callback();
     }
 
     // Runtime callers may check admission before starting a worker. The
@@ -156,6 +189,7 @@ public sealed class ActorMailbox : IDisposable
     /// </summary>
     public bool TryStop(ActorRef expected)
     {
+        Action[] callbacks;
         lock (_gate)
         {
             if (expected.Id != _id || expected.Generation != _generation ||
@@ -164,18 +198,23 @@ public sealed class ActorMailbox : IDisposable
             _closed = true;
             DiscardPending();
             _queuedBytes = 0;
-            return true; // Repeated stop of the same incarnation is idempotent.
+            callbacks = DetachIoRetireCallbacksLocked();
         }
+        RetireIo(callbacks);
+        return true; // Repeated stop of this incarnation is idempotent.
     }
 
     public void Stop()
     {
+        Action[] callbacks;
         lock (_gate)
         {
             _closed = true;
             DiscardPending();
             _queuedBytes = 0;
+            callbacks = DetachIoRetireCallbacksLocked();
         }
+        RetireIo(callbacks);
     }
 
     // Called only while holding _gate. The sender's input was copied on
@@ -194,6 +233,7 @@ public sealed class ActorMailbox : IDisposable
     /// </summary>
     public void Dispose()
     {
+        Action[] callbacks;
         lock (_gate)
         {
             if (_disposed) return;
@@ -201,12 +241,16 @@ public sealed class ActorMailbox : IDisposable
             _closed = true;
             DiscardPending();
             _queuedBytes = 0;
+            callbacks = DetachIoRetireCallbacksLocked();
         }
+        RetireIo(callbacks);
     }
 
     /// <summary>Invalidate old references; local numeric IDs are not secure distributed capabilities.</summary>
     public ActorRef Restart()
     {
+        Action[] callbacks;
+        ActorRef fresh;
         lock (_gate)
         {
             if (_disposed)
@@ -222,8 +266,11 @@ public sealed class ActorMailbox : IDisposable
             _closed = false;
             DiscardPending();
             _queuedBytes = 0;
-            return new ActorRef(_id, _generation, _nonce);
+            callbacks = DetachIoRetireCallbacksLocked();
+            fresh = new ActorRef(_id, _generation, _nonce);
         }
+        RetireIo(callbacks);
+        return fresh;
     }
 }
 
