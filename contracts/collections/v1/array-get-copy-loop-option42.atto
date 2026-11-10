@@ -1,0 +1,17 @@
+// Experimental .NET compiler-to-NativeAOT acceptance fixture.
+// Tests tagged Option<int> carried through a loop CFG backedge and a
+// checked Array<int>.get_copy index, not an untyped scalar sentinel.
+// Expected stdout: 42, expected guest process exit: 0.
+pub fnc main():int {
+  val Array<int> values = Array.of(0, 42);
+  let Option<int> last = None;
+  let int index = 0;
+  while index < 2 {
+    last = values.get_copy(index);
+    index = index + 1;
+  }
+  if last.is_some() {
+    return last.unwrap_or(0);
+  }
+  return 0;
+}
