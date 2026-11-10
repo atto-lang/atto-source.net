@@ -117,6 +117,37 @@ internal static class ActorNativeAggregateStoreTests
             catch (ArgumentOutOfRangeException) { }
         }
 
+        // Host-runtime allocation-free steady state is a separate property
+        // from source compiler/guest execution. Exercise the real native
+        // arena wrapper after JIT warmup; fail on managed payload allocation.
+        using (var arena = new ActorNativeAggregateStore(64, 1))
+        {
+            for (int i = 0; i < 100; i++)
+            {
+                ulong warm = arena.CreateTuple(stackalloc long[] { i, i + 1 });
+                Require(warm != 0 && arena.Read(warm, NativeAggregateKind.Tuple, 1) == i + 1,
+                    "warm scalar native aggregate operations");
+                Require(arena.Drop(warm), "warm native cleanup");
+            }
+            bool valid = true;
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 5000; i++)
+            {
+                ulong native = arena.CreatePair(i, i + 1);
+                if (native == 0 || arena.Read(native, NativeAggregateKind.Pair, 0) != i ||
+                    !arena.Drop(native))
+                {
+                    valid = false;
+                    break;
+                }
+            }
+            long managed = GC.GetAllocatedBytesForCurrentThread() - before;
+            Require(valid && arena.LiveAggregates == 0 && arena.UsedBytes == 0,
+                "unmanaged aggregate steady-state allocations reclaimed");
+            Require(managed == 0,
+                "native aggregate scalar create/read/drop must not allocate managed payload");
+        }
+
         Console.WriteLine("PASS native actor-owned tagged aggregates; kind, schema, quota and lifetime");
     }
 }
