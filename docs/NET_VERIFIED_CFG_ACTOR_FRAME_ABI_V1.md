@@ -77,3 +77,44 @@ overflow claim may be inferred from stage 1. Zero-step CI is
   independent review, and post-merge smoke verification. A GitHub
   `steps=null` or `steps=[]` job is **RUNNER_ADMISSION_FAILURE**, not
   passing or failing runtime evidence.
+
+
+## Compiler CFG boundary liveness and native parallel-transfer bridge
+
+A compiler-only `CfgActorScalarBoundaryPlan.Create(VerifiedCfgFunction)`
+now derives immutable, sorted `LiveInValueIds`, `LiveOutValueIds`, and
+exact branch/jump edge transfer descriptors from the deep-frozen SSA graph.
+The analysis is bounded by the already admitted **256 scalar SSA slots /
+128 CFG blocks** and rejects unsupported host calls, effects and arguments
+before allocating a spill plan. Backward dataflow reaches a fixed point on
+loops, including backedges; `LiveOut` conservatively unions values needed
+by either successor and exact source operands of block-parameter transfers.
+A dominating source value used without an explicit edge parameter remains
+live. Branch edge order, source IDs and destination parameter IDs are copied
+into immutable snapshots.
+
+`ActorScalarFrameAbiV1.TransferParallel` is a trusted, synchronous native
+actor-frame primitive for these compiler-derived edges. It snapshots the
+caller arrays, authenticates the exact issued frame and current actor turn,
+validates unique destination slots and scalar kinds, stages **all** source
+values, and only then commits the writes. This prevents sequential writes
+from corrupting `(a,b) -> (b,a)` loop-edge swaps. An invalid later
+destination, duplicate target, unsupported scalar kind, or malformed edge
+arity is rejected before changing **any** destination frame bytes.
+
+The managed regression suite includes source-derived scalar plans, diamond
+branches, loop backedges, a two-slot parallel swap, direct cross-block
+dominating uses, immutable edge descriptors, and rejection of unproven call
+effects. It also performs one **host-level** verified CFG edge transfer using
+the actual actor-owned native frame ABI and checks native reservation
+reclamation. The source-owned Linux/Windows NativeAOT host probe additionally
+requires the exact `actor-scalar-nativeaot-parallel-transfer` receipt.
+
+**Strict evidence boundary:** this is compiler liveness metadata plus an
+executable trusted **host** transfer primitive. There is still **no**
+compiler-generated CIL call to this primitive, no source `.atto` actor
+suspension, no cancellation/drop/unwind continuation compiler proof, and no
+evidence of isolated physical CLR machine stacks. Passing host probes cannot
+be reported as AttoLang guest execution or Java/LLVM parity. Exact-head
+nonzero-step managed tests and published native binary executions are needed
+before even the host behavior can be called verified.
