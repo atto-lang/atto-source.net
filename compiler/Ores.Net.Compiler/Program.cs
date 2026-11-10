@@ -13,6 +13,8 @@ bool validEmitSource = args.Length == 4 && args[2] == "--out" &&
     (args[0] == "emit-csharp" || args[0] == "emit-fsharp");
 bool validStaticFacts = args.Length == 2 &&
     (args[0] == "static-facts" || args[0] == "static-facts-structured");
+// Explicit source-only preview. Never accept actor pipes in normal check/compile.
+bool validActorPipePlan = args.Length == 2 && args[0] == "plan-actor-pipe";
 bool moduleCommand = args.Length >= 1 && args[0] is "check-modules" or "compile-modules";
 if (!validCheck && !validCompile && !validStructuredCheck && !validStructuredCompile && !validStaticFacts && !validEmitSource && !moduleCommand)
 {
