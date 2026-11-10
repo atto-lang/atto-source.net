@@ -215,7 +215,7 @@ internal static class ActorFrameStackSelfTest
         var depth = runtime.Spawn(ActorKind.Shared, (context, _) =>
         {
             var root = context.PushStackFrame(16);
-            _ = context.PushStackFrame(8);
+            context.PushStackFrame(8);
             bool caught = false;
             try { context.PushStackFrame(8); }
             catch (ActorStackQuotaExceededException) { caught = true; }
@@ -236,7 +236,7 @@ internal static class ActorFrameStackSelfTest
             Require(caught, "cumulative byte quota must throw exact typed fault");
             RejectInvalid(() => context.PushStackFrame(8),
                 "caught byte quota failure must revoke new admission");
-            RejectInvalid(() => { _ = ActorScalarFrameAbiV1.ReadI64(context, typed, 0); },
+            RejectInvalid(() => { ActorScalarFrameAbiV1.ReadI64(context, typed, 0); },
                 "typed scalar spill cannot be read from terminally poisoned stack");
             validatedFaults.Enqueue("aggregate");
         });
