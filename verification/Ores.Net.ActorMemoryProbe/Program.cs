@@ -35,6 +35,10 @@ using var survivorVerified = new AutoResetEvent(false);
 var errors = new ConcurrentQueue<Exception>();
 var handles = new ActorArenaHandle?[actorCount];
 var compressed = new uint[actorCount];
+var typedRoots = new uint[actorCount];
+var typedNode = new ActorGuestLayout32(0xA701, 16,
+    new[] { new ActorGuestField32(0, ActorGuestFieldKind32.I64),
+            new ActorGuestField32(8, ActorGuestFieldKind32.Ref32, 0xA701) });
 var frames = new ActorStackFrameHandle?[actorCount];
 var references = new ActorRef[actorCount];
 ActorArenaLifetimePin? pin = null;
@@ -90,6 +94,13 @@ for (int i = 0; i < actorCount; ++i)
                     Require(correct && allocated == 0,
                         "NativeAOT actor guest payload steady-state must allocate zero CLR bytes");
                 }
+                typedRoots[index] = context.AllocateTypedGuestObject32(typedNode);
+                uint typedChild = context.AllocateTypedGuestObject32(typedNode);
+                context.WriteGuestObject32(typedChild, 0,
+                    new byte[] { (byte)(51 + index) });
+                context.WriteGuestReference32(typedRoots[index], 8, typedChild);
+                Deny(() => context.WriteGuestObject32(typedRoots[index], 8,
+                    new byte[] { 0, 0, 0, 0 }));
                 frames[index] = context.PushStackFrame(8);
                 context.WriteStackFrame(frames[index]!, 0,
                     new byte[] { (byte)(31 + index) });
@@ -102,6 +113,10 @@ for (int i = 0; i < actorCount; ++i)
                 context.ReadGuestObject32(compressed[index], 0, guestValue);
                 Require(guestValue[0] == 41 + index,
                     "survivor compressed ref lost private guest payload");
+                uint child = context.ReadGuestReference32(typedRoots[index], 8);
+                context.ReadGuestObject32(child, 0, guestValue);
+                Require(guestValue[0] == 51 + index,
+                    "survivor typed guest child reference lost private payload");
                 var output = new byte[8];
                 context.Read(handles[index]!, 0, output);
                 Require(output[0] == (phase == 2 ? 13 : 14),
@@ -127,6 +142,10 @@ for (int i = 0; i < actorCount; ++i)
                 context.ReadGuestObject32(compressed[index], 0, guestValue);
                 Require(guestValue[0] == 41 + index,
                     "compressed actor-local ref must survive turn rollover");
+                uint typedChild = context.ReadGuestReference32(typedRoots[index], 8);
+                context.ReadGuestObject32(typedChild, 0, guestValue);
+                Require(guestValue[0] == 51 + index,
+                    "typed guest reference graph survives physical actor turn");
                 var frameValue = new byte[1];
                 context.ReadStackFrame(frames[index]!, 0, frameValue);
                 Require(frameValue[0] == (byte)(31 + index),
@@ -206,3 +225,4 @@ Console.WriteLine("PASS actor-memory-native-probe: four private heaps (two share
 Console.WriteLine("PASS actor-logical-stack-native-probe: four distinct actor-owned frames, cross-turn reads and foreign-handle denial");
 Console.WriteLine("PASS actor-ref32-native-probe: four actor-local uint32 guest refs, distinct native payloads, retained-turn denial (host only; not compiled guest)");
 Console.WriteLine("PASS actor-ref32-native-no-clr-allocation: 4096 warmed guest payload cycles allocated zero managed bytes (host only)");
+Console.WriteLine("PASS actor-ref32-native-typed-nodegraph: four typed native graphs survive actor turns with guarded reference fields (host only; not compiled guest)");
