@@ -65,6 +65,17 @@ internal static class FixedArrayOptionCompilerTests
         throw new Exception("Unverified mutable/unsafe array source admitted: " + label);
     }
 
+    private static void DenyDiagnostic(string source, string diagnostic)
+    {
+        try { _ = OresStructuredCfgLowering.LowerModule(source); }
+        catch (FormatException error) when
+            (error.Message.Contains(diagnostic, StringComparison.Ordinal))
+        { return; }
+        throw new Exception(
+            "Array<int> get_copy must reject with compiler-owned diagnostic: " +
+            diagnostic);
+    }
+
     private static CfgFunction Forge(CfgInstruction probe)
     {
         return new CfgFunction("main", IrValueType.I64, "entry",
@@ -160,6 +171,9 @@ internal static class FixedArrayOptionCompilerTests
             ("bad-index-placeholder", "fnc main():int{val Array<int> a=Array.of(42);return a.get(None).unwrap_or(0);}")
         };
         foreach (var (name, text) in negatives) Deny(text, name);
+        DenyDiagnostic(
+            "fnc main():int{val Array<int> a=Array.of(42);return a.get_copy(true).unwrap_or(0);}",
+            "Array<int>.get_copy index must be int");
 
         var valid = OresCfgVerifier.Verify(Forge(new CfgInstruction(2,
             CfgOpcode.ArrayIndexValidI64, IrValueType.Bool, Left: 0, I64Constant: 8)));
