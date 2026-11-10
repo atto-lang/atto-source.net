@@ -133,9 +133,13 @@ public sealed class ActorNativeAggregateStore : IDisposable
     /// <summary>Only the i64 Array kind is mutable; all product kinds are frozen.</summary>
     public bool TryWriteArray(ulong handle, int index, long value)
     {
-        var (kind, count, shape) = Describe(handle);
-        if (kind != NativeAggregateKind.Array || shape != 0 ||
-            (uint)index >= (uint)count)
+        // This Try API must reject all stale/foreign/unowned handles without
+        // throwing, including actor retirement racing with a mutation.
+        (NativeAggregateKind Kind, int Length, long ShapeId) descriptor;
+        try { descriptor = Describe(handle); }
+        catch (InvalidOperationException) { return false; }
+        if (descriptor.Kind != NativeAggregateKind.Array || descriptor.ShapeId != 0 ||
+            (uint)index >= (uint)descriptor.Length)
             return false;
         return _arena.WriteInt64(handle, HeaderBytes + index * sizeof(long), value);
     }
