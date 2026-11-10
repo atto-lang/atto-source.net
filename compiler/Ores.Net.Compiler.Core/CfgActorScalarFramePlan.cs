@@ -32,6 +32,25 @@ public sealed class CfgActorScalarFramePlan
 
     // Stable wire-free ABI tags: 1=i64, 2=bool, copied so mutable caller
     // arrays cannot change the verified layout's type authority.
+    /// <summary>
+    /// Compiler-side geometric preflight of an already-verified scalar CFG
+    /// activation. Returns a maximum *capacity*, not a recursion or call-depth
+    /// proof. Create() rejects Call and Argument; no recursive source, guest
+    /// exception hook, await or CIL actor lowering is authorized by this gate.
+    /// The runtime must still check every emitted frame admission.
+    /// </summary>
+    public int AdmitActorStackBudget(int actorStackBytes, int actorMaxFrames)
+    {
+        if (actorStackBytes <= 0)
+            throw new ArgumentOutOfRangeException(nameof(actorStackBytes));
+        if (actorMaxFrames <= 0 || actorMaxFrames > 1024)
+            throw new ArgumentOutOfRangeException(nameof(actorMaxFrames));
+        if (FrameBytes > actorStackBytes)
+            throw new FormatException(
+                "ACTOR_FRAME_EXCEEDS_STACK_BUDGET: verified scalar frame does not fit actor-owned stack");
+        return Math.Min(actorMaxFrames, actorStackBytes / FrameBytes);
+    }
+
     public byte[] EncodeTypeTags()
     {
         var result = new byte[_types.Count];
