@@ -291,6 +291,15 @@ internal static class ActorGuestHeap32SelfTest
                     context.WriteGuestObject32(child, 0, scalar);
                     System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(scalar, 99);
                     context.WriteGuestObject32(root, 0, scalar);
+                    ExpectInvalid(() => context.WriteGuestObject32(root, 0,
+                        new byte[] { 0xFF }),
+                        "typed I64 write cannot mutate a partial scalar");
+                    ExpectInvalid(() => context.ReadGuestObject32(root, 0,
+                        new byte[1]),
+                        "typed I64 read cannot observe a partial scalar");
+                    ExpectInvalid(() => context.WriteGuestObject32(root, 4,
+                        new byte[4]),
+                        "typed I64 write must start at its declared offset");
                     context.WriteGuestReference32(root, 8, child);
                     Require(context.ReadGuestReference32(root, 8) == child,
                         "typed Node.next points to child Node");
