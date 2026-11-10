@@ -1,4 +1,6 @@
+using System.Linq;
 using Ores.Net.Compiler;
+using Ores.Net.Runtime;
 
 internal static class CfgActorScalarBoundaryPlanSelfTest
 {
@@ -177,6 +179,66 @@ internal static class CfgActorScalarBoundaryPlanSelfTest
             "a self-loop must not erase its independent exit edge");
         Sequence(plan.Block("loop").Edges[1].SourceValueIds, 3);
         Sequence(plan.Block("loop").Edges[1].DestinationParameterIds, 5);
+
+        // Host-level integration of the compiler-derived edge descriptor.
+        // No emitted CIL/actor await is implied. The native byte spill ABI
+        // must stage both original values before it overwrites either target.
+        using var runtime = new ActorRuntime(new ActorRuntimeOptions
+        {
+            MaxActors = 1, MessagesPerDispatch = 1,
+            ActorPersistentBytes = 8192, ActorScratchBytes = 512,
+            ActorStackBytes = 256, ActorMaxStackFrames = 4,
+            NativeBudgetBytes = 65536,
+            Dispatcher = new ActorDispatcherOptions
+            {
+                PrivateWorkers = 1, SharedWorkers = 1,
+                UntrustedWorkers = 1, QueueCapacityPerDomain = 4
+            }
+        });
+        var actor = runtime.Spawn(ActorKind.Private, (context, _) =>
+        {
+            byte[] schema = plan.Frame.EncodeTypeTags();
+            var frame = ActorScalarFrameAbiV1.Push(context, schema,
+                plan.Frame.BlockCount);
+            ActorScalarFrameAbiV1.WriteI64(context, frame, 2, 41);
+            ActorScalarFrameAbiV1.WriteI64(context, frame, 3, 42);
+            byte[] kinds = swap.SourceValueIds.Select(id => schema[id]).ToArray();
+            ActorScalarFrameAbiV1.TransferParallel(context, frame,
+                swap.SourceValueIds.ToArray(),
+                swap.DestinationParameterIds.ToArray(), kinds);
+            Require(ActorScalarFrameAbiV1.ReadI64(context, frame, 2) == 42 &&
+                    ActorScalarFrameAbiV1.ReadI64(context, frame, 3) == 41,
+                "native typed ABI must commit a verified swap simultaneously");
+
+            // The second destination is sealed i64, but the caller forges a
+            // bool write. All proposals are checked before the first write.
+            RejectInvalid(() => ActorScalarFrameAbiV1.TransferParallel(
+                context, frame, new[] { 2, 3 }, new[] { 2, 3 },
+                new byte[] { 1, 2 }),
+                "failed later destination must not partially mutate earlier");
+            Require(ActorScalarFrameAbiV1.ReadI64(context, frame, 2) == 42 &&
+                    ActorScalarFrameAbiV1.ReadI64(context, frame, 3) == 41,
+                "typed native frame remains unchanged after rejected transfer");
+
+            RejectFormat(() => ActorScalarFrameAbiV1.TransferParallel(
+                context, frame, new[] { 2, 3 }, new[] { 2, 2 },
+                new byte[] { 1, 1 }),
+                "duplicate edge destination cannot be committed");
+            RejectFormat(() => ActorScalarFrameAbiV1.TransferParallel(
+                context, frame, new[] { 2 }, new[] { 3, 2 },
+                new byte[] { 1 }),
+                "partial edge arity cannot reach native frame writes");
+            ActorScalarFrameAbiV1.Pop(context, frame);
+        });
+        runtime.Send(actor, new byte[] { 1 });
+        Require(SpinWait.SpinUntil(() => runtime.CompletedMessages == 1,
+                TimeSpan.FromSeconds(5)) && runtime.FaultedTurns == 0,
+            "verified CFG boundary host transfer completed without actor fault");
+        runtime.Stop(actor);
+        Require(SpinWait.SpinUntil(() =>
+                runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0,
+                TimeSpan.FromSeconds(5)),
+            "CFG-to-actor native frame transfer reclaims its actor arena");
     }
 
     private static void DominatingScalarWithoutEdgeParameterRemainsLive()
@@ -226,6 +288,13 @@ internal static class CfgActorScalarBoundaryPlanSelfTest
     {
         Require(actual.SequenceEqual(expected),
             "unexpected exact SSA live-value/transfer boundary");
+    }
+
+    private static void RejectInvalid(Action action, string scenario)
+    {
+        try { action(); }
+        catch (InvalidOperationException) { return; }
+        throw new Exception("Expected native transfer rejection: " + scenario);
     }
 
     private static void RejectFormat(Action action, string scenario)
