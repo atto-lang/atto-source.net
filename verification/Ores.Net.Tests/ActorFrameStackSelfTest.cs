@@ -157,8 +157,9 @@ internal static class ActorFrameStackSelfTest
         {
             var root = context.PushStackFrame(8);
             var child = context.PushStackFrame(8);
-            RejectInvalid(() => context.PushStackFrame(8),
-                "frame count exhaustion denies third frame");
+            RejectActorOverflow(() => context.PushStackFrame(8),
+                ActorLogicalStackLimit.FrameCount,
+                "frame count exhaustion reports a typed actor-local signal");
             RejectRange(() => context.PushStackFrame(129),
                 "stack byte budget cannot be bypassed");
             RejectRange(() =>
@@ -168,6 +169,9 @@ internal static class ActorFrameStackSelfTest
                 "non-LIFO pop leaves both frames live");
 
             context.PopStackFrame(child);
+            RejectActorOverflow(() => context.PushStackFrame(121),
+                ActorLogicalStackLimit.ByteCapacity,
+                "byte quota exhaustion reports a typed actor-local signal");
             var fullTail = context.PushStackFrame(120);
             Span<byte> sample = stackalloc byte[2];
             context.ReadStackFrame(fullTail, 0, sample);
@@ -206,6 +210,7 @@ internal static class ActorFrameStackSelfTest
         {
             using var runtime = new ActorRuntime(Options(stackBytes: 96, maxFrames: 4));
             int ranPastOverflow = 0;
+            int typedOverflowObserved = 0;
             int siblingTurns = 0;
             ActorStackFrameHandle? failedFrame = null;
 
@@ -214,8 +219,19 @@ internal static class ActorFrameStackSelfTest
                 failedFrame = context.PushStackFrame(64);
                 context.WriteStackFrame(failedFrame, 0, new byte[] { 0x5A });
                 // The second aligned frame exceeds this actor's 96-byte stack.
-                // Do not catch it: RunCell must retire the failing actor only.
-                _ = context.PushStackFrame(64);
+                // Observe the typed fault and rethrow: RunCell must retire
+                // the failing actor. A catch that returns would recover the
+                // *host test*, not the compiled guest PANIC contract.
+                try
+                {
+                    _ = context.PushStackFrame(64);
+                }
+                catch (ActorLogicalStackOverflowException overflow)
+                {
+                    if (overflow.Limit == ActorLogicalStackLimit.ByteCapacity)
+                        Interlocked.Exchange(ref typedOverflowObserved, 1);
+                    throw;
+                }
                 Interlocked.Increment(ref ranPastOverflow);
             });
             var sibling = runtime.Spawn(kind, (context, _) =>
@@ -239,6 +255,7 @@ internal static class ActorFrameStackSelfTest
                 runtime.FaultedTurns == 1 && runtime.LiveActors == 1),
                 "logical stack overflow must fail-stop only its owning actor");
             Require(Volatile.Read(ref ranPastOverflow) == 0 &&
+                    Volatile.Read(ref typedOverflowObserved) == 1 &&
                     runtime.CompletedMessages == 0,
                 "failed actor cannot resume after rejected stack admission");
             Require(runtime.NativeReservedBytes == 8192 + 512,
@@ -304,6 +321,18 @@ internal static class ActorFrameStackSelfTest
         try { action(); }
         catch (InvalidOperationException) { return; }
         throw new Exception("Expected actor frame rejection: " + scenario);
+    }
+
+    private static void RejectActorOverflow(Action action,
+        ActorLogicalStackLimit expected, string scenario)
+    {
+        try { action(); }
+        catch (ActorLogicalStackOverflowException fault)
+        {
+            Require(fault.Limit == expected, scenario + ": incorrect fault reason");
+            return;
+        }
+        throw new Exception("Expected typed actor stack overflow: " + scenario);
     }
 
     private static void RejectNoWire(Action action, string scenario)
