@@ -263,12 +263,14 @@ var tooDeep = quotaRuntime.Spawn(ActorKind.Shared, (ctx, _) =>
 });
 var aggregateBytes = quotaRuntime.Spawn(ActorKind.Shared, (ctx, _) =>
 {
-    ctx.PushStackFrame(56);
+    var typed = ActorScalarFrameAbiV1.Push(ctx, new byte[] { 1, 2 }, blockCount: 1);
+    ActorScalarFrameAbiV1.WriteI64(ctx, typed, 0, 42);
     bool caught = false;
-    try { ctx.PushStackFrame(16); }
+    try { ctx.PushStackFrame(24); }
     catch (ActorStackQuotaExceededException) { caught = true; }
     Require(caught, "native aggregate byte quota did not raise exception");
     Deny(() => ctx.PushStackFrame(1));
+    Deny(() => { _ = ActorScalarFrameAbiV1.ReadI64(ctx, typed, 0); });
     validatedQuotaCases.Enqueue("aggregate");
 });
 var oversizedFrame = quotaRuntime.Spawn(ActorKind.Shared, (ctx, _) =>
