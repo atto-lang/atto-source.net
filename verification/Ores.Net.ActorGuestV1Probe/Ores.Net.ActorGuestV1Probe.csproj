@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <PublishAot>true</PublishAot>
+    <SelfContained>true</SelfContained>
+    <PublishTrimmed>true</PublishTrimmed>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../runtime/Ores.Net.Runtime/Ores.Net.Runtime.csproj" />
+  </ItemGroup>
+  <!-- Only the actual compiler-generated file may satisfy this entrypoint.
+       No checked-in C# host stand-in is accepted as guest execution. -->
+  <Target Name="RequireActorHeapV1Generated" BeforeTargets="CoreCompile">
+    <Error Condition="!Exists('ActorHeapV1.g.cs')"
+           Text="Generate ActorHeapV1.g.cs from contracts/actor-guest-heap/v1/node_graph.atto with emit-actor-heap-v1 before compiling this NativeAOT guest probe." />
+  </Target>
+</Project>
