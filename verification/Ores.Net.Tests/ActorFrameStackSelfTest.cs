@@ -9,6 +9,7 @@ internal static class ActorFrameStackSelfTest
         IndependentStacksSurviveTurnsAndRejectForeignAndStaleHandles();
         BoundsAndLifoExhaustionAreFailureNeutral();
         UncaughtLogicalOverflowRetiresOnlyOwner();
+        CompilerFrameOverflowCannotBeSuppressedAndRetainsControlNotice();
         RetirementAllowsInFlightFrameCleanupButRejectsPush();
         Console.WriteLine(
             "PASS .NET actor-owned logical frame stack host-only regression (not guest/AOT certification)");
@@ -276,6 +277,121 @@ internal static class ActorFrameStackSelfTest
             Require(WaitUntil(() =>
                 runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0),
                 "all actor-local native memory must be refunded on final stop");
+        }
+    }
+
+    // The parser/compiler ABI owns this allocation, not a host diagnostics
+    // caller. Once a checked activation quota is exceeded, catching the C#
+    // exception must not turn a failed compiled guest turn into success.
+    // The host CONTROL receipt is independent of the saturated DATA mailbox.
+    private static void CompilerFrameOverflowCannotBeSuppressedAndRetainsControlNotice()
+    {
+        using var runtime = new ActorRuntime(new ActorRuntimeOptions
+        {
+            MaxActors = 2,
+            MessagesPerDispatch = 1,
+            MailboxMessages = 1,
+            ActorPersistentBytes = 8192,
+            ActorScratchBytes = 512,
+            ActorStackBytes = 96,
+            ActorMaxStackFrames = 1,
+            NativeBudgetBytes = 256 * 1024,
+            Dispatcher = new ActorDispatcherOptions
+            {
+                PrivateWorkers = 1, SharedWorkers = 1, UntrustedWorkers = 1,
+                QueueCapacityPerDomain = 4
+            }
+        });
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        int caught = 0;
+        int peerTurns = 0;
+        var failed = runtime.Spawn(ActorKind.Private, (context, message) =>
+        {
+            entered.Set();
+            if (!release.Wait(TimeSpan.FromSeconds(5)))
+                throw new Exception("Compiler frame probe timed out");
+            var first = ActorScalarFrameAbiV1.Push(context, new byte[] { 1 }, 1);
+            try
+            {
+                ActorScalarFrameAbiV1.Push(context, new byte[] { 1 }, 1);
+                throw new Exception("Second compiler frame unexpectedly admitted");
+            }
+            catch (ActorLogicalStackOverflowException exhausted)
+                when (exhausted.Limit == ActorLogicalStackLimit.FrameCount)
+            {
+                Interlocked.Increment(ref caught);
+            }
+            // Cleanup is still permitted. Successful C# callback return
+            // must nevertheless be converted to a terminal actor failure.
+            ActorScalarFrameAbiV1.Pop(context, first);
+        });
+        var peer = runtime.Spawn(ActorKind.Private, (context, message) =>
+        {
+            var own = context.PushStackFrame(8);
+            context.WriteStackFrame(own, 0, new byte[] { 0x42 });
+            Span<byte> value = stackalloc byte[1];
+            context.ReadStackFrame(own, 0, value);
+            Require(value[0] == 0x42, "same-domain peer owns its own stack");
+            context.PopStackFrame(own);
+            Interlocked.Increment(ref peerTurns);
+        });
+
+        try
+        {
+            runtime.Send(failed, new byte[] { 1 });
+            Require(entered.Wait(TimeSpan.FromSeconds(5)),
+                "failed actor must enter its current turn");
+            runtime.Send(failed, new byte[] { 2 });
+            RejectInvalid(() => runtime.Send(failed, new byte[] { 3 }),
+                "saturated DATA mailbox must reject excess work");
+            release.Set();
+            Require(WaitUntil(() =>
+                runtime.FaultedTurns == 1 && runtime.LiveActors == 1),
+                "caught compiled-frame overflow still kills only its owner");
+            Require(Volatile.Read(ref caught) == 1 &&
+                    runtime.CompletedMessages == 0,
+                "caught stack overflow must not acknowledge its guest turn");
+            Require(runtime.PendingTerminalFaults == 1,
+                "terminal CONTROL notice survives actor reclamation");
+            RejectInvalid(() => runtime.Send(failed, new byte[] { 4 }),
+                "failed actor and its queued DATA work are retired");
+
+            runtime.Send(peer, new byte[] { 1 });
+            Require(WaitUntil(() =>
+                Volatile.Read(ref peerTurns) == 1 && runtime.CompletedMessages == 1),
+                "healthy actor runs on the same single-worker domain");
+
+            RejectInvalid(() => runtime.Spawn(ActorKind.Private,
+                    (context, message) => { }),
+                "unread terminal CONTROL receipt reserves actor capacity");
+            Require(runtime.TryReadTerminalFault(out var notice),
+                "host CONTROL reader must receive one terminal fault");
+            Require(notice.Sequence == 1 &&
+                    notice.ActorId == failed.Id &&
+                    notice.Generation == failed.Generation &&
+                    notice.ActorKind == ActorKind.Private &&
+                    notice.Kind == ActorTerminalFaultKind.LogicalStackOverflow &&
+                    notice.StackLimit == ActorLogicalStackLimit.FrameCount,
+                "terminal receipt must preserve owner and typed quota cause");
+            Require(runtime.PendingTerminalFaults == 0 &&
+                    !runtime.TryReadTerminalFault(out _),
+                "terminal receipt must never be delivered twice");
+
+            var replacement = runtime.Spawn(ActorKind.Private,
+                (context, message) => { });
+            runtime.Send(replacement, new byte[] { 1 });
+            Require(WaitUntil(() => runtime.CompletedMessages == 2),
+                "new actor can start only after terminal receipt drain");
+            runtime.Stop(replacement);
+            runtime.Stop(peer);
+            Require(WaitUntil(() =>
+                runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0),
+                "terminal actor and all healthy replacements refund memory");
+        }
+        finally
+        {
+            release.Set();
         }
     }
 
