@@ -161,3 +161,43 @@ Require(SpinWait.SpinUntil(() => runtime.LiveActors == 0 &&
 Console.WriteLine("PASS actor-memory-survivor: same-pool peer reads and writes during pinned STOP and after physical reclaim");
 Console.WriteLine("PASS actor-memory-native-probe: four private heaps (two shared-pool actors), foreign handles denied, pooled carriers, stale context denied, pinned STOP and physical reclaim");
 Console.WriteLine("PASS actor-logical-stack-native-probe: four distinct actor-owned frames, cross-turn reads and foreign-handle denial");
+
+
+ // NativeAOT host probe for the new actor-private tagged aggregate backing.
+ // This is NOT a compiled AttoLang collection guest: source HIR/CIL linking
+ // remains blocked until a checked aggregate type/lifetime representation.
+using (var owned = new ActorNativeAggregateStore(256, 8))
+using (var foreignActor = new ActorNativeAggregateStore(256, 8))
+{
+    ulong tuple = owned.CreateTuple(stackalloc long[] { 11, 23, 42 });
+    ulong entry = owned.CreateEntry(11, 23);
+    ulong pair = owned.CreatePair(11, 23);
+    ulong record = owned.CreateRecord(17, stackalloc long[] { 5, 42 });
+    ulong array = owned.CreateArray(stackalloc long[] { 1, 2 });
+    ulong foreignTuple = foreignActor.CreateTuple(stackalloc long[] { 99 });
+    Require(tuple != 0 && entry != 0 && pair != 0 && record != 0 &&
+            array != 0 && foreignTuple != 0, "native aggregate allocations");
+    Require(owned.Read(tuple, NativeAggregateKind.Tuple, 2) == 42,
+        "native owned tuple projection");
+    Require(owned.Read(record, NativeAggregateKind.Record, 1, expectedShapeId: 17) == 42,
+        "native owned record projection");
+    Require(owned.Read(entry, NativeAggregateKind.Entry, 0) == 11 &&
+            owned.Read(pair, NativeAggregateKind.Pair, 1) == 23,
+        "distinct owned entry and pair layouts");
+    Deny(() => owned.Read(entry, NativeAggregateKind.Pair, 0));
+    Deny(() => owned.Read(record, NativeAggregateKind.Tuple, 0));
+    Deny(() => owned.Read(foreignTuple, NativeAggregateKind.Tuple, 0));
+    Require(!owned.Drop(foreignTuple), "foreign aggregate cannot be reclaimed");
+    Require(!owned.TryWriteArray(tuple, 0, 6), "owned tuple remains immutable");
+    Require(owned.TryWriteArray(array, 0, 42) &&
+            owned.Read(array, NativeAggregateKind.Array, 0) == 42,
+        "owned array mutable scalar elements");
+    Require(owned.Drop(tuple), "native tuple cleanup");
+    Deny(() => owned.Read(tuple, NativeAggregateKind.Tuple, 0));
+    Require(owned.Drop(entry) && owned.Drop(pair) && owned.Drop(record) &&
+            owned.Drop(array) && foreignActor.Drop(foreignTuple),
+        "all owned native aggregate allocations released");
+    Require(owned.LiveAggregates == 0 && foreignActor.LiveAggregates == 0,
+        "native allocations quiescent");
+}
+Console.WriteLine("PASS actor-aggregate-host-nativeaot: five tagged owned scalar shapes, foreign/stale denial and deterministic cleanup (NOT compiled AttoLang guest)");
