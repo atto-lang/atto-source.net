@@ -135,6 +135,11 @@ public sealed class ActorContext
     public void ReadStackFrame(ActorStackFrameHandle frame, int offset,
         Span<byte> destination) => _stack.Read(_turn, frame, offset, destination);
 
+    // Only compiler-issued scalar ABI frames use sticky terminal admission.
+    // Ordinary host diagnostic stacks remain failure-neutral.
+    internal ActorStackFrameHandle PushCompilerStackFrame(int bytes, int alignment = 8) =>
+        _stack.PushCompilerFrame(_turn, bytes, alignment);
+
     public void WriteStackFrame(ActorStackFrameHandle frame, int offset,
         ReadOnlySpan<byte> source) => _stack.Write(_turn, frame, offset, source);
 
@@ -186,6 +191,23 @@ public sealed class ActorContext
 /// actor cell's control state and the already-scheduled actor-domain token
 /// performs finalization after the current physical turn.
 /// </summary>
+/// <summary>
+/// Host-only immutable CONTROL receipt. Contains no bearer ActorRef, guest
+/// error object or private message bytes. Not a source-level supervisor hook.
+/// This queue is independent of the actor DATA mailbox.
+/// </summary>
+public enum ActorTerminalFaultKind
+{
+    TurnAdmission,
+    UnhandledCallback,
+    LogicalStackOverflow
+}
+
+public readonly record struct ActorTerminalFaultNotice(
+    ulong Sequence, ulong ActorId, ulong Generation,
+    ActorRuntime.ActorKind ActorKind, ActorTerminalFaultKind Kind,
+    ActorLogicalStackLimit? StackLimit);
+
 public sealed class ActorRuntime : IDisposable
 {
     [ThreadStatic]
@@ -199,6 +221,10 @@ public sealed class ActorRuntime : IDisposable
     private readonly ActorRuntimeOptions _options;
     private readonly ActorArenaBudget _nativeBudget;
     private readonly ActorDispatchDomains _domains;
+    // Reserve room for every admitted actor's at-most-one terminal receipt.
+    // Publication does not use the DATA mailbox and does not allocate on fault.
+    private readonly Queue<ActorTerminalFaultNotice> _terminalFaults;
+    private ulong _nextFaultSequence;
 
     private ulong _nextActorId;
     private bool _closed;
@@ -234,6 +260,7 @@ public sealed class ActorRuntime : IDisposable
         internal int Scheduled;
         internal bool Stopping;
         internal int Finalized;
+        internal int TerminalFaultPublished;
         internal TaskCompletionSource Terminated { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -247,6 +274,7 @@ public sealed class ActorRuntime : IDisposable
         _options = options;
         _nativeBudget = new ActorArenaBudget(options.NativeBudgetBytes);
         _domains = new ActorDispatchDomains(options.Dispatcher);
+        _terminalFaults = new Queue<ActorTerminalFaultNotice>(options.MaxActors);
     }
 
     public int LiveActors
@@ -259,6 +287,22 @@ public sealed class ActorRuntime : IDisposable
     public long FaultedTurns => Interlocked.Read(ref _faultedTurns);
     public int StartedCarrierThreads => _domains.TotalStartedWorkers;
 
+    /// <summary>
+    /// Trusted host-only read of immutable terminal CONTROL receipts. These
+    /// survive actor reclamation and cannot be starved by DATA mailbox limits.
+    /// This is a pull/observation substrate, NOT delivery to a guest supervisor.
+    /// </summary>
+    public bool TryReadTerminalFault(out ActorTerminalFaultNotice notice)
+    {
+        lock (_gate)
+            return _terminalFaults.TryDequeue(out notice);
+    }
+
+    public int PendingTerminalFaults
+    {
+        get { lock (_gate) return _terminalFaults.Count; }
+    }
+
     public ActorRef Spawn(ActorKind kind, ActorMessageHandler handler)
     {
         ArgumentNullException.ThrowIfNull(handler);
@@ -268,8 +312,11 @@ public sealed class ActorRuntime : IDisposable
         lock (_gate)
         {
             EnsureOpenLocked();
-            if (_actors.Count >= _options.MaxActors)
-                throw new InvalidOperationException("Actor runtime capacity exhausted");
+            // A terminal receipt consumes its reserved CONTROL slot until read.
+            // Fail closed rather than admit a new actor whose future fault
+            // could be lost behind unread receipts.
+            if (_actors.Count + _terminalFaults.Count >= _options.MaxActors)
+                throw new InvalidOperationException("Actor or terminal CONTROL receipt capacity exhausted");
             if (_nextActorId == ulong.MaxValue)
                 throw new OverflowException("Actor runtime ID space exhausted");
 
@@ -462,13 +509,15 @@ public sealed class ActorRuntime : IDisposable
                         turn = cell.Arena.EnterTurn(
                             cell.Reference.Id, cell.Reference.Generation);
                     }
-                    catch (Exception)
+                    catch (Exception admissionFailure)
                     {
                         // The mailbox transferred this buffer to us before
                         // turn admission. Do not strand sensitive bytes on the
                         // exceptional path or allow repeated failed scheduling.
                         CryptographicOperations.ZeroMemory(payload);
                         Interlocked.Increment(ref _faultedTurns);
+                        PublishTerminalFault(cell, admissionFailure,
+                            ActorTerminalFaultKind.TurnAdmission);
                         MarkStoppingLocked(cell);
                         break;
                     }
@@ -482,14 +531,23 @@ public sealed class ActorRuntime : IDisposable
                         var context = new ActorContext(
                             cell.Reference, cell.Kind, cell.Arena, turn, cell.Stack);
                         cell.Handler(context, payload);
+                        // A caught compiler-owned frame quota violation is
+                        // still a terminal guest-stack PANIC. Its durable
+                        // runtime latch is checked before acknowledging work.
+                        if (cell.Stack.TerminalCompilerOverflow is { } exceeded)
+                            throw new ActorLogicalStackOverflowException(exceeded);
                     }
                     succeeded = true;
                 }
-                catch (Exception)
+                catch (Exception failure)
                 {
                     Interlocked.Increment(ref _faultedTurns);
                     lock (cell.Gate)
+                    {
+                        PublishTerminalFault(cell, failure,
+                            ActorTerminalFaultKind.UnhandledCallback);
                         MarkStoppingLocked(cell);
+                    }
                 }
                 finally
                 {
@@ -541,6 +599,28 @@ public sealed class ActorRuntime : IDisposable
                 // poison a reusable carrier's thread-static runtime identity.
                 s_currentRuntime = previous;
             }
+        }
+    }
+
+    // Called only by an admitted actor's runtime-owned fail-stop path.
+    // Lock order: actor Gate -> runtime _gate. No guest callback is invoked.
+    private void PublishTerminalFault(ActorCell cell, Exception failure,
+        ActorTerminalFaultKind category)
+    {
+        lock (_gate)
+        {
+            if (Interlocked.CompareExchange(ref cell.TerminalFaultPublished, 1, 0) != 0)
+                return;
+            if (_terminalFaults.Count >= _options.MaxActors ||
+                _nextFaultSequence == ulong.MaxValue)
+                throw new InvalidOperationException(
+                    "Terminal CONTROL notice invariant violated");
+            var overflow = failure as ActorLogicalStackOverflowException;
+            _terminalFaults.Enqueue(new ActorTerminalFaultNotice(
+                ++_nextFaultSequence, cell.Reference.Id,
+                cell.Reference.Generation, cell.Kind,
+                overflow is null ? category : ActorTerminalFaultKind.LogicalStackOverflow,
+                overflow?.Limit));
         }
     }
 
