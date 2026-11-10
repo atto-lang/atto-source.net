@@ -97,21 +97,21 @@ public sealed class ActorGuestLayout32
     }
 
     /// <summary>
-    /// Raw byte reads/writes on typed objects are restricted to data fields.
-    /// Reference fields can only be accessed through checked Ref32 methods.
+    /// Typed scalar access is atomic at the ABI boundary: only the exact,
+    /// aligned eight-byte I64 field may be read or written. Partial reads or
+    /// writes could otherwise tear a compiler-owned scalar into ill-typed
+    /// object state. Untyped native buffers retain their byte-granular API.
+    /// Reference fields can only use checked Ref32 methods.
     /// </summary>
     internal bool AllowsScalarAccess(int offset, int length)
     {
-        if (offset < 0 || length <= 0 || offset > SizeBytes ||
-            length > SizeBytes - offset)
+        if (length != sizeof(long) || offset < 0 ||
+            offset > SizeBytes - sizeof(long))
             return false;
         foreach (var field in _fields)
-        {
             if (field.Kind == ActorGuestFieldKind32.I64 &&
-                offset >= field.Offset &&
-                length <= 8 - (offset - field.Offset))
+                offset == field.Offset)
                 return true;
-        }
         return false;
     }
 
