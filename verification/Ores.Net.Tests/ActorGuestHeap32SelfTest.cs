@@ -252,6 +252,17 @@ internal static class ActorGuestHeap32SelfTest
             new[] { new ActorGuestField32(0, ActorGuestFieldKind32.I64, nodeType) }),
             "scalar field cannot claim a reference type");
 
+        var equivalent = new ActorGuestLayout32(nodeType, 16,
+            new[] { new ActorGuestField32(0, ActorGuestFieldKind32.I64),
+                    new ActorGuestField32(8, ActorGuestFieldKind32.Ref32, nodeType) });
+        var colliding = new ActorGuestLayout32(nodeType, 16,
+            new[] { new ActorGuestField32(0, ActorGuestFieldKind32.I64),
+                    new ActorGuestField32(8, ActorGuestFieldKind32.I64) });
+        var oversized = new ActorGuestLayout32(0xAA03, 4096,
+            new[] { new ActorGuestField32(0, ActorGuestFieldKind32.I64) });
+        var retryLayout = new ActorGuestLayout32(0xAA03, 16,
+            new[] { new ActorGuestField32(0, ActorGuestFieldKind32.I64) });
+
         using var runtime = new ActorRuntime(Options());
         using var done = new CountdownEvent(2);
         Exception? failure = null;
@@ -263,6 +274,14 @@ internal static class ActorGuestHeap32SelfTest
                 if (data.Span[0] == 1)
                 {
                     root = context.AllocateTypedGuestObject32(node);
+                    ExpectInvalid(() => context.AllocateTypedGuestObject32(colliding),
+                        "same nominal type ID cannot bind a different field shape");
+                    uint equivalentRef = context.AllocateTypedGuestObject32(equivalent);
+                    context.DropGuestObject32(equivalentRef);
+                    ExpectInvalid(() => context.AllocateTypedGuestObject32(oversized),
+                        "failed oversized layout admission must not consume type ID");
+                    uint retried = context.AllocateTypedGuestObject32(retryLayout);
+                    context.DropGuestObject32(retried);
                     uint child = context.AllocateTypedGuestObject32(node);
                     uint wrong = context.AllocateTypedGuestObject32(other);
                     uint raw = context.AllocateGuestObject32(8);
@@ -316,6 +335,8 @@ internal static class ActorGuestHeap32SelfTest
                     Require(context.ReadGuestReference32(root, 8) == 0,
                         "typed null is the canonical four-byte zero");
                     context.DropGuestObject32(root);
+                    ExpectInvalid(() => context.AllocateTypedGuestObject32(colliding),
+                        "type ID remains sealed after its final guest instance drops");
                 }
             }
             catch (Exception error) { failure = error; }
