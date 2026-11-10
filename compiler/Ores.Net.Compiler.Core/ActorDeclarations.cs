@@ -89,6 +89,7 @@ public static class OresActorDeclarationParser
                     handler.BodyOffset > unit.SourceLength ||
                     handler.BodyLength > unit.SourceLength - handler.BodyOffset)
                     throw new FormatException("E_ACTOR_SIGNATURE: invalid handler AST span");
+                RejectUnloweredActorFailureHook(handler.Name);
                 string key = handler.Name + "/" +
                     handler.Parameters.Count.ToString(CultureInfo.InvariantCulture);
                 if (!handlerKeys.Add(key))
@@ -136,6 +137,21 @@ public static class OresActorDeclarationParser
         builder.Append(':');
         builder.Append(value);
         builder.Append(';');
+    }
+
+    // Handler declaration bodies are currently opaque and NEVER compiled.
+    // Do not let signature metadata accidentally bless a reserved failure
+    // hook that requires typed effect, turn-boundary and supervisor lowering.
+    // on_panic is supervisor-only, including after actor lowering exists.
+    private static void RejectUnloweredActorFailureHook(string name)
+    {
+        if (name == "on_panic")
+            throw new FormatException(
+                "E_ACTOR_PANIC_HOOK_FORBIDDEN: on_panic is supervisor-only");
+        if (name is "on_throw" or "on_raise" or "tear_down" or
+            "on_recover" or "on_throws")
+            throw new FormatException(
+                "E_ACTOR_FAILURE_HOOK_UNLOWERED: reserved actor failure/teardown hook requires typed effect lowering");
     }
 
     private readonly record struct Token(string Text, int Start, int End);
@@ -339,6 +355,7 @@ public static class OresActorDeclarationParser
         {
             Token nameToken = Current;
             string name = ReadName(allowReceive: true);
+            RejectUnloweredActorFailureHook(name);
             Expect("(");
             var parameters = new List<ActorHandlerParameter>();
             bool receiverSeen = false;
