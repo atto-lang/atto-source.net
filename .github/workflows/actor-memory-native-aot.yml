@@ -7,6 +7,7 @@ on:
       - 'verification/Ores.Net.Tests/**'
       - 'verification/Ores.Net.ActorMemoryProbe/**'
       - 'contracts/actor-scalar-execution-v1/**'
+      - 'contracts/actor-two-peer-failure-v1/**'
       - '.github/workflows/actor-memory-native-aot.yml'
   workflow_dispatch:
 permissions:
@@ -42,6 +43,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED"
           test -z "$(git status --porcelain)"
           git rev-parse 'HEAD^{tree}'
+          test "$(git hash-object contracts/actor-two-peer-failure-v1/two-peer-failure-matrix.atto)" = 003983eb9475d7fd680ea5b31804df02f1843f19
           dotnet --info
           dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release | tee "$RUNNER_TEMP/actor-managed-tests.log"
           grep -Fx 'PASS actor scalar frame ABI v1 host/compiler-boundary tests (NOT guest execution)' "$RUNNER_TEMP/actor-managed-tests.log"
@@ -50,6 +52,7 @@ jobs:
           grep -Fx 'PASS net-actor-guest-frame-eight-fault-matrix|faults=8|peer=42|admission=9|guest_atto=0' "$RUNNER_TEMP/actor-managed-tests.log"
           grep -Fx 'PASS net-source-cfg-actor-frames-v1|source=3|faults=3|peer=42|loop=42|fuel=bounded|native_refund=1|guest_machine_code=0' "$RUNNER_TEMP/actor-managed-tests.log"
           grep -Fx 'PASS actor-declaration-ast-v1|actors=2|handlers=3|negative=17|execution=0' "$RUNNER_TEMP/actor-managed-tests.log"
+          grep -Fx 'NET_ACTOR_FAILURE_HOOK_ADMISSION_SOURCE_TESTS|cases=13|guest=NOT_EXECUTED' "$RUNNER_TEMP/actor-managed-tests.log"
       - name: Publish and execute actual host actor NativeAOT isolation probe
         shell: bash
         env:
