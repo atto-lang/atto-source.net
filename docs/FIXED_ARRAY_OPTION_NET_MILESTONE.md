@@ -53,8 +53,16 @@ pub fnc main():int {
   `Some(0)`, `Some(42)`, `None`, and the native executable's return 42.
   A bool-index fixture must be rejected with a compiler-owned type error.
 - Unsafe `array[index]` remains disabled, aligned with hardening PR #418.
-  A future semantic merge with #418 must preserve that denial and admit only
-  separately typechecked collection construction and checked `.get()`.
+  The scalar lexer and linked-array postfix now deliberately emit
+  `E_UNCHECKED_COLLECTION_ACCESS` for `Array<int>` bracket lookups,
+  including missing, negative, huge and attempted writable cases. This is
+  a **fail-closed unsupported diagnostic**, **not** `E_LOAN_CONFLICT` or
+  evidence of a general collection borrow checker. A future semantic merge
+  with #418 must preserve denial while admitting only verified checked access.
+- Additional native fixture `array-get-copy-loop-option42.atto` exercises
+  a tagged `Option<int>` carried across a CFG loop backedge, checked lookup,
+  and successful native guest exit. Its Git blob is
+  `6cbb6be65250d343b5c1195cc650ea14075001cb` (candidate, not executed).
 
 ## Security / future work
 
@@ -80,14 +88,21 @@ Future guest collection implementation must first establish:
 The separate .NET 10 Linux/Windows workflow at
 `.github/workflows/fixed-array-option-nativeaot.yml` must execute:
 
-- 31 independent valid source → verified CFG → emitted CIL interpretation
-  positive cases, 32 negative source cases, 11 forged CFG mutations, and
-  diagnostic-exact bool-index rejection for `.get_copy`;
+- **44 authored** valid source → verified CFG → emitted CIL interpretation
+  candidate cases, **38 authored** negative source cases, 11 forged CFG
+  mutations, and diagnostic-exact bool-index, unchecked bracket,
+  immutable-array, and over-budget rejections. All remain unexecuted on
+  the current exact PR head; counts are not evidence of test passes;
 - exact Git-blob-verified `.atto` sources for present, absent and empty
   arrays, and denied mutable, direct indexed, over-budget forms;
-- real source compiler and separately linked Linux and Windows NativeAOT
-  guest binaries returning 42, strict native-layout verification and
-  artifact digests, with **nonzero executed steps and exact PR head SHA**.
+- real source compiler and **six distinct** separately published Linux and
+  Windows NativeAOT guest fixtures (present, absent, empty, checked copy,
+  signed-i64 boundaries, loop-carried Option) returning 42 **with exit 0**,
+  strict native-layout verification and artifact digests, with
+  **nonzero executed steps and exact PR head SHA**;
+- compiler-negative runs that require the **expected compiler-owned message**
+  under `oresnet:` and no emitted `OresGenerated.dll`, rather than counting
+  an unrelated tool crash or syntax rejection as a semantic loan proof.
 
 Source inspection, CI failures with `steps=null`, synthetic receipts and
 test-only reference evaluation are **NOT_EXECUTED guest proof**. Keep draft
