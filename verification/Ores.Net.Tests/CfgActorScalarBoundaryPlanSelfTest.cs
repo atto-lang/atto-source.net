@@ -228,6 +228,17 @@ internal static class CfgActorScalarBoundaryPlanSelfTest
                 context, frame, new[] { 2 }, new[] { 3, 2 },
                 new byte[] { 1 }),
                 "partial edge arity cannot reach native frame writes");
+            RejectFormat(() => ActorScalarFrameAbiV1.TransferParallel(
+                context, frame, new[] { 2 }, new[] { 3 },
+                new byte[] { 3 }),
+                "unknown scalar edge tags must be rejected before writes");
+            RejectInvalid(() => ActorScalarFrameAbiV1.TransferParallel(
+                context, frame, new[] { 2, 4 }, new[] { 2, 3 },
+                new byte[] { 1, 1 }),
+                "late bool source cannot impersonate an i64 edge input");
+            Require(ActorScalarFrameAbiV1.ReadI64(context, frame, 2) == 42 &&
+                    ActorScalarFrameAbiV1.ReadI64(context, frame, 3) == 41,
+                "rejected late source must leave earlier destination unchanged");
             ActorScalarFrameAbiV1.Pop(context, frame);
         });
         runtime.Send(actor, new byte[] { 1 });
