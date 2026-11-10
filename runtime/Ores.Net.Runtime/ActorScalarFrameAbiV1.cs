@@ -38,7 +38,9 @@ public static class ActorScalarFrameAbiV1
             if (kind is not (I64Tag or BoolTag))
                 throw new FormatException("Unknown actor scalar ABI declared slot type");
         int valueSlots = declaredTypes.Length;
-        ActorStackFrameHandle frame = context.PushStackFrame(bytes, alignment: 8);
+        // Compiler-owned continuation admission is terminal if its quota is
+        // exceeded, even if guest-facing host code attempts to catch it.
+        ActorStackFrameHandle frame = context.PushCompilerStackFrame(bytes, alignment: 8);
         try
         {
             Span<byte> header = stackalloc byte[HeaderBytes];
