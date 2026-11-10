@@ -5,7 +5,7 @@
 Child of .NET actor declaration AST PR #432 (its own parent is integration #411).
 New source: contracts/actor-two-peer-failure-v1/two-peer-failure-matrix.atto
 Canonical conformance PR #648 Git blob:
-003983eb9475d7fd680ea5b31804df02f1843f19
+eaac813262ca184930ba124180ed692e21329969
 
 This is a proposed cross-backend program defining FaultWorker, Witness and the
 Root supervisor. Existing .NET OresActorDeclarationParser only admits top-level
