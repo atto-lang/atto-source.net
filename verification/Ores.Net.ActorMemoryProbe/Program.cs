@@ -97,7 +97,11 @@ for (int i = 0; i < actorCount; ++i)
                 typedRoots[index] = context.AllocateTypedGuestObject32(typedNode);
                 uint typedChild = context.AllocateTypedGuestObject32(typedNode);
                 context.WriteGuestObject32(typedChild, 0,
-                    new byte[] { (byte)(51 + index) });
+                    new byte[8] { (byte)(51 + index), 0, 0, 0, 0, 0, 0, 0 });
+                Deny(() => context.WriteGuestObject32(typedChild, 0,
+                    new byte[] { 0xFF }));
+                Deny(() => context.ReadGuestObject32(typedChild, 0,
+                    new byte[1]));
                 context.WriteGuestReference32(typedRoots[index], 8, typedChild);
                 Deny(() => context.WriteGuestObject32(typedRoots[index], 8,
                     new byte[] { 0, 0, 0, 0 }));
@@ -114,8 +118,9 @@ for (int i = 0; i < actorCount; ++i)
                 Require(guestValue[0] == 41 + index,
                     "survivor compressed ref lost private guest payload");
                 uint child = context.ReadGuestReference32(typedRoots[index], 8);
-                context.ReadGuestObject32(child, 0, guestValue);
-                Require(guestValue[0] == 51 + index,
+                var typedValue = new byte[8];
+                context.ReadGuestObject32(child, 0, typedValue);
+                Require(typedValue[0] == 51 + index,
                     "survivor typed guest child reference lost private payload");
                 var output = new byte[8];
                 context.Read(handles[index]!, 0, output);
@@ -143,8 +148,9 @@ for (int i = 0; i < actorCount; ++i)
                 Require(guestValue[0] == 41 + index,
                     "compressed actor-local ref must survive turn rollover");
                 uint typedChild = context.ReadGuestReference32(typedRoots[index], 8);
-                context.ReadGuestObject32(typedChild, 0, guestValue);
-                Require(guestValue[0] == 51 + index,
+                var typedValue = new byte[8];
+                context.ReadGuestObject32(typedChild, 0, typedValue);
+                Require(typedValue[0] == 51 + index,
                     "typed guest reference graph survives physical actor turn");
                 var frameValue = new byte[1];
                 context.ReadStackFrame(frames[index]!, 0, frameValue);
