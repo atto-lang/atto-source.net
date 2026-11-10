@@ -1,4 +1,5 @@
 using Ores.Net.Runtime;
+using Ores.Net.Compiler;
 
 internal static class ActorGuestHeap32SelfTest
 {
@@ -9,6 +10,7 @@ internal static class ActorGuestHeap32SelfTest
         GuestPayloadFastPathDoesNotAllocateClrObjects();
         GuestReadLoanDelaysArenaReclaimAfterStop();
         TypedNodeGraphEnforcesFieldLayouts();
+        CompiledGuestFixtureMustRemainUncertified();
         Console.WriteLine("PASS .NET actor-local 32-bit guest refs (host runtime only; not compiled guest)");
     }
 
@@ -334,6 +336,33 @@ internal static class ActorGuestHeap32SelfTest
             runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0,
             TimeSpan.FromSeconds(10)),
             "typed graph frees native actor heap on STOP");
+    }
+
+    private static void CompiledGuestFixtureMustRemainUncertified()
+    {
+        // The host-runtime graph is NOT an executable guest. The real .atto
+        // source must currently fail before CIL/NativeAOT emission, rather
+        // than being silently interpreted as scalar i64 or host C# objects.
+        string path = Path.Combine(AppContext.BaseDirectory,
+            "contracts", "actor-guest-heap", "v1", "node_graph.atto");
+        string source = File.ReadAllText(path);
+        Require(source.Contains("define class Node", StringComparison.Ordinal) &&
+                source.Contains("define actor HeapGraphProbe", StringComparison.Ordinal),
+            "guest fixture must retain nominal Node and actor declarations");
+
+        bool denied = false;
+        try
+        {
+            _ = OresStructuredParser.Parse(source);
+        }
+        catch (FormatException exception) when
+            (exception.Message.Contains(
+                "Nominal class/actor methods require", StringComparison.Ordinal))
+        {
+            denied = true;
+        }
+        Require(denied,
+            "unsupported .atto nominal object graph must fail before CIL lowering");
     }
 
     private static void ExpectArgument(Action action, string why)
