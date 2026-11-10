@@ -11,7 +11,7 @@ that existing arena, not a second native allocation or a custom CLR GC heap.
 ```
 guest word:  [ generation: 16 bits ][ slot + 1: 16 bits ]
              0 = null
-actor context + slot -> ActorArenaHandle -> actor-local native slab offset
+actor context + slot -> ActorArenaNativeAllocation (value) -> native slab offset
 ```
 
 An AttoLang object-reference field stores exactly four bytes in little-endian
@@ -61,11 +61,49 @@ reference. Enforce this boundary in typed compiler lowering and through
 explicit transport rejection. Untrusted actors still need a separately
 certified isolate/process protection boundary.
 
+## First nominal object-graph ABI (host substrate)
+
+`ActorGuestLayout32` describes one immutable, compiler-assigned nominal
+type ID, an 8-byte-aligned object size, and at most 64 aligned fields.
+The first version accepts `I64` (8 bytes) and `Ref32` (4 bytes) fields;
+a `Ref32` field must declare its nonzero nominal target type ID.
+Field offsets, overlap, padding, object bounds, reference target identities
+and malformed field kinds are checked before native allocation.
+
+`ActorContext.AllocateTypedGuestObject32(layout)` allocates a typed guest
+object on the **same** native slab. All raw object reads/writes on typed
+objects are restricted to the declared scalar field range. Typed reference
+fields can be touched only by `ReadGuestReference32` /
+`WriteGuestReference32`, which require the exact field offset, a live
+reference and a matching nominal target type. Null remains 0.
+The 256-type bounded registry pins each type ID to one immutable layout
+for the actor incarnation, even after all instances of that type drop.
+A failed native admission rolls back a newly registered type ID.
+
+This makes a two-node `Node { i64 value, Node? next }` layout testable through
+the actor host API. The hosted self-test and the Linux/Windows NativeAOT
+host probe now exercise typed links across physical actor turns and denial
+of raw writes into reference fields. **This remains host code, not source
+lowering**.
+
+The proposed guest source is
+`contracts/actor-guest-heap/v1/node_graph.atto`. The production
+`OresStructuredParser` still rejects nominal class and actor declarations
+before CIL emission. The verification suite requires this exact
+fail-closed condition until the compiler has typed nominal lowering,
+ownership/borrow-checker proofs, static type IDs and compiled actor guests.
+Public host callers can construct descriptors: the IDs are **not**
+authenticators, and arbitrary host-supplied `uint` reference words are
+not transport-safe. Compiler-issued/authorized metadata is mandatory
+before these APIs can be exposed to actual guest code.
+
 ## What this does not yet prove
 
 - No source-level `define actor` object/class, string, tuple, map, array or
   record lowering into this table.
-- No source ownership/borrow-checker path-to-heap proof or typed field map.
+- No compiler-emitted source ownership/borrow-checker path-to-heap proof
+  or compiler-emitted typed field map. Host layout descriptors alone do not
+  certify compiled guest field safety.
 - The new `ActorArena.AllocateNativeGuest`/`ReadNativeGuest`/
   `WriteNativeGuest`/`DropNativeGuest` path uses **value-type native allocation
   capabilities** within the same arena. Unlike legacy `AllocatePersistent`,
