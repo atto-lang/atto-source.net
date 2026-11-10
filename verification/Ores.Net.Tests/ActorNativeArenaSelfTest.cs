@@ -70,6 +70,7 @@ internal static class ActorNativeArenaSelfTest
 
         AggregateLazyGrowthBudgetRefundsAfterNativeFree();
         GrowthChargesFullPeakBackingAndRollsBackOnQuotaDenial();
+        SiblingGrowthDenialPreservesLiveActorAndProcessBudgets();
         LazyBackingGrowthPreservesActorOffsets();
         OddQuotaBackingAlignment();
         ConcurrentDisposeDoesNotRaceNativeAccess();
@@ -219,6 +220,63 @@ internal static class ActorNativeArenaSelfTest
         Require(sufficientBudget.ReservedBytes == 0 &&
                 ActorArenaBudget.Process.ReservedBytes == processBefore,
             "successful growth eventually refunds all physical backing");
+    }
+
+    private static void SiblingGrowthDenialPreservesLiveActorAndProcessBudgets()
+    {
+        // Two actor-private 4 KiB slabs occupy 8 KiB. Growing A to 8 KiB
+        // requires 8 KiB of replacement backing *in addition* to both slabs,
+        // so a 12 KiB tenant cannot admit the 16 KiB transient peak.
+        const int slab = 4096;
+        var tenant = new ActorArenaBudget(3 * slab);
+        long processBefore = ActorArenaBudget.Process.ReservedBytes;
+        using var growing = new ActorNativeArena(2 * slab, 2, tenant);
+        using var sibling = new ActorNativeArena(slab, 1, tenant);
+
+        ulong root = growing.Allocate(slab, 8);
+        ulong neighbor = sibling.Allocate(slab, 8);
+        Require(root != 0 && neighbor != 0, "two actor-private backing slabs admitted");
+        Require(growing.WriteInt64(root, 0, 0x11223344) &&
+                sibling.WriteInt64(neighbor, 0, 0x55667788),
+            "distinct actor roots retain independent native contents");
+        Require(tenant.ReservedBytes == 2 * slab &&
+                ActorArenaBudget.Process.ReservedBytes == processBefore + 2 * slab,
+            "initial physical tenant and process reservations include both actors");
+
+        RejectInvalid(() => _ = growing.Allocate(slab, 8),
+            "actor A cannot borrow sibling B's physical-budget share for relocation");
+        Require(growing.BackingBytes == slab && growing.UsedBytes == slab &&
+                growing.LiveAllocations == 1 && sibling.BackingBytes == slab &&
+                sibling.UsedBytes == slab && sibling.LiveAllocations == 1 &&
+                tenant.ReservedBytes == 2 * slab &&
+                ActorArenaBudget.Process.ReservedBytes == processBefore + 2 * slab,
+            "denied growth is failure-neutral for both actor heaps and both budgets");
+        Require(growing.ReadInt64(root) == 0x11223344 &&
+                sibling.ReadInt64(neighbor) == 0x55667788,
+            "quota denial cannot alter the growing actor or its live sibling");
+
+        sibling.Dispose();
+        Require(tenant.ReservedBytes == slab &&
+                ActorArenaBudget.Process.ReservedBytes == processBefore + slab,
+            "sibling native backing is scrubbed and refunded before reuse");
+        ulong tail = growing.Allocate(slab, 8);
+        Require(tail != 0 && growing.BackingBytes == 2 * slab &&
+                growing.LiveAllocations == 2 &&
+                tenant.ReservedBytes == 2 * slab &&
+                ActorArenaBudget.Process.ReservedBytes == processBefore + 2 * slab,
+            "growth succeeds only after sibling capacity is physically returned");
+        Require(growing.ReadInt64(root) == 0x11223344 &&
+                growing.ReadInt64(tail) == 0,
+            "growth preserves the root and zero-initializes newly allocated bytes");
+        Require(!growing.WriteInt64(neighbor, 0, 99),
+            "a retired sibling handle cannot address the surviving actor");
+        RejectInvalid(() => _ = sibling.ReadInt64(neighbor),
+            "disposed sibling rejects stale access after reservation refund");
+
+        growing.Dispose();
+        Require(tenant.ReservedBytes == 0 &&
+                ActorArenaBudget.Process.ReservedBytes == processBefore,
+            "both actors refund all native reservations without double accounting");
     }
 
     private static void SteadyStateManagedAllocationBudget()
