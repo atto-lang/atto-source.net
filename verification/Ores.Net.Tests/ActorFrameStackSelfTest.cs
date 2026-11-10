@@ -7,6 +7,7 @@ internal static class ActorFrameStackSelfTest
         InvalidConfigurationFailsBeforeCarrierAdmission();
         IndependentStacksSurviveTurnsAndRejectForeignAndStaleHandles();
         BoundsAndLifoExhaustionAreFailureNeutral();
+        UncaughtLogicalOverflowRetiresOnlyOwner();
         RetirementAllowsInFlightFrameCleanupButRejectsPush();
         Console.WriteLine(
             "PASS .NET actor-owned logical frame stack host-only regression (not guest/AOT certification)");
@@ -193,6 +194,70 @@ internal static class ActorFrameStackSelfTest
         Require(WaitUntil(() =>
             runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0),
             "bounded logical stack retires without native memory leak");
+    }
+
+
+    // A deterministic logical guest-stack overflow is safe to induce in process.
+    // This must not be confused with overflowing the CLR/carrier machine stack.
+    private static void UncaughtLogicalOverflowRetiresOnlyOwner()
+    {
+        foreach (ActorKind kind in new[] {
+            ActorKind.Private, ActorKind.Shared, ActorKind.Untrusted })
+        {
+            using var runtime = new ActorRuntime(Options(stackBytes: 96, maxFrames: 4));
+            int ranPastOverflow = 0;
+            int siblingTurns = 0;
+            ActorStackFrameHandle? failedFrame = null;
+
+            var failing = runtime.Spawn(kind, (context, _) =>
+            {
+                failedFrame = context.PushStackFrame(64);
+                context.WriteStackFrame(failedFrame, 0, new byte[] { 0x5A });
+                // The second aligned frame exceeds this actor's 96-byte stack.
+                // Do not catch it: RunCell must retire the failing actor only.
+                _ = context.PushStackFrame(64);
+                Interlocked.Increment(ref ranPastOverflow);
+            });
+            var sibling = runtime.Spawn(kind, (context, _) =>
+            {
+                Require(context.Kind == kind, "sibling retains dispatch domain");
+                var frame = context.PushStackFrame(32);
+                context.WriteStackFrame(frame, 0, new byte[] { 0xB7 });
+                Span<byte> observed = stackalloc byte[1];
+                context.ReadStackFrame(frame, 0, observed);
+                Require(observed[0] == 0xB7,
+                    "sibling stack remains usable after peer overflow");
+                RejectInvalid(() =>
+                    context.ReadStackFrame(failedFrame!, 0, new byte[1]),
+                    "sibling cannot borrow failed actor's retained frame handle");
+                context.PopStackFrame(frame);
+                Interlocked.Increment(ref siblingTurns);
+            });
+
+            runtime.Send(failing, new byte[] { 1 });
+            Require(WaitUntil(() =>
+                runtime.FaultedTurns == 1 && runtime.LiveActors == 1),
+                "logical stack overflow must fail-stop only its owning actor");
+            Require(Volatile.Read(ref ranPastOverflow) == 0 &&
+                    runtime.CompletedMessages == 0,
+                "failed actor cannot resume after rejected stack admission");
+            Require(runtime.NativeReservedBytes == 8192 + 512,
+                "failed actor's persistent arena and frame slab are reclaimed");
+            RejectInvalid(() => runtime.Send(failing, new byte[] { 2 }),
+                "stale failing actor must not be resurrected by another send");
+
+            runtime.Send(sibling, new byte[] { 3 });
+            runtime.Send(sibling, new byte[] { 4 });
+            Require(WaitUntil(() => runtime.CompletedMessages == 2 &&
+                                     Volatile.Read(ref siblingTurns) == 2),
+                "healthy sibling must process two subsequent turns");
+            Require(runtime.FaultedTurns == 1 && runtime.LiveActors == 1,
+                "healthy sibling is neither faulted nor retired");
+            runtime.Stop(sibling);
+            Require(WaitUntil(() =>
+                runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0),
+                "all actor-local native memory must be refunded on final stop");
+        }
     }
 
     private static void RetirementAllowsInFlightFrameCleanupButRejectsPush()
