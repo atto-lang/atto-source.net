@@ -45,6 +45,18 @@ internal static class ActorScalarFrameAbiSelfTest
                 plan.EncodeTypeTags().SequenceEqual(new byte[] { 2, 1 }) &&
                 plan.BlockIndex("entry") == 0,
             "verified CFG value IDs and native scalar ABI layout agree");
+        Require(plan.AdmitActorStackBudget(96, 3) == 2 &&
+                plan.AdmitActorStackBudget(48, 8) == 1,
+            "compiler preflight checks both byte and frame-count capacity");
+        RejectFormat(() => { _ = plan.AdmitActorStackBudget(47, 1); },
+            "compiler refuses a frame larger than the actor-owned stack");
+        RejectRange(() => { _ = plan.AdmitActorStackBudget(0, 1); },
+            "zero actor stack cannot admit a compiler frame");
+        RejectRange(() => { _ = plan.AdmitActorStackBudget(96, 0); },
+            "zero actor frame budget cannot admit any activation");
+        RejectRange(() => { _ = plan.AdmitActorStackBudget(96, 1025); },
+            "unbounded frame budget cannot be certified");
+
         RejectRange(() => ActorScalarFrameAbiV1.FrameBytes(0),
             "empty native frame prohibited");
         RejectRange(() => ActorScalarFrameAbiV1.FrameBytes(257),
