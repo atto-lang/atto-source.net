@@ -497,6 +497,10 @@ public sealed class ActorRuntime : IDisposable
                         var context = new ActorContext(
                             cell.Reference, cell.Kind, cell.Arena, turn, cell.Stack);
                         cell.Handler(context, payload);
+                        // A handler may catch a frame-quota exception, but
+                        // terminal logical stack failure must still retire its
+                        // actor rather than report a completed message.
+                        cell.Stack.ValidateSynchronousTurnExit(turn);
                     }
                     succeeded = true;
                 }
