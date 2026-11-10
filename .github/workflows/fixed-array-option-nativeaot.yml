@@ -54,9 +54,12 @@ jobs:
             fi
           done
           for fixture in contracts/collections/v1/reject-array-{mutable,unsafe-index,oversize}.atto contracts/collections/v1/reject-array-get-copy-bool-index.atto; do
-            if dotnet run --project "$project" -c Release -- check-structured "$fixture"; then
+            if dotnet run --project "$project" -c Release -- check-structured "$fixture" > array-negative.log 2>&1; then
               echo "Array negative source accepted: $fixture" >&2
               exit 1
+            fi
+            if [[ "$fixture" == *get-copy-bool-index.atto ]]; then
+              grep -F "Array<int>.get_copy index must be int" array-negative.log
             fi
           done
       - name: Publish and run real Linux NativeAOT guest binaries
@@ -164,7 +167,7 @@ jobs:
             Remove-Item -LiteralPath $denied -Force -ErrorAction SilentlyContinue
             & $compiler compile-structured $source --out $denied
             if ($LASTEXITCODE -eq 0 -or (Test-Path -LiteralPath $denied)) {
-              throw "NativeAOT compiler accepted unsafe array source: $variant"
+              throw "NativeAOT compiler accepted unsafe array source: $source"
             }
           }
           (Get-FileHash $compiler -Algorithm SHA256).Hash
