@@ -103,22 +103,26 @@ jobs:
             denied=artifacts/rejected-fixed-array/OresGenerated.dll
             mkdir -p "$(dirname "$denied")"
             rm -f -- "$denied"
-            if "$compiler" compile-structured "$source" --out "$denied" > array-native-negative.log 2>&1; then
+            if "$compiler" compile-structured "$source" --out "$denied" > array-native-negative.stdout 2> array-native-negative.stderr; then
               echo "Native compiler admitted unsafe array: $source" >&2
               exit 1
+            else
+              compile_exit=$?
             fi
+            # The compiler's controlled FormatException denial returns 1.
+            # Crashes, missing tools, emitted output or successful builds are
+            # NOT legitimate negative-test passes.
+            test "$compile_exit" -eq 1
             test ! -e "$denied"
-            # Require a controlled typed compiler denial, not a crash or a
-            # transient tool failure. A generic unsupported syntax response
-            # still does not certify static loan-conflict semantics.
-            grep -F "oresnet: " array-native-negative.log
+            test ! -s array-native-negative.stdout
+            grep -F "oresnet: " array-native-negative.stderr
             case "$source" in
               *reject-array-mutable.atto) expected=E_ARRAY_IMMUTABLE_ONLY ;;
               *reject-array-unsafe-index.atto) expected=E_UNCHECKED_COLLECTION_ACCESS ;;
               *reject-array-oversize.atto) expected=E_ARRAY_SIZE ;;
               *reject-array-get-copy-bool-index.atto) expected="Array<int>.get_copy index must be int" ;;
             esac
-            grep -F "$expected" array-native-negative.log
+            grep -F "$expected" array-native-negative.stderr
           done
           sha256sum "$compiler"
           echo "NET_FIXED_ARRAY_LINUX_NATIVE_AOT_GUEST_42|head=$(git rev-parse HEAD)|variants=6"
@@ -195,8 +199,19 @@ jobs:
           )) {
             $denied = 'artifacts/generated/RejectedArray.dll'
             Remove-Item -LiteralPath $denied -Force -ErrorAction SilentlyContinue
-            $diagnostic = (& $compiler compile-structured $source --out $denied 2>&1 | Out-String)
-            $compileExit = $LASTEXITCODE
+            # Start-Process captures stderr and the exit code separately:
+            # PowerShell error-stream preferences cannot masquerade as an
+            # expected compilation denial, and stdout must remain empty.
+            $stderrPath = 'artifacts/generated/RejectedArray.stderr.log'
+            $stdoutPath = 'artifacts/generated/RejectedArray.stdout.log'
+            Remove-Item -LiteralPath $stderrPath, $stdoutPath -Force -ErrorAction SilentlyContinue
+            $process = Start-Process -FilePath (Resolve-Path -LiteralPath $compiler).Path `
+              -ArgumentList @('compile-structured', $source, '--out', $denied) `
+              -NoNewWindow -Wait -PassThru `
+              -RedirectStandardError $stderrPath -RedirectStandardOutput $stdoutPath
+            $compileExit = $process.ExitCode
+            $diagnostic = Get-Content -LiteralPath $stderrPath -Raw
+            $unexpectedStdout = Get-Content -LiteralPath $stdoutPath -Raw
             $expectedError = switch -Wildcard ($source) {
               '*reject-array-mutable.atto' { 'E_ARRAY_IMMUTABLE_ONLY' }
               '*reject-array-unsafe-index.atto' { 'E_UNCHECKED_COLLECTION_ACCESS' }
@@ -205,6 +220,7 @@ jobs:
               default { throw "Unexpected negative fixture: $source" }
             }
             if ($compileExit -ne 1 -or (Test-Path -LiteralPath $denied) -or
+                -not [string]::IsNullOrEmpty($unexpectedStdout) -or
                 -not $diagnostic.Contains('oresnet: ') -or
                 -not $diagnostic.Contains($expectedError)) {
               throw "NativeAOT compiler failed to provide exact safe-array denial for $source; exit=$compileExit; output=$diagnostic"
