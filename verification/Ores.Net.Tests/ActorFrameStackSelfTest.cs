@@ -1,3 +1,4 @@
+using System.Linq;
 using Ores.Net.Runtime;
 
 internal static class ActorFrameStackSelfTest
