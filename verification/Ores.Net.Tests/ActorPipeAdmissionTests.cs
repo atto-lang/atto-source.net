@@ -18,6 +18,8 @@ internal static class ActorPipeAdmissionTests
             ("Actor.pipe(Producer(),Consumer())", "pipe"),
             ("Actor /* gap */ . /* gap */ pipe(Producer(),Consumer())", "pipe"),
             ("Actor::pipe(Producer(),Consumer())", "pipe"),
+            ("ActorUtils.pipe(Producer(),Consumer())", "pipe"),
+            ("ActorUtils::pipe(Producer(),Consumer())", "pipe"),
             ("Actor.connect(Producer(),Consumer())", "connect"),
             ("Actor::connect(Producer(),Consumer())", "connect")
         };
