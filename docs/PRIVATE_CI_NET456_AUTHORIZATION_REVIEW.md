@@ -9,7 +9,7 @@
 | Source repository | `ores-truffle-oreslang/oreslang-source.net` (private) |
 | Source candidate | [PR #456](https://github.com/ores-truffle-oreslang/oreslang-source.net/pull/456) |
 | Candidate head commit | `cd87860f05037bee11842ee5529eecec508ad371` |
-| Candidate root tree | **UNVERIFIED — independently retrieve from authenticated Git commit object before any transfer** |
+| Candidate root tree | `4d9fdfd4df03a0a5abaaaf6ccf0e9de0ea91f661` (verified against source Git commit/tree APIs; **independent reviewer read-back still mandatory**) |
 | Destination (candidate only) | `honeypot-r-us-test/hnpt-e2e` (private) |
 | Destination numeric repository ID | `1346492776` |
 | Source workflow | `.github/workflows/fixed-array-option-nativeaot.yml` |
@@ -25,7 +25,7 @@ The source-local failure does **not** establish billing exhaustion: GitHub Actio
 
 1. A separate reviewer with actual write-or-higher permission, whose immutable GitHub ID is **neither** `11139560` nor `2148448`, must be provisioned/verified. Neither candidate identity may self-approve.
 2. An authorized administrator must establish enforceable protected-`main` CODEOWNER review, restrictions on force pushes/deletions and effective required-check identity. Verify via the *effective* rules/ruleset UI or API read-back.
-3. Independent reviewer and administrator must approve exactly **one** destination repository ID and exactly **one** source commit + independently read source root tree. Write the verified triple to the existing policy files in a separately reviewed, protected change. `private-ci-policy` must pass as the **real** Actions check bound to app ID `15368`.
+3. Independent reviewer and administrator must approve exactly **one** destination repository ID and exactly **one** source commit + independently read source root tree `4d9fdfd4df03a0a5abaaaf6ccf0e9de0ea91f661`. The connected GitHub API returned this tree for candidate commit `cd87860f05037bee11842ee5529eecec508ad371`; this first-party read is evidence, **not** independent approval. Write the verified triple to the existing policy files in a separately reviewed, protected change. `private-ci-policy` must pass as the **real** Actions check bound to app ID `15368`.
 4. Verify the destination GitHub App/runner access, CODEOWNERS, retention, artifact encryption/access, workflow provenance, and trust boundary; no secrets, credentials, runtime environment or unrelated history may cross the boundary.
 5. Obtain an explicit decision on incident inventory and containment from [issue #239](https://github.com/ores-truffle-oreslang/oreslang-source.net/issues/239). Historical orphan Git objects or CI artifacts are not cleaned by branch deletion alone. Close out any unresolved policy deviation first.
 6. If the authorized approval cannot be demonstrated, **stop**. Continue repairing source-local Actions runner admission instead; do not treat user-requested testing or a successful carrier synthetic test as a replacement for independent authorization.
@@ -49,7 +49,7 @@ Confirm the original PR still points at the candidate head. If it has advanced, 
 - `contracts/collections/v1/array-get-copy-signed-boundaries42.atto`: blob `c7fac378157f5c42a886f2b80bd3b6df0c18b762`.
 - `contracts/collections/v1/array-get-copy-immutable42.atto`: blob `d934d5b494406b7e3753173a445af1c0d446a763`.
 
-The approving reviewer must independently compare *all* source blobs used by the workflow, especially compiler/runtime/test inputs. Do not copy an untrusted `pull_request` workflow into the carrier's privileged context without a controlled review; pin the approved carrier workflow on protected destination default branch.
+The source Git tree traversal confirmed `contracts/collections/v1` tree `f9f729242403b63e49ba9ee90004246b39625ab3` contains the three fixture blobs above. The approving reviewer must independently compare *all* source blobs used by the workflow, especially compiler/runtime/test inputs. Do not copy an untrusted `pull_request` workflow into the carrier's privileged context without a controlled review; pin the approved carrier workflow on protected destination default branch.
 
 ## Conditionally permitted test execution — only after approval
 
