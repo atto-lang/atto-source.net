@@ -341,16 +341,17 @@ public sealed class ActorRuntime : IDisposable
     /// graph-completion guarantee. Pipeline callers must wait for upstream
     /// retirement BEFORE sealing downstream admission. Stop() remains abortive.
     /// </summary>
-    public void DrainAndStop(ActorRef actor)
+    public Task DrainAndStop(ActorRef actor)
     {
         ActorCell cell = Lookup(actor);
+        Task completion = cell.Terminated.Task; // generation-bound terminal receipt
         bool finalizeNow = false;
         lock (cell.Gate)
         {
             if (cell.Stopping || !cell.Mailbox.Authorizes(actor))
                 throw new InvalidOperationException("Actor reference is stale or stopping");
             if (cell.Draining)
-                return;
+                return completion;
             cell.Draining = true;
             if (cell.Scheduled == 0)
             {
@@ -379,6 +380,7 @@ public sealed class ActorRuntime : IDisposable
         }
         if (finalizeNow)
             FinalizeCell(cell);
+        return completion;
     }
 
     public void Stop(ActorRef actor)
