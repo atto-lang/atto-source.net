@@ -11,12 +11,14 @@ bool validStructuredCompile = args.Length == 4 &&
     args[0] == "compile-structured" && args[2] == "--out";
 bool validEmitSource = args.Length == 4 && args[2] == "--out" &&
     (args[0] == "emit-csharp" || args[0] == "emit-fsharp");
+bool validActorHeapV1 = args.Length == 4 &&
+    args[0] == "emit-actor-heap-v1" && args[2] == "--out";
 bool validStaticFacts = args.Length == 2 &&
     (args[0] == "static-facts" || args[0] == "static-facts-structured");
 bool moduleCommand = args.Length >= 1 && args[0] is "check-modules" or "compile-modules";
-if (!validCheck && !validCompile && !validStructuredCheck && !validStructuredCompile && !validStaticFacts && !validEmitSource && !moduleCommand)
+if (!validCheck && !validCompile && !validStructuredCheck && !validStructuredCompile && !validStaticFacts && !validEmitSource && !validActorHeapV1 && !moduleCommand)
 {
-    Console.Error.WriteLine("usage: oresnet check input.atto|input.ores | oresnet compile input.atto|input.ores --out path/OresGenerated.dll | oresnet check-structured input.atto|input.ores | oresnet compile-structured input.atto|input.ores --out path/OresGenerated.dll | oresnet emit-csharp input.atto|input.ores --out path/OresProgram.cs | oresnet emit-fsharp input.atto|input.ores --out path/OresProgram.fs | oresnet static-facts input.atto|input.ores | oresnet static-facts-structured input.atto|input.ores");
+    Console.Error.WriteLine("usage: oresnet check input.atto|input.ores | oresnet compile input.atto|input.ores --out path/OresGenerated.dll | oresnet check-structured input.atto|input.ores | oresnet compile-structured input.atto|input.ores --out path/OresGenerated.dll | oresnet emit-csharp input.atto|input.ores --out path/OresProgram.cs | oresnet emit-fsharp input.atto|input.ores --out path/OresProgram.fs | oresnet static-facts input.atto|input.ores | oresnet static-facts-structured input.atto|input.ores | oresnet emit-actor-heap-v1 input.atto --out ActorHeapV1.g.cs");
     return 2;
 }
 
@@ -59,11 +61,26 @@ try
         Console.WriteLine(Encoding.UTF8.GetString(witness.ToArray()));
         return 0;
     }
+    if (validActorHeapV1 &&
+        !string.Equals(Path.GetExtension(args[1]), ".atto", StringComparison.OrdinalIgnoreCase))
+        throw new FormatException("Actor heap V1 emission requires .atto source");
+    if (validActorHeapV1 &&
+        !string.Equals(Path.GetFileName(args[3]), "ActorHeapV1.g.cs", StringComparison.Ordinal))
+        throw new ArgumentException("Actor heap V1 output must be named ActorHeapV1.g.cs");
     if (validStaticFacts &&
         !string.Equals(Path.GetExtension(args[1]), ".atto", StringComparison.OrdinalIgnoreCase) &&
         !string.Equals(Path.GetExtension(args[1]), ".ores", StringComparison.OrdinalIgnoreCase))
         throw new FormatException("Static-facts export requires a .atto or .ores source file");
     var source = ReadBoundedSource(args[1], rejectBom: validStaticFacts);
+    if (validActorHeapV1)
+    {
+        // Strictly opt-in, checked .atto source -> static NativeAOT-compatible
+        // C#; no host execution, general nominal admission, or JIT.
+        string generated = ActorHeapV1Compiler.EmitCSharp(source);
+        WriteAtomicSource(args[3], generated);
+        Console.WriteLine("ACTOR_HEAP_V1_SOURCE_GENERATED|NOT_EXECUTED|NOT_CERTIFIED");
+        return 0;
+    }
     if (validStaticFacts)
     {
         // The production command uses the exact verified scalar IR gate.
