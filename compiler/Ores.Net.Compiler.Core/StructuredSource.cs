@@ -241,6 +241,13 @@ public static class OresStructuredParser
             // This lexer has already removed comments, so no raw regex scan.
             string word = tokens[i].Text;
             string next = tokens[i + 1].Text;
+            // Do not let check-structured, compile-structured or module
+            // linking infer host-only actor routing from a guest 'pipe'.
+            if (ActorPipeAdmission.IsReservedForm(
+                i > 2 ? tokens[i - 3].Text : "",
+                i > 1 ? tokens[i - 2].Text : "",
+                i > 0 ? tokens[i - 1].Text : "", word, next))
+                throw ActorPipeAdmission.Unsupported(tokens[i].Offset);
             if (word == "async" && next == "fnc")
                 throw new FormatException(
                     $"E_CALLABLE_MODIFIERS: async fnc is removed; use suspends at offset {tokens[i].Offset}");
