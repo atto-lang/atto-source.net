@@ -52,7 +52,7 @@ public sealed record StructuredProgram(string Name, IReadOnlyList<StructuredStmt
 /// Narrow checked parser for a single int-returning main, initialized locals,
 /// assignments, if/else, while and returns. No CIL or runtime execution.
 /// </summary>
-public static class OresStructuredParser
+public static partial class OresStructuredParser
 {
     private const int MaxChars = 1_048_576;
     private const int MaxTokens = 100_000;
