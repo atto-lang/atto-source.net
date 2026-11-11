@@ -24,6 +24,10 @@ internal static class ActorRuntimeSelfTest
         HostIoActorFaultRetiresOutput();
         HostIoGlobalBudgetSurvivesPressureAndStop();
         SupervisorStopReceiptRequiresPhysicalTermination();
+        InputReadinessSchedulesWithoutMailboxData();
+        DataAndIoTurnsAlternateWithoutReentrancy();
+        StopPreemptsInputReadinessUnderDataSaturation();
+        Console.WriteLine("ACTOR_IO_READY_SCHEDULER_PASS");
         Console.WriteLine("ACTOR_IO_GLOBAL_BUDGET_PASS");
         Console.WriteLine("ACTOR_SUPERVISOR_CONTROL_RECEIPT_PASS");
         Console.WriteLine("ACTOR_PIPELINE_MAILBOX_CONTROL_PASS");
@@ -393,6 +397,180 @@ internal static class ActorRuntimeSelfTest
         Require(replayDenied, "STOP receipt must reject duplicate invocation");
         Require(runtime.CompletedMessages == 1,
             "saturated queued DATA must not execute after supervisor STOP");
+    }
+
+    // A host-fed input record schedules the actor directly, without writing a
+    // fake empty user DATA message or consuming an ordinary mailbox slot.
+    private static void InputReadinessSchedulesWithoutMailboxData()
+    {
+        using var runtime = new ActorRuntime(Options());
+        using var gotEof = new ManualResetEventSlim();
+        var (actor, hostIo) = runtime.SpawnWithIo(
+            ActorKind.Shared,
+            (_, _) => throw new Exception("I/O wakeup invoked mailbox handler"),
+            ctx =>
+            {
+                while (ctx.TryReadInput(out var frame) && frame is not null)
+                    Require(ctx.TryWriteOutput(frame), "I/O turn writes output");
+                if (ctx.InputEof)
+                {
+                    ctx.CompleteOutput();
+                    gotEof.Set();
+                }
+            });
+
+        byte[] first = { 10, 20 };
+        Require(hostIo.TryFeedInput(first), "automatic I/O wakeup admitted");
+        first[0] = 99;
+        Require(hostIo.TryFeedInput(new byte[] { 30, 40 }),
+            "second I/O frame admitted");
+        hostIo.CompleteInput();
+        hostIo.CompleteInput(); // repeated EOF cannot generate more wakeups
+        Require(!hostIo.TryFeedInput(new byte[] { 50 }),
+            "completed input must deny further records");
+        Require(gotEof.Wait(TimeSpan.FromSeconds(5)),
+            "EOF delivered without manually sending mailbox DATA");
+
+        var bytes = new List<byte>();
+        while (hostIo.TryReadOutput(out var frame))
+        {
+            Require(frame is not null, "drained I/O frame is nonnull");
+            bytes.AddRange(frame);
+        }
+        Require(bytes.SequenceEqual(new byte[] { 10, 20, 30, 40 }),
+            "automatic I/O output preserves order and owned snapshots");
+        Require(hostIo.OutputEof, "output EOF after all admitted frames");
+        Require(runtime.CompletedMessages == 0 &&
+            runtime.CompletedIoTurns >= 1,
+            "I/O wake does not manufacture a user mailbox message");
+        runtime.Stop(actor);
+        Require(WaitUntil(() => runtime.LiveActors == 0 &&
+            runtime.IoQueuedBytes == 0 &&
+            runtime.IoQueuedRecords == 0),
+            "I/O-ready actor retirement returns all credits");
+    }
+
+    private static void DataAndIoTurnsAlternateWithoutReentrancy()
+    {
+        using var runtime = new ActorRuntime(Options());
+        const int count = 48;
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        using var all = new CountdownEvent(2 * count + 1);
+        var trace = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        int concurrent = 0;
+        int overlap = 0;
+
+        var (actor, hostIo) = runtime.SpawnWithIo(
+            ActorKind.Private,
+            (_, _) =>
+            {
+                if (Interlocked.Increment(ref concurrent) != 1)
+                    Interlocked.Increment(ref overlap);
+                try
+                {
+                    trace.Enqueue("mail");
+                    all.Signal();
+                    entered.Set();
+                    if (!release.IsSet)
+                        Require(release.Wait(TimeSpan.FromSeconds(10)),
+                            "release first mailbox carrier turn");
+                }
+                finally { Interlocked.Decrement(ref concurrent); }
+            },
+            ctx =>
+            {
+                if (Interlocked.Increment(ref concurrent) != 1)
+                    Interlocked.Increment(ref overlap);
+                try
+                {
+                    Require(ctx.TryReadInput(out var data) && data is not null,
+                        "each readiness token corresponds to one I/O frame");
+                    trace.Enqueue("io");
+                    all.Signal();
+                }
+                finally { Interlocked.Decrement(ref concurrent); }
+            });
+
+        runtime.Send(actor, new byte[] { 1 });
+        Require(entered.Wait(TimeSpan.FromSeconds(5)), "first mail turn entered");
+        try
+        {
+            for (int i = 0; i < count; ++i)
+            {
+                Require(hostIo.TryFeedInput(new byte[] { (byte)i }),
+                    "bounded I/O readiness admission");
+                runtime.Send(actor, new byte[] { (byte)i });
+            }
+        }
+        finally { release.Set(); }
+
+        Require(all.Wait(TimeSpan.FromSeconds(10)),
+            "both DATA and I/O queues completed without starvation");
+        Require(Volatile.Read(ref overlap) == 0,
+            "DATA/I/O handler turns must never overlap");
+        var sequence = trace.ToArray();
+        Require(sequence.Length == 2 * count + 1 &&
+            sequence[0] == "mail", "all actor turns accounted for");
+        for (int i = 1; i < sequence.Length; ++i)
+            Require(sequence[i] != sequence[i - 1],
+                "bounded scheduler should alternate ready I/O and mailbox turns");
+        Require(WaitUntil(() => runtime.CompletedMessages == count + 1 &&
+            runtime.CompletedIoTurns == count),
+            "I/O turns have distinct completion accounting from user mail");
+
+        runtime.Stop(actor);
+        Require(WaitUntil(() => runtime.LiveActors == 0),
+            "alternating DATA/I/O actor physically retired");
+    }
+
+    private static void StopPreemptsInputReadinessUnderDataSaturation()
+    {
+        using var runtime = new ActorRuntime(Options());
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        int ioCallbacks = 0, mailboxTurns = 0;
+        var (actor, hostIo) = runtime.SpawnWithIo(ActorKind.Private,
+            (_, _) =>
+            {
+                Interlocked.Increment(ref mailboxTurns);
+                entered.Set();
+                Require(release.Wait(TimeSpan.FromSeconds(10)),
+                    "release saturated mailbox turn");
+            },
+            ctx =>
+            {
+                Interlocked.Increment(ref ioCallbacks);
+                _ = ctx.TryReadInput(out _);
+            });
+        runtime.Send(actor, new byte[] { 1 });
+        Require(entered.Wait(TimeSpan.FromSeconds(5)),
+            "blocking actor turn started");
+        try
+        {
+            for (int i = 0; i < Options().MailboxMessages; ++i)
+                runtime.Send(actor, new byte[] { 2 });
+            Require(hostIo.TryFeedInput(new byte[] { 7 }),
+                "independent I/O readiness admits despite saturated DATA");
+            Require(runtime.IoQueuedRecords == 1 &&
+                runtime.CompletedIoTurns == 0,
+                "I/O frame is queued but cannot reenter active turn");
+
+            var stopping = Task.Run(() => runtime.Stop(actor));
+            Require(stopping.Wait(TimeSpan.FromSeconds(5)),
+                "trusted STOP cannot wait for DATA or I/O scheduler credit");
+            Require(runtime.IoQueuedRecords == 1,
+                "STOP defers I/O scrub until physical actor exit");
+        }
+        finally { release.Set(); }
+        Require(WaitUntil(() => runtime.LiveActors == 0 &&
+            runtime.IoQueuedRecords == 0 && runtime.NativeReservedBytes == 0),
+            "STOP reclaimed pending input and erased scheduler wakeup");
+        Require(Volatile.Read(ref ioCallbacks) == 0 &&
+            Volatile.Read(ref mailboxTurns) == 1,
+            "STOP preempts queued I/O and queued mailbox DATA");
+        Require(runtime.CompletedIoTurns == 0,
+            "canceled readiness cannot count as executed input");
     }
 
     private static void ForgedSameIdCannotObserveTermination()
