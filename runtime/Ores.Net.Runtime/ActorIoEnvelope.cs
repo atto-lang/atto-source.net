@@ -17,21 +17,41 @@ public sealed class ActorIoHostPort
 {
     private readonly ActorIoEnvelope _io;
     private readonly ActorRef _actor;
+    // Weak ownership: a host-held port must not retain its retired runtime,
+    // actor handler, arena or every sibling actor transitively.
+    private readonly WeakReference<ActorRuntime>? _wakeRuntime;
 
-    internal ActorIoHostPort(ActorIoEnvelope io, ActorRef actor)
+    internal ActorIoHostPort(ActorIoEnvelope io, ActorRef actor,
+        ActorRuntime? wakeRuntime = null)
     {
         _io = io;
         _actor = actor;
+        if (wakeRuntime is not null)
+            _wakeRuntime = new WeakReference<ActorRuntime>(wakeRuntime);
     }
 
-    public bool TryFeedInput(ReadOnlySpan<byte> data) =>
-        _io.TryFeedInput(_actor, data);
+    public bool TryFeedInput(ReadOnlySpan<byte> data)
+    {
+        bool admitted = _io.TryFeedInput(_actor, data);
+        if (admitted) NotifyReadiness();
+        return admitted;
+    }
+
+    private void NotifyReadiness()
+    {
+        if (_wakeRuntime?.TryGetTarget(out var runtime) == true)
+            runtime.NotifyInputReady(_actor);
+    }
 
     public bool TryReadOutput(out byte[]? data) =>
         _io.TryReadOutput(_actor, out data);
 
     // Only the host input writer can signal input EOF.
-    public void CompleteInput() => _io.CompleteInput(_actor);
+    public void CompleteInput()
+    {
+        if (_io.TryCompleteInput(_actor))
+            NotifyReadiness();
+    }
 
     // Output EOF becomes observable after every previously admitted frame
     // has been drained. The host cannot close the actor's output for it.
@@ -201,12 +221,18 @@ public sealed class ActorIoEnvelope : IDisposable
     /// Host-owned half-close for io.in. Existing queued bytes remain readable,
     /// but no further bytes can be admitted. Repeated EOF is idempotent.
     /// </summary>
-    public void CompleteInput(ActorRef actor)
+    public void CompleteInput(ActorRef actor) => _ = TryCompleteInput(actor);
+
+    // Returns false for an already-published EOF so a host cannot manufacture
+    // unbounded scheduler wakeups by repeatedly closing the same input.
+    internal bool TryCompleteInput(ActorRef actor)
     {
         lock (_gate)
         {
             RequireCurrent(actor);
+            if (_inputCompleted) return false;
             _inputCompleted = true;
+            return true;
         }
     }
 
