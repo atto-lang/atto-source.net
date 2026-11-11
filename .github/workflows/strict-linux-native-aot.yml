@@ -64,6 +64,28 @@ jobs:
             exit 1
           fi
           test ! -e "$denied"
+      - name: Fail closed on unimplemented dispatch source before Native AOT CIL emission
+        shell: bash
+        run: |
+          set -euo pipefail
+          compiler=artifacts/compiler/linux-x64/oresnet
+          test -x "$compiler"
+          work="$(mktemp -d)"
+          trap 'rm -rf -- "$work"' EXIT
+          for case_name in direct_call_42 instance_call_42 static_qualified_42 virtual_override_121020 wrong_arity_reject; do
+            source="contracts/dispatch-v1/$case_name.atto"
+            test -f "$source" && test ! -L "$source"
+            output="$work/$case_name.dll"
+            if "$compiler" compile "$source" --out "$output" >"$work/$case_name.stdout" 2>"$work/$case_name.stderr"; then
+              echo "::error::Unimplemented dispatch source was admitted: $case_name"
+              exit 1
+            fi
+            test ! -e "$output" || { echo "::error::CIL emitted for $case_name"; exit 1; }
+            test -s "$work/$case_name.stderr" || { echo "::error::No compiler diagnostic for $case_name"; exit 1; }
+            printf 'NET_DISPATCH_NATIVE_COMPILER_REJECT|case=%s|source_blob=%s|no_cil=TRUE|semantic_parity=NOT_IMPLEMENTED\n' \
+              "$case_name" "$(git hash-object "$source")"
+          done
+          echo 'NET_NATIVEAOT_DISPATCH_CORPUS_EXECUTABLE_PARITY=NOT_EXECUTED'
       - name: Prove second generated source gets its own Native AOT executable
         shell: bash
         run: |
