@@ -293,9 +293,10 @@ public sealed class ActorRuntime : IDisposable
         internal ActorRef Reference { get; }
         internal Action DispatchAction { get; }
         internal int Scheduled;
-        // Each accepted io.in record and first EOF posts one pending readiness
-        // turn, independently of ordinary mailbox DATA credit. Per-actor
-        // input records are bounded, and the drain alternates with mailbox.
+        // Readiness is a coalesced edge, never one callback per DATA record.
+        // Buffered data stays in the separately bounded ActorIoEnvelope.
+        // If a callback makes input progress, the dispatcher rearms one edge
+        // while buffered input remains; no worker may spin without progress.
         internal int PendingIoSignals;
         internal bool PreferIo;
         internal bool Stopping;
@@ -434,11 +435,11 @@ public sealed class ActorRuntime : IDisposable
         lock (cell.Gate)
         {
             if (cell.Stopping) return;
-            // Coalesce under pressure. There is always at least one pending
-            // readiness token while any accepted signal has not run, so this
-            // cannot lose the wakeup. Repeated EOF is ignored at source.
-            if (cell.PendingIoSignals < ActorIoEnvelope.MaxRecordsPerChannel + 1)
-                ++cell.PendingIoSignals;
+            // Collapse a burst of accepted input records into one wakeup.
+            // A callback which consumes at least one frame rearms itself
+            // while input remains, so coalescing cannot strand a progressing
+            // consumer. Repeated EOF is rejected before it reaches here.
+            cell.PendingIoSignals = 1;
             if (cell.Scheduled != 0) return;
             try
             {
