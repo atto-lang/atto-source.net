@@ -39,8 +39,8 @@ jobs:
           dotnet --info
           dotnet run --project verification/Ores.Net.Tests -c Release \
             2>&1 | tee "$RUNNER_TEMP/net-supervisor-data-fence.log"
-          grep -E '^NET_SUPERVISOR_DATA_FENCE_HOST_PASS\\|attempts=6144\\|admitted=[0-9]+\\|sibling=1\\|nativeaot_guest=0\\|supervision_tree=0$' \
-            "$RUNNER_TEMP/net-supervisor-data-fence.log"
+          grep -F 'NET_SUPERVISOR_DATA_FENCE_HOST_PASS|attempts=6144|' "$RUNNER_TEMP/net-supervisor-data-fence.log"
+          grep -F '|sibling=1|nativeaot_guest=0|supervision_tree=0' "$RUNNER_TEMP/net-supervisor-data-fence.log"
       - name: Verify original source head remains unchanged
         shell: bash
         env:
