@@ -24,18 +24,30 @@ internal static class ActorHeapV1CompilerSelfTest
         Require(generated.Contains("namespace Ores.Net.Generated;", StringComparison.Ordinal) &&
                 generated.Contains("public static void receive(ActorContext context, int message)",
                     StringComparison.Ordinal) &&
-                generated.Contains("AllocateTypedGuestObject32(layout)", StringComparison.Ordinal) &&
-                generated.Contains("WriteGuestReference32(second, 8, first)", StringComparison.Ordinal) &&
-                generated.Contains("ReadGuestReference32(second, 8)", StringComparison.Ordinal) &&
+                generated.Contains("AllocateOwnedTypedGuestObject32(layout)", StringComparison.Ordinal) &&
+                generated.Contains("WriteOwnedGuestReference32(second, 8, first)", StringComparison.Ordinal) &&
+                generated.Contains("ReadOwnedGuestReference32(second, 8)", StringComparison.Ordinal) &&
                 generated.Contains("WriteInt64LittleEndian(value, 42L)", StringComparison.Ordinal) &&
                 generated.Contains("WriteInt64LittleEndian(value, 99L)", StringComparison.Ordinal) &&
                 generated.Contains("ReadInt64LittleEndian(value) != 42L", StringComparison.Ordinal) &&
                 generated.Contains("finally", StringComparison.Ordinal) &&
-                generated.Contains("DropGuestObject32(second)", StringComparison.Ordinal) &&
-                generated.Contains("DropGuestObject32(first)", StringComparison.Ordinal),
+                generated.Contains("DropOwnedGuestObject32(second)", StringComparison.Ordinal) &&
+                generated.Contains("DropOwnedGuestObject32(first)", StringComparison.Ordinal),
             "AOT C# is derived from typed AttoLang source and scoped cleanup");
         Require(generated.Split("finally", StringSplitOptions.None).Length >= 4,
             "generated nested finally guards must attempt both native drops");
+        Require(generated.Contains("ActorGuestOwnedRef32 first = default;",
+                    StringComparison.Ordinal) &&
+                generated.Contains("ActorGuestOwnedRef32 linked =", StringComparison.Ordinal) &&
+                generated.Contains("WriteOwnedGuestReference32(first, 8, default)",
+                    StringComparison.Ordinal) &&
+                generated.Contains("ReadOwnedGuestObject32(linked, 0, value)",
+                    StringComparison.Ordinal) &&
+                !generated.Contains("AllocateTypedGuestObject32(", StringComparison.Ordinal) &&
+                !generated.Contains("WriteGuestReference32(", StringComparison.Ordinal) &&
+                !generated.Contains("ReadGuestReference32(", StringComparison.Ordinal) &&
+                !generated.Contains("DropGuestObject32(", StringComparison.Ordinal),
+            "compiler-emitted actors cannot use unauthenticated raw uint32 references");
 
         string changed = source.Replace("new Node(42, none)", "new Node(-7, none)",
                 StringComparison.Ordinal)
