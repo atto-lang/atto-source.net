@@ -27,6 +27,7 @@ internal static class ActorRuntimeSelfTest
         InputReadinessSchedulesWithoutMailboxData();
         DataAndIoTurnsAlternateWithoutReentrancy();
         StopPreemptsInputReadinessUnderDataSaturation();
+        ConcurrentInputWritersNeverLoseWakeups();
         Console.WriteLine("ACTOR_IO_READY_SCHEDULER_PASS");
         Console.WriteLine("ACTOR_IO_GLOBAL_BUDGET_PASS");
         Console.WriteLine("ACTOR_SUPERVISOR_CONTROL_RECEIPT_PASS");
@@ -571,6 +572,67 @@ internal static class ActorRuntimeSelfTest
             "STOP preempts queued I/O and queued mailbox DATA");
         Require(runtime.CompletedIoTurns == 0,
             "canceled readiness cannot count as executed input");
+    }
+
+    private static void ConcurrentInputWritersNeverLoseWakeups()
+    {
+        using var runtime = new ActorRuntime(Options());
+        const int producers = 4;
+        const int each = 64;
+        using var all = new CountdownEvent(producers * each);
+        int liveTurns = 0, overlapping = 0;
+        var seen = new System.Collections.Concurrent.ConcurrentDictionary<int, byte>();
+
+        var (actor, port) = runtime.SpawnWithIo(
+            ActorKind.Shared,
+            (_, _) => throw new Exception("unexpected DATA mailbox wake"),
+            ctx =>
+            {
+                if (Interlocked.Increment(ref liveTurns) != 1)
+                    Interlocked.Increment(ref overlapping);
+                try
+                {
+                    while (ctx.TryReadInput(out var data) && data is not null)
+                    {
+                        Require(data.Length == 2,
+                            "one copied two-byte producer record");
+                        int id = (data[0] << 8) | data[1];
+                        Require(seen.TryAdd(id, 1),
+                            "concurrent sources delivered a duplicate record");
+                        all.Signal();
+                    }
+                }
+                finally { Interlocked.Decrement(ref liveTurns); }
+            });
+
+        var tasks = Enumerable.Range(0, producers).Select(producer =>
+            Task.Run(() =>
+            {
+                for (int index = 0; index < each; ++index)
+                {
+                    int id = producer * each + index;
+                    var frame = new byte[] { (byte)(id >> 8), (byte)id };
+                    Require(port.TryFeedInput(frame),
+                        "concurrent admitted I/O record");
+                    frame[0] = frame[1] = 255;
+                }
+            })).ToArray();
+        Require(Task.WaitAll(tasks, TimeSpan.FromSeconds(10)),
+            "concurrent I/O feeder tasks completed");
+        Require(all.Wait(TimeSpan.FromSeconds(10)),
+            "every accepted record eventually scheduled its owning actor");
+        Require(Volatile.Read(ref overlapping) == 0,
+            "concurrent producers must not cause actor I/O reentrancy");
+        Require(seen.Count == producers * each &&
+            runtime.CompletedMessages == 0,
+            "readiness event never becomes user DATA or duplicates a frame");
+        Require(WaitUntil(() => runtime.IoQueuedRecords == 0 &&
+            runtime.IoQueuedBytes == 0),
+            "concurrent input drain refunds all queued shared credits");
+        runtime.Stop(actor);
+        Require(WaitUntil(() => runtime.LiveActors == 0 &&
+            runtime.NativeReservedBytes == 0),
+            "contention test actor terminated after readiness drain");
     }
 
     private static void ForgedSameIdCannotObserveTermination()
