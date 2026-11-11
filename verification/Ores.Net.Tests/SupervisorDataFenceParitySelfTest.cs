@@ -34,6 +34,9 @@ internal static class SupervisorDataFenceParitySelfTest
             var target = runtime.Spawn(ActorKind.Private, static (_, _) => { });
             var sibling = runtime.Spawn(ActorKind.Private,
                 (_, _) => Interlocked.Increment(ref siblingProcessed));
+            // Prove at least one pre-STOP admission; otherwise a run where
+            // STOP wins immediately proves only rejection, not reclamation.
+            runtime.Send(target, new byte[] { 42 });
             using var start = new ManualResetEventSlim(false);
             int attempted = 0, admitted = 0, denied = 0, stopReturned = 0;
             Task[] tasks = new Task[senders + 1];
@@ -77,6 +80,10 @@ internal static class SupervisorDataFenceParitySelfTest
             Require(SpinWait.SpinUntil(
                 () => runtime.LiveActors == 1, TimeSpan.FromSeconds(5)),
                 "stopped incarnation did not retire before sibling");
+            // The abort is allowed to discard the pre-STOP message, never to
+            // strand the physical arena or mint a new DATA authorization.
+            Require(runtime.NativeReservedBytes > 0,
+                "healthy sibling's native arena was unexpectedly reclaimed");
             bool staleDenied = false;
             try { runtime.Send(target, new byte[] { 9 }); }
             catch (InvalidOperationException) { staleDenied = true; }
