@@ -1027,6 +1027,7 @@ CfgCilStressTests.Run();
 SupervisorStopLedgerSelfTest.Run();
 StructuredSourceTests.Run();
 StructuredCfgLoweringTests.Run();
+AttoEqualityNativeAotCandidateTests.Run();
 StructuredStaticAbiTests.Run();
 StaticFactsV0Tests.Run();
 ValueBoundaryTests.Run();
