@@ -390,6 +390,12 @@ public static class OresStructuredParser
                 if (word == "guard")
                     throw new FormatException(
                         $"GUARD_BACKEND_UNSUPPORTED: early-exit CFG and ownership lowering required at offset {offset}");
+                // Match/default is a true expression grammar extension, not a
+                // valid scalar identifier or CIL fallthrough. This lexer skips
+                // comments before this check; no source-substring blacklist.
+                if (word == "match")
+                    throw new FormatException(
+                        $"MATCH_DEFAULT_BACKEND_UNSUPPORTED: typed match requires real pattern admission, ordered CFG fallback and exhaustiveness before CIL emission at offset {offset}");
                 if (word is "cpu" or "gpu" or "quantum" ||
                     (word == "nb" && !StaticSelectAdmission.FollowedByStaticSelect(source, index)))
                     throw new FormatException(
@@ -401,6 +407,9 @@ public static class OresStructuredParser
                             $"execution task requires scheduler-aware Future/continuation lowering; no implicit inline execution at offset {offset}");
                 }
             }
+            else if (ch == '~')
+                throw new FormatException(
+                    $"TILDE_AGGREGATE_BACKEND_UNSUPPORTED: typed Map/Record literals require a checked AST, key domains, ownership, transactional constructor and NativeAOT layout at offset {offset}");
             else if (ch == '%')
                 throw new FormatException(
                     $"noncanonical '%' source operator; use named Integer.rem/mod at offset {offset}");
