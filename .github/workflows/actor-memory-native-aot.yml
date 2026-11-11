@@ -5,6 +5,7 @@ on:
       - 'runtime/Ores.Net.Runtime/**'
       - 'verification/Ores.Net.Tests/**'
       - 'verification/Ores.Net.ActorMemoryProbe/**'
+      - 'scripts/test-actor-io-host.sh'
       - '.github/workflows/actor-memory-native-aot.yml'
   workflow_dispatch:
 permissions:
@@ -31,25 +32,14 @@ jobs:
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
         with:
           dotnet-version: '10.0.x'
-      - name: Exact source identity and existing full verification runner
+      - name: Strict build and exact-head actor host regression receipts
         shell: bash
         env:
-          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$EXPECTED"
-          test -z "$(git status --porcelain)"
-          git rev-parse 'HEAD^{tree}'
-          dotnet --info
-          dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release | tee "$RUNNER_TEMP/actor-managed-tests.log"
-          grep -Fx 'PASS actor scalar frame ABI v1 host/compiler-boundary tests (NOT guest execution)' "$RUNNER_TEMP/actor-managed-tests.log"
-          grep -Fx 'ACTOR_IO_ENVELOPE_RETIREMENT_PASS' "$RUNNER_TEMP/actor-managed-tests.log"
-          grep -Fx 'ACTOR_PIPELINE_MAILBOX_CONTROL_PASS' "$RUNNER_TEMP/actor-managed-tests.log"
-          grep -Fx 'ACTOR_IO_HALF_CLOSE_PASS' "$RUNNER_TEMP/actor-managed-tests.log"
-          grep -Fx 'ACTOR_IO_HOST_INTEGRATION_PASS' "$RUNNER_TEMP/actor-managed-tests.log"
-          grep -Fx 'ACTOR_IO_GLOBAL_BUDGET_PASS' "$RUNNER_TEMP/actor-managed-tests.log"
-          grep -Fx 'ACTOR_SUPERVISOR_CONTROL_RECEIPT_PASS' "$RUNNER_TEMP/actor-managed-tests.log"
-          grep -Fx 'ACTOR_IO_READY_SCHEDULER_PASS' "$RUNNER_TEMP/actor-managed-tests.log"
+          bash scripts/test-actor-io-host.sh | tee "$RUNNER_TEMP/actor-host-evidence.log"
+          grep -Fx 'ACTOR_IO_HOST_EXACT_HEAD_TESTS_EXECUTED_PASS' "$RUNNER_TEMP/actor-host-evidence.log"
       - name: Publish and execute actual host actor NativeAOT isolation probe
         shell: bash
         env:
