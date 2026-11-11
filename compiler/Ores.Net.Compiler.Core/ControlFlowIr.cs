@@ -168,6 +168,7 @@ public static class OresCfgVerifier
             CfgTerminator frozenTerminator = terminator switch
             {
                 CfgReturn r => new CfgReturn(r.ValueId),
+                CfgReturnVoid => new CfgReturnVoid(),
                 CfgJump j => new CfgJump(j.Target, FreezeArguments(j.Arguments)),
                 CfgBranch c => new CfgBranch(c.Condition, c.TrueTarget,
                     FreezeArguments(c.TrueArguments),
