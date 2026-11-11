@@ -110,6 +110,21 @@ public sealed class ActorContext
         return _io.TryWriteOutput(Self, data);
     }
 
+    public bool InputEof
+    {
+        get
+        {
+            ValidateActiveTurn();
+            return _io.InputEof(Self);
+        }
+    }
+
+    public void CompleteOutput()
+    {
+        ValidateActiveTurn();
+        _io.CompleteOutput(Self);
+    }
+
     // Host capability providers must enforce the same physical-turn authority
     // as actor memory access. A retained context is not a reusable credential.
     internal void ValidateActiveTurn() => _arena.ValidateActiveTurn(_turn);
