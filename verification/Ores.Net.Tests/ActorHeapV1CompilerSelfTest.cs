@@ -131,6 +131,9 @@ internal static class ActorHeapV1CompilerSelfTest
             "nested comments never become grammar tokens or emitted guest operations");
 
         RejectV1(new string('x', ActorHeapV1Compiler.MaxSourceBytes + 1));
+        RejectV1("\uFEFF" + source);
+        RejectV1("\uD800" + source); // Strict UTF-8 cannot encode an unpaired surrogate.
+
         Console.WriteLine(
             "PASS actor heap v1 .atto checked compiler parser/emitter (source-only; no guest execution)");
     }
