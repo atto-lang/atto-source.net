@@ -6,6 +6,11 @@ using System.Text;
 bool validCheck = args.Length == 2 && args[0] == "check";
 bool validCompile = args.Length == 4 && args[0] == "compile" && args[2] == "--out";
 // Opt-in verification lane only: never silently broaden shipping scalar check/compile.
+// Separate opt-in nominal enum guest/compiler slice; shipping scalar and
+// structured entrypoints retain their fail-closed ADT admission boundaries.
+bool validEnumCheck = args.Length == 2 && args[0] == "check-enum-v1";
+bool validEnumCompile = args.Length == 4 &&
+    args[0] == "compile-enum-v1" && args[2] == "--out";
 bool validStructuredCheck = args.Length == 2 && args[0] == "check-structured";
 bool validStructuredCompile = args.Length == 4 &&
     args[0] == "compile-structured" && args[2] == "--out";
@@ -14,9 +19,10 @@ bool validEmitSource = args.Length == 4 && args[2] == "--out" &&
 bool validStaticFacts = args.Length == 2 &&
     (args[0] == "static-facts" || args[0] == "static-facts-structured");
 bool moduleCommand = args.Length >= 1 && args[0] is "check-modules" or "compile-modules";
-if (!validCheck && !validCompile && !validStructuredCheck && !validStructuredCompile && !validStaticFacts && !validEmitSource && !moduleCommand)
+if (!validCheck && !validCompile && !validStructuredCheck && !validStructuredCompile &&
+    !validEnumCheck && !validEnumCompile && !validStaticFacts && !validEmitSource && !moduleCommand)
 {
-    Console.Error.WriteLine("usage: oresnet check input.atto|input.ores | oresnet compile input.atto|input.ores --out path/OresGenerated.dll | oresnet check-structured input.atto|input.ores | oresnet compile-structured input.atto|input.ores --out path/OresGenerated.dll | oresnet emit-csharp input.atto|input.ores --out path/OresProgram.cs | oresnet emit-fsharp input.atto|input.ores --out path/OresProgram.fs | oresnet static-facts input.atto|input.ores | oresnet static-facts-structured input.atto|input.ores");
+    Console.Error.WriteLine("usage: oresnet check-enum-v1 FILE.atto | oresnet compile-enum-v1 FILE.atto --out path/OresGenerated.dll | oresnet check input.atto|input.ores | oresnet compile input.atto|input.ores --out path/OresGenerated.dll | oresnet check-structured input.atto|input.ores | oresnet compile-structured input.atto|input.ores --out path/OresGenerated.dll | oresnet emit-csharp input.atto|input.ores --out path/OresProgram.cs | oresnet emit-fsharp input.atto|input.ores --out path/OresProgram.fs | oresnet static-facts input.atto|input.ores | oresnet static-facts-structured input.atto|input.ores");
     return 2;
 }
 
@@ -72,6 +78,24 @@ try
         Console.WriteLine(args[0] == "static-facts"
             ? StaticFactsV0Exporter.FromCompiledScalarSource(source)
             : StaticFactsV0Exporter.FromStructuredSource(source));
+        return 0;
+    }
+    if (validEnumCheck || validEnumCompile)
+    {
+        if (!string.Equals(Path.GetExtension(args[1]), ".atto",
+            StringComparison.OrdinalIgnoreCase))
+            throw new FormatException("Nominal enum v1 requires canonical .atto source");
+        var module = OresNominalEnumV1.LowerModule(source);
+        if (validEnumCompile)
+        {
+            if (!string.Equals(Path.GetFileName(args[3]), "OresGenerated.dll",
+                StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Generated assembly must be named OresGenerated.dll");
+            CilEmitter.EmitLibrary(module, args[3]);
+            Console.WriteLine("Emitted verified nominal enum v1 CIL: " +
+                Path.GetFullPath(args[3]));
+        }
+        else Console.WriteLine("Verified nominal enum v1 source and CFG: OK");
         return 0;
     }
     if (validStructuredCheck || validStructuredCompile)
