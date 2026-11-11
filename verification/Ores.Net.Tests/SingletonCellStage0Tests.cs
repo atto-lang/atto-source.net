@@ -192,7 +192,46 @@ internal static class SingletonCellStage0Tests
                 await compiledCell.ResolveAsync() == 42 && compiledStarts == 1,
             "compiled source stage0 initializer was not published once");
         await CrossTaskCyclesAndWaiterBudgets();
+        await CarrierBurstMatrix();
         Console.WriteLine("singleton stage0: once-publication, sticky failure, same-flow cycles, cancellation and retirement host tests PASS (not guest or NativeAOT proof)");
+    }
+
+    // Physical CLR Task concurrency over a trusted-host cell. The 3/7/15
+    // matrix aligns the carrier counts with the shared cross-slice oracle;
+    // it does not prove separate AttoLang actor heaps or compiled guest access.
+    private static async Task CarrierBurstMatrix()
+    {
+        foreach (int carrierCount in new[] { 3, 7, 15 })
+        {
+            var entered = Pending<bool>();
+            var release = Pending<long>();
+            var start = Pending<bool>();
+            int initializes = 0;
+            var cell = new SingletonCellStage0<long>(async () =>
+            {
+                Interlocked.Increment(ref initializes);
+                entered.TrySetResult(true);
+                return await release.Task.ConfigureAwait(false);
+            }, maxPendingWaiters: 16);
+
+            Task<long>[] requests = Enumerable.Range(0, carrierCount)
+                .Select(_ => Task.Run(async () =>
+                {
+                    await start.Task.ConfigureAwait(false);
+                    return await cell.ResolveAsync().ConfigureAwait(false);
+                })).ToArray();
+            start.SetResult(true);
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            release.SetResult(42L);
+            long[] observed = await Task.WhenAll(requests)
+                .WaitAsync(TimeSpan.FromSeconds(10));
+            Require(observed.Length == carrierCount &&
+                    observed.All(value => value == 42) &&
+                    initializes == 1 && cell.PendingWaiters == 0,
+                "3/7/15 carrier burst broke singleton publication or leaked waiters");
+            Require(await cell.ResolveAsync() == 42 && initializes == 1,
+                "ready singleton publication was reinitialized after burst");
+        }
     }
 
     private static async Task CrossTaskCyclesAndWaiterBudgets()
