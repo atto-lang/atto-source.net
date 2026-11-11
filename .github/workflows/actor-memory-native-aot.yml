@@ -48,6 +48,7 @@ jobs:
           grep -Fx 'ACTOR_IO_HALF_CLOSE_PASS' "$RUNNER_TEMP/actor-managed-tests.log"
           grep -Fx 'ACTOR_IO_HOST_INTEGRATION_PASS' "$RUNNER_TEMP/actor-managed-tests.log"
           grep -Fx 'ACTOR_IO_GLOBAL_BUDGET_PASS' "$RUNNER_TEMP/actor-managed-tests.log"
+          grep -Fx 'ACTOR_SUPERVISOR_CONTROL_RECEIPT_PASS' "$RUNNER_TEMP/actor-managed-tests.log"
       - name: Publish and execute actual host actor NativeAOT isolation probe
         shell: bash
         env:
