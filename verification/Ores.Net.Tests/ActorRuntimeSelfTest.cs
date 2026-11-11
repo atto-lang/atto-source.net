@@ -17,8 +17,94 @@ internal static class ActorRuntimeSelfTest
         HandlerFaultRetiresOnlyThatActor();
         ConcurrentDisposersAwaitCarrierQuiescence();
         FailedTurnAdmissionScrubsDequeuedMessage();
+        ActorToActorRelayIsFifoAndCopyIsolated();
+        TerminalStopDoesNotRequireMailboxDataCredit();
         Console.WriteLine(
             "PASS .NET integrated actor runtime mailbox, arena, domains, stop and fault isolation");
+    }
+
+    // Real actor runtime paths: one actor handler sends to a second mailbox.
+    // This is a host-runtime integration test, not a source-language guest proof.
+    private static void ActorToActorRelayIsFifoAndCopyIsolated()
+    {
+        using var runtime = new ActorRuntime(Options());
+        const int count = 48;
+        using var delivered = new CountdownEvent(count);
+        var observed = new System.Collections.Concurrent.ConcurrentQueue<byte>();
+
+        var sink = runtime.Spawn(ActorKind.Private, (_, mail) =>
+        {
+            Require(mail.Length == 1, "relay frame remains exactly one byte");
+            observed.Enqueue(mail.Span[0]);
+            delivered.Signal();
+        });
+        var relay = runtime.Spawn(ActorKind.Shared, (_, mail) =>
+            runtime.Send(sink, mail.Span));
+
+        byte[] source = { 0 };
+        for (int i = 0; i < count; i++)
+        {
+            source[0] = (byte)i;
+            runtime.Send(relay, source);
+            source[0] = 255; // caller buffer is never published by reference
+        }
+        Require(delivered.Wait(TimeSpan.FromSeconds(10)),
+            "actor-to-actor relay drained all frames");
+        Require(observed.SequenceEqual(Enumerable.Range(0, count).Select(i => (byte)i)),
+            "actor-to-actor transport preserved FIFO and isolated sender mutation");
+        Require(WaitUntil(() => runtime.CompletedMessages == 2 * count),
+            "both relay and sink recorded each completed turn");
+
+        runtime.Stop(relay);
+        runtime.Stop(sink);
+        Require(WaitUntil(() => runtime.LiveActors == 0 &&
+            runtime.NativeReservedBytes == 0),
+            "both pipeline actors physically retired");
+    }
+
+    // The trusted STOP path must not be a user-DATA message. In particular,
+    // a saturated bounded mailbox cannot prevent cancellation/retirement.
+    private static void TerminalStopDoesNotRequireMailboxDataCredit()
+    {
+        using var runtime = new ActorRuntime(Options());
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        int handled = 0;
+        var actor = runtime.Spawn(ActorKind.Private, (_, _) =>
+        {
+            Interlocked.Increment(ref handled);
+            entered.Set();
+            if (!release.Wait(TimeSpan.FromSeconds(10)))
+                throw new Exception("CONTROL separation test timed out");
+        });
+
+        runtime.Send(actor, new byte[] { 1 });
+        Require(entered.Wait(TimeSpan.FromSeconds(5)),
+            "actor entered a live turn before DATA saturation");
+        try
+        {
+            for (int i = 0; i < Options().MailboxMessages; i++)
+                runtime.Send(actor, new byte[] { 2 });
+
+            bool rejected = false;
+            try { runtime.Send(actor, new byte[] { 3 }); }
+            catch (InvalidOperationException) { rejected = true; }
+            Require(rejected, "saturated DATA mailbox must reject additional DATA");
+            var stop = Task.Run(() => runtime.Stop(actor));
+            Require(stop.Wait(TimeSpan.FromSeconds(5)),
+                "trusted STOP cannot wait for ordinary DATA queue credit");
+            rejected = false;
+            try { runtime.Send(actor, new byte[] { 4 }); }
+            catch (InvalidOperationException) { rejected = true; }
+            Require(rejected, "STOP fences further DATA admission");
+        }
+        finally { release.Set(); }
+
+        Require(WaitUntil(() => runtime.LiveActors == 0 &&
+            runtime.NativeReservedBytes == 0),
+            "terminal STOP physically retired saturated actor");
+        Require(handled == 1,
+            "queued DATA never ran after terminal CONTROL STOP");
     }
 
     private static void ForgedSameIdCannotObserveTermination()
