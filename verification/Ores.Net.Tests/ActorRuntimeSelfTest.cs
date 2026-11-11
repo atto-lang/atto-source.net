@@ -23,7 +23,9 @@ internal static class ActorRuntimeSelfTest
         HostIoPendingDataScrubbedOnlyAfterPhysicalQuiescence();
         HostIoActorFaultRetiresOutput();
         HostIoGlobalBudgetSurvivesPressureAndStop();
+        SupervisorStopReceiptRequiresPhysicalTermination();
         Console.WriteLine("ACTOR_IO_GLOBAL_BUDGET_PASS");
+        Console.WriteLine("ACTOR_SUPERVISOR_CONTROL_RECEIPT_PASS");
         Console.WriteLine("ACTOR_PIPELINE_MAILBOX_CONTROL_PASS");
         Console.WriteLine("ACTOR_IO_HOST_INTEGRATION_PASS");
         Console.WriteLine(
@@ -332,6 +334,65 @@ internal static class ActorRuntimeSelfTest
         try { using var _ = new ActorRuntime(Options(ioRecords: 0)); }
         catch (ArgumentOutOfRangeException) { invalidLimitsRejected = true; }
         Require(invalidLimitsRejected, "zero global record cap must reject at admission");
+    }
+
+    // Host CONTROL choreography: a saturated actor's DATA mailbox cannot
+    // manufacture a STOP receipt or complete physical finalization. This
+    // coordinates two real runtime substrates; guest supervisor lowering
+    // remains an independent compiler gate.
+    private static void SupervisorStopReceiptRequiresPhysicalTermination()
+    {
+        using var runtime = new ActorRuntime(Options());
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var actor = runtime.Spawn(ActorKind.Private, (_, _) =>
+        {
+            entered.Set();
+            Require(release.Wait(TimeSpan.FromSeconds(10)),
+                "supervisor CONTROL test carrier eventually released");
+        });
+        var terminated = runtime.ObserveTermination(actor);
+        var ledger = new SupervisorStopLedger(Guid.NewGuid(), Guid.NewGuid(), 1);
+        var child = ledger.Register(actor);
+        runtime.Send(actor, new byte[] { 1 });
+        Require(entered.Wait(TimeSpan.FromSeconds(5)),
+            "supervised actor entered a physical turn");
+        try
+        {
+            for (int i = 0; i < Options().MailboxMessages; ++i)
+                runtime.Send(actor, new byte[] { 2 });
+            bool premature = false;
+            try { ledger.ReserveStop(child, actor); }
+            catch (InvalidOperationException) { premature = true; }
+            Require(premature, "STOP receipt cannot precede physical finalization");
+
+            runtime.Stop(actor); // trusted CONTROL not queued as user mail
+            Require(!terminated.IsCompleted,
+                "STOP request must not fake physical quiescence");
+            Require(ledger.Snapshot(child, actor) ==
+                SupervisorStopLedger.Phase.Active,
+                "receipt ledger stays active until trusted runtime verification");
+        }
+        finally { release.Set(); }
+
+        Require(terminated.Wait(TimeSpan.FromSeconds(5)),
+            "supervised actor physically completed terminal turn");
+        Require(WaitUntil(() => runtime.LiveActors == 0),
+            "supervised actor retired after STOP");
+        ledger.AssertPhysicallyFinalized(child, actor);
+        var stopTicket = ledger.ReserveStop(child, actor);
+        ledger.ClaimHostInvocation(stopTicket);
+        ledger.MarkApplied(stopTicket);
+        ledger.AcknowledgeApplied(stopTicket);
+        Require(ledger.Snapshot(child, actor) ==
+            SupervisorStopLedger.Phase.Stopped,
+            "trusted CONTROL ticket acknowledged exactly once");
+        bool replayDenied = false;
+        try { ledger.ClaimHostInvocation(stopTicket); }
+        catch (InvalidOperationException) { replayDenied = true; }
+        Require(replayDenied, "STOP receipt must reject duplicate invocation");
+        Require(runtime.CompletedMessages == 1,
+            "saturated queued DATA must not execute after supervisor STOP");
     }
 
     private static void ForgedSameIdCannotObserveTermination()
