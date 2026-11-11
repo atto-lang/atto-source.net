@@ -61,6 +61,39 @@ reference. Enforce this boundary in typed compiler lowering and through
 explicit transport rejection. Untrusted actors still need a separately
 certified isolate/process protection boundary.
 
+## Actor-bound compiler reference authority (hardening draft)
+
+The low-level `uint` references above are **not** globally authenticated:
+different actors can mint identical slot/generation words. To prevent a
+compiler-generated guest from interpreting a foreign actor's word as its own
+object, `ActorGuestOwnedRef32` is a host value type with an internal,
+runtime-minted `ActorArena` owner identity and a private encoded word. A
+default handle denotes null. A non-null handle cannot be manufactured by
+guest source or reconstructed from serialized numeric data using this API.
+
+`ActorContext.AllocateOwnedTypedGuestObject32`,
+`ReadOwnedGuestObject32`, `WriteOwnedGuestObject32`,
+`ReadOwnedGuestReference32`, `WriteOwnedGuestReference32`,
+`BorrowOwnedGuestObjectRead32` and `DropOwnedGuestObject32` validate the
+physical turn and the exact arena object **before** touching lazy native
+metadata. New allocation/loan creation additionally requires active
+admission. Reference writes reject foreign targets even when their raw
+words happen to collide with a live local slot, and null uses `default`.
+The physical native `Ref32` field remains exactly four bytes; this
+managed wrapper is never embedded in the guest payload or network format.
+
+The original `uint` API is retained as **trusted low-level compatibility
+only**. Arbitrary hostile host C#, FFI, tenant isolation and wire-message
+provenance require separate trust boundaries; the owned wrapper does not
+turn an in-process host into an OS-level sandbox. The staged compiler
+emitter in draft #449 uses the owner-bound API exclusively and has
+negative source-only tests to prevent regression to raw operations.
+
+A hosted two-actor regression attempts to read, write, borrow, link and
+drop one actor's checked handle using a sibling's current execution turn,
+then proves local data survives and STOP refunds both arenas. The tests
+are authored but not certified until exact-head CLR/NativeAOT runs execute.
+
 ## First nominal object-graph ABI (host substrate)
 
 `ActorGuestLayout32` describes one immutable, compiler-assigned nominal
