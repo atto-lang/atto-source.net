@@ -63,6 +63,30 @@ public static class OresParser
                 StaticSelectAdmission.IsStaticSelectFollower(tokens[i + 1].Text))
                 throw StaticSelectAdmission.Unsupported(tokens[i].Offset);
         }
+        // The scalar i64 parser is an independent public compiler entrypoint.
+        // A Kestrel host HTTP provider does not authorize guest HTTP actors.
+        // Deny exact contextual declarations before expression/IR parsing.
+        for (int i = 0; i + 1 < tokens.Count; i++)
+        {
+            int j = i;
+            if (tokens[j].Text == "pub" && tokens[j + 1].Text == "define") j++;
+            if (tokens[j].Text != "define") continue;
+            j++;
+            bool hasHttpTransport = false;
+            while (j < tokens.Count &&
+                   tokens[j].Text is "pub" or "private" or "shared" or "untrusted"
+                       or "serial" or "http" or "tcp" or "websocket" or "ws"
+                       or "stream" or "unary" or "abstract")
+            {
+                if (tokens[j].Text == "http") hasHttpTransport = true;
+                j++;
+            }
+            if (hasHttpTransport && j < tokens.Count &&
+                (tokens[j].Text is "actor" or "isoactor"))
+                throw new FormatException(
+                    $"HTTP_ACTOR_BACKEND_UNSUPPORTED: .NET scalar compiler requires typed HTTP actor admission, ownership and physical shutdown lowering at offset {tokens[j].Offset}");
+        }
+
         // The shipping i64 frontend has no coroutine frames, bounded FIFO
         // critical admission, or authenticated guard owner. Reject with an
         // explicit compiler-owned capability diagnostic, not a generic parser
