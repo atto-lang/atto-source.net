@@ -4,6 +4,30 @@ using System.Text;
 
 namespace Ores.Net.Runtime;
 
+/// <summary>
+/// Opaque, generation-fenced, host-side I/O capability. Only the creator
+/// of SpawnWithIo receives this port. It can feed io.in and drain io.out;
+/// actor-side read/write is restricted to a live ActorContext turn.
+/// This port never grants raw file/socket descriptors or mailbox authority.
+/// </summary>
+public sealed class ActorIoHostPort
+{
+    private readonly ActorIoEnvelope _io;
+    private readonly ActorRef _actor;
+
+    internal ActorIoHostPort(ActorIoEnvelope io, ActorRef actor)
+    {
+        _io = io;
+        _actor = actor;
+    }
+
+    public bool TryFeedInput(ReadOnlySpan<byte> data) =>
+        _io.TryFeedInput(_actor, data);
+
+    public bool TryReadOutput(out byte[]? data) =>
+        _io.TryReadOutput(_actor, out data);
+}
+
 public readonly record struct ActorIoDiagnostic(string Code, string Message);
 public readonly record struct ActorIoEvent(string Kind, string Payload);
 
