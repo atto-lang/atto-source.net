@@ -1,6 +1,8 @@
 using System.Collections.ObjectModel;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Ores.Net.Runtime;
 
@@ -10,6 +12,7 @@ namespace Ores.Net.Runtime;
 /// actor-side read/write is restricted to a live ActorContext turn.
 /// This port never grants raw file/socket descriptors or mailbox authority.
 /// </summary>
+[JsonConverter(typeof(ActorIoHostPortNoWireConverter))]
 public sealed class ActorIoHostPort
 {
     private readonly ActorIoEnvelope _io;
@@ -85,6 +88,23 @@ internal sealed class ActorIoBudget
             _queuedBytes -= bytes;
         }
     }
+}
+
+/// <summary>
+/// Actor I/O host ports are live local capabilities, never DTOs or wire
+/// handles. A separate authenticated remote channel ABI must be explicit.
+/// </summary>
+public sealed class ActorIoHostPortNoWireConverter : JsonConverter<ActorIoHostPort>
+{
+    public override ActorIoHostPort Read(ref Utf8JsonReader reader,
+        Type typeToConvert, JsonSerializerOptions options) =>
+        throw new NotSupportedException(
+            "Actor I/O host ports cannot be deserialized from JSON");
+
+    public override void Write(Utf8JsonWriter writer, ActorIoHostPort value,
+        JsonSerializerOptions options) =>
+        throw new NotSupportedException(
+            "Actor I/O host ports cannot be serialized as JSON");
 }
 
 public readonly record struct ActorIoDiagnostic(string Code, string Message);
