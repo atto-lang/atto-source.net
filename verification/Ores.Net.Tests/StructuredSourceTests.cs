@@ -35,6 +35,19 @@ internal static class StructuredSourceTests
         throw new Exception("Unsupported receiver/capture syntax was admitted");
     }
 
+    private static void RejectScalarHttpActor(string source)
+    {
+        try { _ = OresParser.Parse(source); }
+        catch (FormatException ex)
+        {
+            Require(ex.Message.Contains("HTTP_ACTOR_BACKEND_UNSUPPORTED", StringComparison.Ordinal) &&
+                    ex.Message.Contains("offset", StringComparison.Ordinal),
+                "scalar source gate did not emit an HTTP actor diagnostic: " + ex.Message);
+            return;
+        }
+        throw new Exception("Scalar parser incorrectly admitted an HTTP actor declaration");
+    }
+
     private static void RejectScalarStateInjection(string source, string expectedDiagnostic)
     {
         try { _ = OresParser.Parse(source); }
@@ -64,7 +77,10 @@ internal static class StructuredSourceTests
             "define " + string.Concat(Enumerable.Repeat("pub ", 16)) +
                 "serial http actor Endpoint as end"
         })
+        {
             RejectFeature(source, "HTTP_ACTOR_BACKEND_UNSUPPORTED");
+            RejectScalarHttpActor(source);
+        }
         Require(OresStructuredParser.Parse(
             "fnc main():int{return 42;} // define serial http actor NotADeclaration").Body.Count == 1,
             "HTTP actor text in comments must not become a declaration");
