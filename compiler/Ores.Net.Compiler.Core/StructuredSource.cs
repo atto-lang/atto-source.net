@@ -216,6 +216,31 @@ public static class OresStructuredParser
                 throw new FormatException("Structured token budget exceeded");
             if (token.Text.Length == 0) break;
         }
+        // An HTTP actor is not a scalar function or a generic mailbox actor.
+        // The Kestrel NativeAOT *host* transport is not evidence that this
+        // structured compiler can lower source HTTP actor dispatch or 3x4
+        // request/message lifetimes. Detect actual lexer tokens, not comments.
+        for (int i = 0; i + 1 < tokens.Count; i++)
+        {
+            int j = i;
+            if (tokens[j].Text == "pub" && tokens[j + 1].Text == "define") j++;
+            if (tokens[j].Text != "define") continue;
+            j++;
+            bool hasHttpTransport = false;
+            while (j < tokens.Count &&
+                   tokens[j].Text is "pub" or "private" or "shared" or "untrusted"
+                       or "serial" or "http" or "tcp" or "websocket" or "ws"
+                       or "stream" or "unary" or "abstract")
+            {
+                if (tokens[j].Text == "http") hasHttpTransport = true;
+                j++;
+            }
+            if (hasHttpTransport && j < tokens.Count &&
+                (tokens[j].Text is "actor" or "isoactor"))
+                throw new FormatException(
+                    $"HTTP_ACTOR_BACKEND_UNSUPPORTED: .NET source HTTP actor requires request/message lifetime admission, actor-state loans and physical shutdown lowering at offset {tokens[j].Offset}");
+        }
+
         for (int i = 0; i + 1 < tokens.Count; i++)
         {
             // No protected state heap or virtual actor activation exists in
