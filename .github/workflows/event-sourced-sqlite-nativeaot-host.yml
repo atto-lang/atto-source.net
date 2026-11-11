@@ -1,0 +1,44 @@
+name: .NET Native AOT SQLite durable inbox HOST only
+on:
+  pull_request:
+    paths:
+      - 'runtime/Ores.Net.Runtime/DurableCommandInboxV1.cs'
+      - 'verification/Ores.Net.Tests/DurableCommandInboxV1SelfTest.cs'
+      - 'verification/Ores.Net.DurableCommandProbe/**'
+      - 'docs/EVENT_SOURCING_DURABLE_COMMAND_HOST_V1.md'
+      - '.github/workflows/event-sourced-sqlite-nativeaot-host.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  nativeaot-linux-host:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.x'
+      - name: Pin complete exact source identity
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          git rev-parse 'HEAD^{tree}'
+          git ls-files -s runtime/Ores.Net.Runtime/DurableCommandInboxV1.cs
+      - name: Build and execute Linux Native AOT host SQLite probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f /usr/include/sqlite3.h
+          dotnet publish verification/Ores.Net.DurableCommandProbe/Ores.Net.DurableCommandProbe.csproj             -c Release -r linux-x64 -p:PublishAot=true -p:SelfContained=true             -o "$RUNNER_TEMP/durable-command-probe"
+          test -x "$RUNNER_TEMP/durable-command-probe/Ores.Net.DurableCommandProbe"
+          "$RUNNER_TEMP/durable-command-probe/Ores.Net.DurableCommandProbe"             | tee "$RUNNER_TEMP/durable-command.log"
+          grep -Fx 'NET_DURABLE_HOST_PASS|atomic_events=2|cross_epoch_reply=1|nativeaot_test_host_only=1|guest_atto=0'             "$RUNNER_TEMP/durable-command.log"
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"

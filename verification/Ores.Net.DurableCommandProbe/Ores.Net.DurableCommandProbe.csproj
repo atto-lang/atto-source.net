@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <PublishAot>true</PublishAot>
+    <SelfContained>true</SelfContained>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../runtime/Ores.Net.Runtime/Ores.Net.Runtime.csproj"/>
+    <Compile Include="../Ores.Net.Tests/DurableCommandInboxV1SelfTest.cs"
+             Link="DurableCommandInboxV1SelfTest.cs"/>
+  </ItemGroup>
+</Project>
