@@ -26,6 +26,13 @@ public sealed class ActorIoHostPort
 
     public bool TryReadOutput(out byte[]? data) =>
         _io.TryReadOutput(_actor, out data);
+
+    // Only the host input writer can signal input EOF.
+    public void CompleteInput() => _io.CompleteInput(_actor);
+
+    // Output EOF becomes observable after every previously admitted frame
+    // has been drained. The host cannot close the actor's output for it.
+    public bool OutputEof => _io.OutputEof(_actor);
 }
 
 public readonly record struct ActorIoDiagnostic(string Code, string Message);
@@ -61,6 +68,8 @@ public sealed class ActorIoEnvelope : IDisposable
     private int _errorBytes;
     private int _eventBytes;
     private bool _disposed;
+    private bool _inputCompleted;
+    private bool _outputCompleted;
     private ulong _metadataVersion = 1;
     private IReadOnlyDictionary<string, string> _metadata =
         new ReadOnlyDictionary<string, string>(new Dictionary<string, string>());
@@ -79,7 +88,8 @@ public sealed class ActorIoEnvelope : IDisposable
         lock (_gate)
         {
             RequireCurrent(actor);
-            return TryEnqueueBytes(_input, ref _inputBytes, data);
+            return !_inputCompleted &&
+                TryEnqueueBytes(_input, ref _inputBytes, data);
         }
     }
 
@@ -97,7 +107,8 @@ public sealed class ActorIoEnvelope : IDisposable
         lock (_gate)
         {
             RequireCurrent(actor);
-            return TryEnqueueBytes(_output, ref _outputBytes, data);
+            return !_outputCompleted &&
+                TryEnqueueBytes(_output, ref _outputBytes, data);
         }
     }
 
@@ -107,6 +118,50 @@ public sealed class ActorIoEnvelope : IDisposable
         {
             RequireCurrent(actor);
             return TryDequeueBytes(_output, ref _outputBytes, out data);
+        }
+    }
+
+    /// <summary>
+    /// Host-owned half-close for io.in. Existing queued bytes remain readable,
+    /// but no further bytes can be admitted. Repeated EOF is idempotent.
+    /// </summary>
+    public void CompleteInput(ActorRef actor)
+    {
+        lock (_gate)
+        {
+            RequireCurrent(actor);
+            _inputCompleted = true;
+        }
+    }
+
+    public bool InputEof(ActorRef actor)
+    {
+        lock (_gate)
+        {
+            RequireCurrent(actor);
+            return _inputCompleted && _input.Count == 0;
+        }
+    }
+
+    /// <summary>
+    /// Actor-owned half-close for io.out. Admitted output remains drainable
+    /// by the host until the record queue is empty.
+    /// </summary>
+    public void CompleteOutput(ActorRef actor)
+    {
+        lock (_gate)
+        {
+            RequireCurrent(actor);
+            _outputCompleted = true;
+        }
+    }
+
+    public bool OutputEof(ActorRef actor)
+    {
+        lock (_gate)
+        {
+            RequireCurrent(actor);
+            return _outputCompleted && _output.Count == 0;
         }
     }
 
@@ -232,6 +287,8 @@ public sealed class ActorIoEnvelope : IDisposable
         {
             if (_disposed) return;
             _disposed = true;
+            _inputCompleted = true;
+            _outputCompleted = true;
             ScrubPending(_input);
             ScrubPending(_output);
             _errors.Clear();
