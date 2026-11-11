@@ -441,8 +441,8 @@ internal static class ActorRuntimeSelfTest
         Require(bytes.SequenceEqual(new byte[] { 10, 20, 30, 40 }),
             "automatic I/O output preserves order and owned snapshots");
         Require(hostIo.OutputEof, "output EOF after all admitted frames");
-        Require(runtime.CompletedMessages == 0 &&
-            runtime.CompletedIoTurns >= 1,
+        Require(WaitUntil(() => runtime.CompletedIoTurns >= 1) &&
+            runtime.CompletedMessages == 0,
             "I/O wake does not manufacture a user mailbox message");
         runtime.Stop(actor);
         Require(WaitUntil(() => runtime.LiveActors == 0 &&
