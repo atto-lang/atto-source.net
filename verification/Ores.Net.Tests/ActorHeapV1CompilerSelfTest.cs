@@ -58,6 +58,20 @@ internal static class ActorHeapV1CompilerSelfTest
                 .Contains("long.MinValue", StringComparison.Ordinal),
             "minimal signed i64 literal is emitted without an overflowing token");
 
+        // This same edit becomes the NativeAOT negative assertion fixture in
+        // the exact-head workflow. It must change the *executed* comparison,
+        // not silently leave the positive test hardcoded.
+        string falseAssertion = source.Replace(
+            "assert(second.next?.value == 42)",
+            "assert(second.next?.value == 43)", StringComparison.Ordinal);
+        string falseGenerated = ActorHeapV1Compiler.EmitCSharp(falseAssertion);
+        Require(falseGenerated.Contains("ReadInt64LittleEndian(value) != 43L",
+                    StringComparison.Ordinal) &&
+                falseGenerated.Contains("WriteInt64LittleEndian(value, 42L)",
+                    StringComparison.Ordinal) &&
+                !string.Equals(falseGenerated, generated, StringComparison.Ordinal),
+            "changing the expected guest assertion must change emitted native comparison");
+
         // The *production* structured compiler must continue refusing this
         // nominal source until its general nominal CFG/CIL path is implemented.
         RejectStructured(source);
