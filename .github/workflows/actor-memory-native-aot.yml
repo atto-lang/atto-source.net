@@ -43,6 +43,7 @@ jobs:
           dotnet --info
           dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release | tee "$RUNNER_TEMP/actor-managed-tests.log"
           grep -Fx 'PASS actor scalar frame ABI v1 host/compiler-boundary tests (NOT guest execution)' "$RUNNER_TEMP/actor-managed-tests.log"
+          grep -Fx 'PASS actor-ref32-owned-auth: per-actor handles deny cross-actor aliasing, stale reads and foreign links (host only)' "$RUNNER_TEMP/actor-managed-tests.log"
       - name: Publish and execute actual host actor NativeAOT isolation probe
         shell: bash
         env:
