@@ -93,6 +93,40 @@ for (int i = 0; i < actorCount; ++i)
                     long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
                     Require(correct && allocated == 0,
                         "NativeAOT actor guest payload steady-state must allocate zero CLR bytes");
+
+                    // Warm the nominal type-ID registry separately: that
+                    // first metadata admission may allocate managed memory.
+                    for (int warm = 0; warm < 128; warm++)
+                    {
+                        uint temporary = context.AllocateTypedGuestObject32(typedNode);
+                        System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(
+                            value, warm);
+                        context.WriteGuestObject32(temporary, 0, value);
+                        context.WriteGuestReference32(temporary, 8, 0);
+                        context.DropGuestObject32(temporary);
+                    }
+
+                    bool typedCorrect = true;
+                    long typedBefore = GC.GetAllocatedBytesForCurrentThread();
+                    for (int cycle = 0; cycle < 4096; cycle++)
+                    {
+                        uint temporary = context.AllocateTypedGuestObject32(typedNode);
+                        System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(
+                            value, cycle);
+                        context.WriteGuestObject32(temporary, 0, value);
+                        value.Clear();
+                        context.ReadGuestObject32(temporary, 0, value);
+                        if (System.Buffers.Binary.BinaryPrimitives.ReadInt64LittleEndian(
+                                value) != cycle)
+                            typedCorrect = false;
+                        context.WriteGuestReference32(temporary, 8, 0);
+                        context.DropGuestObject32(temporary);
+                        if (!typedCorrect) break;
+                    }
+                    long typedAllocated =
+                        GC.GetAllocatedBytesForCurrentThread() - typedBefore;
+                    Require(typedCorrect && typedAllocated == 0,
+                        "NativeAOT warmed typed actor object path must allocate zero CLR bytes");
                 }
                 typedRoots[index] = context.AllocateTypedGuestObject32(typedNode);
                 uint typedChild = context.AllocateTypedGuestObject32(typedNode);
@@ -232,3 +266,4 @@ Console.WriteLine("PASS actor-logical-stack-native-probe: four distinct actor-ow
 Console.WriteLine("PASS actor-ref32-native-probe: four actor-local uint32 guest refs, distinct native payloads, retained-turn denial (host only; not compiled guest)");
 Console.WriteLine("PASS actor-ref32-native-no-clr-allocation: 4096 warmed guest payload cycles allocated zero managed bytes (host only)");
 Console.WriteLine("PASS actor-ref32-native-typed-nodegraph: four typed native graphs survive actor turns with guarded reference fields (host only; not compiled guest)");
+Console.WriteLine("PASS actor-ref32-native-typed-no-clr-allocation: 4096 warmed typed I64/ref32 cycles allocated zero managed bytes (host only)");
