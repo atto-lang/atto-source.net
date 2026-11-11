@@ -139,6 +139,13 @@ internal static class CfgCilEmitter
                         case CfgOpcode.ConstantBool:
                             il.LoadConstantI4(op.BoolConstant!.Value ? 1 : 0);
                             break;
+                        case CfgOpcode.BoolNot:
+                            // The verifier proves Left is a bool SSA value.
+                            // Comparing to zero emits a normalized Boolean.
+                            il.LoadLocal(op.Left!.Value);
+                            il.LoadConstantI4(0);
+                            il.OpCode(ILOpCode.Ceq);
+                            break;
                         case CfgOpcode.OptionOrI64:
                         {
                             // All three operands were type/SSA/dominance checked.

@@ -191,6 +191,9 @@ public static class OresStructuredCfgLowering
                     return variable.ValueId;
                 case StructuredOptionPresent present:
                     return OptionParts(present.Option, block, variables).Tag;
+                case StructuredOptionAbsent absent:
+                    return Emit(block, CfgOpcode.BoolNot, IrValueType.Bool,
+                        left: OptionParts(absent.Option, block, variables).Tag);
                 case StructuredOptionOr selected:
                 {
                     var option = OptionParts(selected.Option, block, variables);

@@ -18,7 +18,9 @@ public enum CfgOpcode
     NotEqualI64,
     // Two-word source Option<int>, selected from verified bool tag/i64
     // payload and an eagerly evaluated i64 fallback. Not an opaque pointer.
-    OptionOrI64
+    OptionOrI64,
+    // Verified Boolean negation, used by the closed Option<int>.is_none() query.
+    BoolNot
 }
 
 public readonly record struct CfgParameter(int Id, IrValueType Type);
@@ -316,6 +318,16 @@ public static class OresCfgVerifier
                             throw new FormatException("Unverified CFG static call");
                         for (int arg = 0; arg < op.Arguments.Count; arg++)
                             Use(i, opIndex, op.Arguments[arg], callee.ParameterTypes[arg]);
+                        break;
+                    }
+                    case CfgOpcode.BoolNot:
+                    {
+                        RequireType(op.Type, IrValueType.Bool);
+                        if (op.Left is null || op.Right is not null ||
+                            op.Arguments is not null || op.Target is not null ||
+                            op.I64Constant is not null || op.BoolConstant is not null)
+                            throw new FormatException("Malformed CFG Boolean negation");
+                        Use(i, opIndex, op.Left.Value, IrValueType.Bool);
                         break;
                     }
                     case CfgOpcode.OptionOrI64:

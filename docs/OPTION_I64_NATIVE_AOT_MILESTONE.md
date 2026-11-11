@@ -18,7 +18,9 @@ pub fnc main():int {
 ```
 
 - `Some(int)` / `None`, `Option<int>` local `val` and `let` bindings,
-  reassignment through `let`, `.is_some()` and eager `.unwrap_or(int)`.
+  reassignment through `let`, `.is_some()`, `.is_none()` and eager
+  `.unwrap_or(int)`. `is_none()` compiles to a verified Boolean negation
+  of the independent tag; no payload comparison or sentinel check is used.
 - `None` is not a special signed i64 sentinel. Each source value lowers to
   **two separately verified SSA IDs**: an exact Boolean tag and a full signed
   64-bit payload. Every signed i64, including 0, MIN, MAX, remains valid.

@@ -15,6 +15,8 @@ public sealed record StructuredSome(int At, StructuredExpr Payload)
 public sealed record StructuredNone(int At) : StructuredExpr(At, IrValueType.OptionI64);
 public sealed record StructuredOptionPresent(int At, StructuredExpr Option)
     : StructuredExpr(At, IrValueType.Bool);
+public sealed record StructuredOptionAbsent(int At, StructuredExpr Option)
+    : StructuredExpr(At, IrValueType.Bool);
 public sealed record StructuredOptionOr(int At, StructuredExpr Option, StructuredExpr Fallback)
     : StructuredExpr(At, IrValueType.I64);
 public sealed record StructuredRead(int At, string Name, IrValueType ValueType)
@@ -930,6 +932,12 @@ public static class OresStructuredParser
                 Expect(")");
                 return new StructuredOptionPresent(at, option);
             }
+            if (Take("is_none"))
+            {
+                Expect("(");
+                Expect(")");
+                return new StructuredOptionAbsent(at, option);
+            }
             if (Take("unwrap_or"))
             {
                 Expect("(");
@@ -938,7 +946,7 @@ public static class OresStructuredParser
                 Expect(")");
                 return new StructuredOptionOr(at, option, fallback);
             }
-            throw Error("E_OPTION_METHOD_UNSUPPORTED: use is_some() or unwrap_or(int)");
+            throw Error("E_OPTION_METHOD_UNSUPPORTED: use is_some(), is_none(), or unwrap_or(int)");
         }
         private StructuredExpr Expr(int depth) => Equal(depth + 1);
         private StructuredExpr Equal(int depth)

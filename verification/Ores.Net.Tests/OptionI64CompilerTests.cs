@@ -122,12 +122,33 @@ internal static class OptionI64CompilerTests
                 ops, new CfgReturn(3)) });
     }
 
+    private static CfgFunction ForgedBoolean(CfgInstruction operation)
+    {
+        var ops = new CfgInstruction[]
+        {
+            new(0, CfgOpcode.ConstantBool, IrValueType.Bool, BoolConstant: true),
+            new(1, CfgOpcode.ConstantI64, IrValueType.I64, I64Constant: 42),
+            operation
+        };
+        return new CfgFunction("main", IrValueType.Bool, "entry",
+            new[] { new CfgBlock("entry", Array.Empty<CfgParameter>(),
+                ops, new CfgReturn(2)) });
+    }
+
     public static void Run()
     {
         const string some = "pub fnc main():int{val Option<int> value=Some(42);return value.unwrap_or(0);}";
         const string none = "pub fnc main():int{val Option<int> value=None;return value.unwrap_or(42);}";
         Check(some, 42, "Some(42) tagged payload");
         Check(none, 42, "None fallback");
+        Check("fnc main():int{if None.is_none(){return 42;}return 0;}",
+            42, "None.is_none true");
+        Check("fnc main():int{if Some(0).is_none(){return 0;}return 42;}",
+            42, "Some(0).is_none false independent of zero payload");
+        Check("fnc main():int{val Option<int> x=None;if x.is_none(){return 42;}return 0;}",
+            42, "named Option local .is_none()");
+        Check("fnc main():int{let Option<int> x=None;x=Some(0);if x.is_none(){return 0;}return 42;}",
+            42, "mutable Option full tag replacement .is_none()");
 
         Check("fnc main():int{if Some(0).is_some(){return 42;}return 0;}",
             42, "Some(0) tag is present, independent of payload");
@@ -172,6 +193,8 @@ internal static class OptionI64CompilerTests
             ("no wrong fallback", "fnc main():int{return Some(42).unwrap_or(false);}"),
             ("no unsafe unwrap", "fnc main():int{return Some(42).unwrap();}"),
             ("no unknown Option method", "fnc main():int{return None.flatten();}"),
+            ("is_none rejects arguments", "fnc main():int{if None.is_none(42){return 1;}return 0;}"),
+            ("is_none is bool, not i64", "fnc main():int{return None.is_none();}"),
             ("no nested Option flatten", "fnc main():int{val Option<Option<int>> x=Some(None);return 0;}"),
             ("no nested Some coercion", "fnc main():int{return Some(None).unwrap_or(0);}"),
             ("no Option<bool> erasure", "fnc main():int{val Option<bool> x=None;return 0;}"),
@@ -207,6 +230,23 @@ internal static class OptionI64CompilerTests
         RejectForged(Forged(new CfgInstruction(3, CfgOpcode.OptionOrI64,
             IrValueType.I64, Left: 0, Right: 1, Arguments: new[] { 4 })),
             "future SSA fallback");
+        RejectForged(ForgedBoolean(new CfgInstruction(2,
+            CfgOpcode.BoolNot, IrValueType.Bool, Left: 1)),
+            "BoolNot rejected i64 operand");
+        RejectForged(ForgedBoolean(new CfgInstruction(2,
+            CfgOpcode.BoolNot, IrValueType.Bool)),
+            "BoolNot requires one operand");
+        RejectForged(ForgedBoolean(new CfgInstruction(2,
+            CfgOpcode.BoolNot, IrValueType.Bool, Left: 0, Right: 0)),
+            "BoolNot cannot read unverified second operand");
+        RejectForged(ForgedBoolean(new CfgInstruction(2,
+            CfgOpcode.BoolNot, IrValueType.Bool, Left: 0, Arguments: Array.Empty<int>())),
+            "BoolNot cannot smuggle extra operands");
+        RejectForged(ForgedBoolean(new CfgInstruction(2,
+            CfgOpcode.BoolNot, IrValueType.I64, Left: 0)),
+            "BoolNot must result in Bool");
+        _ = OresCfgVerifier.Verify(ForgedBoolean(new CfgInstruction(2,
+            CfgOpcode.BoolNot, IrValueType.Bool, Left: 0)));
         var valid = OresCfgVerifier.Verify(Forged(new CfgInstruction(
             3, CfgOpcode.OptionOrI64, IrValueType.I64,
             Left: 0, Right: 1, Arguments: new[] { 2 })));

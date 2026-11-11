@@ -35,6 +35,7 @@ internal static class CfgReferenceEvaluator
                     CfgOpcode.EqualI64 => Left() == Right(),
                     CfgOpcode.NotEqualI64 => Left() != Right(),
                     CfgOpcode.LessThanI64 => Left() < Right(),
+                    CfgOpcode.BoolNot => !(bool)values[op.Left!.Value],
                     CfgOpcode.OptionOrI64 =>
                         (bool)values[op.Left!.Value]
                             ? (long)values[op.Right!.Value]
