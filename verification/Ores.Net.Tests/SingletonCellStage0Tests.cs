@@ -231,6 +231,28 @@ internal static class SingletonCellStage0Tests
                 "3/7/15 carrier burst broke singleton publication or leaked waiters");
             Require(await cell.ResolveAsync() == 42 && initializes == 1,
                 "ready singleton publication was reinitialized after burst");
+
+            var failure = new InvalidOperationException(
+                "stage0 singleton factory failure at carrier count " + carrierCount);
+            int failureStarts = 0;
+            var failed = new SingletonCellStage0<long>(() =>
+            {
+                Interlocked.Increment(ref failureStarts);
+                return ValueTask.FromException<long>(failure);
+            }, maxPendingWaiters: 16);
+            var failStart = Pending<bool>();
+            Task[] observers = Enumerable.Range(0, carrierCount)
+                .Select(_ => Task.Run(async () =>
+                {
+                    await failStart.Task.ConfigureAwait(false);
+                    await ExpectSameFailure(failed.ResolveAsync(), failure)
+                        .ConfigureAwait(false);
+                })).ToArray();
+            failStart.SetResult(true);
+            await Task.WhenAll(observers).WaitAsync(TimeSpan.FromSeconds(10));
+            await ExpectSameFailure(failed.ResolveAsync(), failure);
+            Require(failureStarts == 1 && failed.PendingWaiters == 0,
+                "3/7/15 failure burst retried the initializer or leaked waiters");
         }
     }
 
