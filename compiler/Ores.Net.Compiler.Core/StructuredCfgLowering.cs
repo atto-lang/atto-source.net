@@ -283,6 +283,10 @@ public static class OresStructuredCfgLowering
                             Expression(returned.Value, current, variables));
                         current = null;
                         break;
+                    case StructuredReturnVoid:
+                        current.Terminator = new CfgReturnVoid();
+                        current = null;
+                        break;
                     case StructuredIf conditional:
                         current = If(conditional, current, variables);
                         break;
