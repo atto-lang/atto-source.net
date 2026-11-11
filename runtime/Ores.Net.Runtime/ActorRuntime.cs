@@ -102,25 +102,39 @@ public sealed class ActorContext
     // NativeAOT guest-object substrate: one uint32 generation/slot word per
     // reference; payloads stay in this actor's existing native arena.
     // These words must never cross an actor/mailbox/FFI boundary as authority.
+    private ActorGuestHeap32 GuestHeapForActiveTurn()
+    {
+        // Lazy backing tables must not be initialized by an expired/retired
+        // actor turn that no longer has allocation or loan authority.
+        _arena.ValidateActiveTurn(_turn);
+        return _guestHeap.Value;
+    }
+
+    private ActorGuestHeap32 GuestHeapForPhysicalTurn()
+    {
+        // A currently admitted carrier may finish memory cleanup after STOP
+        // begins. Do not require fresh admission to drop/read/write.
+        _arena.ValidatePhysicalTurn(_turn);
+        return _guestHeap.Value;
+    }
+
+    // Trusted low-level ABI only: a uint32 word is NOT a cross-actor reference.
     public uint AllocateGuestObject32(int bytes, int alignment = 8) =>
-        _guestHeap.Value.Allocate(_turn, bytes, alignment);
+        GuestHeapForActiveTurn().Allocate(_turn, bytes, alignment);
 
-    // Compiler-produced nominal types use immutable layouts so raw writes
-    // cannot bypass typed object-reference fields. Source lowering is pending.
     public uint AllocateTypedGuestObject32(ActorGuestLayout32 layout) =>
-        _guestHeap.Value.AllocateTyped(_turn, layout);
+        GuestHeapForActiveTurn().AllocateTyped(_turn, layout);
 
-    // Compiler-facing API: a runtime-minted arena identity travels alongside
-    // the *host* value, but never enters the guest's four-byte Ref32 field.
-    // Do not use raw uint32 references for guest ownership/actor boundaries.
+    // Compiler-facing API: bind native four-byte fields to the physical actor
+    // owner's identity in host metadata, never in the guest object payload.
     public ActorGuestOwnedRef32 AllocateOwnedTypedGuestObject32(
         ActorGuestLayout32 layout) =>
-        new(_arena, _guestHeap.Value.AllocateTyped(_turn, layout));
+        new(_arena, GuestHeapForActiveTurn().AllocateTyped(_turn, layout));
 
     private uint RequireOwnedGuestRef32(ActorGuestOwnedRef32 reference)
     {
-        // Check the physical execution lease *before* inspecting even a
-        // null/foreign handle. A retained ActorContext grants no authority.
+        // Validate the physical execution lease, then the actor owner,
+        // *before* the lazy guest table can allocate any managed metadata.
         _arena.ValidatePhysicalTurn(_turn);
         if (!reference.BelongsTo(_arena))
             throw new InvalidOperationException(
@@ -128,29 +142,40 @@ public sealed class ActorContext
         return reference.Word;
     }
 
-    public void DropOwnedGuestObject32(ActorGuestOwnedRef32 reference) =>
-        _guestHeap.Value.Drop(_turn, RequireOwnedGuestRef32(reference));
+    public void DropOwnedGuestObject32(ActorGuestOwnedRef32 reference)
+    {
+        uint word = RequireOwnedGuestRef32(reference);
+        GuestHeapForPhysicalTurn().Drop(_turn, word);
+    }
 
     public ActorArenaReadLoan BorrowOwnedGuestObjectRead32(
-        ActorGuestOwnedRef32 reference) =>
-        _guestHeap.Value.BorrowRead(_turn, RequireOwnedGuestRef32(reference));
+        ActorGuestOwnedRef32 reference)
+    {
+        uint word = RequireOwnedGuestRef32(reference);
+        return GuestHeapForActiveTurn().BorrowRead(_turn, word);
+    }
 
     public void ReadOwnedGuestObject32(ActorGuestOwnedRef32 reference,
-        int offset, Span<byte> destination) =>
-        _guestHeap.Value.Read(_turn, RequireOwnedGuestRef32(reference),
-            offset, destination);
+        int offset, Span<byte> destination)
+    {
+        uint word = RequireOwnedGuestRef32(reference);
+        GuestHeapForPhysicalTurn().Read(_turn, word, offset, destination);
+    }
 
     public void WriteOwnedGuestObject32(ActorGuestOwnedRef32 reference,
-        int offset, ReadOnlySpan<byte> source) =>
-        _guestHeap.Value.Write(_turn, RequireOwnedGuestRef32(reference),
-            offset, source);
+        int offset, ReadOnlySpan<byte> source)
+    {
+        uint word = RequireOwnedGuestRef32(reference);
+        GuestHeapForPhysicalTurn().Write(_turn, word, offset, source);
+    }
 
     public ActorGuestOwnedRef32 ReadOwnedGuestReference32(
         ActorGuestOwnedRef32 owner, int offset)
     {
-        uint word = _guestHeap.Value.ReadReference(_turn,
-            RequireOwnedGuestRef32(owner), offset);
-        return word == 0 ? default : new ActorGuestOwnedRef32(_arena, word);
+        uint word = RequireOwnedGuestRef32(owner);
+        uint target = GuestHeapForPhysicalTurn().ReadReference(_turn,
+            word, offset);
+        return target == 0 ? default : new ActorGuestOwnedRef32(_arena, target);
     }
 
     public void WriteOwnedGuestReference32(ActorGuestOwnedRef32 owner,
@@ -158,26 +183,29 @@ public sealed class ActorContext
     {
         uint ownerWord = RequireOwnedGuestRef32(owner);
         uint targetWord = target.IsNull ? 0 : RequireOwnedGuestRef32(target);
-        _guestHeap.Value.WriteReference(_turn, ownerWord, offset, targetWord);
+        GuestHeapForPhysicalTurn().WriteReference(
+            _turn, ownerWord, offset, targetWord);
     }
 
     public void DropGuestObject32(uint reference) =>
-        _guestHeap.Value.Drop(_turn, reference);
+        GuestHeapForPhysicalTurn().Drop(_turn, reference);
 
     public ActorArenaReadLoan BorrowGuestObjectRead32(uint reference) =>
-        _guestHeap.Value.BorrowRead(_turn, reference);
+        GuestHeapForActiveTurn().BorrowRead(_turn, reference);
 
     public void ReadGuestObject32(uint reference, int offset,
-        Span<byte> destination) => _guestHeap.Value.Read(_turn, reference, offset, destination);
+        Span<byte> destination) =>
+        GuestHeapForPhysicalTurn().Read(_turn, reference, offset, destination);
 
     public void WriteGuestObject32(uint reference, int offset,
-        ReadOnlySpan<byte> source) => _guestHeap.Value.Write(_turn, reference, offset, source);
+        ReadOnlySpan<byte> source) =>
+        GuestHeapForPhysicalTurn().Write(_turn, reference, offset, source);
 
     public uint ReadGuestReference32(uint owner, int offset) =>
-        _guestHeap.Value.ReadReference(_turn, owner, offset);
+        GuestHeapForPhysicalTurn().ReadReference(_turn, owner, offset);
 
     public void WriteGuestReference32(uint owner, int offset, uint target) =>
-        _guestHeap.Value.WriteReference(_turn, owner, offset, target);
+        GuestHeapForPhysicalTurn().WriteReference(_turn, owner, offset, target);
 
     public ActorArenaHandle AllocatePersistent(int bytes, int alignment = 8) =>
         _arena.AllocatePersistent(_turn, bytes, alignment);
