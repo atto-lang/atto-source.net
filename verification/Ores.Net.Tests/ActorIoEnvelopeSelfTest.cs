@@ -89,10 +89,55 @@ internal static class ActorIoEnvelopeSelfTest
         ExpectStale(() => io.TryWriteOutput(foreign, new byte[] { 9 }), "foreign authority");
 
         TestTerminalRetirement();
+        TestHalfCloseKeepsQueuedFrames();
         Console.WriteLine("ACTOR_IO_ENVELOPE_RETIREMENT_PASS");
+        Console.WriteLine("ACTOR_IO_HALF_CLOSE_PASS");
 
         Console.WriteLine(
             "PASS .NET actor io bounded input/output/error/events/metadata and generation fencing");
+    }
+
+    private static void TestHalfCloseKeepsQueuedFrames()
+    {
+        using var box = new ActorMailbox(91009);
+        var actor = box.CurrentRef;
+        using var io = new ActorIoEnvelope(box);
+        Require(io.TryFeedInput(actor, new byte[] { 1, 2, 3 }),
+            "half-close input buffer admission");
+        Require(!io.InputEof(actor), "open input is not EOF");
+        io.CompleteInput(actor);
+        io.CompleteInput(actor); // idempotent
+        Require(!io.InputEof(actor), "input EOF waits for queued frames");
+        Require(!io.TryFeedInput(actor, new byte[] { 4 }),
+            "host input write after half-close rejected");
+        Require(!io.TryFeedInput(actor, Array.Empty<byte>()),
+            "empty input cannot reopen completed stream");
+        Require(io.TryReadInput(actor, out var input) && input is not null &&
+            input.SequenceEqual(new byte[] { 1, 2, 3 }),
+            "input buffered before half-close must still drain");
+        Require(io.InputEof(actor) && !io.TryReadInput(actor, out _),
+            "input EOF becomes observable only after drain");
+
+        Require(io.TryWriteOutput(actor, new byte[] { 5, 6 }),
+            "half-close output buffer admission");
+        io.CompleteOutput(actor);
+        io.CompleteOutput(actor);
+        Require(!io.OutputEof(actor), "output EOF waits for queued frames");
+        Require(!io.TryWriteOutput(actor, new byte[] { 7 }),
+            "actor output write after half-close rejected");
+        Require(!io.TryWriteOutput(actor, Array.Empty<byte>()),
+            "empty output cannot reopen completed stream");
+        Require(io.TryReadOutput(actor, out var output) && output is not null &&
+            output.SequenceEqual(new byte[] { 5, 6 }),
+            "output queued before half-close must still drain");
+        Require(io.OutputEof(actor) && !io.TryReadOutput(actor, out _),
+            "output EOF becomes observable only after drain");
+
+        var wrong = new ActorMailbox(91009).CurrentRef;
+        ExpectStale(() => io.CompleteInput(wrong), "foreign input EOF");
+        ExpectStale(() => io.CompleteOutput(wrong), "foreign output EOF");
+        ExpectStale(() => io.InputEof(wrong), "foreign input EOF observation");
+        ExpectStale(() => io.OutputEof(wrong), "foreign output EOF observation");
     }
 
     private static void TestTerminalRetirement()
