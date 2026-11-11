@@ -276,6 +276,7 @@ public static class OresStructuredParser
     private sealed class Lexer(string source, bool moduleMode = false)
     {
         private int index;
+        private bool previousWasWith;
         public Token Read()
         {
             while (index < source.Length)
@@ -323,6 +324,12 @@ public static class OresStructuredParser
             int offset = index;
             if (index == source.Length) return new Token("", index);
             char ch = source[index];
+            bool precededByWith = previousWasWith;
+            previousWasWith = false;
+            if (precededByWith && ch == '{')
+                throw new FormatException(
+                    $"WITH_BACKEND_UNSUPPORTED: immutable with requires checked rt copy/take, "
+                    + $"owned field layout/drop and Native AOT reconstruction at offset {index}");
             // Injection changes ownership and lifetime authority. The scalar
             // CIL bootstrap cannot treat an annotation as harmless metadata.
             // Perform this check after comments have been skipped so comment
@@ -430,6 +437,7 @@ public static class OresStructuredParser
             if (tokenText == "enum")
                 throw new FormatException(
                     $"nominal enum overloads require compiler-bound dispatch (unsupported .NET bootstrap) at offset {offset}");
+            previousWasWith = tokenText == "with";
             return new Token(tokenText, offset);
         }
     }

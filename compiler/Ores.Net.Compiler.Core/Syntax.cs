@@ -94,6 +94,7 @@ public static class OresParser
     private sealed class Lexer(string text)
     {
         private int _i;
+        private bool previousWasWith;
 
         public Token Read()
         {
@@ -137,6 +138,14 @@ public static class OresParser
             var start = _i;
             if (_i == text.Length) return new Token("", start);
             var ch = text[_i];
+            // Lexical-context guard: comments/whitespace were skipped above.
+            // Preserve ordinary identifiers 'with(x)' and inert comments.
+            bool precededByWith = previousWasWith;
+            previousWasWith = false;
+            if (precededByWith && ch == '{')
+                throw new FormatException(
+                    $"WITH_BACKEND_UNSUPPORTED: immutable with requires checked rt copy/take, "
+                    + $"owned field layout/drop and Native AOT reconstruction at offset {_i}");
             // Scalar and structured CIL frontends must agree: state-changing
             // annotations are compiler effects, never inert metadata. Check
             // only lexed tokens, after comments have been skipped.
@@ -188,6 +197,7 @@ public static class OresParser
                     (text[_i] is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_'))
                     _i++;
                 var word = text[start.._i];
+                previousWasWith = word == "with";
                 if (word is "any" or "unknown" or "Any" or "Unknown")
                     throw new FormatException(
                         "any/unknown requires tagged opaque-value ABI and Native AOT runtime descriptors");
