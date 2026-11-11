@@ -5,7 +5,9 @@ namespace Ores.Net.Compiler;
 public enum IrValueType
 {
     I64,
-    Bool
+    Bool,
+    // Method result only. Void must not be an SSA value, local, or parameter.
+    Void
 }
 
 public enum IrOpcode
