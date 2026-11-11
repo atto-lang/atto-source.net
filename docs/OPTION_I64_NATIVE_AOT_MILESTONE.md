@@ -71,3 +71,13 @@ reviewer approves.
 
 Public name: AttoLang. Preserve `oresnet`, `Ores.Net.*`, repository
 names and legacy `.ores` compatibility.
+
+## Additional `.atto` NativeAOT guest gate: `is_none()`
+
+The exact-file fixture `contracts/option-i64/v1/option-is-none42.atto`
+checks that `Some(0).is_none()` is false and `None.is_none()` is true;
+the guest returns 42 only if both checks hold. Git blob:
+`c9ba0fa0bcd14863e098e77ff090ac9c4e46a893`. The Linux and Windows jobs now pin the blob, compile
+with the structured frontend, build native executables and check the
+result. **Not yet executed at the exact updated head**; zero-step CI is
+not proof of guest behavior.
