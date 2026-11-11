@@ -24,6 +24,18 @@ internal static class CfgReferenceEvaluator
             {
                 long Left() => (long)values[op.Left!.Value];
                 long Right() => (long)values[op.Right!.Value];
+                bool OptionEqualI64()
+                {
+                    // Keep the test-only interpreter independent of emitted
+                    // CIL, but enforce identical tagged semantics. Inactive
+                    // None payload slots must never participate in equality.
+                    bool leftPresent = (bool)values[op.Left!.Value];
+                    bool rightPresent = (bool)values[op.Arguments![0]];
+                    if (leftPresent != rightPresent) return false;
+                    return !leftPresent ||
+                        (long)values[op.Right!.Value] ==
+                        (long)values[op.Arguments[1]];
+                }
                 values[op.ResultId] = op.Opcode switch
                 {
                     CfgOpcode.ConstantI64 => op.I64Constant!.Value,
@@ -36,6 +48,7 @@ internal static class CfgReferenceEvaluator
                     CfgOpcode.NotEqualI64 => Left() != Right(),
                     CfgOpcode.LessThanI64 => Left() < Right(),
                     CfgOpcode.BoolNot => !(bool)values[op.Left!.Value],
+                    CfgOpcode.OptionEqualI64 => OptionEqualI64(),
                     CfgOpcode.OptionOrI64 =>
                         (bool)values[op.Left!.Value]
                             ? (long)values[op.Right!.Value]

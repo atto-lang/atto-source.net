@@ -147,9 +147,25 @@ internal static class OptionI64CompilerTests
             new(3, CfgOpcode.ConstantI64, IrValueType.I64, I64Constant: rightPayload),
             operation
         };
-        return new CfgFunction("main", IrValueType.Bool, "entry",
-            new[] { new CfgBlock("entry", Array.Empty<CfgParameter>(),
-                ops, new CfgReturn(4)) });
+        // Standalone generated Run must return i64. Branch on the verified
+        // Bool selector rather than trying to emit a Bool-returning entry.
+        // This keeps malformed mutations on the same verifier path and
+        // permits checking the *actual* emitted CIL, not just the oracle.
+        return new CfgFunction("main", IrValueType.I64, "entry",
+            new[]
+            {
+                new CfgBlock("entry", Array.Empty<CfgParameter>(),
+                    ops, new CfgBranch(4, "equal", Array.Empty<int>(),
+                        "unequal", Array.Empty<int>())),
+                new CfgBlock("equal", Array.Empty<CfgParameter>(),
+                    new[] { new CfgInstruction(5, CfgOpcode.ConstantI64,
+                        IrValueType.I64, I64Constant: 42) },
+                    new CfgReturn(5)),
+                new CfgBlock("unequal", Array.Empty<CfgParameter>(),
+                    new[] { new CfgInstruction(6, CfgOpcode.ConstantI64,
+                        IrValueType.I64, I64Constant: 0) },
+                    new CfgReturn(6))
+            });
     }
 
     private static void CheckOptionEqualityBoundary(bool leftTag, long leftPayload,
@@ -162,7 +178,7 @@ internal static class OptionI64CompilerTests
             new CfgInstruction(4, CfgOpcode.OptionEqualI64, IrValueType.Bool,
                 Left: 0, Right: 1, Arguments: new[] { 2, 3 }),
             leftTag, leftPayload, rightTag, rightPayload));
-        long expectedValue = expected ? 1L : 0L;
+        long expectedValue = expected ? 42L : 0L;
         if (CfgReferenceEvaluator.Evaluate(graph) != expectedValue)
             throw new Exception("Option inactive-payload reference mismatch: " + label);
         var temp = Path.Combine(Path.GetTempPath(),
@@ -359,7 +375,7 @@ internal static class OptionI64CompilerTests
         var eqValid = OresCfgVerifier.Verify(ForgedOptionEquality(
             new CfgInstruction(4, CfgOpcode.OptionEqualI64, IrValueType.Bool,
                 Left: 0, Right: 1, Arguments: new[] { 2, 3 })));
-        if (CfgReferenceEvaluator.Evaluate(eqValid) != 1)
+        if (CfgReferenceEvaluator.Evaluate(eqValid) != 42)
             throw new Exception("Verified Option equality did not match two Some(42) values");
         var valid = OresCfgVerifier.Verify(Forged(new CfgInstruction(
             3, CfgOpcode.OptionOrI64, IrValueType.I64,

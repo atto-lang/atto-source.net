@@ -100,3 +100,16 @@ workflows pin and execute the guest. This is **not** generic ADT
 equality, `Result<T,E>` equality, nominal enum equality, or verified
 production NativeAOT behavior until the exact-head workflow has
 nonzero executed steps and native receipts.
+
+## NativeAOT equality verification harness fix
+
+The `OptionEqualI64` opcode is now implemented in the independent
+`CfgReferenceEvaluator` used by managed compiler tests. The oracle
+checks tags first and ignores inactive `None` payloads. The adversarial
+direct-CFG equality tests use a verifier-checked Bool branch to return
+an i64 42/0 from the standalone `Run` entry; a Bool-returning standalone
+`Run` was invalid under the existing CIL method signature contract.
+This repairs the **test execution harness**, not the production scalar
+frontend. Both source and emitted CIL must agree on expected results.
+Actual .NET build, Linux/Windows NativeAOT execution, and guest parity
+still require stepful tests on the exact new PR head.
