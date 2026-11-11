@@ -135,19 +135,51 @@ internal static class OptionI64CompilerTests
                 ops, new CfgReturn(2)) });
     }
 
-    private static CfgFunction ForgedOptionEquality(CfgInstruction operation)
+    private static CfgFunction ForgedOptionEquality(CfgInstruction operation,
+        bool leftTag = true, long leftPayload = 42,
+        bool rightTag = true, long rightPayload = 42)
     {
         var ops = new CfgInstruction[]
         {
-            new(0, CfgOpcode.ConstantBool, IrValueType.Bool, BoolConstant: true),
-            new(1, CfgOpcode.ConstantI64, IrValueType.I64, I64Constant: 42),
-            new(2, CfgOpcode.ConstantBool, IrValueType.Bool, BoolConstant: true),
-            new(3, CfgOpcode.ConstantI64, IrValueType.I64, I64Constant: 42),
+            new(0, CfgOpcode.ConstantBool, IrValueType.Bool, BoolConstant: leftTag),
+            new(1, CfgOpcode.ConstantI64, IrValueType.I64, I64Constant: leftPayload),
+            new(2, CfgOpcode.ConstantBool, IrValueType.Bool, BoolConstant: rightTag),
+            new(3, CfgOpcode.ConstantI64, IrValueType.I64, I64Constant: rightPayload),
             operation
         };
         return new CfgFunction("main", IrValueType.Bool, "entry",
             new[] { new CfgBlock("entry", Array.Empty<CfgParameter>(),
                 ops, new CfgReturn(4)) });
+    }
+
+    private static void CheckOptionEqualityBoundary(bool leftTag, long leftPayload,
+        bool rightTag, long rightPayload, bool expected, string label)
+    {
+        // These deliberately allow nonzero inactive None slots. This is
+        // verifier-admitted host-side IR, never guest construction. The
+        // generated CIL must ignore inactive payloads at runtime.
+        var graph = OresCfgVerifier.Verify(ForgedOptionEquality(
+            new CfgInstruction(4, CfgOpcode.OptionEqualI64, IrValueType.Bool,
+                Left: 0, Right: 1, Arguments: new[] { 2, 3 }),
+            leftTag, leftPayload, rightTag, rightPayload));
+        long expectedValue = expected ? 1L : 0L;
+        if (CfgReferenceEvaluator.Evaluate(graph) != expectedValue)
+            throw new Exception("Option inactive-payload reference mismatch: " + label);
+        var temp = Path.Combine(Path.GetTempPath(),
+            "atto-option-equality-boundary-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(temp);
+        try
+        {
+            var output = Path.Combine(temp, "OresGenerated.dll");
+            CilEmitter.EmitLibrary(graph, output);
+            using var assembly = AssemblyDefinition.ReadAssembly(output);
+            var method = assembly.MainModule.Types.Single(type =>
+                type.FullName == "Oreslang.Generated.OresProgram")
+                .Methods.Single(candidate => candidate.Name == "Run");
+            if (CfgCilTestInterpreter.Evaluate(method) != expectedValue)
+                throw new Exception("Option inactive-payload emitted CIL mismatch: " + label);
+        }
+        finally { Directory.Delete(temp, recursive: true); }
     }
 
     public static void Run()
@@ -202,6 +234,16 @@ internal static class OptionI64CompilerTests
         CheckModuleHelper("fnc answer():int{val Option<int> x=Some(42);return x.unwrap_or(0);}fnc main():int{return answer();}",
             42, "Option local inside statically linked helper");
         CheckEagerFallbackOverflow();
+        CheckOptionEqualityBoundary(false, 42, false, 7, true,
+            "None equals None even with different inactive payloads");
+        CheckOptionEqualityBoundary(false, long.MinValue, false, long.MaxValue, true,
+            "None equality never compares inactive full-i64 payloads");
+        CheckOptionEqualityBoundary(false, 0, true, 0, false,
+            "Some(0) differs from None even with matching payload bits");
+        CheckOptionEqualityBoundary(true, long.MinValue, true, long.MinValue, true,
+            "Some exact signed minimum equality");
+        CheckOptionEqualityBoundary(true, long.MinValue, true, long.MaxValue, false,
+            "Some full-width i64 values differ");
 
         // No unexpected re-entry into production scalar compiler.
         bool scalarRejected = false;
