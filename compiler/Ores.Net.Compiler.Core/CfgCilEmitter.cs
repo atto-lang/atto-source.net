@@ -36,7 +36,8 @@ internal static class CfgCilEmitter
             var blocks = graph.Blocks;
             int valueCount = blocks.Sum(b => b.Parameters.Count + b.Instructions.Count);
             int scratchCount = blocks.Sum(b => b.Parameters.Count);
-            if (valueCount is <= 0 or > OresCfgVerifier.MaxValues ||
+            if ((valueCount == 0 && graph.ResultType != IrValueType.Void) ||
+                valueCount > OresCfgVerifier.MaxValues ||
                 scratchCount > OresCfgVerifier.MaxValues)
                 throw new FormatException("CFG CIL local slot budget exceeded");
 
