@@ -142,6 +142,10 @@ internal static class ActorRuntimeSelfTest
         Require(!publicApi.Contains("TryReadInput") &&
             !publicApi.Contains("TryWriteOutput"),
             "host port must not widen into actor-side I/O authority");
+        bool noWire = false;
+        try { _ = System.Text.Json.JsonSerializer.Serialize(hostIo); }
+        catch (NotSupportedException) { noWire = true; }
+        Require(noWire, "host I/O capability must not serialize as actor DATA");
 
         var inputSource = new byte[] { 13, 21, 34 };
         Require(hostIo.TryFeedInput(inputSource), "host feed input");
