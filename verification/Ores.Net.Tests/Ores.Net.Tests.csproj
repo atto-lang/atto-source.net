@@ -31,6 +31,9 @@
     <None Include="../../contracts/http-actor-admission/3x4.atto"
           Link="contracts/http-actor-admission/3x4.atto"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/http-actor-v1/*.atto"
+          Link="contracts/http-actor-v1/%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="../../compiler/Ores.Net.Compiler.Core/Ores.Net.Compiler.Core.csproj" />
     <ProjectReference Include="../../runtime/Ores.Net.Runtime/Ores.Net.Runtime.csproj" />
     <!-- Independent metadata inspection runs only in the test process. -->
