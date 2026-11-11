@@ -268,6 +268,7 @@ public static class CilEmitter
                 {
                     if (method.ResultType == IrValueType.I64) returnType.Type().Int64();
                     else if (method.ResultType == IrValueType.Bool) returnType.Type().Boolean();
+                    else if (method.ResultType == IrValueType.Void) returnType.Void();
                     else throw new FormatException("Unsupported CIL method result");
                 },
                 parameters =>
