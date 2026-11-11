@@ -430,6 +430,15 @@ public static class OresStructuredParser
             if (tokenText == "enum")
                 throw new FormatException(
                     $"nominal enum overloads require compiler-bound dispatch (unsupported .NET bootstrap) at offset {offset}");
+            // The structured/linked NativeAOT entrypoints must be no more
+            // permissive than the shipping scalar frontend. Without explicit
+            // tagged storage, typed case descriptors, ownership and drop
+            // lowering, Option/Result tokens cannot become i64 SSA values.
+            // Only complete lexer tokens are checked: quoted source strings,
+            // nested comments, and longer identifiers are never ADT syntax.
+            if (tokenText is "Option" or "Result" or "Some" or "None" or "Ok" or "Err" or "trap")
+                throw new FormatException(
+                    $"Option/Result/trap requires verified tagged-sum CIL and NativeAOT guest-control lowering at offset {offset}");
             return new Token(tokenText, offset);
         }
     }
