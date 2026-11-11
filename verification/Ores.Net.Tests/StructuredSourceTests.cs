@@ -51,6 +51,27 @@ internal static class StructuredSourceTests
 
     public static void Run()
     {
+        // The optional Kestrel host provider is not a source HTTP actor compiler.
+        // Neither the serial alias nor explicit or 3x4 concurrency may silently
+        // become a scalar function or a generic mailbox actor in Native AOT.
+        foreach (var source in new[] {
+            "define serial http actor Endpoint as end",
+            "define http actor Endpoint as int requestConcurrency = 1; int messageConcurrency = 1; end",
+            "define http actor Endpoint as int requestConcurrency = 3; int messageConcurrency = 4; end",
+            "define pub serial http actor Endpoint as end",
+            "pub define http actor Endpoint as end",
+            "define pub shared http actor Endpoint as end",
+            "define " + string.Concat(Enumerable.Repeat("pub ", 16)) +
+                "serial http actor Endpoint as end"
+        })
+            RejectFeature(source, "HTTP_ACTOR_BACKEND_UNSUPPORTED");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{return 42;} // define serial http actor NotADeclaration").Body.Count == 1,
+            "HTTP actor text in comments must not become a declaration");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{return 42;} /* define http actor NotADeclaration as end */").Body.Count == 1,
+            "HTTP actor text in block comments must not become a declaration");
+
         // Injected mutable containers are not the current scalar backend's
         // ordinary metadata. Require a feature-specific diagnostic, not a
         // generic invalid-character parse rejection or fake CIL success.
