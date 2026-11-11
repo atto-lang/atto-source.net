@@ -16,18 +16,18 @@ internal static class DurableCommandInboxV1SelfTest
         throw new Exception("DURABLE_COMMAND_INBOX_V1_NOT_DENIED_" + why);
     }
     // Separate SQLite connection for deterministic host fault injection.
-    private static class SqliteFaults
+    private static partial class SqliteFaults
     {
-        [DllImport("sqlite3", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int sqlite3_open_v2(
-            [MarshalAs(UnmanagedType.LPUTF8Str)] string filename,
-            out IntPtr db, int flags, IntPtr vfs);
-        [DllImport("sqlite3", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int sqlite3_exec(IntPtr db,
-            [MarshalAs(UnmanagedType.LPUTF8Str)] string sql,
-            IntPtr callback, IntPtr arg, IntPtr error);
-        [DllImport("sqlite3", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int sqlite3_close_v2(IntPtr db);
+        [LibraryImport("sqlite3", EntryPoint="sqlite3_open_v2",
+            StringMarshalling=StringMarshalling.Utf8)]
+        internal static partial int sqlite3_open_v2(string filename,
+            out IntPtr db,int flags,IntPtr vfs);
+        [LibraryImport("sqlite3", EntryPoint="sqlite3_exec",
+            StringMarshalling=StringMarshalling.Utf8)]
+        internal static partial int sqlite3_exec(IntPtr db,string sql,
+            IntPtr callback,IntPtr arg,IntPtr error);
+        [LibraryImport("sqlite3", EntryPoint="sqlite3_close_v2")]
+        internal static partial int sqlite3_close_v2(IntPtr db);
     }
     private static void ExecRaw(string file,string statement)
     {

@@ -1,7 +1,7 @@
 # .NET Native AOT durable command inbox — draft host slice
 
 The `DurableCommandInboxV1` runtime component is a privileged synchronous
-SQLite WAL/FULL storage provider. It uses static SQLite native P/Invoke,
+SQLite WAL/FULL storage provider. It uses source-generated SQLite native LibraryImport,
 bounded owned byte arrays, and deterministic AOT-compatible descriptors;
 it does not create runtime IL, use reflection, JIT, or dynamically load guest
 assemblies.
@@ -29,3 +29,15 @@ recorded, both host execution and five-backend parity remain NOT_EXECUTED.
 
 No private-source CI transfer is authorized by a source-free canary or the
 existence of these workflows. Independent carrier approval remains mandatory.
+
+## Native AOT marshaling hardening
+
+The SQLite boundary uses `LibraryImport` methods generated at build time
+and explicitly pinned UTF-8/path/SQL/blob buffers with `SQLITE_TRANSIENT`
+for bound values. Runtime IL marshalling stubs and reflective metadata
+discovery are not required. The test-only fault injector also uses
+source-generated `LibraryImport`, not `DllImport`.
+
+This must be tested in an actual Native AOT binary on Linux, and separately
+on Windows with an explicitly deployed native sqlite3 library, before any
+full-AOT capability is certified. An authored probe source is NOT a pass.

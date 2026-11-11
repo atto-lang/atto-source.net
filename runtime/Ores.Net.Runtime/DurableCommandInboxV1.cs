@@ -37,44 +37,48 @@ public sealed class DurableCommandInboxV1 : IDisposable
     private readonly object _gate = new();
     private IntPtr _db;
 
-    private static class Native
+    // Source-generated native interop: every argument is blittable. SQL and
+    // filenames are explicitly UTF-8, pinned only for the duration of a call.
+    // SQLite copies bound text/blob bytes because SQLITE_TRANSIENT is used.
+    private static partial class Native
     {
-        [DllImport("sqlite3", CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
-        internal static extern int sqlite3_open_v2([MarshalAs(UnmanagedType.LPUTF8Str)] string file,
+        [LibraryImport("sqlite3", EntryPoint="sqlite3_open_v2")]
+        internal static unsafe partial int sqlite3_open_v2(byte* path,
             out IntPtr db, int flags, IntPtr vfs);
-        [DllImport("sqlite3", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int sqlite3_close_v2(IntPtr db);
-        [DllImport("sqlite3", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int sqlite3_exec(IntPtr db, [MarshalAs(UnmanagedType.LPUTF8Str)] string sql,
-            IntPtr callback, IntPtr argument, IntPtr errorMessage);
-        [DllImport("sqlite3", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int sqlite3_prepare_v2(IntPtr db, [MarshalAs(UnmanagedType.LPUTF8Str)] string sql,
-            int bytes, out IntPtr statement, IntPtr tail);
-        [DllImport("sqlite3", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int sqlite3_finalize(IntPtr statement);
-        [DllImport("sqlite3", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int sqlite3_step(IntPtr statement);
-        [DllImport("sqlite3", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int sqlite3_reset(IntPtr statement);
-        [DllImport("sqlite3", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int sqlite3_clear_bindings(IntPtr statement);
-        [DllImport("sqlite3", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int sqlite3_bind_text(IntPtr statement,int index,
-            [MarshalAs(UnmanagedType.LPUTF8Str)] string text,int bytes,IntPtr destructor);
-        [DllImport("sqlite3", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int sqlite3_bind_int64(IntPtr statement,int index,long value);
-        [DllImport("sqlite3", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int sqlite3_bind_blob(IntPtr statement,int index,byte[] bytes,int size,IntPtr destructor);
-        [DllImport("sqlite3", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int sqlite3_bind_zeroblob(IntPtr statement,int index,int size);
-        [DllImport("sqlite3", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern long sqlite3_column_int64(IntPtr statement,int column);
-        [DllImport("sqlite3", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int sqlite3_column_bytes(IntPtr statement,int column);
-        [DllImport("sqlite3", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern int sqlite3_column_type(IntPtr statement,int column);
-        [DllImport("sqlite3", CallingConvention = CallingConvention.Cdecl)]
-        internal static extern IntPtr sqlite3_column_blob(IntPtr statement,int column);
+        [LibraryImport("sqlite3", EntryPoint="sqlite3_close_v2")]
+        internal static partial int sqlite3_close_v2(IntPtr db);
+        [LibraryImport("sqlite3", EntryPoint="sqlite3_exec")]
+        internal static unsafe partial int sqlite3_exec(IntPtr db,byte* sql,
+            IntPtr callback,IntPtr argument,IntPtr errorMessage);
+        [LibraryImport("sqlite3", EntryPoint="sqlite3_prepare_v2")]
+        internal static unsafe partial int sqlite3_prepare_v2(IntPtr db,byte* sql,
+            int bytes,out IntPtr statement,IntPtr tail);
+        [LibraryImport("sqlite3", EntryPoint="sqlite3_finalize")]
+        internal static partial int sqlite3_finalize(IntPtr statement);
+        [LibraryImport("sqlite3", EntryPoint="sqlite3_step")]
+        internal static partial int sqlite3_step(IntPtr statement);
+        [LibraryImport("sqlite3", EntryPoint="sqlite3_reset")]
+        internal static partial int sqlite3_reset(IntPtr statement);
+        [LibraryImport("sqlite3", EntryPoint="sqlite3_clear_bindings")]
+        internal static partial int sqlite3_clear_bindings(IntPtr statement);
+        [LibraryImport("sqlite3", EntryPoint="sqlite3_bind_text")]
+        internal static unsafe partial int sqlite3_bind_text(IntPtr statement,int index,
+            byte* text,int bytes,IntPtr destructor);
+        [LibraryImport("sqlite3", EntryPoint="sqlite3_bind_int64")]
+        internal static partial int sqlite3_bind_int64(IntPtr statement,int index,long value);
+        [LibraryImport("sqlite3", EntryPoint="sqlite3_bind_blob")]
+        internal static unsafe partial int sqlite3_bind_blob(IntPtr statement,int index,
+            byte* bytes,int size,IntPtr destructor);
+        [LibraryImport("sqlite3", EntryPoint="sqlite3_bind_zeroblob")]
+        internal static partial int sqlite3_bind_zeroblob(IntPtr statement,int index,int size);
+        [LibraryImport("sqlite3", EntryPoint="sqlite3_column_int64")]
+        internal static partial long sqlite3_column_int64(IntPtr statement,int column);
+        [LibraryImport("sqlite3", EntryPoint="sqlite3_column_bytes")]
+        internal static partial int sqlite3_column_bytes(IntPtr statement,int column);
+        [LibraryImport("sqlite3", EntryPoint="sqlite3_column_type")]
+        internal static partial int sqlite3_column_type(IntPtr statement,int column);
+        [LibraryImport("sqlite3", EntryPoint="sqlite3_column_blob")]
+        internal static partial IntPtr sqlite3_column_blob(IntPtr statement,int column);
     }
 
     private sealed class Query(DurableCommandInboxV1 store, string sql) : IDisposable
@@ -82,14 +86,26 @@ public sealed class DurableCommandInboxV1 : IDisposable
         private IntPtr _stmt = Prepare(store._db, sql);
         private static IntPtr Prepare(IntPtr db,string sql)
         {
-            Check(Native.sqlite3_prepare_v2(db,sql,-1,out var s,IntPtr.Zero));
-            return s;
+            byte[] sqlUtf8=Encoding.UTF8.GetBytes(sql+"\0");
+            unsafe
+            {
+                fixed(byte* ptr=sqlUtf8)
+                {
+                    Check(Native.sqlite3_prepare_v2(db,ptr,-1,out var stmt,IntPtr.Zero));
+                    return stmt;
+                }
+            }
         }
         public IntPtr Handle => _stmt != IntPtr.Zero ? _stmt : throw new ObjectDisposedException(nameof(Query));
         public Query Text(int index,string text)
         {
             byte[] utf8=Encoding.UTF8.GetBytes(text);
-            Check(Native.sqlite3_bind_text(Handle,index,text,utf8.Length,Transient));return this;
+            unsafe
+            {
+                fixed(byte* ptr=utf8)
+                    Check(Native.sqlite3_bind_text(Handle,index,ptr,utf8.Length,Transient));
+            }
+            return this;
         }
         public Query Integer(int index,long value)
         {
@@ -97,8 +113,13 @@ public sealed class DurableCommandInboxV1 : IDisposable
         }
         public Query Blob(int index,byte[] value)
         {
-            Check(value.Length == 0 ? Native.sqlite3_bind_zeroblob(Handle,index,0)
-                : Native.sqlite3_bind_blob(Handle,index,value,value.Length,Transient));return this;
+            if(value.Length==0)Check(Native.sqlite3_bind_zeroblob(Handle,index,0));
+            else unsafe
+            {
+                fixed(byte* ptr=value)
+                    Check(Native.sqlite3_bind_blob(Handle,index,ptr,value.Length,Transient));
+            }
+            return this;
         }
         public int Step()
         {
@@ -149,7 +170,15 @@ public sealed class DurableCommandInboxV1 : IDisposable
         if(!IdOk(tenant)||!IdOk(actor)||!IdOk(slot)||!IdOk(op))
             throw new ArgumentException("INVALID_COMMAND_IDENTITY");
     }
-    private void Sql(string sql){Check(Native.sqlite3_exec(_db,sql,IntPtr.Zero,IntPtr.Zero,IntPtr.Zero));}
+    private void Sql(string sql)
+    {
+        byte[] bytes=Encoding.UTF8.GetBytes(sql+"\0");
+        unsafe
+        {
+            fixed(byte* ptr=bytes)
+                Check(Native.sqlite3_exec(_db,ptr,IntPtr.Zero,IntPtr.Zero,IntPtr.Zero));
+        }
+    }
     private void Rollback(){try{Sql("ROLLBACK");}catch(InvalidOperationException){ /* ambiguous outcome */ }}
     private static Query Key(Query q,string tenant,string actor,string slot) =>
         q.Text(1,tenant).Text(2,actor).Text(3,slot);
@@ -171,7 +200,13 @@ public sealed class DurableCommandInboxV1 : IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(trustedDatabasePath);
         if(!Path.IsPathFullyQualified(trustedDatabasePath)||trustedDatabasePath.StartsWith("file:",StringComparison.OrdinalIgnoreCase)||
             trustedDatabasePath.Contains('\0'))throw new ArgumentException("TRUSTED_DATABASE_PATH_REQUIRED");
-        Check(Native.sqlite3_open_v2(trustedDatabasePath,out _db,OpenReadWrite|OpenCreate|OpenFullMutex,IntPtr.Zero));
+        byte[] pathBytes=Encoding.UTF8.GetBytes(trustedDatabasePath+"\0");
+        unsafe
+        {
+            fixed(byte* ptr=pathBytes)
+                Check(Native.sqlite3_open_v2(ptr,out _db,
+                    OpenReadWrite|OpenCreate|OpenFullMutex,IntPtr.Zero));
+        }
         try
         {
             Sql("PRAGMA busy_timeout=5000");Sql("PRAGMA journal_mode=WAL");Sql("PRAGMA synchronous=FULL");
