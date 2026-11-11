@@ -429,12 +429,11 @@ public sealed class ActorRuntime : IDisposable
         lock (cell.Gate)
         {
             if (cell.Stopping) return;
-            // The source queue admits <= 1024 pending input records. A
-            // malicious repeated EOF must not increase scheduler credits.
-            if (cell.PendingIoSignals >= ActorIoEnvelope.MaxRecordsPerChannel + 1)
-                throw new InvalidOperationException("Actor I/O readiness queue overflow");
-
-            ++cell.PendingIoSignals;
+            // Coalesce under pressure. There is always at least one pending
+            // readiness token while any accepted signal has not run, so this
+            // cannot lose the wakeup. Repeated EOF is ignored at source.
+            if (cell.PendingIoSignals < ActorIoEnvelope.MaxRecordsPerChannel + 1)
+                ++cell.PendingIoSignals;
             if (cell.Scheduled != 0) return;
             try
             {
@@ -598,17 +597,46 @@ public sealed class ActorRuntime : IDisposable
             int processed = 0;
             while (processed < _options.MessagesPerDispatch)
             {
-                byte[] payload;
+                byte[] payload = Array.Empty<byte>();
+                bool ioReadyTurn;
                 ActorArenaTurn turn;
 
                 lock (cell.Gate)
                 {
-                    if (cell.Stopping ||
-                        !cell.Mailbox.TryReceive(out byte[]? dequeued) ||
-                        dequeued is null)
+                    if (cell.Stopping)
                         break;
 
-                    payload = dequeued;
+                    // A single scheduled token serializes both inputs. Alternate
+                    // if both queues are ready; NEVER consume user mailbox bytes
+                    // to manufacture an I/O wakeup, or treat I/O as CONTROL.
+                    bool mailReady = cell.Mailbox.QueuedMessages != 0;
+                    if (cell.IoReadyHandler is not null &&
+                        cell.PendingIoSignals != 0 &&
+                        (cell.PreferIo || !mailReady))
+                    {
+                        --cell.PendingIoSignals;
+                        ioReadyTurn = true;
+                        cell.PreferIo = false;
+                    }
+                    else if (cell.Mailbox.TryReceive(out byte[]? dequeued) &&
+                        dequeued is not null)
+                    {
+                        payload = dequeued;
+                        ioReadyTurn = false;
+                        cell.PreferIo = true;
+                    }
+                    else if (cell.IoReadyHandler is not null &&
+                        cell.PendingIoSignals != 0)
+                    {
+                        --cell.PendingIoSignals;
+                        ioReadyTurn = true;
+                        cell.PreferIo = false;
+                    }
+                    else
+                    {
+                        break;
+                    }
+
                     try
                     {
                         turn = cell.Arena.EnterTurn(
@@ -616,10 +644,11 @@ public sealed class ActorRuntime : IDisposable
                     }
                     catch (Exception)
                     {
-                        // The mailbox transferred this buffer to us before
-                        // turn admission. Do not strand sensitive bytes on the
-                        // exceptional path or allow repeated failed scheduling.
-                        CryptographicOperations.ZeroMemory(payload);
+                        // Mailbox ownership was transferred at dequeue; the I/O
+                        // signal owns no buffer. Failed admission retires the
+                        // actor and scrubs any pending I/O at finalization.
+                        if (!ioReadyTurn)
+                            CryptographicOperations.ZeroMemory(payload);
                         Interlocked.Increment(ref _faultedTurns);
                         MarkStoppingLocked(cell);
                         break;
@@ -634,7 +663,10 @@ public sealed class ActorRuntime : IDisposable
                         var context = new ActorContext(
                             cell.Reference, cell.Kind, cell.Arena, turn, cell.Stack,
                             cell.Io);
-                        cell.Handler(context, payload);
+                        if (ioReadyTurn)
+                            cell.IoReadyHandler!(context);
+                        else
+                            cell.Handler(context, payload);
                     }
                     succeeded = true;
                 }
@@ -646,9 +678,15 @@ public sealed class ActorRuntime : IDisposable
                 }
                 finally
                 {
-                    CryptographicOperations.ZeroMemory(payload);
+                    if (!ioReadyTurn)
+                        CryptographicOperations.ZeroMemory(payload);
                     if (succeeded)
-                        Interlocked.Increment(ref _completedMessages);
+                    {
+                        if (ioReadyTurn)
+                            Interlocked.Increment(ref _completedIoTurns);
+                        else
+                            Interlocked.Increment(ref _completedMessages);
+                    }
                 }
 
                 processed++;
@@ -667,7 +705,8 @@ public sealed class ActorRuntime : IDisposable
                     {
                         finalize = true;
                     }
-                    else if (cell.Mailbox.QueuedMessages != 0)
+                    else if (cell.Mailbox.QueuedMessages != 0 ||
+                        cell.PendingIoSignals != 0)
                     {
                         try
                         {
@@ -703,6 +742,10 @@ public sealed class ActorRuntime : IDisposable
             return;
 
         cell.Stopping = true;
+        // Trusted CONTROL always wins: pending readiness is discarded without
+        // waiting for mailbox slots, and physical I/O scrub remains deferred
+        // until all in-flight actor turns have quiesced.
+        cell.PendingIoSignals = 0;
         cell.Mailbox.Stop();
         cell.Arena.Retire();
     }
