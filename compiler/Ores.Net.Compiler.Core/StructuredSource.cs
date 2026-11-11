@@ -447,6 +447,15 @@ public static class OresStructuredParser
             if (tokenText == "enum")
                 throw new FormatException(
                     $"nominal enum overloads require compiler-bound dispatch (unsupported .NET bootstrap) at offset {offset}");
+            // The opt-in structured compiler has independently verified closed
+            // Option<int> lowering; unlike the shipping scalar frontend it
+            // must admit Option/Some/None tokens. Everything else in the
+            // tagged family is still unsupported, even when reached via
+            // linked-unit discovery, and must fail before typed SSA/CIL.
+            // This is a complete-token check after skipping source trivia.
+            if (tokenText is "Result" or "Ok" or "Err" or "trap")
+                throw new FormatException(
+                    $"Option/Result/trap requires verified tagged-sum CIL and NativeAOT guest-control lowering at offset {offset}");
             return new Token(tokenText, offset);
         }
     }
