@@ -381,7 +381,9 @@ public static class CilEmitter
             var caller = methods[index];
             int count = caller.Blocks.Sum(b => b.Parameters.Count + b.Instructions.Count);
             definitions += count;
-            if (definitions > 100_000 || count is <= 0 or > OresCfgVerifier.MaxValues)
+            if (definitions > 100_000 ||
+                (count == 0 && caller.ResultType != IrValueType.Void) ||
+                count > OresCfgVerifier.MaxValues)
                 throw new FormatException("CFG module SSA budget exceeded");
 
             // SSA IDs have already been checked for uniqueness and density
