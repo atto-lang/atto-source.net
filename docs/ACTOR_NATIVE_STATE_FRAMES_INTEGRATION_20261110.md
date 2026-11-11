@@ -59,7 +59,10 @@ macOS arm64 NativeAOT Mach-O probe passes **three consecutive executions**:
   but their managed cells are not native actor arena evidence.
 
 Native binary SHA-256:
-`9efbe52147aac1719a5c302e8aae566c5d6fc56b411628ab6f000ddde472e613`.
+`3fe7570f3fc9babd8b60a3c81ea15dbad782763c42878da38bca65ca77b91b46`.
+The final probe asserts `RuntimeFeature.IsDynamicCodeSupported == false` and
+passes three runs with that native-only gate. Its workflow checks this receipt
+and uses a checked shell glob for DLL sidecars on both target platforms.
 Compiler and new Counter probe pin ILCompiler/runtime packs 10.0.14, following
 the existing memory probe, instead of bypassing the 10.0.0 NuGet security audit
 failure. Linux/Windows workflow gates are authored; they have not executed on

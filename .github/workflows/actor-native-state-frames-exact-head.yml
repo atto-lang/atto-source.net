@@ -70,5 +70,8 @@ jobs:
           for round in 1 2 3; do
             "./artifacts/native-counter/${{ matrix.executable }}" | tee "artifacts/native-counter-round-$round.log"
             grep -F 'ACTOR_GENERATED_PRODUCTION_RUNTIME_PASS source_mailbox=true native_state=true execution_stack=true overflow_peer_survival=true retired_native_bytes=0' "artifacts/native-counter-round-$round.log"
+            grep -F 'NATIVE_COUNTER_DYNAMIC_CODE_DISABLED' "artifacts/native-counter-round-$round.log"
           done
-          test -z "$(find artifacts/native-counter -name '*.dll' -print -quit)"
+          shopt -s globstar nullglob nocaseglob
+          dlls=(artifacts/native-counter/**/*.dll)
+          test "${#dlls[@]}" -eq 0

@@ -14,6 +14,9 @@ static long Deliver(OresVmHost.ActorScheduler scheduler,
     return scheduler.DispatchNext(isolate, actor, Actor_Counter.ActorLayoutIdentity, generatedMethod);
 }
 
+if (System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported)
+    throw new InvalidOperationException("Counter NativeAOT probe must not support dynamic code");
+Console.WriteLine("NATIVE_COUNTER_DYNAMIC_CODE_DISABLED");
 ActorGeneratedRuntimeCounterChecks.Run();
 var host = new OresVmHost(maxTenants: 2);
 var tenantA = host.CreateIsolate("counter-a", maxActors: 2);
