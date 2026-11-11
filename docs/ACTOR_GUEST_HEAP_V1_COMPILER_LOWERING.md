@@ -42,6 +42,27 @@ dispatch, async operation, FFI, message reference transfer, or impure
 operation is admitted. Unsupported text fails with an
 `E_ACTOR_HEAP_V1_*` compiler diagnostic before any emitted file exists.
 
+### Actor-bound reference and source-identity hardening
+
+Generated `.atto` code **never** holds a naked `uint32` actor-object
+capability. Every compiler-local object variable and dereferenced link is
+an `ActorGuestOwnedRef32` carrying the runtime-minted arena identity.
+Compiler output calls `AllocateOwnedTypedGuestObject32`,
+`ReadOwnedGuestObject32`, `WriteOwnedGuestObject32`,
+`ReadOwnedGuestReference32`, `WriteOwnedGuestReference32` and
+`DropOwnedGuestObject32`. The ABI retains a 4-byte native Ref32 field,
+but accessing that value through a sibling actor's context fails before
+native metadata access, including on a coincidentally equal reference word.
+The unbound raw `uint32` host API remains available solely for trusted
+legacy callers; it is not a public actor-object authority.
+
+The optional `emit-actor-heap-v1` CLI now rejects a UTF-8 BOM rather
+than silently removing it. It uses a bounded, double-read source snapshot
+with byte comparison and last-write-time checks, so provenance refers to
+the admitted bytes. A negative workflow test constructs a BOM-prefixed
+copy of the exact fixture and requires compiler rejection **without
+emitting a file**.
+
 ### Checked lowering
 
 For the accepted graph, generated `ActorHeapV1.g.cs` contains:
