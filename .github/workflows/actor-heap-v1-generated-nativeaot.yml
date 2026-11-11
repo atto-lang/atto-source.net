@@ -98,8 +98,13 @@ jobs:
           # The compiler must reject it without writing an output file.
           bom_source="$RUNNER_TEMP/actor-heap-with-bom.atto"
           bom_out="$RUNNER_TEMP/actor-heap-bom-rejected/ActorHeapV1.g.cs"
-          printf '\\357\\273\\277' > "$bom_source"
-          cat "$fixture" >> "$bom_source"
+          node -e '
+            const fs = require("node:fs");
+            fs.writeFileSync(process.argv[1], Buffer.concat([
+              Buffer.from([0xef, 0xbb, 0xbf]),
+              fs.readFileSync(process.argv[2])
+            ]));
+          ' "$bom_source" "$fixture"
           if dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj \
               -c Release -- emit-actor-heap-v1 "$bom_source" --out "$bom_out"; then
             echo "BOM-prefixed .atto source bypassed exact-byte admission" >&2
