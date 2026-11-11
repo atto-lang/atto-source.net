@@ -19,6 +19,7 @@ internal static class ActorRuntimeSelfTest
         FailedTurnAdmissionScrubsDequeuedMessage();
         ActorToActorRelayIsFifoAndCopyIsolated();
         TerminalStopDoesNotRequireMailboxDataCredit();
+        Console.WriteLine("ACTOR_PIPELINE_MAILBOX_CONTROL_PASS");
         Console.WriteLine(
             "PASS .NET integrated actor runtime mailbox, arena, domains, stop and fault isolation");
     }
