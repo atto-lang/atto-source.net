@@ -166,6 +166,53 @@ internal static class StructuredStaticAbiTests
             }
     }
 
+    private static void RejectReferenceOnlyRetargetMutation()
+    {
+        // Metadata name/signature equality is NOT declaration identity.
+        // An emitted MethodReference that looks like a local helper must not
+        // acquire authority to replace its independently verified MethodDef.
+        var module = OresStructuredCfgLowering.LowerModule(
+            "fnc inc(int n):int{return n+1;}fnc main():int{return inc(41);}");
+        string folder = Path.Combine(Path.GetTempPath(),
+            "ores-static-abi-reference-spoof-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            string file = Path.Combine(folder, "OresGenerated.dll");
+            CilEmitter.EmitLibrary(module, file);
+            using var image = AssemblyDefinition.ReadAssembly(file);
+            var type = image.MainModule.Types.Single(t =>
+                t.FullName == "Oreslang.Generated.OresProgram");
+            var helper = type.Methods.Single(m => m.Name == "helper_inc");
+            var run = type.Methods.Single(m => m.Name == "Run");
+            var call = run.Body.Instructions.Single(i => i.OpCode.Code == Code.Call);
+            var original = call.Operand;
+            var forged = new MethodReference(helper.Name, helper.ReturnType, type)
+            {
+                HasThis = false
+            };
+            foreach (var parameter in helper.Parameters)
+                forged.Parameters.Add(new ParameterDefinition(parameter.ParameterType));
+            try
+            {
+                call.Operand = forged; // same local name, owner and signature
+                try
+                {
+                    AssertClosedDirectCalls(type, "method-reference-spoof");
+                }
+                catch (FormatException error) when
+                    (error.Message.Contains("bounded local MethodDef",
+                        StringComparison.Ordinal))
+                {
+                    return;
+                }
+                throw new Exception("MethodReference spoof acquired local MethodDef authority");
+            }
+            finally { call.Operand = original; }
+        }
+        finally { Directory.Delete(folder, recursive: true); }
+    }
+
     private static void RejectDynamicOpcodeMutation()
     {
         var module = OresStructuredCfgLowering.LowerModule(
@@ -305,6 +352,7 @@ internal static class StructuredStaticAbiTests
         Check(lexicalMethods, 42, 2, "source-order MethodDef tokens must not sort helpers");
         RejectDynamicOpcodeMutation(); // mutate real emitted CIL in-memory, never ship it
         RejectSameSignatureRetargetMutation(); // same ABI, wrong method token must reject
+        RejectReferenceOnlyRetargetMutation(); // same metadata, forged MethodReference must reject
 
         Check("fnc main():int{return 42;}", 42, 0, "single main remains supported");
         Check("fnc inc(int x):int{return x+1;}fnc main():int{return inc(41);}",
