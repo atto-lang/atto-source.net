@@ -87,20 +87,71 @@ internal static class StructuredStaticAbiTests
                     helper.Parameters.Count > 0)
                     throw new Exception("Helper was not compiled with ldarg: " + label);
             }
-            foreach (var method in type.Methods)
-                foreach (var instruction in method.Body.Instructions)
+            AssertClosedDirectCalls(type, label);
+        }
+        finally { Directory.Delete(folder, recursive: true); }
+    }
+
+    private static void AssertClosedDirectCalls(TypeDefinition type, string label)
+    {
+        foreach (var method in type.Methods)
+            foreach (var instruction in method.Body.Instructions)
+            {
+                // This currently supported scalar helper profile has NO
+                // runtime metadata lookup, method-pointer or virtual ABI.
+                if (instruction.OpCode.Code is Code.Calli or Code.Callvirt
+                    or Code.Ldftn or Code.Ldvirtftn or Code.Newobj
+                    or Code.Jmp or Code.Ldtoken)
+                    throw new FormatException("Dynamic dispatch escaped static ABI: " + label);
+                if (instruction.OpCode.Code != Code.Call) continue;
+                if (instruction.Operand is not MethodDefinition callee ||
+                    !ReferenceEquals(callee.DeclaringType, type) ||
+                    !callee.IsPrivate || !callee.IsStatic ||
+                    !callee.Name.StartsWith("helper_", StringComparison.Ordinal) ||
+                    method.Body.MaxStackSize < callee.Parameters.Count)
+                    throw new FormatException("Call operand was not a bounded local MethodDef: " + label);
+            }
+    }
+
+    private static void RejectDynamicOpcodeMutation()
+    {
+        var module = OresStructuredCfgLowering.LowerModule(
+            "fnc inc(int n):int{return n+1;}fnc main():int{return inc(41);}");
+        string folder = Path.Combine(Path.GetTempPath(),
+            "ores-static-abi-dynamic-mutation-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            var file = Path.Combine(folder, "OresGenerated.dll");
+            CilEmitter.EmitLibrary(module, file);
+            using var image = AssemblyDefinition.ReadAssembly(file);
+            var type = image.MainModule.Types.Single(t =>
+                t.FullName == "Oreslang.Generated.OresProgram");
+            var run = type.Methods.Single(m => m.Name == "Run");
+            var call = run.Body.Instructions.Single(i => i.OpCode.Code == Code.Call);
+            var original = call.OpCode;
+            foreach (var injected in new[] {
+                OpCodes.Calli, OpCodes.Callvirt, OpCodes.Ldftn,
+                OpCodes.Ldvirtftn, OpCodes.Jmp, OpCodes.Ldtoken, OpCodes.Newobj
+            })
+            {
+                try
                 {
-                    if (instruction.OpCode.Code is Code.Calli or Code.Callvirt
-                        or Code.Ldftn or Code.Newobj)
-                        throw new Exception("Dynamic dispatch escaped static ABI: " + label);
-                    if (instruction.OpCode.Code != Code.Call) continue;
-                    if (instruction.Operand is not MethodDefinition callee ||
-                        !ReferenceEquals(callee.DeclaringType, type) ||
-                        !callee.IsPrivate || !callee.IsStatic ||
-                        !callee.Name.StartsWith("helper_", StringComparison.Ordinal) ||
-                        method.Body.MaxStackSize < callee.Parameters.Count)
-                        throw new Exception("Call operand was not a bounded local MethodDef: " + label);
+                    call.OpCode = injected;
+                    try
+                    {
+                        AssertClosedDirectCalls(type, injected.Name);
+                    }
+                    catch (FormatException error) when
+                        (error.Message.Contains("Dynamic dispatch escaped static ABI",
+                            StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+                    throw new Exception("Static ABI checker accepted forged opcode: " + injected.Name);
                 }
+                finally { call.OpCode = original; }
+            }
         }
         finally { Directory.Delete(folder, recursive: true); }
     }
@@ -199,6 +250,7 @@ internal static class StructuredStaticAbiTests
         if (!emittedOrder.SequenceEqual(new[] { "z_helper", "a_helper" }))
             throw new Exception("CIL MethodDef order diverged from source declaration order");
         Check(lexicalMethods, 42, 2, "source-order MethodDef tokens must not sort helpers");
+        RejectDynamicOpcodeMutation(); // mutate real emitted CIL in-memory, never ship it
 
         Check("fnc main():int{return 42;}", 42, 0, "single main remains supported");
         Check("fnc inc(int x):int{return x+1;}fnc main():int{return inc(41);}",
