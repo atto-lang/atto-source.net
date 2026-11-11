@@ -11,6 +11,7 @@ internal static class ActorGuestHeap32SelfTest
         TypedGuestPayloadFastPathDoesNotAllocateClrObjects();
         GuestReadLoanDelaysArenaReclaimAfterStop();
         TypedNodeGraphEnforcesFieldLayouts();
+        OwnedGuestReferencesDenyCrossActorAlias();
         CompiledGuestFixtureMustRemainUncertified();
         Console.WriteLine("PASS .NET actor-local 32-bit guest refs (host runtime only; not compiled guest)");
     }
@@ -180,6 +181,108 @@ internal static class ActorGuestHeap32SelfTest
             runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0,
             TimeSpan.FromSeconds(10)),
             "actor retirement must reclaim both physical native payload slabs");
+    }
+
+    /// <summary>
+    /// The raw 32-bit slot/generation word is deliberately NOT an actor
+    /// capability. The compiler-visible wrapper must check runtime-minted
+    /// physical owner identity even when peer actors allocate identical
+    /// type layouts at the same slot/generation sequence.
+    /// </summary>
+    private static void OwnedGuestReferencesDenyCrossActorAlias()
+    {
+        const uint nodeType = 0xB704;
+        var node = new ActorGuestLayout32(nodeType, 16,
+            new[] { new ActorGuestField32(0, ActorGuestFieldKind32.I64),
+                    new ActorGuestField32(8, ActorGuestFieldKind32.Ref32, nodeType) });
+        using var runtime = new ActorRuntime(Options());
+        using var completed = new CountdownEvent(4);
+        object failureGate = new();
+        Exception? failure = null;
+        ActorGuestOwnedRef32 leftRoot = default, rightRoot = default;
+
+        ActorMessageHandler Handler(bool left) => (context, message) =>
+        {
+            try
+            {
+                Require(message.Length == 1, "owned-ref probe message shape");
+                if (message.Span[0] == 1)
+                {
+                    var reference = context.AllocateOwnedTypedGuestObject32(node);
+                    Span<byte> value = stackalloc byte[8];
+                    System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(
+                        value, left ? 42 : 99);
+                    context.WriteOwnedGuestObject32(reference, 0, value);
+                    context.WriteOwnedGuestReference32(reference, 8, default);
+                    if (left) leftRoot = reference;
+                    else rightRoot = reference;
+                }
+                else if (message.Span[0] == 2)
+                {
+                    var owned = left ? leftRoot : rightRoot;
+                    var foreign = left ? rightRoot : leftRoot;
+                    Span<byte> value = stackalloc byte[8];
+                    Require(!owned.IsNull && !foreign.IsNull,
+                        "both actor-bound handles minted before access");
+                    ExpectInvalid(() => context.ReadOwnedGuestObject32(
+                        foreign, 0, new byte[8]),
+                        "foreign actor-owned handle cannot read equal local slots");
+                    ExpectInvalid(() => context.WriteOwnedGuestObject32(
+                        foreign, 0, new byte[8]),
+                        "foreign actor-owned handle cannot overwrite local actor memory");
+                    ExpectInvalid(() => context.DropOwnedGuestObject32(foreign),
+                        "foreign actor-owned handle cannot retire local slot");
+                    ExpectInvalid(() => context.BorrowOwnedGuestObjectRead32(foreign),
+                        "foreign actor-owned handle cannot acquire local read loan");
+                    ExpectInvalid(() => context.ReadOwnedGuestReference32(foreign, 8),
+                        "foreign actor-owned handle cannot dereference local ref field");
+                    ExpectInvalid(() => context.WriteOwnedGuestReference32(
+                        owned, 8, foreign),
+                        "foreign actor reference cannot enter local Ref32 field");
+                    ExpectInvalid(() => context.DropOwnedGuestObject32(default),
+                        "default null cannot masquerade as live owned reference");
+                    context.ReadOwnedGuestObject32(owned, 0, value);
+                    Require(System.Buffers.Binary.BinaryPrimitives.ReadInt64LittleEndian(
+                                value) == (left ? 42 : 99),
+                        "cross-actor denied access cannot corrupt private scalar");
+                    Require(context.ReadOwnedGuestReference32(owned, 8).IsNull,
+                        "null reference round trips as non-transferable default");
+                    context.DropOwnedGuestObject32(owned);
+                    ExpectInvalid(() => context.ReadOwnedGuestObject32(
+                        owned, 0, new byte[8]),
+                        "dropped owned handle stays stale within incarnation");
+                }
+                else throw new Exception("Unexpected actor owned-ref probe message");
+            }
+            catch (Exception error)
+            {
+                lock (failureGate) failure ??= error;
+            }
+            finally { completed.Signal(); }
+        };
+
+        var a = runtime.Spawn(ActorKind.Private, Handler(true));
+        var b = runtime.Spawn(ActorKind.Shared, Handler(false));
+        runtime.Send(a, new byte[] { 1 });
+        runtime.Send(b, new byte[] { 1 });
+        Require(SpinWait.SpinUntil(() => completed.CurrentCount == 2,
+            TimeSpan.FromSeconds(10)), "both actors minted their private handles");
+        if (failure is not null)
+            throw new Exception("actor-bound ref allocation failed", failure);
+        runtime.Send(a, new byte[] { 2 });
+        runtime.Send(b, new byte[] { 2 });
+        Require(completed.Wait(TimeSpan.FromSeconds(10)),
+            "both actors executed cross-owner denial gates");
+        if (failure is not null)
+            throw new Exception("actor-bound ref authority check failed", failure);
+        Require(SpinWait.SpinUntil(() => runtime.CompletedMessages == 4,
+            TimeSpan.FromSeconds(10)) && runtime.FaultedTurns == 0,
+            "four actor-owned native-reference turns completed without fault");
+        runtime.Stop(a);
+        runtime.Stop(b);
+        Require(SpinWait.SpinUntil(() =>
+            runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0,
+            TimeSpan.FromSeconds(10)), "both checked actor reference heaps refunded");
     }
 
     private static void GenerationExhaustionFailsClosedWithoutWrapping()
