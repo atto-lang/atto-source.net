@@ -23,6 +23,7 @@ internal static class ActorRuntimeSelfTest
         HostIoPendingDataScrubbedOnlyAfterPhysicalQuiescence();
         HostIoActorFaultRetiresOutput();
         HostIoGlobalBudgetSurvivesPressureAndStop();
+        Console.WriteLine("ACTOR_IO_GLOBAL_BUDGET_PASS");
         Console.WriteLine("ACTOR_PIPELINE_MAILBOX_CONTROL_PASS");
         Console.WriteLine("ACTOR_IO_HOST_INTEGRATION_PASS");
         Console.WriteLine(
