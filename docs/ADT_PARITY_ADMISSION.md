@@ -19,3 +19,21 @@ closed exhaustiveness and ownership-safe CIL/Native AOT lowering, then execute
 positive and semantic negative cases on a verified exact compiler tree.
 Do not count generic `FormatException`, zero-step Actions or host-only tests
 as certified guest semantics. Keep draft until reviewed, stepful CI runs.
+
+## Structured and linked NativeAOT ADT admission follow-up
+
+The `OresStructuredParser` is a separate CFG/SSA entrypoint from
+`OresParser`. The tokenized structured lexer now rejects executable
+`Option`, `Result`, `Some`, `None`, `Ok`, `Err` and `trap` with the
+same stable unsupported-feature diagnostic. That gate also applies to
+linked-unit import discovery, while quoted strings, nested comments,
+and longer identifiers are not promoted to ADT syntax.
+
+`OptionResultTrapAdmissionTests` checks the real structured parser, not
+a regular-expression scanner or fake scalar evaluator. No tagged CIL
+layout, case payload, borrow ownership, exhaustive match, actor wire
+encoding or Native AOT guest execution has been implemented by this
+hardening. A compiler's unsupported-feature refusal must not be counted
+as a passing semantic-negative fixture in the canonical `.atto` ADT
+matrix. Keep `confirmedBackends=[]` until compiler-backed evidence is
+available on the exact source head with nonzero Actions steps.
