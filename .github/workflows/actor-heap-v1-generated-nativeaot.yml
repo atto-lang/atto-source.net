@@ -78,6 +78,15 @@ jobs:
             tee "$RUNNER_TEMP/actor-heap-emission.log"
           grep -Fx 'ACTOR_HEAP_V1_SOURCE_GENERATED|NOT_EXECUTED|NOT_CERTIFIED' "$RUNNER_TEMP/actor-heap-emission.log"
           test -s verification/Ores.Net.ActorGuestV1Probe/ActorHeapV1.g.cs
+          grep -Fq 'ActorGuestOwnedRef32 first = default;' "$generated"
+          grep -Fq 'AllocateOwnedTypedGuestObject32(layout)' "$generated"
+          grep -Fq 'ReadOwnedGuestReference32(second, 8)' "$generated"
+          grep -Fq 'WriteOwnedGuestReference32(second, 8, first)' "$generated"
+          grep -Fq 'DropOwnedGuestObject32(second)' "$generated"
+          if grep -Eq '(AllocateTypedGuestObject32|ReadGuestReference32|WriteGuestReference32|DropGuestObject32)\\(' "$generated"; then
+            echo "Generated guest bypassed actor-bound reference authority" >&2
+            exit 1
+          fi
           sha256sum contracts/actor-guest-heap/v1/node_graph.atto |
             tee "$RUNNER_TEMP/actor-heap-atto-sha256.txt"
           sha256sum verification/Ores.Net.ActorGuestV1Probe/ActorHeapV1.g.cs |
