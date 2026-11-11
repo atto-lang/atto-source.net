@@ -17,6 +17,11 @@ public sealed record StructuredOptionPresent(int At, StructuredExpr Option)
     : StructuredExpr(At, IrValueType.Bool);
 public sealed record StructuredOptionAbsent(int At, StructuredExpr Option)
     : StructuredExpr(At, IrValueType.Bool);
+// Closed tagged equality: compare declared Option<int> tags before active payloads.
+// Neither a None payload nor an untyped scalar may influence the result.
+public sealed record StructuredOptionEqual(int At, StructuredExpr LeftOption,
+    StructuredExpr RightOption, bool Negated)
+    : StructuredExpr(At, IrValueType.Bool);
 public sealed record StructuredOptionOr(int At, StructuredExpr Option, StructuredExpr Fallback)
     : StructuredExpr(At, IrValueType.I64);
 public sealed record StructuredRead(int At, string Name, IrValueType ValueType)
@@ -958,11 +963,23 @@ public static class OresStructuredParser
                 bool notEqual = Current.Text is "!=" or "neq";
                 index++;
                 var right = Compare(depth + 1);
-                Require(left, IrValueType.I64, "Equality requires int operands");
-                Require(right, IrValueType.I64, "Equality requires int operands");
-                left = CheckedBinary(at,
-                    notEqual ? StructuredOperator.NotEqualI64 : StructuredOperator.EqualI64,
-                    left, right, IrValueType.Bool);
+                if (left.Type == IrValueType.OptionI64 ||
+                    right.Type == IrValueType.OptionI64)
+                {
+                    Require(left, IrValueType.OptionI64,
+                        "E_OPTION_EQUALITY_TYPE: Option<int> equality requires two Option<int> operands");
+                    Require(right, IrValueType.OptionI64,
+                        "E_OPTION_EQUALITY_TYPE: Option<int> equality requires two Option<int> operands");
+                    left = new StructuredOptionEqual(at, left, right, notEqual);
+                }
+                else
+                {
+                    Require(left, IrValueType.I64, "Equality requires int operands");
+                    Require(right, IrValueType.I64, "Equality requires int operands");
+                    left = CheckedBinary(at,
+                        notEqual ? StructuredOperator.NotEqualI64 : StructuredOperator.EqualI64,
+                        left, right, IrValueType.Bool);
+                }
             }
             return left;
         }

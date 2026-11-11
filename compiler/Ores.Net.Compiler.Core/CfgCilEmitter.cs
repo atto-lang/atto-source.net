@@ -139,6 +139,36 @@ internal static class CfgCilEmitter
                         case CfgOpcode.ConstantBool:
                             il.LoadConstantI4(op.BoolConstant!.Value ? 1 : 0);
                             break;
+                        case CfgOpcode.OptionEqualI64:
+                        {
+                            // Short circuit on tags. Never inspect a None's
+                            // (inactive) payload, even if a hostile lowerer
+                            // has provided arbitrary data in that SSA slot.
+                            // No boxed values, reflection or runtime dispatch.
+                            var sameTag = il.DefineLabel();
+                            var bothSome = il.DefineLabel();
+                            var end = il.DefineLabel();
+                            il.LoadLocal(op.Left!.Value);
+                            il.LoadLocal(op.Arguments![0]);
+                            il.OpCode(ILOpCode.Ceq);
+                            il.Branch(ILOpCode.Brtrue, sameTag);
+                            il.LoadConstantI4(0);
+                            il.StoreLocal(op.ResultId);
+                            il.Branch(ILOpCode.Br, end);
+                            il.MarkLabel(sameTag);
+                            il.LoadLocal(op.Left.Value);
+                            il.Branch(ILOpCode.Brtrue, bothSome);
+                            il.LoadConstantI4(1);
+                            il.StoreLocal(op.ResultId);
+                            il.Branch(ILOpCode.Br, end);
+                            il.MarkLabel(bothSome);
+                            il.LoadLocal(op.Right!.Value);
+                            il.LoadLocal(op.Arguments[1]);
+                            il.OpCode(ILOpCode.Ceq);
+                            il.StoreLocal(op.ResultId);
+                            il.MarkLabel(end);
+                            continue;
+                        }
                         case CfgOpcode.BoolNot:
                             // The verifier proves Left is a bool SSA value.
                             // Comparing to zero emits a normalized Boolean.

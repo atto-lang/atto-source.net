@@ -47,7 +47,13 @@ internal static class CfgReferenceEvaluator
             switch (block.Terminator)
             {
                 case CfgReturn returned:
-                    return (long)values[returned.ValueId];
+                {
+                    // A verified CFG may also return Bool. The test-only
+                    // evaluator exposes the canonical 0/1 projection so
+                    // the same oracle can exercise tagged equality directly.
+                    object result = values[returned.ValueId];
+                    return result is bool boolean ? (boolean ? 1L : 0L) : (long)result;
+                }
                 case CfgJump jump:
                     arguments = jump.Arguments.Select(id => values[id]).ToArray();
                     currentName = jump.Target;

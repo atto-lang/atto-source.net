@@ -194,6 +194,18 @@ public static class OresStructuredCfgLowering
                 case StructuredOptionAbsent absent:
                     return Emit(block, CfgOpcode.BoolNot, IrValueType.Bool,
                         left: OptionParts(absent.Option, block, variables).Tag);
+                case StructuredOptionEqual comparison:
+                {
+                    // Preserve left-to-right source evaluation exactly once.
+                    var lhs = OptionParts(comparison.LeftOption, block, variables);
+                    var rhs = OptionParts(comparison.RightOption, block, variables);
+                    int equal = Emit(block, CfgOpcode.OptionEqualI64, IrValueType.Bool,
+                        left: lhs.Tag, right: lhs.Payload,
+                        arguments: new[] { rhs.Tag, rhs.Payload });
+                    return comparison.Negated
+                        ? Emit(block, CfgOpcode.BoolNot, IrValueType.Bool, left: equal)
+                        : equal;
+                }
                 case StructuredOptionOr selected:
                 {
                     var option = OptionParts(selected.Option, block, variables);

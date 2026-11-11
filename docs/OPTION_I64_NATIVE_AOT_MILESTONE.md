@@ -81,3 +81,22 @@ the guest returns 42 only if both checks hold. Git blob:
 with the structured frontend, build native executables and check the
 result. **Not yet executed at the exact updated head**; zero-step CI is
 not proof of guest behavior.
+
+## Closed Option<int> tagged equality
+
+The experimental structured compiler now lowers exact `eq`/`neq`
+for two closed `Option<int>` values. It requires two independently
+verified Boolean tags and two signed-i64 payloads, rejects every
+mixed tagged/scalar comparison, and never inspects inactive payloads
+in generated CIL. The `None`/`Some(0)` distinction, all signed 64-bit
+payloads, forged CFG operands and the complement relation are covered
+by the managed verifier/CIL test source.
+
+NativeAOT guest `contracts/option-i64/v1/option-equality42.atto` (Git
+blob `771643415dfe2a8e7948fb5b9822a14835d20922`) must return 42 after checking `None neq None`
+is false, `Some(0) eq None` is false, `Some(0) eq Some(0)` is
+true, and `Some(0) neq Some(1)` is true. Both Linux and Windows
+workflows pin and execute the guest. This is **not** generic ADT
+equality, `Result<T,E>` equality, nominal enum equality, or verified
+production NativeAOT behavior until the exact-head workflow has
+nonzero executed steps and native receipts.
