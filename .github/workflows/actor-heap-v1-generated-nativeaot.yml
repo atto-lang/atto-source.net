@@ -83,10 +83,13 @@ jobs:
           grep -Fq 'ReadOwnedGuestReference32(second, 8)' "$generated"
           grep -Fq 'WriteOwnedGuestReference32(second, 8, first)' "$generated"
           grep -Fq 'DropOwnedGuestObject32(second)' "$generated"
-          if grep -Eq '(AllocateTypedGuestObject32|ReadGuestReference32|WriteGuestReference32|DropGuestObject32)\\(' "$generated"; then
-            echo "Generated guest bypassed actor-bound reference authority" >&2
-            exit 1
-          fi
+          for raw_op in 'AllocateTypedGuestObject32(' 'ReadGuestReference32(' \
+              'WriteGuestReference32(' 'DropGuestObject32('; do
+            if grep -Fq "$raw_op" "$generated"; then
+              echo "Generated guest bypassed actor-bound reference authority: $raw_op" >&2
+              exit 1
+            fi
+          done
           sha256sum contracts/actor-guest-heap/v1/node_graph.atto |
             tee "$RUNNER_TEMP/actor-heap-atto-sha256.txt"
           sha256sum verification/Ores.Net.ActorGuestV1Probe/ActorHeapV1.g.cs |
