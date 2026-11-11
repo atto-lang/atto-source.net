@@ -19,7 +19,11 @@ internal static class ActorRuntimeSelfTest
         FailedTurnAdmissionScrubsDequeuedMessage();
         ActorToActorRelayIsFifoAndCopyIsolated();
         TerminalStopDoesNotRequireMailboxDataCredit();
+        HostIoTurnsAreDirectionalAndCopyIsolated();
+        HostIoPendingDataScrubbedOnlyAfterPhysicalQuiescence();
+        HostIoActorFaultRetiresOutput();
         Console.WriteLine("ACTOR_PIPELINE_MAILBOX_CONTROL_PASS");
+        Console.WriteLine("ACTOR_IO_HOST_INTEGRATION_PASS");
         Console.WriteLine(
             "PASS .NET integrated actor runtime mailbox, arena, domains, stop and fault isolation");
     }
@@ -106,6 +110,134 @@ internal static class ActorRuntimeSelfTest
             "terminal STOP physically retired saturated actor");
         Require(handled == 1,
             "queued DATA never ran after terminal CONTROL STOP");
+    }
+
+    private static void HostIoTurnsAreDirectionalAndCopyIsolated()
+    {
+        using var runtime = new ActorRuntime(Options());
+        using var handled = new ManualResetEventSlim();
+        ActorContext? retained = null;
+        var (actor, hostIo) = runtime.SpawnWithIo(ActorKind.Shared, (context, _) =>
+        {
+            retained = context;
+            Require(context.TryReadInput(out byte[]? input) && input is not null,
+                "live turn must read host-fed input");
+            Require(input.SequenceEqual(new byte[] { 13, 21, 34 }),
+                "host-to-actor channel must isolate sender mutations");
+            Require(context.TryWriteOutput(input),
+                "live turn must publish bounded output");
+            handled.Set();
+        });
+
+        // The host port provides *only* input admission and output draining.
+        // It must never expose the actor's input reader or output writer.
+        var publicApi = typeof(ActorIoHostPort).GetMethods(
+            BindingFlags.Instance | BindingFlags.Public).Select(m => m.Name).ToArray();
+        Require(!publicApi.Contains("TryReadInput") &&
+            !publicApi.Contains("TryWriteOutput"),
+            "host port must not widen into actor-side I/O authority");
+
+        var inputSource = new byte[] { 13, 21, 34 };
+        Require(hostIo.TryFeedInput(inputSource), "host feed input");
+        inputSource[0] = 255;
+        // Until a dedicated I/O readiness scheduler token exists, explicit
+        // ordinary actor wakeup is required. Never label this native I/O AOT.
+        runtime.Send(actor, ReadOnlySpan<byte>.Empty);
+        Require(handled.Wait(TimeSpan.FromSeconds(5)), "actor turn consumed io.in");
+        Require(WaitUntil(() => runtime.CompletedMessages == 1),
+            "I/O actor turn completed");
+
+        Require(hostIo.TryReadOutput(out var output) && output is not null &&
+            output.SequenceEqual(new byte[] { 13, 21, 34 }),
+            "host drain io.out returns exact owned payload");
+        bool expired = false;
+        try { retained!.TryWriteOutput(new byte[] { 99 }); }
+        catch (InvalidOperationException) { expired = true; }
+        Require(expired, "retained ActorContext cannot write io.out outside turn");
+
+        runtime.Stop(actor);
+        Require(WaitUntil(() => runtime.LiveActors == 0),
+            "I/O actor physically stopped");
+        bool retired = false;
+        try { hostIo.TryFeedInput(new byte[] { 1 }); }
+        catch (ObjectDisposedException) { retired = true; }
+        Require(retired, "terminal actor STOP must retire host I/O port");
+    }
+
+    // Inspect transport-owned arrays: clearing queues without scrubbing
+    // would not pass, and scrubbing before a live turn quiesces is forbidden.
+    private static byte[] PeekHostIoOwnedBytes(ActorIoHostPort host, string queueField)
+    {
+        var ioField = typeof(ActorIoHostPort).GetField("_io",
+            BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new Exception("missing host I/O transport field");
+        var io = (ActorIoEnvelope)(ioField.GetValue(host)
+            ?? throw new Exception("missing host I/O envelope"));
+        var queue = typeof(ActorIoEnvelope).GetField(queueField,
+            BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new Exception("missing I/O owned queue " + queueField);
+        return ((Queue<byte[]>)queue.GetValue(io)!).Peek();
+    }
+
+    private static void HostIoPendingDataScrubbedOnlyAfterPhysicalQuiescence()
+    {
+        using var runtime = new ActorRuntime(Options());
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var (actor, hostIo) = runtime.SpawnWithIo(ActorKind.Private, (ctx, _) =>
+        {
+            Require(ctx.TryWriteOutput(new byte[] { 77, 88, 99 }),
+                "turn writes output before its STOP");
+            entered.Set();
+            Require(release.Wait(TimeSpan.FromSeconds(10)),
+                "test release carrier after STOP");
+        });
+
+        runtime.Send(actor, ReadOnlySpan<byte>.Empty);
+        Require(entered.Wait(TimeSpan.FromSeconds(5)), "actor entered I/O turn");
+        try
+        {
+            Require(hostIo.TryFeedInput(new byte[] { 41, 42 }),
+                "host posted independently bounded input");
+            byte[] ownedInput = PeekHostIoOwnedBytes(hostIo, "_input");
+            byte[] ownedOutput = PeekHostIoOwnedBytes(hostIo, "_output");
+            runtime.Stop(actor);
+            Require(ownedInput[0] == 41 && ownedOutput[0] == 77,
+                "pending owned buffers cannot be reclaimed until physical turn exit");
+            Require(runtime.LiveActors == 1,
+                "stop cannot claim completed physical retirement before quiescence");
+            bool stale = false;
+            try { hostIo.TryFeedInput(new byte[] { 1 }); }
+            catch (InvalidOperationException) { stale = true; }
+            Require(stale, "STOP must immediately fence further I/O DATA");
+            release.Set();
+            Require(WaitUntil(() => runtime.LiveActors == 0 &&
+                runtime.NativeReservedBytes == 0),
+                "STOP finalizes after actor turn exit");
+            Require(ownedInput.All(value => value == 0) &&
+                ownedOutput.All(value => value == 0),
+                "physical finalization scrubs queued input and output");
+        }
+        finally { release.Set(); }
+    }
+
+    private static void HostIoActorFaultRetiresOutput()
+    {
+        using var runtime = new ActorRuntime(Options());
+        var (actor, hostIo) = runtime.SpawnWithIo(ActorKind.Shared, (ctx, _) =>
+        {
+            Require(ctx.TryWriteOutput(new byte[] { 12, 13 }),
+                "faulting turn publishes output");
+            throw new InvalidOperationException("expected actor-local fault");
+        });
+        runtime.Send(actor, ReadOnlySpan<byte>.Empty);
+        Require(WaitUntil(() => runtime.FaultedTurns == 1 &&
+            runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0),
+            "actor fault must retire only its own I/O resources");
+        bool retired = false;
+        try { hostIo.TryReadOutput(out _); }
+        catch (ObjectDisposedException) { retired = true; }
+        Require(retired, "fault-retired host output must not remain readable");
     }
 
     private static void ForgedSameIdCannotObserveTermination()
