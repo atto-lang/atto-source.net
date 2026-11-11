@@ -86,6 +86,23 @@ dotnet publish verification/Ores.Net.ActorGuestV1Probe/Ores.Net.ActorGuestV1Prob
 
 Do the corresponding `win-x64` publish and execute on Windows.
 
+The exact-head workflow additionally **derives a negative fixture from the
+pinned `.atto` source** by changing only the assertion expectation from
+`42` to `43`. It records the mutated source and emitted C# digests, forces
+a fresh NativeAOT rebuild, and runs the resulting binary with
+`--expect-assert-failure`. Only a real generated
+`E_ACTOR_HEAP_V1_ASSERT` fault qualifies: the host probe rethrows it so the
+runtime executes the actor-fault retirement path, then requires one fault,
+zero successful dispatches, no live actors, and zero native bytes reserved.
+This is **one narrow assertion/cleanup path**, not a proof of all
+`panic`/`raise`/`throw` semantics. Both Linux and Windows must execute
+positive **and** negative native binaries on the same exact source head.
+
+The compiler branch includes the latest runtime parent via a conflict-free,
+two-parent Git merge. All four intersecting runtime file blobs were verified
+identical before the merge. Neither draft is merged into `main`, and a
+source-only commit does not demonstrate that the new execution gates passed.
+
 The `actor-heap-v1-generated-nativeaot.yml` workflow checks the exact
 source SHA and tree, verifies parser/emitter negative corpus, emits source
 *from the checked .atto fixture*, fingerprints the source/generated C#
