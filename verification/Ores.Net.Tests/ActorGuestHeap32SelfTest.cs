@@ -13,6 +13,7 @@ internal static class ActorGuestHeap32SelfTest
         TypedNodeGraphEnforcesFieldLayouts();
         OwnedGuestReferencesDenyCrossActorAlias();
         CompiledGuestFixtureMustRemainUncertified();
+        Console.WriteLine("PASS actor-ref32-owned-auth: per-actor handles deny cross-actor aliasing, stale reads and foreign links (host only)");
         Console.WriteLine("PASS .NET actor-local 32-bit guest refs (host runtime only; not compiled guest)");
     }
 
