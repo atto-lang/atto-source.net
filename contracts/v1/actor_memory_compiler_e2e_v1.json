@@ -1,0 +1,61 @@
+{
+  "schema": "oreslang.actor_memory_compiler_e2e.v1",
+  "version": 1,
+  "scope": "Host substrate exercise is not compiler-lowered guest execution, NativeAOT, zero-GC, or low-GC certification",
+  "host_checks": [
+    "persistent-owner-survives-turn",
+    "temporary-owner-explicit-drop",
+    "stale-handle-after-reuse-rejected",
+    "foreign-actor-handle-rejected",
+    "reused-storage-zeroed",
+    "reclamation-after-quiescence"
+  ],
+  "guest_checks": [
+    "compiled-owned-object-allocation",
+    "compiler-emitted-drop-on-all-exits",
+    "persistent-state-through-suspend-resume",
+    "scratch-revoked-on-turn-boundary",
+    "cancel-and-error-cleanup",
+    "ffi-pins-block-retirement",
+    "actor-stop-releases-native-region",
+    "no-guest-raw-pointer-escape",
+    "actor-restart-rejects-stale-generation",
+    "hot-path-allocation-metrics"
+  ],
+  "backend_targets": {
+    "llvm": {
+      "goal": "zero-tracing-gc",
+      "host_probe": "tests/actor_memory_e2e_v1_host.c",
+      "host_verified": false,
+      "compiled_guest": "NOT_EXECUTED",
+      "aot": "NOT_EXECUTED",
+      "allocation_measurement": "NOT_MEASURED"
+    },
+    "net": {
+      "goal": "low-clr-gc",
+      "host_probe": "verification/Ores.Net.Tests/ActorMemoryE2EV1SelfTest.cs",
+      "host_verified": false,
+      "compiled_guest": "NOT_EXECUTED",
+      "aot": "NOT_EXECUTED",
+      "allocation_measurement": "NOT_MEASURED"
+    },
+    "java": {
+      "goal": "low-jvm-gc",
+      "host_probe": "src/test/java/dev/oreslang/runtime/ActorMemoryE2EV1Test.java",
+      "host_verified": false,
+      "compiled_guest": "NOT_EXECUTED",
+      "aot": "NOT_EXECUTED",
+      "allocation_measurement": "NOT_MEASURED"
+    }
+  },
+  "evidence_requirements": {
+    "exact_head_and_tree": true,
+    "nonzero_executed_steps": true,
+    "guest_compilation_and_execution": true,
+    "native_memory_usage_measured": true,
+    "managed_allocation_bytes_measured_on_net_and_java": true,
+    "source_org_or_specifically_approved_private_runner": true,
+    "zero_step_ci_is": "NOT_EXECUTED",
+    "no_cross_org_private_source_export_without_approval": true
+  }
+}
