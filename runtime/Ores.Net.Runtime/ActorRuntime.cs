@@ -92,6 +92,9 @@ public sealed class ActorContext
     private readonly ActorArenaTurn _turn;
     private readonly ActorFrameStack _stack;
     private readonly ActorIoEnvelope _io;
+    private int _ioInputRecordsRead;
+
+    internal int IoInputRecordsRead => _ioInputRecordsRead;
 
     internal ActorContext(ActorRef self, ActorKind kind,
         ActorArena arena, ActorArenaTurn turn, ActorFrameStack stack,
@@ -114,7 +117,9 @@ public sealed class ActorContext
     public bool TryReadInput(out byte[]? data)
     {
         ValidateActiveTurn();
-        return _io.TryReadInput(Self, out data);
+        bool received = _io.TryReadInput(Self, out data);
+        if (received) ++_ioInputRecordsRead;
+        return received;
     }
 
     public bool TryWriteOutput(ReadOnlySpan<byte> data)
@@ -656,6 +661,7 @@ public sealed class ActorRuntime : IDisposable
                 }
 
                 bool succeeded = false;
+                int inputRecordsRead = 0;
                 try
                 {
                     using (turn)
@@ -664,7 +670,10 @@ public sealed class ActorRuntime : IDisposable
                             cell.Reference, cell.Kind, cell.Arena, turn, cell.Stack,
                             cell.Io);
                         if (ioReadyTurn)
+                        {
                             cell.IoReadyHandler!(context);
+                            inputRecordsRead = context.IoInputRecordsRead;
+                        }
                         else
                             cell.Handler(context, payload);
                     }
@@ -686,6 +695,21 @@ public sealed class ActorRuntime : IDisposable
                             Interlocked.Increment(ref _completedIoTurns);
                         else
                             Interlocked.Increment(ref _completedMessages);
+                    }
+                }
+
+                if (ioReadyTurn && succeeded && inputRecordsRead > 0)
+                {
+                    lock (cell.Gate)
+                    {
+                        // A coalesced queue can still hold input after all
+                        // recorded readiness edges were consumed. If the
+                        // callback demonstrably made forward progress, rearm
+                        // exactly one turn. Never spin a handler that refuses
+                        // to consume input, and never rearm after STOP.
+                        if (!cell.Stopping && cell.PendingIoSignals == 0 &&
+                            cell.Io.HasBufferedInput(cell.Reference))
+                            cell.PendingIoSignals = 1;
                     }
                 }
 
