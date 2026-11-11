@@ -30,7 +30,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           test -z "$(git status --porcelain)"
           test "$(git hash-object runtime/Ores.Net.Runtime/ActorRuntime.cs)" = 35df8453491e00fd65ad7e280917a9ccbab0f3e6
-          test "$(git hash-object verification/Ores.Net.Tests/SupervisorDataFenceParitySelfTest.cs)" = fef087aa89cbf1451160ad9736addae460fca7e9
+          test "$(git hash-object verification/Ores.Net.Tests/SupervisorDataFenceParitySelfTest.cs)" = 89b6878d79ae1c75f552288d3697a04aa0150d02
           test "$(git hash-object verification/Ores.Net.Tests/Program.cs)" = 154c0fe78c99b47903532371b70aadc7ec2bd013
       - name: Execute actual NET10 host ActorRuntime send/STOP and native cleanup test
         shell: bash
