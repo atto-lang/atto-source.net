@@ -46,22 +46,7 @@ internal static class StructuredStaticAbiTests
             // helper must remain an independent MethodDef with zero emitted
             // calls, while each verified CFG Call must map to its exact
             // emitted target (not merely to any helper with the same arity).
-            var verifiedMethods = new[] { module.Main }.Concat(module.Helpers).ToArray();
-            for (int methodIndex = 0; methodIndex < verifiedMethods.Length; methodIndex++)
-            {
-                var expectedTargets = verifiedMethods[methodIndex].Blocks
-                    .SelectMany(block => block.Instructions)
-                    .Where(op => op.Opcode == CfgOpcode.Call)
-                    .Select(op => "helper_" + op.Target).ToArray();
-                var emittedTargets = type.Methods[methodIndex].Body.Instructions
-                    .Where(op => op.OpCode.Code == Code.Call)
-                    .Select(op => op.Operand is MethodDefinition callee
-                        ? callee.Name
-                        : throw new Exception("Non-MethodDef CIL call: " + label))
-                    .ToArray();
-                if (!expectedTargets.AsSpan().SequenceEqual(emittedTargets))
-                    throw new Exception("Verified CFG and CIL call targets differ: " + label);
-            }
+            AssertExactCallTargets(module, type, label);
             // Compare the emitted MethodDef table against every independently
             // verified CFG signature, not just the aggregate method count.
             for (int index = 0; index < module.Helpers.Count; index++)
@@ -88,6 +73,74 @@ internal static class StructuredStaticAbiTests
                     throw new Exception("Helper was not compiled with ldarg: " + label);
             }
             AssertClosedDirectCalls(type, label);
+        }
+        finally { Directory.Delete(folder, recursive: true); }
+    }
+
+    private static void AssertExactCallTargets(
+        VerifiedCfgModule module, TypeDefinition type, string label)
+    {
+        var verifiedMethods = new[] { module.Main }.Concat(module.Helpers).ToArray();
+        if (type.Methods.Count != verifiedMethods.Length)
+            throw new FormatException("Verified CFG and CIL method count differ: " + label);
+        for (int methodIndex = 0; methodIndex < verifiedMethods.Length; methodIndex++)
+        {
+            var expectedTargets = verifiedMethods[methodIndex].Blocks
+                .SelectMany(block => block.Instructions)
+                .Where(op => op.Opcode == CfgOpcode.Call)
+                .Select(op => "helper_" + op.Target).ToArray();
+            var emittedTargets = type.Methods[methodIndex].Body.Instructions
+                .Where(op => op.OpCode.Code == Code.Call)
+                .Select(op => op.Operand is MethodDefinition callee
+                    ? callee.Name
+                    : throw new FormatException("Non-MethodDef CIL call: " + label))
+                .ToArray();
+            if (!expectedTargets.AsSpan().SequenceEqual(emittedTargets))
+                throw new FormatException("Verified CFG and CIL call targets differ: " + label);
+        }
+    }
+
+    private static void RejectSameSignatureRetargetMutation()
+    {
+        // Both helpers are intentionally ABI compatible. A validator that
+        // merely checks owner/private/static/arity cannot distinguish them;
+        // the exact verified CFG target must still determine the call.
+        var module = OresStructuredCfgLowering.LowerModule(
+            "fnc correct(int n):int{return n+1;}" +
+            "fnc wrong(int n):int{return n+2;}" +
+            "fnc main():int{return correct(41);}");
+        string folder = Path.Combine(Path.GetTempPath(),
+            "ores-static-abi-retarget-mutation-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            var file = Path.Combine(folder, "OresGenerated.dll");
+            CilEmitter.EmitLibrary(module, file);
+            using var image = AssemblyDefinition.ReadAssembly(file);
+            var type = image.MainModule.Types.Single(t =>
+                t.FullName == "Oreslang.Generated.OresProgram");
+            var run = type.Methods.Single(m => m.Name == "Run");
+            var wrong = type.Methods.Single(m => m.Name == "helper_wrong");
+            var call = run.Body.Instructions.Single(i => i.OpCode.Code == Code.Call);
+            var original = call.Operand;
+            try
+            {
+                call.Operand = wrong;
+                // This less-specific check is expected to pass; the target
+                // is private and static and belongs to the right type.
+                AssertClosedDirectCalls(type, "same-signature-retarget");
+                try
+                {
+                    AssertExactCallTargets(module, type, "same-signature-retarget");
+                }
+                catch (FormatException error) when
+                    (error.Message.Contains("call targets differ", StringComparison.Ordinal))
+                {
+                    return;
+                }
+                throw new Exception("ABI-compatible forged MethodDef retarget escaped CFG proof");
+            }
+            finally { call.Operand = original; }
         }
         finally { Directory.Delete(folder, recursive: true); }
     }
@@ -251,6 +304,7 @@ internal static class StructuredStaticAbiTests
             throw new Exception("CIL MethodDef order diverged from source declaration order");
         Check(lexicalMethods, 42, 2, "source-order MethodDef tokens must not sort helpers");
         RejectDynamicOpcodeMutation(); // mutate real emitted CIL in-memory, never ship it
+        RejectSameSignatureRetargetMutation(); // same ABI, wrong method token must reject
 
         Check("fnc main():int{return 42;}", 42, 0, "single main remains supported");
         Check("fnc inc(int x):int{return x+1;}fnc main():int{return inc(41);}",
