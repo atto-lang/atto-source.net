@@ -56,9 +56,19 @@ managed allocation bytes on .NET/Java. A zero-step CI result is
   deterministic cleanup, stale and foreign handles.
 - Java: `ActorMemoryE2EV1Test.java` in the existing Maven JUnit suite;
   actor-local direct-memory ownership, simulated turns, stale and foreign
-  handles; JVM allocation bytes still **NOT_MEASURED** in this probe.
+  handles; a JDK per-thread allocation counter instruments 16,384 warmed
+  host-only ownership operations (not guest or process-wide JVM evidence).
 
-These tests can establish subset host semantics, but do not establish
-compiler-generated object placement, exact-head AOT, or guest zero-GC.
+The LLVM workflow additionally compiles `oreslang-llvmc` at the checked-out
+PR head and executes two **independent compiled guest slices**: scalar
+actor-owned `i64` from `tests/source_actor_e2e.py`, and lexical class-owned
+`Array<int>` from `tests/native_class_owned_array_source.py`. Both are
+repeated with ASan/UBSan. A successful run may only claim these narrower
+slices, not actor-owned classes across suspension or the entire guest program.
+
+These tests can establish subset host and compiled-source semantics after
+actual executable receipts, but do not establish fully general
+compiler-generated object placement, exact-head NativeAOT across all
+backends, or whole-program guest zero-GC.
 Other backends (Forge/WASM) continue under the existing five-backend arena
 contract and are outside this three-backend **compiler E2E** slice.
