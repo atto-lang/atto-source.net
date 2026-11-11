@@ -22,6 +22,7 @@ internal static class ActorRuntimeSelfTest
         HostIoTurnsAreDirectionalAndCopyIsolated();
         HostIoPendingDataScrubbedOnlyAfterPhysicalQuiescence();
         HostIoActorFaultRetiresOutput();
+        HostIoGlobalBudgetSurvivesPressureAndStop();
         Console.WriteLine("ACTOR_PIPELINE_MAILBOX_CONTROL_PASS");
         Console.WriteLine("ACTOR_IO_HOST_INTEGRATION_PASS");
         Console.WriteLine(
@@ -250,6 +251,76 @@ internal static class ActorRuntimeSelfTest
         Require(retired, "fault-retired host output must not remain readable");
     }
 
+    private static void HostIoGlobalBudgetSurvivesPressureAndStop()
+    {
+        // Two different actor I/O envelopes share one runtime-level credit
+        // window, including zero-byte records. The native arena budget does
+        // not account for CLR-managed I/O queues.
+        using var runtime = new ActorRuntime(Options(ioBytes: 4, ioRecords: 2));
+        using var processed = new ManualResetEventSlim();
+        var (first, firstIo) = runtime.SpawnWithIo(ActorKind.Shared, (ctx, _) =>
+        {
+            Require(ctx.TryReadInput(out var data) && data is not null &&
+                data.SequenceEqual(new byte[] { 1, 2 }),
+                "first actor drains its own input");
+            processed.Set();
+        });
+        var (second, secondIo) = runtime.SpawnWithIo(
+            ActorKind.Private, static (_, _) => { });
+
+        Require(firstIo.TryFeedInput(new byte[] { 1, 2 }),
+            "first actor reserves two global bytes");
+        Require(secondIo.TryFeedInput(new byte[] { 3, 4 }),
+            "second actor reserves remaining two global bytes");
+        Require(runtime.IoQueuedBytes == 4 && runtime.IoQueuedRecords == 2,
+            "global I/O credit telemetry sees both actors");
+        Require(!firstIo.TryFeedInput(Array.Empty<byte>()),
+            "zero-byte frame cannot evade shared record credit");
+        Require(!secondIo.TryFeedInput(new byte[] { 5 }),
+            "global byte/record backpressure rejects cross-actor payload");
+        Require(runtime.IoQueuedBytes == 4 && runtime.IoQueuedRecords == 2,
+            "rejected queue admission leaves accounting unchanged");
+
+        runtime.Send(first, ReadOnlySpan<byte>.Empty);
+        Require(processed.Wait(TimeSpan.FromSeconds(5)),
+            "first actor serviced its queue");
+        Require(WaitUntil(() => runtime.CompletedMessages == 1),
+            "first actor completed before credit observation");
+        Require(runtime.IoQueuedBytes == 2 && runtime.IoQueuedRecords == 1,
+            "draining one actor refunds only that actor's reserved credits");
+
+        Require(firstIo.TryFeedInput(new byte[] { 6, 7 }),
+            "refunded window admits another actor payload");
+        Require(!secondIo.TryFeedInput(Array.Empty<byte>()),
+            "record window still bounded even when bytes fit");
+
+        runtime.Stop(first);
+        Require(WaitUntil(() => runtime.LiveActors == 1),
+            "stopped actor retires only its own I/O queue");
+        Require(runtime.IoQueuedBytes == 2 && runtime.IoQueuedRecords == 1,
+            "first actor STOP cannot refund another actor's queued DATA");
+        Require(secondIo.TryFeedInput(new byte[] { 8, 9 }),
+            "credit returned by retirement can be reused independently");
+        Require(runtime.IoQueuedBytes == 4 && runtime.IoQueuedRecords == 2,
+            "credits remain bounded after retirement and reuse");
+
+        runtime.Stop(second);
+        Require(WaitUntil(() => runtime.LiveActors == 0 &&
+            runtime.NativeReservedBytes == 0),
+            "both I/O actor cells physically retired");
+        Require(runtime.IoQueuedBytes == 0 && runtime.IoQueuedRecords == 0,
+            "terminal STOP refunds every remaining global I/O record and byte");
+
+        bool invalidLimitsRejected = false;
+        try { using var _ = new ActorRuntime(Options(ioBytes: 0)); }
+        catch (ArgumentOutOfRangeException) { invalidLimitsRejected = true; }
+        Require(invalidLimitsRejected, "zero global byte cap must reject at admission");
+        invalidLimitsRejected = false;
+        try { using var _ = new ActorRuntime(Options(ioRecords: 0)); }
+        catch (ArgumentOutOfRangeException) { invalidLimitsRejected = true; }
+        Require(invalidLimitsRejected, "zero global record cap must reject at admission");
+    }
+
     private static void ForgedSameIdCannotObserveTermination()
     {
         using var runtime = new ActorRuntime(Options());
@@ -331,8 +402,11 @@ internal static class ActorRuntimeSelfTest
             "rejected-message actor stops without native-memory leak");
     }
 
-    private static ActorRuntimeOptions Options() => new()
+    private static ActorRuntimeOptions Options(
+        int ioBytes = 64 * 1024 * 1024, int ioRecords = 65_536) => new()
     {
+        MaxIoQueuedBytes = ioBytes,
+        MaxIoQueuedRecords = ioRecords,
         MaxActors = 32,
         MessagesPerDispatch = 16,
         MailboxMessages = 256,
