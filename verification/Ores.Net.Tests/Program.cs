@@ -365,6 +365,9 @@ Require(OresParser.Parse(
 CriticalSuspendsBoundaryTests.Run(); // compiler-owned scalar admission, not runtime critical support
 AsyncOnlyIoPolicyTests.Run();
 CapabilityIoLifecycleV1SelfTest.Run();
+ActorStateSchemaAdmissionTests.Run();
+ActorStateLayoutIntegrationTests.Run();
+ActorGeneratedCounterTests.Run();
 SourceByteBudgetTests.Run();
 ElmCompositionAdmissionTests.Run();
 HeapContainerSourceBoundaryTests.Run(); // actual scalar compiler fail-closed heap/container checks
@@ -375,15 +378,65 @@ CrossBackendCheckedI64ParityTests.Run();
 AsyncInteropFailClosedTests.Run();
 await HostTaskObservationTests.Run();
 
-// The canonical actor negative includes a later assignment. Lex its punctuation
-// while preserving the precise unsupported top-level declaration diagnostic.
-try
-{
-    OresParser.Parse("define actor Worker as { pub fnc on_message(int n): int { return n; } }\n" +
-        "pub fnc main(): int { const worker = spawn Worker(); stop worker; return 43; }\n");
-    throw new Exception("Unsupported actor declaration was admitted");
-}
-catch (FormatException ex) when (ex.Message == "Expected 'fnc' at offset 7") { }
+// Source actor syntax must fail at a semantic actor boundary, never as an
+// accidental scalar-fnc parse error. Legacy actors remain rejected outright;
+// canonical isolated actors first validate a bounded sealed state schema.
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define actor Worker as { pub fnc on_message(int n): int { return n; } }"),
+    "sealed state/handle_state and scheduler-owned logical continuation frames",
+    "legacy source actor must remain fail closed");
+
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as state { count: int = 0; enabled: bool = true; } " +
+        "pub increment(): int { return self.handle_state(critical |s| -> s.count); } end"),
+    "Source actor state schema parsed; sealed handle_state and generation-fenced logical-turn lowering is unavailable",
+    "canonical isolated actor schema must reach the precise lowering boundary");
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as state { count: int = 0; count: int = 1; } end"),
+    "Duplicate actor state field 'count'",
+    "duplicate isolated actor state field");
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as state { label: float = 0; } end"),
+    "Actor state schema admits only int/bool fields",
+    "unsupported isolated actor state type");
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as state { count: int = 9223372036854775808; } end"),
+    "Actor int state default overflows signed i64",
+    "isolated actor state i64 overflow");
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as state { count: int = -9223372036854775808; } end"),
+    "Source actor state schema parsed; sealed handle_state and generation-fenced logical-turn lowering is unavailable",
+    "signed i64 minimum actor state default reaches the lowering boundary");
+var actorStateOverflowFields = string.Join(" ", Enumerable.Range(0, 17)
+    .Select(i => $"f{i}: int = 0;"));
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as state { " + actorStateOverflowFields + " } end"),
+    "Actor state schema field limit exceeded (16)",
+    "isolated actor state field count is bounded");
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as state { enabled: bool = 1; } end"),
+    "Actor bool state default must be true or false",
+    "isolated actor bool default");
+RejectDiagnostic(
+    () => OresParser.Parse("define isolated actor Counter as state { } end"),
+    "Actor state schema requires at least one field",
+    "isolated actor empty state schema");
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as let count: int = 0; end"),
+    "Isolated actor requires sealed state",
+    "isolated actor cannot fall back to legacy scalar fields");
+Require(OresParser.Parse(
+    "fnc main():int{return 1;} /* define isolated actor Ghost as state { count:int=0; } */") is Literal,
+    "actor keywords in comments remain lexically invisible");
 Reject(() => OresParser.Parse("fnc main():int { return 1=2; }"), "assignment expression");
 Reject(() => OresParser.Parse("fnc main():int { const x = 1; return x; }"), "local assignment");
 
@@ -985,8 +1038,23 @@ static byte[] PendingOwnedBuffer(ActorMailbox actor)
 {
     var field = typeof(ActorMailbox).GetField("_messages",
         System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-    Require(field is not null, "mailbox test can inspect private queue");
-    return ((Queue<byte[]>)field!.GetValue(actor)!).Peek();
+    var messages = field?.GetValue(actor) as System.Collections.IEnumerable;
+    Require(messages is not null && actor.QueuedMessages == 1,
+        "mailbox test can inspect exactly one pending envelope");
+    var iterator = messages!.GetEnumerator();
+    Require(iterator.MoveNext(), "mailbox test has a pending envelope");
+    var envelope = iterator.Current;
+    Require(envelope is not null && !iterator.MoveNext(),
+        "mailbox test has exactly one pending envelope");
+    var envelopeType = envelope!.GetType();
+    var flags = System.Reflection.BindingFlags.Instance |
+        System.Reflection.BindingFlags.Public;
+    var isControl = envelopeType.GetProperty("IsControl", flags)?.GetValue(envelope);
+    Require(isControl is bool control && !control,
+        "mailbox test inspects a USER envelope, never scheduler control");
+    var owned = envelopeType.GetProperty("Payload", flags)?.GetValue(envelope) as byte[];
+    Require(owned is not null, "mailbox test captures owned USER payload");
+    return owned!;
 }
 
 var originalInput = new byte[] { 9, 8, 7, 6 };

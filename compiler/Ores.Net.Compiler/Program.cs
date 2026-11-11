@@ -9,14 +9,15 @@ bool validCompile = args.Length == 4 && args[0] == "compile" && args[2] == "--ou
 bool validStructuredCheck = args.Length == 2 && args[0] == "check-structured";
 bool validStructuredCompile = args.Length == 4 &&
     args[0] == "compile-structured" && args[2] == "--out";
+bool validEmitActorSource = args.Length == 4 && args[0] == "emit-actor-csharp" && args[2] == "--out";
 bool validEmitSource = args.Length == 4 && args[2] == "--out" &&
     (args[0] == "emit-csharp" || args[0] == "emit-fsharp");
 bool validStaticFacts = args.Length == 2 &&
     (args[0] == "static-facts" || args[0] == "static-facts-structured");
 bool moduleCommand = args.Length >= 1 && args[0] is "check-modules" or "compile-modules";
-if (!validCheck && !validCompile && !validStructuredCheck && !validStructuredCompile && !validStaticFacts && !validEmitSource && !moduleCommand)
+if (!validCheck && !validCompile && !validStructuredCheck && !validStructuredCompile && !validStaticFacts && !validEmitSource && !validEmitActorSource && !moduleCommand)
 {
-    Console.Error.WriteLine("usage: oresnet check input.atto|input.ores | oresnet compile input.atto|input.ores --out path/OresGenerated.dll | oresnet check-structured input.atto|input.ores | oresnet compile-structured input.atto|input.ores --out path/OresGenerated.dll | oresnet emit-csharp input.atto|input.ores --out path/OresProgram.cs | oresnet emit-fsharp input.atto|input.ores --out path/OresProgram.fs | oresnet static-facts input.atto|input.ores | oresnet static-facts-structured input.atto|input.ores");
+    Console.Error.WriteLine("usage: oresnet check input.atto|input.ores | oresnet compile input.atto|input.ores --out path/OresGenerated.dll | oresnet check-structured input.atto|input.ores | oresnet compile-structured input.atto|input.ores --out path/OresGenerated.dll | oresnet emit-csharp input.atto|input.ores --out path/OresProgram.cs | oresnet emit-fsharp input.atto|input.ores --out path/OresProgram.fs | oresnet emit-actor-csharp Counter.atto --out path/Actor_Counter.g.cs | oresnet static-facts input.atto|input.ores | oresnet static-facts-structured input.atto|input.ores");
     return 2;
 }
 
@@ -72,6 +73,17 @@ try
         Console.WriteLine(args[0] == "static-facts"
             ? StaticFactsV0Exporter.FromCompiledScalarSource(source)
             : StaticFactsV0Exporter.FromStructuredSource(source));
+        return 0;
+    }
+    if (validEmitActorSource)
+    {
+        if (!string.Equals(Path.GetExtension(args[3]), ".cs",
+            StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Actor C# source output requires a .cs file");
+        var actorMethod = OresParser.InspectSynchronousActorIncrement(source);
+        var generated = ActorIncrementSourceEmitter.EmitCSharp(actorMethod);
+        WriteAtomicSource(args[3], generated);
+        Console.WriteLine($"Emitted experimental static actor C# from verified increment IR: {Path.GetFullPath(args[3])}");
         return 0;
     }
     if (validStructuredCheck || validStructuredCompile)

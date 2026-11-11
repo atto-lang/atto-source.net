@@ -345,3 +345,14 @@ Trust level and compilation mode stay independent: untrusted Wasm may be
 JIT-compiled, AOT-lowered or interpreted. The **current shipping .NET
 compiler/host remains NativeAOT only**, supports only its documented
 arithmetic subset, and does not load CIL at runtime.
+
+## Experimental source actor/native arena integration
+
+The opt-in `emit-actor-csharp` lane now emits a `SpawnRuntime` entry for its
+bounded synchronous Counter profile. It uses the production ActorRuntime,
+private native scalar state, execution-owned frames and supervisor mailbox
+replies. The managed suite and a macOS arm64 NativeAOT probe execute ordinary
+and overflow source-generated actors; the older trusted-host Counter API is
+kept separate and its managed cells are not arena-isolation evidence.
+See [execution evidence and open parity gates](docs/ACTOR_NATIVE_STATE_FRAMES_INTEGRATION_20261110.md).
+This is not general actor CIL, concurrent-default actor execution or Spin support.
