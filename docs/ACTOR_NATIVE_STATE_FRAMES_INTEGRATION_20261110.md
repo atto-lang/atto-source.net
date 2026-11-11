@@ -65,8 +65,31 @@ passes three runs with that native-only gate. Its workflow checks this receipt
 and uses a checked shell glob for DLL sidecars on both target platforms.
 Compiler and new Counter probe pin ILCompiler/runtime packs 10.0.14, following
 the existing memory probe, instead of bypassing the 10.0.0 NuGet security audit
-failure. Linux/Windows workflow gates are authored; they have not executed on
-this candidate and are not certified by the macOS result.
+failure. Linux/Windows execution is independently recorded below; it is not
+inferred from the macOS result.
+
+## Exact-tree hosted follow-up
+
+The tested source commit is `70f0e4671137907370e28d71838688799386daab`, root
+tree `18dd661928cc5261a03162dc0cf230cc96ecfef9`. Source-org jobs could not start
+because of billing. Using the user's authorized fallback, all 478 source files
+were mirrored through the GitHub connector to verified-private
+`streempilot-test/browser-studio-e2e`; all blob identities and the final root tree
+match. Carrier `98bbf8d5a713748b1c3f98e1d923feabef1c6245`, temporary branch
+`ci/atto-net-state-frames-exact-tree-20261110`.
+
+[Run 42934451529](https://github.com/streempilot-test/browser-studio-e2e/actions/runs/42934451529)
+passed Windows job `130240932731` and Linux job `130240933205`. Both executed
+identity verification, exact regeneration of both source actor goldens, complete
+managed verification, NativeAOT publish and three native executions with required
+dynamic-code-disabled, native state/stack, peer survival and zero-reserved-byte
+receipts. The artifact check rejects DLL sidecars. No cross-org secrets/tokens
+were added; checkout uses the destination token without persisting credentials.
+Origin CI failures remain recorded and no required check was bypassed. Other
+historical mirror-triggered workflows were canceled to conserve budget.
+
+This section is a documentation-only follow-up to the tested code commit; it
+does not claim that a later documentation tree was separately rebuilt.
 
 ## Still required
 
