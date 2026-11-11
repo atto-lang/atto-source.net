@@ -26,6 +26,8 @@ public sealed class ActorRuntimeOptions
     public int ActorMaxLifetimePins { get; init; } = 4096;
     public int ActorMaxReadLoans { get; init; } = 4096;
     public long NativeBudgetBytes { get; init; } = 512L * 1024 * 1024;
+    public int MaxIoQueuedBytes { get; init; } = 64 * 1024 * 1024;
+    public int MaxIoQueuedRecords { get; init; } = 65_536;
     public ActorDispatcherOptions Dispatcher { get; init; } = new();
 
     internal void Validate()
@@ -59,6 +61,10 @@ public sealed class ActorRuntimeOptions
             throw new ArgumentOutOfRangeException(nameof(ActorMaxReadLoans));
         if (NativeBudgetBytes <= 0)
             throw new ArgumentOutOfRangeException(nameof(NativeBudgetBytes));
+        if (MaxIoQueuedBytes <= 0 || MaxIoQueuedBytes > 64 * 1024 * 1024)
+            throw new ArgumentOutOfRangeException(nameof(MaxIoQueuedBytes));
+        if (MaxIoQueuedRecords <= 0 || MaxIoQueuedRecords > 65_536)
+            throw new ArgumentOutOfRangeException(nameof(MaxIoQueuedRecords));
 
         ArgumentNullException.ThrowIfNull(Dispatcher);
         Dispatcher.Validate();
@@ -231,6 +237,7 @@ public sealed class ActorRuntime : IDisposable
     private readonly Dictionary<ulong, ActorCell> _actors = new();
     private readonly ActorRuntimeOptions _options;
     private readonly ActorArenaBudget _nativeBudget;
+    private readonly ActorIoBudget _ioBudget;
     private readonly ActorDispatchDomains _domains;
 
     private ulong _nextActorId;
@@ -244,7 +251,7 @@ public sealed class ActorRuntime : IDisposable
 
         internal ActorCell(ActorRuntime owner, ActorKind kind,
             ActorMailbox mailbox, ActorArena arena, ActorMessageHandler handler,
-            int stackBytes, int maxStackFrames)
+            int stackBytes, int maxStackFrames, ActorIoBudget ioBudget)
         {
             _owner = owner;
             Kind = kind;
@@ -253,7 +260,7 @@ public sealed class ActorRuntime : IDisposable
             Stack = new ActorFrameStack(arena, stackBytes, maxStackFrames);
             Handler = handler;
             Reference = mailbox.CurrentRef;
-            Io = new ActorIoEnvelope(mailbox);
+            Io = new ActorIoEnvelope(mailbox, ioBudget);
             HostIo = new ActorIoHostPort(Io, Reference);
             DispatchAction = Dispatch;
         }
@@ -283,6 +290,7 @@ public sealed class ActorRuntime : IDisposable
         options.Validate();
         _options = options;
         _nativeBudget = new ActorArenaBudget(options.NativeBudgetBytes);
+        _ioBudget = new ActorIoBudget(options.MaxIoQueuedBytes, options.MaxIoQueuedRecords);
         _domains = new ActorDispatchDomains(options.Dispatcher);
     }
 
@@ -292,6 +300,8 @@ public sealed class ActorRuntime : IDisposable
     }
 
     public long NativeReservedBytes => _nativeBudget.ReservedBytes;
+    public int IoQueuedBytes => _ioBudget.QueuedBytes;
+    public int IoQueuedRecords => _ioBudget.QueuedRecords;
     public long CompletedMessages => Interlocked.Read(ref _completedMessages);
     public long FaultedTurns => Interlocked.Read(ref _faultedTurns);
     public int StartedCarrierThreads => _domains.TotalStartedWorkers;
@@ -331,7 +341,7 @@ public sealed class ActorRuntime : IDisposable
                     ? Math.Min(64 * 1024, Math.Max(1, _options.ActorPersistentBytes / 4))
                     : _options.ActorStackBytes;
                 var cell = new ActorCell(this, kind, mailbox, arena, handler,
-                    stackBytes, _options.ActorMaxStackFrames);
+                    stackBytes, _options.ActorMaxStackFrames, _ioBudget);
                 _actors.Add(candidateId, cell);
                 _nextActorId = candidateId;
                 return cell.Reference;
