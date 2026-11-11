@@ -180,6 +180,10 @@ internal static class CfgCilEmitter
                         il.LoadLocal(returned.ValueId);
                         il.OpCode(ILOpCode.Ret);
                         break;
+                    case CfgReturnVoid:
+                        // Void MethodDef signature and empty evaluation stack.
+                        il.OpCode(ILOpCode.Ret);
+                        break;
                     case CfgJump jump:
                         Transfer(jump.Target, jump.Arguments);
                         break;
