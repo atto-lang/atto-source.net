@@ -78,19 +78,37 @@ public sealed class ActorContext
     private readonly ActorArena _arena;
     private readonly ActorArenaTurn _turn;
     private readonly ActorFrameStack _stack;
+    private readonly ActorIoEnvelope _io;
 
     internal ActorContext(ActorRef self, ActorKind kind,
-        ActorArena arena, ActorArenaTurn turn, ActorFrameStack stack)
+        ActorArena arena, ActorArenaTurn turn, ActorFrameStack stack,
+        ActorIoEnvelope io)
     {
         Self = self;
         Kind = kind;
         _arena = arena;
         _turn = turn;
         _stack = stack;
+        _io = io;
     }
 
     public ActorRef Self { get; }
     public ActorKind Kind { get; }
+
+    // Actor-side directional I/O. Both operations require a currently
+    // executing physical actor turn, never just a retained ActorRef.
+    // This is host runtime integration, not guest io.* compiler lowering.
+    public bool TryReadInput(out byte[]? data)
+    {
+        ValidateActiveTurn();
+        return _io.TryReadInput(Self, out data);
+    }
+
+    public bool TryWriteOutput(ReadOnlySpan<byte> data)
+    {
+        ValidateActiveTurn();
+        return _io.TryWriteOutput(Self, data);
+    }
 
     // Host capability providers must enforce the same physical-turn authority
     // as actor memory access. A retained context is not a reusable credential.
@@ -220,6 +238,8 @@ public sealed class ActorRuntime : IDisposable
             Stack = new ActorFrameStack(arena, stackBytes, maxStackFrames);
             Handler = handler;
             Reference = mailbox.CurrentRef;
+            Io = new ActorIoEnvelope(mailbox);
+            HostIo = new ActorIoHostPort(Io, Reference);
             DispatchAction = Dispatch;
         }
 
@@ -228,6 +248,8 @@ public sealed class ActorRuntime : IDisposable
         internal ActorMailbox Mailbox { get; }
         internal ActorArena Arena { get; }
         internal ActorFrameStack Stack { get; }
+        internal ActorIoEnvelope Io { get; }
+        internal ActorIoHostPort HostIo { get; }
         internal ActorMessageHandler Handler { get; }
         internal ActorRef Reference { get; }
         internal Action DispatchAction { get; }
@@ -305,6 +327,20 @@ public sealed class ActorRuntime : IDisposable
                 throw;
             }
         }
+    }
+
+    /// <summary>
+    /// Mint a separate directional host I/O capability at actor creation.
+    /// Merely knowing the ActorRef does not grant either host-side channel.
+    /// The caller must explicitly wake the actor through its scheduled
+    /// mailbox until I/O-ready scheduler admission is implemented.
+    /// </summary>
+    public (ActorRef Actor, ActorIoHostPort HostIo) SpawnWithIo(
+        ActorKind kind, ActorMessageHandler handler)
+    {
+        var actor = Spawn(kind, handler);
+        var cell = Lookup(actor);
+        return (actor, cell.HostIo);
     }
 
     public void Send(ActorRef destination, ReadOnlySpan<byte> payload)
@@ -480,7 +516,8 @@ public sealed class ActorRuntime : IDisposable
                     using (turn)
                     {
                         var context = new ActorContext(
-                            cell.Reference, cell.Kind, cell.Arena, turn, cell.Stack);
+                            cell.Reference, cell.Kind, cell.Arena, turn, cell.Stack,
+                            cell.Io);
                         cell.Handler(context, payload);
                     }
                     succeeded = true;
@@ -560,6 +597,9 @@ public sealed class ActorRuntime : IDisposable
             return;
 
         cell.Mailbox.Stop();
+        // Only the physical finalizer disposes I/O: in-flight actor turns
+        // must finish before their private DATA buffers can be scrubbed.
+        cell.Io.Dispose();
         cell.Arena.Retire();
         cell.Arena.TryReclaim();
 
