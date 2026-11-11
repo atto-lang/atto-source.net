@@ -209,7 +209,10 @@ public static class OresCfgVerifier
                 AddDefinition(op.ResultId, op.Type, blockIndex, instructionIndex);
             }
         }
-        if (definitions.Count == 0 || definitions.Count > MaxValues)
+        // An empty void helper has no SSA values: its sole terminator is
+        // the independently verified CfgReturnVoid, not a fabricated 0.
+        if ((definitions.Count == 0 && function.ResultType != IrValueType.Void) ||
+            definitions.Count > MaxValues)
             throw new FormatException("CFG SSA value budget exceeded");
         // Dense IDs prevent accidental giant lookup allocations during later
         // local-register assignment, and reject gaps and negative definitions.
