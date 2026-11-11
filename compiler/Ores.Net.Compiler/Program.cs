@@ -71,7 +71,11 @@ try
         !string.Equals(Path.GetExtension(args[1]), ".atto", StringComparison.OrdinalIgnoreCase) &&
         !string.Equals(Path.GetExtension(args[1]), ".ores", StringComparison.OrdinalIgnoreCase))
         throw new FormatException("Static-facts export requires a .atto or .ores source file");
-    var source = ReadBoundedSource(args[1], rejectBom: validStaticFacts);
+    // Exact .atto-to-NativeAOT emission must bind to the actual admitted
+    // source bytes: reject BOM normalization and detect source changes during
+    // the bounded double-read snapshot, just like signed static-facts export.
+    var source = ReadBoundedSource(args[1],
+        rejectBom: validStaticFacts || validActorHeapV1);
     if (validActorHeapV1)
     {
         // Strictly opt-in, checked .atto source -> static NativeAOT-compatible
