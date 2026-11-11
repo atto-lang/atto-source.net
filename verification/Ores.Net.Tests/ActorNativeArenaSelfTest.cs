@@ -73,6 +73,7 @@ internal static class ActorNativeArenaSelfTest
         PersistentRootAndTemporaryTailChurn();
         OutOfOrderDropsCoalesceNativeTail();
         SteadyStateManagedAllocationBudget();
+        ActorMemoryE2EV1SelfTest.Run(); // host-only: NOT guest or NativeAOT certification
         Console.WriteLine("PASS .NET unmanaged actor arena, primitive handles, stack cleanup scopes");
     }
 
