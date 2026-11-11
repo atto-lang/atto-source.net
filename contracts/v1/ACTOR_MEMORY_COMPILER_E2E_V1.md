@@ -51,6 +51,9 @@ managed allocation bytes on .NET/Java. A zero-step CI result is
 - LLVM: `tests/actor_memory_e2e_v1_host.c`, compiled with the *real*
   `ActorArena.c`; simulated turns, temporary drops, scratch reset,
   pinned retirement and three POSIX abort-on-misuse negative controls.
+  Linux link-time malloc/calloc/realloc wrappers additionally count calls
+  from the linked test/arena translation units across 1,024 actor turns;
+  this cannot certify libc-internal, FFI, or whole-process allocations.
 - .NET: `ActorMemoryE2EV1SelfTest.cs` in the existing test executable;
   warmed per-thread CLR allocation measurement around 1,024 simulated turns,
   deterministic cleanup, stale and foreign handles.
