@@ -8,6 +8,7 @@ internal static class ActorGuestHeap32SelfTest
         PerActorReferencesSurviveTurnsAndDenyStaleAccess();
         GenerationExhaustionFailsClosedWithoutWrapping();
         GuestPayloadFastPathDoesNotAllocateClrObjects();
+        TypedGuestPayloadFastPathDoesNotAllocateClrObjects();
         GuestReadLoanDelaysArenaReclaimAfterStop();
         TypedNodeGraphEnforcesFieldLayouts();
         CompiledGuestFixtureMustRemainUncertified();
@@ -444,6 +445,79 @@ internal static class ActorGuestHeap32SelfTest
         Require(SpinWait.SpinUntil(() => runtime.NativeReservedBytes == 0,
             TimeSpan.FromSeconds(10)),
             "off-carrier guest read-loan release permits exactly-once native refund");
+    }
+
+    private static void TypedGuestPayloadFastPathDoesNotAllocateClrObjects()
+    {
+        var layout = new ActorGuestLayout32(0xB601, 16,
+            new[]
+            {
+                new ActorGuestField32(0, ActorGuestFieldKind32.I64),
+                new ActorGuestField32(8, ActorGuestFieldKind32.Ref32, 0xB601)
+            });
+        using var runtime = new ActorRuntime(Options(slots: 4));
+        using var finished = new ManualResetEventSlim();
+        Exception? failure = null;
+        var actor = runtime.Spawn(ActorKind.Private, (context, _) =>
+        {
+            try
+            {
+                Span<byte> data = stackalloc byte[8];
+                // Exclude one-time actor metadata, type-ID dictionary
+                // admission, JIT/NativeAOT static initialization and locks.
+                for (int warmup = 0; warmup < 128; warmup++)
+                {
+                    uint reference = context.AllocateTypedGuestObject32(layout);
+                    System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(
+                        data, warmup);
+                    context.WriteGuestObject32(reference, 0, data);
+                    context.WriteGuestReference32(reference, 8, 0);
+                    context.DropGuestObject32(reference);
+                }
+
+                bool correct = true;
+                long before = GC.GetAllocatedBytesForCurrentThread();
+                for (int i = 0; i < 4096; i++)
+                {
+                    uint reference = context.AllocateTypedGuestObject32(layout);
+                    if (reference == 0)
+                    {
+                        correct = false;
+                        break;
+                    }
+                    System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(
+                        data, i);
+                    context.WriteGuestObject32(reference, 0, data);
+                    data.Clear();
+                    context.ReadGuestObject32(reference, 0, data);
+                    if (System.Buffers.Binary.BinaryPrimitives.ReadInt64LittleEndian(
+                            data) != i)
+                        correct = false;
+                    context.WriteGuestReference32(reference, 8, 0);
+                    context.DropGuestObject32(reference);
+                    if (!correct)
+                        break;
+                }
+                long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+                Require(correct, "typed native I64/ref32 payload retained values");
+                Require(allocated == 0,
+                    "warmed typed guest object path must allocate zero CLR bytes");
+            }
+            catch (Exception error) { failure = error; }
+            finally { finished.Set(); }
+        });
+        runtime.Send(actor, new byte[] { 1 });
+        Require(finished.Wait(TimeSpan.FromSeconds(20)),
+            "typed native guest fast-path probe finished");
+        if (failure is not null)
+            throw new Exception("typed native guest allocation probe failed", failure);
+        Require(SpinWait.SpinUntil(() => runtime.CompletedMessages == 1,
+            TimeSpan.FromSeconds(10)) && runtime.FaultedTurns == 0,
+            "typed native fast-path actor turn completed");
+        runtime.Stop(actor);
+        Require(SpinWait.SpinUntil(() => runtime.LiveActors == 0 &&
+            runtime.NativeReservedBytes == 0, TimeSpan.FromSeconds(10)),
+            "typed fast-path native actor slab reclaimed");
     }
 
     private static void GuestPayloadFastPathDoesNotAllocateClrObjects()
