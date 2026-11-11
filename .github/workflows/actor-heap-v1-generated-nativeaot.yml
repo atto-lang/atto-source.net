@@ -102,3 +102,53 @@ jobs:
           "$output/$BINARY" | tee "$RUNNER_TEMP/actor-heap-nativeaot-guest.log"
           grep -Fx 'PASS attolang-actor-heap-v1-nativeaot: generated .atto Node graph executed in two independent actor heaps (narrow guest subset)' "$RUNNER_TEMP/actor-heap-nativeaot-guest.log"
           sha256sum "$output/$BINARY" | tee "$RUNNER_TEMP/actor-heap-native-binary-sha256.txt"
+
+      - name: Compile and execute a negative AttoLang assertion with actor heap cleanup
+        shell: bash
+        env:
+          RID: ${{ matrix.rid }}
+          BINARY: ${{ matrix.binary }}
+        run: |
+          set -euo pipefail
+          fixture=contracts/actor-guest-heap/v1/node_graph.atto
+          before="$(git rev-parse "HEAD:$fixture")"
+          test "$before" = "$(git hash-object "$fixture")"
+          negative_source="$RUNNER_TEMP/actor-heap-expected-assertion-failure.atto"
+          # Derive precisely one mutation of the pinned source, without
+          # altering the tracked fixture or introducing unreviewed guest ops.
+          node -e '
+            const fs = require("node:fs");
+            const [source, output] = process.argv.slice(1);
+            const original = fs.readFileSync(source, "utf8");
+            const before = "assert(second.next?.value == 42)";
+            const after = "assert(second.next?.value == 43)";
+            if (original.split(before).length !== 2) process.exit(2);
+            fs.writeFileSync(output, original.replace(before, after));
+          ' "$fixture" "$negative_source"
+          test -s "$negative_source"
+          sha256sum "$negative_source" |
+            tee "$RUNNER_TEMP/actor-heap-negative-atto-sha256.txt"
+          dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -- \
+            emit-actor-heap-v1 "$negative_source" \
+            --out verification/Ores.Net.ActorGuestV1Probe/ActorHeapV1.g.cs |
+            tee "$RUNNER_TEMP/actor-heap-negative-emission.log"
+          grep -Fx 'ACTOR_HEAP_V1_SOURCE_GENERATED|NOT_EXECUTED|NOT_CERTIFIED' "$RUNNER_TEMP/actor-heap-negative-emission.log"
+          generated=verification/Ores.Net.ActorGuestV1Probe/ActorHeapV1.g.cs
+          grep -F 'ReadInt64LittleEndian(value) != 43L)' "$generated"
+          sha256sum "$generated" |
+            tee "$RUNNER_TEMP/actor-heap-negative-generated-sha256.txt"
+          test "$(git hash-object "$fixture")" = "$before"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          # Force a new native build, never reuse the positive binary.
+          dotnet clean verification/Ores.Net.ActorGuestV1Probe/Ores.Net.ActorGuestV1Probe.csproj \
+            -c Release -r "$RID" -p:PublishAot=true
+          negative_output="$RUNNER_TEMP/atto-actor-heap-v1-negative-nativeaot"
+          dotnet publish verification/Ores.Net.ActorGuestV1Probe/Ores.Net.ActorGuestV1Probe.csproj \
+            -c Release -r "$RID" -p:PublishAot=true -p:SelfContained=true \
+            -o "$negative_output"
+          test -f "$negative_output/$BINARY"
+          "$negative_output/$BINARY" --expect-assert-failure |
+            tee "$RUNNER_TEMP/actor-heap-negative-nativeaot.log"
+          grep -Fx 'PASS attolang-actor-heap-v1-nativeaot-negative: compiled .atto assertion failure retired actor and reclaimed native heap' "$RUNNER_TEMP/actor-heap-negative-nativeaot.log"
+          sha256sum "$negative_output/$BINARY" |
+            tee "$RUNNER_TEMP/actor-heap-negative-binary-sha256.txt"
