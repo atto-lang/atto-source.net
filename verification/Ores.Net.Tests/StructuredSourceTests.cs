@@ -74,6 +74,9 @@ internal static class StructuredSourceTests
             "define pub serial http actor Endpoint as end",
             "pub define http actor Endpoint as end",
             "define pub shared http actor Endpoint as end",
+            "pub define untrusted http actor Endpoint as end",
+            "pub define http isoactor Endpoint as end",
+            "define private tcp http stream actor Endpoint as end",
             "define " + string.Concat(Enumerable.Repeat("pub ", 16)) +
                 "serial http actor Endpoint as end"
         })
@@ -81,6 +84,17 @@ internal static class StructuredSourceTests
             RejectFeature(source, "HTTP_ACTOR_BACKEND_UNSUPPORTED");
             RejectScalarHttpActor(source);
         }
+        // The same 94-byte .atto fixture is byte-identical in the JS and Rust
+        // source compiler tests. Load from the test output, never from a mutable
+        // repository-relative path or a hardcoded host-only surrogate.
+        string httpActorFixture = File.ReadAllText(Path.Combine(
+            AppContext.BaseDirectory, "contracts", "http-actor-admission", "3x4.atto"));
+        Require(httpActorFixture ==
+                "define http actor Endpoint as\n  int requestConcurrency = 3;\n" +
+                "  int messageConcurrency = 4;\nend\n",
+            "shared HTTP actor fixture bytes unexpectedly changed");
+        RejectFeature(httpActorFixture, "HTTP_ACTOR_BACKEND_UNSUPPORTED");
+        RejectScalarHttpActor(httpActorFixture);
         Require(OresStructuredParser.Parse(
             "fnc main():int{return 42;} // define serial http actor NotADeclaration").Body.Count == 1,
             "HTTP actor text in comments must not become a declaration");
