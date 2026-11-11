@@ -11,10 +11,11 @@ Status: host-runtime integration only. No `.atto` guest compiler lowering, OS de
 
 ## Scheduler / mailbox semantics
 
-- Every admitted host input record and the **first** input EOF publishes a readiness signal; no fake empty DATA message is sent into the actor mailbox.
+- Every admitted host input record and the **first** input EOF publishes (or coalesces into) a pending readiness signal; no fake empty DATA message is sent into the actor mailbox. A burst can create at most **one pending input-ready bit per actor**, never one scheduled callback per queued record.
 - A single scheduled actor-domain token exclusively runs either a DATA mailbox handler or an I/O readiness handler. Both enter `ActorArenaTurn`. If both are waiting, they alternate. The limit per dispatch is `ActorRuntimeOptions.MessagesPerDispatch`.
-- Coalesced readiness is bounded to `MaxRecordsPerChannel + 1` outstanding signals for each actor, including EOF. The readiness handler may drain multiple frames. A readiness invocation can find an empty queue when an earlier invocation already drained it.
-- If bounded signal coalescing leaves buffered input after a callback **actually consumed at least one frame**, the actor is rearmed once. A callback that refuses to consume input is not busy-spun; further readiness then needs a new host input event or explicit future retry policy.
+- The readiness handler may drain multiple frames; at most one pending input-ready bit exists for each actor even if 1,024 records have been admitted. A readiness invocation can find an empty queue when an earlier invocation already drained it.
+- If coalescing leaves buffered input after a callback **actually consumed at least one frame**, the actor is rearmed once. A callback that refuses to consume input is not busy-spun; further readiness needs a new host input event or an explicit future retry policy.
+- Regression tests verify a 256-frame burst causes exactly one callback when that callback drains the queue, while another 256-frame burst with a non-consuming callback does not burn carrier time with repeated callbacks. Both paths must refund outstanding I/O records on STOP.
 - No dedicated I/O thread or CONTROL carrier is created. User callbacks execute on existing PRIVATE/SHARED/UNTRUSTED carriers. They must not block; callers must not assume automatic socket, file or pipe readiness here.
 - `ActorRuntime.Stop` closes DATA admission and cancels queued I/O signals immediately without requiring any mailbox capacity. A live physical turn may complete; I/O-owned bytes are scrubbed at physical finalization, *not* when STOP is first requested.
 
@@ -39,6 +40,7 @@ Expected markers when actually executed by the source-owned workflow:
 - `ACTOR_IO_HOST_INTEGRATION_PASS`
 - `ACTOR_IO_GLOBAL_BUDGET_PASS`
 - `ACTOR_IO_READY_SCHEDULER_PASS`
+- `ACTOR_IO_WAKEUP_COALESCE_PASS`
 - `ACTOR_SUPERVISOR_CONTROL_RECEIPT_PASS`
 - `ACTOR_PIPELINE_MAILBOX_CONTROL_PASS`
 
