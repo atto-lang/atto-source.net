@@ -39,6 +39,8 @@ public sealed record StructuredLet(int At, string Name, IrValueType ValueType,
 public sealed record StructuredSet(int At, string Name, StructuredExpr Value)
     : StructuredStmt(At);
 public sealed record StructuredReturn(int At, StructuredExpr Value) : StructuredStmt(At);
+// Explicit return; and compiler-inserted void fallthrough share a terminator.
+public sealed record StructuredReturnVoid(int At) : StructuredStmt(At);
 public sealed record StructuredIf(int At, StructuredExpr Condition,
     IReadOnlyList<StructuredStmt> Then, IReadOnlyList<StructuredStmt>? Else)
     : StructuredStmt(At);
@@ -616,7 +618,7 @@ public static class OresStructuredParser
                 }
                 if (Current.Text == "(")
                     throw Error("Tuple-v2 shorthand return requires typed tuple ownership/ABI lowering");
-                IrValueType resultType = Type();
+                IrValueType resultType = Take("void") ? IrValueType.Void : Type();
                 if (name == "main" && entry)
                 {
                     if (visible.ContainsKey(name)) throw Error("Entry main conflicts with an imported callable");
@@ -624,7 +626,7 @@ public static class OresStructuredParser
                     if (parameters.Count != 0 || resultType != IrValueType.I64)
                         throw new FormatException($"main must have signature ():int at offset {at}");
                     var (body, returns) = Block(0);
-                    if (!returns) throw Error("Not every path returns int");
+                    if (!returns) throw Error("RETURN_EXPLICIT_REQUIRED: not every main path returns int");
                     return Finish("main", body);
                 }
                 if (visible.ContainsKey(name))
@@ -637,8 +639,16 @@ public static class OresStructuredParser
                 scopes.Add(parameterTypes);
                 var (helperBody, helperReturns) = Block(0);
                 scopes.RemoveAt(scopes.Count - 1);
-                if (!helperReturns)
-                    throw Error("Not every typed helper path returns");
+                if (!helperReturns && resultType != IrValueType.Void)
+                    throw Error("RETURN_EXPLICIT_REQUIRED: not every non-void helper path returns");
+                if (!helperReturns && resultType == IrValueType.Void)
+                {
+                    // Compiler-owned empty-stack terminator for permissible
+                    // void fallthrough, not an implicit source value return.
+                    var completed = helperBody.ToList();
+                    completed.Add(new StructuredReturnVoid(at));
+                    helperBody = Array.AsReadOnly(completed.ToArray());
+                }
                 StructuredExpr? inlineReturn =
                     helperBody.Count == 1 && helperBody[0] is StructuredReturn only
                         ? only.Value : null;
@@ -752,6 +762,15 @@ public static class OresStructuredParser
                     $"GUARD_BACKEND_UNSUPPORTED: early-exit CFG and ownership lowering required at offset {at}");
             if (Take("return"))
             {
+                if (activeReturnType == IrValueType.Void)
+                {
+                    if (Current.Text != ";")
+                        throw Error("RETURN_VOID_VALUE: void function cannot return a value");
+                    Expect(";");
+                    return (new StructuredReturnVoid(at), true);
+                }
+                if (Current.Text == ";")
+                    throw Error("RETURN_VALUE_REQUIRED: non-void function requires a value");
                 var value = Expr(depth + 1);
                 Require(value, activeReturnType,
                     "Return value does not match function result type");
