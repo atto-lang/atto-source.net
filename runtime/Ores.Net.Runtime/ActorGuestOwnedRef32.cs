@@ -2,7 +2,7 @@ namespace Ores.Net.Runtime;
 
 /// <summary>
 /// An actor-bound host/compiler handle for one local 32-bit guest reference.
-/// The actual native field stays four bytes; this stack-only value wrapper
+/// The actual native field stays four bytes; this managed value wrapper
 /// also binds it to the runtime-minted actor arena identity. It must not be
 /// serialized or embedded in guest memory. Default is the canonical null.
 /// </summary>
