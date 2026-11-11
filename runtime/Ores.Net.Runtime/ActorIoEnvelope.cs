@@ -198,6 +198,18 @@ public sealed class ActorIoEnvelope : IDisposable
         }
     }
 
+    // Used only by the existing actor-domain scheduler while holding the
+    // actor cell gate. If readiness signals were coalesced under pressure, a
+    // turn that consumed data may rearm once while input remains buffered.
+    internal bool HasBufferedInput(ActorRef actor)
+    {
+        lock (_gate)
+        {
+            RequireCurrent(actor);
+            return _input.Count != 0;
+        }
+    }
+
     public bool TryWriteOutput(ActorRef actor, ReadOnlySpan<byte> data)
     {
         lock (_gate)
