@@ -95,6 +95,30 @@ internal static class StructuredSourceTests
             "shared HTTP actor fixture bytes unexpectedly changed");
         RejectFeature(httpActorFixture, "HTTP_ACTOR_BACKEND_UNSUPPORTED");
         RejectScalarHttpActor(httpActorFixture);
+        // These three .atto blobs must remain byte-identical to the Java,
+        // LLVM, Wasm and shared conformance inputs. This gate executes both
+        // independent CIL parser entrypoints; it does NOT claim HTTP guest
+        // sockets or Native AOT HTTP actor runtime support.
+        foreach (var (file, expectedBlob) in new (string File, string Sha)[] {
+            ("serial-1x1.atto", "7564a770934d2374ec5166a353c2c9bb3c383bdf"),
+            ("explicit-1x1.atto", "d2e5ebaffaaa26bfe6e117aaa8b36a6eb33937e1"),
+            ("unsupported-3x4.atto", "6987e72d70ae509522f7e050a494c0aef721a653")
+        })
+        {
+            byte[] data = File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory,
+                "contracts", "http-actor-v1", file));
+            byte[] header = System.Text.Encoding.ASCII.GetBytes("blob " + data.Length + "\0");
+            byte[] gitBlobBytes = new byte[header.Length + data.Length];
+            Buffer.BlockCopy(header, 0, gitBlobBytes, 0, header.Length);
+            Buffer.BlockCopy(data, 0, gitBlobBytes, header.Length, data.Length);
+            string blob = Convert.ToHexString(
+                System.Security.Cryptography.SHA1.HashData(gitBlobBytes)).ToLowerInvariant();
+            Require(blob == expectedBlob,
+                "canonical HTTP actor Git blob changed for " + file);
+            string atto = System.Text.Encoding.UTF8.GetString(data);
+            RejectFeature(atto, "HTTP_ACTOR_BACKEND_UNSUPPORTED");
+            RejectScalarHttpActor(atto);
+        }
         Require(OresStructuredParser.Parse(
             "fnc main():int{return 42;} // define serial http actor NotADeclaration").Body.Count == 1,
             "HTTP actor text in comments must not become a declaration");
