@@ -181,6 +181,21 @@ internal static class StructuredCfgLoweringTests
         CheckOverflow("fnc inc(int x):int{return x+1;}fnc main():int{return inc(9223372036854775807);}",
             "typed call overflow preserves checked CIL");
 
+        // These are .atto files. Check() passes them through the real
+        // structured source parser, verified CFG, deterministic CIL emission
+        // and an independent CIL evaluator, never runtime source generation.
+        string operatorDir = Path.Combine(AppContext.BaseDirectory, "contracts", "erl-otp-aot");
+        Check(File.ReadAllText(Path.Combine(operatorDir, "neq-alias-true.atto")),
+            42, "AttoLang !eq true CIL comparison");
+        Check(File.ReadAllText(Path.Combine(operatorDir, "neq-alias-false.atto")),
+            42, "AttoLang !eq false CIL comparison");
+        Reject(File.ReadAllText(Path.Combine(operatorDir, "neq-alias-split.atto")),
+            "spaces must not turn ! eq into != or !eq");
+        Reject(File.ReadAllText(Path.Combine(operatorDir, "neq-alias-mixed.atto")),
+            "no implicit bool-to-int equality");
+        Reject(File.ReadAllText(Path.Combine(operatorDir, "neq-alias-prefix.atto")),
+            "!equation must not tokenize as !eq plus suffix");
+
         Check("fnc main():int{if 3 neq 4{return 42;}else{return 0;}}",
             42, "canonical neq true comparison");
         Check("fnc main():int{if 4 neq 4{return 0;}else{return 42;}}",
