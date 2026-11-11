@@ -124,8 +124,12 @@ internal static class ActorRuntimeSelfTest
                 "live turn must read host-fed input");
             Require(input.SequenceEqual(new byte[] { 13, 21, 34 }),
                 "host-to-actor channel must isolate sender mutations");
+            Require(context.InputEof, "io.in EOF follows final queued record");
             Require(context.TryWriteOutput(input),
                 "live turn must publish bounded output");
+            context.CompleteOutput();
+            Require(!context.TryWriteOutput(new byte[] { 9 }),
+                "actor cannot write io.out after actor-owned EOF");
             handled.Set();
         });
 
@@ -139,6 +143,10 @@ internal static class ActorRuntimeSelfTest
 
         var inputSource = new byte[] { 13, 21, 34 };
         Require(hostIo.TryFeedInput(inputSource), "host feed input");
+        hostIo.CompleteInput();
+        hostIo.CompleteInput();
+        Require(!hostIo.TryFeedInput(new byte[] { 66 }),
+            "host cannot write io.in after host-owned EOF");
         inputSource[0] = 255;
         // Until a dedicated I/O readiness scheduler token exists, explicit
         // ordinary actor wakeup is required. Never label this native I/O AOT.
@@ -147,9 +155,11 @@ internal static class ActorRuntimeSelfTest
         Require(WaitUntil(() => runtime.CompletedMessages == 1),
             "I/O actor turn completed");
 
+        Require(!hostIo.OutputEof, "output EOF must wait for pending record");
         Require(hostIo.TryReadOutput(out var output) && output is not null &&
             output.SequenceEqual(new byte[] { 13, 21, 34 }),
             "host drain io.out returns exact owned payload");
+        Require(hostIo.OutputEof, "host observes EOF after final output drain");
         bool expired = false;
         try { retained!.TryWriteOutput(new byte[] { 99 }); }
         catch (InvalidOperationException) { expired = true; }
