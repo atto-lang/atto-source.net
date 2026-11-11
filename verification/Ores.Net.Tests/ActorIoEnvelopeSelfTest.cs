@@ -89,6 +89,7 @@ internal static class ActorIoEnvelopeSelfTest
         ExpectStale(() => io.TryWriteOutput(foreign, new byte[] { 9 }), "foreign authority");
 
         TestTerminalRetirement();
+        Console.WriteLine("ACTOR_IO_ENVELOPE_RETIREMENT_PASS");
 
         Console.WriteLine(
             "PASS .NET actor io bounded input/output/error/events/metadata and generation fencing");
