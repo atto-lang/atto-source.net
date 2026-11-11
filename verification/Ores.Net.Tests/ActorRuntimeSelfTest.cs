@@ -28,6 +28,9 @@ internal static class ActorRuntimeSelfTest
         DataAndIoTurnsAlternateWithoutReentrancy();
         StopPreemptsInputReadinessUnderDataSaturation();
         ConcurrentInputWritersNeverLoseWakeups();
+        BurstInputReadinessIsCoalesced();
+        IdleInputCallbackCannotBusySpin();
+        Console.WriteLine("ACTOR_IO_WAKEUP_COALESCE_PASS");
         Console.WriteLine("ACTOR_IO_READY_SCHEDULER_PASS");
         Console.WriteLine("ACTOR_IO_GLOBAL_BUDGET_PASS");
         Console.WriteLine("ACTOR_SUPERVISOR_CONTROL_RECEIPT_PASS");
@@ -633,6 +636,109 @@ internal static class ActorRuntimeSelfTest
         Require(WaitUntil(() => runtime.LiveActors == 0 &&
             runtime.NativeReservedBytes == 0),
             "contention test actor terminated after readiness drain");
+    }
+
+    // A burst must not schedule one callback per input record when a single
+    // callback drains the bounded transport. This is both an amplification
+    // regression and a fairness limit for actor carrier scheduling.
+    private static void BurstInputReadinessIsCoalesced()
+    {
+        using var runtime = new ActorRuntime(Options());
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        using var drained = new ManualResetEventSlim();
+        const int frames = 256;
+        int observed = 0, invocations = 0;
+
+        var (actor, port) = runtime.SpawnWithIo(ActorKind.Shared,
+            (_, _) =>
+            {
+                entered.Set();
+                Require(release.Wait(TimeSpan.FromSeconds(10)),
+                    "coalescing fixture release");
+            },
+            ctx =>
+            {
+                Interlocked.Increment(ref invocations);
+                while (ctx.TryReadInput(out var frame) && frame is not null)
+                {
+                    Require(frame.Length == 1, "coalesced one-byte frames");
+                    Interlocked.Increment(ref observed);
+                }
+                if (Volatile.Read(ref observed) == frames)
+                    drained.Set();
+            });
+
+        runtime.Send(actor, new byte[] { 1 });
+        Require(entered.Wait(TimeSpan.FromSeconds(5)),
+            "mailbox turn pins source before I/O burst");
+        try
+        {
+            for (int i = 0; i < frames; i++)
+                Require(port.TryFeedInput(new byte[] { (byte)i }),
+                    "burst input admitted while carrier was busy");
+        }
+        finally { release.Set(); }
+
+        Require(drained.Wait(TimeSpan.FromSeconds(10)),
+            "coalesced readiness drains every accepted frame");
+        Require(WaitUntil(() => runtime.CompletedIoTurns == 1 &&
+            runtime.IoQueuedRecords == 0),
+            "256 input wakeups coalesced into exactly one physical I/O turn");
+        Require(Volatile.Read(ref observed) == frames &&
+            Volatile.Read(ref invocations) == 1,
+            "no amplification, duplicate or lost input after coalescing");
+        runtime.Stop(actor);
+        Require(WaitUntil(() => runtime.LiveActors == 0 &&
+            runtime.IoQueuedBytes == 0 && runtime.IoQueuedRecords == 0),
+            "coalesced actor reclaimed global I/O budget");
+    }
+
+    private static void IdleInputCallbackCannotBusySpin()
+    {
+        using var runtime = new ActorRuntime(Options());
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        using var callback = new ManualResetEventSlim();
+        int invocations = 0;
+
+        var (actor, port) = runtime.SpawnWithIo(ActorKind.Private,
+            (_, _) =>
+            {
+                entered.Set();
+                Require(release.Wait(TimeSpan.FromSeconds(10)),
+                    "idle consumer fixture release");
+            },
+            _ =>
+            {
+                Interlocked.Increment(ref invocations);
+                callback.Set();
+                // Intentionally do not consume input. There is no automatic
+                // retry without either progress or a fresh host signal.
+            });
+
+        runtime.Send(actor, new byte[] { 1 });
+        Require(entered.Wait(TimeSpan.FromSeconds(5)),
+            "idle consumer mailbox turn active before burst");
+        try
+        {
+            for (int i = 0; i < 256; i++)
+                Require(port.TryFeedInput(new byte[] { 4 }),
+                    "idle consumer bounded input admission");
+        }
+        finally { release.Set(); }
+
+        Require(callback.Wait(TimeSpan.FromSeconds(5)),
+            "one I/O callback executed for burst");
+        Require(WaitUntil(() => runtime.CompletedIoTurns == 1),
+            "non-consuming I/O callback completed once");
+        Require(Volatile.Read(ref invocations) == 1 &&
+            runtime.IoQueuedRecords == 256,
+            "non-consuming callback must not busy-spin or secretly drain");
+        runtime.Stop(actor);
+        Require(WaitUntil(() => runtime.LiveActors == 0 &&
+            runtime.IoQueuedBytes == 0 && runtime.IoQueuedRecords == 0),
+            "STOP zeroizes idle input and refunds all reserved records");
     }
 
     private static void ForgedSameIdCannotObserveTermination()
