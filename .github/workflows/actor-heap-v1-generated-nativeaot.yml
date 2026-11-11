@@ -94,6 +94,18 @@ jobs:
             tee "$RUNNER_TEMP/actor-heap-atto-sha256.txt"
           sha256sum verification/Ores.Net.ActorGuestV1Probe/ActorHeapV1.g.cs |
             tee "$RUNNER_TEMP/actor-heap-generated-csharp-sha256.txt"
+          # A BOM-prefixed source is different from the signed .atto bytes.
+          # The compiler must reject it without writing an output file.
+          bom_source="$RUNNER_TEMP/actor-heap-with-bom.atto"
+          bom_out="$RUNNER_TEMP/actor-heap-bom-rejected/ActorHeapV1.g.cs"
+          printf '\\357\\273\\277' > "$bom_source"
+          cat "$fixture" >> "$bom_source"
+          if dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj \
+              -c Release -- emit-actor-heap-v1 "$bom_source" --out "$bom_out"; then
+            echo "BOM-prefixed .atto source bypassed exact-byte admission" >&2
+            exit 1
+          fi
+          test ! -e "$bom_out"
           # Verify the fixture itself was not rewritten by the compiler.
           test "$(git hash-object "$fixture")" = "$expected_blob"
           test -z "$(git diff --name-only HEAD --)"
