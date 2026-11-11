@@ -1,0 +1,92 @@
+name: Actor memory compiler E2E v1 — host-only evidence (net)
+on:
+  pull_request:
+    paths:
+      - 'contracts/v1/ACTOR_MEMORY_COMPILER_E2E_V1.md'
+      - 'contracts/v1/actor_memory_compiler_e2e_v1.json'
+      - 'scripts/verify_actor_memory_compiler_e2e_v1.py'
+      - 'scripts/test_actor_memory_compiler_e2e_v1.py'
+      - 'tests/actor_memory_e2e_v1_host.c'
+      - 'verification/Ores.Net.Tests/ActorMemoryE2EV1SelfTest.cs'
+      - 'verification/Ores.Net.Tests/ActorNativeArenaSelfTest.cs'
+      - 'src/test/java/dev/oreslang/runtime/ActorMemoryE2EV1Test.java'
+      - '.github/workflows/actor-memory-compiler-e2e-v1.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  host-substrate-not-guest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact checkout and reject false certification
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -n "$(git rev-parse 'HEAD^{tree}')"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          python3 -I scripts/verify_actor_memory_compiler_e2e_v1.py
+          python3 -m unittest discover -s scripts -p 'test_actor_memory_compiler_e2e_v1.py' -v
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.x'
+      - name: Execute CLR runtime allocation and ownership probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release \
+            | tee "$RUNNER_TEMP/actor-memory-net.log"
+          grep -Fx 'ACTOR_MEMORY_E2E_V1_HOST_ONLY=PASS' "$RUNNER_TEMP/actor-memory-net.log"
+          grep -Fx 'ACTOR_MEMORY_E2E_V1_COMPILED_GUEST=NOT_EXECUTED' "$RUNNER_TEMP/actor-memory-net.log"
+      - name: Write bounded evidence receipt (never guest or AOT)
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          TARGET_BACKEND: net
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess
+          def git(*args):
+              return subprocess.check_output(["git", *args], text=True).strip()
+          paths = [
+              "contracts/v1/ACTOR_MEMORY_COMPILER_E2E_V1.md",
+              "contracts/v1/actor_memory_compiler_e2e_v1.json",
+              "scripts/verify_actor_memory_compiler_e2e_v1.py",
+              "scripts/test_actor_memory_compiler_e2e_v1.py",
+          ]
+          expected = os.environ["EXPECTED_HEAD"]
+          if git("rev-parse", "HEAD") != expected:
+              raise SystemExit("nonexact HEAD")
+          receipt = {
+              "schema": "oreslang.actor_memory_compiler_e2e.host_receipt_v1",
+              "backend": os.environ["TARGET_BACKEND"],
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "head": expected,
+              "tree": git("rev-parse", "HEAD^{tree}"),
+              "blobs": {p: git("hash-object", p) for p in paths},
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "host_substrate": "PASS",
+              "compiled_guest": "NOT_EXECUTED",
+              "aot": "NOT_EXECUTED",
+              "zero_gc_certified": False,
+              "cross_org_private_source_export": False,
+          }
+          pathlib.Path(os.environ["RUNNER_TEMP"], "actor-memory-host-v1.json").write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+          print("ACTOR_MEMORY_HOST_RECEIPT_V1=PASS")
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: actor-memory-host-v1-net-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/actor-memory-host-v1.json
+          if-no-files-found: error
+          retention-days: 7
