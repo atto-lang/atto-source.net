@@ -94,7 +94,7 @@ internal static class ExplicitReturnFlowTests
             "RETURN_EXPLICIT_REQUIRED");
         Reject("braced lambda is not an implicit outer return",
             Entry("fnc unused(): int { val int f = |x| -> { x; }; }"),
-            "Unsupported");
+            "checked closure lowering");
         Reject("wrong return type",
             Entry("fnc unused(): int { return true; }"),
             "Return value does not match function result type");
