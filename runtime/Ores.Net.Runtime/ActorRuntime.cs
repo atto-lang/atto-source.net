@@ -110,6 +110,57 @@ public sealed class ActorContext
     public uint AllocateTypedGuestObject32(ActorGuestLayout32 layout) =>
         _guestHeap.Value.AllocateTyped(_turn, layout);
 
+    // Compiler-facing API: a runtime-minted arena identity travels alongside
+    // the *host* value, but never enters the guest's four-byte Ref32 field.
+    // Do not use raw uint32 references for guest ownership/actor boundaries.
+    public ActorGuestOwnedRef32 AllocateOwnedTypedGuestObject32(
+        ActorGuestLayout32 layout) =>
+        new(_arena, _guestHeap.Value.AllocateTyped(_turn, layout));
+
+    private uint RequireOwnedGuestRef32(ActorGuestOwnedRef32 reference)
+    {
+        // Check the physical execution lease *before* inspecting even a
+        // null/foreign handle. A retained ActorContext grants no authority.
+        _arena.ValidatePhysicalTurn(_turn);
+        if (!reference.BelongsTo(_arena))
+            throw new InvalidOperationException(
+                "Null or foreign actor-owned guest reference");
+        return reference.Word;
+    }
+
+    public void DropOwnedGuestObject32(ActorGuestOwnedRef32 reference) =>
+        _guestHeap.Value.Drop(_turn, RequireOwnedGuestRef32(reference));
+
+    public ActorArenaReadLoan BorrowOwnedGuestObjectRead32(
+        ActorGuestOwnedRef32 reference) =>
+        _guestHeap.Value.BorrowRead(_turn, RequireOwnedGuestRef32(reference));
+
+    public void ReadOwnedGuestObject32(ActorGuestOwnedRef32 reference,
+        int offset, Span<byte> destination) =>
+        _guestHeap.Value.Read(_turn, RequireOwnedGuestRef32(reference),
+            offset, destination);
+
+    public void WriteOwnedGuestObject32(ActorGuestOwnedRef32 reference,
+        int offset, ReadOnlySpan<byte> source) =>
+        _guestHeap.Value.Write(_turn, RequireOwnedGuestRef32(reference),
+            offset, source);
+
+    public ActorGuestOwnedRef32 ReadOwnedGuestReference32(
+        ActorGuestOwnedRef32 owner, int offset)
+    {
+        uint word = _guestHeap.Value.ReadReference(_turn,
+            RequireOwnedGuestRef32(owner), offset);
+        return word == 0 ? default : new ActorGuestOwnedRef32(_arena, word);
+    }
+
+    public void WriteOwnedGuestReference32(ActorGuestOwnedRef32 owner,
+        int offset, ActorGuestOwnedRef32 target)
+    {
+        uint ownerWord = RequireOwnedGuestRef32(owner);
+        uint targetWord = target.IsNull ? 0 : RequireOwnedGuestRef32(target);
+        _guestHeap.Value.WriteReference(_turn, ownerWord, offset, targetWord);
+    }
+
     public void DropGuestObject32(uint reference) =>
         _guestHeap.Value.Drop(_turn, reference);
 
