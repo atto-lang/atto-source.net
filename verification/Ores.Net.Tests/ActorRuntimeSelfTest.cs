@@ -196,6 +196,7 @@ internal static class ActorRuntimeSelfTest
         using var runtime = new ActorRuntime(Options());
         using var entered = new ManualResetEventSlim();
         using var release = new ManualResetEventSlim();
+        int postStopActorIoDenied = 0;
         var (actor, hostIo) = runtime.SpawnWithIo(ActorKind.Private, (ctx, _) =>
         {
             Require(ctx.TryWriteOutput(new byte[] { 77, 88, 99 }),
@@ -203,6 +204,11 @@ internal static class ActorRuntimeSelfTest
             entered.Set();
             Require(release.Wait(TimeSpan.FromSeconds(10)),
                 "test release carrier after STOP");
+            try { ctx.TryWriteOutput(new byte[] { 1 }); }
+            catch (InvalidOperationException)
+            {
+                Interlocked.Exchange(ref postStopActorIoDenied, 1);
+            }
         });
 
         runtime.Send(actor, ReadOnlySpan<byte>.Empty);
@@ -229,6 +235,8 @@ internal static class ActorRuntimeSelfTest
             Require(ownedInput.All(value => value == 0) &&
                 ownedOutput.All(value => value == 0),
                 "physical finalization scrubs queued input and output");
+            Require(Volatile.Read(ref postStopActorIoDenied) == 1,
+                "in-flight turn must lose output admission after trusted STOP");
         }
         finally { release.Set(); }
     }
