@@ -31,7 +31,8 @@ jobs:
           test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
           tree="$(git rev-parse HEAD^{tree})"
           [[ "$tree" =~ ^[0-9a-f]{40}$ ]]
-          for p in examples/atto-neq-nativeaot.atto examples/atto-neq-mixed-bool-reject.atto; do
+          test "$(git rev-parse HEAD:examples/atto-neq-nativeaot.atto)" = 0e69c04a8a15c3da924183656da10ab7dcdeb9bd
+          for p in examples/atto-neq-nativeaot.atto examples/atto-neq-mixed-bool-reject.atto examples/atto-neq-split-reject.atto examples/atto-neq-suffix-reject.atto; do
             test "$(git hash-object --no-filters "$p")" = "$(git rev-parse "HEAD:$p")"
           done
           echo "ATTO_OPERATOR_SOURCE_PINNED head=$SOURCE_HEAD tree=$tree"
