@@ -7,6 +7,13 @@ public delegate void ActorMessageHandler(
     ActorContext context, ReadOnlyMemory<byte> message);
 
 /// <summary>
+/// Host-substrate I/O continuation: executes on the actor's existing bounded
+/// carrier domain, with the same non-reentrant actor turn as mailbox DATA.
+/// No new carrier, guest closure, synthetic mailbox message or CONTROL lane.
+/// </summary>
+public delegate void ActorIoReadyHandler(ActorContext context);
+
+/// <summary>
 /// Bounded host-runtime options. This remains a runtime integration substrate,
 /// not source-level actor lowering.
 /// </summary>
@@ -243,6 +250,7 @@ public sealed class ActorRuntime : IDisposable
     private ulong _nextActorId;
     private bool _closed;
     private long _completedMessages;
+    private long _completedIoTurns;
     private long _faultedTurns;
 
     private sealed class ActorCell
@@ -251,7 +259,8 @@ public sealed class ActorRuntime : IDisposable
 
         internal ActorCell(ActorRuntime owner, ActorKind kind,
             ActorMailbox mailbox, ActorArena arena, ActorMessageHandler handler,
-            int stackBytes, int maxStackFrames, ActorIoBudget ioBudget)
+            int stackBytes, int maxStackFrames, ActorIoBudget ioBudget,
+            ActorIoReadyHandler? ioReadyHandler)
         {
             _owner = owner;
             Kind = kind;
@@ -259,9 +268,11 @@ public sealed class ActorRuntime : IDisposable
             Arena = arena;
             Stack = new ActorFrameStack(arena, stackBytes, maxStackFrames);
             Handler = handler;
+            IoReadyHandler = ioReadyHandler;
             Reference = mailbox.CurrentRef;
             Io = new ActorIoEnvelope(mailbox, ioBudget);
-            HostIo = new ActorIoHostPort(Io, Reference);
+            HostIo = new ActorIoHostPort(Io, Reference,
+                ioReadyHandler is null ? null : owner);
             DispatchAction = Dispatch;
         }
 
@@ -273,9 +284,15 @@ public sealed class ActorRuntime : IDisposable
         internal ActorIoEnvelope Io { get; }
         internal ActorIoHostPort HostIo { get; }
         internal ActorMessageHandler Handler { get; }
+        internal ActorIoReadyHandler? IoReadyHandler { get; }
         internal ActorRef Reference { get; }
         internal Action DispatchAction { get; }
         internal int Scheduled;
+        // Each accepted io.in record and first EOF posts one pending readiness
+        // turn, independently of ordinary mailbox DATA credit. Per-actor
+        // input records are bounded, and the drain alternates with mailbox.
+        internal int PendingIoSignals;
+        internal bool PreferIo;
         internal bool Stopping;
         internal int Finalized;
         internal TaskCompletionSource Terminated { get; } =
@@ -303,10 +320,15 @@ public sealed class ActorRuntime : IDisposable
     public int IoQueuedBytes => _ioBudget.QueuedBytes;
     public int IoQueuedRecords => _ioBudget.QueuedRecords;
     public long CompletedMessages => Interlocked.Read(ref _completedMessages);
+    public long CompletedIoTurns => Interlocked.Read(ref _completedIoTurns);
     public long FaultedTurns => Interlocked.Read(ref _faultedTurns);
     public int StartedCarrierThreads => _domains.TotalStartedWorkers;
 
-    public ActorRef Spawn(ActorKind kind, ActorMessageHandler handler)
+    public ActorRef Spawn(ActorKind kind, ActorMessageHandler handler) =>
+        SpawnCore(kind, handler, null);
+
+    private ActorRef SpawnCore(ActorKind kind, ActorMessageHandler handler,
+        ActorIoReadyHandler? ioReadyHandler)
     {
         ArgumentNullException.ThrowIfNull(handler);
         if (kind is not (ActorKind.Private or ActorKind.Shared or ActorKind.Untrusted))
@@ -341,7 +363,7 @@ public sealed class ActorRuntime : IDisposable
                     ? Math.Min(64 * 1024, Math.Max(1, _options.ActorPersistentBytes / 4))
                     : _options.ActorStackBytes;
                 var cell = new ActorCell(this, kind, mailbox, arena, handler,
-                    stackBytes, _options.ActorMaxStackFrames, _ioBudget);
+                    stackBytes, _options.ActorMaxStackFrames, _ioBudget, ioReadyHandler);
                 _actors.Add(candidateId, cell);
                 _nextActorId = candidateId;
                 return cell.Reference;
@@ -357,15 +379,84 @@ public sealed class ActorRuntime : IDisposable
     /// <summary>
     /// Mint a separate directional host I/O capability at actor creation.
     /// Merely knowing the ActorRef does not grant either host-side channel.
-    /// The caller must explicitly wake the actor through its scheduled
-    /// mailbox until I/O-ready scheduler admission is implemented.
+    /// Without an I/O-ready callback, the legacy host must explicitly
+    /// send a mailbox wakeup; the new overload supports direct I/O signaling.
     /// </summary>
     public (ActorRef Actor, ActorIoHostPort HostIo) SpawnWithIo(
-        ActorKind kind, ActorMessageHandler handler)
+        ActorKind kind, ActorMessageHandler handler) =>
+        SpawnWithIoCore(kind, handler, null);
+
+    /// <summary>
+    /// Bind a separate I/O readiness continuation. Host input and initial EOF
+    /// automatically schedule the owning actor without consuming DATA mailbox
+    /// credits. I/O is never an extra reentrant turn or a CONTROL action.
+    /// </summary>
+    public (ActorRef Actor, ActorIoHostPort HostIo) SpawnWithIo(
+        ActorKind kind, ActorMessageHandler handler,
+        ActorIoReadyHandler onInputReady)
     {
-        var actor = Spawn(kind, handler);
+        ArgumentNullException.ThrowIfNull(onInputReady);
+        return SpawnWithIoCore(kind, handler, onInputReady);
+    }
+
+    private (ActorRef Actor, ActorIoHostPort HostIo) SpawnWithIoCore(
+        ActorKind kind, ActorMessageHandler handler,
+        ActorIoReadyHandler? onInputReady)
+    {
+        var actor = SpawnCore(kind, handler, onInputReady);
         var cell = Lookup(actor);
         return (actor, cell.HostIo);
+    }
+
+    /// <summary>
+    /// Publish an already-admitted, bounded input-record/EOF readiness event.
+    /// This is separate from the user mailbox and the trusted STOP control.
+    /// A stale, stopped or already-finalized destination is ignored. Never
+    /// retain a carrier waiting for input; a scheduled token owns the wakeup.
+    /// </summary>
+    internal void NotifyInputReady(ActorRef actor)
+    {
+        ActorCell cell;
+        lock (_gate)
+        {
+            if (_closed || !_actors.TryGetValue(actor.Id, out var found) ||
+                found.Reference != actor || found.IoReadyHandler is null)
+                return;
+            cell = found;
+        }
+
+        bool finalize = false;
+        lock (cell.Gate)
+        {
+            if (cell.Stopping) return;
+            // The source queue admits <= 1024 pending input records. A
+            // malicious repeated EOF must not increase scheduler credits.
+            if (cell.PendingIoSignals >= ActorIoEnvelope.MaxRecordsPerChannel + 1)
+                throw new InvalidOperationException("Actor I/O readiness queue overflow");
+
+            ++cell.PendingIoSignals;
+            if (cell.Scheduled != 0) return;
+            try
+            {
+                if (!TryScheduleLocked(cell))
+                {
+                    MarkStoppingLocked(cell);
+                    finalize = true;
+                }
+            }
+            catch
+            {
+                MarkStoppingLocked(cell);
+                finalize = true;
+            }
+        }
+
+        if (finalize)
+        {
+            FinalizeCell(cell);
+            throw new InvalidOperationException(
+                "I/O readiness dispatch failed; actor was safely retired");
+        }
     }
 
     public void Send(ActorRef destination, ReadOnlySpan<byte> payload)
