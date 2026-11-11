@@ -35,6 +35,58 @@ public sealed class ActorIoHostPort
     public bool OutputEof => _io.OutputEof(_actor);
 }
 
+/// <summary>
+/// Shared bounded queued-DATA credit for all actor I/O envelopes in one
+/// runtime. Includes zero-byte records; not a cap on delivered caller-owned
+/// memory, native actor arenas or non-queue metadata snapshots.
+/// </summary>
+internal sealed class ActorIoBudget
+{
+    private readonly object _gate = new();
+    private readonly int _maxBytes;
+    private readonly int _maxRecords;
+    private int _queuedBytes;
+    private int _queuedRecords;
+
+    internal ActorIoBudget(int maxBytes, int maxRecords)
+    {
+        if (maxBytes <= 0 || maxBytes > 64 * 1024 * 1024)
+            throw new ArgumentOutOfRangeException(nameof(maxBytes));
+        if (maxRecords <= 0 || maxRecords > 65_536)
+            throw new ArgumentOutOfRangeException(nameof(maxRecords));
+        _maxBytes = maxBytes;
+        _maxRecords = maxRecords;
+    }
+
+    internal int QueuedBytes { get { lock (_gate) return _queuedBytes; } }
+    internal int QueuedRecords { get { lock (_gate) return _queuedRecords; } }
+
+    internal bool TryReserve(int bytes)
+    {
+        if (bytes < 0) throw new ArgumentOutOfRangeException(nameof(bytes));
+        lock (_gate)
+        {
+            if (_queuedRecords >= _maxRecords ||
+                bytes > _maxBytes - _queuedBytes) return false;
+            ++_queuedRecords;
+            _queuedBytes += bytes;
+            return true;
+        }
+    }
+
+    internal void Release(int bytes, int records = 1)
+    {
+        lock (_gate)
+        {
+            if (bytes < 0 || records < 0 || _queuedRecords < records ||
+                _queuedBytes < bytes)
+                throw new InvalidOperationException("actor I/O budget accounting corrupted");
+            _queuedRecords -= records;
+            _queuedBytes -= bytes;
+        }
+    }
+}
+
 public readonly record struct ActorIoDiagnostic(string Code, string Message);
 public readonly record struct ActorIoEvent(string Kind, string Payload);
 
@@ -58,6 +110,7 @@ public sealed class ActorIoEnvelope : IDisposable
 
     private readonly ActorMailbox _mailbox;
     private readonly ActorRef _boundActor;
+    private readonly ActorIoBudget? _budget;
     private readonly object _gate = new();
     private readonly Queue<byte[]> _input = new();
     private readonly Queue<byte[]> _output = new();
@@ -74,9 +127,12 @@ public sealed class ActorIoEnvelope : IDisposable
     private IReadOnlyDictionary<string, string> _metadata =
         new ReadOnlyDictionary<string, string>(new Dictionary<string, string>());
 
-    public ActorIoEnvelope(ActorMailbox mailbox)
+    public ActorIoEnvelope(ActorMailbox mailbox) : this(mailbox, null) { }
+
+    internal ActorIoEnvelope(ActorMailbox mailbox, ActorIoBudget? budget)
     {
         _mailbox = mailbox ?? throw new ArgumentNullException(nameof(mailbox));
+        _budget = budget;
         _boundActor = _mailbox.CurrentRef;
         if (!_mailbox.Authorizes(_boundActor))
             throw new InvalidOperationException(
@@ -186,7 +242,9 @@ public sealed class ActorIoEnvelope : IDisposable
                 return false;
             }
             diagnostic = _errors.Dequeue();
-            _errorBytes -= Utf8Bytes(diagnostic.Code) + Utf8Bytes(diagnostic.Message);
+            int bytes = Utf8Bytes(diagnostic.Code) + Utf8Bytes(diagnostic.Message);
+            _errorBytes -= bytes;
+            _budget?.Release(bytes);
             return true;
         }
     }
@@ -212,7 +270,9 @@ public sealed class ActorIoEnvelope : IDisposable
                 return false;
             }
             @event = _events.Dequeue();
-            _eventBytes -= Utf8Bytes(@event.Kind) + Utf8Bytes(@event.Payload);
+            int bytes = Utf8Bytes(@event.Kind) + Utf8Bytes(@event.Payload);
+            _eventBytes -= bytes;
+            _budget?.Release(bytes);
             return true;
         }
     }
@@ -289,10 +349,13 @@ public sealed class ActorIoEnvelope : IDisposable
             _disposed = true;
             _inputCompleted = true;
             _outputCompleted = true;
+            int queued = _input.Count + _output.Count + _errors.Count + _events.Count;
+            int bytes = checked(_inputBytes + _outputBytes + _errorBytes + _eventBytes);
             ScrubPending(_input);
             ScrubPending(_output);
             _errors.Clear();
             _events.Clear();
+            _budget?.Release(bytes, queued);
             _inputBytes = 0;
             _outputBytes = 0;
             _errorBytes = 0;
@@ -309,7 +372,7 @@ public sealed class ActorIoEnvelope : IDisposable
         queue.Clear();
     }
 
-    private static bool TryEnqueueBytes(
+    private bool TryEnqueueBytes(
         Queue<byte[]> queue,
         ref int queuedBytes,
         ReadOnlySpan<byte> source)
@@ -320,13 +383,23 @@ public sealed class ActorIoEnvelope : IDisposable
             queuedBytes > MaxBytesPerChannel ||
             source.Length > MaxBytesPerChannel - queuedBytes)
             return false;
-        var owned = source.ToArray();
-        queue.Enqueue(owned);
-        queuedBytes += owned.Length;
-        return true;
+        if (_budget is not null && !_budget.TryReserve(source.Length))
+            return false;
+        try
+        {
+            var owned = source.ToArray();
+            queue.Enqueue(owned);
+            queuedBytes += owned.Length;
+            return true;
+        }
+        catch
+        {
+            _budget?.Release(source.Length);
+            throw;
+        }
     }
 
-    private static bool TryDequeueBytes(
+    private bool TryDequeueBytes(
         Queue<byte[]> queue,
         ref int queuedBytes,
         out byte[]? data)
@@ -338,10 +411,11 @@ public sealed class ActorIoEnvelope : IDisposable
         }
         data = queue.Dequeue();
         queuedBytes -= data.Length;
+        _budget?.Release(data.Length);
         return true;
     }
 
-    private static bool TryEnqueueRecord<T>(
+    private bool TryEnqueueRecord<T>(
         Queue<T> queue,
         ref int queuedBytes,
         T item,
@@ -353,9 +427,20 @@ public sealed class ActorIoEnvelope : IDisposable
             queuedBytes > MaxBytesPerChannel ||
             bytes > MaxBytesPerChannel - queuedBytes)
             return false;
-        queue.Enqueue(item);
-        queuedBytes += checked((int)bytes);
-        return true;
+        int charge = checked((int)bytes);
+        if (_budget is not null && !_budget.TryReserve(charge))
+            return false;
+        try
+        {
+            queue.Enqueue(item);
+            queuedBytes += charge;
+            return true;
+        }
+        catch
+        {
+            _budget?.Release(charge);
+            throw;
+        }
     }
 
     private static int Utf8Bytes(string value)
