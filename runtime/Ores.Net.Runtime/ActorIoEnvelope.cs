@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace Ores.Net.Runtime;
@@ -17,7 +18,7 @@ public sealed record ActorMetadataSnapshot(
 /// It is a bounded in-memory transport intended for the future source-level
 /// io.in/io.out/io.err/io.events/io.meta lowering.
 /// </summary>
-public sealed class ActorIoEnvelope
+public sealed class ActorIoEnvelope : IDisposable
 {
     public const int MaxRecordsPerChannel = 1024;
     public const int MaxBytesPerChannel = 4 * 1024 * 1024;
@@ -35,6 +36,7 @@ public sealed class ActorIoEnvelope
     private int _outputBytes;
     private int _errorBytes;
     private int _eventBytes;
+    private bool _disposed;
     private ulong _metadataVersion = 1;
     private IReadOnlyDictionary<string, string> _metadata =
         new ReadOnlyDictionary<string, string>(new Dictionary<string, string>());
@@ -181,12 +183,49 @@ public sealed class ActorIoEnvelope
 
     private void RequireCurrent(ActorRef actor)
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
         // An envelope belongs to exactly one actor incarnation. Even a fresh,
         // valid ActorRef after mailbox restart cannot reopen records retained
         // by an older generation; the supervisor must construct a new envelope.
         if (actor != _boundActor || !_mailbox.Authorizes(actor))
             throw new InvalidOperationException(
                 "Actor I/O capability is stale, foreign, retired, or belongs to another generation");
+    }
+
+    /// <summary>
+    /// Permanently retire this generation's actor I/O queues. Pending owned
+    /// byte frames are scrubbed before releasing their memory. Buffers already
+    /// delivered to a caller are owned by that caller and are never modified.
+    ///
+    /// Stop/restart of the mailbox fences stale calls; the supervisor must
+    /// also Dispose its I/O envelope during physical actor retirement.
+    /// Managed diagnostic/event strings and external metadata snapshots cannot
+    /// be guaranteed physically zeroized by the CLR.
+    /// </summary>
+    public void Dispose()
+    {
+        lock (_gate)
+        {
+            if (_disposed) return;
+            _disposed = true;
+            ScrubPending(_input);
+            ScrubPending(_output);
+            _errors.Clear();
+            _events.Clear();
+            _inputBytes = 0;
+            _outputBytes = 0;
+            _errorBytes = 0;
+            _eventBytes = 0;
+            _metadata = new ReadOnlyDictionary<string, string>(
+                new Dictionary<string, string>(StringComparer.Ordinal));
+        }
+    }
+
+    private static void ScrubPending(Queue<byte[]> queue)
+    {
+        foreach (var record in queue)
+            CryptographicOperations.ZeroMemory(record);
+        queue.Clear();
     }
 
     private static bool TryEnqueueBytes(
