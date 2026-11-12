@@ -57,4 +57,11 @@ string NestedTemplate(int n) => tick + string.Concat(Enumerable.Repeat(open + ti
     string.Concat(Enumerable.Repeat(tick + "}", n)) + tick;
 Good(NestedTemplate(16));
 Bad(NestedTemplate(17));
+// Raw UTF-16 source text must never smuggle isolated surrogate code units.
+foreach (string delimiter in new[] { "'", "\"", tick })
+{
+    Good(delimiter + char.ConvertFromUtf32(0x1f600) + delimiter);
+    foreach (char isolated in new[] { (char)0xd800, (char)0xdbff, (char)0xdc00, (char)0xdfff })
+        Bad(delimiter + isolated + delimiter);
+}
 Console.WriteLine("quoted/template source syntax smoke: PASS");
