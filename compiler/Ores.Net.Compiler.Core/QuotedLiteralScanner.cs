@@ -31,7 +31,7 @@ internal static class QuotedLiteralScanner
             if (pos >= source.Length) throw Error("Expected string literal", pos);
             char delimiter = source[pos];
             if (delimiter is '\'' or '"') Quoted();
-            else if (delimiter == (char)96) Template(1);
+            else if (delimiter == (char)96) Template(0);
             else throw Error("Expected string literal", pos);
             return pos;
         }
@@ -103,7 +103,7 @@ internal static class QuotedLiteralScanner
         private void Interpolation(int templateDepth)
         {
             int opening = pos;
-            int braces = 0;
+            int braces = 1;
             bool hasExpression = false;
             while (pos < source.Length)
             {
@@ -132,7 +132,7 @@ internal static class QuotedLiteralScanner
                 if (c == '}')
                 {
                     pos++;
-                    if (braces == 0)
+                    if (braces == 1)
                     {
                         if (!hasExpression) throw Error("Empty template interpolation", opening);
                         return;
@@ -161,7 +161,7 @@ internal static class QuotedLiteralScanner
                     if (++substitutions > 1024)
                         throw Error("Template substitution budget exceeded", pos);
                     pos += 2;
-                    Interpolation(depth);
+                    Interpolation(depth + 1);
                     continue;
                 }
                 pos++;
