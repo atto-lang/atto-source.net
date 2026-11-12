@@ -305,6 +305,12 @@ public static class OresParser
                 throw new FormatException($"STATE_CONTAINER_BACKEND_UNSUPPORTED: protected heap region and critical guard lowering required at offset {Current.Offset}");
             if (Current.Text == "virtual" && _index + 1 < tokens.Count && tokens[_index + 1].Text == "actor")
                 throw new FormatException($"VIRTUAL_ACTOR_BACKEND_UNSUPPORTED: logical key and activation fencing required at offset {Current.Offset}");
+            // Scalar NativeAOT has no originating-slot virtual dispatch or
+            // compiler-owned mailbox ingress. Deny before parsing fnc main.
+            if (Current.Text == "abstract")
+                throw new FormatException($"NET_PRIVATE_ABSTRACT_UNSUPPORTED: inherited override authority and trusted actor-hook dispatch require typed lowering at offset {Current.Offset}");
+            if (Current.Text is "class" or "actor")
+                throw new FormatException($"NET_NOMINAL_METHODS_UNSUPPORTED: actor/class entrypoints require runtime-sealed receiver and CIL lowering at offset {Current.Offset}");
             // Scalar CIL and NativeAOT do not lower nominal ModelGraphs.
             // 'model' is contextual, not globally reserved.
             if (Current.Text == "model")
