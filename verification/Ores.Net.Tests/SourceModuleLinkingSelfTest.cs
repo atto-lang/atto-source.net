@@ -49,7 +49,8 @@ internal static class SourceModuleLinkingSelfTest
                     "mixed single/double quote import source produces real linked CIL result");
             Write("main.ores", "import module left from './le\\u0066t'; fnc main():int{return left.value(1);}");
             Reject(Compile, "escaped single-quoted import must be rejected", "unescaped local source string");
-            Write("main.ores", "import module left from '../outside'; fnc main():int{return left.value(1);}");
+            File.WriteAllText(outside, "pub fnc first():int { return 1; }");
+            Write("main.ores", "import module left from '../" + Path.GetFileName(outside) + "'; fnc main():int{return left.value(1);}");
             Reject(Compile, "single-quoted path traversal must remain rejected", "escapes explicit source roots");
             Write("main.ores", "import module left from \"./left\"; import module right from \"./right\"; pub fnc main():int { return left.value(10) + right.value(11); }");
             string hash = compiled.GraphSha256;
