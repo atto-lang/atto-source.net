@@ -73,6 +73,17 @@ internal static class QuotedTemplateAdmissionTests
             string.Concat(Enumerable.Repeat("`}", 33)) + "`;}",
             "Template nesting budget");
 
+        // Canonical Java/LLVM depth counts both nested template and interpolation frames.
+        string nestedTemplate = "`x`";
+        for (int i = 2; i <= 17; i++) nestedTemplate = "`outer ${" + nestedTemplate + "}`";
+        AssertReject("fnc main():int{return " + nestedTemplate + ";}", "STRING_BACKEND_UNSUPPORTED");
+        nestedTemplate = "`outer ${" + nestedTemplate + "}`";
+        AssertReject("fnc main():int{return " + nestedTemplate + ";}", "Template nesting budget");
+        string braces255 = "`" + "${" + new string('{', 255) + "x" + new string('}', 255) + "}" + "`";
+        string braces256 = "`" + "${" + new string('{', 256) + "x" + new string('}', 256) + "}" + "`";
+        AssertReject("fnc main():int{return " + braces255 + ";}", "STRING_BACKEND_UNSUPPORTED");
+        AssertReject("fnc main():int{return " + braces256 + ";}", "Template interpolation braces budget");
+
         if (OresParser.Parse("fnc main():int{return 42;}") is null ||
             OresStructuredParser.Parse("fnc main():int{return 42;}") is null)
             throw new Exception("Scalar baseline broken by quote/template lexer");
