@@ -35,13 +35,16 @@ internal static class QuotedTemplateAdmissionTests
             "fnc main():int{return `outer ${`inner ${\"x\"}`}`;}",
             "fnc main():int{return `line one\nline two`;}",
             "fnc main():int{return `before ${ /* } */ \"ok\" } after`;}",
-            "fnc main():int{return 'line\\\ncontinuation';}"
+            "fnc main():int{return 'line\\\ncontinuation';}",
+            "fnc main():int{return 'raw\nnewline';}",
+            "fnc main():int{return \"raw\r\nnewline\";}",
+            "fnc main():int{return 'legacy \\q';}",
+            "fnc main():int{return 'legacy \\x41';}"
         })
             AssertReject(source, "STRING_BACKEND_UNSUPPORTED");
 
         foreach (string source in new[] {
             "fnc main():int{return 'unterminated;}",
-            "fnc main():int{return 'bad\nline';}",
             "fnc main():int{return `unterminated;}",
             "fnc main():int{return `bad ${name;}",
             "fnc main():int{return `empty ${}`;}",
