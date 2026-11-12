@@ -25,6 +25,7 @@ internal static class QuotedTemplateSourceTests
         {
             "'single'", "\"double\"", "'escaped \\' quote'",
             "\"opposite 'quote'\"", "'unicode \\u0041'",
+            "'raw\nnewline'", "'\\q'", "'\\x0G'", "'\\uD83D\\uDE00'",
             new string((char)0x60, 1) + "raw\nmultiline" + (char)0x60,
             new string((char)0x60, 1) + "x $" + "{call({a: '}'}, /* { */ " +
                 (char)0x60 + "nested $" + "{y}" + (char)0x60 + ")}" + (char)0x60
@@ -35,22 +36,20 @@ internal static class QuotedTemplateSourceTests
             Fail("pub fnc main():int { return " + literal + "; }",
                 "STRING_BACKEND_UNSUPPORTED", true);
         }
-        foreach (string malformed in new[]
+        foreach (var (malformed, diagnostic) in new (string Literal, string Diagnostic)[]
         {
-            "'raw\nnewline'", "'unterminated", "'\\q'", "'\\u12X4'",
-            new string((char)0x60, 1) + "unclosed $" + "{value"
+            ("'unterminated", "Unterminated"),
+            ("'\\u12X4'", "Invalid Unicode escape"),
+            ("'\\u{1f600}'", "Invalid Unicode escape"),
+            (new string((char)0x60, 1) + "x ${oops", "Unterminated"),
+            (new string((char)0x60, 1) + "bad \\q" + (char)0x60, "Invalid template escape"),
+            (new string((char)0x60, 1) + "bad \\x41" + (char)0x60, "Invalid template escape"),
+            (new string((char)0x60, 1) + "bad \\u{1f600}" + (char)0x60, "Invalid Unicode escape"),
+            (new string((char)0x60, 1) + "bad \\" + "\n" + (char)0x60, "Invalid template escape")
         })
         {
-            Fail("pub fnc main():int { return " + malformed + "; }",
-                malformed.Contains('\n') ? "newline in quoted string" :
-                    malformed.Contains("\\q") ? "Invalid string escape" :
-                    malformed.Contains("\\u12") ? "Invalid Unicode escape" :
-                    "Unterminated", false);
-            Fail("pub fnc main():int { return " + malformed + "; }",
-                malformed.Contains('\n') ? "newline in quoted string" :
-                    malformed.Contains("\\q") ? "Invalid string escape" :
-                    malformed.Contains("\\u12") ? "Invalid Unicode escape" :
-                    "Unterminated", true);
+            foreach (bool structured in new[] { false, true })
+                Fail("pub fnc main():int { return " + malformed + "; }", diagnostic, structured);
         }
         foreach (var (literal, diagnostic) in new (string Literal, string Diagnostic)[]
         {
