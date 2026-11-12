@@ -79,6 +79,16 @@ internal static class QuotedTemplateSourceTests
             Fail(Statement(Nested(16)), "STRING_BACKEND_UNSUPPORTED", structured);
             Fail(Statement(Nested(17)), "nesting limit", structured);
         }
+        string CommentDepth(int count) => "`${" +
+            string.Concat(Enumerable.Repeat("/*", count)) + "ignored" +
+            string.Concat(Enumerable.Repeat("*/", count)) + "x}`";
+        foreach (bool structured in new[] { false, true })
+        {
+            Fail("pub fnc main():int { return " + CommentDepth(128) + "; }",
+                "STRING_BACKEND_UNSUPPORTED", structured);
+            Fail("pub fnc main():int { return " + CommentDepth(129) + "; }",
+                "Comment nesting limit", structured);
+        }
         // Legal import specifiers are actual source syntax and resolve exactly
         // through the compiler graph; this is more than a host-only scanner.
         string root = Path.Combine(Path.GetTempPath(),
