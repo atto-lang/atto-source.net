@@ -26,7 +26,7 @@ foreach (var source in new[]
     "'single'", "\"double\"", "'opposite \"quotes\"'", "\"opposite 'quotes'\"",
     "'escaped \\' apostrophe'", "\"escaped \\\" quote\"",
     "'continuation\\\nline'", "'hex \\x41'", "'unicode \\u0041'",
-    ""raw\nnewline"", "'\\q'", "'\\x0G'", "'\\uD83D\\uDE00'",
+    "\"raw\nnewline\"", "'\\q'", "'\\x0G'", "'\\uD83D\\uDE00'",
     tick + "raw\nmultiline" + tick,
     tick + "escaped \\$" + "{still_text}" + tick,
     tick + "x " + open + "fnc({key: '}', str: \"{\"}, /* { */ " +
