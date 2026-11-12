@@ -70,6 +70,19 @@ internal static class QuotedSourceSyntax
                         throw Error("Invalid Unicode escape", escape);
                     continue;
                 }
+                // Validate an escaped raw scalar as rigorously as unescaped
+                // text; otherwise direct scanner callers could admit a lone
+                // surrogate hidden immediately after a backslash.
+                if (char.IsHighSurrogate(next))
+                {
+                    if (i + 1 >= source.Length || !char.IsLowSurrogate(source[i + 1]))
+                        throw Error("Unpaired Unicode surrogate in string", i);
+                    if (quote == '\u0060') throw Error("Invalid template escape", escape);
+                    i += 2;
+                    continue;
+                }
+                if (char.IsLowSurrogate(next))
+                    throw Error("Unpaired Unicode surrogate in string", i);
                 // Java/Graal ordinary strings retain legacy escape fallback.
                 // Backticks use strict escapes (including no continuation).
                 if (quote == '\u0060' &&
