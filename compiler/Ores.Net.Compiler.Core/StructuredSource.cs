@@ -197,7 +197,7 @@ public static class OresStructuredParser
                     throw new FormatException(
                         $"Local class/actor declarations are not permitted at offset {token.Offset}");
                 throw new FormatException(
-                    $"Nominal class/actor methods require receiver-erased method slots, type/borrow checking and Native AOT CIL lowering; unsupported in .NET structured frontend at offset {token.Offset}");
+                    $"NET_NOMINAL_METHODS_UNSUPPORTED: class/actor methods require receiver-erased slots, type/borrow checking and Native AOT CIL lowering at offset {token.Offset}");
             }
             if (token.Text is "lex" or "nlex")
             {
