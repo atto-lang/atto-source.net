@@ -74,16 +74,17 @@ internal static class QuotedLiteralScanner
                 else if (high is >= 0xdc00 and <= 0xdfff)
                     throw Error("Unpaired Unicode surrogate escape", opening);
             }
-            else if (IsLineEnd(escaped))
+            else if (!template)
             {
-                if (template)
-                    throw Error("Invalid template escape", opening);
+                // Legacy Java/LLVM ordinary String escapes are permissive.
+                // Unknown escapes keep their following character; raw lines are valid.
                 if (escaped == '\r' && pos < source.Length && source[pos] == '\n')
                     pos++;
             }
-            else if (escaped is not ('n' or 'r' or 't' or '\\' or '\'' or '"' or '$')
-                     && escaped != (char)96)
-                throw Error("Invalid source literal escape", opening);
+            else if (IsLineEnd(escaped) ||
+                     (escaped is not ('n' or 'r' or 't' or '\\' or '\'' or '"' or '$')
+                     && escaped != (char)96))
+                throw Error("Invalid template escape", opening);
         }
 
         private void Quoted()
@@ -95,7 +96,7 @@ internal static class QuotedLiteralScanner
                 char c = source[pos];
                 if (c == '\\') { Escape(opening, false); continue; }
                 if (c == quote) { pos++; return; }
-                if (IsLineEnd(c)) throw Error("Raw newline in quoted string", opening);
+                // Raw LF, CR and Unicode separators are ordinary String data.
                 pos++;
             }
             throw Error("Unterminated quoted string", opening);
