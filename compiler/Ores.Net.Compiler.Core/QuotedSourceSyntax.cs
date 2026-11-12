@@ -132,7 +132,7 @@ internal static class QuotedSourceSyntax
                 {
                     if (i + 1 < source.Length && source[i] == '/' && source[i + 1] == '*')
                     {
-                        if (++nesting > 64) throw Error("Comment nesting limit", i);
+                        if (++nesting > 128) throw Error("Comment nesting limit", i);
                         i += 2;
                     }
                     else if (i + 1 < source.Length && source[i] == '*' && source[i + 1] == '/')
