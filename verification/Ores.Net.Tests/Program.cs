@@ -23,6 +23,8 @@ static void RejectDiagnostic(Action action, string diagnostic, string why)
     throw new Exception("Expected parser rejection with diagnostic '" + diagnostic + "': " + why);
 }
 
+QuotedTemplateAdmissionTests.Run();
+
 static void InvalidSend(Action action, string why)
 {
     try { action(); }
