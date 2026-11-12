@@ -79,6 +79,17 @@ internal static class QuotedSourceSyntax
                 continue;
             }
             if (ch == quote) return i + 1;
+            // Direct scanner callers must not admit isolated UTF-16 code units,
+            // even before a source-level Unicode validator is available.
+            if (char.IsHighSurrogate(ch))
+            {
+                if (i + 1 >= source.Length || !char.IsLowSurrogate(source[i + 1]))
+                    throw Error("Unpaired Unicode surrogate in string", i);
+                i += 2;
+                continue;
+            }
+            if (char.IsLowSurrogate(ch))
+                throw Error("Unpaired Unicode surrogate in string", i);
             // Ordinary quoted source preserves raw line breaks in Java/Graal.
             if (quote == '\u0060' && ch == '$' && i + 1 < source.Length && source[i + 1] == '{')
             {
