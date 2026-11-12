@@ -61,12 +61,17 @@ internal static class QuotedSourceSyntax
                     }
                     else
                     {
+                        int scalar = 0;
                         for (int j = 0; j < 4; j++)
                         {
                             if (i == source.Length || !IsHex(source[i]))
                                 throw Error("Invalid Unicode escape", escape);
-                            i++;
+                            char hexDigit = source[i++];
+                            scalar = scalar * 16 + (hexDigit <= '9' ? hexDigit - '0' :
+                                hexDigit <= 'F' ? hexDigit - 'A' + 10 : hexDigit - 'a' + 10);
                         }
+                        if (scalar is >= 0xd800 and <= 0xdfff)
+                            throw Error("Invalid Unicode escape", escape);
                     }
                     continue;
                 }
@@ -111,6 +116,7 @@ internal static class QuotedSourceSyntax
     {
         if (depth > 64) throw Error("Template nesting limit", at);
         int braces = 1;
+        bool hasCode = false;
         int i = at;
         while (i < source.Length)
         {
@@ -144,17 +150,25 @@ internal static class QuotedSourceSyntax
             }
             if (IsQuote(source[i]))
             {
+                hasCode = true;
                 i = Quoted(source, i, depth + 1, ref substitutions);
                 continue;
             }
             if (source[i] == '{')
             {
+                hasCode = true;
                 if (++braces > 128) throw Error("Interpolation brace nesting limit", i);
             }
             else if (source[i] == '}')
             {
-                if (--braces == 0) return i + 1;
+                if (--braces == 0)
+                {
+                    if (!hasCode) throw Error("Empty template interpolation", at - 2);
+                    return i + 1;
+                }
+                hasCode = true;
             }
+            else if (!char.IsWhiteSpace(source[i])) hasCode = true;
             i++;
         }
         throw Error("Unterminated template interpolation", at - 2);
