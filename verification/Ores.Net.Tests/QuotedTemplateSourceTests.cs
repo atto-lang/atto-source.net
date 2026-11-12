@@ -64,6 +64,21 @@ internal static class QuotedTemplateSourceTests
             foreach (bool structured in new[] { false, true })
                 Fail("pub fnc main():int { return " + literal + "; }", diagnostic, structured);
         }
+        string tick = new((char)0x60, 1);
+        string Many(int count) => tick + string.Concat(Enumerable.Repeat("${'x'}", count)) + tick;
+        string Braces(int count) => tick + "${" + new string('{', count) + "x" + new string('}', count) + "}" + tick;
+        string Nested(int count) => tick + string.Concat(Enumerable.Repeat("${`", count)) + "x" +
+            string.Concat(Enumerable.Repeat("`}", count)) + tick;
+        foreach (bool structured in new[] { false, true })
+        {
+            string Statement(string quoted) => "pub fnc main():int { return " + quoted + "; }";
+            Fail(Statement(Many(1024)), "STRING_BACKEND_UNSUPPORTED", structured);
+            Fail(Statement(Many(1025)), "Template substitution limit", structured);
+            Fail(Statement(Braces(255)), "STRING_BACKEND_UNSUPPORTED", structured);
+            Fail(Statement(Braces(256)), "Interpolation brace nesting limit", structured);
+            Fail(Statement(Nested(16)), "STRING_BACKEND_UNSUPPORTED", structured);
+            Fail(Statement(Nested(17)), "nesting limit", structured);
+        }
         // Legal import specifiers are actual source syntax and resolve exactly
         // through the compiler graph; this is more than a host-only scanner.
         string root = Path.Combine(Path.GetTempPath(),
