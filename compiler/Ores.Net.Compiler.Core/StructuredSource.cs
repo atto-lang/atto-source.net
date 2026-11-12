@@ -340,21 +340,9 @@ public static class OresStructuredParser
                 throw new FormatException(
                     $"Annotations require verified compiler lowering at offset {offset}");
             }
-            if (moduleMode && ch == '"')
+            if (ch == (char)39 || ch == (char)34 || ch == (char)96)
             {
-                index++;
-                while (index < source.Length && source[index] != '"')
-                {
-                    if (source[index] is '\r' or '\n' or '\0')
-                        throw new FormatException($"Invalid string literal at offset {offset}");
-                    if (source[index++] == '\\')
-                    {
-                        if (index == source.Length) break;
-                        index++;
-                    }
-                }
-                if (index == source.Length) throw new FormatException($"Unterminated string at offset {offset}");
-                index++;
+                index = QuotedLiteralScanner.Scan(source, offset);
                 return new Token(source[offset..index], offset);
             }
             if (Digit(ch))
@@ -1021,6 +1009,9 @@ public static class OresStructuredParser
                     throw new FormatException($"Invalid i64 at offset {offset}");
                 return new StructuredInt(offset, n);
             }
+            if (raw.Length > 0 && (raw[0] == (char)39 ||
+                raw[0] == (char)34 || raw[0] == (char)96))
+                throw new FormatException($"STRING_BACKEND_UNSUPPORTED: .NET structured frontend lacks typed String Native AOT CIL lowering at offset {offset}");
             var name = Name();
             bool localBinding = scopes.Any(scope => scope.ContainsKey(name));
             if (linking is not null)
