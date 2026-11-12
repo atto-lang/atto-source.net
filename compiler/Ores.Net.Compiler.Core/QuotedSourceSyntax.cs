@@ -20,6 +20,19 @@ internal static class QuotedSourceSyntax
     private static FormatException Error(string message, int offset) =>
         new(message + " at offset " + offset);
 
+    private static int UnicodeUnit(string source, ref int index, int escape)
+    {
+        int scalar = 0;
+        for (int j = 0; j < 4; j++)
+        {
+            if (index >= source.Length || !IsHex(source[index]))
+                throw Error("Invalid Unicode escape", escape);
+            char digit = source[index++];
+            scalar = scalar * 16 + (digit <= '9' ? digit - '0' :
+                digit <= 'F' ? digit - 'A' + 10 : digit - 'a' + 10);
+        }
+        return scalar;
+    }
     private static int Quoted(string source, int start, int depth, ref int substitutions)
     {
         if (depth > 64) throw Error("String/template nesting limit", start);
@@ -35,6 +48,7 @@ internal static class QuotedSourceSyntax
                 char next = source[i];
                 if (IsLine(next))
                 {
+                    if (quote == '\u0060') throw Error("Invalid template escape", escape);
                     if (next == '\r' && i + 1 < source.Length && source[i + 1] == '\n') i++;
                     i++;
                     continue;
@@ -42,58 +56,30 @@ internal static class QuotedSourceSyntax
                 if (next == 'u')
                 {
                     i++;
-                    if (i < source.Length && source[i] == '{')
+                    int scalar = UnicodeUnit(source, ref i, escape);
+                    if (scalar is >= 0xd800 and <= 0xdbff)
                     {
-                        int digits = ++i;
-                        int scalar = 0;
-                        while (i < source.Length && IsHex(source[i]) && i - digits < 7)
-                        {
-                            scalar = checked(scalar * 16 +
-                                (source[i] <= '9' ? source[i] - '0' :
-                                 source[i] <= 'F' ? source[i] - 'A' + 10 : source[i] - 'a' + 10));
-                            i++;
-                        }
-                        if (i == digits || i - digits > 6 || i == source.Length ||
-                            source[i] != '}' || scalar > 0x10ffff ||
-                            scalar is >= 0xd800 and <= 0xdfff)
+                        if (i + 2 > source.Length || source[i] != '\\' || source[i + 1] != 'u')
                             throw Error("Invalid Unicode escape", escape);
-                        i++;
-                    }
-                    else
-                    {
-                        int scalar = 0;
-                        for (int j = 0; j < 4; j++)
-                        {
-                            if (i == source.Length || !IsHex(source[i]))
-                                throw Error("Invalid Unicode escape", escape);
-                            char hexDigit = source[i++];
-                            scalar = scalar * 16 + (hexDigit <= '9' ? hexDigit - '0' :
-                                hexDigit <= 'F' ? hexDigit - 'A' + 10 : hexDigit - 'a' + 10);
-                        }
-                        if (scalar is >= 0xd800 and <= 0xdfff)
+                        i += 2;
+                        int low = UnicodeUnit(source, ref i, escape);
+                        if (low is < 0xdc00 or > 0xdfff)
                             throw Error("Invalid Unicode escape", escape);
                     }
+                    else if (scalar is >= 0xdc00 and <= 0xdfff)
+                        throw Error("Invalid Unicode escape", escape);
                     continue;
                 }
-                if (next == 'x')
-                {
-                    i++;
-                    for (int j = 0; j < 2; j++)
-                    {
-                        if (i == source.Length || !IsHex(source[i]))
-                            throw Error("Invalid hex escape", escape);
-                        i++;
-                    }
-                    continue;
-                }
-                if ("\\'\"\u0060$0bfnrtv".IndexOf(next) < 0)
-                    throw Error("Invalid string escape", escape);
+                // Java/Graal ordinary strings retain legacy escape fallback.
+                // Backticks use strict escapes (including no continuation).
+                if (quote == '\u0060' &&
+                    "\\'\"`$nrt".IndexOf(next) < 0)
+                    throw Error("Invalid template escape", escape);
                 i++;
                 continue;
             }
             if (ch == quote) return i + 1;
-            if (quote != '\u0060' && IsLine(ch))
-                throw Error("Newline in quoted string", i);
+            // Ordinary quoted source preserves raw line breaks in Java/Graal.
             if (quote == '\u0060' && ch == '$' && i + 1 < source.Length && source[i + 1] == '{')
             {
                 if (++substitutions > 128)
