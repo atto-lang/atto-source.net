@@ -35,7 +35,7 @@ internal static class QuotedSourceSyntax
     }
     private static int Quoted(string source, int start, int depth, ref int substitutions)
     {
-        if (depth > 64) throw Error("String/template nesting limit", start);
+        if (depth > 32) throw Error("String/template nesting limit", start);
         char quote = source[start];
         int i = start + 1;
         while (i < source.Length)
@@ -82,7 +82,7 @@ internal static class QuotedSourceSyntax
             // Ordinary quoted source preserves raw line breaks in Java/Graal.
             if (quote == '\u0060' && ch == '$' && i + 1 < source.Length && source[i + 1] == '{')
             {
-                if (++substitutions > 128)
+                if (++substitutions > 1024)
                     throw Error("Template substitution limit", i);
                 int body = i + 2;
                 int end = Interpolation(source, body, depth + 1, ref substitutions);
@@ -100,7 +100,7 @@ internal static class QuotedSourceSyntax
 
     private static int Interpolation(string source, int at, int depth, ref int substitutions)
     {
-        if (depth > 64) throw Error("Template nesting limit", at);
+        if (depth > 32) throw Error("Template nesting limit", at);
         int braces = 1;
         bool hasCode = false;
         int i = at;
@@ -143,7 +143,7 @@ internal static class QuotedSourceSyntax
             if (source[i] == '{')
             {
                 hasCode = true;
-                if (++braces > 128) throw Error("Interpolation brace nesting limit", i);
+                if (++braces > 256) throw Error("Interpolation brace nesting limit", i);
             }
             else if (source[i] == '}')
             {
