@@ -47,5 +47,14 @@ foreach (var source in new[]
     Bad(source);
 Bad(tick + string.Concat(Enumerable.Repeat(open + tick, 70)) + "x" +
     string.Concat(Enumerable.Repeat(tick + "}", 70)) + tick);
-Bad(tick + string.Concat(Enumerable.Repeat(open + "x}", 129)) + tick);
+string CountTemplate(int n) => tick + string.Concat(Enumerable.Repeat("${'x'}", n)) + tick;
+Good(CountTemplate(1024));
+Bad(CountTemplate(1025));
+string BracesTemplate(int n) => tick + open + new string('{', n) + "x" + new string('}', n) + "}" + tick;
+Good(BracesTemplate(255));
+Bad(BracesTemplate(256));
+string NestedTemplate(int n) => tick + string.Concat(Enumerable.Repeat(open + tick, n)) + "x" +
+    string.Concat(Enumerable.Repeat(tick + "}", n)) + tick;
+Good(NestedTemplate(16));
+Bad(NestedTemplate(17));
 Console.WriteLine("quoted/template source syntax smoke: PASS");
