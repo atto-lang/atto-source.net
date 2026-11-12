@@ -80,6 +80,12 @@ internal static class QuotedTemplateAdmissionTests
         AssertReject("fnc main():int{return '\\uD83D';}", "Unpaired Unicode surrogate escape");
         AssertReject("fnc main():int{return '\\uDE00';}", "Unpaired Unicode surrogate escape");
         AssertReject("fnc main():int{return '\\uD83D\\u0061';}", "Unpaired Unicode surrogate escape");
+        string comment128 = "`prefix ${" + string.Concat(Enumerable.Repeat("/*", 128)) +
+            " ignored " + string.Concat(Enumerable.Repeat("*/", 128)) + "'ok'}`";
+        string comment129 = "`prefix ${" + string.Concat(Enumerable.Repeat("/*", 129)) +
+            " ignored " + string.Concat(Enumerable.Repeat("*/", 129)) + "'ok'}`";
+        AssertReject("fnc main():int{return " + comment128 + ";}", "STRING_BACKEND_UNSUPPORTED");
+        AssertReject("fnc main():int{return " + comment129 + ";}", "Block comment nesting budget exceeded");
         // Canonical Java/LLVM depth counts both nested template and interpolation frames.
         string nestedTemplate = "`x`";
         for (int i = 2; i <= 17; i++) nestedTemplate = "`outer ${" + nestedTemplate + "}`";
