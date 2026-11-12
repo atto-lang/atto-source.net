@@ -69,4 +69,11 @@ string NestedComments(int count) => tick + open +
     string.Concat(Enumerable.Repeat("*/", count)) + "x}" + tick;
 Good(NestedComments(128));
 Bad(NestedComments(129));
+// A literal backslash must not conceal an unpaired raw UTF-16 scalar.
+foreach (string delimiter in new[] { "'", "\"" })
+{
+    Good(delimiter + "\\" + char.ConvertFromUtf32(0x1f600) + delimiter);
+    foreach (char isolated in new[] { (char)0xd800, (char)0xdbff, (char)0xdc00, (char)0xdfff })
+        Bad(delimiter + "\\" + isolated + delimiter);
+}
 Console.WriteLine("quoted/template source syntax smoke: PASS");
