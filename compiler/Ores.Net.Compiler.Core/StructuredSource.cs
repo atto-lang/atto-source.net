@@ -499,7 +499,8 @@ public static class OresStructuredParser
                 string name = Name();
                 Expect("from");
                 string quoted = Current.Text;
-                if (quoted.Length < 3 || quoted[0] != '"' || quoted[^1] != '"' || quoted.Contains('\\'))
+                if (quoted.Length < 3 || (quoted[0] != '"' && quoted[0] != '\'') ||
+                    quoted[^1] != quoted[0] || quoted.Contains('\\'))
                     throw Error("Import requires an unescaped local source string");
                 index++;
                 Expect(";");
