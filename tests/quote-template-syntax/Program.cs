@@ -26,6 +26,7 @@ foreach (var source in new[]
     "'single'", "\"double\"", "'opposite \"quotes\"'", "\"opposite 'quotes'\"",
     "'escaped \\' apostrophe'", "\"escaped \\\" quote\"",
     "'continuation\\\nline'", "'hex \\x41'", "'unicode \\u0041'",
+    ""raw\nnewline"", "'\\q'", "'\\x0G'", "'\\uD83D\\uDE00'",
     tick + "raw\nmultiline" + tick,
     tick + "escaped \\$" + "{still_text}" + tick,
     tick + "x " + open + "fnc({key: '}', str: \"{\"}, /* { */ " +
@@ -34,7 +35,10 @@ foreach (var source in new[]
     Good(source);
 foreach (var source in new[]
 {
-    "'unclosed", "\"raw\nnewline\"", "'\\q'", "'\\u12xz'", "'\\x0G'",
+    "'unclosed", "'\\u12xz'", "'\\uD800'", "'\\uDFFF'", "'\\u{1f600}'",
+    tick + "invalid \\q" + tick, tick + "invalid \\x41" + tick,
+    tick + "invalid \\u{1f600}" + tick,
+    tick + "invalid \\" + "\n" + tick,
     tick + "bad " + open + " }" + tick,
     tick + "bad " + open + "call(1)" + tick,
     tick + "bad " + open + "/* unclosed}" + tick,
