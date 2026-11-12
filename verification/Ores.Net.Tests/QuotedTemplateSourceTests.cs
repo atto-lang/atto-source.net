@@ -52,6 +52,19 @@ internal static class QuotedTemplateSourceTests
                     malformed.Contains("\\u12") ? "Invalid Unicode escape" :
                     "Unterminated", true);
         }
+        foreach (var (literal, diagnostic) in new (string Literal, string Diagnostic)[]
+        {
+            ("'\\uD800'", "Invalid Unicode escape"),
+            ("'\\uDFFF'", "Invalid Unicode escape"),
+            (new string((char)0x60, 1) + "x ${/* only comment */}" + (char)0x60,
+                "Empty template interpolation"),
+            (new string((char)0x60, 1) + "x ${// only comment\n}" + (char)0x60,
+                "Empty template interpolation")
+        })
+        {
+            foreach (bool structured in new[] { false, true })
+                Fail("pub fnc main():int { return " + literal + "; }", diagnostic, structured);
+        }
         // Legal import specifiers are actual source syntax and resolve exactly
         // through the compiler graph; this is more than a host-only scanner.
         string root = Path.Combine(Path.GetTempPath(),
