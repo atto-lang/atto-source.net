@@ -37,6 +37,21 @@ internal static class SourceModuleLinkingSelfTest
                 Require(CfgCilTestInterpreter.Evaluate(program.Methods.Single(m => m.Name == "Run")) == 42, "linked CIL executes imported helpers");
                 Require(program.Methods.Count == 5, "CIL has main and independent imported methods");
             }
+            // Single-quoted local specifiers use the same graph, type, and source-root policy.
+            // This probes the existing legacy .ores module-linking entrypoint; no new
+            // guest feature is implemented by the host-path parser.
+            Write("main.ores", "import module left from './left'; import module right from \"./right\"; pub fnc main():int { return left.value(10) + right.value(11); }");
+            var singleQuoteImports = Compile();
+            Require(singleQuoteImports.Sources.Count == 4, "single-quoted import loads same bounded source graph");
+            CilEmitter.EmitLibrary(singleQuoteImports.Module, assembly);
+            using (var image = AssemblyDefinition.ReadAssembly(assembly))
+                Require(CfgCilTestInterpreter.Evaluate(image.MainModule.Types.Single(t => t.Name == "OresProgram").Methods.Single(m => m.Name == "Run")) == 42,
+                    "mixed single/double quote import source produces real linked CIL result");
+            Write("main.ores", "import module left from './le\\u0066t'; fnc main():int{return left.value(1);}");
+            Reject(Compile, "escaped single-quoted import must be rejected", "unescaped local source string");
+            Write("main.ores", "import module left from '../outside'; fnc main():int{return left.value(1);}");
+            Reject(Compile, "single-quoted path traversal must remain rejected", "escapes explicit source roots");
+            Write("main.ores", "import module left from \"./left\"; import module right from \"./right\"; pub fnc main():int { return left.value(10) + right.value(11); }");
             string hash = compiled.GraphSha256;
             Write("base.ores", "pub fnc twice(int n):int { return n * 2; } // changed source bytes");
             Require(Compile().GraphSha256 != hash, "transitive source bytes affect graph identity");
