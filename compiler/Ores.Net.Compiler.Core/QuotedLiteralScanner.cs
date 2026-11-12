@@ -36,6 +36,23 @@ internal static class QuotedLiteralScanner
             return pos;
         }
 
+        private int ReadUnicode4(int opening)
+        {
+            if (pos + 4 > source.Length)
+                throw Error("Invalid Unicode escape", opening);
+            int value = 0;
+            for (int i = 0; i < 4; i++)
+            {
+                char digit = source[pos++];
+                if (!IsHex(digit)) throw Error("Invalid Unicode escape", opening);
+                int n = digit is >= '0' and <= '9' ? digit - '0'
+                    : digit is >= 'A' and <= 'F' ? digit - 'A' + 10
+                    : digit - 'a' + 10;
+                value = (value << 4) | n;
+            }
+            return value;
+        }
+
         private void Escape(int opening, bool template)
         {
             pos++; // backslash
@@ -44,12 +61,18 @@ internal static class QuotedLiteralScanner
             char escaped = source[pos++];
             if (escaped == 'u')
             {
-                if (pos + 4 > source.Length)
-                    throw Error("Invalid Unicode escape", opening);
-                for (int i = 0; i < 4; i++)
-                    if (!IsHex(source[pos + i]))
-                        throw Error("Invalid Unicode escape", opening);
-                pos += 4;
+                int high = ReadUnicode4(opening);
+                if (high is >= 0xd800 and <= 0xdbff)
+                {
+                    if (pos + 2 > source.Length || source[pos] != '\\' || source[pos + 1] != 'u')
+                        throw Error("Unpaired Unicode surrogate escape", opening);
+                    pos += 2;
+                    int low = ReadUnicode4(opening);
+                    if (low is < 0xdc00 or > 0xdfff)
+                        throw Error("Unpaired Unicode surrogate escape", opening);
+                }
+                else if (high is >= 0xdc00 and <= 0xdfff)
+                    throw Error("Unpaired Unicode surrogate escape", opening);
             }
             else if (IsLineEnd(escaped))
             {
