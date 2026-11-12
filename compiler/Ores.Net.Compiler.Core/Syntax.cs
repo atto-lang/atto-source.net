@@ -152,6 +152,11 @@ public static class OresParser
                         $"STATE_INJECTION_UNSUPPORTED: @{name} requires typed container ownership, borrow checks and Native AOT lowering at offset {start}");
                 throw new FormatException($"Annotations require verified compiler lowering at offset {start}");
             }
+            if (ch == (char)39 || ch == (char)34 || ch == (char)96)
+            {
+                _i = QuotedLiteralScanner.Scan(text, start);
+                return new Token(text[start.._i], start);
+            }
             if (ch is >= '0' and <= '9')
             {
                 // Match the reference's decimal digit separators without
@@ -425,6 +430,9 @@ public static class OresParser
                 Expect(")");
                 return inner;
             }
+            if (Current.Text.Length > 0 && (Current.Text[0] == (char)39 ||
+                Current.Text[0] == (char)34 || Current.Text[0] == (char)96))
+                throw new FormatException($"STRING_BACKEND_UNSUPPORTED: .NET scalar frontend lacks typed String CIL lowering at offset {Current.Offset}");
             if (Current.Text.Length == 0 || Current.Text[0] is < '0' or > '9')
                 throw new FormatException($"Expected integer at offset {Current.Offset}");
             var raw = Current.Text;
