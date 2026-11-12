@@ -76,4 +76,8 @@ foreach (string delimiter in new[] { "'", "\"" })
     foreach (char isolated in new[] { (char)0xd800, (char)0xdbff, (char)0xdc00, (char)0xdfff })
         Bad(delimiter + "\\" + isolated + delimiter);
 }
+// Unicode Next Line is whitespace, not executable template-interpolation code.
+foreach (string body in new[] { "\u0085", "\u0085/* comment */", "\u0085\n", "\u0085\u2028\u2029" })
+    Bad(tick + "x " + open + body + "}" + tick);
+Good(tick + "x " + open + "\u0085x}" + tick);
 Console.WriteLine("quoted/template source syntax smoke: PASS");
