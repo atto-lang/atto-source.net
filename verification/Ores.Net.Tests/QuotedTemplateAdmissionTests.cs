@@ -42,6 +42,8 @@ internal static class QuotedTemplateAdmissionTests
             "fnc main():int{return 'legacy \\x41';}"
         })
             AssertReject(source, "STRING_BACKEND_UNSUPPORTED");
+        AssertReject("fnc main():int{return `v ${to_string(42)}`;}", "STRING_BACKEND_UNSUPPORTED");
+        AssertReject("fnc main():int{return `v ${value.to_string()}`;}", "STRING_BACKEND_UNSUPPORTED");
 
         foreach (string source in new[] {
             "fnc main():int{return 'unterminated;}",
