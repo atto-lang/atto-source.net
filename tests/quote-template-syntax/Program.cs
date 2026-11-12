@@ -64,4 +64,9 @@ foreach (string delimiter in new[] { "'", "\"", tick })
     foreach (char isolated in new[] { (char)0xd800, (char)0xdbff, (char)0xdc00, (char)0xdfff })
         Bad(delimiter + isolated + delimiter);
 }
+string NestedComments(int count) => tick + open +
+    string.Concat(Enumerable.Repeat("/*", count)) + "ignored" +
+    string.Concat(Enumerable.Repeat("*/", count)) + "x}" + tick;
+Good(NestedComments(128));
+Bad(NestedComments(129));
 Console.WriteLine("quoted/template source syntax smoke: PASS");
