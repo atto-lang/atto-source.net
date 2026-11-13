@@ -9,7 +9,8 @@ namespace Ores.Net.Compiler;
 public sealed class VerifiedActorIncrement
 {
     internal VerifiedActorIncrement(ActorStateSchemaMetadata schema,
-        string method, int methodOffset, string field, int fieldIndex, long delta)
+        string method, int methodOffset, string field, int fieldIndex, long delta,
+        string? scalarMailParameter = null)
     {
         Schema = schema;
         MethodName = method;
@@ -17,6 +18,7 @@ public sealed class VerifiedActorIncrement
         FieldName = field;
         FieldIndex = fieldIndex;
         Delta = delta;
+        ScalarMailParameter = scalarMailParameter;
     }
     public ActorStateSchemaMetadata Schema { get; }
     public string MethodName { get; }
@@ -24,13 +26,16 @@ public sealed class VerifiedActorIncrement
     public string FieldName { get; }
     public int FieldIndex { get; }
     public long Delta { get; }
+    // Non-null only for a single source-typed owned int mailbox input.
+    public string? ScalarMailParameter { get; }
 }
 
 /// <summary>
 /// Strictly bounded first guest actor method grammar. The syntax is parsed by
 /// the same lexer as scalar sources. No text regex or substring admission.
-/// Only exactly one synchronous state.increment-by-positive-literal callback
-/// may enter this experimental IR; every other actor body fails closed.
+/// Exactly one synchronous checked state increment is allowed. Its input is
+/// either the previously supported literal +1 or one owned int message;
+/// all other actor bodies fail closed.
 /// </summary>
 public static partial class OresParser
 {
@@ -88,6 +93,9 @@ public static partial class OresParser
         var methodOffset = At().Offset;
         var methodName = Identifier();
         Expect("(");
+        string? scalarMailParameter = null;
+        if (Take("int"))
+            scalarMailParameter = Identifier();
         Expect(")");
         Expect(":");
         Expect("int");
@@ -130,13 +138,23 @@ public static partial class OresParser
         var readField = Identifier();
         Expect("+");
         var deltaToken = At();
-        if (deltaToken.Text.Length == 0 ||
-            deltaToken.Text.Any(c => c != '_' && (c < '0' || c > '9')) ||
-            !long.TryParse(deltaToken.Text.Replace("_", "", StringComparison.Ordinal),
-                NumberStyles.None, CultureInfo.InvariantCulture, out long delta) ||
-            delta != 1)
+        long delta;
+        if (scalarMailParameter is not null)
+        {
+            if (deltaToken.Text != scalarMailParameter)
+                throw new FormatException(
+                    $"Actor increment requires its single owned int input at offset {deltaToken.Offset}");
+            delta = 0; // Typed mailbox value; never an implicit literal.
+        }
+        else if (deltaToken.Text.Length == 0 ||
+                 deltaToken.Text.Any(c => c != '_' && (c < '0' || c > '9')) ||
+                 !long.TryParse(deltaToken.Text.Replace("_", "", StringComparison.Ordinal),
+                     NumberStyles.None, CultureInfo.InvariantCulture, out delta) ||
+                 delta != 1)
+        {
             throw new FormatException(
                 $"Actor increment supports only checked + 1 at offset {deltaToken.Offset}");
+        }
         p++;
         Expect(";");
         Expect("return");
@@ -152,7 +170,8 @@ public static partial class OresParser
         if (At().Text.Length != 0)
             throw new FormatException($"Unexpected trailing actor source at offset {At().Offset}");
 
-        if (writeReceiver != parameter || readReceiver != parameter ||
+        if (scalarMailParameter == parameter
+            || writeReceiver != parameter || readReceiver != parameter ||
             returnReceiver != parameter || writeField != readField ||
             readField != returnField)
             throw new FormatException("State callback alias or field mismatch");
@@ -162,6 +181,6 @@ public static partial class OresParser
         if (methodName == "handle_state")
             throw new FormatException("Reserved actor intrinsic method name");
         return new VerifiedActorIncrement(schema, methodName, methodOffset,
-            writeField, field.Index, delta);
+            writeField, field.Index, delta, scalarMailParameter);
     }
 }
