@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "id": "actor-counter-identical-source-v1",
+  "status": "CANDIDATE_NOT_EXECUTED",
+  "authority": "ores-truffle-oreslang/oreslang-platform-conformance PR #709 (draft)",
+  "origin": "Java Counter V2 PR #3008; receive ABI corrected to external mtd per conformance #709",
+  "targets": [
+    "java",
+    "llvm",
+    "net"
+  ],
+  "expected": {
+    "stdout": "1|3|6|10",
+    "exitCode": 0,
+    "messages": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "actorStateFinal": 10
+  },
+  "sourceUnitBlobs": {
+    ".atto.pkg.toml": "500be9437a53a6767002280d60507587c947b92c",
+    "src/counter/actor.atto": "5135f72fac5b9ccb5c2a418f0d9f79bdd3f5ea32",
+    "src/counter/contract.atto": "213541736c415d30fc54bc0f413d8b0f77b623e4",
+    "src/counter/main.atto": "90d33cf97bfe553021cf340af8f62e4036a884e1",
+    "src/counter/method.atto": "e7efbde0987013bc231eef40ec0524eeadc636e8",
+    "src/counter/receive.atto": "14abc5da40fb7c080a76a8d663c6d1b57fbcb466",
+    "src/counter/state.atto": "5a63c3a307ec47e19025848fb979ceb42e9980c5"
+  },
+  "sourceUnits": {
+    ".atto.pkg.toml": "schema_version = \"1\"\n[project]\nname = \"counter-v2\"\nversion = \"0.2.0\"\nroot = \".\"\n[source]\nroots = [\"src\"]\n",
+    "src/counter/actor.atto": "namespace counter;\ndeclare pub actor Counter implements CounterContract;\n",
+    "src/counter/contract.atto": "namespace counter;\ndefine pub contract CounterContract for actor as\n  mtd echo(int n): int;\nend\n",
+    "src/counter/main.atto": "namespace counter;\npub async routine main(): void {\n  val worker = spawn Counter();\n  await worker.get_ready();\n  worker.send(1);\n  worker.send(2);\n  worker.send(3);\n  worker.send(4);\n  val a = (await worker.outputs.next()).value.unwrap();\n  val b = (await worker.outputs.next()).value.unwrap();\n  val c = (await worker.outputs.next()).value.unwrap();\n  val d = (await worker.outputs.next()).value.unwrap();\n  stdio.stdout.write(a.value);\n  stdio.stdout.write(\"|\");\n  stdio.stdout.write(b.value);\n  stdio.stdout.write(\"|\");\n  stdio.stdout.write(c.value);\n  stdio.stdout.write(\"|\");\n  stdio.stdout.write(d.value);\n  await worker.get_done();\n  return;\n}\n",
+    "src/counter/method.atto": "namespace counter;\npub mtd (Counter c) echo(int n): int { return n; }\n",
+    "src/counter/receive.atto": "namespace counter;\n// State views never escape the intrinsic: the writer is exclusive and the\n// reader transports a copyable scalar, not a borrowed state reference.\nexternal mtd (Counter c) receive(ActorMail<int> mail): void {\n  self.handle_state(critical-write |s| -> {\n    s.total = s.total + mail.value;\n  });\n  self.handle_state(critical-read |s| -> {\n    self.send(s.total);\n  });\n  if mail.value == 4; do\n    self.end();\n  fi\n  return;\n}\n",
+    "src/counter/state.atto": "namespace counter;\ndefine state on actor Counter as {\n  let int total : 0;\n}\n"
+  },
+  "proofRequirements": [
+    "backend production compiler parses complete package",
+    "checked actor-state MIR and private external receive ingress",
+    "actual compiler-generated guest executable",
+    "real mailbox delivery and computed output",
+    "two-actor state isolation, STOP and generation fencing",
+    "exact PR head and root tree plus all fixture blobs",
+    "runner-allocated nonzero executed steps, no required skips",
+    "native LLVM O0/O2 ASan UBSan and .NET full NativeAOT, Java GraalVM",
+    "independent approved review"
+  ],
+  "verifiedBackends": []
+}
