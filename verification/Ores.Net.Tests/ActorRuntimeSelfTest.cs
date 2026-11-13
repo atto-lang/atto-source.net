@@ -15,6 +15,7 @@ internal static class ActorRuntimeSelfTest
         RetainedContextCannotUseExpiredTurn();
         LifetimePinCanOutliveActorTurnAndStop();
         HandlerFaultRetiresOnlyThatActor();
+        StopDuringActiveTurnFencesBacklogAcrossDomains();
         ConcurrentDisposersAwaitCarrierQuiescence();
         FailedTurnAdmissionScrubsDequeuedMessage();
         Console.WriteLine(
@@ -513,6 +514,80 @@ internal static class ActorRuntimeSelfTest
 
         Require(runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0,
             "both disposal callers observed complete native reclamation");
+    }
+
+
+    // Host-level parity regression: stopping one actor while its physical turn
+    // is executing must revoke mailbox admission, discard its queued DATA, and
+    // preserve both its arena and an unrelated actor until safe quiescence.
+    // This is not evidence of compiler-generated .atto actor guest execution.
+    private static void StopDuringActiveTurnFencesBacklogAcrossDomains()
+    {
+        foreach (ActorKind kind in new[] {
+            ActorKind.Private, ActorKind.Shared, ActorKind.Untrusted
+        })
+        {
+            using var runtime = new ActorRuntime(Options());
+            using var entered = new ManualResetEventSlim();
+            using var release = new ManualResetEventSlim();
+            using var siblingDone = new ManualResetEventSlim();
+            int received = 0;
+
+            var target = runtime.Spawn(kind, (_, _) =>
+            {
+                Interlocked.Increment(ref received);
+                entered.Set();
+                if (!release.Wait(TimeSpan.FromSeconds(10)))
+                    throw new InvalidOperationException("STOP test carrier timed out");
+            });
+
+            // Use a different execution domain so an unrelated actor can
+            // prove progress even while the target's physical turn is blocked.
+            var siblingKind = kind == ActorKind.Private
+                ? ActorKind.Shared : ActorKind.Private;
+            var sibling = runtime.Spawn(siblingKind, (_, _) => siblingDone.Set());
+            Task? stop = null;
+            try
+            {
+                runtime.Send(target, new byte[] { 1 });
+                Require(entered.Wait(TimeSpan.FromSeconds(5)),
+                    "target enters a physical turn before STOP: " + kind);
+                runtime.Send(target, new byte[] { 2, 3, 4 });
+                stop = Task.Run(() => runtime.Stop(target));
+                Require(stop.Wait(TimeSpan.FromSeconds(5)),
+                    "STOP must not wait for a blocked handler: " + kind);
+
+                bool lateSendDenied = false;
+                try { runtime.Send(target, new byte[] { 5 }); }
+                catch (InvalidOperationException) { lateSendDenied = true; }
+                Require(lateSendDenied,
+                    "STOP must revoke future mailbox admission: " + kind);
+                Require(Volatile.Read(ref received) == 1,
+                    "queued DATA must not overtake the blocked turn: " + kind);
+                Require(runtime.LiveActors == 2 && runtime.NativeReservedBytes > 0,
+                    "STOP must retain active actor resources until turn exit: " + kind);
+
+                runtime.Send(sibling, new byte[] { 9 });
+                Require(siblingDone.Wait(TimeSpan.FromSeconds(5)),
+                    "an unaffected actor continues running during STOP: " + kind);
+            }
+            finally
+            {
+                // A failing assertion must never strand the stopped carrier.
+                release.Set();
+            }
+
+            Require(WaitUntil(() => runtime.LiveActors == 1),
+                "STOP finalizes exactly the target after turn exit: " + kind);
+            Require(Volatile.Read(ref received) == 1 &&
+                    WaitUntil(() => runtime.CompletedMessages == 2) &&
+                    runtime.FaultedTurns == 0,
+                "STOP drops queued DATA without counting it as executed: " + kind);
+            runtime.Stop(sibling);
+            Require(WaitUntil(() => runtime.LiveActors == 0 &&
+                     runtime.NativeReservedBytes == 0),
+                "STOP refunds both actors' native arenas: " + kind);
+        }
     }
 
     private static bool WaitUntil(Func<bool> condition) =>
