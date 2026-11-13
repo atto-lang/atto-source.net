@@ -110,6 +110,10 @@ internal static class ActorGeneratedRuntimeCounterChecks
             ActorExecutionContext execution = context.Execution;
             try { checkedState.AddInt64(context, 0, 1); throw new Exception("overflow admitted"); }
             catch (OverflowException) { }
+            // A critical-read borrows the native arena, copies an i64 and
+            // releases the reader before this actor can write again.
+            long detached = checkedState.ReadInt64(context, 0);
+            Require(detached == long.MaxValue, "critical-read returned unexpected native value");
             checkedResult.Enqueue(checkedState.AddInt64(context, 0, 0));
             Require(ReferenceEquals(execution, context.Execution), "critical operation replaced execution context");
         });
@@ -119,8 +123,12 @@ internal static class ActorGeneratedRuntimeCounterChecks
 
         var rejected = new ConcurrentQueue<bool>();
         ActorRef foreign = runtime.Spawn(ActorKind.Shared, (context, _) => {
-            try { checkedState.AddInt64(context, 0, -1); rejected.Enqueue(false); }
-            catch (InvalidOperationException) { rejected.Enqueue(true); }
+            bool readDenied = false, writeDenied = false;
+            try { checkedState.ReadInt64(context, 0); }
+            catch (InvalidOperationException) { readDenied = true; }
+            try { checkedState.AddInt64(context, 0, -1); }
+            catch (InvalidOperationException) { writeDenied = true; }
+            rejected.Enqueue(readDenied && writeDenied);
         });
         runtime.Send(foreign, ReadOnlySpan<byte>.Empty);
         Wait(() => rejected.Count == 1, "foreign actor check did not execute");

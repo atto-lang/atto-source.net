@@ -11,10 +11,11 @@ public static class DeclaredActor_Counter
         {
             if (message.Length != 8) throw new System.InvalidOperationException("Expected 8-byte ActorMail<int> payload");
             long incoming = System.Buffers.Binary.BinaryPrimitives.ReadInt64LittleEndian(message.Span);
-            long result = state.AddInt64(context, 0, incoming);
+            state.AddInt64(context, 0, incoming);
+            long snapshot = state.ReadInt64(context, 0);
             System.Span<byte> reply = stackalloc byte[16];
             System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(reply, context.Self.Id);
-            System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(reply[8..], result);
+            System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(reply[8..], snapshot);
             runtime.Send(replyTo, reply);
             if (incoming == 4L) runtime.Stop(context.Self);
         });

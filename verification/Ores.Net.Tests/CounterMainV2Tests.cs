@@ -92,6 +92,28 @@ internal static class CounterMainV2Tests
         Reject(units, "worker.send(2);", "worker.send(2); /* unclosed", "invalid comment");
         Reject(units, "worker.send(2);", "worker.send(2); \u0000", "NUL");
 
+        // The six-file root must not independently authorize an older
+        // receiver that publishes while a critical-read loan is live.
+        foreach (var mutation in new[] {
+            ("self.send(snapshot)", "self.send(s.total)"),
+            ("val int snapshot", "let int snapshot"),
+            ("-> s.total", "-> s"),
+            ("val int snapshot", "val object snapshot"),
+            ("self.send(snapshot);", "await self.send(snapshot);")
+        })
+        {
+            var badReceiver = new Dictionary<string, string>(units, StringComparer.Ordinal);
+            const string receiveFile = "src/counter/receive.atto";
+            Require(badReceiver[receiveFile].Contains(mutation.Item1, StringComparison.Ordinal),
+                "malformed receiver negative source control");
+            badReceiver[receiveFile] = badReceiver[receiveFile].Replace(
+                mutation.Item1, mutation.Item2, StringComparison.Ordinal);
+            bool rejected = false;
+            try { _ = OresParser.InspectCounterMainV2(badReceiver); }
+            catch (FormatException) { rejected = true; }
+            Require(rejected, "six-file linker admitted borrowed state into mailbox boundary");
+        }
+
         var missing = new Dictionary<string, string>(units, StringComparer.Ordinal);
         missing.Remove("src/counter/main.atto");
         bool denied = false;

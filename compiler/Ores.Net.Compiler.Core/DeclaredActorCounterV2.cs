@@ -105,12 +105,17 @@ public static partial class OresParser
         receive.E(mail); receive.E("."); receive.E("value"); receive.E(";");
         receive.E("}"); receive.E(")"); receive.E(";");
 
+        // The compiler owns the critical-read loan, but only the detached
+        // copyable i64 scalar can outlive the intrinsic. Mailbox publication
+        // is syntactically after its lifetime ends, never inside the callback.
+        receive.E("val"); receive.E("int"); string detached = receive.Id();
+        receive.E("=");
         receive.StateIntrinsic("read");
         string reader = receive.Loan();
-        receive.E("{");
+        receive.E(reader); receive.E("."); receive.E(field);
+        receive.E(")"); receive.E(";");
         receive.E("self"); receive.E("."); receive.E("send"); receive.E("(");
-        receive.E(reader); receive.E("."); receive.E(field); receive.E(")");
-        receive.E(";"); receive.E("}"); receive.E(")"); receive.E(";");
+        receive.E(detached); receive.E(")"); receive.E(";");
 
         receive.E("if"); receive.E(mail); receive.E("."); receive.E("value");
         receive.E("==");
@@ -127,6 +132,9 @@ public static partial class OresParser
             writer is "self" or "mail" or "handle_state" ||
             reader is "self" or "mail" or "handle_state" ||
             writer == mail || reader == mail ||
+            detached is "self" or "mail" or "handle_state" or "receive" or "send" or "end" ||
+            detached == mail || detached == writer || detached == reader ||
+            detached == field || detached == actorName || detached == receiverName ||
             methodReceiver is "self" or "handle_state" ||
             receiverName is "self" or "handle_state" ||
             receiverName == mail || methodReceiver == methodArg ||
@@ -328,10 +336,11 @@ public static class DeclaredActorCounterV2Emitter
         b.AppendLine("        {");
         b.AppendLine("            if (message.Length != 8) throw new System.InvalidOperationException(\"Expected 8-byte ActorMail<int> payload\");");
         b.AppendLine("            long incoming = System.Buffers.Binary.BinaryPrimitives.ReadInt64LittleEndian(message.Span);");
-        b.AppendLine("            long result = state.AddInt64(context, 0, incoming);");
+        b.AppendLine("            state.AddInt64(context, 0, incoming);
+            long snapshot = state.ReadInt64(context, 0);");
         b.AppendLine("            System.Span<byte> reply = stackalloc byte[16];");
         b.AppendLine("            System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(reply, context.Self.Id);");
-        b.AppendLine("            System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(reply[8..], result);");
+        b.AppendLine("            System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(reply[8..], snapshot);");
         b.AppendLine("            runtime.Send(replyTo, reply);");
         b.Append("            if (incoming == ").Append(plan.StopValue == long.MinValue ?
             "long.MinValue" : plan.StopValue.ToString(CultureInfo.InvariantCulture) + "L");

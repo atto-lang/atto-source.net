@@ -23,3 +23,7 @@ The original `main.atto`, not a synthetic host test, is the authority for source
 General `async routine` and `await` semantics, nontrivial coroutine captures, async suspension inside actors, general `ActorMail<T>`, typed ActorIR/CIL, verifier proof for arbitrary actor logic, multi-package linker, cross-backend Java/GraalVM and LLVM guest execution. None of these are claimed by this bounded candidate.
 
 Never transfer private source to an external carrier without exact-tree validation and the required independent authorization. A failed Actions job with `runner_id=0`/`steps=[]` proves only runner admission failure, not a program failure or success.
+
+## Source contract reconciliation
+
+The parent #498 Counter fixture changed to detached immutable Copy semantics: `val int snapshot = self.handle_state(critical-read |s| -> s.total);` followed by `self.send(snapshot);`. This six-source compiler now admits only the updated receive syntax through the parent verifier; direct state loan transport, mutation of the copy alias, and suspension before loan release are rejected. The native handler uses actor-owned `ActorNativeScalarState.ReadInt64` and a disposable arena read loan to materialize the snapshot **before** the mailbox send. Source and generated C# are verified together on the same exact head/tree; no new native execution is claimed until full CI is runner-allocated.

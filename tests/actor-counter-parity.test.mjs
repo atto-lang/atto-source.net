@@ -38,6 +38,22 @@ test('rejects receive lifecycle spoofing even with a re-pinned blob', async () =
   assert.throws(() => verifyCorpus(forged), /lifecycle ABI/);
 });
 
+test('rejects live critical-read sends even if source blob is re-pinned', async () => {
+  const c = await load();
+  const src = 'src/counter/receive.atto';
+  const forged = mutate(c, x => {
+    const detached = '  val int snapshot = self.handle_state(critical-read |s| -> s.total);\n' +
+        '  self.send(snapshot);\n';
+    assert.ok(x.sourceUnits[src].includes(detached));
+    x.sourceUnits[src] = x.sourceUnits[src].replace(detached,
+        '  self.handle_state(critical-read |s| -> {\n' +
+        '    self.send(s.total);\n' +
+        '  });\n');
+    x.sourceUnitBlobs[src] = gitBlobSha(x.sourceUnits[src]);
+  });
+  assert.throws(() => verifyCorpus(forged), /release critical-read/);
+});
+
 test('materialization rejects overwrites and reproduces all pinned bytes', async () => {
   const c = await load();
   const temp = await mkdtemp(path.join(os.tmpdir(), 'atto-counter-corpus-'));
