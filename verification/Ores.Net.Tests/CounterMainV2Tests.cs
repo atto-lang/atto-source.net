@@ -37,8 +37,9 @@ internal static class CounterMainV2Tests
                 throw new InvalidOperationException("Missing source unit " + name));
         }
         VerifiedCounterMainV2 verified = OresParser.InspectCounterMainV2(units);
-        Require(verified.Messages.SequenceEqual(new long[] { 1, 2, 3, 4 }),
-            "canonical source sends not preserved as typed operands");
+        Require(verified.ActorName == "Counter" &&
+                verified.Messages.SequenceEqual(new long[] { 1, 2, 3, 4 }),
+            "canonical actor identity/send operands not preserved as typed IR");
 
         string compiled = CounterMainV2Emitter.EmitCSharp(verified);
         string golden = File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
@@ -51,6 +52,20 @@ internal static class CounterMainV2Tests
                 !compiled.Contains("Thread.Sleep(", StringComparison.Ordinal) &&
                 !compiled.Contains("SpinWait.", StringComparison.Ordinal),
             "guest source was replaced by host polling or precomputed output");
+
+        // Nominal actor identity must be a verified source operand, not a
+        // fixed host class that silently ignores the linked actor declaration.
+        var renamed = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var pair in units)
+            renamed.Add(pair.Key, pair.Value.Replace("Counter", "Renamed", StringComparison.Ordinal));
+        var renamedPlan = OresParser.InspectCounterMainV2(renamed);
+        string renamedGenerated = CounterMainV2Emitter.EmitCSharp(renamedPlan);
+        Require(renamedPlan.ActorName == "Renamed" &&
+                renamedGenerated.Contains(
+                    "worker = DeclaredActor_Renamed.SpawnRuntime(runtime, observer);",
+                    StringComparison.Ordinal) &&
+                !renamedGenerated.Contains("DeclaredActor_Counter.", StringComparison.Ordinal),
+            "nominal actor identity silently fell back to hardcoded Counter");
 
         var changed = new Dictionary<string, string>(units, StringComparer.Ordinal);
         changed["src/counter/main.atto"] = changed["src/counter/main.atto"]

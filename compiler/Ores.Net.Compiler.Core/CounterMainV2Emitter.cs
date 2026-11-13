@@ -14,8 +14,11 @@ public static class CounterMainV2Emitter
     public static string EmitCSharp(VerifiedCounterMainV2 plan)
     {
         ArgumentNullException.ThrowIfNull(plan);
-        if (plan.Messages.Count != 4)
-            throw new InvalidOperationException("Unverified Counter main message arity");
+        if (plan.Messages.Count != 4 ||
+            plan.ActorName.Length is < 1 or > 128 ||
+            plan.ActorName[0] is not (>= 'a' and <= 'z' or >= 'A' and <= 'Z' or '_') ||
+            plan.ActorName.Skip(1).Any(c => c is not (>= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' or '_')))
+            throw new InvalidOperationException("Unverified Counter main actor identity/arity");
         var b = new StringBuilder();
         b.AppendLine("// Source-checked Counter v2 async main, static NativeAOT.");
         b.AppendLine("using System;");
@@ -49,7 +52,8 @@ public static class CounterMainV2Emitter
         b.AppendLine("            if (!outputs.Writer.TryWrite(value))");
         b.AppendLine("                throw new InvalidOperationException(\"Bounded output overflow\");");
         b.AppendLine("        });");
-        b.AppendLine("        worker = DeclaredActor_Counter.SpawnRuntime(runtime, observer);");
+        b.Append("        worker = DeclaredActor_").Append(plan.ActorName)
+            .AppendLine(".SpawnRuntime(runtime, observer);");
         b.AppendLine("        // get_ready is resolved by synchronous actor registration in this closed profile.");
         b.AppendLine("        Task done = runtime.ObserveTermination(worker);");
         b.AppendLine("        var mail = new byte[8];");
