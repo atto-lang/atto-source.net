@@ -77,20 +77,23 @@ public sealed class ActorContext
 {
     private readonly ActorArena _arena;
     private readonly ActorArenaTurn _turn;
-    private readonly ActorFrameStack _stack;
+    private readonly ActorExecutionStack _stack;
 
     internal ActorContext(ActorRef self, ActorKind kind,
-        ActorArena arena, ActorArenaTurn turn, ActorFrameStack stack)
+        ActorArena arena, ActorArenaTurn turn,
+        ActorExecutionContext execution)
     {
         Self = self;
         Kind = kind;
         _arena = arena;
         _turn = turn;
-        _stack = stack;
+        _stack = execution.Stack;
+        Execution = execution;
     }
 
     public ActorRef Self { get; }
     public ActorKind Kind { get; }
+    public ActorExecutionContext Execution { get; }
 
     // Host capability providers must enforce the same physical-turn authority
     // as actor memory access. A retained context is not a reusable credential.
@@ -140,6 +143,21 @@ public sealed class ActorContext
 
     public void PopStackFrame(ActorStackFrameHandle frame) =>
         _stack.Pop(_turn, frame);
+
+    // Internal compiler/runtime ABI authority: never expose sealed type
+    // descriptors as guest values or permit caller-provided raw tags to mint
+    // type authority on an already-issued activation.
+    internal void SealScalarFrame(ActorStackFrameHandle frame,
+        ReadOnlySpan<byte> declaredTypes, int blockCount) =>
+        _stack.SealScalarFrame(_turn, frame, declaredTypes, blockCount);
+
+    internal void ValidateScalarFrameHeader(
+        ActorStackFrameHandle frame, int slots, int blocks) =>
+        _stack.ValidateScalarHeader(_turn, frame, slots, blocks);
+
+    internal void ValidateScalarFrameSlot(
+        ActorStackFrameHandle frame, int slot, byte kind) =>
+        _stack.ValidateScalarSlot(_turn, frame, slot, kind);
 
     public ActorShardColumns CreateShard(int rows, int fields,
         ActorDataLayout layout, int lanes = 1) =>
@@ -217,7 +235,7 @@ public sealed class ActorRuntime : IDisposable
             Kind = kind;
             Mailbox = mailbox;
             Arena = arena;
-            Stack = new ActorFrameStack(arena, stackBytes, maxStackFrames);
+            FrameStorage = new ActorFrameStorage(arena, stackBytes, maxStackFrames);
             Handler = handler;
             Reference = mailbox.CurrentRef;
             DispatchAction = Dispatch;
@@ -227,7 +245,8 @@ public sealed class ActorRuntime : IDisposable
         internal ActorKind Kind { get; }
         internal ActorMailbox Mailbox { get; }
         internal ActorArena Arena { get; }
-        internal ActorFrameStack Stack { get; }
+        internal ActorFrameStorage FrameStorage { get; }
+        internal ulong NextExecutionSequence;
         internal ActorMessageHandler Handler { get; }
         internal ActorRef Reference { get; }
         internal Action DispatchAction { get; }
@@ -479,9 +498,21 @@ public sealed class ActorRuntime : IDisposable
                 {
                     using (turn)
                     {
+                        if (cell.NextExecutionSequence == ulong.MaxValue)
+                            throw new InvalidOperationException("Actor invocation identity exhausted");
+                        var execution = new ActorExecutionContext(
+                            cell.Reference, ++cell.NextExecutionSequence, cell.FrameStorage);
+                        execution.Stack.Begin(turn);
                         var context = new ActorContext(
-                            cell.Reference, cell.Kind, cell.Arena, turn, cell.Stack);
-                        cell.Handler(context, payload);
+                            cell.Reference, cell.Kind, cell.Arena, turn, execution);
+                        try
+                        {
+                            cell.Handler(context, payload);
+                            // Swallowing a quota fault cannot turn this receive
+                            // into successful completion of its actor generation.
+                            execution.Stack.ValidateSynchronousTurnExit(turn);
+                        }
+                        finally { execution.Stack.Complete(turn); }
                     }
                     succeeded = true;
                 }
