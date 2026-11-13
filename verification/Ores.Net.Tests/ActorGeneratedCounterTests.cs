@@ -76,7 +76,6 @@ internal static class ActorGeneratedCounterTests
         Require(messageGenerated.Replace("\r\n", "\n", StringComparison.Ordinal) ==
                 messageGolden.Replace("\r\n", "\n", StringComparison.Ordinal),
             "typed-mail generated NativeAOT source differs from checked golden");
-
         // Omitted self is only a source syntax alias for the same compiler
         // intrinsic and must generate identical static NativeAOT code.
         var implicitSelfSource = CounterSource.Replace("return self.handle_state(",
@@ -115,6 +114,16 @@ internal static class ActorGeneratedCounterTests
             "message parameter cannot be ignored");
         Reject(messageSource.Replace("critical-write", "critical-read", StringComparison.Ordinal),
             "typed mail must not authorize reader mutation");
+        foreach (var reserved in new[] {
+            "receive", "init", "send", "end", "tear_down", "on_start",
+            "on_stop", "on_restart", "on_panic", "on_throw",
+            "on_throws", "on_raise", "on_recover", "handle_state"
+        })
+        {
+            Reject(messageSource.Replace("increment(int incoming)",
+                reserved + "(int incoming)", StringComparison.Ordinal),
+                "privileged actor hook selector: " + reserved);
+        }
 
         Reject(CounterSource.Replace("critical-write", "critical-read", StringComparison.Ordinal), "read loan cannot increment");
         Reject(CounterSource.Replace("critical-write", "critical", StringComparison.Ordinal),

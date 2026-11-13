@@ -82,10 +82,25 @@ internal static class ActorGeneratedRuntimeCounterChecks
                 .SequenceEqual(new long[] { 7, 15, 16 }),
             "typed-mail overflow damaged sibling's private native state");
 
-        ActorRef malformedMail = Actor_MessageCounter.SpawnRuntime(runtime, supervisor);
-        runtime.Send(malformedMail, ReadOnlySpan<byte>.Empty);
-        Wait(() => runtime.FaultedTurns >= 3,
-            "malformed typed-mail frame must fail before native state mutation");
+        // Signed wire decoding must not accidentally coerce negative input
+        // into an unsigned delta. This remains one checked actor-local turn.
+        BinaryPrimitives.WriteInt64LittleEndian(incoming, -4);
+        runtime.Send(messageB, incoming);
+        Wait(() => replies.Count == 15, "negative signed mailbox value was not processed");
+        Require(replies.Where(x => x.Actor == messageB.Id).Select(x => x.Value)
+                .SequenceEqual(new long[] { 7, 15, 16, 12 }),
+            "signed mailbox input was not decoded as i64");
+
+        // Every invalid frame length must terminate only its receiving actor;
+        // one malformed message may not turn into a partial state write.
+        foreach (var length in new[] { 0, 7, 9 })
+        {
+            ActorRef malformedMail = Actor_MessageCounter.SpawnRuntime(runtime, supervisor);
+            runtime.Send(malformedMail, new byte[length]);
+        }
+        Wait(() => runtime.FaultedTurns >= 5,
+            "malformed typed-mail lengths must fail before native state mutation");
+        Require(replies.Count == 15, "malformed mailbox frames generated spurious replies");
 
         // Direct runtime negative: rollback and finally must release the exact
         // 16-byte stack budget while preserving this execution context.
