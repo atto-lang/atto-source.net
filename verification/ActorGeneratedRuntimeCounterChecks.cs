@@ -116,7 +116,7 @@ internal static class ActorGeneratedRuntimeCounterChecks
         runtime.Dispose();
         Require(runtime.NativeReservedBytes == 0, "native state/frame budget leaked at retirement");
         CheckSchedulerQuotaRefund();
-        Console.WriteLine("ACTOR_GENERATED_PRODUCTION_RUNTIME_PASS source_mailbox=true native_state=true execution_stack=true overflow_peer_survival=true retired_native_bytes=0");
+        Console.WriteLine("ACTOR_GENERATED_PRODUCTION_RUNTIME_PASS source_mailbox=true native_state=true execution_stack=true overflow_peer_survival=true retired_native_bytes=0 scalar_i64_mail=true mailbox_counter_1_3_6_10=true");
     }
 
     private static void CheckSchedulerQuotaRefund()
