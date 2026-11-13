@@ -54,12 +54,13 @@ jobs:
           echo "SOURCE_HEAD=$SOURCE_SHA"
           echo "SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
           dotnet --info
-      - name: Regenerate both actual source actors
+      - name: Regenerate all three actual source actors
         run: |
           set -euo pipefail
           dotnet run --project compiler/Ores.Net.Compiler -c Release -- emit-actor-csharp examples/actor-counter.atto --out verification/Ores.Net.Tests/GeneratedCounterActor.g.cs
           dotnet run --project compiler/Ores.Net.Compiler -c Release -- emit-actor-csharp examples/actor-overflow-counter.atto --out verification/Ores.Net.Tests/GeneratedOverflowCounterActor.g.cs
-          git diff --exit-code -- verification/Ores.Net.Tests/GeneratedCounterActor.g.cs verification/Ores.Net.Tests/GeneratedOverflowCounterActor.g.cs
+          dotnet run --project compiler/Ores.Net.Compiler -c Release -- emit-actor-csharp examples/actor-message-counter.atto --out verification/Ores.Net.Tests/GeneratedMessageCounterActor.g.cs
+          git diff --exit-code -- verification/Ores.Net.Tests/GeneratedCounterActor.g.cs verification/Ores.Net.Tests/GeneratedOverflowCounterActor.g.cs verification/Ores.Net.Tests/GeneratedMessageCounterActor.g.cs
       - name: Run complete managed verification
         run: dotnet run --project verification/Ores.Net.Tests -c Release
       - name: Publish static native actor probe
@@ -69,7 +70,7 @@ jobs:
           set -euo pipefail
           for round in 1 2 3; do
             "./artifacts/native-counter/${{ matrix.executable }}" | tee "artifacts/native-counter-round-$round.log"
-            grep -F 'ACTOR_GENERATED_PRODUCTION_RUNTIME_PASS source_mailbox=true native_state=true execution_stack=true overflow_peer_survival=true retired_native_bytes=0' "artifacts/native-counter-round-$round.log"
+            grep -F 'ACTOR_GENERATED_PRODUCTION_RUNTIME_PASS source_mailbox=true native_state=true execution_stack=true overflow_peer_survival=true retired_native_bytes=0 scalar_i64_mail=true mailbox_counter_1_3_6_10=true' "artifacts/native-counter-round-$round.log"
             grep -F 'NATIVE_COUNTER_DYNAMIC_CODE_DISABLED' "artifacts/native-counter-round-$round.log"
           done
           shopt -s globstar nullglob nocaseglob
