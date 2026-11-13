@@ -7,6 +7,23 @@ namespace Ores.Net.Compiler;
 public abstract record StructuredExpr(int Offset, IrValueType Type);
 public sealed record StructuredInt(int At, long Value) : StructuredExpr(At, IrValueType.I64);
 public sealed record StructuredBool(int At, bool Value) : StructuredExpr(At, IrValueType.Bool);
+// A closed, allocation-free Option<int> source type. Lowering expands it into
+// two independently verified SSA primitives (tag + payload), never a sentinel.
+// No Option<T> ABI, nested Option, type erasure or implicit unwrap is authorized.
+public sealed record StructuredSome(int At, StructuredExpr Payload)
+    : StructuredExpr(At, IrValueType.OptionI64);
+public sealed record StructuredNone(int At) : StructuredExpr(At, IrValueType.OptionI64);
+public sealed record StructuredOptionPresent(int At, StructuredExpr Option)
+    : StructuredExpr(At, IrValueType.Bool);
+public sealed record StructuredOptionAbsent(int At, StructuredExpr Option)
+    : StructuredExpr(At, IrValueType.Bool);
+// Closed tagged equality: compare declared Option<int> tags before active payloads.
+// Neither a None payload nor an untyped scalar may influence the result.
+public sealed record StructuredOptionEqual(int At, StructuredExpr LeftOption,
+    StructuredExpr RightOption, bool Negated)
+    : StructuredExpr(At, IrValueType.Bool);
+public sealed record StructuredOptionOr(int At, StructuredExpr Option, StructuredExpr Fallback)
+    : StructuredExpr(At, IrValueType.I64);
 public sealed record StructuredRead(int At, string Name, IrValueType ValueType)
     : StructuredExpr(At, ValueType);
 public sealed record StructuredNegate(int At, StructuredExpr Value)
@@ -323,6 +340,9 @@ public static class OresStructuredParser
             int offset = index;
             if (index == source.Length) return new Token("", index);
             char ch = source[index];
+            // Keep safe-collection denial from current main in the separate
+            // structured/linked parser, including when Option<int> is enabled.
+            SafeCollectionSourceAdmission.RejectUnverifiedBracket(ch, offset);
             // Injection changes ownership and lifetime authority. The scalar
             // CIL bootstrap cannot treat an annotation as harmless metadata.
             // Perform this check after comments have been skipped so comment
@@ -430,13 +450,13 @@ public static class OresStructuredParser
             if (tokenText == "enum")
                 throw new FormatException(
                     $"nominal enum overloads require compiler-bound dispatch (unsupported .NET bootstrap) at offset {offset}");
-            // The structured/linked NativeAOT entrypoints must be no more
-            // permissive than the shipping scalar frontend. Without explicit
-            // tagged storage, typed case descriptors, ownership and drop
-            // lowering, Option/Result tokens cannot become i64 SSA values.
-            // Only complete lexer tokens are checked: quoted source strings,
-            // nested comments, and longer identifiers are never ADT syntax.
-            if (tokenText is "Option" or "Result" or "Some" or "None" or "Ok" or "Err" or "trap")
+            // The opt-in structured compiler has independently verified closed
+            // Option<int> lowering; unlike the shipping scalar frontend it
+            // must admit Option/Some/None tokens. Everything else in the
+            // tagged family is still unsupported, even when reached via
+            // linked-unit discovery, and must fail before typed SSA/CIL.
+            // This is a complete-token check after skipping source trivia.
+            if (tokenText is "Result" or "Ok" or "Err" or "trap")
                 throw new FormatException(
                     $"Option/Result/trap requires verified tagged-sum CIL and NativeAOT guest-control lowering at offset {offset}");
             return new Token(tokenText, offset);
@@ -600,6 +620,10 @@ public static class OresStructuredParser
                         if (parameters.Count >= MaxParameters)
                             throw Error("Typed helper parameter budget exceeded");
                         IrValueType type = Type();
+                        // The pair ABI is intentionally not exposed across
+                        // calls until exact typed method signatures exist.
+                        if (type == IrValueType.OptionI64)
+                            throw Error("E_OPTION_ABI_UNSUPPORTED: Option<int> method parameters need verified two-word ABI");
                         string parameter = Name();
                         if (!parameterTypes.TryAdd(parameter,
                             new LocalBinding(type, StructuredBindingKind.Val, null)))
@@ -617,6 +641,8 @@ public static class OresStructuredParser
                 if (Current.Text == "(")
                     throw Error("Tuple-v2 shorthand return requires typed tuple ownership/ABI lowering");
                 IrValueType resultType = Type();
+                if (resultType == IrValueType.OptionI64)
+                    throw Error("E_OPTION_ABI_UNSUPPORTED: Option<int> method results need verified two-word ABI");
                 if (name == "main" && entry)
                 {
                     if (visible.ContainsKey(name)) throw Error("Entry main conflicts with an imported callable");
@@ -778,6 +804,9 @@ public static class OresStructuredParser
                 long? constantValue = null;
                 if (kind == StructuredBindingKind.Const)
                 {
+                    if (type == IrValueType.OptionI64)
+                        throw new FormatException(
+                            $"E_OPTION_CONST_UNSUPPORTED: Option<int> const folding needs tagged-value proof at offset {at}");
                     try { constantValue = ConstantValue(initializer); }
                     catch (OverflowException)
                     {
@@ -841,7 +870,15 @@ public static class OresStructuredParser
         {
             if (Take("int")) return IrValueType.I64;
             if (Take("bool")) return IrValueType.Bool;
-            throw Error("Expected int or bool type");
+            if (Take("Option"))
+            {
+                Expect("<");
+                if (!Take("int"))
+                    throw Error("E_OPTION_I64_ONLY: this NativeAOT slice admits only Option<int>; no nested or erased generic Option");
+                Expect(">");
+                return IrValueType.OptionI64;
+            }
+            throw Error("Expected int, bool or closed Option<int> type");
         }
         private string Name()
         {
@@ -855,7 +892,8 @@ public static class OresStructuredParser
                     or "define" or "pub" or "fnc" or "const" or "val" or "final"
                     or "struct" or "record" or "class" or "actor"
                     or "module" or "import" or "from" or "as" or "end"
-                    or "routine" or "async" or "isoactor" or "guard")
+                    or "routine" or "async" or "isoactor" or "guard"
+                    or "Some" or "None" or "Option")
                 throw new FormatException($"Invalid identifier at offset {at}");
             index++;
             return name;
@@ -897,6 +935,36 @@ public static class OresStructuredParser
                         $"const initializer must be a compile-time scalar at offset {expression.Offset}");
             }
         }
+        // Only closed Option<int> inspection operations are admitted.
+        // Eager unwrap_or evaluates its fallback exactly once, even for Some.
+        // Unsafe .unwrap(), ?. chaining and implicit conversion are forbidden.
+        private StructuredExpr OptionPostfix(StructuredExpr option, int depth)
+        {
+            if (option.Type != IrValueType.OptionI64 || !Take("."))
+                return option;
+            int at = Current.Offset;
+            if (Take("is_some"))
+            {
+                Expect("(");
+                Expect(")");
+                return new StructuredOptionPresent(at, option);
+            }
+            if (Take("is_none"))
+            {
+                Expect("(");
+                Expect(")");
+                return new StructuredOptionAbsent(at, option);
+            }
+            if (Take("unwrap_or"))
+            {
+                Expect("(");
+                var fallback = Expr(depth + 1);
+                Require(fallback, IrValueType.I64, "Option<int>.unwrap_or fallback must be int");
+                Expect(")");
+                return new StructuredOptionOr(at, option, fallback);
+            }
+            throw Error("E_OPTION_METHOD_UNSUPPORTED: use is_some(), is_none(), or unwrap_or(int)");
+        }
         private StructuredExpr Expr(int depth) => Equal(depth + 1);
         private StructuredExpr Equal(int depth)
         {
@@ -907,11 +975,23 @@ public static class OresStructuredParser
                 bool notEqual = Current.Text is "!=" or "neq";
                 index++;
                 var right = Compare(depth + 1);
-                Require(left, IrValueType.I64, "Equality requires int operands");
-                Require(right, IrValueType.I64, "Equality requires int operands");
-                left = CheckedBinary(at,
-                    notEqual ? StructuredOperator.NotEqualI64 : StructuredOperator.EqualI64,
-                    left, right, IrValueType.Bool);
+                if (left.Type == IrValueType.OptionI64 ||
+                    right.Type == IrValueType.OptionI64)
+                {
+                    Require(left, IrValueType.OptionI64,
+                        "E_OPTION_EQUALITY_TYPE: Option<int> equality requires two Option<int> operands");
+                    Require(right, IrValueType.OptionI64,
+                        "E_OPTION_EQUALITY_TYPE: Option<int> equality requires two Option<int> operands");
+                    left = new StructuredOptionEqual(at, left, right, notEqual);
+                }
+                else
+                {
+                    Require(left, IrValueType.I64, "Equality requires int operands");
+                    Require(right, IrValueType.I64, "Equality requires int operands");
+                    left = CheckedBinary(at,
+                        notEqual ? StructuredOperator.NotEqualI64 : StructuredOperator.EqualI64,
+                        left, right, IrValueType.Bool);
+                }
             }
             return left;
         }
@@ -1016,9 +1096,19 @@ public static class OresStructuredParser
             {
                 var inner = Expr(depth + 1);
                 Expect(")");
-                return inner;
+                return OptionPostfix(inner, depth);
             }
             int offset = Current.Offset;
+            if (Take("Some"))
+            {
+                Expect("(");
+                var payload = Expr(depth + 1);
+                Require(payload, IrValueType.I64, "Some(int) payload must be int");
+                Expect(")");
+                return OptionPostfix(new StructuredSome(offset, payload), depth);
+            }
+            if (Take("None"))
+                return OptionPostfix(new StructuredNone(offset), depth);
             if (Take("true")) return new StructuredBool(offset, true);
             if (Take("false")) return new StructuredBool(offset, false);
             string raw = Current.Text;
@@ -1032,6 +1122,10 @@ public static class OresStructuredParser
             }
             var name = Name();
             bool localBinding = scopes.Any(scope => scope.ContainsKey(name));
+            // Option methods on local values must not be reinterpreted as
+            // linked module qualification or static method dispatch.
+            if (localBinding && Lookup(name, offset).Type == IrValueType.OptionI64)
+                return OptionPostfix(new StructuredRead(offset, name, IrValueType.OptionI64), depth);
             if (linking is not null)
                 while (Take("."))
                 {

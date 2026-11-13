@@ -35,54 +35,100 @@ internal static class OptionResultTrapAdmissionTests
             throw new Exception("Scalar CIL admitted or misclassified tagged source: " + source);
         }
 
-        // The structured and linked NativeAOT entrypoints use a separate
-        // lexer. Check that no Option/Result source can be lowered as an
-        // ordinary i64 SSA instruction or mislabeled a semantic-negative ADT
-        // parity pass. Require the SAME feature diagnostic as the scalar path.
-        string[] structuredUnsupported =
-        [
-            "fnc main():int { return Some(7); }",
-            "fnc main():int { return None; }",
-            "fnc main():int { return Ok(7); }",
-            "fnc main():int { return Err(7); }",
-            "fnc main():int { val Option<int> x = None; return 7; }",
-            "fnc main():int { val Result<int,int> x = Ok(7); return 7; }",
-            "fnc main():int { return trap(7); }",
-            "define enum Stage as Ready = 1 end",
-            "fnc main():int { return Stage.Ready(7); } // Some is in a comment",
-        ];
-        foreach (string source in structuredUnsupported)
+        // Structured/linked CIL has a separately verified closed Option<int>
+        // lane. Unsupported Result/Ok/Err/trap must retain the stable
+        // refusal diagnostic instead of silently becoming scalar SSA.
+        foreach (var source in new[]
         {
-            // An unknown nominal constructor without any reserved ADT
-            // spelling must still fail closed, but not claim a tagged-sum
-            // source-specific diagnostic unless a tagged token is present.
-            bool tagged = source.Contains("Some(", StringComparison.Ordinal)
-                || source.Contains("None", StringComparison.Ordinal)
-                || source.Contains("Ok(", StringComparison.Ordinal)
-                || source.Contains("Err(", StringComparison.Ordinal)
-                || source.Contains("Option<", StringComparison.Ordinal)
-                || source.Contains("Result<", StringComparison.Ordinal)
-                || source.Contains("trap(", StringComparison.Ordinal);
+            "fnc main():int{return Ok(7);}",
+            "fnc main():int{return Err(7);}",
+            "fnc main():int{return Result(7);}",
+            "fnc main():int{val Result<int,int> x=Ok(7);return 7;}",
+            "fnc main():int{return trap(7);}",
+            "trap fnc main():int{return 7;}"
+        })
+        {
             try { _ = OresStructuredParser.Parse(source); }
-            catch (FormatException error) when (!tagged || (
-                error.Message.Contains(Diagnostic, StringComparison.Ordinal)
-                && error.Message.Contains("offset ", StringComparison.Ordinal)))
+            catch (FormatException error) when (
+                error.Message.Contains(Diagnostic, StringComparison.Ordinal) &&
+                error.Message.Contains("offset ", StringComparison.Ordinal))
             {
                 continue;
             }
-            throw new Exception(
-                "Structured NativeAOT admitted or misclassified tagged source: " + source);
+            throw new Exception("Structured CIL admitted or misclassified unsupported tagged source: " + source);
         }
 
-        foreach (string source in new[]
+        // Reconcile with the experimental closed Option<int> path, rather
+        // than applying a broad token deny that would invalidate its typed
+        // Option tag and payload SSA proof.
+        var closedOption = OresStructuredParser.Parse(
+            "pub fnc main():int{val Option<int> x=Some(42);return x.unwrap_or(0);}");
+        if (closedOption.Body.Count == 0)
+            throw new Exception("Structured CIL lost verified closed Option<int> admission");
+        foreach (var source in new[]
         {
-            "fnc main():int{return 7;} // Option Result Some None Ok Err trap",
-            "fnc main():int{return 7;} /* Option /* Result trap */ Some */",
-            "fnc main():int{return 7;} // OptionValue Somewhat Okapi"
+            "fnc main():int{return 7;} // Result Ok Err trap",
+            "fnc main():int{return 7;} /* Result /* Ok Err */ trap */",
+            "fnc main():int{return 7;} // ResultValue Okapi ErrorCode"
         })
         {
             if (OresStructuredParser.Parse(source).Body.Count != 1)
-                throw new Exception("Structured CIL treated trivia as executable ADT source");
+                throw new Exception("Structured lexer treated ADT source trivia as executable code");
+        }
+        try
+        {
+            _ = OresStructuredParser.Parse("fnc main():int{return ResultValue;}");
+            throw new Exception("Unsupported scalar name was unexpectedly admitted");
+        }
+        catch (FormatException error) when (
+            !error.Message.Contains(Diagnostic, StringComparison.Ordinal))
+        {
+            // Correct: a longer identifier is not a reserved ADT token.
+        }
+
+        // Import discovery lexes all source before resolving any file path.
+        // Unsupported tagged tokens must be rejected in this entrypoint too;
+        // the experimental closed Option<int> still must be accepted.
+        string linkedRoot = Path.Combine(Path.GetTempPath(),
+            "atto-linked-adt-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(linkedRoot);
+        string linkedEntrypoint = Path.Combine(linkedRoot, "main.atto");
+        try
+        {
+            foreach (string unsupported in new[]
+            {
+                "fnc main():int { return Result(7); }",
+                "fnc main():int { return Ok(7); }",
+                "fnc main():int { return Err(7); }",
+                "fnc main():int { return trap(7); }",
+                "trap fnc main():int { return 7; }"
+            })
+            {
+                File.WriteAllText(linkedEntrypoint, unsupported);
+                try
+                {
+                    _ = OresSourceModuleCompiler.Compile(
+                        linkedEntrypoint, new[] { linkedRoot });
+                }
+                catch (FormatException error) when (
+                    error.Message.Contains(Diagnostic, StringComparison.Ordinal)
+                    && error.Message.Contains("offset ", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+                throw new Exception("Linked CIL admitted unsupported ADT syntax: "
+                    + unsupported);
+            }
+            File.WriteAllText(linkedEntrypoint,
+                "pub fnc main():int { val Option<int> x = Some(42); return x.unwrap_or(0); }");
+            _ = OresSourceModuleCompiler.Compile(linkedEntrypoint, new[] { linkedRoot });
+            File.WriteAllText(linkedEntrypoint,
+                "pub fnc main():int { return 42; } /* Result /* trap */ Ok Err */");
+            _ = OresSourceModuleCompiler.Compile(linkedEntrypoint, new[] { linkedRoot });
+        }
+        finally
+        {
+            Directory.Delete(linkedRoot, recursive: true);
         }
 
         // The lexer must not treat words in source trivia as code.

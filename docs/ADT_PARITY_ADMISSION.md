@@ -20,20 +20,34 @@ positive and semantic negative cases on a verified exact compiler tree.
 Do not count generic `FormatException`, zero-step Actions or host-only tests
 as certified guest semantics. Keep draft until reviewed, stepful CI runs.
 
-## Structured and linked NativeAOT ADT admission follow-up
+## Merge-order reconciliation with structured Option<int> (#428)
 
-The `OresStructuredParser` is a separate CFG/SSA entrypoint from
-`OresParser`. The tokenized structured lexer now rejects executable
-`Option`, `Result`, `Some`, `None`, `Ok`, `Err` and `trap` with the
-same stable unsupported-feature diagnostic. That gate also applies to
-linked-unit import discovery, while quoted strings, nested comments,
-and longer identifiers are not promoted to ADT syntax.
+The experimental `check-structured` / `compile-structured` lane in PR #428
+has verified closed `Option<int>` (tag: Bool, payload: signed i64),
+`Some`/`None`, tag queries and exact tagged equality. Consequently,
+blanket lexer denial of `Option`, `Some` and `None` in independent
+PR #468 **must not** be merged unchanged on top of #428. The production
+`OresParser` continues to reject all ADT source. The experimental
+structured lexer refuses `Result`, `Ok`, `Err` and `trap` with the
+same stable unsupported-feature diagnostic, in addition to rejecting
+unsupported generic Option shapes and unsafe operations during typing.
 
-`OptionResultTrapAdmissionTests` checks the real structured parser, not
-a regular-expression scanner or fake scalar evaluator. No tagged CIL
-layout, case payload, borrow ownership, exhaustive match, actor wire
-encoding or Native AOT guest execution has been implemented by this
-hardening. A compiler's unsupported-feature refusal must not be counted
-as a passing semantic-negative fixture in the canonical `.atto` ADT
-matrix. Keep `confirmedBackends=[]` until compiler-backed evidence is
-available on the exact source head with nonzero Actions steps.
+The structured lexer regression checks both outcomes: actual closed
+`Option<int>` source is admitted, but unsupported `Result`/trap source
+never reaches verified CFG/CIL, even in the presence of comments or longer
+identifiers. This is an implementation-layer boundary, **not** a claim of
+NativeAOT executed guest conformance; exact-head stepful tests and reviewer
+approval remain mandatory.
+
+## Linked-unit compiler admission (stacked follow-up)
+
+The public linked-unit compiler route tokenizes source before resolving imports
+and lowering verified CFG. Tests cover unsupported Result, Ok, Err, and trap
+forms in this route; only the bounded closed Option<int> subset is admitted,
+and nested source comments remain inert. This preserves Option tag/payload SSA
+work from #428 while ensuring alternate module entrypoints fail closed.
+
+This follow-up intentionally does not reintroduce #468's former blanket lexer
+rejection of Option, Some, or None. The shipping scalar compiler still rejects
+those constructs. Tests are definitions until run against this exact branch head;
+no NativeAOT guest result is inferred from earlier host-only carrier receipts.
