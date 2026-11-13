@@ -179,8 +179,15 @@ public static partial class OresParser
         var field = schema.Fields.FirstOrDefault(x => x.Name == writeField);
         if (field is null || field.Kind != ActorStateFieldKind.Int64)
             throw new FormatException("Actor increment requires a declared int state field");
-        if (methodName == "handle_state")
-            throw new FormatException("Reserved actor intrinsic method name");
+        // This opt-in source emitter never grants actor lifecycle or
+        // supervisor CONTROL authority. Preserve the same reserved hook
+        // namespace as the declared-actor ABI rather than letting a public
+        // ordinary method be compiled under a privileged selector.
+        if (new[] { "handle_state", "init", "receive", "send", "end",
+                    "tear_down", "on_start", "on_stop", "on_restart",
+                    "on_panic", "on_throw", "on_throws", "on_raise",
+                    "on_recover" }.Contains(methodName, StringComparer.Ordinal))
+            throw new FormatException("Reserved actor runtime method name");
         return new VerifiedActorIncrement(schema, methodName, methodOffset,
             writeField, field.Index, delta, scalarMailParameter);
     }
