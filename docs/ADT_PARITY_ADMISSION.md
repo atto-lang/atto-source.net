@@ -51,3 +51,15 @@ This follow-up intentionally does not reintroduce #468's former blanket lexer
 rejection of Option, Some, or None. The shipping scalar compiler still rejects
 those constructs. Tests are definitions until run against this exact branch head;
 no NativeAOT guest result is inferred from earlier host-only carrier receipts.
+
+## Canonical .atto source-linking compatibility
+
+The linked source compiler now admits canonical .atto entrypoints and imports,
+while keeping .ores files compatible for existing graphs. For extensionless
+local imports, it selects the only existing candidate; if both foo.atto and
+foo.ores exist it rejects the path as ambiguous, requiring an explicit suffix.
+The established source-root ownership, strict UTF-8, no-reparse/symlink,
+per-file byte budget and bounded graph checks still apply after resolution.
+The linked ADT regression covers a .atto entry, canonical .atto helper import,
+ambiguous dual-suffix import rejection, and .ores fallback. These tests are
+not executed evidence until a trusted runner executes the exact new branch.

@@ -125,6 +125,34 @@ internal static class OptionResultTrapAdmissionTests
             File.WriteAllText(linkedEntrypoint,
                 "pub fnc main():int { return 42; } /* Result /* trap */ Ok Err */");
             _ = OresSourceModuleCompiler.Compile(linkedEntrypoint, new[] { linkedRoot });
+
+            // Canonical .atto import discovery, explicit legacy fallback, and
+            // fail-closed ambiguity when both suffixes exist.
+            File.WriteAllText(linkedEntrypoint,
+                "import fnc answer from \"./answer\"; pub fnc main():int { return answer(); }");
+            string canonicalAnswer = Path.Combine(linkedRoot, "answer.atto");
+            string legacyAnswer = Path.Combine(linkedRoot, "answer.ores");
+            const string answerSource = "pub fnc answer():int { return 42; }";
+            File.WriteAllText(canonicalAnswer, answerSource);
+            if (OresSourceModuleCompiler.Compile(linkedEntrypoint,
+                new[] { linkedRoot }).Sources.Count != 2)
+                throw new Exception("Canonical .atto import did not resolve two exact source units");
+            File.WriteAllText(legacyAnswer, answerSource);
+            try
+            {
+                _ = OresSourceModuleCompiler.Compile(linkedEntrypoint,
+                    new[] { linkedRoot });
+                throw new Exception("Ambiguous .atto/.ores import was silently resolved");
+            }
+            catch (FormatException error) when (
+                error.Message.Contains("Ambiguous AttoLang source import", StringComparison.Ordinal))
+            {
+                // Correct: require an explicit extension, no implicit selection.
+            }
+            File.Delete(canonicalAnswer);
+            if (OresSourceModuleCompiler.Compile(linkedEntrypoint,
+                new[] { linkedRoot }).Sources.Count != 2)
+                throw new Exception("Legacy .ores import compatibility was lost");
         }
         finally
         {
