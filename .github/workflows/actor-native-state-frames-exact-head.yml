@@ -61,6 +61,15 @@ jobs:
           dotnet run --project compiler/Ores.Net.Compiler -c Release -- emit-actor-csharp examples/actor-overflow-counter.atto --out verification/Ores.Net.Tests/GeneratedOverflowCounterActor.g.cs
           dotnet run --project compiler/Ores.Net.Compiler -c Release -- emit-actor-csharp examples/actor-message-counter.atto --out verification/Ores.Net.Tests/GeneratedMessageCounterActor.g.cs
           git diff --exit-code -- verification/Ores.Net.Tests/GeneratedCounterActor.g.cs verification/Ores.Net.Tests/GeneratedOverflowCounterActor.g.cs verification/Ores.Net.Tests/GeneratedMessageCounterActor.g.cs
+      - name: Materialize and compile real external receive from identical-source corpus
+        run: |
+          set -euo pipefail
+          node tools/actor-counter-parity.mjs verify
+          mkdir -p artifacts
+          source_dir="$(node -p "require('node:path').resolve('artifacts/declared-counter-v2')")"
+          node tools/actor-counter-parity.mjs materialize "$source_dir"
+          dotnet run --project compiler/Ores.Net.Compiler -c Release -- emit-external-counter-csharp "$source_dir" --out verification/Ores.Net.Tests/GeneratedExternalCounterActor.g.cs
+          git diff --exit-code -- verification/Ores.Net.Tests/GeneratedExternalCounterActor.g.cs
       - name: Verify omitted-self source generates identical native actor
         run: |
           set -euo pipefail
@@ -77,6 +86,7 @@ jobs:
             "./artifacts/native-counter/${{ matrix.executable }}" | tee "artifacts/native-counter-round-$round.log"
             grep -F 'ACTOR_GENERATED_PRODUCTION_RUNTIME_PASS source_mailbox=true native_state=true execution_stack=true overflow_peer_survival=true retired_native_bytes=0 scalar_i64_mail=true mailbox_counter_1_3_6_10=true' "artifacts/native-counter-round-$round.log"
             grep -F 'NATIVE_COUNTER_DYNAMIC_CODE_DISABLED' "artifacts/native-counter-round-$round.log"
+            grep -F 'DECLARED_EXTERNAL_RECEIVE_NATIVE_PASS source_handler=true two_actor_isolation=true self_end=true stale_send_denied=true malformed_mail_fault=true' "artifacts/native-counter-round-$round.log"
           done
           shopt -s globstar nullglob nocaseglob
           dlls=(artifacts/native-counter/**/*.dll)

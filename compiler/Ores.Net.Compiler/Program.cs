@@ -10,14 +10,17 @@ bool validStructuredCheck = args.Length == 2 && args[0] == "check-structured";
 bool validStructuredCompile = args.Length == 4 &&
     args[0] == "compile-structured" && args[2] == "--out";
 bool validEmitActorSource = args.Length == 4 && args[0] == "emit-actor-csharp" && args[2] == "--out";
+// This separate mode only binds the verified external receive slice of the
+// Counter v2 package; it never claims compiled async main or general actors.
+bool validExternalReceive = args.Length == 4 && args[0] == "emit-external-counter-csharp" && args[2] == "--out";
 bool validEmitSource = args.Length == 4 && args[2] == "--out" &&
     (args[0] == "emit-csharp" || args[0] == "emit-fsharp");
 bool validStaticFacts = args.Length == 2 &&
     (args[0] == "static-facts" || args[0] == "static-facts-structured");
 bool moduleCommand = args.Length >= 1 && args[0] is "check-modules" or "compile-modules";
-if (!validCheck && !validCompile && !validStructuredCheck && !validStructuredCompile && !validStaticFacts && !validEmitSource && !validEmitActorSource && !moduleCommand)
+if (!validCheck && !validCompile && !validStructuredCheck && !validStructuredCompile && !validStaticFacts && !validEmitSource && !validEmitActorSource && !validExternalReceive && !moduleCommand)
 {
-    Console.Error.WriteLine("usage: oresnet check input.atto|input.ores | oresnet compile input.atto|input.ores --out path/OresGenerated.dll | oresnet check-structured input.atto|input.ores | oresnet compile-structured input.atto|input.ores --out path/OresGenerated.dll | oresnet emit-csharp input.atto|input.ores --out path/OresProgram.cs | oresnet emit-fsharp input.atto|input.ores --out path/OresProgram.fs | oresnet emit-actor-csharp Counter.atto --out path/Actor_Counter.g.cs | oresnet static-facts input.atto|input.ores | oresnet static-facts-structured input.atto|input.ores");
+    Console.Error.WriteLine("usage: oresnet check input.atto|input.ores | oresnet compile input.atto|input.ores --out path/OresGenerated.dll | oresnet check-structured input.atto|input.ores | oresnet compile-structured input.atto|input.ores --out path/OresGenerated.dll | oresnet emit-csharp input.atto|input.ores --out path/OresProgram.cs | oresnet emit-fsharp input.atto|input.ores --out path/OresProgram.fs | oresnet emit-actor-csharp Counter.atto --out path/Actor_Counter.g.cs | oresnet emit-external-counter-csharp ROOT --out path/DeclaredActor_Counter.g.cs | oresnet static-facts input.atto|input.ores | oresnet static-facts-structured input.atto|input.ores");
     return 2;
 }
 
@@ -58,6 +61,43 @@ try
             json.WriteEndArray(); json.WriteEndObject();
         }
         Console.WriteLine(Encoding.UTF8.GetString(witness.ToArray()));
+        return 0;
+    }
+    if (validExternalReceive)
+    {
+        if (!string.Equals(Path.GetExtension(args[3]), ".cs", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("External receive source output requires .cs");
+        string root = Path.GetFullPath(args[1]);
+        string src = Path.Combine(root, "src");
+        string counter = Path.Combine(src, "counter");
+        // Never follow package/actor source symlinks while certifying a
+        // single locally materialized, SHA-verified canonical source corpus.
+        foreach (string directory in new[] { root, src, counter })
+        {
+            if (!Directory.Exists(directory) ||
+                (File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
+                throw new FormatException("External receive package directory must be real");
+        }
+        string manifestPath = Path.Combine(root, ".atto.pkg.toml");
+        if ((File.GetAttributes(manifestPath) & FileAttributes.ReparsePoint) != 0)
+            throw new FormatException("External receive manifest cannot be a symlink");
+        const string expectedManifest = "schema_version = \"1\"\n[project]\nname = \"counter-v2\"\nversion = \"0.2.0\"\nroot = \".\"\n[source]\nroots = [\"src\"]\n";
+        if (ReadBoundedSource(manifestPath, rejectBom: true) != expectedManifest)
+            throw new FormatException("External receive v2 requires the canonical package manifest");
+        var sourceUnits = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (string file in new[] { "actor.atto", "contract.atto",
+                     "method.atto", "receive.atto", "state.atto" })
+        {
+            string path = Path.Combine(counter, file);
+            if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+                throw new FormatException("External receive source cannot be a symlink");
+            sourceUnits.Add("src/counter/" + file, ReadBoundedSource(path, rejectBom: true));
+        }
+        var verifiedReceive = OresParser.InspectExternalCounterV2(sourceUnits);
+        if (verifiedReceive.Namespace != "counter")
+            throw new FormatException("External receive namespace does not match source root");
+        WriteAtomicSource(args[3], DeclaredActorCounterV2Emitter.EmitCSharp(verifiedReceive));
+        Console.WriteLine("VERIFIED_EXTERNAL_RECEIVE_V2 actor_handler_only=true async_main_not_compiled=true");
         return 0;
     }
     if (validStaticFacts &&
