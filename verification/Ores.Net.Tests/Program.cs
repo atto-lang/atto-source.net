@@ -322,6 +322,7 @@ VmIsolateHostTests.Run();
 VmIsolateHostHardeningTests.Run();
 OptionResultTrapAdmissionTests.Run();
 OptionI64CompilerTests.Run(); // opt-in typed Option<int> source -> verified CFG -> CIL
+SafeCollectionSourceAdmissionTests.Run(); // indexed collection access remains fail-closed
 // Shared TCP-pool capabilities are not guest-lowered by either .NET frontend.
 // Deny in both the shipping scalar CLI path and the structured CFG path;
 // a host-only HTTP/1.1 socket provider is not an actor-shared pool.
