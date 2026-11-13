@@ -297,9 +297,13 @@ class ScalarHarnessTest(unittest.TestCase):
                         self.assertTrue(good, message)
                 # An error for the wrong feature or unrelated infrastructure
                 # must never satisfy negative source conformance.
-                for bad in ("file not found", "unknown compiler option",
-                            "usage error", "unexpected token in tool setup",
-                            "Expected 'fnc' at offset 4"):
+                # The old async diagnostic is valid for other rejected
+                # programs, so reject it only for the async-specific case.
+                for bad in (
+                    "file not found", "unknown compiler option",
+                    "usage error", "unexpected token in tool setup"
+                ) + (("Expected 'fnc' at offset 4",)
+                     if backend == "net" and case_id == "reject.async" else ()):
                     code = "import sys;sys.stderr.write(" + repr(
                         backend.replace("forge", "oresforge").replace("net", "oresnet") +
                         ": " + bad + "\n") + ");sys.exit(1)"
