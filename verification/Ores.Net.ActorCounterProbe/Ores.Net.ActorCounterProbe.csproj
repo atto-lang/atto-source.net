@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <RuntimeFrameworkVersion>10.0.14</RuntimeFrameworkVersion>
-    <IlcPackageVersion>10.0.14</IlcPackageVersion>
+    <RuntimeFrameworkVersion>10.0.15</RuntimeFrameworkVersion>
+    <IlcPackageVersion>10.0.15</IlcPackageVersion>
     <OutputType>Exe</OutputType>
     <PublishAot>true</PublishAot>
     <SelfContained>true</SelfContained>

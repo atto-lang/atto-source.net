@@ -5,8 +5,8 @@
     <SelfContained>true</SelfContained>
     <PublishTrimmed>true</PublishTrimmed>
     <IsAotCompatible>true</IsAotCompatible>
-    <RuntimeFrameworkVersion>10.0.14</RuntimeFrameworkVersion>
-    <IlcPackageVersion>10.0.14</IlcPackageVersion>
+    <RuntimeFrameworkVersion>10.0.15</RuntimeFrameworkVersion>
+    <IlcPackageVersion>10.0.15</IlcPackageVersion>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../runtime/Ores.Net.Runtime/Ores.Net.Runtime.csproj" />
