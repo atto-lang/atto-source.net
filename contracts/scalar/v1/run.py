@@ -180,7 +180,8 @@ NEGATIVE_DIAGNOSTICS = {
         "reject.unknown": r"oresnet: Expected integer at offset (?P<offset>[0-9]+)",
         "reject.division": r"oresnet: Division requires float result lowering; unsupported in the i64 source subset",
         "reject.actor": r"oresnet: Expected 'fnc' at offset (?P<offset>[0-9]+)",
-        "reject.async": r"oresnet: Expected 'fnc' at offset (?P<offset>[0-9]+)",
+        # Legacy async fnc now has a stable, more specific fail-closed diagnostic.
+        "reject.async": r"oresnet: E_CALLABLE_MODIFIERS: async fnc is removed; use suspends at offset (?P<offset>[0-9]+)",
         "reject.structural": r"oresnet: Expected integer at offset (?P<offset>[0-9]+)",
     },
 }

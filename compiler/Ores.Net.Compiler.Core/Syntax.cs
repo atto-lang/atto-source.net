@@ -335,7 +335,6 @@ public static class OresParser
                 {
                     var previous = tokens[_index - 1];
                     int boundaryStart = previous.Offset + previous.Text.Length;
-                    int boundaryLength = Current.Offset - boundaryStart;
                     bool hasLineBreak = false;
                     for (int i = boundaryStart; i < Current.Offset; i++)
                     {

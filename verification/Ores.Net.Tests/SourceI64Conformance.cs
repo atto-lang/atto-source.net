@@ -89,6 +89,9 @@ internal static class SourceI64Conformance
         int endCase = 0;
         foreach (string source in new[] {
             "pub fnc main() -> int\n  return 40 + 2;\nend",
+            "pub fnc main() -> int\r\n  return 40 + 2;\r\nend",
+            "pub fnc main() -> int\r  return 40 + 2;\rend",
+            "pub fnc main() -> int /* header comment */\r\n  return 40 + 2;\r\nend",
             "pub fnc main() -> int :: return 40 + 2; end"
         })
         {
@@ -105,6 +108,7 @@ internal static class SourceI64Conformance
         }
         foreach (var bad in new[] {
             "fnc main() -> int return 42; end",
+            "fnc main() -> int /* still on one line */ return 42; end",
             "fnc main(): int :: return 42; end",
             "fnc main() -> int\n  return 42;",
             "fnc main() -> int\n  return 42;\nend end",
