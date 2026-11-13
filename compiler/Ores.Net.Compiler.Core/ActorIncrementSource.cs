@@ -138,22 +138,23 @@ public static partial class OresParser
         var readField = Identifier();
         Expect("+");
         var deltaToken = At();
-        long delta;
+        long delta = 0; // The typed-mail form has no source-literal delta.
         if (scalarMailParameter is not null)
         {
             if (deltaToken.Text != scalarMailParameter)
                 throw new FormatException(
                     $"Actor increment requires its single owned int input at offset {deltaToken.Offset}");
-            delta = 0; // Typed mailbox value; never an implicit literal.
         }
-        else if (deltaToken.Text.Length == 0 ||
-                 deltaToken.Text.Any(c => c != '_' && (c < '0' || c > '9')) ||
-                 !long.TryParse(deltaToken.Text.Replace("_", "", StringComparison.Ordinal),
-                     NumberStyles.None, CultureInfo.InvariantCulture, out delta) ||
-                 delta != 1)
+        else
         {
-            throw new FormatException(
-                $"Actor increment supports only checked + 1 at offset {deltaToken.Offset}");
+            if (deltaToken.Text.Length == 0 ||
+                deltaToken.Text.Any(c => c != '_' && (c < '0' || c > '9')) ||
+                !long.TryParse(deltaToken.Text.Replace("_", "", StringComparison.Ordinal),
+                    NumberStyles.None, CultureInfo.InvariantCulture, out long sourceDelta) ||
+                sourceDelta != 1)
+                throw new FormatException(
+                    $"Actor increment supports only checked + 1 at offset {deltaToken.Offset}");
+            delta = sourceDelta;
         }
         p++;
         Expect(";");
