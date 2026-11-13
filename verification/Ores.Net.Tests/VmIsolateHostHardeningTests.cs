@@ -5,10 +5,36 @@ internal static class VmIsolateHostHardeningTests
 {
     public static void Run()
     {
+        TenantVmAliasRetainsIsolationAdmission();
         QueuedCallerRejectedWhileTurnRuns();
         TenantAndHostMailQuotas();
         FaultDiscardsTenantState();
         Console.WriteLine("PASS .NET tenant host hardening: queued callers fail fast, tenant and host mail quotas, fault state discarded");
+    }
+
+    // The new canonical trusted TenantVM alias must not turn logical tenant
+    // registration into a native/validated-Wasm isolation guarantee.
+    private static void TenantVmAliasRetainsIsolationAdmission()
+    {
+        var host = new OresVmHost(maxTenants: 2);
+        var a = host.CreateTrustedTenantVm("alias-a");
+        Expect<InvalidOperationException>(() => host.CreateIsolate("blocked",
+            isolation: OresVmHost.IsolationMode.NativeVmIsolate),
+            "NativeVmIsolate must not downgrade to the trusted TenantVM alias");
+        var b = host.CreateTrustedTenantVm("alias-b");
+        host.Start(a); host.Start(b);
+        var actorA = host.RegisterActor(a, 7);
+        var actorB = host.RegisterActor(b, 7);
+        Expect<InvalidOperationException>(() => host.RetireActor(a, actorB),
+            "cross-TenantVM actor ticket");
+        host.RetireActor(a, actorA);
+        host.RetireActor(b, actorB);
+        host.BeginShutdown(a); host.CompleteShutdown(a); host.Destroy(a);
+        var fresh = host.CreateTrustedTenantVm("alias-a");
+        Expect<InvalidOperationException>(() => host.Start(a), "stale tenant handle");
+        host.Start(fresh);
+        host.BeginShutdown(fresh); host.CompleteShutdown(fresh); host.Destroy(fresh);
+        host.BeginShutdown(b); host.CompleteShutdown(b); host.Destroy(b);
     }
 
     // A caller queued behind a running turn must be rejected promptly when the
@@ -57,7 +83,7 @@ internal static class VmIsolateHostHardeningTests
     private static void TenantAndHostMailQuotas()
     {
         var host = new OresVmHost(maxTenants: 2, maxQueuedMailBytes: 1500);
-        var a = host.CreateIsolate("mail-a", maxQueuedMailBytes: 1000);
+        var a = host.CreateTrustedTenantVm("mail-a", maxQueuedMailBytes: 1000);
         var b = host.CreateIsolate("mail-b", maxQueuedMailBytes: 1000);
         host.Start(a); host.Start(b);
         var a1 = host.RegisterActor(a, 1); var a2 = host.RegisterActor(a, 2); var a3 = host.RegisterActor(a, 3);
