@@ -26,10 +26,18 @@ public sealed class ActorRuntimeOptions
     public int ActorMaxLifetimePins { get; init; } = 4096;
     public int ActorMaxReadLoans { get; init; } = 4096;
     public long NativeBudgetBytes { get; init; } = 512L * 1024 * 1024;
+    // Matches Java ActorHeapAdmission's fail-closed startup policy.
+    // An "untrusted" worker domain is not an isolate or protected process.
+    public string GcMode { get; init; } = "hybrid";
+    public string TenantIsolationMode { get; init; } = "trusted-inprocess";
     public ActorDispatcherOptions Dispatcher { get; init; } = new();
 
     internal void Validate()
     {
+        // Deny unsupported GC/tenant security claims before dispatch pools,
+        // actor native slabs or physical carrier threads are constructed.
+        ActorHeapAdmissionV1.RequireSupportedManagedMode(GcMode);
+        ActorHeapAdmissionV1.RequireSupportedTenantIsolationMode(TenantIsolationMode);
         if (MaxActors <= 0 || MaxActors > 65_536)
             throw new ArgumentOutOfRangeException(nameof(MaxActors));
         if (MessagesPerDispatch <= 0 || MessagesPerDispatch > 4096)
