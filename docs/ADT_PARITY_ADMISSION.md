@@ -63,3 +63,10 @@ per-file byte budget and bounded graph checks still apply after resolution.
 The linked ADT regression covers a .atto entry, canonical .atto helper import,
 ambiguous dual-suffix import rejection, and .ores fallback. These tests are
 not executed evidence until a trusted runner executes the exact new branch.
+
+Extensionless dual-candidate existence uses the existing no-follow project
+marker probe rather than File.Exists alone, so a dangling .atto symlink is
+not silently skipped in favor of a .ores file. The POSIX test creates such a
+dangling candidate and requires the same ambiguity rejection; Windows tests
+avoid creating symlinks that may require privileges. Authorized imports still
+pass the existing explicit reparse-point rejection.

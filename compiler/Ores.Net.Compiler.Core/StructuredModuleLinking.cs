@@ -152,8 +152,11 @@ public static class OresSourceModuleCompiler
                     throw new FormatException("Source import escapes explicit source roots");
                 string canonical = path + ".atto";
                 string legacy = path + ".ores";
-                bool hasCanonical = File.Exists(canonical);
-                bool hasLegacy = File.Exists(legacy);
+                // A dangling symlink is still a source identity candidate;
+                // File.Exists alone can silently ignore one and choose the
+                // other suffix. Probe without following the candidate.
+                bool hasCanonical = ProjectRootSourceResolver.MarkerExistsNoFollow(canonical);
+                bool hasLegacy = ProjectRootSourceResolver.MarkerExistsNoFollow(legacy);
                 if (hasCanonical && hasLegacy)
                     throw new FormatException("Ambiguous AttoLang source import: use an explicit .atto or .ores suffix");
                 path = hasCanonical ? canonical : legacy;

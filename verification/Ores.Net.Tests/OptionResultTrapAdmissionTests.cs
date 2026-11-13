@@ -150,6 +150,25 @@ internal static class OptionResultTrapAdmissionTests
                 // Correct: require an explicit extension, no implicit selection.
             }
             File.Delete(canonicalAnswer);
+            if (!OperatingSystem.IsWindows())
+            {
+                // Dangling canonical aliases must not silently redirect to a
+                // different legacy source identity.
+                File.CreateSymbolicLink(canonicalAnswer,
+                    Path.Combine(linkedRoot, "nonexistent-answer.atto"));
+                try
+                {
+                    _ = OresSourceModuleCompiler.Compile(
+                        linkedEntrypoint, new[] { linkedRoot });
+                    throw new Exception("Dangling canonical alias bypassed import ambiguity gate");
+                }
+                catch (FormatException error) when (
+                    error.Message.Contains("Ambiguous AttoLang source import", StringComparison.Ordinal))
+                {
+                    // Correct: presence is checked without following symlinks.
+                }
+                File.Delete(canonicalAnswer);
+            }
             if (OresSourceModuleCompiler.Compile(linkedEntrypoint,
                 new[] { linkedRoot }).Sources.Count != 2)
                 throw new Exception("Legacy .ores import compatibility was lost");
