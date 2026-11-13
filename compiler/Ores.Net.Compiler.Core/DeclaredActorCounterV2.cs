@@ -336,8 +336,8 @@ public static class DeclaredActorCounterV2Emitter
         b.AppendLine("        {");
         b.AppendLine("            if (message.Length != 8) throw new System.InvalidOperationException(\"Expected 8-byte ActorMail<int> payload\");");
         b.AppendLine("            long incoming = System.Buffers.Binary.BinaryPrimitives.ReadInt64LittleEndian(message.Span);");
-        b.AppendLine("            state.AddInt64(context, 0, incoming);
-            long snapshot = state.ReadInt64(context, 0);");
+        b.AppendLine("            state.AddInt64(context, 0, incoming);");
+        b.AppendLine("            long snapshot = state.ReadInt64(context, 0);");
         b.AppendLine("            System.Span<byte> reply = stackalloc byte[16];");
         b.AppendLine("            System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(reply, context.Self.Id);");
         b.AppendLine("            System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(reply[8..], snapshot);");
