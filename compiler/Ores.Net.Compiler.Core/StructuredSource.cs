@@ -436,6 +436,17 @@ public static class OresStructuredParser
             }
             else if (ch == '=' && index + 1 < source.Length &&
                      source[index + 1] == '=') index += 2;
+            // AttoLang's !eq is one indivisible binary token. It must not be
+            // lexed as unary ! + identifier eq, nor as a prefix of !eqname.
+            // Reuse the existing statically typed NotEqualI64 -> CIL Ceq+invert
+            // pipeline. Legacy != remains admitted pending a versioned strict
+            // source-profile migration; this change is additive only.
+            else if (ch == '!' && index + 2 < source.Length &&
+                     source[index + 1] == 'e' && source[index + 2] == 'q' &&
+                     (index + 3 == source.Length ||
+                      !(char.IsLetterOrDigit(source[index + 3]) ||
+                        source[index + 3] == '_')))
+                index += 3;
             else if (ch == '!' && index + 1 < source.Length &&
                      source[index + 1] == '=') index += 2;
             else if (moduleMode && index + 1 < source.Length &&
@@ -914,10 +925,10 @@ public static class OresStructuredParser
         private StructuredExpr Equal(int depth)
         {
             var left = Compare(depth + 1);
-            while (Current.Text is "==" or "eq" or "!=" or "neq")
+            while (Current.Text is "==" or "eq" or "!=" or "neq" or "!eq")
             {
                 int at = Current.Offset;
-                bool notEqual = Current.Text is "!=" or "neq";
+                bool notEqual = Current.Text is "!=" or "neq" or "!eq";
                 index++;
                 var right = Compare(depth + 1);
                 Require(left, IrValueType.I64, "Equality requires int operands");

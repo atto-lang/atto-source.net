@@ -1047,6 +1047,7 @@ Require(OresStructuredParser.Parse(
     "commented telemetry syntax cannot affect NativeAOT admission");
 StructuredSourceTests.Run();
 StructuredCfgLoweringTests.Run();
+AttoEqualityNativeAotCandidateTests.Run();
 StructuredStaticAbiTests.Run();
 StaticFactsV0Tests.Run();
 ValueBoundaryTests.Run();
