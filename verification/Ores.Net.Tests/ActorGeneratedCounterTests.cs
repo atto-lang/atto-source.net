@@ -76,6 +76,30 @@ internal static class ActorGeneratedCounterTests
         Require(messageGenerated.Replace("\r\n", "\n", StringComparison.Ordinal) ==
                 messageGolden.Replace("\r\n", "\n", StringComparison.Ordinal),
             "typed-mail generated NativeAOT source differs from checked golden");
+
+        // Omitted self is only a source syntax alias for the same compiler
+        // intrinsic and must generate identical static NativeAOT code.
+        var implicitSelfSource = CounterSource.Replace("return self.handle_state(",
+            "return handle_state(", StringComparison.Ordinal);
+        var implicitSelfIr = OresParser.InspectSynchronousActorIncrement(implicitSelfSource);
+        Require(ActorIncrementSourceEmitter.EmitCSharp(implicitSelfIr) == generated,
+            "omitted-self literal source diverged from explicit self");
+        var implicitMessageSource = messageSource.Replace("return self.handle_state(",
+            "return handle_state(", StringComparison.Ordinal);
+        var implicitMessageIr = OresParser.InspectSynchronousActorIncrement(implicitMessageSource);
+        Require(implicitMessageIr.ScalarMailParameter == "incoming" &&
+                ActorIncrementSourceEmitter.EmitCSharp(implicitMessageIr) == messageGenerated,
+            "omitted-self typed-mail source must preserve owned input");
+        Reject(implicitMessageSource.Replace("incoming", "handle_state", StringComparison.Ordinal),
+            "method parameter shadows omitted-self state intrinsic");
+        Reject(messageSource.Replace("incoming", "self", StringComparison.Ordinal),
+            "message parameter shadows actor self");
+        Reject(implicitMessageSource.Replace("critical-write |s|", "critical-write |self|",
+                StringComparison.Ordinal).Replace("s.count", "self.count", StringComparison.Ordinal),
+            "borrowed state parameter shadows actor self");
+        Reject(implicitSelfSource.Replace("return handle_state(",
+                "return state.handle_state(", StringComparison.Ordinal),
+            "arbitrary receiver cannot invoke sealed state intrinsic");
         Require(messageGenerated.Contains("ReadInt64LittleEndian(message.Span)", StringComparison.Ordinal) &&
             messageGenerated.Contains("state.AddInt64(context, 0, delta)", StringComparison.Ordinal) &&
             !messageGenerated.Contains("Call_increment(", StringComparison.Ordinal) &&
