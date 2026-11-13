@@ -452,6 +452,7 @@ SelectableI64ChannelSelfTest.Run();
 SelectableI64FutureSelfTest.Run();
 ActorDispatchDomainsSelfTest.Run();
 ActorRuntimeSelfTest.Run();
+NativeTraceContinuationV1SelfTest.Run(); // host-owned W3C scopes; not guest CIL instrumentation
 UniversalHotLoadV1SelfTest.Run();
 ActorFrameStackSelfTest.Run(); // host-only actor logical frames; not guest/AOT evidence
 ActorScalarFrameAbiSelfTest.Run(); // verified CFG layout/native spill boundary, not guest execution
@@ -1026,6 +1027,22 @@ AttoXpScalarParityTests.Run(); // pinned .atto scalar IR + CIL evaluator only
 CfgVerifierTests.Run();
 CfgCilStressTests.Run();
 SupervisorStopLedgerSelfTest.Run();
+// The canonical Atto telemetry syntax is not an ordinary CIL call.
+// Both public frontends must reject it *specifically* until exception-safe
+// compiler lowering and NativeAOT runtime attachment are actually present.
+foreach (string source in new[] {
+    "fnc main():int{using telemetry.span() as span {return 42;}}",
+    "fnc main():int{using/*nested*/telemetry./*separator*/span() as span{return 42;}}"
+})
+{
+    RejectDiagnostic(() => OresParser.Parse(source), "E_TELEMETRY_SCOPE_UNSUPPORTED",
+        "scalar compiler cannot silently accept telemetry using syntax");
+    RejectDiagnostic(() => OresStructuredParser.Parse(source), "E_TELEMETRY_SCOPE_UNSUPPORTED",
+        "structured compiler cannot silently accept telemetry using syntax");
+}
+Require(OresStructuredParser.Parse(
+    "fnc main():int{/* using telemetry.span() as span {} */return 42;}").Body.Count == 1,
+    "commented telemetry syntax cannot affect NativeAOT admission");
 StructuredSourceTests.Run();
 StructuredCfgLoweringTests.Run();
 StructuredStaticAbiTests.Run();
