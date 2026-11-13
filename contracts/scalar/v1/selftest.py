@@ -282,7 +282,7 @@ class ScalarHarnessTest(unittest.TestCase):
                 "reject.unknown": "oresnet: Expected integer at offset 29",
                 "reject.division": "oresnet: Division requires float result lowering; unsupported in the i64 source subset",
                 "reject.actor": "oresnet: Expected 'fnc' at offset 7",
-                "reject.async": "oresnet: Expected 'fnc' at offset 4",
+                "reject.async": "oresnet: E_CALLABLE_MODIFIERS: async fnc is removed; use suspends at offset 4",
                 "reject.structural": "oresnet: Expected integer at offset 29",
             },
         }
@@ -298,7 +298,8 @@ class ScalarHarnessTest(unittest.TestCase):
                 # An error for the wrong feature or unrelated infrastructure
                 # must never satisfy negative source conformance.
                 for bad in ("file not found", "unknown compiler option",
-                            "usage error", "unexpected token in tool setup"):
+                            "usage error", "unexpected token in tool setup",
+                            "Expected 'fnc' at offset 4"):
                     code = "import sys;sys.stderr.write(" + repr(
                         backend.replace("forge", "oresforge").replace("net", "oresnet") +
                         ": " + bad + "\n") + ");sys.exit(1)"
