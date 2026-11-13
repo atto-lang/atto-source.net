@@ -345,3 +345,15 @@ Trust level and compilation mode stay independent: untrusted Wasm may be
 JIT-compiled, AOT-lowered or interpreted. The **current shipping .NET
 compiler/host remains NativeAOT only**, supports only its documented
 arithmetic subset, and does not load CIL at runtime.
+
+### Alternate main-function body layout (scalar-only)
+
+The i64 bootstrap parser accepts `fnc main() -> int` with a
+newline-delimited `return expression;` and `end`, or
+`fnc main() -> int :: return expression; end` in compact source.
+The explicit `::` is required before removing the signature/body newline.
+These forms use the existing typed checked-i64 IR and CIL emitter; they
+**do not** enable general free/module functions, Option/Result, multiple
+statements, structured match, or actor function bodies. Tests independently
+compare interpreted typed IR against emitted CIL. General compiler parity
+remains an open requirement.

@@ -86,7 +86,7 @@ public static class OresParser
                 throw new FormatException(
                     $"E_SUSPENDS_UNSUPPORTED: suspension requires .NET continuation/effect lowering at offset {tokens[i].Offset}");
         }
-        return new Reader(tokens).ParseProgram();
+        return new Reader(tokens, source).ParseProgram();
     }
 
     private readonly record struct Token(string Text, int Offset);
@@ -244,6 +244,12 @@ public static class OresParser
                 _i += 2;
                 return new Token("->", start);
             }
+            // Preserve the explicit free-function header/body separator.
+            if (ch == ':' && _i + 1 < text.Length && text[_i + 1] == ':')
+            {
+                _i += 2;
+                return new Token("::", start);
+            }
             // Lex assignment punctuation so unsupported declarations are rejected
             // at their declaration, rather than at a later initializer. The
             // arithmetic parser still has no assignment production.
@@ -268,7 +274,7 @@ public static class OresParser
         }
     }
 
-    private sealed class Reader(List<Token> tokens)
+    private sealed class Reader(List<Token> tokens, string source)
     {
         private int _index;
         private Token Current => tokens[_index];
@@ -316,16 +322,33 @@ public static class OresParser
             Expect("main");
             Expect("(");
             Expect(")");
-            if (!Take(":")) Expect("->");
+            bool arrowReturn = !Take(":");
+            if (arrowReturn) Expect("->");
             Expect("int");
-            Expect("{");
+            bool braced = Take("{");
+            if (!braced)
+            {
+                if (!arrowReturn)
+                    throw new FormatException($"End-delimited main requires '-> int' at offset {Current.Offset}");
+                bool explicitSeparator = Take("::");
+                if (!explicitSeparator)
+                {
+                    var previous = tokens[_index - 1];
+                    int boundaryStart = previous.Offset + previous.Text.Length;
+                    int boundaryLength = Current.Offset - boundaryStart;
+                    bool hasLineBreak = boundaryLength > 0 && source.AsSpan(boundaryStart, boundaryLength)
+                        .IndexOfAny('\n', '\r', '\u0085', '\u2028', '\u2029') >= 0;
+                    if (!hasLineBreak)
+                        throw new FormatException($"Compact end-delimited main requires '::' at offset {Current.Offset}");
+                }
+            }
             if (Current.Text == "guard")
                 throw new FormatException(
                     $"GUARD_BACKEND_UNSUPPORTED: early-exit CFG and ownership lowering required at offset {Current.Offset}");
             Expect("return");
             var expression = ParseAdd(0);
             Expect(";");
-            Expect("}");
+            Expect(braced ? "}" : "end");
             if (Current.Text.Length != 0)
                 throw new FormatException($"Unexpected token at offset {Current.Offset}");
             return expression;
