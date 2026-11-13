@@ -107,16 +107,15 @@ public static partial class OresParser
         Expect("(");
         int criticalOffset = At().Offset;
         Expect("critical");
-        if (At().Text == "-")
-        {
-            if (At().Offset != criticalOffset + 8)
-                throw new FormatException("Critical modifier must be contiguous critical-write");
-            Expect("-");
-            if (At().Offset != criticalOffset + 9 || At().Text != "write")
-                throw new FormatException("Increment requires exclusive critical-write");
-            Expect("write");
-        }
-        // Bare critical remains a legacy write spelling in this opt-in lane.
+        // The compiler-owned state writer requires the canonical contiguous
+        // modifier. A bare legacy `critical` token must never mint an
+        // exclusive mutable loan (nor silently assume a write effect).
+        if (At().Text != "-" || At().Offset != criticalOffset + 8)
+            throw new FormatException("Increment requires adjacent critical-write");
+        Expect("-");
+        if (At().Text != "write" || At().Offset != criticalOffset + 9)
+            throw new FormatException("Increment requires exclusive critical-write");
+        Expect("write");
         Expect("|");
         var parameter = Identifier();
         Expect("|");
