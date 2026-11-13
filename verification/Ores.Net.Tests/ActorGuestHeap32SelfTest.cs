@@ -12,8 +12,10 @@ internal static class ActorGuestHeap32SelfTest
         GuestReadLoanDelaysArenaReclaimAfterStop();
         TypedNodeGraphEnforcesFieldLayouts();
         OwnedGuestReferencesDenyCrossActorAlias();
+        TypedReferenceCycleAndReadLoanDelayPhysicalReclaim();
         CompiledGuestFixtureMustRemainUncertified();
         Console.WriteLine("PASS actor-ref32-owned-auth: per-actor handles deny cross-actor aliasing, stale reads and foreign links (host only)");
+        Console.WriteLine("PASS actor-ref32-cycle-reclaim: cyclic typed guest links do not retain native arena past final read loan (host only)");
         Console.WriteLine("PASS .NET actor-local 32-bit guest refs (host runtime only; not compiled guest)");
     }
 
@@ -190,6 +192,69 @@ internal static class ActorGuestHeap32SelfTest
     /// physical owner identity even when peer actors allocate identical
     /// type layouts at the same slot/generation sequence.
     /// </summary>
+    /// <summary>
+    /// Java ActorOwnedGraphArena keeps graph links non-owning and allows
+    /// cycles. A cycle must never retain a native actor slab after the final
+    /// external read loan is retired. This test is HOST-only: no .atto guest
+    /// compiler lowering or per-object destructor semantics are implied.
+    /// </summary>
+    private static void TypedReferenceCycleAndReadLoanDelayPhysicalReclaim()
+    {
+        const uint nodeType = 0xB708;
+        var node = new ActorGuestLayout32(nodeType, 16,
+            new[] { new ActorGuestField32(0, ActorGuestFieldKind32.I64),
+                    new ActorGuestField32(8, ActorGuestFieldKind32.Ref32, nodeType) });
+        using var runtime = new ActorRuntime(Options());
+        using var completed = new ManualResetEventSlim();
+        ActorArenaReadLoan? heldLoan = null;
+        Exception? failure = null;
+
+        var actor = runtime.Spawn(ActorKind.Shared, (context, _) =>
+        {
+            try
+            {
+                ActorGuestOwnedRef32 first =
+                    context.AllocateOwnedTypedGuestObject32(node);
+                ActorGuestOwnedRef32 second =
+                    context.AllocateOwnedTypedGuestObject32(node);
+                context.WriteOwnedGuestReference32(first, 8, second);
+                context.WriteOwnedGuestReference32(second, 8, first);
+                Require(context.ReadOwnedGuestReference32(first, 8).Equals(second) &&
+                        context.ReadOwnedGuestReference32(second, 8).Equals(first),
+                    "two-node cyclic links preserve nominal identity and actor ownership");
+                // The loan is deliberately held beyond the physical actor
+                // turn. It fences reclamation, not guest byte authority.
+                heldLoan = context.BorrowOwnedGuestObjectRead32(first);
+            }
+            catch (Exception ex) { failure = ex; }
+            finally { completed.Set(); }
+        });
+
+        runtime.Send(actor, new byte[] { 1 });
+        Require(completed.Wait(TimeSpan.FromSeconds(10)),
+            "typed cyclic actor graph setup completed");
+        if (failure is not null)
+            throw new Exception("typed cyclic graph admission failed", failure);
+        Require(SpinWait.SpinUntil(() => runtime.CompletedMessages == 1,
+            TimeSpan.FromSeconds(10)) && runtime.FaultedTurns == 0 &&
+            heldLoan is not null, "cyclic graph completed a real actor turn");
+
+        long reserved = runtime.NativeReservedBytes;
+        Require(reserved == 2048 + 128,
+            "cyclic graph does not require a second native graph allocator");
+        runtime.Stop(actor);
+        Require(SpinWait.SpinUntil(() => runtime.LiveActors == 0,
+            TimeSpan.FromSeconds(10)), "cyclic graph actor STOP logically completes");
+        Require(runtime.NativeReservedBytes == reserved,
+            "an outstanding loan must delay physical release despite cyclic graph links");
+
+        heldLoan!.Dispose();
+        heldLoan.Dispose(); // duplicate release must never refund twice
+        Require(SpinWait.SpinUntil(() => runtime.NativeReservedBytes == 0,
+            TimeSpan.FromSeconds(10)),
+            "after final loan retirement, native slab refunds despite cyclic links");
+    }
+
     private static void OwnedGuestReferencesDenyCrossActorAlias()
     {
         const uint nodeType = 0xB704;
