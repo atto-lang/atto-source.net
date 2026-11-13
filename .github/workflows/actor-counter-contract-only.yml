@@ -26,9 +26,9 @@ jobs:
           set -euo pipefail
           echo "SOURCE_HEAD=$(git rev-parse HEAD)"
           echo "SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
-          test "$(git hash-object contracts/actor-counter-identical-source-v1/corpus.json)" = 7b2bd1aaae0ec0d8503dccd49e9902d604722538
-          test "$(git hash-object tools/actor-counter-parity.mjs)" = 079dbf758fa18678a5381b19df51978169988f44
-          test "$(git hash-object tests/actor-counter-parity.test.mjs)" = b4a7b20de5f3ec38c63390a08cb15663ad92ab22
+          test "$(git hash-object contracts/actor-counter-identical-source-v1/corpus.json)" = 526595b444aaf761dc75c44ad9b39a08d45341aa
+          test "$(git hash-object tools/actor-counter-parity.mjs)" = cefef62458f8e50790ee40a49d9cf21ac1d676ef
+          test "$(git hash-object tests/actor-counter-parity.test.mjs)" = f3cf178210d45e0a3dd1c588cea8c2ce2c5be240
       - name: Run source-integrity and lifecycle-spoofing tests (NOT guest execution)
         shell: bash
         run: |
