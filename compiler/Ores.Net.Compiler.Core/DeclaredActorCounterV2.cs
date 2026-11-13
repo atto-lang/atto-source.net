@@ -339,6 +339,8 @@ public static class DeclaredActorCounterV2Emitter
         b.AppendLine("        });");
         b.AppendLine("    }");
         b.AppendLine("}");
-        return b.ToString();
+        // Preserve the identical compiler-generated Git blob across
+        // Linux and Windows regardless of host Environment.NewLine.
+        return b.ToString().Replace("\r\n", "\n", StringComparison.Ordinal);
     }
 }
