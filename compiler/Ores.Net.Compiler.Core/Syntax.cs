@@ -336,8 +336,15 @@ public static class OresParser
                     var previous = tokens[_index - 1];
                     int boundaryStart = previous.Offset + previous.Text.Length;
                     int boundaryLength = Current.Offset - boundaryStart;
-                    bool hasLineBreak = boundaryLength > 0 && source.AsSpan(boundaryStart, boundaryLength)
-                        .IndexOfAny('\n', '\r', '\u0085', '\u2028', '\u2029') >= 0;
+                    bool hasLineBreak = false;
+                    for (int i = boundaryStart; i < Current.Offset; i++)
+                    {
+                        if (source[i] is '\n' or '\r' or '\u0085' or '\u2028' or '\u2029')
+                        {
+                            hasLineBreak = true;
+                            break;
+                        }
+                    }
                     if (!hasLineBreak)
                         throw new FormatException($"Compact end-delimited main requires '::' at offset {Current.Offset}");
                 }
