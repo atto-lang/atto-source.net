@@ -369,6 +369,7 @@ ActorStateSchemaAdmissionTests.Run();
 ActorStateLayoutIntegrationTests.Run();
 ActorGeneratedCounterTests.Run();
 DeclaredActorCounterV2Tests.Run();
+CounterMainV2Tests.Run();
 SourceByteBudgetTests.Run();
 ElmCompositionAdmissionTests.Run();
 HeapContainerSourceBoundaryTests.Run(); // actual scalar compiler fail-closed heap/container checks

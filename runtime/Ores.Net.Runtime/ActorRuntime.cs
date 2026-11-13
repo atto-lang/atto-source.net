@@ -379,7 +379,13 @@ public sealed class ActorRuntime : IDisposable
             FinalizeCell(cell);
     }
 
-    internal Task ObserveTermination(ActorRef actor)
+    /// <summary>
+    /// Read-only completion capability: the caller must hold the exact
+    /// runtime-minted actor reference, including its unforgeable nonce.
+    /// The task is acquired before STOP, then remains valid through physical
+    /// actor retirement. It neither reopens the mailbox nor grants dispatch.
+    /// </summary>
+    public Task ObserveTermination(ActorRef actor)
     {
         ActorCell cell = Lookup(actor);
         // Numeric IDs are lookup keys, not observation authority. The immutable

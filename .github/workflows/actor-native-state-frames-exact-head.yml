@@ -70,6 +70,8 @@ jobs:
           node tools/actor-counter-parity.mjs materialize "$source_dir"
           dotnet run --project compiler/Ores.Net.Compiler -c Release -- emit-external-counter-csharp "$source_dir" --out verification/Ores.Net.Tests/GeneratedExternalCounterActor.g.cs
           git diff --exit-code -- verification/Ores.Net.Tests/GeneratedExternalCounterActor.g.cs
+          dotnet run --project compiler/Ores.Net.Compiler -c Release -- emit-counter-main-csharp "$source_dir" --out verification/Ores.Net.Tests/GeneratedCounterMainV2.g.cs
+          git diff --exit-code -- verification/Ores.Net.Tests/GeneratedCounterMainV2.g.cs
       - name: Verify omitted-self source generates identical native actor
         run: |
           set -euo pipefail
@@ -79,6 +81,18 @@ jobs:
         run: dotnet run --project verification/Ores.Net.Tests -c Release
       - name: Publish static native actor probe
         run: dotnet publish verification/Ores.Net.ActorCounterProbe -c Release -r '${{ matrix.rid }}' --self-contained true -o artifacts/native-counter
+      - name: Publish static six-unit Counter main guest NativeAOT
+        run: dotnet publish verification/Ores.Net.CounterMainV2Guest -c Release -r '${{ matrix.rid }}' --self-contained true -o artifacts/native-counter-main
+      - name: Execute canonical Counter main guest with exact stdout
+        run: |
+          set -euo pipefail
+          for round in 1 2 3; do
+            "./artifacts/native-counter-main/Ores.Net.CounterMainV2Guest${{ matrix.rid == 'win-x64' && '.exe' || '' }}" > "artifacts/counter-main-round-$round.out"
+            cmp "artifacts/counter-main-round-$round.out" <(printf '1|3|6|10')
+          done
+          shopt -s globstar nullglob nocaseglob
+          dlls=(artifacts/native-counter-main/**/*.dll)
+          test "${#dlls[@]}" -eq 0
       - name: Execute source-generated actors in native binary
         run: |
           set -euo pipefail

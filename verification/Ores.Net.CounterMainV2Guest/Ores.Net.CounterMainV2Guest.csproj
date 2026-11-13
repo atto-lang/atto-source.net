@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <PublishAot>true</PublishAot>
+    <SelfContained>true</SelfContained>
+    <PublishTrimmed>true</PublishTrimmed>
+    <IsAotCompatible>true</IsAotCompatible>
+    <RuntimeFrameworkVersion>10.0.14</RuntimeFrameworkVersion>
+    <IlcPackageVersion>10.0.14</IlcPackageVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../runtime/Ores.Net.Runtime/Ores.Net.Runtime.csproj" />
+    <Compile Include="../Ores.Net.Tests/GeneratedExternalCounterActor.g.cs" Link="GeneratedExternalCounterActor.g.cs" />
+    <Compile Include="../Ores.Net.Tests/GeneratedCounterMainV2.g.cs" Link="GeneratedCounterMainV2.g.cs" />
+  </ItemGroup>
+</Project>
