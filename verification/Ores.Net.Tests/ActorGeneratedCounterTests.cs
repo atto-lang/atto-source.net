@@ -59,6 +59,39 @@ internal static class ActorGeneratedCounterTests
         Require(ActorIncrementSourceEmitter.EmitCSharp(OresParser.InspectSynchronousActorIncrement(overflowSource))
                 .Replace("\r\n", "\n", StringComparison.Ordinal) == overflowGolden.Replace("\r\n", "\n", StringComparison.Ordinal),
             "overflow source/golden mismatch");
+        // This is a genuine source-checked message-payload guest slice:
+        // a single owned `int incoming` drives the actor-local checked add,
+        // not a trusted-host fabricated value or legacy fixed +1 control tick.
+        var messageSource = CounterSource
+            .Replace("actor Counter as", "actor MessageCounter as", StringComparison.Ordinal)
+            .Replace("increment(): int", "increment(int incoming): int", StringComparison.Ordinal)
+            .Replace("s.count + 1", "s.count + incoming", StringComparison.Ordinal);
+        var messageIr = OresParser.InspectSynchronousActorIncrement(messageSource);
+        Require(messageIr.ScalarMailParameter == "incoming" && messageIr.Delta == 0 &&
+            messageIr.Schema.ActorName == "MessageCounter",
+            "typed mailbox input did not survive checked source IR");
+        var messageGolden = File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
+            "GeneratedMessageCounterActor.g.cs"));
+        var messageGenerated = ActorIncrementSourceEmitter.EmitCSharp(messageIr);
+        Require(messageGenerated.Replace("\r\n", "\n", StringComparison.Ordinal) ==
+                messageGolden.Replace("\r\n", "\n", StringComparison.Ordinal),
+            "typed-mail generated NativeAOT source differs from checked golden");
+        Require(messageGenerated.Contains("ReadInt64LittleEndian(message.Span)", StringComparison.Ordinal) &&
+            messageGenerated.Contains("state.AddInt64(context, 0, delta)", StringComparison.Ordinal) &&
+            !messageGenerated.Contains("Call_increment(", StringComparison.Ordinal) &&
+            !messageGenerated.Contains("Dispatch_increment(", StringComparison.Ordinal),
+            "typed source mail must never fall back to no-arg host dispatch");
+        Reject(messageSource.Replace("s.count + incoming", "s.count + unknown", StringComparison.Ordinal),
+            "unbound message name");
+        Reject(messageSource.Replace("increment(int incoming)", "increment(int incoming, int extra)",
+            StringComparison.Ordinal), "multiple message captures");
+        Reject(messageSource.Replace("int incoming", "borrow int incoming", StringComparison.Ordinal),
+            "borrowed message captured across mailbox");
+        Reject(messageSource.Replace("s.count + incoming", "s.count + 1", StringComparison.Ordinal),
+            "message parameter cannot be ignored");
+        Reject(messageSource.Replace("critical-write", "critical-read", StringComparison.Ordinal),
+            "typed mail must not authorize reader mutation");
+
         Reject(CounterSource.Replace("critical-write", "critical-read", StringComparison.Ordinal), "read loan cannot increment");
         Reject(CounterSource.Replace("critical-write", "critical", StringComparison.Ordinal),
             "bare legacy critical must not be granted an exclusive write loan");
