@@ -45,6 +45,48 @@ internal static class ActorGeneratedRuntimeCounterChecks
         Wait(() => replies.Count == 7, "fresh source actor failed after peer retirement");
         Require(replies.Last().Actor == fresh.Id && replies.Last().Value == 1, "fresh actor inherited state");
 
+        // A distinct compiler-checked .atto source form takes one owned i64
+        // mailbox argument. The statically generated method decodes the wire
+        // before entering actor-owned native state; replies are produced by
+        // actual private ActorRuntime DATA turns (never by a host replay loop).
+        ActorRef messageA = Actor_MessageCounter.SpawnRuntime(runtime, supervisor);
+        ActorRef messageB = Actor_MessageCounter.SpawnRuntime(runtime, supervisor);
+        Span<byte> incoming = stackalloc byte[8];
+        foreach (long value in new long[] { 1, 2, 3, 4 })
+        {
+            BinaryPrimitives.WriteInt64LittleEndian(incoming, value);
+            runtime.Send(messageA, incoming);
+        }
+        foreach (long value in new long[] { 7, 8 })
+        {
+            BinaryPrimitives.WriteInt64LittleEndian(incoming, value);
+            runtime.Send(messageB, incoming);
+        }
+        Wait(() => replies.Count == 13, "typed-mail actors did not issue all real mailbox replies");
+        Require(replies.Where(x => x.Actor == messageA.Id).Select(x => x.Value)
+                .SequenceEqual(new long[] { 1, 3, 6, 10 }),
+            "typed-mail counter must produce exact canonical 1|3|6|10 prefix");
+        Require(replies.Where(x => x.Actor == messageB.Id).Select(x => x.Value)
+                .SequenceEqual(new long[] { 7, 15 }),
+            "typed-mail second actor reused another actor's native state");
+
+        // Signed i64 arithmetic overflows without a partial state write. An
+        // overflowing source-generated actor must not poison its sibling.
+        BinaryPrimitives.WriteInt64LittleEndian(incoming, long.MaxValue);
+        runtime.Send(messageA, incoming);
+        Wait(() => runtime.FaultedTurns >= 2, "typed-mail overflow was not fail-stop");
+        BinaryPrimitives.WriteInt64LittleEndian(incoming, 1);
+        runtime.Send(messageB, incoming);
+        Wait(() => replies.Count == 14, "typed-mail peer stopped after sibling overflow");
+        Require(replies.Where(x => x.Actor == messageB.Id).Select(x => x.Value)
+                .SequenceEqual(new long[] { 7, 15, 16 }),
+            "typed-mail overflow damaged sibling's private native state");
+
+        ActorRef malformedMail = Actor_MessageCounter.SpawnRuntime(runtime, supervisor);
+        runtime.Send(malformedMail, ReadOnlySpan<byte>.Empty);
+        Wait(() => runtime.FaultedTurns >= 3,
+            "malformed typed-mail frame must fail before native state mutation");
+
         // Direct runtime negative: rollback and finally must release the exact
         // 16-byte stack budget while preserving this execution context.
         var checkedState = new ActorNativeScalarState(new long[] { long.MaxValue }, new byte[] { 1 });
