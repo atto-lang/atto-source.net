@@ -65,6 +65,7 @@ jobs:
         run: |
           set -euo pipefail
           node tools/actor-counter-parity.mjs verify
+          node --test tests/actor-counter-parity.test.mjs
           mkdir -p artifacts
           source_dir="$(node -p "require('node:path').resolve('artifacts/declared-counter-v2')")"
           node tools/actor-counter-parity.mjs materialize "$source_dir"

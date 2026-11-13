@@ -49,6 +49,8 @@ internal static class DeclaredActorCounterV2Tests
         Require(Lf(compiled) == Lf(golden),
             "source-verified external receive differs from static native golden");
         Require(compiled.Contains("state.AddInt64(context, 0, incoming)", StringComparison.Ordinal) &&
+                compiled.Contains("state.ReadInt64(context, 0)", StringComparison.Ordinal) &&
+                compiled.Contains("WriteInt64LittleEndian(reply[8..], snapshot)", StringComparison.Ordinal) &&
                 compiled.Contains("runtime.Send(replyTo, reply)", StringComparison.Ordinal) &&
                 compiled.Contains("if (incoming == 4L) runtime.Stop(context.Self)", StringComparison.Ordinal) &&
                 !compiled.Contains("Call_receive(", StringComparison.Ordinal),
@@ -83,7 +85,22 @@ internal static class DeclaredActorCounterV2Tests
         Reject(units, r, "critical-write", "critical--write", "double critical modifier");
         Reject(units, r, "s.total = s.total + mail.value",
             "s.total = s.total + 1", "host-forged delta instead of source mail");
-        Reject(units, r, "self.send(s.total)", "self.send(mail.value)", "wrong read result");
+        Reject(units, r, "self.send(snapshot)", "self.send(mail.value)", "wrong read result");
+        Reject(units, r, "self.send(snapshot)", "self.send(s.total)", "borrowed state escaped without Copy");
+        Reject(units, r, "self.send(snapshot)", "self.send(0)", "fabricated constant reply");
+        Reject(units, r, "val int snapshot", "let int snapshot", "mutable read snapshot");
+        Reject(units, r, "val int snapshot", "val object snapshot", "wrong detached scalar type");
+        Reject(units, r, "val int snapshot", "val int self", "shadowing actor receiver");
+        Reject(units, r, "val int snapshot", "val int mail", "shadowing mailbox argument");
+        Reject(units, r, "val int snapshot", "val int s", "state loan alias escape");
+        Reject(units, r, "val int snapshot", "val int handle_state", "intrinsic shadowing");
+        Reject(units, r, "-> s.total", "-> s", "state view escaped instead of scalar field");
+        Reject(units, r, "-> s.total", "-> mail.value", "read ignored native state");
+        Reject(units, r, "-> s.total", "-> { self.send(s.total); }", "mailbox send inside read loan");
+        Reject(units, r, "-> s.total", "-> { await something(); s.total }", "suspension in read loan");
+        Reject(units, r, "self.send(snapshot);", "await self.send(snapshot);", "suspension across mailbox");
+        Reject(units, r, "self.handle_state(critical-read", "other.handle_state(critical-read",
+            "forged read receiver");
         Reject(units, r, "self.end();", "self.end(1);", "forged lifecycle argument");
         Reject(units, r, "if mail.value == 4", "if mail.value = 4", "assignment instead of comparison");
         Reject(units, r, "if mail.value == 4", "if mail.value == 9223372036854775808", "stop i64 overflow");

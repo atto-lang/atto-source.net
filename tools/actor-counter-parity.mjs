@@ -49,6 +49,15 @@ export function verifyCorpus(corpus) {
       !receiver.includes('self.handle_state(critical-read |s|')) {
     throw new Error('Counter lifecycle ABI or compiler-owned critical scopes drifted');
   }
+  // A Git blob alone is not an ownership check. Lock this canonical candidate
+  // to a detached scalar whose critical-read loan ends before mailbox send.
+  const detached = '  val int snapshot = self.handle_state(critical-read |s| -> s.total);\n' +
+      '  self.send(snapshot);\n';
+  if (!receiver.includes(detached) ||
+      (receiver.match(/self\.send\s*\(/g) ?? []).length !== 1 ||
+      /self\.send\s*\(\s*s\./.test(receiver)) {
+    throw new Error('Counter must release critical-read before mailbox send');
+  }
   return true;
 }
 

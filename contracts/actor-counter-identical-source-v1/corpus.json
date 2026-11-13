@@ -26,7 +26,7 @@
     "src/counter/contract.atto": "213541736c415d30fc54bc0f413d8b0f77b623e4",
     "src/counter/main.atto": "90d33cf97bfe553021cf340af8f62e4036a884e1",
     "src/counter/method.atto": "e7efbde0987013bc231eef40ec0524eeadc636e8",
-    "src/counter/receive.atto": "14abc5da40fb7c080a76a8d663c6d1b57fbcb466",
+    "src/counter/receive.atto": "0c5fc9d696df0716bdc73daefa43482a1255fba2",
     "src/counter/state.atto": "5a63c3a307ec47e19025848fb979ceb42e9980c5"
   },
   "sourceUnits": {
@@ -35,7 +35,7 @@
     "src/counter/contract.atto": "namespace counter;\ndefine pub contract CounterContract for actor as\n  mtd echo(int n): int;\nend\n",
     "src/counter/main.atto": "namespace counter;\npub async routine main(): void {\n  val worker = spawn Counter();\n  await worker.get_ready();\n  worker.send(1);\n  worker.send(2);\n  worker.send(3);\n  worker.send(4);\n  val a = (await worker.outputs.next()).value.unwrap();\n  val b = (await worker.outputs.next()).value.unwrap();\n  val c = (await worker.outputs.next()).value.unwrap();\n  val d = (await worker.outputs.next()).value.unwrap();\n  stdio.stdout.write(a.value);\n  stdio.stdout.write(\"|\");\n  stdio.stdout.write(b.value);\n  stdio.stdout.write(\"|\");\n  stdio.stdout.write(c.value);\n  stdio.stdout.write(\"|\");\n  stdio.stdout.write(d.value);\n  await worker.get_done();\n  return;\n}\n",
     "src/counter/method.atto": "namespace counter;\npub mtd (Counter c) echo(int n): int { return n; }\n",
-    "src/counter/receive.atto": "namespace counter;\n// State views never escape the intrinsic: the writer is exclusive and the\n// reader transports a copyable scalar, not a borrowed state reference.\nexternal mtd (Counter c) receive(ActorMail<int> mail): void {\n  self.handle_state(critical-write |s| -> {\n    s.total = s.total + mail.value;\n  });\n  self.handle_state(critical-read |s| -> {\n    self.send(s.total);\n  });\n  if mail.value == 4; do\n    self.end();\n  fi\n  return;\n}\n",
+    "src/counter/receive.atto": "namespace counter;\n// State views never escape the intrinsic. A detached Copy scalar is read\n// under the loan; mailbox publication follows only after scope exit.\nexternal mtd (Counter c) receive(ActorMail<int> mail): void {\n  self.handle_state(critical-write |s| -> {\n    s.total = s.total + mail.value;\n  });\n  // Detached immutable scalar; no actor-state loan crosses mailbox admission.\n  val int snapshot = self.handle_state(critical-read |s| -> s.total);\n  self.send(snapshot);\n  if mail.value == 4; do\n    self.end();\n  fi\n  return;\n}\n",
     "src/counter/state.atto": "namespace counter;\ndefine state on actor Counter as {\n  let int total : 0;\n}\n"
   },
   "proofRequirements": [
