@@ -73,6 +73,7 @@ internal static class ActorNativeArenaSelfTest
         PersistentRootAndTemporaryTailChurn();
         OutOfOrderDropsCoalesceNativeTail();
         SteadyStateManagedAllocationBudget();
+        PersistentRootManagedAllocationBudget();
         Console.WriteLine("PASS .NET unmanaged actor arena, primitive handles, stack cleanup scopes");
     }
 
@@ -110,6 +111,54 @@ internal static class ActorNativeArenaSelfTest
             "steady-state primitive native allocate/read/write/drop must not allocate CLR objects");
         Require(arena.LiveAllocations == 0 && arena.UsedBytes == 0,
             "steady-state benchmark leaves no retained actor allocation");
+    }
+
+    // The more realistic actor workload has a long-lived native root plus a
+    // per-message transient owner. A zero-allocation success loop must not be
+    // conflated with a CLR heap that never runs GC or with source lowering.
+    private static void PersistentRootManagedAllocationBudget()
+    {
+        using var arena = new ActorNativeArena(256, 4);
+        ulong root = arena.Allocate(16);
+        Require(root != ActorNativeArena.InvalidHandle, "persistent actor root admitted");
+        Require(arena.WriteInt64(root, 0, 0x12345678),
+            "persistent actor root initialized");
+
+        // Warm JIT/NativeAOT and all call paths on this physical carrier.
+        for (int i = 0; i < 200; i++)
+        {
+            ulong item = arena.Allocate(32);
+            Require(item != ActorNativeArena.InvalidHandle,
+                "transient warmup admitted");
+            Require(arena.WriteInt64(item, 0, i) && arena.ReadInt64(item) == i,
+                "transient warmup exact value");
+            Require(arena.Drop(item), "transient warmup drop");
+        }
+
+        bool correct = true;
+        long managedBefore = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 20_000; ++i)
+        {
+            ulong transient = arena.Allocate(32);
+            if (transient == ActorNativeArena.InvalidHandle ||
+                !arena.WriteInt64(transient, 0, i) ||
+                arena.ReadInt64(transient) != i ||
+                !arena.Drop(transient) ||
+                arena.ReadInt64(root) != 0x12345678)
+            {
+                correct = false;
+                break;
+            }
+        }
+        long managedAllocated = GC.GetAllocatedBytesForCurrentThread() - managedBefore;
+        Require(correct, "persistent-root transient churn succeeded");
+        Require(managedAllocated == 0,
+            "numeric-handle actor hot path must not allocate managed CLR objects");
+        Require(arena.LiveAllocations == 1 && arena.UsedBytes <= 16,
+            "transients reclaim without retaining native slab growth");
+        Require(arena.Drop(root), "persistent root deterministic drop");
+        Require(arena.LiveAllocations == 0 && arena.UsedBytes == 0,
+            "native actor memory recycles after the final owner");
     }
 
     private static void OutOfOrderDropsCoalesceNativeTail()
