@@ -12,6 +12,26 @@ static void Deny(Action operation)
     throw new InvalidOperationException("foreign actor memory authority admitted");
 }
 
+// Java ActorHeapAdmission parity must hold inside an actual NativeAOT host
+// process as well as the managed test runner. Do not treat actor-local native
+// bytes or a full set of user-constructible proof flags as a GC/isolate proof.
+ActorHeapAdmissionV1.RequireSupportedManagedMode("hybrid");
+ActorHeapAdmissionV1.RequireSupportedManagedMode("ownership-first");
+ActorHeapAdmissionV1.RequireSupportedTenantIsolationMode("trusted-inprocess");
+Deny(() => ActorHeapAdmissionV1.RequireSupportedManagedMode("zero-gc"));
+Deny(() => ActorHeapAdmissionV1.RequireSupportedTenantIsolationMode(
+    "sandboxed-process"));
+Deny(() => _ = new ActorRuntime(new ActorRuntimeOptions { GcMode = "strict-no-gc" }));
+Deny(() => _ = new ActorRuntime(new ActorRuntimeOptions
+{
+    TenantIsolationMode = "vm-isolate"
+}));
+var forgedProof = new ActorHeapAdmissionV1.OwnershipProof(
+    true, true, true, true, true, true, true, true);
+Require(forgedProof.Complete, "all-true proof must still be non-authoritative");
+Deny(() => ActorHeapAdmissionV1.RequireZeroGuestTracing(
+    ActorHeapAdmissionV1.Backing.ExplicitNativeRegion, forgedProof));
+
 // Keep all probe actor cardinalities and dispatcher admission capacity in lockstep.
 const int actorCount = 4;
 var options = new ActorRuntimeOptions
@@ -267,3 +287,4 @@ Console.WriteLine("PASS actor-ref32-native-probe: four actor-local uint32 guest 
 Console.WriteLine("PASS actor-ref32-native-no-clr-allocation: 4096 warmed guest payload cycles allocated zero managed bytes (host only)");
 Console.WriteLine("PASS actor-ref32-native-typed-nodegraph: four typed native graphs survive actor turns with guarded reference fields (host only; not compiled guest)");
 Console.WriteLine("PASS actor-ref32-native-typed-no-clr-allocation: 4096 warmed typed I64/ref32 cycles allocated zero managed bytes (host only)");
+Console.WriteLine("PASS actor-heap-java-parity-nativeaot: unsupported GC and tenant isolation rejected before actor admission (host only)");
