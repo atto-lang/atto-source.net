@@ -452,6 +452,7 @@ SelectableI64ChannelSelfTest.Run();
 SelectableI64FutureSelfTest.Run();
 ActorDispatchDomainsSelfTest.Run();
 ActorRuntimeSelfTest.Run();
+NativeTraceContinuationV1SelfTest.Run(); // host-owned W3C scopes; not guest CIL instrumentation
 UniversalHotLoadV1SelfTest.Run();
 ActorFrameStackSelfTest.Run(); // host-only actor logical frames; not guest/AOT evidence
 ActorScalarFrameAbiSelfTest.Run(); // verified CFG layout/native spill boundary, not guest execution
