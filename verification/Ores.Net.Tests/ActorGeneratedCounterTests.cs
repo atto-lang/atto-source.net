@@ -60,7 +60,13 @@ internal static class ActorGeneratedCounterTests
                 .Replace("\r\n", "\n", StringComparison.Ordinal) == overflowGolden.Replace("\r\n", "\n", StringComparison.Ordinal),
             "overflow source/golden mismatch");
         Reject(CounterSource.Replace("critical-write", "critical-read", StringComparison.Ordinal), "read loan cannot increment");
+        Reject(CounterSource.Replace("critical-write", "critical", StringComparison.Ordinal),
+            "bare legacy critical must not be granted an exclusive write loan");
         Reject(CounterSource.Replace("critical-write", "critical -write", StringComparison.Ordinal), "split critical mode");
+        Reject(CounterSource.Replace("critical-write", "critical- write", StringComparison.Ordinal),
+            "spaced critical mode suffix");
+        Reject(CounterSource.Replace("critical-write", "critical--write", StringComparison.Ordinal),
+            "double-hyphen critical mode");
         Require(generated.Contains("public static class Actor_Counter", StringComparison.Ordinal) &&
             generated.Contains("public const string ActorLayoutIdentity = \"Counter|1:I\";", StringComparison.Ordinal) &&
             generated.Contains("public static long Call_increment(OresVmHost.ActorDispatchScope scope)", StringComparison.Ordinal) &&
