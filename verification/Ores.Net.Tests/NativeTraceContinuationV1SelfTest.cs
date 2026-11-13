@@ -14,7 +14,7 @@ internal static class NativeTraceContinuationV1SelfTest
     {
         checks++;
         try { action(); }
-        catch (T) { return; }
+        catch (Exception error) when (error is T) { return; }
         throw new Exception("Expected rejection: " + message);
     }
 
