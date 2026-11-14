@@ -5,3 +5,6 @@
 /TestResults/
 *.user
 *.pdb
+
+tmp/
+temp/

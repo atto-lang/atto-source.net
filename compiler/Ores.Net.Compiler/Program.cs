@@ -3,23 +3,59 @@ using System.Text;
 using System.Globalization;
 using Ores.Net.Runtime;
 
+// The bootstrap CLR capability is a deliberate compiler invocation grant,
+// not an authority inferred from host type names or environment variables.
+// It is valid only for scalar check/compile, never module/structured/facts paths.
+bool mathI64Granted = args.Length >= 4 &&
+    args[^2] == "--capability" && args[^1] == "interop.dotnet.math-i64";
+if (mathI64Granted) args = args[..^2];
+var dotnetPolicy = mathI64Granted
+    ? DotnetHostImportPolicy.MathI64V0
+    : DotnetHostImportPolicy.DenyAll;
+
 // Reject invalid shapes before indexing args[3]. Previously "compile file.ores"
 // passed validation then crashed with IndexOutOfRangeException instead of usage.
 bool validCheck = args.Length == 2 && args[0] == "check";
 bool validAsyncRun = args.Length == 2 && args[0] == "run-async";
+bool validDeclaredReceiveSyntax = args.Length == 2 &&
+    args[0] == "check-declared-receive-syntax";
+// FULL_GUEST_AOT_TODO (platform-conformance #321): These commands emit
+// verified scalar/structured CIL or managed-source artifacts, not yet a
+// closed-world native guest executable for arbitrary AttoLang programs.
+// Keep them intact; a strict build must close module/method/generic/actor,
+// exception/cleanup and suspension edges before NativeAOT publish, and forbid
+// interpreter/Reflection.Emit/runtime codegen fallback in the sealed profile.
+// ZERO_TRACING_GC_TODO: CIL and .NET NativeAOT still use CLR-managed object
+// lifetimes by default. NativeAOT != no GC. Lower guest class/actor data into
+// actor-owned unmanaged regions with checked 32-bit offsets and generation
+// authority; prove deterministic disposal at return, cancellation, restart,
+// FFI pins and hot swap, plus transitive native/PInvoke allocation closure.
 bool validCompile = args.Length == 4 && args[0] == "compile" && args[2] == "--out";
 // Opt-in verification lane only: never silently broaden shipping scalar check/compile.
+// Separate opt-in nominal enum guest/compiler slice; shipping scalar and
+// structured entrypoints retain their fail-closed ADT admission boundaries.
+bool validEnumCheck = args.Length == 2 && args[0] == "check-enum-v1";
+bool validEnumCompile = args.Length == 4 &&
+    args[0] == "compile-enum-v1" && args[2] == "--out";
 bool validStructuredCheck = args.Length == 2 && args[0] == "check-structured";
 bool validStructuredCompile = args.Length == 4 &&
     args[0] == "compile-structured" && args[2] == "--out";
+bool validEmitActorSource = args.Length == 4 && args[0] == "emit-actor-csharp" && args[2] == "--out";
+// This separate mode only binds the verified external receive slice of the
+// Counter v2 package; it never claims compiled async main or general actors.
+bool validExternalReceive = args.Length == 4 && args[0] == "emit-external-counter-csharp" && args[2] == "--out";
 bool validEmitSource = args.Length == 4 && args[2] == "--out" &&
     (args[0] == "emit-csharp" || args[0] == "emit-fsharp");
 bool validStaticFacts = args.Length == 2 &&
     (args[0] == "static-facts" || args[0] == "static-facts-structured");
+// Explicit source-only preview. Never accept actor pipes in normal check/compile.
+bool validActorPipePlan = args.Length == 2 && args[0] == "plan-actor-pipe";
 bool moduleCommand = args.Length >= 1 && args[0] is "check-modules" or "compile-modules";
-if (!validCheck && !validCompile && !validAsyncRun && !validStructuredCheck && !validStructuredCompile && !validStaticFacts && !validEmitSource && !moduleCommand)
+if ((mathI64Granted && !validCheck && !validCompile) ||
+    (!validCheck && !validAsyncRun && !validEnumCheck && !validEnumCompile && !validDeclaredReceiveSyntax && !validCompile && !validStructuredCheck && !validStructuredCompile &&
+     !validStaticFacts && !validActorPipePlan && !validEmitActorSource && !validExternalReceive && !validEmitSource && !moduleCommand))
 {
-    Console.Error.WriteLine("usage: oresnet check input.ores | oresnet run-async input.ores | oresnet compile input.ores --out path/OresGenerated.dll | oresnet check-structured input.ores | oresnet compile-structured input.ores --out path/OresGenerated.dll | oresnet emit-csharp input.ores --out path/OresProgram.cs | oresnet emit-fsharp input.ores --out path/OresProgram.fs | oresnet static-facts input.ores | oresnet static-facts-structured input.ores");
+    Console.Error.WriteLine("usage: oresnet check-enum-v1 FILE.atto | oresnet compile-enum-v1 FILE.atto --out path/OresGenerated.dll | oresnet check input.atto|input.ores | oresnet run-async input.ores | oresnet compile input.atto|input.ores --out path/OresGenerated.dll | oresnet check-structured input.atto|input.ores | oresnet compile-structured input.atto|input.ores --out path/OresGenerated.dll | oresnet emit-csharp input.atto|input.ores --out path/OresProgram.cs | oresnet emit-fsharp input.atto|input.ores --out path/OresProgram.fs | oresnet static-facts input.atto|input.ores | oresnet static-facts-structured input.atto|input.ores | oresnet plan-actor-pipe input.atto (typed plan only, not executable actors) | oresnet emit-actor-csharp Counter.atto --out path/Actor_Counter.g.cs | oresnet emit-external-counter-csharp ROOT --out path/DeclaredActor_Counter.g.cs | oresnet check-declared-receive-syntax receive.atto (syntax only, NOT guest execution)");
     return 2;
 }
 
@@ -62,10 +98,87 @@ try
         Console.WriteLine(Encoding.UTF8.GetString(witness.ToArray()));
         return 0;
     }
+    if (validExternalReceive)
+    {
+        if (!string.Equals(Path.GetExtension(args[3]), ".cs", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("External receive source output requires .cs");
+        string root = Path.GetFullPath(args[1]);
+        string src = Path.Combine(root, "src");
+        string counter = Path.Combine(src, "counter");
+        // Never follow package/actor source symlinks while certifying a
+        // single locally materialized, SHA-verified canonical source corpus.
+        foreach (string directory in new[] { root, src, counter })
+        {
+            if (!Directory.Exists(directory) ||
+                (File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
+                throw new FormatException("External receive package directory must be real");
+        }
+        string manifestPath = Path.Combine(root, ".atto.pkg.toml");
+        if ((File.GetAttributes(manifestPath) & FileAttributes.ReparsePoint) != 0)
+            throw new FormatException("External receive manifest cannot be a symlink");
+        const string expectedManifest = "schema_version = \"1\"\n[project]\nname = \"counter-v2\"\nversion = \"0.2.0\"\nroot = \".\"\n[source]\nroots = [\"src\"]\n";
+        if (ReadBoundedSource(manifestPath, rejectBom: true) != expectedManifest)
+            throw new FormatException("External receive v2 requires the canonical package manifest");
+        var sourceUnits = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (string file in new[] { "actor.atto", "contract.atto",
+                     "method.atto", "receive.atto", "state.atto" })
+        {
+            string path = Path.Combine(counter, file);
+            if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+                throw new FormatException("External receive source cannot be a symlink");
+            sourceUnits.Add("src/counter/" + file, ReadBoundedSource(path, rejectBom: true));
+        }
+        var verifiedReceive = OresParser.InspectExternalCounterV2(sourceUnits);
+        if (verifiedReceive.Namespace != "counter")
+            throw new FormatException("External receive namespace does not match source root");
+        WriteAtomicSource(args[3], DeclaredActorCounterV2Emitter.EmitCSharp(verifiedReceive));
+        Console.WriteLine("VERIFIED_EXTERNAL_RECEIVE_V2 actor_handler_only=true async_main_not_compiled=true");
+        return 0;
+    }
     if (validStaticFacts &&
+        !string.Equals(Path.GetExtension(args[1]), ".atto", StringComparison.OrdinalIgnoreCase) &&
         !string.Equals(Path.GetExtension(args[1]), ".ores", StringComparison.OrdinalIgnoreCase))
-        throw new FormatException("Static-facts export requires a .ores source file");
+        throw new FormatException("Static-facts export requires a .atto or .ores source file");
     var source = ReadBoundedSource(args[1], rejectBom: validStaticFacts);
+    if (validDeclaredReceiveSyntax)
+    {
+        if (!string.Equals(Path.GetExtension(args[1]), ".atto",
+                StringComparison.OrdinalIgnoreCase))
+            throw new FormatException("Declared receive syntax check requires a .atto source file");
+        var admitted = OresParser.InspectDeclaredActorReceive(source);
+        Console.WriteLine(
+            $"NET_DECLARED_COUNTER_RECEIVE_SYNTAX_PASS|namespace={admitted.Namespace}" +
+            $"|actor={admitted.ActorName}|field={admitted.StateField}" +
+            $"|stop={admitted.StopOnMailValue}|guest_not_executed");
+        return 0;
+    }
+    if (validActorPipePlan)
+    {
+        string extension = Path.GetExtension(args[1]);
+        if (!string.Equals(extension, ".atto", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(extension, ".ores", StringComparison.OrdinalIgnoreCase))
+            throw new FormatException("Actor pipe plan requires an .atto or legacy .ores source file");
+        var plan = OresStructuredParser.PlanActorPipeV1(source);
+        // Full-AOT: no reflection-based JsonSerializer (IL2026/IL3050). Write the same
+        // compact object, in the same field order, with Utf8JsonWriter.
+        var planJson = new MemoryStream();
+        using (var json = new System.Text.Json.Utf8JsonWriter(planJson))
+        {
+            json.WriteStartObject();
+            json.WriteString("status", ActorPipeGraphV1.Evidence);
+            json.WriteBoolean("executable_actor_guest", false);
+            json.WriteBoolean("native_aot_verified", false);
+            json.WriteNumber("stage_count", plan.Stages.Count);
+            json.WriteStartObject("edge");
+            json.WriteString("source", plan.Edge.ProducerBinding);
+            json.WriteString("destination", plan.Edge.ConsumerBinding);
+            json.WriteEndObject();
+            json.WriteNumber("message", plan.InputMessage);
+            json.WriteEndObject();
+        }
+        Console.WriteLine(System.Text.Encoding.UTF8.GetString(planJson.ToArray()));
+        return 0;
+    }
     if (validStaticFacts)
     {
         // The production command uses the exact verified scalar IR gate.
@@ -93,6 +206,35 @@ try
         Console.WriteLine(observed.ToString(CultureInfo.InvariantCulture));
         return 0;
     }
+    if (validEnumCheck || validEnumCompile)
+    {
+        if (!string.Equals(Path.GetExtension(args[1]), ".atto",
+            StringComparison.OrdinalIgnoreCase))
+            throw new FormatException("Nominal enum v1 requires canonical .atto source");
+        var module = OresNominalEnumV1.LowerModule(source);
+        if (validEnumCompile)
+        {
+            if (!string.Equals(Path.GetFileName(args[3]), "OresGenerated.dll",
+                StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Generated assembly must be named OresGenerated.dll");
+            CilEmitter.EmitLibrary(module, args[3]);
+            Console.WriteLine("Emitted verified nominal enum v1 CIL: " +
+                Path.GetFullPath(args[3]));
+        }
+        else Console.WriteLine("Verified nominal enum v1 source and CFG: OK");
+        return 0;
+    }
+    if (validEmitActorSource)
+    {
+        if (!string.Equals(Path.GetExtension(args[3]), ".cs",
+            StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Actor C# source output requires a .cs file");
+        var actorMethod = OresParser.InspectSynchronousActorIncrement(source);
+        var generated = ActorIncrementSourceEmitter.EmitCSharp(actorMethod);
+        WriteAtomicSource(args[3], generated);
+        Console.WriteLine($"Emitted experimental static actor C# from verified increment IR: {Path.GetFullPath(args[3])}");
+        return 0;
+    }
     if (validStructuredCheck || validStructuredCompile)
     {
         // Experimental typed source -> verified CFG -> deterministic CIL.
@@ -109,10 +251,10 @@ try
         else Console.WriteLine("Experimental structured source and verified CFG: OK");
         return 0;
     }
-    var expression = OresParser.Parse(source);
+    var expression = OresParser.Parse(source, dotnetPolicy);
     // Both check and compile require successfully verified typed IR.
     // Production CIL must not bypass SSA/type validation.
-    var verified = OresIrLowering.Lower(expression);
+    var verified = OresIrLowering.Lower(expression, policy: dotnetPolicy);
     if (args[0] == "compile")
     {
         if (!string.Equals(Path.GetFileName(args[3]), "OresGenerated.dll",

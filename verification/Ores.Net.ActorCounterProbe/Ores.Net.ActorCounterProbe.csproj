@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RuntimeFrameworkVersion>10.0.14</RuntimeFrameworkVersion>
+    <IlcPackageVersion>10.0.14</IlcPackageVersion>
+    <OutputType>Exe</OutputType>
+    <PublishAot>true</PublishAot>
+    <SelfContained>true</SelfContained>
+    <PublishTrimmed>true</PublishTrimmed>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../ActorGeneratedRuntimeCounterChecks.cs" Link="ActorGeneratedRuntimeCounterChecks.cs" />
+    <Compile Include="../Ores.Net.Tests/GeneratedOverflowCounterActor.g.cs" Link="GeneratedOverflowCounterActor.g.cs" />
+    <Compile Include="../Ores.Net.Tests/GeneratedMessageCounterActor.g.cs" Link="GeneratedMessageCounterActor.g.cs" />
+    <Compile Include="../Ores.Net.Tests/GeneratedExternalCounterActor.g.cs" Link="GeneratedExternalCounterActor.g.cs" />
+    <ProjectReference Include="../../runtime/Ores.Net.Runtime/Ores.Net.Runtime.csproj" />
+    <!-- Statically compile the emitter's reviewed golden, not a runtime plugin. -->
+    <Compile Include="../Ores.Net.Tests/GeneratedCounterActor.g.cs"
+             Link="GeneratedCounterActor.g.cs" />
+  </ItemGroup>
+</Project>

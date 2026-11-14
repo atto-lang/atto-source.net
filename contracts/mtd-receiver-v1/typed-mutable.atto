@@ -1,0 +1,5 @@
+// Canonical mutable receiver; .NET must reject until checked borrow/CIL lowering.
+mtd (mut self: Point) move_by(int dx, int dy): void {
+  self.x += dx;
+  self.y += dy;
+}
