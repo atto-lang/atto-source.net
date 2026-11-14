@@ -21,18 +21,18 @@ internal static class ActorPubSubByteQuotaTests
         }
         string payload = new('X', 8 * 1024 * 1024);
         var blocked = topic.Publish(subscribers[0], payload);
-        Require(blocked.Accepted == 0 && blocked.Backpressured,
-            "9 x 8MiB RELIABLE exceeds graph byte quota");
+        Require(blocked.Sequence == 0 && blocked.Accepted == 0 && blocked.Backpressured,
+            "9 x 8MiB RELIABLE exceeds graph byte quota without sequence allocation");
         foreach (var actor in subscribers)
             Require(!topic.TryRead(actor, out _), "no partial publication");
         Require(topic.Unsubscribe(subscribers[8]),
             "remove one reliable edge to drop fanout to 64MiB");
         var admitted = topic.Publish(subscribers[0], payload);
-        Require(admitted.Accepted == 8 && !admitted.Backpressured,
-            "8 x 8MiB exactly fills graph byte budget");
+        Require(admitted.Sequence == 1 && admitted.Accepted == 8 && !admitted.Backpressured,
+            "8 x 8MiB exactly fills graph byte budget with sequence 1");
         var again = topic.Publish(subscribers[0], "another");
-        Require(again.Accepted == 0 && again.Backpressured,
-            "additional small payload is rejected without partial fanout");
+        Require(again.Sequence == 0 && again.Accepted == 0 && again.Backpressured,
+            "additional small payload is rejected without partial fanout or sequence allocation");
         for (int i = 0; i < 8; i++)
             Require(topic.TryRead(subscribers[i], out string original) &&
                     original.Length == payload.Length,
@@ -43,8 +43,8 @@ internal static class ActorPubSubByteQuotaTests
         foreach (var actor in subscribers)
             Require(lossy.Subscribe(actor), "lossy subscribe");
         var partial = lossy.Publish(subscribers[0], payload);
-        Require(partial.Accepted == 8 && partial.Dropped == 1,
-            "LOSSY admits 8 of 9 copies within shared byte cap");
+        Require(partial.Sequence == 1 && partial.Accepted == 8 && partial.Dropped == 1,
+            "LOSSY admits 8 of 9 copies within shared byte cap and sequences the attempt");
 
         var latest = group.DefineTopic<string>(
             "latest-bytes", ActorTopicDeliveryPolicy.Latest, 1);
@@ -53,20 +53,24 @@ internal static class ActorPubSubByteQuotaTests
         bool denied = false;
         try { _ = latest.Publish(subscribers[0], "blocked"); }
         catch (InvalidOperationException) { denied = true; }
-        Require(denied, "LATEST honors shared graph byte budget");
+        Require(denied, "LATEST honors shared graph byte budget before committing a sequence");
 
         int delivered = 0;
         foreach (var actor in subscribers)
             if (lossy.TryRead(actor, out _)) delivered++;
         Require(delivered == 8, "LOSSY queue stores exactly eight events");
-        Require(latest.Publish(subscribers[0], "old").Accepted == 9,
+        var latestOld = latest.Publish(subscribers[0], "old");
+        Require(latestOld.Sequence == 1 && latestOld.Accepted == 9,
             "LATEST runs after reclaiming LOSSY byte credits");
         var replacement = latest.Publish(subscribers[0], "new");
-        Require(replacement.Coalesced == 9 && replacement.Accepted == 9,
-            "LATEST replacement accounts prior bytes");
+        Require(replacement.Sequence == 2 && replacement.Coalesced == 9 && replacement.Accepted == 9,
+            "LATEST replacement increments sequence and accounts prior bytes");
         foreach (var actor in subscribers)
-            Require(latest.TryRead(actor, out string value) && value == "new",
-                "LATEST only retains the newest message");
+        {
+            Require(latest.TryReadDelivery(actor, out ActorPubSubDelivery<string> delivery) &&
+                    delivery.Sequence == 2 && delivery.Value == "new",
+                "LATEST delivery retains latest sequence and value");
+        }
 
         Require(topic.Publish(subscribers[0], payload).Accepted == 8,
             "refill graph before group close");
