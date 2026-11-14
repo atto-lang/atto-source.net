@@ -3,6 +3,8 @@ using Mono.Cecil.Cil;
 using Ores.Net.Compiler;
 using Ores.Net.Runtime;
 
+DeclaredActorReceiveSyntaxTests.Run();
+
 static void Require(bool value, string why)
 {
     if (!value) throw new Exception("FAILED: " + why);
@@ -15,6 +17,14 @@ static void Reject(Action action, string why)
     throw new Exception("Expected parser rejection: " + why);
 }
 
+static void RejectDiagnostic(Action action, string diagnostic, string why)
+{
+    try { action(); }
+    catch (FormatException ex) when
+        (ex.Message.Contains(diagnostic, StringComparison.OrdinalIgnoreCase)) { return; }
+    throw new Exception("Expected parser rejection with diagnostic '" + diagnostic + "': " + why);
+}
+
 static void InvalidSend(Action action, string why)
 {
     try { action(); }
@@ -22,19 +32,687 @@ static void InvalidSend(Action action, string why)
     throw new Exception("Expected mailbox rejection: " + why);
 }
 
+// Portable annotation admission parity: parse the same immutable corpus used
+// by Java/LLVM/WASM/Forge, but assert BOTH independent .NET source frontends.
+{
+    var corpus = Path.Combine(AppContext.BaseDirectory, "annotation-admission-v1.cases");
+    var ids = new HashSet<string>(StringComparer.Ordinal);
+    int passes = 0, rejects = 0;
+    foreach (var line in File.ReadAllLines(corpus, System.Text.Encoding.UTF8))
+    {
+        if (string.IsNullOrWhiteSpace(line) || line.StartsWith('#')) continue;
+        var fields = line.Split('|');
+        Require(fields.Length == 7, "annotation corpus row width");
+        var id = fields[0];
+        Require(System.Text.RegularExpressions.Regex.IsMatch(id, @"^[a-z][a-z_0-9]*$"),
+            "invalid annotation corpus id: " + id);
+        Require(ids.Add(id), "duplicate annotation corpus id: " + id);
+        for (int index = 1; index <= 5; ++index)
+            Require(fields[index] is "pass" or "reject", "invalid annotation expectation: " + id);
+        var bytes = Convert.FromBase64String(fields[6]);
+        Require(Convert.ToBase64String(bytes) == fields[6], "noncanonical annotation source " + id);
+        var source = new System.Text.UTF8Encoding(false, true).GetString(bytes);
+        Require(System.Text.Encoding.UTF8.GetBytes(source).SequenceEqual(bytes),
+            "noncanonical UTF-8 annotation source " + id);
+        if (fields[4] == "reject")
+        {
+            rejects++;
+            RejectDiagnostic(() => OresParser.Parse(source),
+                "Annotations require verified compiler lowering",
+                "scalar annotation parity " + id);
+            RejectDiagnostic(() => OresStructuredParser.Parse(source),
+                "Annotations require verified compiler lowering",
+                "structured annotation parity " + id);
+        }
+        else
+        {
+            passes++;
+            Require(OresParser.Parse(source) is Literal,
+                "scalar annotation positive " + id);
+            Require(OresStructuredParser.Parse(source) is not null,
+                "structured annotation positive " + id);
+        }
+    }
+    Require(ids.Count == 17 && passes == 3 && rejects == 14,
+        "annotation admission corpus completeness");
+}
+
+// Candidate AttoLang v2 placement matrix is shared byte-for-byte with the
+// conformance repository. These .NET expectations remain REJECT on BOTH frontends
+// until typed AST/HIR, effect checking and Native AOT lowering are executable.
+{
+    var path = Path.Combine(AppContext.BaseDirectory, "annotation-compiler-corpus-v2.json");
+    var corpusBytes = File.ReadAllBytes(path);
+    var gitHeader = System.Text.Encoding.ASCII.GetBytes($"blob {corpusBytes.Length}\0");
+    var gitInput = new byte[gitHeader.Length + corpusBytes.Length];
+    gitHeader.CopyTo(gitInput, 0);
+    corpusBytes.CopyTo(gitInput, gitHeader.Length);
+    var blob = Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(gitInput))
+        .ToLowerInvariant();
+    Require(blob == "de694e726cceb87c43e0684cad36619a85f90343",
+        "shared v2 annotation corpus Git blob identity");
+    using var document = System.Text.Json.JsonDocument.Parse(corpusBytes);
+    var root = document.RootElement;
+    Require(root.GetProperty("schema_version").GetString() ==
+        "attolang.annotation-compiler-corpus/v2", "annotation v2 schema version");
+    Require(root.GetProperty("status").GetString() ==
+        "CANDIDATE_EXPECTATIONS_NOT_EXECUTED", "annotation v2 is not guest proof");
+    var backendNames = new[] { "java", "llvm", "net", "wasm", "forge" };
+    Require(root.GetProperty("backend_order").EnumerateArray()
+        .Select(x => x.GetString()).SequenceEqual(backendNames),
+        "annotation v2 ordered backend inventory");
+    var rows = root.GetProperty("cases").EnumerateArray().ToArray();
+    Require(rows.Length == 15, "annotation v2 candidate corpus completeness");
+    var ids = new HashSet<string>(StringComparer.Ordinal);
+    foreach (var row in rows)
+    {
+        var id = row.GetProperty("id").GetString()
+            ?? throw new Exception("missing annotation case id");
+        Require(ids.Add(id), "duplicate annotation v2 case: " + id);
+        var expected = row.GetProperty("expected");
+        Require(expected.EnumerateObject().Select(x => x.Name).SequenceEqual(backendNames),
+            "v2 case backend key drift: " + id);
+        Require(expected.GetProperty("net").GetString() == "reject",
+            "unearned .NET annotation support: " + id);
+        var source = row.GetProperty("source").GetString()
+            ?? throw new Exception("missing annotation source");
+        Require(source.EndsWith('\n') && !source.Contains('\r') &&
+            source.Contains('@'), "invalid candidate source boundaries: " + id);
+        if (source.StartsWith('@'))
+        {
+            // Annotation was the first active source token; a generic parse
+            // failure is insufficient evidence for our typed-AOT rejection gate.
+            RejectDiagnostic(() => OresParser.Parse(source),
+                "Annotations require verified compiler lowering",
+                "v2 scalar annotation case " + id);
+            RejectDiagnostic(() => OresStructuredParser.Parse(source),
+                "Annotations require verified compiler lowering",
+                "v2 structured annotation case " + id);
+        }
+        else
+        {
+            // Class/actor lowering is currently unsupported; this is only
+            // an overall rejection, NOT proof of an annotation-specific gate.
+            Reject(() => OresParser.Parse(source), "v2 scalar nested case " + id);
+            Reject(() => OresStructuredParser.Parse(source), "v2 structured nested case " + id);
+        }
+    }
+    // All six common comment endings must not conceal a later live @Doc token.
+    foreach (var eol in new[] { "\n", "\r", "\r\n", "\u0085", "\u2028", "\u2029" })
+    {
+        var live = "fnc main():int{return 42;} // inert" + eol + "@Doc(\"active\")";
+        Reject(() => OresParser.Parse(live), "scalar live annotation after comment boundary");
+        Reject(() => OresStructuredParser.Parse(live),
+            "structured live annotation after comment boundary");
+        var inert = "fnc main():int{return 42;} // @Doc(\"inert\")" + eol;
+        Require(OresParser.Parse(inert) is Literal,
+            "scalar annotation in comment is not active");
+        Require(OresStructuredParser.Parse(inert) is not null,
+            "structured annotation in comment is not active");
+    }
+}
+
+// Annotation effects cannot be erased by either Native AOT source path.
+foreach (var annotation in new[] {
+    "@Ret(int)", "@FromJson(\"id\")", "@Critical(1)",
+    "@RequiresPermission(\"ffi\")", "@UnknownMacro", "@ActorMaxThreads"
+})
+{
+    var source = annotation + "\nfnc main(): int { return 42; }";
+    RejectDiagnostic(() => OresParser.Parse(source),
+        "Annotations require verified compiler lowering",
+        "scalar Native AOT annotation " + annotation);
+    RejectDiagnostic(() => OresStructuredParser.Parse(source),
+        "Annotations require verified compiler lowering",
+        "structured Native AOT annotation " + annotation);
+}
+Require(OresParser.Parse("fnc main():int{return 42;} // @Ret(int)") is Literal,
+    "annotation in scalar comment remains inert");
+Require(OresStructuredParser.Parse("fnc main():int{return 42;} // @Ret(int)") is not null,
+    "annotation in structured comment remains inert");
+
+// Durable M0 is not lowered by the .NET Native AOT compiler. Exercise the
+// real structured lexer/parser boundary, not a source-substring approximation.
+foreach (var durableSource in new[] {
+    "define activity Payments as charge(int cents)->int{return cents;} end",
+    "define workflow Checkout as run(int id)->int{return id;} end",
+    "pub define activity Payments as charge(int cents)->int{return cents;} end",
+    "pub define workflow Checkout as run(int id)->int{return id;} end",
+    "define pub activity Payments as charge(int cents)->int{return cents;} end",
+    "define pub workflow Checkout as run(int id)->int{return id;} end",
+    "define /* whitespace token */ activity Payments as charge(int cents)->int{return cents;} end",
+    "define /* outer /* inner */ outer */ workflow Checkout as run(int id)->int{return id;} end"
+})
+    RejectDiagnostic(() => OresStructuredParser.Parse(durableSource),
+        "DURABLE_M0_BACKEND_UNSUPPORTED",
+        "durable M0 declaration must fail before CIL or Native AOT emission");
+Require(OresStructuredParser.Parse(
+    "fnc main():int{/* define activity Fake as */ // define workflow Fake as\n return 42; }")
+    .Body.Count == 1, "comments mentioning durable declarations must not trigger capability rejection");
+
+var durableM0SourcePath = Path.Combine(AppContext.BaseDirectory,
+    "contracts", "durable-m0", "v1", "checkout.atto");
+RejectDiagnostic(() => OresStructuredParser.Parse(File.ReadAllText(durableM0SourcePath)),
+    "DURABLE_M0_BACKEND_UNSUPPORTED",
+    "shared Java/LLVM/.NET/Wasm declaration corpus must fail before unimplemented CIL lowering");
+// Shared canonical manifest *reference*, not .NET compiler manifestation:
+// LLVM CMake, .NET System.Text.Json, Wasm Node and conformance Node load
+// these exact bytes, never a copied claim that a backend emitted them.
+var durableM0Path = Path.Combine(AppContext.BaseDirectory,
+    "contracts", "durable-m0", "v1", "manifest-v1.json");
+var durableM0ShaPath = Path.Combine(AppContext.BaseDirectory,
+    "contracts", "durable-m0", "v1", "manifest-v1.sha256");
+byte[] durableM0Bytes = File.ReadAllBytes(durableM0Path);
+const string durableM0PinnedSha = "aa1eed7637b99d8c270c3cd7a3f15ab83acf0463b00ebaa58f0f52c8dd525784";
+var durableM0ActualSha = Convert.ToHexString(
+    System.Security.Cryptography.SHA256.HashData(durableM0Bytes)).ToLowerInvariant();
+Require(durableM0Bytes.Length == 1671 &&
+    durableM0ActualSha == durableM0PinnedSha &&
+    File.ReadAllText(durableM0ShaPath).Trim() == durableM0PinnedSha,
+    "DURABLE_M0_MANIFEST_DRIFT: candidate reference bytes, size or SHA-256 changed");
+using (var durableM0Doc = System.Text.Json.JsonDocument.Parse(durableM0Bytes))
+{
+    var root = durableM0Doc.RootElement;
+    Require(root.GetProperty("format").GetString() == "atto.durable.manifest.v1",
+        "durable M0 reference manifest version");
+    var activity = root.GetProperty("activities")[0];
+    Require(activity.GetProperty("id").GetString() == "Billing.PaymentProvider",
+        "activity target must be module-qualified");
+    var workflow = root.GetProperty("workflows")[0];
+    Require(workflow.GetProperty("id").GetString() == "Billing.Checkout",
+        "workflow target must be module-qualified");
+    var commands = workflow.GetProperty("commands");
+    Require(commands.GetArrayLength() == 3,
+        "durable M0 reference must preserve three ordered history commands");
+    for (int step = 0; step < commands.GetArrayLength(); step++)
+        Require(commands[step].GetProperty("order").GetInt32() == step,
+            "durable M0 history order must be dense and stable");
+    Require(commands[0].GetProperty("target").GetString() == "Billing.PaymentProvider.charge",
+        "durable activity call must have canonical qualified target");
+    Require(workflow.GetProperty("queries")[0].GetProperty("endpoint").GetString() == "status",
+        "read-only query must remain outside ordered history");
+    byte[] reencoded = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(root);
+    Require(reencoded.AsSpan().SequenceEqual(durableM0Bytes),
+        "System.Text.Json must preserve exact canonical candidate bytes");
+}
+byte[] durableM0Mutation = (byte[])durableM0Bytes.Clone();
+durableM0Mutation[0] ^= 1;
+Require(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+    durableM0Mutation)).ToLowerInvariant() != durableM0PinnedSha,
+    "mutated manifest must not retain approved source-free reference digest");
+Console.WriteLine("DURABLE_M0_REFERENCE_ONLY|sha256=" + durableM0PinnedSha +
+    "|bytes=1671|not_guest_execution");
+// Cross-backend namespace/lifecycle parity: the NativeAOT compiler does
+// not yet implement manifest-indexed namespace import or once-only init.
+// Unreachable files do not enter the graph, and unsupported imports fail
+// before CIL emission rather than executing an ambient package.
+{
+    string root = Path.Combine(Path.GetTempPath(), "oreslang-ns-parity-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    try
+    {
+        string main = Path.Combine(root, "main.ores");
+        string startup = Path.Combine(root, "startup.ores");
+        string unrelated = Path.Combine(root, "unrelated.ores");
+        File.WriteAllText(unrelated, "not valid ores source");
+        File.WriteAllText(main, "fnc main()->int { return 1; }");
+        Require(OresSourceModuleCompiler.Compile(main, new[] { root }).Sources.Count == 1,
+            "unreferenced namespace provider must not enter NativeAOT module graph");
+
+        File.WriteAllText(main,
+            "import namespace billing as payments from \"checkout\"; fnc main()->int { return 1; }");
+        RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
+            "manifest-verified multi-file package linker",
+            "namespace import needs exact manifest ownership");
+
+        // Standalone compilation must also refuse lifecycle hooks; only
+        // checking linked dependency imports is insufficient.
+        File.WriteAllText(main, "fnc init()->int { return 9; } fnc main()->int { return 1; }");
+        RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
+            "once-only reachable initialization lowering",
+            "standalone private init cannot be compiled as an ordinary callable");
+        File.WriteAllText(main, "pub fnc init()->int { return 9; } fnc main()->int { return 1; }");
+        RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
+            "once-only reachable initialization lowering",
+            "standalone public init cannot be compiled as an ordinary callable");
+
+        File.WriteAllText(startup, "pub fnc init()->int { return 9; }");
+        File.WriteAllText(main,
+            "import fnc init from \"./startup.ores\"; fnc main()->int { return init(); }");
+        RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
+            "once-only reachable initialization lowering",
+            "lifecycle init cannot become an ordinary imported callable");
+
+        // Rejection must reach transitive linked sources and module wrappers:
+        // a caller cannot suppress init admission by changing the import kind.
+        File.WriteAllText(startup,
+            "define module Startup as pub fnc init()->int { return 9; } end");
+        File.WriteAllText(main,
+            "import module Startup from \"./startup.ores\"; fnc main()->int { return 1; }");
+        RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
+            "once-only reachable initialization lowering",
+            "linked module-scoped init requires a verified once-only lifecycle");
+
+        File.WriteAllText(startup,
+            "import namespace billing from \"checkout\"; pub fnc helper()->int { return 2; }");
+        File.WriteAllText(main,
+            "import fnc helper from \"./startup.ores\"; fnc main()->int { return helper(); }");
+        RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
+            "manifest-verified multi-file package linker",
+            "transitively linked namespace import must reject before CIL emission");
+
+        // Additional cross-backend regression #1: the same-package +/
+        // selector cannot bypass the missing manifest-owned namespace graph.
+        File.WriteAllText(main,
+            "import namespace billing from \"+/\"; fnc main()->int { return 1; }");
+        RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
+            "manifest-verified multi-file package linker",
+            "unverified same-package namespace import must fail before CIL");
+
+        // Regression #2: even a qualified scalar call cannot authorize an
+        // unpinned namespace import by satisfying a lexical name.
+        File.WriteAllText(main,
+            "import namespace billing as payments from \"checkout\"; " +
+            "fnc main()->int { return payments.answer(); }");
+        RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
+            "manifest-verified multi-file package linker",
+            "qualified namespace calls require package-authenticated providers");
+
+        // Regression #3: transitive imports with +/ are just as forbidden
+        // as direct imports until the NativeAOT namespace linker exists.
+        File.WriteAllText(startup,
+            "import namespace billing from \"+/\"; pub fnc helper()->int { return 2; }");
+        File.WriteAllText(main,
+            "import fnc helper from \"./startup.ores\"; fnc main()->int { return helper(); }");
+        RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
+            "manifest-verified multi-file package linker",
+            "transitive same-package namespace import must fail before CIL");
+
+        // Regression #4: an unreachable file containing forbidden namespace
+        // syntax must remain outside the reachable compilation closure.
+        File.WriteAllText(unrelated,
+            "import namespace billing from \"checkout\"; fnc bad()->int { return 999; }");
+        File.WriteAllText(main, "fnc main()->int { return 1; }");
+        Require(OresSourceModuleCompiler.Compile(main, new[] { root }).Sources.Count == 1,
+            "unreachable namespace source must not enter the NativeAOT linker");
+
+        // A failed admission must not contaminate a later independent
+        // compilation; unrelated files remain outside the reachable graph.
+        File.WriteAllText(main, "fnc main()->int { return 1; }");
+        Require(OresSourceModuleCompiler.Compile(main, new[] { root }).Sources.Count == 1,
+            "rejected import must not alter subsequent standalone compilation");
+    }
+    finally { Directory.Delete(root, true); }
+}
+
+// Opaque top types and value-producing conditionals are language-reserved,
+ // but this i64-only bootstrap has no tagged dynamic-value ABI or typed CFG
+ // lowering for them yet. Reject before OresIR/CIL emission.
+foreach (var opaque in new[] { "any", "unknown", "Any", "Unknown" })
+    RejectDiagnostic(
+        () => OresParser.Parse("fnc main():" + opaque + "{return 1;}"),
+        "tagged opaque-value ABI",
+        "opaque top type " + opaque);
+RejectDiagnostic(
+    () => OresParser.Parse("fnc main():int{return 1 ? 2 : 3;}"),
+    "ternary expression requires bool typing and CFG branch-merge lowering",
+    "ternary must not fall through to i64 CIL lowering");
+Require(OresParser.Parse("fnc main():int{return 1;} // any unknown ?") is Literal,
+    "opaque-top and ternary tokens in comments remain lexically invisible");
+
+
+foreach (var wrapperCase in new[] {
+    (
+        "fnc main():int{ val nested: Future<Future<int>> = value; return 1; }",
+        "Nested Future remains nested; implicit Future flatten is forbidden"
+    ),
+    (
+        "fnc main():int{ val nested: Future<Future<Option<int>>> = value; return 1; }",
+        "Nested Future remains nested; implicit Future flatten is forbidden"
+    ),
+    (
+        "fnc main():int{ val nested: Option<Option<int>> = value; return 1; }",
+        "Nested Option remains nested; implicit Option flatten is forbidden"
+    ),
+    (
+        "fnc main():int{ val nested: Option<Option<Future<int>>> = value; return 1; }",
+        "Nested Option remains nested; implicit Option flatten is forbidden"
+    )
+})
+    RejectDiagnostic(
+        () => OresParser.Parse(wrapperCase.Item1),
+        wrapperCase.Item2,
+        "nested wrapper must fail closed without implicit canonicalization");
+Require(OresParser.Parse(
+    "fnc main():int{return 1;} // Future<Future<int>> Option<Option<int>>") is Literal,
+    "nested-wrapper tokens in comments remain lexically invisible");
+// Two-word runtime declaration kinds must never become scalar CIL or
+// unguarded native state. They are distinct from ordinary actor declarations.
+foreach (var (source, code) in new[] {
+    ("define state container Counter as end", "STATE_CONTAINER_BACKEND_UNSUPPORTED"),
+    ("define pub state /* comment */ container Counter as end", "STATE_CONTAINER_BACKEND_UNSUPPORTED"),
+    ("pub define state container Counter as end", "STATE_CONTAINER_BACKEND_UNSUPPORTED"),
+    ("define virtual actor Cart as end", "VIRTUAL_ACTOR_BACKEND_UNSUPPORTED"),
+    ("define pub virtual /* comment */ actor Cart as end", "VIRTUAL_ACTOR_BACKEND_UNSUPPORTED"),
+    ("pub define virtual actor Cart as end", "VIRTUAL_ACTOR_BACKEND_UNSUPPORTED")
+})
+{
+    RejectDiagnostic(() => OresParser.Parse(source), code, "scalar declaration gate");
+    RejectDiagnostic(() => OresStructuredParser.Parse(source), code, "structured declaration gate");
+}
+Require(OresParser.Parse("fnc main():int{return 42;} // define virtual actor X") is Literal,
+    "comment text must not become declaration");
+Require(OresStructuredParser.Parse("fnc main():int{return 42;} // define state container X") is not null,
+    "structured comments must not become declarations");
+
+// AttoLang guard is reserved, but .NET source CFG/ownership effects are
+// not implemented. Both parser entrypoints must deny it explicitly before
+// CIL/NativeAOT emission, not interpret it as a mutable local or function.
+foreach (var guardSource in new[] {
+    "fnc main():int{guard true{return 1;}return 42;}",
+    "fnc main():int{guard 1>0{return 1;}return 42;}",
+    "fnc main():int{guard false{return 1;}return 42;}"
+})
+{
+    RejectDiagnostic(() => OresParser.Parse(guardSource),
+        "GUARD_BACKEND_UNSUPPORTED", "shipping scalar guard admission");
+    RejectDiagnostic(() => OresStructuredParser.Parse(guardSource),
+        "GUARD_BACKEND_UNSUPPORTED", "structured CFG guard admission");
+}
+RejectDiagnostic(
+    () => OresStructuredParser.Parse(
+        "fnc main():int{if true{guard false{return 1;}}else{return 2;}return 42;}"),
+    "GUARD_BACKEND_UNSUPPORTED", "nested guard is not executed as plain if");
+Reject(() => OresStructuredParser.Parse("fnc main():int{let int guard=42;return 42;}"),
+    "guard cannot be reused as a binding name");
+Require(OresParser.Parse("fnc main():int{return 42;} // guard is comment") is Literal,
+    "guard in a comment must not trigger source admission");
+Require(OresStructuredParser.Parse(
+    "fnc main():int{return 42;} // guard is comment") is not null,
+    "structured parser must ignore guard in comments");
+
+// Shipping scalar parser has no class-method CIL/Native AOT lowering.
+ // It must reject the exact Java receiver-parity sources before emission,
+ // independently of the experimental structured parser's diagnostic gate.
+foreach (var source in new[] {
+    "define class X1 as foo():void {} end",
+    "define class X2 as foo(self):void {} end",
+    "define class X as foo():void {} foo(self):void {} end",
+    "define class X as foo(int x):int {return x;} foo(self,int x):int {return x;} end"
+})
+    Reject(() => OresParser.Parse(source), "unimplemented class method receiver parity");
+// Source supervisors are not scalar functions. The shipping parser must
+// reject typed CONTROL authority before a generic fnc diagnostic or CIL.
+foreach (var source in new[] {
+    "define supervisor S1 as on_panic(f: Failure): void { return; } end",
+    "pub define supervisor S1 as end",
+    "define pub supervisor S1 as end",
+    "define supervisor S1 extends Actor as end",
+    "define supervisor S1 implements Observer as end",
+    "define supervisor S1 with RestartPolicy as end",
+    "define supervisor actor S1 as end",
+})
+    RejectDiagnostic(
+        () => OresParser.Parse(source),
+        "Source supervisors require typed Failure, owned CONTROL dispatch",
+        "shipping scalar source supervisor must fail before CIL");
+Require(OresParser.Parse(
+    "fnc main():int{return 42;} // define supervisor Fake extends Actor") is Literal,
+    "source supervisor words in scalar comments must not be CONTROL");
+Require(OresParser.Parse(
+    "fnc main():int{return 42;} /* define /* supervisor */ supervisor S1 */") is Literal,
+    "nested scalar source comments must not be CONTROL");
+
+// Nominal enum overloads require compiler-owned type identities and an
+// executable selected-slot ABI. The scalar .NET frontend must not accept
+// their source syntax before those paths exist (including case payloads).
+foreach (var source in new[] {
+    "define enum Color as\n  Red\n  Blue\nend\nfnc main():int{return 1;}",
+    "define enum Color as\n  Red\nend\ndefine enum Mode as\n  Fast\nend\n" +
+        "fnc pick(Color x):int{return 1;} fnc pick(Mode x):int{return 2;} " +
+        "fnc main():int{return 0;}"
+})
+{
+    try { _ = OresParser.Parse(source); }
+    catch (FormatException ex) when (
+        ex.Message.Contains("nominal enum overloads require compiler-bound dispatch",
+            StringComparison.Ordinal)) { continue; }
+    throw new Exception("Unsupported nominal enum source must fail with an explicit diagnostic");
+}
+Require(OresParser.Parse("fnc main():int{return 1;} // enum is comment") is Literal,
+    "enum inside a source comment must not trigger overload admission");
+Require(OresParser.Parse(
+    "fnc main():int{return 1;} /* enum Color /* enum Mode */ end */") is Literal,
+    "nested block-comment enum words must not trigger overload admission");
+
+DotnetHostImportTests.Run(); // compiled System.Math.Abs(i64) CIL metadata and fail-closed imports
+VmIsolateHostTests.Run();
+VmIsolateHostHardeningTests.Run();
+OptionResultTrapAdmissionTests.Run();
+OptionI64CompilerTests.Run(); // opt-in typed Option<int> source -> verified CFG -> CIL
+SafeCollectionSourceAdmissionTests.Run(); // indexed collection access remains fail-closed
+// Shared TCP-pool capabilities are not guest-lowered by either .NET frontend.
+// Deny in both the shipping scalar CLI path and the structured CFG path;
+// a host-only HTTP/1.1 socket provider is not an actor-shared pool.
+Require(OresParser.Parse("fnc main():int{return 42;} // tcp.pool") is Literal,
+    "a TCP-pool marker in a source comment must not affect scalar execution");
+foreach (var source in new[] {
+    "fnc main():int{return tcp.pool(1);}",
+    "fnc main():int{return pool.acquire_async(1);}",
+    "fnc main():int{return lease.exchange_async(42);}",
+    "fnc main():int{return await pool.acquire_async(1);}",
+    "fnc main():int{return rt share payload;}"
+})
+{
+    foreach (var parse in new Action<string>[] {
+        text => { _ = OresParser.Parse(text); },
+        text => { _ = OresStructuredParser.Parse(text); }
+    })
+    {
+        try { parse(source); }
+        catch (FormatException ex) when (!string.IsNullOrWhiteSpace(ex.Message)) { continue; }
+        throw new Exception("Unsupported TCP-pool guest effect reached .NET lowering: " + source);
+    }
+}
+// A model declaration must be explicitly denied before scalar IR/CIL emission.
+// Both public declaration orders share the same unsupported diagnostic.
+foreach (var source in new[] {
+    "define model PriceEstimate() as AddTax(10) end",
+    "define model x as Identity() end",
+    "define pub model PriceEstimate() as AddTax(10) end",
+    "pub define model PriceEstimate() as AddTax(10) end",
+    "define /* comment */ model PriceEstimate() as AddTax(10) end"
+})
+    RejectDiagnostic(() => OresParser.Parse(source), "MODEL_LOWERING_UNSUPPORTED",
+        "unlowered .NET nominal ModelGraph");
+Require(OresParser.Parse(
+    "fnc main():int{return 42;} /* define model Fake as Op() end */") is Literal,
+    "commented-out model declarations are inert");
+Require(OresParser.Parse(
+    "fnc main():int{return 42;} // define model Fake as Op() end") is Literal,
+    "model text in line comments remains inert");
+
+CriticalSuspendsBoundaryTests.Run(); // compiler-owned scalar admission, not runtime critical support
+AttoSemanticNegativeGateTests.Run(); // canonical .atto negatives + IR/CIL positive controls (not NativeAOT)
+AsyncOnlyIoPolicyTests.Run();
+CapabilityIoLifecycleV1SelfTest.Run();
+ActorStateSchemaAdmissionTests.Run();
+ActorStateLayoutIntegrationTests.Run();
+ActorGeneratedCounterTests.Run();
+DeclaredActorCounterV2Tests.Run();
 SourceByteBudgetTests.Run();
 ActorPipelineSelectorTests.Run(); // v1 selector-only contract
+ElmCompositionAdmissionTests.Run();
+HeapContainerSourceBoundaryTests.Run(); // actual scalar compiler fail-closed heap/container checks
+StructuralPatternAdmissionTests.Run();
+QuotedTemplateSourceTests.Run(); // real source lexers and single-quote import graph
+AdtSourceAdmissionTests.Run();
+NumericSeparatorParityTests.Run();
+ExplicitExportSyntaxTests.Run();
+CrossBackendCheckedI64ParityTests.Run();
+ActorHierarchyMlAdmissionTests.Run();
+AsyncInteropFailClosedTests.Run();
+EtsPgFailClosedTests.Run();
+await HostTaskObservationTests.Run();
+
+// Source actor syntax must fail at a semantic actor boundary, never as an
+// accidental scalar-fnc parse error. Legacy actors remain rejected outright;
+// canonical isolated actors first validate a bounded sealed state schema.
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define actor Worker as { pub fnc on_message(int n): int { return n; } }"),
+    "sealed state/handle_state and scheduler-owned logical continuation frames",
+    "legacy source actor must remain fail closed");
+
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as state { count: int = 0; enabled: bool = true; } " +
+        "pub increment(): int { return self.handle_state(critical |s| -> s.count); } end"),
+    "Source actor state schema parsed; sealed handle_state and generation-fenced logical-turn lowering is unavailable",
+    "canonical isolated actor schema must reach the precise lowering boundary");
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as state { count: int = 0; count: int = 1; } end"),
+    "Duplicate actor state field 'count'",
+    "duplicate isolated actor state field");
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as state { label: float = 0; } end"),
+    "Actor state schema admits only int/bool fields",
+    "unsupported isolated actor state type");
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as state { count: int = 9223372036854775808; } end"),
+    "Actor int state default overflows signed i64",
+    "isolated actor state i64 overflow");
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as state { count: int = -9223372036854775808; } end"),
+    "Source actor state schema parsed; sealed handle_state and generation-fenced logical-turn lowering is unavailable",
+    "signed i64 minimum actor state default reaches the lowering boundary");
+var actorStateOverflowFields = string.Join(" ", Enumerable.Range(0, 17)
+    .Select(i => $"f{i}: int = 0;"));
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as state { " + actorStateOverflowFields + " } end"),
+    "Actor state schema field limit exceeded (16)",
+    "isolated actor state field count is bounded");
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as state { enabled: bool = 1; } end"),
+    "Actor bool state default must be true or false",
+    "isolated actor bool default");
+RejectDiagnostic(
+    () => OresParser.Parse("define isolated actor Counter as state { } end"),
+    "Actor state schema requires at least one field",
+    "isolated actor empty state schema");
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as let count: int = 0; end"),
+    "Isolated actor requires sealed state",
+    "isolated actor cannot fall back to legacy scalar fields");
+Require(OresParser.Parse(
+    "fnc main():int{return 1;} /* define isolated actor Ghost as state { count:int=0; } */") is Literal,
+    "actor keywords in comments remain lexically invisible");
+Reject(() => OresParser.Parse("fnc main():int { return 1=2; }"), "assignment expression");
+Reject(() => OresParser.Parse("fnc main():int { const x = 1; return x; }"), "local assignment");
+
+// Immutable-default v1 / five-backend admission (common-source #203).
+// Shipping scalar .NET has no locals. Reject all new spellings BEFORE
+// CIL/Native AOT emission; a generic parse rejection is not proof that
+// readonly semantics have been implemented. The structured path is
+// separately staged in #201/#282 and requires real Native AOT validation.
+foreach (var source in new[] {
+    "fnc main():int { int x = 7; return x; }",
+    "fnc main():int { const x = 7; return x; }",
+    "fnc main():int { const int x = 7; return x; }",
+    "fnc main():int { const x: int = 7; return x; }",
+    "fnc main():int { int x = 7; int y = x * 3; return y; }",
+    "fnc main():int { int x = 7; x = 8; return x; }",
+    "fnc main():int { int x = 7; x += 1; return x; }",
+    "fnc main():int { const x = 7; x = 8; return x; }",
+    "fnc main():int { int x = x + 1; return x; }",
+    "fnc main():int { int x = y; int y = 7; return x; }",
+    "fnc main():int { int x = 7; int x = 8; return x; }",
+    "fnc main():int { const x; return 7; }",
+    "fnc main():int { const x = undefined_name; return x; }",
+    "fnc main():int { string x = 7; return 0; }",
+    "fnc main():int { const unused = 9223372036854775807 + 1; return 7; }",
+    "fnc main(int x):int { const y = x + 1; return y; }"
+}) {
+    Reject(() => OresParser.Parse(source),
+        "shipping scalar compiler must fail closed on immutable-default locals");
+}
+// False keyword detection from comments would change scalar semantics.
+Require(OresParser.Parse("fnc main():int{return 42;} // const x = 7;") is Literal,
+    "immutable declaration comment must not be compiled as a binding");
+
+
+// The .NET scalar compiler must NOT claim guest access to host slab pins or
+// raw TCP pooling until a typed actor-ownership lowering and NativeAOT
+// transport boundary are actually implemented.
+foreach (var source in new[] {
+    "fnc main():int{return FrozenTcpSlab.pin();}",
+    "fnc main():int{return FrozenBytes.read_at(0);}",
+    "fnc main():int{return SharedBuffer.pin();}",
+    "fnc main():int{return TcpPool.acquire_async();}",
+    "fnc main():int{return rt share socket;}",
+    "fnc main():int{return rt mut share socket;}"
+}) {
+    Reject(() => OresParser.Parse(source),
+        "unsupported host-only TCP slab or guest pooling source");
+}
+
+FrozenTcpSlabSelfTest.Run(); // host-only immutable shared-buffer parity
+TcpPoolLeaseLedgerSelfTest.Run(); // trusted TCP lease authority, no socket I/O
+await TcpPoolPhysicalCloseLoopbackSelfTest.RunAsync(); // host-only real TCP close fence
+ActorIoEnvelopeSelfTest.Run();
 ActorRefNoWireSelfTest.Run();
 ActorMailboxBoundsSelfTest.Run();
+SelectContinuationFenceSelfTest.Run();
 ActorMailboxRestartAtomicitySelfTest.Run();
+ActorFinalizationV1SelfTest.Run();
 ActorMailboxAuthorizationPrioritySelfTest.Run();
+ActorMailboxPrivateDataSelfTest.Run();
+ActorArenaSelfTest.Run();
+StateRegionLoanProvenanceSelfTest.Run();
+ActorIsolationAccessV1SelfTest.Run();
+ActorShardColumnsSelfTest.Run();
+SelectArbiterSelfTest.Run();
+SelectableI64ChannelSelfTest.Run();
+BoundedDemandI64PortSelfTest.Run(); // host scalar adapter; NOT source Flow<T> or Native AOT guest proof
+SelectableI64FutureSelfTest.Run();
+ActorDispatchDomainsSelfTest.Run();
+ActorRuntimeSelfTest.Run();
+ActorRuntimeGracefulDrainSelfTest.Run(); // HOST only; not guest pipe lowering
+SupervisorDataFenceParitySelfTest.Run(); // HOST only; stop-vs-send and sibling parity
+ActorPubSubSelfTest.Run();
+ActorPubSubTurnAuthorityTests.Run();
+ActorPubSubByteQuotaTests.Run();
+ActorPubSubSourceAdmissionTests.Run();
+ActorPipeAdmissionTests.Run(); // compiler gate only; no executable actor guest yet
+ActorPipeSourcePlanV1SelfTest.Run(); // checked scalar CIL oracle, not actor delivery
+NativeTraceContinuationV1SelfTest.Run(); // host-owned W3C scopes; not guest CIL instrumentation
+UniversalHotLoadV1SelfTest.Run();
+ActorFrameStackSelfTest.Run(); // host-only actor logical frames; not guest/AOT evidence
+ActorGuestFrameGateSelfTest.Run(); // terminal compiled-guest frame seam, host-only
+ActorScalarFrameAbiSelfTest.Run(); // verified CFG layout/native spill boundary, not guest execution
+BatchedCheckpointV1SelfTest.Run(); // host contract only; no compiled guest safepoints yet
+CfgActorScalarBoundaryPlanSelfTest.Run(); // compiler-only verified CFG liveness; NOT guest CIL
+ProjectRootSourceTests.Run(); // host-only resolver, not linked .NET source imports
+ActorNativeArenaSelfTest.Run();
 
 // Import parity is deliberately not claimed for the .NET scalar compiler.
 // Each form must fail at lexical admission with a specific import diagnostic,
 // before either typed IR verification or Native AOT CIL emission.
 foreach (var path in new[] {
     "+/src/helper", "+src/helper", "@/src/helper", "pkg:math/src/helper", "./helper",
-    "../helper", "common/helper", ".hidden/helper"
+    "../helper", "common/helper", ".hidden/helper",
+    "+/src//helper", "+/src/./helper", "+/src/../helper",
+    "pkg:math/src/../helper", @"pkg:math\src\helper",
+    "+/../outside", "+//src/helper", @"+/src\helper",
+    "pkg:missing/helper", "+/nested/lib/child", "+/nested/parent-alias",
+    "+/dangling/lib/child"
 })
 {
     try
@@ -47,9 +725,68 @@ foreach (var path in new[] {
             StringComparison.Ordinal)) { continue; }
     throw new Exception("Unsupported import was not rejected for the right reason: " + path);
 }
+// Every supported line separator ends a comment. Otherwise a single-file
+// parser can emit an unrelated successful artifact while silently ignoring
+// an import that begins on the next logical line.
+foreach (var separator in new[] { "\r", "\r\n", "\n", "\u0085", "\u2028", "\u2029" })
+{
+    var withImport = "fnc main():int{return 42;} // comment" + separator +
+        "import fnc helper from \"./other\";";
+    foreach (var parse in new Action<string>[] {
+        source => { _ = OresParser.Parse(source); },
+        source => { _ = OresStructuredParser.Parse(source); }
+    })
+    {
+        try { parse(withImport); }
+        catch (FormatException ex) when
+            (ex.Message.Contains("source imports require verified module graph lowering",
+                StringComparison.Ordinal)) { continue; }
+        throw new Exception("A line separator hid an import from a .NET parser");
+    }
+}
+Require(OresParser.Parse("fnc main():int{return 42;} // import\r") is Literal,
+    "CR-only trailing comment must not be interpreted as an import");
+
 Require(OresParser.Parse("fnc main():int{return 42;} // import not code") is Literal,
     "import in a comment must not be treated as an import declaration");
 
+
+foreach (var operation in new[] { "ref", "unref", "deref", "deref mut", "raw" })
+{
+    try { _ = OresParser.Parse($"fnc main():int{{return rt {operation} value;}}"); }
+    catch (FormatException ex) when
+        (ex.Message.Contains("is not valid Oreslang source",
+            StringComparison.Ordinal)) { continue; }
+    throw new Exception("Unsupported pointer operation did not fail closed: rt " + operation);
+}
+
+
+foreach (var operation in new[] { "copy", "share", "take", "borrow", "mut borrow" })
+{
+    try { _ = OresParser.Parse($"fnc main():int{{return rt {operation} value;}}"); }
+    catch (FormatException ex) when
+        (ex.Message.Contains("requires typed actor-arena lowering",
+            StringComparison.Ordinal)) { continue; }
+    throw new Exception("Unsupported ownership operation did not fail closed: rt " + operation);
+}
+try
+{
+    _ = OresParser.Parse("fnc main():int{return rt borrow mut value;}");
+    throw new Exception("Legacy rt borrow mut spelling was admitted");
+}
+catch (FormatException ex) when
+    (ex.Message.Contains("use 'rt mut borrow'", StringComparison.Ordinal)) { }
+
+
+foreach (var forbiddenSource in new[] {
+    "fnc main():int{return &value;}",
+    "fnc main():int{return &mut value;}",
+    "fnc main():int{return *value;}",
+    "fnc main():int{return rt borrow mut value;}",
+    "fnc main():Pointer<int>{return value;}"
+})
+    Reject(() => OresParser.Parse(forbiddenSource),
+        "pointer/reference spellings and legacy mutable-borrow syntax");
 
 foreach (var invalid in new[] { "\0", "\ud800", "\udc00", "\ud800x" })
     Reject(() => OresParser.Parse("fnc main():int{return 1;} // " + invalid),
@@ -87,6 +824,12 @@ foreach (var expr in new[] {
     try { OresParser.Parse("fnc main():int{return " + expr + ";}"); }
     catch (FormatException ex) when (ex.Message.Contains("pipeline requires named callable lowering",
             StringComparison.OrdinalIgnoreCase)) { continue; }
+    // Option/Result words are refused by the lexer (#328) before the
+    // pipeline is seen. That is also fail-closed, but only accepted for the
+    // inputs that actually name Option or Result.
+    catch (FormatException ex) when ((expr.Contains("Option") || expr.Contains("Result")) &&
+        ex.Message.StartsWith("Option/Result/trap requires verified tagged-sum CIL",
+            StringComparison.Ordinal)) { continue; }
     throw new Exception("Unsupported value pipeline must fail closed: " + expr);
 }
 Require(OresParser.Parse("fnc main():int{return 1;} // 1 |> unsupported") is Literal,
@@ -105,6 +848,29 @@ catch (FormatException ex) when (ex.Message.Contains("Unterminated block comment
 Reject(() => OresParser.Parse("fnc main():int{return 1; /*".PadRight(150, '/') + "/*x*/;}"),
     "malformed unclosed nested comments");
 
+// Refinement types are design-only on .NET. Until checked construction and
+// invariant-preserving lowering exist, reject every proposed surface family
+// rather than silently erasing constraints to the scalar base type.
+Require(OresParser.Parse("fnc main():int{return 42;}") is Literal,
+    "refinement rejection control must compile in the scalar subset");
+foreach (var refinement in new[] {
+    "@Size(min=1,max=32) type Username = string; fnc main():int{return 42;}",
+    "type NonEmpty = string with length gt 0; fnc main():int{return 42;}",
+    "type NonBlank = string where it.trim().length > 0; fnc main():int{return 42;}",
+    "define newtype Username(string) with length gte 1; fnc main():int{return 42;}",
+    "type Port = int with value gte 1 and value lte 65535; fnc main():int{return 42;}",
+    "type Port = int with value >= 1 and value <= 65535; fnc main():int{return 42;}",
+    "type Percentage = int with value gte 0 and value lte 100; fnc main():int{return 42;}",
+    "type Percentage = int with value >= 0 and value <= 100; fnc main():int{return 42;}",
+    "type Legacy = int with value ge 1; fnc main():int{return 42;}",
+    "type Legacy = int with value le 10; fnc main():int{return 42;}",
+    "type T = string with length gt 0 or length eq 10; fnc main():int{return 42;}"
+})
+{
+    Reject(() => OresParser.Parse(refinement),
+        "unsupported refinement syntax must fail closed before CIL emission");
+}
+
 var positive = OresParser.Parse("define pub fnc main() : int { return 2 + 3 * 4; }");
 Require(positive is Binary { Operator: '+' }, "top-level expression shape");
 Require(OresParser.Parse("define pub fnc main() -> int { return 2 + 3 * 4; }")
@@ -121,6 +887,11 @@ Reject(() => OresParser.Parse("fnc main():int{return 3; } extra"), "trailing syn
 Reject(() => OresParser.Parse("pub pub fnc main():int{return 3;}"), "duplicate pub");
 Reject(() => OresParser.Parse("fnc main():int{return 9223372036854775808;}"), "i64 range");
 Reject(() => OresParser.Parse("fnc main():int{return 1 @ 3;}"), "illegal character");
+foreach (string real in new[] { "0.125", "1e10", "1E-10", "123.456d", "123d",
+                               "1_000.5", "1_0e+2", "1_2d" })
+    RejectDiagnostic(() => OresParser.Parse("fnc main():int{return " + real + ";}"),
+        "Floating-point/decimal literal requires typed numeric lowering",
+        "real/decimal literal must fail before token splitting: " + real);
 Reject(() => OresParser.Parse("fnc main():int{return (1+2;}"), "unmatched parentheses");
 
 // Typed OresIR stage-one verification: no forward SSA references,
@@ -458,8 +1229,23 @@ static byte[] PendingOwnedBuffer(ActorMailbox actor)
 {
     var field = typeof(ActorMailbox).GetField("_messages",
         System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-    Require(field is not null, "mailbox test can inspect private queue");
-    return ((Queue<byte[]>)field!.GetValue(actor)!).Peek();
+    var messages = field?.GetValue(actor) as System.Collections.IEnumerable;
+    Require(messages is not null && actor.QueuedMessages == 1,
+        "mailbox test can inspect exactly one pending envelope");
+    var iterator = messages!.GetEnumerator();
+    Require(iterator.MoveNext(), "mailbox test has a pending envelope");
+    var envelope = iterator.Current;
+    Require(envelope is not null && !iterator.MoveNext(),
+        "mailbox test has exactly one pending envelope");
+    var envelopeType = envelope!.GetType();
+    var flags = System.Reflection.BindingFlags.Instance |
+        System.Reflection.BindingFlags.Public;
+    var isControl = envelopeType.GetProperty("IsControl", flags)?.GetValue(envelope);
+    Require(isControl is bool control && !control,
+        "mailbox test inspects a USER envelope, never scheduler control");
+    var owned = envelopeType.GetProperty("Payload", flags)?.GetValue(envelope) as byte[];
+    Require(owned is not null, "mailbox test captures owned USER payload");
+    return owned!;
 }
 
 var originalInput = new byte[] { 9, 8, 7, 6 };
@@ -485,15 +1271,46 @@ Require(restartActor.QueuedMessages == 0, "restart clears pending messages");
 
 
 int count = 0;
-Require(RuntimeHost.Execute(() => { count++; return 7; }) == 0 && count == 1,
+Require(await RuntimeHost.ExecuteAsync(() => { count++; return 7; }) == 0 && count == 1,
     "runtime host invokes entry once");
-Require(RuntimeHost.Execute(() => throw new OverflowException()) == 70,
+Require(await RuntimeHost.ExecuteAsync(() => throw new OverflowException()) == 70,
     "overflow error returned");
-Require(RuntimeHost.Execute(() => throw new DivideByZeroException()) == 70,
+Require(await RuntimeHost.ExecuteAsync(() => throw new DivideByZeroException()) == 70,
     "divide zero error returned");
 
+ActorCooperationMeterTests.Run(); // host-only, not compiled guest preemption
+ManagedSourceEmitterTests.Run();
+SourceI64Conformance.Run();
+HpcFinanceRiskHostParityTests.Run(); // host oracle + source rejection, not .NET f64 guest parity
+SharedScalarParityConformance.Run();
+AttoXpScalarParityTests.Run(); // pinned .atto scalar IR + CIL evaluator only
 CfgVerifierTests.Run();
 CfgCilStressTests.Run();
+SupervisorStopLedgerSelfTest.Run();
+// The canonical Atto telemetry syntax is not an ordinary CIL call.
+// Both public frontends must reject it *specifically* until exception-safe
+// compiler lowering and NativeAOT runtime attachment are actually present.
+foreach (string source in new[] {
+    "fnc main():int{using telemetry.span() as span {return 42;}}",
+    "fnc main():int{using/*nested*/telemetry./*separator*/span() as span{return 42;}}"
+})
+{
+    RejectDiagnostic(() => OresParser.Parse(source), "E_TELEMETRY_SCOPE_UNSUPPORTED",
+        "scalar compiler cannot silently accept telemetry using syntax");
+    RejectDiagnostic(() => OresStructuredParser.Parse(source), "E_TELEMETRY_SCOPE_UNSUPPORTED",
+        "structured compiler cannot silently accept telemetry using syntax");
+}
+Require(OresStructuredParser.Parse(
+    "fnc main():int{/* using telemetry.span() as span {} */return 42;}").Body.Count == 1,
+    "commented telemetry syntax cannot affect NativeAOT admission");
 StructuredSourceTests.Run();
+StructuredCfgLoweringTests.Run();
+AttoEqualityNativeAotCandidateTests.Run();
+StructuredStaticAbiTests.Run();
+NominalEnumV1GuestTests.Run(); // verified .atto enum source -> real CFG/CIL; native execution separately
+NominalEnumFunctionV2GuestTests.Run(); // source-nominal arg/result -> actual private MethodDef call
+ExplicitReturnFlowTests.Run(); // nonvoid explicit + void fallthrough CIL proof
+StaticFactsV0Tests.Run();
 ValueBoundaryTests.Run();
 Console.WriteLine("Oreslang .NET bootstrap, CFG verifier, CIL stress and structured source tests passed");
+

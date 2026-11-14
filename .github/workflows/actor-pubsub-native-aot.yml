@@ -1,0 +1,77 @@
+name: Actor pubsub NativeAOT runtime and source-gate exact head
+
+on:
+  push:
+    branches: [feat/actor-pubsub-v1]
+  pull_request:
+    paths:
+      - 'runtime/Ores.Net.Runtime/ActorPubSub.cs'
+      - 'runtime/Ores.Net.Runtime/ActorRuntime.cs'
+      - 'compiler/Ores.Net.Compiler.Core/ActorPubSubSourceAdmission.cs'
+      - 'verification/Ores.Net.Tests/ActorPubSub*'
+      - 'verification/Ores.Net.ActorPubSubProbe/**'
+      - 'contracts/v1/fixtures/actor-pubsub*'
+      - '.github/workflows/actor-pubsub-native-aot.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  native-runtime:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            rid: linux-x64
+            binary: Ores.Net.ActorPubSubProbe
+          - os: windows-2022
+            rid: win-x64
+            binary: Ores.Net.ActorPubSubProbe.exe
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact, clean source checkout
+        shell: bash
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          test -z "$(git status --porcelain)"
+          echo "PUBSUB_EXACT_HEAD=$EXPECTED TREE=$(git rev-parse 'HEAD^{tree}')"
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install Linux NativeAOT toolchain
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev binutils
+      - name: Execute source rejection corpus and managed runtime cases
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release |
+            tee "$RUNNER_TEMP/pubsub-managed.log"
+          grep -Fx 'PASS .NET ActorGroup pub-sub bounded delivery, multi-membership and lifecycle cleanup' "$RUNNER_TEMP/pubsub-managed.log"
+          grep -Fx 'PASS .NET bounded pubsub turn authority, membership epochs and quotas' "$RUNNER_TEMP/pubsub-managed.log"
+          grep -Fx 'PASS .NET pubsub 64MiB bounded all-or-nothing' "$RUNNER_TEMP/pubsub-managed.log"
+          grep -Fx 'PASS .NET pub-sub source corpus fails closed before scalar/structured lowering' "$RUNNER_TEMP/pubsub-managed.log"
+      - name: Compile and execute actual NativeAOT pubsub host binary
+        shell: bash
+        env:
+          RID: ${{ matrix.rid }}
+          BINARY: ${{ matrix.binary }}
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/pubsub-native"
+          dotnet publish verification/Ores.Net.ActorPubSubProbe/Ores.Net.ActorPubSubProbe.csproj \
+            -c Release -r "$RID" -p:PublishAot=true -p:SelfContained=true -o "$output"
+          test -f "$output/$BINARY"
+          "$output/$BINARY" | tee "$RUNNER_TEMP/pubsub-native.log"
+          grep -Fx 'PASS NET_PUBSUB_NATIVE_AOT_HOST_ADMISSION_AND_TURN_FENCES' "$RUNNER_TEMP/pubsub-native.log"
+          echo "PUBSUB_NATIVE_AOT_HOST_EXECUTED RID=$RID SHA=$(git rev-parse HEAD)"

@@ -1,0 +1,5 @@
+# Exact source snapshots approved for a specific private CI destination repository ID.
+# No snapshots are approved by default.
+# Format: source_commit_40hex source_root_tree_40hex destination_repository_id
+# CANDIDATE PR258 (inactive): 8048916de1c2da64f9d84359fdddcd0ab891bf35 1e549c49fcd222bcab22c5aff634d6a0d594ed0b 1346492776
+# CANDIDATE PR259 (inactive): 03f8eefa3dd7071b024920c166ca0e8af682a04b acbdf0050b4ec07c4f781b8bc272569510c3dec2 1346492776

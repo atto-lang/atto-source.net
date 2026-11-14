@@ -1,0 +1,1104 @@
+using System.Buffers.Binary;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Threading;
+
+namespace Ores.Net.Runtime;
+
+/// <summary>
+/// Opaque actor-private persistent allocation capability. The offset and arena
+/// authority are intentionally not public. Exact reference identity is required;
+/// metadata-equivalent reconstructed objects are not issued capabilities.
+/// </summary>
+public sealed class ActorArenaHandle
+{
+    private readonly Guid _authority;
+    private readonly int _slot;
+    private readonly ulong _generation;
+    private readonly ulong _actorId;
+    private readonly ulong _incarnation;
+
+    public int Length { get; }
+
+    internal ActorArenaHandle(Guid authority, int slot, ulong generation,
+        ulong actorId, ulong incarnation, int length)
+    {
+        _authority = authority;
+        _slot = slot;
+        _generation = generation;
+        _actorId = actorId;
+        _incarnation = incarnation;
+        Length = length;
+    }
+
+    internal Guid Authority => _authority;
+    internal int Slot => _slot;
+    internal ulong Generation => _generation;
+    internal ulong ActorId => _actorId;
+    internal ulong Incarnation => _incarnation;
+}
+
+/// <summary>
+/// Turn-scoped scratch allocation. Scratch capabilities are invalidated when
+/// the physical actor turn exits, regardless of whether the next carrier is
+/// the same operating-system thread. Only exact issued objects are accepted.
+/// </summary>
+public sealed class ActorScratchHandle
+{
+    private readonly Guid _authority;
+    private readonly ulong _epoch;
+    private readonly int _offset;
+
+    public int Length { get; }
+
+    internal ActorScratchHandle(Guid authority, ulong epoch, int offset, int length)
+    {
+        _authority = authority;
+        _epoch = epoch;
+        _offset = offset;
+        Length = length;
+    }
+
+    internal Guid Authority => _authority;
+    internal ulong Epoch => _epoch;
+    internal int Offset => _offset;
+}
+
+/// <summary>
+/// One admitted physical actor turn. There may be at most one active turn for
+/// an ActorArena. Dispose is the mandatory scratch-reset and quiescence edge.
+/// </summary>
+public sealed class ActorArenaTurn : IDisposable
+{
+    private int _released;
+
+    internal ActorArenaTurn(ActorArena arena, Guid authority, ulong actorId,
+        ulong incarnation, ulong epoch)
+    {
+        Arena = arena;
+        Authority = authority;
+        ActorId = actorId;
+        Incarnation = incarnation;
+        Epoch = epoch;
+    }
+
+    internal ActorArena Arena { get; }
+    internal Guid Authority { get; }
+    internal ulong ActorId { get; }
+    internal ulong Incarnation { get; }
+    internal ulong Epoch { get; }
+    internal bool Released => Volatile.Read(ref _released) != 0;
+
+    // Physical turns must be closed by their admitting carrier. Validation and
+    // the released flag transition happen atomically under the arena gate.
+    // A stolen Dispose must not poison this token or free scratch memory.
+    public void Dispose() => Arena.ReleaseTurn(this);
+
+    internal void MarkReleased() => Volatile.Write(ref _released, 1);
+}
+
+/// <summary>
+/// Read-only lifetime loan for one persistent allocation. The loan may survive
+/// a turn/suspension, but it grants no out-of-turn dereference API. While live,
+/// mutation and drop of the allocation are denied and arena reclamation waits.
+/// </summary>
+public sealed class ActorArenaReadLoan : IDisposable
+{
+    private ActorArena? _arena;
+    private int _released;
+
+    internal ActorArenaReadLoan(ActorArena arena, Guid authority, int slot,
+        ulong generation, ulong actorId, ulong incarnation, int length)
+    {
+        _arena = arena;
+        Authority = authority;
+        Slot = slot;
+        Generation = generation;
+        ActorId = actorId;
+        Incarnation = incarnation;
+        Length = length;
+    }
+
+    internal Guid Authority { get; }
+    internal int Slot { get; }
+    internal ulong Generation { get; }
+    internal ulong ActorId { get; }
+    internal ulong Incarnation { get; }
+    public int Length { get; }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _released, 1) != 0)
+            return;
+        var arena = Interlocked.Exchange(ref _arena, null);
+        arena?.ReleaseReadLoan(this);
+    }
+}
+
+/// <summary>
+/// Lifetime-only pin for an async continuation, FFI operation, or I/O callback.
+/// It deliberately exposes no byte/handle access. Release may happen on a
+/// different carrier and is idempotent.
+/// </summary>
+public sealed class ActorArenaLifetimePin : IDisposable
+{
+    private ActorArena? _arena;
+    private int _released;
+
+    internal ActorArenaLifetimePin(ActorArena arena, Guid authority)
+    {
+        _arena = arena;
+        Authority = authority;
+    }
+
+    internal Guid Authority { get; }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _released, 1) != 0)
+            return;
+        var arena = Interlocked.Exchange(ref _arena, null);
+        arena?.ReleaseLifetimePin(this);
+    }
+}
+
+/// <summary>
+/// Bounded actor-owned unmanaged storage for .NET Native AOT.
+///
+/// Persistent bytes survive actor turns. Scratch bytes are bulk-zeroed on every
+/// turn exit. Persistent slots are generation-fenced and partial frees never
+/// move live values. The byte bump pointer is recycled only after the last live
+/// persistent allocation is dropped. In demand-backed mode the physical slab
+/// may relocate under the arena gate while *logical offsets and issued handle
+/// identities remain stable*. No guest/raw pointer escapes this API.
+///
+/// This is a host-runtime substrate, not yet general Oreslang guest-object
+/// lowering and not a security sandbox. Managed control metadata remains on the
+/// CLR heap; actor payload bytes live in NativeMemory allocations.
+/// </summary>
+public unsafe sealed class ActorArena : IDisposable
+{
+    public const int MaxArenaBytes = 64 * 1024 * 1024;
+    public const int MaxAllocationSlots = 65_536;
+    public const int MaxOutstandingLifetimePins = 65_536;
+    public const int MaxOutstandingReadLoans = 65_536;
+    public const int MaxScratchCapabilitiesPerTurn = 65_536;
+    public const int MaxManagedRef32Edges = 65_536;
+
+    private const int SlabAlignment = 64;
+
+    private struct Slot
+    {
+        internal int Offset;
+        internal int Length;
+        internal ulong Generation;
+        internal int ReadLoans;
+        internal bool Live;
+        internal ActorArenaHandle? Issued;
+    }
+
+    private readonly object _gate = new();
+    private readonly ulong _actorId;
+    private readonly ulong _incarnation;
+    private readonly Guid _authority;
+    private readonly int _persistentCapacity;
+    private readonly int _scratchCapacity;
+    private readonly int _persistentPhysicalBytes;
+    private readonly int _scratchPhysicalBytes;
+    private readonly int _maxLifetimePins;
+    private readonly int _maxReadLoans;
+    private readonly ActorArenaBudget _budget;
+    private readonly int _budgetBytes;
+    private readonly bool _demandBacked;
+    private int _persistentCommitted;
+    private int _scratchCommitted;
+    private readonly Slot[] _slots;
+    private readonly int[] _freeSlots;
+    // Only exact issued objects carry authority, including lifetime-only tokens.
+    private readonly HashSet<ActorScratchHandle> _issuedScratch =
+        new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<ActorArenaReadLoan> _issuedReadLoans =
+        new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<ActorArenaLifetimePin> _issuedLifetimePins =
+        new(ReferenceEqualityComparer.Instance);
+
+    // Guest object fields contain only 4-byte actor-local words. They are NOT
+    // capabilities. An original-generation target proof is retained out of
+    // line per issued parent/field; never reconstruct it from an offset.
+    private readonly Dictionary<ActorArenaHandle, Dictionary<int, ActorArenaHandle>>
+        _managedRef32Edges = new(ReferenceEqualityComparer.Instance);
+    private int _managedRef32EdgeCount;
+
+    private byte* _persistent;
+    private byte* _scratch;
+    private int _nextSlot;
+    private int _freeSlotCount;
+    private int _liveAllocations;
+    private int _persistentHighWater;
+    private int _persistentLiveBytes;
+    private int _scratchHighWater;
+    private int _externalPins;
+    private int _readLoans;
+    private ulong _turnEpoch;
+    private bool _turnActive;
+    private ActorArenaTurn? _activeTurn;
+    private Thread? _activeCarrier;
+    private bool _retired;
+    private bool _reclaimed;
+    private bool _budgetRefunded;
+    private bool _processBudgetReserved;
+
+    public ActorArena(ulong actorId, ulong incarnation,
+        int persistentBytes = 8 * 1024 * 1024,
+        int scratchBytes = 1024 * 1024,
+        int maxAllocations = 4096,
+        int maxLifetimePins = 4096,
+        int maxReadLoans = 4096,
+        ActorArenaBudget? budget = null,
+        bool demandBacked = false)
+    {
+        if (actorId == 0)
+            throw new ArgumentOutOfRangeException(nameof(actorId));
+        if (incarnation == 0)
+            throw new ArgumentOutOfRangeException(nameof(incarnation));
+        if (persistentBytes <= 0)
+            throw new ArgumentOutOfRangeException(nameof(persistentBytes));
+        if (scratchBytes <= 0)
+            throw new ArgumentOutOfRangeException(nameof(scratchBytes));
+        if (persistentBytes > MaxArenaBytes || scratchBytes > MaxArenaBytes ||
+            persistentBytes > MaxArenaBytes - scratchBytes)
+            throw new ArgumentOutOfRangeException(nameof(persistentBytes),
+                "Actor arena persistent + scratch capacity exceeds 64 MiB");
+        if (maxAllocations <= 0 || maxAllocations > MaxAllocationSlots)
+            throw new ArgumentOutOfRangeException(nameof(maxAllocations));
+        if (maxLifetimePins <= 0 || maxLifetimePins > MaxOutstandingLifetimePins)
+            throw new ArgumentOutOfRangeException(nameof(maxLifetimePins));
+        if (maxReadLoans <= 0 || maxReadLoans > MaxOutstandingReadLoans)
+            throw new ArgumentOutOfRangeException(nameof(maxReadLoans));
+
+        _actorId = actorId;
+        _incarnation = incarnation;
+        _persistentCapacity = persistentBytes;
+        _scratchCapacity = scratchBytes;
+        _persistentPhysicalBytes = RoundUp(persistentBytes, SlabAlignment);
+        _scratchPhysicalBytes = RoundUp(scratchBytes, SlabAlignment);
+        _maxLifetimePins = maxLifetimePins;
+        _maxReadLoans = maxReadLoans;
+        _budget = budget ?? ActorArenaBudget.Process;
+        _demandBacked = demandBacked;
+        _budgetBytes = checked(_persistentPhysicalBytes + _scratchPhysicalBytes);
+        _slots = new Slot[maxAllocations];
+        _freeSlots = new int[maxAllocations];
+
+        // Dynamic mode admits only the logical quota at construction. Native
+        // residency and the tenant/process charge follow actual allocation.
+        if (_demandBacked)
+        {
+            _authority = Guid.NewGuid();
+            if (_authority == Guid.Empty)
+                throw new InvalidOperationException("Actor arena authority must not be empty");
+            return;
+        }
+
+        _budget.Reserve(_budgetBytes);
+        try
+        {
+            // Runtime/tenant budgets cannot bypass the process-wide cap.
+            if (!ReferenceEquals(_budget, ActorArenaBudget.Process))
+            {
+                ActorArenaBudget.Process.Reserve(_budgetBytes);
+                _processBudgetReserved = true;
+            }
+
+            _authority = Guid.NewGuid();
+            if (_authority == Guid.Empty)
+                throw new InvalidOperationException(
+                    "Actor arena authority must not be empty");
+
+            _persistent = (byte*)NativeMemory.AlignedAlloc(
+                checked((nuint)_persistentPhysicalBytes), (nuint)SlabAlignment);
+            if (_persistent == null)
+                throw new OutOfMemoryException(
+                    "Unable to reserve persistent actor arena");
+
+            _scratch = (byte*)NativeMemory.AlignedAlloc(
+                checked((nuint)_scratchPhysicalBytes), (nuint)SlabAlignment);
+            if (_scratch == null)
+                throw new OutOfMemoryException("Unable to reserve actor scratch arena");
+
+            Zero(_persistent, _persistentPhysicalBytes);
+            Zero(_scratch, _scratchPhysicalBytes);
+            _persistentCommitted = _persistentPhysicalBytes;
+            _scratchCommitted = _scratchPhysicalBytes;
+        }
+        catch
+        {
+            if (_scratch != null)
+            {
+                NativeMemory.AlignedFree(_scratch);
+                _scratch = null;
+            }
+            if (_persistent != null)
+            {
+                NativeMemory.AlignedFree(_persistent);
+                _persistent = null;
+            }
+            if (_processBudgetReserved)
+            {
+                ActorArenaBudget.Process.Refund(_budgetBytes);
+                _processBudgetReserved = false;
+            }
+            _budget.Refund(_budgetBytes);
+            _budgetRefunded = true;
+            throw;
+        }
+    }
+
+    public ulong ActorId => _actorId;
+    public ulong Incarnation => _incarnation;
+    public int PersistentCapacityBytes => _persistentCapacity;
+    public int ScratchCapacityBytes => _scratchCapacity;
+    public int ReservedNativeBytes
+    {
+        get { lock (_gate) return _persistentCommitted + _scratchCommitted; }
+    }
+    public bool DemandBacked => _demandBacked;
+
+    public bool IsRetired
+    {
+        get { lock (_gate) return _retired; }
+    }
+
+    public bool IsReclaimed
+    {
+        get { lock (_gate) return _reclaimed; }
+    }
+
+    public int PersistentLiveBytes
+    {
+        get { lock (_gate) return _persistentLiveBytes; }
+    }
+
+    public int LiveAllocations
+    {
+        get { lock (_gate) return _liveAllocations; }
+    }
+
+    public int OutstandingReadLoans
+    {
+        get { lock (_gate) return _readLoans; }
+    }
+
+    public int OutstandingLifetimePins
+    {
+        get { lock (_gate) return _externalPins; }
+    }
+
+    /// <summary>
+    /// Admit one physical turn. Actor identity is independent of carrier threads
+    /// across turns, but each live turn is bound to its admitting carrier.
+    /// Async suspension must end the physical turn and resume in a new turn.
+    /// </summary>
+    public ActorArenaTurn EnterTurn(ulong actorId, ulong incarnation)
+    {
+        lock (_gate)
+        {
+            EnsureNotReclaimedLocked();
+            if (_retired)
+                throw new InvalidOperationException("Actor arena is retired");
+            if (actorId != _actorId || incarnation != _incarnation)
+                throw new InvalidOperationException("Foreign actor cannot enter arena");
+            if (_turnActive)
+                throw new InvalidOperationException("Actor already has an active physical turn");
+            if (_turnEpoch == ulong.MaxValue)
+                throw new OverflowException("Actor arena turn epoch exhausted");
+
+            ulong nextEpoch = _turnEpoch + 1;
+            var admitted = new ActorArenaTurn(
+                this, _authority, _actorId, _incarnation, nextEpoch);
+            _turnEpoch = nextEpoch;
+            _activeTurn = admitted;
+            _activeCarrier = Thread.CurrentThread;
+            _turnActive = true;
+            return admitted;
+        }
+    }
+
+    /// <summary>
+    /// Allocate persistent actor-private bytes. Returned storage is zeroed.
+    /// Partial frees are non-compacting; the bump region resets only once all
+    /// persistent allocations are gone.
+    /// </summary>
+    public ActorArenaHandle AllocatePersistent(ActorArenaTurn turn, int bytes,
+        int alignment = 8)
+    {
+        if (bytes <= 0)
+            throw new ArgumentOutOfRangeException(nameof(bytes));
+        ValidateAlignment(alignment);
+
+        lock (_gate)
+        {
+            ValidateTurnLocked(turn);
+            EnsureAdmissionOpenLocked();
+
+            int aligned = AlignUp(_persistentHighWater, alignment);
+            if (aligned > _persistentCapacity ||
+                bytes > _persistentCapacity - aligned)
+                throw new InvalidOperationException("Actor persistent arena capacity exhausted");
+
+            if (_freeSlotCount == 0 && _nextSlot == _slots.Length)
+                throw new InvalidOperationException("Actor persistent allocation slots exhausted");
+
+            // Do not consume a free slot or publish a live slot before an exact
+            // issued capability has been successfully constructed.
+            int slotId = _freeSlotCount != 0
+                ? _freeSlots[_freeSlotCount - 1]
+                : _nextSlot;
+            ref Slot slot = ref _slots[slotId];
+            if (slot.Live || slot.Issued is not null)
+                throw new InvalidOperationException("Actor arena slot accounting is corrupt");
+
+            ulong generation = slot.Generation == 0 ? 1 : slot.Generation;
+            var issued = new ActorArenaHandle(_authority, slotId, generation,
+                _actorId, _incarnation, bytes);
+            EnsureBackingLocked(ref _persistent, ref _persistentCommitted,
+                checked(aligned + bytes), _persistentPhysicalBytes, _persistentHighWater);
+            Zero(_persistent + aligned, bytes);
+
+            if (_freeSlotCount != 0)
+                _freeSlotCount--;
+            else
+                _nextSlot++;
+            slot.Generation = generation;
+            slot.Offset = aligned;
+            slot.Length = bytes;
+            slot.ReadLoans = 0;
+            slot.Issued = issued;
+            slot.Live = true;
+            _persistentHighWater = checked(aligned + bytes);
+            _persistentLiveBytes = checked(_persistentLiveBytes + bytes);
+            _liveAllocations++;
+            return issued;
+        }
+    }
+
+    /// <summary>
+    /// Drop one persistent allocation. Live read loans prohibit mutation/drop.
+    /// Generation increments before the slot is eligible for reuse.
+    /// </summary>
+    public void ReleasePersistent(ActorArenaTurn turn, ActorArenaHandle handle)
+    {
+        lock (_gate)
+        {
+            ValidateTurnLocked(turn);
+            ref Slot slot = ref ValidateHandleLocked(handle);
+            if (slot.ReadLoans != 0)
+                throw new InvalidOperationException(
+                    "Cannot drop actor allocation while a read loan is live");
+            if (slot.Generation == ulong.MaxValue)
+                throw new OverflowException("Actor allocation generation exhausted");
+
+            // A last-in-first-out temporary can be reclaimed immediately
+            // without moving any earlier live allocations. This is the
+            // common persistent-root + per-message-transient actor pattern.
+            bool wasTail = slot.Offset + slot.Length == _persistentHighWater;
+            int freedOffset = slot.Offset;
+            Zero(_persistent + slot.Offset, slot.Length);
+            _persistentLiveBytes -= slot.Length;
+            _liveAllocations--;
+            if (_managedRef32Edges.Remove(handle, out var outgoing))
+                _managedRef32EdgeCount -= outgoing.Count;
+            slot.Live = false;
+            slot.Issued = null;
+            slot.Offset = 0;
+            slot.Length = 0;
+            slot.Generation++;
+
+            _freeSlots[_freeSlotCount++] = handle.Slot;
+
+            if (wasTail)
+                _persistentHighWater = freedOffset;
+
+            if (_liveAllocations == 0)
+            {
+                Zero(_persistent, _persistentCommitted);
+                _persistentHighWater = 0;
+                _persistentLiveBytes = 0;
+            }
+        }
+    }
+
+    public void Write(ActorArenaTurn turn, ActorArenaHandle handle, int offset,
+        ReadOnlySpan<byte> source)
+    {
+        lock (_gate)
+        {
+            ValidateTurnLocked(turn);
+            ref Slot slot = ref ValidateHandleLocked(handle);
+            if (slot.ReadLoans != 0)
+                throw new InvalidOperationException(
+                    "Cannot mutate actor allocation while a read loan is live");
+            ValidateRange(offset, source.Length, slot.Length);
+            source.CopyTo(new Span<byte>(_persistent + slot.Offset + offset, source.Length));
+        }
+    }
+
+    public void Read(ActorArenaTurn turn, ActorArenaHandle handle, int offset,
+        Span<byte> destination)
+    {
+        lock (_gate)
+        {
+            ValidateTurnLocked(turn);
+            ref Slot slot = ref ValidateHandleLocked(handle);
+            ValidateRange(offset, destination.Length, slot.Length);
+            new ReadOnlySpan<byte>(_persistent + slot.Offset + offset, destination.Length)
+                .CopyTo(destination);
+        }
+    }
+
+    /// <summary>
+    /// Store one guest-visible 32-bit actor-relative object reference.
+    /// `0` is null; other words encode (aligned target byte offset / 8) + 1.
+    /// The full target capability stays solely in the host sidecar ledger.
+    /// This is a checked host primitive, not .atto source field lowering.
+    /// </summary>
+    public void WriteManagedRef32(ActorArenaTurn turn, ActorArenaHandle parent,
+        int fieldOffset, ActorArenaHandle? target)
+    {
+        lock (_gate)
+        {
+            ValidateTurnLocked(turn);
+            ref Slot parentSlot = ref ValidateHandleLocked(parent);
+            ValidateManagedRef32Field(fieldOffset, parentSlot.Length);
+            if (parentSlot.ReadLoans != 0)
+                throw new InvalidOperationException(
+                    "Cannot mutate 32-bit reference field while parent read loan is live");
+
+            uint encoded = 0;
+            if (target is not null)
+            {
+                ref Slot targetSlot = ref ValidateHandleLocked(target);
+                // Ordinary arena bytes may be 1-aligned; managed object starts
+                // must be 8-aligned for the guest ref32 ABI.
+                if ((targetSlot.Offset & 7) != 0)
+                    throw new InvalidOperationException(
+                        "Managed reference target must be 8-byte aligned");
+                encoded = checked((uint)(targetSlot.Offset / 8 + 1));
+            }
+
+            // Publish an original-generation sidecar proof *before* bytes.
+            // Hash-table allocation failure must not forge a guest field.
+            if (target is not null)
+            {
+                // Check quota *before* creating a new sidecar dictionary.
+                // Repeated denied stores must not populate empty metadata.
+                bool updatingEdge = _managedRef32Edges.TryGetValue(parent, out var current)
+                    && current.ContainsKey(fieldOffset);
+                if (!updatingEdge && _managedRef32EdgeCount == MaxManagedRef32Edges)
+                    throw new InvalidOperationException(
+                        "Actor managed reference sidecar quota exhausted");
+                if (!_managedRef32Edges.TryGetValue(parent, out var fields))
+                {
+                    fields = new Dictionary<int, ActorArenaHandle>();
+                    _managedRef32Edges.Add(parent, fields);
+                }
+                if (!fields.ContainsKey(fieldOffset))
+                {
+                    if (_managedRef32EdgeCount == MaxManagedRef32Edges)
+                        throw new InvalidOperationException(
+                            "Actor managed reference sidecar quota exhausted");
+                    fields.Add(fieldOffset, target);
+                    _managedRef32EdgeCount++;
+                }
+                else
+                    fields[fieldOffset] = target;
+            }
+            else if (_managedRef32Edges.TryGetValue(parent, out var fields))
+            {
+                if (fields.Remove(fieldOffset))
+                    _managedRef32EdgeCount--;
+                if (fields.Count == 0)
+                    _managedRef32Edges.Remove(parent);
+            }
+
+            BinaryPrimitives.WriteUInt32LittleEndian(
+                new Span<byte>(_persistent + parentSlot.Offset + fieldOffset, 4),
+                encoded);
+        }
+    }
+
+    /// <summary>
+    /// Decode an issued guest field only when its exact out-of-line original
+    /// target remains live. An equivalent offset or recreated handle is never
+    /// authority, including when a freed slot is recycled (ABA).
+    /// </summary>
+    public ActorArenaHandle? ReadManagedRef32(ActorArenaTurn turn,
+        ActorArenaHandle parent, int fieldOffset)
+    {
+        lock (_gate)
+        {
+            ValidateTurnLocked(turn);
+            ref Slot parentSlot = ref ValidateHandleLocked(parent);
+            ValidateManagedRef32Field(fieldOffset, parentSlot.Length);
+
+            uint word = BinaryPrimitives.ReadUInt32LittleEndian(
+                new ReadOnlySpan<byte>(_persistent + parentSlot.Offset + fieldOffset, 4));
+            bool hasProof = _managedRef32Edges.TryGetValue(parent, out var fields)
+                && fields!.ContainsKey(fieldOffset);
+            if (word == 0 && !hasProof)
+                return null;
+            if (word == 0 || !hasProof)
+                throw new InvalidOperationException(
+                    "Missing or corrupted original-generation 32-bit field proof");
+            if (!fields!.TryGetValue(fieldOffset, out var original))
+                throw new InvalidOperationException(
+                    "Original-generation 32-bit field proof disappeared");
+
+            ref Slot targetSlot = ref ValidateHandleLocked(original);
+            if ((targetSlot.Offset & 7) != 0 ||
+                word != checked((uint)(targetSlot.Offset / 8 + 1)))
+                throw new InvalidOperationException(
+                    "32-bit guest field does not match issued actor target");
+            return original;
+        }
+    }
+
+    private static void ValidateManagedRef32Field(int offset, int parentLength)
+    {
+        if (offset < 0 || (offset & 3) != 0 ||
+            offset > parentLength || 4 > parentLength - offset)
+            throw new ArgumentOutOfRangeException(nameof(offset),
+                "Managed guest reference field must be aligned and occupy exactly four bytes");
+    }
+
+    /// <summary>
+    /// Acquire a read loan that may survive turn exit. It freezes writes and
+    /// drop of this allocation until released, but the loan cannot dereference
+    /// bytes without a separately admitted owner turn.
+    /// </summary>
+    public ActorArenaReadLoan BorrowRead(ActorArenaTurn turn, ActorArenaHandle handle)
+    {
+        lock (_gate)
+        {
+            ValidateTurnLocked(turn);
+            EnsureAdmissionOpenLocked();
+            if (_readLoans == _maxReadLoans)
+                throw new InvalidOperationException("Actor read-loan quota exhausted");
+
+            ref Slot slot = ref ValidateHandleLocked(handle);
+            var loan = new ActorArenaReadLoan(this, _authority, handle.Slot,
+                handle.Generation, _actorId, _incarnation, handle.Length);
+            if (!_issuedReadLoans.Add(loan))
+                throw new InvalidOperationException("Duplicate read-loan issuance");
+            slot.ReadLoans = checked(slot.ReadLoans + 1);
+            _readLoans++;
+            return loan;
+        }
+    }
+
+    /// <summary>
+    /// Pin only arena lifetime for a continuation/FFI/I/O owner. No memory
+    /// authority is attached to this object.
+    /// </summary>
+    public ActorArenaLifetimePin AcquireLifetimePin(ActorArenaTurn turn)
+    {
+        lock (_gate)
+        {
+            ValidateTurnLocked(turn);
+            EnsureAdmissionOpenLocked();
+            if (_externalPins == _maxLifetimePins)
+                throw new InvalidOperationException("Actor lifetime-pin quota exhausted");
+            var pin = new ActorArenaLifetimePin(this, _authority);
+            if (!_issuedLifetimePins.Add(pin))
+                throw new InvalidOperationException("Duplicate lifetime-pin issuance");
+            _externalPins++;
+            return pin;
+        }
+    }
+
+    public ActorScratchHandle AllocateScratch(ActorArenaTurn turn, int bytes,
+        int alignment = 8)
+    {
+        if (bytes <= 0)
+            throw new ArgumentOutOfRangeException(nameof(bytes));
+        ValidateAlignment(alignment);
+
+        lock (_gate)
+        {
+            ValidateTurnLocked(turn);
+            EnsureAdmissionOpenLocked();
+            int aligned = AlignUp(_scratchHighWater, alignment);
+            if (aligned > _scratchCapacity || bytes > _scratchCapacity - aligned)
+                throw new InvalidOperationException("Actor scratch arena capacity exhausted");
+
+            if (_issuedScratch.Count >= MaxScratchCapabilitiesPerTurn)
+                throw new InvalidOperationException("Actor scratch capability quota exhausted");
+
+            // Allocate and register the exact issued object before publishing
+            // the new high-water mark. A reconstructed matching tuple is not
+            // equivalent to this capability.
+            var issued = new ActorScratchHandle(_authority, turn.Epoch, aligned, bytes);
+            EnsureBackingLocked(ref _scratch, ref _scratchCommitted,
+                checked(aligned + bytes), _scratchPhysicalBytes, _scratchHighWater);
+            Zero(_scratch + aligned, bytes);
+            if (!_issuedScratch.Add(issued))
+                throw new InvalidOperationException("Duplicate actor scratch issuance");
+            _scratchHighWater = checked(aligned + bytes);
+            return issued;
+        }
+    }
+
+    public void WriteScratch(ActorArenaTurn turn, ActorScratchHandle handle,
+        int offset, ReadOnlySpan<byte> source)
+    {
+        lock (_gate)
+        {
+            ValidateTurnLocked(turn);
+            ValidateScratchLocked(handle);
+            ValidateRange(offset, source.Length, handle.Length);
+            source.CopyTo(new Span<byte>(_scratch + handle.Offset + offset, source.Length));
+        }
+    }
+
+    public void ReadScratch(ActorArenaTurn turn, ActorScratchHandle handle,
+        int offset, Span<byte> destination)
+    {
+        lock (_gate)
+        {
+            ValidateTurnLocked(turn);
+            ValidateScratchLocked(handle);
+            ValidateRange(offset, destination.Length, handle.Length);
+            new ReadOnlySpan<byte>(_scratch + handle.Offset + offset, destination.Length)
+                .CopyTo(destination);
+        }
+    }
+
+    /// <summary>
+    /// Seal new authority and try physical reclamation. Existing active turns
+    /// may perform cleanup/read/drop, but cannot allocate, borrow, or pin after
+    /// retirement. Physical bytes are retained until turns, loans, and pins are
+    /// quiescent.
+    /// </summary>
+    public bool Retire()
+    {
+        lock (_gate)
+        {
+            if (_reclaimed)
+                return true;
+            _retired = true;
+            return TryReclaimLocked();
+        }
+    }
+
+    public bool TryReclaim()
+    {
+        lock (_gate)
+        {
+            if (_reclaimed)
+                return true;
+            if (!_retired)
+                return false;
+            return TryReclaimLocked();
+        }
+    }
+
+    public void Dispose()
+    {
+        Retire();
+    }
+
+    internal void ReleaseTurn(ActorArenaTurn turn)
+    {
+        ArgumentNullException.ThrowIfNull(turn);
+        lock (_gate)
+        {
+            // Idempotent after final reclaim only for a token genuinely
+            // owned by this arena. A foreign token is never accepted.
+            if (!ReferenceEquals(turn.Arena, this))
+                throw new InvalidOperationException("Foreign actor turn release");
+            if (turn.Released)
+                return;
+            if (_reclaimed || !_turnActive ||
+                !ReferenceEquals(_activeTurn, turn) ||
+                !ReferenceEquals(_activeCarrier, Thread.CurrentThread) ||
+                turn.Arena != this || turn.Authority != _authority ||
+                turn.ActorId != _actorId || turn.Incarnation != _incarnation ||
+                turn.Epoch != _turnEpoch)
+                throw new InvalidOperationException("Stale, foreign or off-carrier actor turn release");
+
+            if (_scratchHighWater != 0)
+                Zero(_scratch, _scratchHighWater);
+            _scratchHighWater = 0;
+            _issuedScratch.Clear();
+            turn.MarkReleased();
+            _activeTurn = null;
+            _activeCarrier = null;
+            _turnActive = false;
+            TryReclaimLocked();
+        }
+    }
+
+    internal void ReleaseReadLoan(ActorArenaReadLoan loan)
+    {
+        lock (_gate)
+        {
+            if (_reclaimed)
+                throw new InvalidOperationException("Read loan outlived physical arena");
+            if (loan.Authority != _authority || loan.ActorId != _actorId ||
+                loan.Incarnation != _incarnation || loan.Slot < 0 ||
+                loan.Slot >= _nextSlot)
+                throw new InvalidOperationException("Foreign actor read loan release");
+
+            ref Slot slot = ref _slots[loan.Slot];
+            if (!slot.Live || slot.Generation != loan.Generation ||
+                slot.ReadLoans <= 0 || _readLoans <= 0 ||
+                !_issuedReadLoans.Remove(loan))
+                throw new InvalidOperationException("Unissued or stale actor read loan release");
+
+            slot.ReadLoans--;
+            _readLoans--;
+            TryReclaimLocked();
+        }
+    }
+
+    internal void ReleaseLifetimePin(ActorArenaLifetimePin pin)
+    {
+        ArgumentNullException.ThrowIfNull(pin);
+        lock (_gate)
+        {
+            if (_reclaimed)
+                throw new InvalidOperationException("Lifetime pin outlived physical arena");
+            if (pin.Authority != _authority || _externalPins <= 0 ||
+                !_issuedLifetimePins.Remove(pin))
+                throw new InvalidOperationException("Unissued or foreign actor lifetime-pin release");
+            _externalPins--;
+            TryReclaimLocked();
+        }
+    }
+
+    private ref Slot ValidateHandleLocked(ActorArenaHandle handle)
+    {
+        ArgumentNullException.ThrowIfNull(handle);
+        EnsureNotReclaimedLocked();
+        if (handle.Authority != _authority || handle.ActorId != _actorId ||
+            handle.Incarnation != _incarnation || handle.Slot < 0 ||
+            handle.Slot >= _nextSlot)
+            throw new InvalidOperationException("Foreign actor arena capability");
+
+        ref Slot slot = ref _slots[handle.Slot];
+        if (!slot.Live || !ReferenceEquals(slot.Issued, handle) ||
+            slot.Generation != handle.Generation || slot.Length != handle.Length)
+            throw new InvalidOperationException("Stale actor arena capability");
+        return ref slot;
+    }
+
+    private void ValidateScratchLocked(ActorScratchHandle handle)
+    {
+        ArgumentNullException.ThrowIfNull(handle);
+        EnsureNotReclaimedLocked();
+        if (!_turnActive || !_issuedScratch.Contains(handle) ||
+            handle.Authority != _authority || handle.Epoch != _turnEpoch || handle.Epoch == 0 ||
+            handle.Offset < 0 || handle.Length <= 0 ||
+            handle.Offset > _scratchHighWater ||
+            handle.Length > _scratchHighWater - handle.Offset)
+            throw new InvalidOperationException("Stale actor scratch capability");
+    }
+
+    internal void ValidateActiveTurn(ActorArenaTurn turn)
+    {
+        lock (_gate)
+        {
+            ValidateTurnLocked(turn);
+            EnsureAdmissionOpenLocked();
+        }
+    }
+
+    // A current physical carrier may finish frame cleanup after retirement.
+    // Check this before reading caller-visible stack metadata; unlike new
+    // admission, cleanup cannot require that the arena remain non-retired.
+    internal void ValidatePhysicalTurn(ActorArenaTurn turn)
+    {
+        lock (_gate)
+            ValidateTurnLocked(turn);
+    }
+
+    private void ValidateTurnLocked(ActorArenaTurn turn)
+    {
+        ArgumentNullException.ThrowIfNull(turn);
+        EnsureNotReclaimedLocked();
+        if (turn.Released || !_turnActive ||
+            !ReferenceEquals(_activeTurn, turn) ||
+            !ReferenceEquals(_activeCarrier, Thread.CurrentThread) ||
+            turn.Arena != this || turn.Authority != _authority ||
+            turn.ActorId != _actorId || turn.Incarnation != _incarnation ||
+            turn.Epoch != _turnEpoch)
+            throw new InvalidOperationException("Stale or foreign actor turn");
+    }
+
+    private void EnsureAdmissionOpenLocked()
+    {
+        if (_retired)
+            throw new InvalidOperationException("Actor arena admission is retired");
+    }
+
+    private void EnsureNotReclaimedLocked()
+    {
+        if (_reclaimed)
+            throw new ObjectDisposedException(nameof(ActorArena));
+    }
+
+    private bool TryReclaimLocked()
+    {
+        if (!_retired || _turnActive || _externalPins != 0 || _readLoans != 0)
+            return false;
+
+        if (_persistent != null)
+        {
+            Zero(_persistent, _persistentCommitted);
+            NativeMemory.AlignedFree(_persistent);
+            _persistent = null;
+        }
+
+        if (_scratch != null)
+        {
+            Zero(_scratch, _scratchCommitted);
+            NativeMemory.AlignedFree(_scratch);
+            _scratch = null;
+        }
+
+        if (!_budgetRefunded)
+        {
+            int physicallyReleased = checked(_persistentCommitted + _scratchCommitted);
+            int charged = _demandBacked ? physicallyReleased : _budgetBytes;
+            // Reclaim is a one-shot after the last turn, loan and FFI pin.
+            // The accounting refund happens only after native scrub and free.
+            if (charged != 0)
+            {
+                _budget.Refund(charged);
+                if (_demandBacked && !ReferenceEquals(_budget, ActorArenaBudget.Process))
+                    ActorArenaBudget.Process.Refund(charged);
+                else if (_processBudgetReserved)
+                {
+                    ActorArenaBudget.Process.Refund(charged);
+                    _processBudgetReserved = false;
+                }
+            }
+            _persistentCommitted = 0;
+            _scratchCommitted = 0;
+            _budgetRefunded = true;
+        }
+
+        Array.Clear(_slots, 0, _slots.Length);
+        Array.Clear(_freeSlots, 0, _freeSlots.Length);
+        _issuedScratch.Clear();
+        _issuedReadLoans.Clear();
+        _issuedLifetimePins.Clear();
+        _managedRef32Edges.Clear();
+        _managedRef32EdgeCount = 0;
+        _activeTurn = null;
+        _activeCarrier = null;
+        _nextSlot = 0;
+        _freeSlotCount = 0;
+        _liveAllocations = 0;
+        _persistentHighWater = 0;
+        _persistentLiveBytes = 0;
+        _scratchHighWater = 0;
+        _reclaimed = true;
+        return true;
+    }
+
+    // No native pointer or span is exposed to guest code. All read/write and
+    // lifetime transitions hold _gate, so a new aligned slab can be installed
+    // while opaque handles keep the same logical offsets and slot generations.
+    // This mode is *not* valid for raw-pointer FFI loans or realtime turns.
+    private void EnsureBackingLocked(ref byte* pointer, ref int committed,
+        int required, int maximumPhysicalBytes, int liveHighWater)
+    {
+        if (required <= committed) return;
+        if (!_demandBacked)
+            throw new InvalidOperationException("Eager actor backing was not committed");
+        // A lifetime-only FFI/I/O pin does not expose a pointer through this
+        // API, but an integration may retain a native view under that pin.
+        // Never relocate any actor slab while such external work is live.
+        if (_externalPins != 0)
+            throw new InvalidOperationException(
+                "Actor native backing cannot grow while an external lifetime pin is live");
+
+        int next = committed == 0 ? Math.Min(4096, maximumPhysicalBytes) : committed;
+        while (next < required)
+            next = next > maximumPhysicalBytes / 2 ? maximumPhysicalBytes : checked(next * 2);
+
+        int delta = checked(next - committed);
+        _budget.Reserve(delta);
+        bool processReserved = false;
+        byte* replacement = null;
+        try
+        {
+            if (!ReferenceEquals(_budget, ActorArenaBudget.Process))
+            {
+                ActorArenaBudget.Process.Reserve(delta);
+                processReserved = true;
+            }
+            replacement = (byte*)NativeMemory.AlignedAlloc((nuint)next, (nuint)SlabAlignment);
+            if (replacement == null)
+                throw new OutOfMemoryException("Unable to grow actor-private native backing");
+            Zero(replacement, next);
+            if (pointer != null)
+            {
+                Buffer.MemoryCopy(pointer, replacement, next, liveHighWater);
+                Zero(pointer, committed);
+                NativeMemory.AlignedFree(pointer);
+            }
+            pointer = replacement;
+            committed = next;
+        }
+        catch
+        {
+            if (replacement != null)
+            {
+                Zero(replacement, next);
+                NativeMemory.AlignedFree(replacement);
+            }
+            if (processReserved)
+                ActorArenaBudget.Process.Refund(delta);
+            _budget.Refund(delta);
+            throw;
+        }
+    }
+
+    private static int RoundUp(int value, int alignment)
+    {
+        int remainder = value & (alignment - 1);
+        return remainder == 0 ? value : checked(value + alignment - remainder);
+    }
+
+    private static int AlignUp(int value, int alignment)
+    {
+        int remainder = value & (alignment - 1);
+        return remainder == 0 ? value : checked(value + alignment - remainder);
+    }
+
+    private static void ValidateAlignment(int alignment)
+    {
+        if (alignment <= 0 || alignment > SlabAlignment ||
+            (alignment & (alignment - 1)) != 0)
+            throw new ArgumentOutOfRangeException(nameof(alignment),
+                "Alignment must be a power of two between 1 and 64");
+    }
+
+    private static void ValidateRange(int offset, int length, int capacity)
+    {
+        if (offset < 0 || length < 0 || offset > capacity ||
+            length > capacity - offset)
+            throw new ArgumentOutOfRangeException(nameof(offset),
+                "Actor arena access is outside the allocation");
+    }
+
+    private static void Zero(byte* pointer, int length)
+    {
+        if (length <= 0)
+            return;
+        CryptographicOperations.ZeroMemory(new Span<byte>(pointer, length));
+    }
+}
+
