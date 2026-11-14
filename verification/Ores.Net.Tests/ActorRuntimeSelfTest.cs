@@ -17,10 +17,79 @@ internal static class ActorRuntimeSelfTest
         LifetimePinCanOutliveActorTurnAndStop();
         HandlerFaultRetiresOnlyThatActor();
         StopDuringActiveTurnFencesBacklogAcrossDomains();
+        DrainCompletesAdmittedWorkAndRejectsLateSends();
+        AbortOverridesDrainAndScrubsBacklog();
         ConcurrentDisposersAwaitCarrierQuiescence();
         FailedTurnAdmissionScrubsDequeuedMessage();
         Console.WriteLine(
-            "PASS .NET integrated actor runtime mailbox, arena, domains, stop and fault isolation");
+            "PASS .NET integrated actor runtime mailbox, FIFO drain, abort precedence, arena, domains, stop and fault isolation");
+    }
+
+    // HOST-RUNTIME ONLY: the compiled source-actor callback and typed pipe
+    // emitter are still missing. This is a real carrier/arena/mailbox test.
+    private static void DrainCompletesAdmittedWorkAndRejectsLateSends()
+    {
+        using var entered = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        using var runtime = new ActorRuntime(Options());
+        int delivered = 0;
+        int checksum = 0;
+        var actor = runtime.Spawn(ActorKind.Private, (_, msg) =>
+        {
+            if (msg.Span[0] == 1)
+            {
+                entered.Set();
+                if (!release.Wait(TimeSpan.FromSeconds(5)))
+                    throw new Exception("drain setup timed out");
+            }
+            Interlocked.Add(ref checksum, msg.Span[0]);
+            Interlocked.Increment(ref delivered);
+        });
+        try
+        {
+            runtime.Send(actor, new byte[] { 1 });
+            Require(entered.Wait(TimeSpan.FromSeconds(5)), "first actor turn started");
+            runtime.Send(actor, new byte[] { 2 });
+            runtime.Send(actor, new byte[] { 3 });
+            runtime.DrainAndStop(actor);
+            runtime.DrainAndStop(actor); // idempotent while it is draining
+            bool lateSendDenied = false;
+            try { runtime.Send(actor, new byte[] { 4 }); }
+            catch (InvalidOperationException) { lateSendDenied = true; }
+            Require(lateSendDenied, "drain must atomically close send admission");
+        }
+        finally { release.Set(); }
+        Require(WaitUntil(() => runtime.LiveActors == 0 &&
+            runtime.NativeReservedBytes == 0), "draining actor must retire its arena");
+        Require(delivered == 3 && checksum == 6 && runtime.FaultedTurns == 0,
+            "drain must execute all three accepted messages exactly once");
+    }
+
+    private static void AbortOverridesDrainAndScrubsBacklog()
+    {
+        using var entered = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        using var runtime = new ActorRuntime(Options());
+        int delivered = 0;
+        var actor = runtime.Spawn(ActorKind.Shared, (_, _) =>
+        {
+            entered.Set();
+            if (!release.Wait(TimeSpan.FromSeconds(5)))
+                throw new Exception("abort setup timed out");
+            Interlocked.Increment(ref delivered);
+        });
+        try
+        {
+            runtime.Send(actor, new byte[] { 1 });
+            Require(entered.Wait(TimeSpan.FromSeconds(5)), "abort test actor turn started");
+            runtime.Send(actor, new byte[] { 2 });
+            runtime.DrainAndStop(actor);
+            runtime.Stop(actor); // abort explicitly overrides graceful drain
+        }
+        finally { release.Set(); }
+        Require(WaitUntil(() => runtime.LiveActors == 0 &&
+            runtime.NativeReservedBytes == 0), "aborted actor must retire its arena");
+        Require(delivered == 1, "abort must not deliver the queued second message");
     }
 
     private static void ForgedSameIdCannotObserveTermination()
