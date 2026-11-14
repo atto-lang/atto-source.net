@@ -255,28 +255,35 @@ public static partial class OresStructuredParser
             if (Current.Text.Length != 0)
                 throw Error("unexpected declarations or trailing statements");
 
-            // Typed scalar handler composition is a valuable independent
-            // CIL oracle, but does NOT allocate actors or deliver mail.
+            // This remains scalar CIL, NOT isolated actor execution. Use
+            // sequential typed locals instead of recursive nested calls:
+            // a 16-stage valid graph must not exhaust an unrelated scalar
+            // expression nesting limit. An SSA local is one stage value.
             var scalarMethods = new System.Text.StringBuilder();
+            var scalarBody = new System.Text.StringBuilder();
             var emittedHandlerNames = new HashSet<string>(StringComparer.Ordinal);
-            string scalarResult = message.ToString(CultureInfo.InvariantCulture);
-            foreach (var stage in stages)
+            string previousValue = message.ToString(CultureInfo.InvariantCulture);
+            for (int i = 0; i < stages.Count; i++)
             {
-                ActorHandler handler = _actors[stage.ActorType];
-                // Multiple actor *instances* of the same nominal type share
-                // one typed helper definition in this scalar CIL oracle.
-                // The invocation still occurs once for EVERY owned stage.
+                ActorHandler handler = _actors[stages[i].ActorType];
+                // Distinct owned actor instances may share their nominal
+                // handler type. Emit a definition once, invoke at each stage.
                 if (emittedHandlerNames.Add(handler.Method))
                     scalarMethods.Append("fnc ").Append(handler.Method).Append('(')
                         .Append(handler.Input).Append(' ').Append(handler.Parameter)
                         .Append("):").Append(handler.Output).Append(' ')
                         .Append(handler.Body).Append('\n');
-                scalarResult = handler.Method + "(" + scalarResult + ")";
+                string local = "__pipe_stage_value_" + i.ToString(CultureInfo.InvariantCulture);
+                scalarBody.Append("let ").Append(handler.Output).Append(' ')
+                    .Append(local).Append(" = ").Append(handler.Method)
+                    .Append('(').Append(previousValue).Append(");\n");
+                previousValue = local;
             }
+            scalarBody.Append(stages[^1].MessageOutput == "int"
+                ? "return " + previousValue + ";"
+                : "return 0;");
             string scalar = scalarMethods.ToString() +
-                (stages[^1].MessageOutput == "int"
-                    ? "fnc main():int{return " + scalarResult + ";}"
-                    : "fnc main():int{return 0;}");
+                "fnc main():int{\n" + scalarBody + "\n}";
             try
             {
                 _ = OresStructuredCfgLowering.LowerModule(scalar);
