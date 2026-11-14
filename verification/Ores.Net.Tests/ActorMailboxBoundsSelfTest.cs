@@ -47,6 +47,31 @@ internal static class ActorMailboxBoundsSelfTest
         single.Send(refSingle, new byte[] { 42 });
         if (!single.TryReceive(out var payload) || payload is null || payload[0] != 42)
             throw new Exception("slot not released");
+        // Drain closes admission without erasing previously admitted bytes.
+        // A forged or stale ActorRef must never claim drain authority.
+        var draining = new ActorMailbox(5, maxMessages: 2, maxQueuedBytes: 8);
+        var drainRef = draining.CurrentRef;
+        var wrongDrainRef = new ActorMailbox(5).CurrentRef;
+        draining.Send(drainRef, new byte[] { 4, 5 });
+        draining.Send(drainRef, new byte[] { 6 });
+        if (draining.TryBeginDrain(wrongDrainRef) ||
+            !draining.TryBeginDrain(drainRef) ||
+            draining.TryBeginDrain(drainRef))
+            throw new Exception("drain admission must be generation/nonce fenced and once-only");
+        DenySend(() => draining.Send(drainRef, new byte[] { 7 }));
+        if (!draining.TryReceive(out var drainedFirst) ||
+            drainedFirst is null || !drainedFirst.SequenceEqual(new byte[] { 4, 5 }) ||
+            !draining.TryReceive(out var drainedSecond) ||
+            drainedSecond is null || !drainedSecond.SequenceEqual(new byte[] { 6 }) ||
+            draining.TryReceive(out _))
+            throw new Exception("draining lost or reordered admitted DATA");
+        draining.Stop();
+        var postDrain = draining.Restart();
+        if (draining.TryBeginDrain(drainRef))
+            throw new Exception("stale generation could drain replacement actor");
+        draining.Send(postDrain, new byte[] { 8 });
+        draining.Dispose();
+
         // Disposal is terminal authority retirement, unlike a restartable Stop.
         // Inspect only the already-owned DATA array to prove queued secrets
         // are physically scrubbed rather than merely removed from the queue.
@@ -77,6 +102,6 @@ internal static class ActorMailboxBoundsSelfTest
         }
         catch (ObjectDisposedException) { }
 
-        Console.WriteLine("PASS .NET mailbox limits, exact byte refund, empty data, restart, dispose scrub");
+        Console.WriteLine("PASS .NET mailbox limits, drain admission/FIFO, exact byte refund, empty data, restart, dispose scrub");
     }
 }
