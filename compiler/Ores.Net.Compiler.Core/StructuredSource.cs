@@ -404,9 +404,11 @@ public static partial class OresStructuredParser
             // IR yet. The separate scalar OresParser admits only immediate,
             // pure literal Tuple.of(...)[const] projections. Do not silently
             // reinterpret an owning aggregate as an i64 helper invocation.
+            // Exception: fixed Array<int> literals have verified value-typed CFG/CIL
+            // lowering (val-only, i64 elements, Option<int> checked get).
             if (i + 2 < tokens.Count && tokens[i + 1].Text == "." &&
                 tokens[i + 2].Text == "of" &&
-                tokens[i].Text is "Tuple" or "Map" or "Array" or "List" or
+                tokens[i].Text is "Tuple" or "Map" or "List" or
                     "Vector" or "Set" or "Entry" or "Pair" or "Record")
                 throw new FormatException(
                     $"E_COLLECTION_FACTORY_UNSUPPORTED: {tokens[i].Text}.of requires typed product/collection CFG and NativeAOT CIL lowering at offset {tokens[i].Offset}");
