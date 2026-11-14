@@ -70,7 +70,6 @@ internal static class StructuredSourceTests
             "untrusted actor A1 { }",
             "isoactor A1 { }",
             "define serial http actor A1 as end",
-            "define abstract actor A1 as end",
             "define transform actor A1 as end",
             "define pipe actor A1 as end",
             "define actor A1 extends Base as end",
@@ -78,6 +77,9 @@ internal static class StructuredSourceTests
             "define actor A1 impl Traced as end"
         })
             RejectFeature(actorSource, "receiver-erased method slots");
+        // `define abstract` is refused earlier by main's abstract-hook gate.
+        RejectFeature("define abstract actor A1 as end",
+            "Private abstract class hooks require typed virtual dispatch");
         // Same canonical lifecycle source as the platform-conformance v1
         // fixture; .NET must refuse it until ActorRef and CIL state/receive
         // lowering are actually implemented and executed.
