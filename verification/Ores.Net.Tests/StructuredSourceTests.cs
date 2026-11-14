@@ -417,18 +417,24 @@ internal static class StructuredSourceTests
             "const is immutable");
         Reject("fnc main():int{val bool v=true;if v {v=false;}return 1;}",
             "nested blocks cannot mutate outer val");
-        // Unlike a compile-time constant-expression requirement, Oreslang
-        // const is an immutable *binding* and may be initialized at runtime.
+        // Runtime bindings use val, not const: every const scalar requires
+        // deterministic static evaluation before CFG/CIL emission.
         foreach (var source in new[] {
             "fnc main():int{let int x=2;const int c=x;return c;}",
-            "fnc main():int{val int x=2;const int c=x;return c;}"
+            "fnc main():int{val int x=2;const int c=x;return c;}",
+            "fnc main():int{let int x=2;int c=x;return c;}"
+        })
+            RejectFeature(source, "E_NON_CONST_INITIALIZER");
+        foreach (var source in new[] {
+            "fnc main():int{let int x=2;val int c=x;return c;}",
+            "fnc main():int{val int x=2;val int c=x;return c;}"
         })
         {
-            var runtimeConst = OresStructuredParser.Parse(source);
-            Require(runtimeConst.Body[1] is StructuredLet {
-                Name: "c", Kind: StructuredBindingKind.Const,
+            var runtimeVal = OresStructuredParser.Parse(source);
+            Require(runtimeVal.Body[1] is StructuredLet {
+                Name: "c", Kind: StructuredBindingKind.Val,
                 Initializer: StructuredRead { Type: IrValueType.I64 }
-            }, "runtime-initialized const must not acquire fake compile-time value");
+            }, "runtime-initialized fixed binding must be val");
         }
         Reject("fnc main():int{const int x=9223372036854775807+1;return x;}",
             "const arithmetic must trap during admission");
