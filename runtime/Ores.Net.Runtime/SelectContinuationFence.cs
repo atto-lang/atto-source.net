@@ -205,3 +205,28 @@ public sealed class SelectContinuationFence
         public bool Close() => _owner.Close(this);
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+    public bool TryConsume(Ticket? ticket)
+
+
+
+
+
+
+
+
+
+
+

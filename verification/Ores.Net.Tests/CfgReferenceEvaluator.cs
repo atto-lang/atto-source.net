@@ -24,6 +24,20 @@ internal static class CfgReferenceEvaluator
             {
                 long Left() => (long)values[op.Left!.Value];
                 long Right() => (long)values[op.Right!.Value];
+                bool BoolLeft() => (bool)values[op.Left!.Value];
+                bool BoolRight() => (bool)values[op.Right!.Value];
+                bool OptionEqualI64()
+                {
+                    // Keep the test-only interpreter independent of emitted
+                    // CIL, but enforce identical tagged semantics. Inactive
+                    // None payload slots must never participate in equality.
+                    bool leftPresent = (bool)values[op.Left!.Value];
+                    bool rightPresent = (bool)values[op.Arguments![0]];
+                    if (leftPresent != rightPresent) return false;
+                    return !leftPresent ||
+                        (long)values[op.Right!.Value] ==
+                        (long)values[op.Arguments[1]];
+                }
                 values[op.ResultId] = op.Opcode switch
                 {
                     CfgOpcode.ConstantI64 => op.I64Constant!.Value,
@@ -33,7 +47,20 @@ internal static class CfgReferenceEvaluator
                     CfgOpcode.CheckedMultiply => checked(Left() * Right()),
                     CfgOpcode.CheckedDivide => DivideChecked(Left(), Right()),
                     CfgOpcode.EqualI64 => Left() == Right(),
+                    CfgOpcode.NotEqualI64 => Left() != Right(),
                     CfgOpcode.LessThanI64 => Left() < Right(),
+                    CfgOpcode.EqualBool => BoolLeft() == BoolRight(),
+                    CfgOpcode.NotEqualBool => BoolLeft() != BoolRight(),
+                    CfgOpcode.XorBool => BoolLeft() ^ BoolRight(),
+                    CfgOpcode.GreaterThanI64 => Left() > Right(),
+                    CfgOpcode.LessThanOrEqualI64 => Left() <= Right(),
+                    CfgOpcode.GreaterThanOrEqualI64 => Left() >= Right(),
+                    CfgOpcode.BoolNot => !(bool)values[op.Left!.Value],
+                    CfgOpcode.OptionEqualI64 => OptionEqualI64(),
+                    CfgOpcode.OptionOrI64 =>
+                        (bool)values[op.Left!.Value]
+                            ? (long)values[op.Right!.Value]
+                            : (long)values[op.Arguments![0]],
                     _ => throw new InvalidOperationException("Unexpected CFG opcode")
                 };
             }
@@ -41,7 +68,13 @@ internal static class CfgReferenceEvaluator
             switch (block.Terminator)
             {
                 case CfgReturn returned:
-                    return (long)values[returned.ValueId];
+                {
+                    // A verified CFG may also return Bool. The test-only
+                    // evaluator exposes the canonical 0/1 projection so
+                    // the same oracle can exercise tagged equality directly.
+                    object result = values[returned.ValueId];
+                    return result is bool boolean ? (boolean ? 1L : 0L) : (long)result;
+                }
                 case CfgJump jump:
                     arguments = jump.Arguments.Select(id => values[id]).ToArray();
                     currentName = jump.Target;

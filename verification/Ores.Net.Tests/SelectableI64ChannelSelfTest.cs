@@ -378,3 +378,129 @@ internal static class SelectableI64ChannelSelfTest
         ForeignSubscriptionCannotCommit();
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    private static void PendingBufferedWritersAdmitInSubscriptionOrder()
+        Require(channel.TryWrite(0), "seed full channel");
+
+        using var firstSelect = new SelectArbiter(1);
+        using var secondSelect = new SelectArbiter(1);
+        var first = firstSelect.RegisterCase(0);
+        var second = secondSelect.RegisterCase(0);
+
+        var firstWait = BindWrite(channel, first, 1, () => firstCallbacks++);
+        var secondWait = BindWrite(channel, second, 2, () => secondCallbacks++);
+
+        Require(channel.PendingWriters == 2, "two writers pending");
+        Require(firstSelect.Winner is null && secondSelect.Winner is null,
+            "neither pending writer committed while full");
+
+        Require(channel.TryRead(out var seed) && seed == 0,
+            "first read frees one slot");
+
+        Require(firstSelect.Winner == 0,
+            "oldest registered writer commits first");
+        Require(secondSelect.Winner is null,
+            "later writer remains pending while first value occupies slot");
+            "both readiness observers sampled first freed slot");
+        Require(channel.PendingWriters == 1,
+            "only later writer remains registered");
+
+        Require(channel.TryRead(out var firstValue) && firstValue == 1,
+            "first pending payload is FIFO-visible");
+        Require(secondSelect.Winner == 0,
+            "later writer commits on second freed slot");
+        Require(secondCallbacks == 2,
+            "later writer receives readiness again");
+            "no writer registrations remain");
+
+        Require(channel.TryRead(out var secondValue) && secondValue == 2,
+            "second pending payload follows first");
+        Require(!channel.TryRead(out _), "no extra payload delivered");
+
+    private static void CancellingOlderWriterLetsLaterWriterAdvanceWithoutGhostDelivery()
+        Require(channel.TryWrite(0), "seed full channel");
+
+        using var olderSelect = new SelectArbiter(1);
+        using var laterSelect = new SelectArbiter(1);
+        var older = olderSelect.RegisterCase(0);
+        var later = laterSelect.RegisterCase(0);
+        var olderCallbacks = 0;
+        var laterCallbacks = 0;
+
+        var olderWait = BindWrite(channel, older, 1, () => olderCallbacks++);
+        older.Arm(() => olderWait.Close());
+        var laterWait = BindWrite(channel, later, 2, () => laterCallbacks++);
+        later.Arm(() => laterWait.Close());
+
+        Require(channel.PendingWriters == 2, "two writers pending before cancellation");
+        Require(olderSelect.Cancel(), "older writer cancellation wins");
+        Require(channel.PendingWriters == 1,
+            "older cancellation detaches exactly one writer");
+        Require(olderCallbacks == 0,
+            "cancelled writer did not observe readiness");
+
+        Require(channel.TryRead(out var seed) && seed == 0,
+            "read frees capacity after cancellation");
+
+        Require(olderSelect.Winner is null,
+            "cancelled older writer never becomes winner");
+        Require(laterSelect.Winner == 0,
+            "later live writer advances");
+        Require(laterCallbacks == 1,
+            "later writer observes freed capacity once");
+            "later winner consumes final registration");
+
+        Require(channel.TryRead(out var value) && value == 2,
+            "only later live payload was admitted");
+        Require(!channel.TryRead(out _),
+            "cancelled older payload never appears");
+        Require(olderCallbacks == 0,
+            "cancelled waiter never resurrected");
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        PendingBufferedWritersAdmitInSubscriptionOrder();
+        CancellingOlderWriterLetsLaterWriterAdvanceWithoutGhostDelivery();
