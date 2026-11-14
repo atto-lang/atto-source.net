@@ -32,6 +32,11 @@
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../tests/fixtures/trap-three-backend-target.atto"
           Link="trap-three-backend-target.atto" CopyToOutputDirectory="PreserveNewest" />
+    <!-- The nine canonical .atto guest fixtures are byte-identical with
+         platform-conformance and the LLVM/Java parity branches. -->
+    <None Include="../../tests/fixtures/caller-trap-parity/*.atto"
+          Link="caller-trap-parity/%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../tests/fixtures/actor-pipe-two-stage.atto"
           Link="actor-pipe-two-stage.atto" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/logical-word-operators-v1/**/*"
