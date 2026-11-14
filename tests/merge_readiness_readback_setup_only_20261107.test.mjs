@@ -98,7 +98,7 @@ for(const b of Object.keys(REPOS)) {
   });
   for(const [label,mutate] of drift)
     test(b+': reject readback drift '+label,async()=>{
-      await assert.rejects(()=>live(b,mutate),/drift during evidence capture/);
+      await assert.rejects(()=>live(b,mutate),/GitHub evidence changed during collection/);
     });
   for(const name of setup)
     test(b+': deny setup-only step '+name,()=>{
