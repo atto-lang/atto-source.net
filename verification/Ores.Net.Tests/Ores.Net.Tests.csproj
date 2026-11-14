@@ -22,6 +22,8 @@
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../examples/structured-bindings42.ores" Link="structured-bindings42.ores"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../tests/fixtures/actor-pipe-two-stage.atto"
+          Link="actor-pipe-two-stage.atto" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/logical-word-operators-v1/**/*"
           Link="contracts/logical-word-operators-v1/%(RecursiveDir)%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest" />

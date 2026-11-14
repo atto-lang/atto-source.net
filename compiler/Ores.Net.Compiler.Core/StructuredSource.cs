@@ -115,7 +115,21 @@ public static class OresStructuredParser
             tokens.Add(lexer.Read());
             if (tokens.Count > MaxTokens) throw new FormatException("Structured token budget exceeded");
         } while (tokens[^1].Text.Length != 0);
+        RejectActorPipe(tokens); // before any module graph/import resolution
         return tokens;
+    }
+
+    private static void RejectActorPipe(List<Token> tokens)
+    {
+        for (int i = 0; i + 1 < tokens.Count; i++)
+        {
+            if (ActorPipeAdmission.IsReservedForm(
+                i > 2 ? tokens[i - 3].Text : "",
+                i > 1 ? tokens[i - 2].Text : "",
+                i > 0 ? tokens[i - 1].Text : "",
+                tokens[i].Text, tokens[i + 1].Text))
+                throw ActorPipeAdmission.Unsupported(tokens[i].Offset);
+        }
     }
 
     private static StructuredLinkedUnit ParseCore(string source, LinkedModuleContext? linking)
@@ -221,6 +235,7 @@ public static class OresStructuredParser
                 throw new FormatException("Structured token budget exceeded");
             if (token.Text.Length == 0) break;
         }
+        RejectActorPipe(tokens); // deny source graphs before CFG/CIL admission
         for (int i = 0; i + 1 < tokens.Count; i++)
         {
             // No protected state heap or virtual actor activation exists in

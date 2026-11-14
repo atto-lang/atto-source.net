@@ -55,6 +55,15 @@ public static class OresParser
         // so a post-lex token scan could not observe them.
         for (int i = 0; i + 1 < tokens.Count; i++)
         {
+            // Actor 'pipe' is a contextual graph operator, not scalar '|>'.
+            // Shared token-aware admission keeps comments and identifier 'pipe'
+            // inert while forbidding untyped graph lowering to Native AOT.
+            if (ActorPipeAdmission.IsReservedForm(
+                i > 2 ? tokens[i - 3].Text : "",
+                i > 1 ? tokens[i - 2].Text : "",
+                i > 0 ? tokens[i - 1].Text : "",
+                tokens[i].Text, tokens[i + 1].Text))
+                throw ActorPipeAdmission.Unsupported(tokens[i].Offset);
             // Both shipped scalar and structured frontends must reject a
             // nominal supervisor BEFORE source/IR lowering. Check tokens,
             // not substrings: nested comments and lookalike identifiers do
