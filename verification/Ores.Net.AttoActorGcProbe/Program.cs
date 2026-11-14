@@ -28,6 +28,11 @@ if (requireNativeAot)
 
 long receipts = 0;
 int badReceipts = 0;
+// Legacy ReadOnlyMemory may be retained, but its sensitive bytes must stay
+// scrubbed forever after that turn. Future pooled transport must use a
+// separate borrow-only Span API, never recycle this externally retainable view.
+ReadOnlyMemory<byte> retainedFirstReply = default;
+int retainedFirstReplyCaptured = 0;
 ActorRef guest = default;
 var options = new ActorRuntimeOptions
 {
@@ -51,6 +56,8 @@ ActorRef supervisor = runtime.Spawn(ActorKind.Shared, (_, data) =>
         return;
     }
 
+    if (Interlocked.CompareExchange(ref retainedFirstReplyCaptured, 1, 0) == 0)
+        retainedFirstReply = data;
     ulong sender = BinaryPrimitives.ReadUInt64LittleEndian(data.Span);
     long result = BinaryPrimitives.ReadInt64LittleEndian(data.Span[8..]);
     // The private guest actor must preserve FIFO ordering and its own
@@ -119,6 +126,11 @@ Require(SpinWait.SpinUntil(() =>
         TimeSpan.FromSeconds(20)),
     "real mailbox DATA turns for actor and supervisor were not completed");
 Require(runtime.FaultedTurns == 0, "guest execution faulted on valid i64 input");
+Require(retainedFirstReplyCaptured == 1 && retainedFirstReply.Length == 16,
+    "first message buffer canary was not observed");
+foreach (byte value in retainedFirstReply.Span)
+    Require(value == 0, "retained legacy payload escaped turn zeroization");
+
 
 // Wrong wire shape must terminate only the malformed actor; a live sibling
 // must continue with its independent state, not inherit the retired state.
@@ -130,6 +142,13 @@ Require(SpinWait.SpinUntil(() => runtime.FaultedTurns == 1,
 SendAndVerifyBatch(batchSize);
 Require(Interlocked.Read(ref receipts) == warmupMessages + sampledMessages + batchSize,
     "valid source-generated actor failed after malformed sibling STOP");
+Require(SpinWait.SpinUntil(() =>
+    runtime.CompletedMessages >= 2L * (warmupMessages + sampledMessages + batchSize),
+    TimeSpan.FromSeconds(20)),
+    "survivor and supervisor did not complete final actor turns");
+foreach (byte value in retainedFirstReply.Span)
+    Require(value == 0, "legacy retained message exposed a later actor payload");
+
 
 runtime.Stop(guest);
 Require(SpinWait.SpinUntil(() => runtime.LiveActors == 1,
