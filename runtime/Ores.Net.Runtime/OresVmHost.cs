@@ -527,7 +527,12 @@ public sealed partial class OresVmHost
                         // memory corruption; OS process mode remains denied.
                         lock (_gate) {
                             if (tenant.Phase == Phase.Running)
+                            {
+                                // Every entry into Quiescing stops durable-queue
+                                // admission, so CompleteShutdown can observe Drained.
+                                tenant.Durable.Quiesce();
                                 tenant.Phase = Phase.Quiescing;
+                            }
                             // The faulted incarnation's state is not trusted
                             // and is never read back.
                             tenant.EndReason ??= "guest-fault";
