@@ -306,16 +306,16 @@ internal static class StructuredCfgLoweringTests
             ("fnc main():int{const yes=true as bool;if yes{return 42;}else{return 0;}}", "bool inference never int"),
             ("fnc main():int{const yes=(6*7 eq 42) as bool;if yes{return 42;}else{return 0;}}", "bool comparison checked cast"),
             ("fnc main():int{let x=7 as int;x=42;return x;}", "explicit let permits rebinding"),
-            ("fnc main():int{let int x=40;const y=x;return y+2;}", "const runtime initializer is fixed binding"),
-            ("fnc plus(int n):int{return n+1;}fnc main():int{const x=plus(41) as int;return x;}", "checked cast of function result"),
-            ("fnc plus(int n):int{return n+1;}fnc main():int{const x=plus(41);return x;}", "inferred function result without cast"),
+            ("fnc main():int{let int x=40;val y=x;return y+2;}", "const runtime initializer is fixed binding"),
+            ("fnc plus(int n):int{return n+1;}fnc main():int{val x=plus(41) as int;return x;}", "checked cast of function result"),
+            ("fnc plus(int n):int{return n+1;}fnc main():int{val x=plus(41);return x;}", "inferred function result without cast"),
             ("fnc main():int{const x=7;if true{const z=x as int;return z+35;}else{return 0;}}", "scope-local inference"),
             ("fnc main():int{const x=true as bool as bool;if x{return 42;}else{return 0;}}", "chained bool identity casts"),
-            ("fnc main():int{val x=7;const y=x as int;return y+35;}", "inferred val preserves int"),
+            ("fnc main():int{val x=7;val y=x as int;return y+35;}", "inferred val preserves int"),
             ("fnc main():int{let x=7;x=42;return x;}", "inferred let preserves mutable int"),
             ("fnc main():int{let x=false;x=true;if x{return 42;}else{return 0;}}", "inferred mutable bool"),
-            ("fnc yes():bool{return true;}fnc main():int{const x=yes();if x{return 42;}else{return 0;}}", "inferred bool helper result"),
-            ("fnc yes():bool{return true;}fnc main():int{const x=yes() as bool;if x{return 42;}else{return 0;}}", "checked bool helper result"),
+            ("fnc yes():bool{return true;}fnc main():int{val x=yes();if x{return 42;}else{return 0;}}", "inferred bool helper result"),
+            ("fnc yes():bool{return true;}fnc main():int{val x=yes() as bool;if x{return 42;}else{return 0;}}", "checked bool helper result"),
             ("fnc seven():int{return 7 as int;}fnc main():int{return seven()+35;}", "checked identity cast at helper return"),
             ("fnc main():int{const a=7;const b=a;const c=b as int;return c+35;}", "multi-hop int inference"),
             ("fnc main():int{const a=true;const b=a;const c=b as bool;if c{return 42;}else{return 0;}}", "multi-hop bool inference"),
@@ -327,9 +327,9 @@ internal static class StructuredCfgLoweringTests
             ("fnc main():int{return (7 as int as int)*6;}", "chained cast binds before multiplication"),
             ("fnc main():int{const x=7 as int;const y=x as int;return y*6;}", "checked cast through inferred constant reference"),
             ("fnc main():int{let x=7;x=x+1;x=x+34;return x;}", "SSA let multiwrite matches Cranelift LLVM"),
-            ("fnc main():int{let x=7;const snap=x;x=42;return snap+35;}", "const captures prior SSA version"),
+            ("fnc main():int{let x=7;val snap=x;x=42;return snap+35;}", "const captures prior SSA version"),
             ("fnc main():int{let x=7;val snap=x;x=42;return snap+35;}", "val captures prior SSA version"),
-            ("fnc main():int{let x=7;const snap=x as int;x=42;return snap+35;}", "checked cast snapshot cannot alias mutable local"),
+            ("fnc main():int{let x=7;val snap=x as int;x=42;return snap+35;}", "checked cast snapshot cannot alias mutable local"),
             ("fnc main():int{let x=7 as int;x=(x+35) as int;return x;}", "cast applied to mutable SSA replacement"),
             ("fnc main():int{const base=7;let x=base;x=42;return x;}", "mutable sourced from immutable const")
         })
@@ -589,10 +589,14 @@ internal static class StructuredCfgLoweringTests
         Reject("fnc main():int{const int x=1;x=2;return x;}", "const reassignment");
         Reject("fnc main():int{val int x=1;if true{x=2;}return x;}",
             "val cannot be mutated inside nested block");
-        Check("fnc main():int{let int x=40;const int y=x;return y+2;}",
-            42, "const eagerly snapshots current mutable binding value");
-        Check("fnc main():int{val int x=40;const int y=x;return y+2;}",
-            42, "const accepts runtime single-assignment source value");
+        Check("fnc main():int{let int x=40;val int y=x;return y+2;}",
+            42, "val snapshots current mutable binding value");
+        Check("fnc main():int{val int x=40;val int y=x;return y+2;}",
+            42, "val accepts runtime single-assignment source value");
+        Reject("fnc main():int{let int x=40;const int y=x;return y+2;}",
+            "const must not snapshot runtime mutable local");
+        Reject("fnc main():int{val int x=40;int y=x;return y+2;}",
+            "implicit const must not copy runtime val as constexpr");
         Reject("fnc main():int{const int x=9223372036854775807+1;return x;}",
             "const overflow is rejected before CIL");
 
