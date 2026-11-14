@@ -46,7 +46,9 @@ public static class OresStructuredCfgLowering
         return new VerifiedCfgModule(main, methods.AsReadOnly());
     }
 
-    private readonly record struct Binding(IrValueType Type, int ValueId);
+    // A closed Option<int> is represented by two separately verified SSA IDs.
+    // Its tag occupies ValueId (Bool), payload occupies PayloadId (I64).
+    private readonly record struct Binding(IrValueType Type, int ValueId, int? PayloadId = null);
 
     private sealed class Block(string name)
     {
@@ -136,6 +138,40 @@ public static class OresStructuredCfgLowering
             return id;
         }
 
+        // Explicit tagged Option<int> representation: no all-bits-value
+        // sentinel, nullable managed heap object or implicit flattening.
+        private (int Tag, int Payload) OptionParts(StructuredExpr option, ref Block block,
+            Dictionary<string, Binding> variables)
+        {
+            switch (option)
+            {
+                case StructuredSome some:
+                {
+                    int payload = Expression(some.Payload, ref block, variables);
+                    int tag = Emit(block, CfgOpcode.ConstantBool, IrValueType.Bool,
+                        boolean: true);
+                    return (tag, payload);
+                }
+                case StructuredNone:
+                {
+                    int tag = Emit(block, CfgOpcode.ConstantBool, IrValueType.Bool,
+                        boolean: false);
+                    int payload = Emit(block, CfgOpcode.ConstantI64, IrValueType.I64,
+                        value: 0);
+                    return (tag, payload);
+                }
+                case StructuredRead read when read.Type == IrValueType.OptionI64:
+                {
+                    if (!variables.TryGetValue(read.Name, out var value) ||
+                        value.Type != IrValueType.OptionI64 || !value.PayloadId.HasValue)
+                        throw new FormatException("Unbound or unverified Option<int> local");
+                    return (value.ValueId, value.PayloadId.Value);
+                }
+                default:
+                    throw new FormatException(
+                        "E_OPTION_I64_ONLY: unverified Option<int> expression");
+            }
+        }
         private int Expression(StructuredExpr expression, ref Block block,
             Dictionary<string, Binding> variables)
         {
@@ -149,9 +185,40 @@ public static class OresStructuredCfgLowering
                         boolean: boolean.Value);
                 case StructuredRead read:
                     if (!variables.TryGetValue(read.Name, out var variable) ||
-                        variable.Type != read.Type)
-                        throw new FormatException("Unbound structured CFG local");
+                        variable.Type != read.Type || variable.Type == IrValueType.OptionI64)
+                        throw new FormatException("Unbound or unverified scalar CFG local");
                     return variable.ValueId;
+                // Operands may short-circuit into new CFG blocks (ref block), so
+                // evaluate them fully before emitting into the current block.
+                case StructuredOptionPresent present:
+                    return OptionParts(present.Option, ref block, variables).Tag;
+                case StructuredOptionAbsent absent:
+                {
+                    int tag = OptionParts(absent.Option, ref block, variables).Tag;
+                    return Emit(block, CfgOpcode.BoolNot, IrValueType.Bool, left: tag);
+                }
+                case StructuredOptionEqual comparison:
+                {
+                    // Preserve left-to-right source evaluation exactly once.
+                    var lhs = OptionParts(comparison.LeftOption, ref block, variables);
+                    var rhs = OptionParts(comparison.RightOption, ref block, variables);
+                    int equal = Emit(block, CfgOpcode.OptionEqualI64, IrValueType.Bool,
+                        left: lhs.Tag, right: lhs.Payload,
+                        arguments: new[] { rhs.Tag, rhs.Payload });
+                    return comparison.Negated
+                        ? Emit(block, CfgOpcode.BoolNot, IrValueType.Bool, left: equal)
+                        : equal;
+                }
+                case StructuredOptionOr selected:
+                {
+                    var option = OptionParts(selected.Option, ref block, variables);
+                    // Eager source evaluation: evaluate the fallback once even
+                    // when the option is Some; only selection is conditional.
+                    int fallback = Expression(selected.Fallback, ref block, variables);
+                    return Emit(block, CfgOpcode.OptionOrI64, IrValueType.I64,
+                        left: option.Tag, right: option.Payload,
+                        arguments: new[] { fallback });
+                }
                 case StructuredCall call:
                 {
                     if (emitCalls)
@@ -275,17 +342,41 @@ public static class OresStructuredCfgLowering
             var destination = NewBlock();
             foreach (string name in names)
             {
-                int id = NextValue();
                 var type = source[name].Type;
-                destination.Parameters.Add(new CfgParameter(id, type));
-                result[name] = new Binding(type, id);
+                int id = NextValue();
+                if (type == IrValueType.OptionI64)
+                {
+                    int payloadId = NextValue();
+                    destination.Parameters.Add(new CfgParameter(id, IrValueType.Bool));
+                    destination.Parameters.Add(new CfgParameter(payloadId, IrValueType.I64));
+                    result[name] = new Binding(type, id, payloadId);
+                }
+                else
+                {
+                    destination.Parameters.Add(new CfgParameter(id, type));
+                    result[name] = new Binding(type, id);
+                }
             }
             return destination;
         }
 
         private static int[] Values(string[] names,
-            Dictionary<string, Binding> variables) =>
-            names.Select(name => variables[name].ValueId).ToArray();
+            Dictionary<string, Binding> variables)
+        {
+            var ids = new List<int>(names.Length * 2);
+            foreach (string name in names)
+            {
+                var value = variables[name];
+                ids.Add(value.ValueId);
+                if (value.Type == IrValueType.OptionI64)
+                {
+                    if (!value.PayloadId.HasValue)
+                        throw new FormatException("Missing Option<int> CFG payload");
+                    ids.Add(value.PayloadId.Value);
+                }
+            }
+            return ids.ToArray();
+        }
 
         private Block? EmitStatements(IReadOnlyList<StructuredStmt> statements,
             Block start, Dictionary<string, Binding> variables)
@@ -305,9 +396,19 @@ public static class OresStructuredCfgLowering
                         if (variables.ContainsKey(declaration.Name))
                             throw new FormatException("Shadowed structured CFG local");
                         Block evalBlock = current;
-                        int value = Expression(declaration.Initializer, ref evalBlock, variables);
-                        current = evalBlock;
-                        variables.Add(declaration.Name, new Binding(declaration.ValueType, value));
+                        if (declaration.ValueType == IrValueType.OptionI64)
+                        {
+                            var option = OptionParts(declaration.Initializer, ref evalBlock, variables);
+                            current = evalBlock;
+                            variables.Add(declaration.Name, new Binding(
+                                IrValueType.OptionI64, option.Tag, option.Payload));
+                        }
+                        else
+                        {
+                            int value = Expression(declaration.Initializer, ref evalBlock, variables);
+                            current = evalBlock;
+                            variables.Add(declaration.Name, new Binding(declaration.ValueType, value));
+                        }
                         break;
                     }
                     case StructuredSet assignment:
@@ -315,9 +416,19 @@ public static class OresStructuredCfgLowering
                         if (!variables.TryGetValue(assignment.Name, out var original))
                             throw new FormatException("Unknown structured CFG assignment");
                         Block evalBlock = current;
-                        int value = Expression(assignment.Value, ref evalBlock, variables);
-                        current = evalBlock;
-                        variables[assignment.Name] = new Binding(original.Type, value);
+                        if (original.Type == IrValueType.OptionI64)
+                        {
+                            var option = OptionParts(assignment.Value, ref evalBlock, variables);
+                            current = evalBlock;
+                            variables[assignment.Name] = new Binding(
+                                IrValueType.OptionI64, option.Tag, option.Payload);
+                        }
+                        else
+                        {
+                            int value = Expression(assignment.Value, ref evalBlock, variables);
+                            current = evalBlock;
+                            variables[assignment.Name] = new Binding(original.Type, value);
+                        }
                         break;
                     }
                     case StructuredReturn returned:

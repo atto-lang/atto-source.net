@@ -21,7 +21,15 @@ public enum CfgOpcode
     GreaterThanOrEqualI64,
     EqualBool,
     NotEqualBool,
-    XorBool
+    XorBool,
+    // Two-word source Option<int>, selected from verified bool tag/i64
+    // payload and an eagerly evaluated i64 fallback. Not an opaque pointer.
+    OptionOrI64,
+    // Verified Boolean negation, used by the closed Option<int>.is_none() query.
+    BoolNot,
+    // Closed Option<int> equality: tags (Bool) and active payloads (I64).
+    // All four operands must be verified SSA values in evaluation order.
+    OptionEqualI64
 }
 
 public readonly record struct CfgParameter(int Id, IrValueType Type);
@@ -319,6 +327,43 @@ public static class OresCfgVerifier
                             throw new FormatException("Unverified CFG static call");
                         for (int arg = 0; arg < op.Arguments.Count; arg++)
                             Use(i, opIndex, op.Arguments[arg], callee.ParameterTypes[arg]);
+                        break;
+                    }
+                    case CfgOpcode.OptionEqualI64:
+                    {
+                        RequireType(op.Type, IrValueType.Bool);
+                        if (op.Left is null || op.Right is null ||
+                            op.Arguments is null || op.Arguments.Count != 2 ||
+                            op.I64Constant is not null || op.BoolConstant is not null ||
+                            op.Target is not null)
+                            throw new FormatException("Malformed CFG Option<int> equality");
+                        Use(i, opIndex, op.Left.Value, IrValueType.Bool);
+                        Use(i, opIndex, op.Right.Value, IrValueType.I64);
+                        Use(i, opIndex, op.Arguments[0], IrValueType.Bool);
+                        Use(i, opIndex, op.Arguments[1], IrValueType.I64);
+                        break;
+                    }
+                    case CfgOpcode.BoolNot:
+                    {
+                        RequireType(op.Type, IrValueType.Bool);
+                        if (op.Left is null || op.Right is not null ||
+                            op.Arguments is not null || op.Target is not null ||
+                            op.I64Constant is not null || op.BoolConstant is not null)
+                            throw new FormatException("Malformed CFG Boolean negation");
+                        Use(i, opIndex, op.Left.Value, IrValueType.Bool);
+                        break;
+                    }
+                    case CfgOpcode.OptionOrI64:
+                    {
+                        RequireType(op.Type, IrValueType.I64);
+                        if (op.Left is null || op.Right is null ||
+                            op.Arguments is null || op.Arguments.Count != 1 ||
+                            op.I64Constant is not null || op.BoolConstant is not null ||
+                            op.Target is not null)
+                            throw new FormatException("Malformed CFG Option<int> selection");
+                        Use(i, opIndex, op.Left.Value, IrValueType.Bool);
+                        Use(i, opIndex, op.Right.Value, IrValueType.I64);
+                        Use(i, opIndex, op.Arguments[0], IrValueType.I64);
                         break;
                     }
                     case CfgOpcode.ConstantI64:
