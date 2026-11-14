@@ -247,6 +247,27 @@ public static partial class OresStructuredParser
                         $"Lexical captures require checked closure lowering at offset {token.Offset}");
             }
             tokens.Add(token);
+            // Reject as soon as the typed receiver header completes: later
+            // body syntax may be outside this limited scalar lexer entirely.
+            // Waiting for EOF could report an unrelated invalid character
+            // before the missing NativeAOT method capability.
+            int receiverAt = tokens.Count - 1;
+            if (token.Text == ":" &&
+                ((receiverAt >= 3 &&
+                  tokens[receiverAt - 1].Text == "self" &&
+                  tokens[receiverAt - 2].Text == "(" &&
+                  tokens[receiverAt - 3].Text == "mtd") ||
+                 (receiverAt >= 4 &&
+                  tokens[receiverAt - 1].Text == "self" &&
+                  tokens[receiverAt - 2].Text == "mut" &&
+                  tokens[receiverAt - 3].Text == "(" &&
+                  tokens[receiverAt - 4].Text == "mtd")))
+            {
+                int methodIndex = tokens[receiverAt - 2].Text == "("
+                    ? receiverAt - 3 : receiverAt - 4;
+                throw new FormatException(
+                    $"MTD_RECEIVER_NATIVEAOT_UNSUPPORTED: typed receiver methods need nominal class slots, borrow checking and CIL lowering at offset {tokens[methodIndex].Offset}");
+            }
             if (token.Text == "{") braceDepth++;
             else if (token.Text == "}" && braceDepth > 0) braceDepth--;
             if (tokens.Count > MaxTokens)
