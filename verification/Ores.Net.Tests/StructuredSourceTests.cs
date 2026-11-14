@@ -1003,6 +1003,14 @@ internal static class StructuredSourceTests
             "or rejects non-boolean RHS");
         Reject("fnc main():int{if true xor 1{return 1;}else{return 2;}}",
             "xor rejects non-boolean RHS");
+        Reject("fnc main():int{if 1 && true{return 1;}else{return 2;}}",
+            "&& rejects non-boolean LHS");
+        Reject("fnc main():int{if false || 1{return 1;}else{return 2;}}",
+            "|| rejects non-boolean RHS");
+        Reject("fnc main():int{if true ^^ 1{return 1;}else{return 2;}}",
+            "^^ rejects non-boolean RHS");
+        Reject("fnc main():int{if true ^ false{return 1;}else{return 2;}}",
+            "single ^ stays out of the grammar");
         Reject("fnc main():int{if true==1{return 1;}else{return 2;}}",
             "bool/int equality mixing rejected");
         Reject("fnc main():int{const bool b=false xor (9223372036854775807+1>0);" +
