@@ -265,10 +265,10 @@ public static partial class OresStructuredParser
                 scalarMethods.Append("fnc ").Append(handler.Method).Append('(')
                     .Append(handler.Input).Append(' ').Append(handler.Parameter)
                     .Append("):").Append(handler.Output).Append(' ')
-                    .Append(handler.Body).Append('\\n');
+                    .Append(handler.Body).Append('\n');
                 scalarResult = handler.Method + "(" + scalarResult + ")";
             }
-            string scalar = scalarMethods +
+            string scalar = scalarMethods.ToString() +
                 (stages[^1].MessageOutput == "int"
                     ? "fnc main():int{return " + scalarResult + ";}"
                     : "fnc main():int{return 0;}");
