@@ -1304,7 +1304,7 @@ public static partial class OresStructuredParser
                 var operand = Unary(depth + 1);
                 if (operand.Type != IrValueType.I64)
                     throw new FormatException(
-                        $"E_TRAP_PROFILE_UNSUPPORTED: only non-throwing synchronous int operands have verified Option<int> CIL lowering at offset {at}");
+                        $"E_TRAP_PROFILE_UNSUPPORTED: Option/Result/trap requires verified tagged-sum CIL and NativeAOT guest-control lowering for non-int operands at offset {at}");
                 int height = Height(operand) + 1;
                 if (height > MaxDepth)
                     throw new FormatException($"Structured trap AST depth exceeds limit at offset {at}");
