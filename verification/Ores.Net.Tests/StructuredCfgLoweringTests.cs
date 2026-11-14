@@ -96,6 +96,14 @@ internal static class StructuredCfgLoweringTests
             6, "runtime val has independent SSA identity");
         Check("fnc main():int{const bool b=2<3;if b{return 42;}else{return 0;}}",
             42, "compile-time boolean branch in emitted CIL");
+        Check("fnc main():int{if true then 42; else 1; fi}",
+            42, "implicit tail conditional in verified CFG/CIL");
+        Check("fnc main():int{if false then 1 else 42 fi}",
+            42, "keyword tail branch without semicolon");
+        Check("fnc main():int{if true then let int val=5, val+42 else 1 fi}",
+            47, "comma sequencing with contextual val local");
+        Check("fnc main():int{if true then 41; else 1; fi return 99;}",
+            99, "non-tail conditional does not return early");
         Check("fnc main():int{if true then return 42; else return 1; fi}",
             42, "then/fi conditional emits verified CIL");
         Check("fnc main():int{if false then return 1; else return 42; fi}",

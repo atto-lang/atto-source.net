@@ -160,6 +160,14 @@ internal static class StructuredSourceTests
         Reject("fnc main():int{if true then{return 42;}else{return 1;}fi}",
             "then/fi if must not admit braced branches");
 
+        var implicitTail = OresStructuredParser.Parse("""
+            fnc main():int { if true then let int val=5, val+42 else 1 fi }
+            """);
+        Require(implicitTail.Body[0] is StructuredIf {
+            Then.Count: 2, Else.Count: 1
+        }, "keyword comma sequence and final value must parse");
+        Reject("fnc main():int{if true then 42 else 1 fi fi}",
+            "extra keyword terminator must be rejected");
         var runtimeBool = OresStructuredParser.Parse("""
             fnc main():int {
                 val bool enabled = true;

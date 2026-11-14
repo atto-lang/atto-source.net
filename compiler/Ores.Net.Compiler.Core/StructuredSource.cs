@@ -39,6 +39,7 @@ public sealed record StructuredLet(int At, string Name, IrValueType ValueType,
 public sealed record StructuredSet(int At, string Name, StructuredExpr Value)
     : StructuredStmt(At);
 public sealed record StructuredReturn(int At, StructuredExpr Value) : StructuredStmt(At);
+public sealed record StructuredValueStatement(int At, StructuredExpr Value) : StructuredStmt(At);
 public sealed record StructuredIf(int At, StructuredExpr Condition,
     IReadOnlyList<StructuredStmt> Then, IReadOnlyList<StructuredStmt>? Else)
     : StructuredStmt(At);
@@ -484,8 +485,9 @@ public static class OresStructuredParser
                     if (parameters.Count != 0 || resultType != IrValueType.I64)
                         throw new FormatException($"main must have signature ():int at offset {at}");
                     var (body, returns) = Block(0);
-                    if (!returns) throw Error("Not every path returns int");
-                    return Finish("main", body);
+                    var (lowered, tailReturns) = LowerTail(body);
+                    if (!returns && !tailReturns) throw Error("Not every path returns int");
+                    return Finish("main", lowered);
                 }
                 if (visible.ContainsKey(name))
                     throw new FormatException($"Duplicate typed helper at offset {at}");
@@ -495,9 +497,10 @@ public static class OresStructuredParser
                 // parser as main. The separate MethodDef ABI isolates locals.
                 activeReturnType = resultType;
                 scopes.Add(parameterTypes);
-                var (helperBody, helperReturns) = Block(0);
+                var (parsedBody, helperReturns) = Block(0);
                 scopes.RemoveAt(scopes.Count - 1);
-                if (!helperReturns)
+                var (helperBody, tailReturns) = LowerTail(parsedBody);
+                if (!helperReturns && !tailReturns)
                     throw Error("Not every typed helper path returns");
                 StructuredExpr? inlineReturn =
                     helperBody.Count == 1 && helperBody[0] is StructuredReturn only
@@ -512,6 +515,47 @@ public static class OresStructuredParser
                 functionOrder.Add(methodName);
             }
         }
+        // Only a final expression in a callable or branch becomes a return.
+        // Previously evaluated non-tail expressions retain their effects.
+        private static (IReadOnlyList<StructuredStmt> Body, bool Returns)
+            LowerTail(IReadOnlyList<StructuredStmt> body)
+        {
+            if (body.Count == 0) return (body, false);
+            var rewritten = body.ToArray();
+            var (last, returns) = LowerTailStatement(rewritten[^1]);
+            rewritten[^1] = last;
+            return (Array.AsReadOnly(rewritten), returns);
+        }
+
+        private static (StructuredStmt Statement, bool Returns)
+            LowerTailStatement(StructuredStmt statement)
+        {
+            if (statement is StructuredReturn) return (statement, true);
+            if (statement is StructuredValueStatement value)
+                return (new StructuredReturn(value.At, value.Value), true);
+            if (statement is StructuredIf conditional)
+            {
+                var (yes, yesReturns) = LowerTail(conditional.Then);
+                IReadOnlyList<StructuredStmt>? no = null;
+                bool noReturns = false;
+                if (conditional.Else is not null)
+                    (no, noReturns) = LowerTail(conditional.Else);
+                return (new StructuredIf(conditional.At, conditional.Condition, yes, no),
+                    yesReturns && noReturns);
+            }
+            return (statement, false);
+        }
+
+        private int keywordArmDepth;
+
+        private void StatementDelimiter()
+        {
+            if (Take(";")) return;
+            if (keywordArmDepth > 0 && Take(",")) return;
+            if (keywordArmDepth > 0 && (Current.Text is "else" or "fi")) return;
+            throw Error("Expected ';' or keyword-arm comma");
+        }
+
         private (IReadOnlyList<StructuredStmt> Body, bool Returns) Block(int depth)
         {
             Budget(depth);
@@ -544,24 +588,31 @@ public static class OresStructuredParser
             Budget(depth);
             scopes.Add(new Dictionary<string, LocalBinding>(StringComparer.Ordinal));
             localTypeScopes.Add(new HashSet<string>(StringComparer.Ordinal));
-            var body = new List<StructuredStmt>();
-            bool terminated = false;
-            while (Current.Text != "fi" && (!stopAtElse || Current.Text != "else"))
+            keywordArmDepth++;
+            try
             {
-                if (Current.Text.Length == 0 || Current.Text == "}")
-                    throw Error("Unterminated keyword if arm (expected else or fi)");
-                if (terminated) throw Error("Unreachable statement");
-                if (++statements > MaxStatements)
-                    throw Error("Structured statement budget exceeded");
-                var (statement, returns) = Statement(depth + 1);
-                body.Add(statement);
-                terminated = returns;
+                var body = new List<StructuredStmt>();
+                bool terminated = false;
+                while (Current.Text != "fi" && (!stopAtElse || Current.Text != "else"))
+                {
+                    if (Current.Text.Length == 0 || Current.Text == "}")
+                        throw Error("Unterminated keyword if arm (expected else or fi)");
+                    if (terminated) throw Error("Unreachable statement");
+                    if (++statements > MaxStatements)
+                        throw Error("Structured statement budget exceeded");
+                    var (statement, returns) = Statement(depth + 1);
+                    body.Add(statement);
+                    terminated = returns;
+                }
+                return (Array.AsReadOnly(body.ToArray()), terminated);
             }
-            scopes.RemoveAt(scopes.Count - 1);
-            localTypeScopes.RemoveAt(localTypeScopes.Count - 1);
-            return (Array.AsReadOnly(body.ToArray()), terminated);
+            finally
+            {
+                keywordArmDepth--;
+                scopes.RemoveAt(scopes.Count - 1);
+                localTypeScopes.RemoveAt(localTypeScopes.Count - 1);
+            }
         }
-
         private (StructuredStmt Statement, bool Returns) Statement(int depth)
         {
             Budget(depth);
@@ -616,7 +667,9 @@ public static class OresStructuredParser
                 Expect(";");
                 return (new StructuredReturn(at, value), true);
             }
-            if (Current.Text is "let" or "val" or "const")
+            if ((Current.Text is "let" or "val" or "const") &&
+                !(Current.Text == "val" && keywordArmDepth > 0 &&
+                  index + 1 < tokens.Count && tokens[index + 1].Text == "+"))
             {
                 StructuredBindingKind kind = Current.Text switch
                 {
@@ -627,7 +680,7 @@ public static class OresStructuredParser
                 index++;
                 var type = Type();
                 int nameAt = Current.Offset;
-                string name = Name();
+                string name = Name(allowVal: true);
                 if (scopes.Any(scope => scope.ContainsKey(name)))
                     throw new FormatException($"Duplicate local binding at offset {nameAt}");
                 Expect("=");
@@ -646,7 +699,7 @@ public static class OresStructuredParser
                         ? new StructuredBool(initializer.Offset, constantValue.Value != 0)
                         : new StructuredInt(initializer.Offset, constantValue.Value);
                 }
-                Expect(";");
+                StatementDelimiter();
                 // Bind only after checking initializer (no self-reference).
                 scopes[^1].Add(name, new LocalBinding(type, kind, constantValue));
                 return (new StructuredLet(at, name, type, initializer, kind), false);
@@ -687,6 +740,14 @@ public static class OresStructuredParser
                 // Even a constant-true loop is not accepted as a return proof.
                 return (new StructuredWhile(at, condition, body), false);
             }
+            if (keywordArmDepth > 0 &&
+                !(index + 1 < tokens.Count && tokens[index + 1].Text == "="))
+            {
+                var value = Expr(depth + 1);
+                Require(value, activeReturnType, "Keyword-arm value must match function return type");
+                StatementDelimiter();
+                return (new StructuredValueStatement(at, value), false);
+            }
             int variableAt = Current.Offset;
             string variable = Name();
             var binding = Lookup(variable, variableAt);
@@ -705,7 +766,7 @@ public static class OresStructuredParser
             if (Take("bool")) return IrValueType.Bool;
             throw Error("Expected int or bool type");
         }
-        private string Name()
+        private string Name(bool allowVal = false)
         {
             string name = Current.Text;
             int at = Current.Offset;
@@ -714,10 +775,11 @@ public static class OresStructuredParser
                 !name.Skip(1).All(c => Alpha(c) || Digit(c) || c == '_') ||
                 name is "if" or "else" or "while" or "return" or "let"
                     or "int" or "bool" or "true" or "false"
-                    or "define" or "pub" or "fnc" or "const" or "val" or "final"
+                    or "define" or "pub" or "fnc" or "const" or "final"
                     or "struct" or "record" or "class" or "actor"
                     or "module" or "import" or "from" or "as" or "end"
-                    or "routine" or "async" or "isoactor")
+                    or "routine" or "async" or "isoactor" ||
+                (name == "val" && !allowVal))
                 throw new FormatException($"Invalid identifier at offset {at}");
             index++;
             return name;
@@ -888,7 +950,7 @@ public static class OresStructuredParser
                     throw new FormatException($"Invalid i64 at offset {offset}");
                 return new StructuredInt(offset, n);
             }
-            var name = Name();
+            var name = Name(allowVal: scopes.Any(scope => scope.ContainsKey("val")));
             bool localBinding = scopes.Any(scope => scope.ContainsKey(name));
             if (linking is not null)
                 while (Take("."))

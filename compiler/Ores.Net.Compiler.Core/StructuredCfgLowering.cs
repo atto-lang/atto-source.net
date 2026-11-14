@@ -271,6 +271,9 @@ public static class OresStructuredCfgLowering
                         variables[assignment.Name] = new Binding(original.Type, value);
                         break;
                     }
+                    case StructuredValueStatement unused:
+                        _ = Expression(unused.Value, current, variables);
+                        break;
                     case StructuredReturn returned:
                         current.Terminator = new CfgReturn(
                             Expression(returned.Value, current, variables));
