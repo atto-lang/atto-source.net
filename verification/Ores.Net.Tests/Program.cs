@@ -219,6 +219,32 @@ RejectDiagnostic(
 Require(OresParser.Parse("fnc main():int{return 1;} // any unknown ?") is Literal,
     "opaque-top and ternary tokens in comments remain lexically invisible");
 
+
+foreach (var wrapperCase in new[] {
+    (
+        "fnc main():int{ val nested: Future<Future<int>> = value; return 1; }",
+        "Nested Future remains nested; implicit Future flatten is forbidden"
+    ),
+    (
+        "fnc main():int{ val nested: Future<Future<Option<int>>> = value; return 1; }",
+        "Nested Future remains nested; implicit Future flatten is forbidden"
+    ),
+    (
+        "fnc main():int{ val nested: Option<Option<int>> = value; return 1; }",
+        "Nested Option remains nested; implicit Option flatten is forbidden"
+    ),
+    (
+        "fnc main():int{ val nested: Option<Option<Future<int>>> = value; return 1; }",
+        "Nested Option remains nested; implicit Option flatten is forbidden"
+    )
+})
+    RejectDiagnostic(
+        () => OresParser.Parse(wrapperCase.Item1),
+        wrapperCase.Item2,
+        "nested wrapper must fail closed without implicit canonicalization");
+Require(OresParser.Parse(
+    "fnc main():int{return 1;} // Future<Future<int>> Option<Option<int>>") is Literal,
+    "nested-wrapper tokens in comments remain lexically invisible");
 // Two-word runtime declaration kinds must never become scalar CIL or
 // unguarded native state. They are distinct from ordinary actor declarations.
 foreach (var (source, code) in new[] {
@@ -318,9 +344,12 @@ Require(OresParser.Parse(
     "fnc main():int{return 1;} /* enum Color /* enum Mode */ end */") is Literal,
     "nested block-comment enum words must not trigger overload admission");
 
+DotnetHostImportTests.Run(); // compiled System.Math.Abs(i64) CIL metadata and fail-closed imports
 VmIsolateHostTests.Run();
 VmIsolateHostHardeningTests.Run();
 OptionResultTrapAdmissionTests.Run();
+OptionI64CompilerTests.Run(); // opt-in typed Option<int> source -> verified CFG -> CIL
+SafeCollectionSourceAdmissionTests.Run(); // indexed collection access remains fail-closed
 // Shared TCP-pool capabilities are not guest-lowered by either .NET frontend.
 // Deny in both the shipping scalar CLI path and the structured CFG path;
 // a host-only HTTP/1.1 socket provider is not an actor-shared pool.
@@ -363,6 +392,7 @@ Require(OresParser.Parse(
     "model text in line comments remains inert");
 
 CriticalSuspendsBoundaryTests.Run(); // compiler-owned scalar admission, not runtime critical support
+AttoSemanticNegativeGateTests.Run(); // canonical .atto negatives + IR/CIL positive controls (not NativeAOT)
 AsyncOnlyIoPolicyTests.Run();
 CapabilityIoLifecycleV1SelfTest.Run();
 ActorStateSchemaAdmissionTests.Run();
@@ -374,7 +404,9 @@ HeapContainerSourceBoundaryTests.Run(); // actual scalar compiler fail-closed he
 StructuralPatternAdmissionTests.Run();
 AdtSourceAdmissionTests.Run();
 NumericSeparatorParityTests.Run();
+ExplicitExportSyntaxTests.Run();
 CrossBackendCheckedI64ParityTests.Run();
+ActorHierarchyMlAdmissionTests.Run();
 AsyncInteropFailClosedTests.Run();
 await HostTaskObservationTests.Run();
 
@@ -498,15 +530,27 @@ ActorFinalizationV1SelfTest.Run();
 ActorMailboxAuthorizationPrioritySelfTest.Run();
 ActorMailboxPrivateDataSelfTest.Run();
 ActorArenaSelfTest.Run();
+StateRegionLoanProvenanceSelfTest.Run();
+ActorIsolationAccessV1SelfTest.Run();
 ActorShardColumnsSelfTest.Run();
 SelectArbiterSelfTest.Run();
 SelectableI64ChannelSelfTest.Run();
+BoundedDemandI64PortSelfTest.Run(); // host scalar adapter; NOT source Flow<T> or Native AOT guest proof
 SelectableI64FutureSelfTest.Run();
 ActorDispatchDomainsSelfTest.Run();
 ActorRuntimeSelfTest.Run();
+ActorPubSubSelfTest.Run();
+ActorPubSubTurnAuthorityTests.Run();
+ActorPubSubByteQuotaTests.Run();
+ActorPubSubSourceAdmissionTests.Run();
+ActorPipeAdmissionTests.Run(); // compiler gate only; no executable actor guest yet
+ActorPipeSourcePlanV1SelfTest.Run(); // checked scalar CIL oracle, not actor delivery
+NativeTraceContinuationV1SelfTest.Run(); // host-owned W3C scopes; not guest CIL instrumentation
 UniversalHotLoadV1SelfTest.Run();
 ActorFrameStackSelfTest.Run(); // host-only actor logical frames; not guest/AOT evidence
+ActorGuestFrameGateSelfTest.Run(); // terminal compiled-guest frame seam, host-only
 ActorScalarFrameAbiSelfTest.Run(); // verified CFG layout/native spill boundary, not guest execution
+BatchedCheckpointV1SelfTest.Run(); // host contract only; no compiled guest safepoints yet
 CfgActorScalarBoundaryPlanSelfTest.Run(); // compiler-only verified CFG liveness; NOT guest CIL
 ProjectRootSourceTests.Run(); // host-only resolver, not linked .NET source imports
 ActorNativeArenaSelfTest.Run();
@@ -1087,15 +1131,34 @@ Require(await RuntimeHost.ExecuteAsync(() => throw new OverflowException()) == 7
 Require(await RuntimeHost.ExecuteAsync(() => throw new DivideByZeroException()) == 70,
     "divide zero error returned");
 
+ActorCooperationMeterTests.Run(); // host-only, not compiled guest preemption
 ManagedSourceEmitterTests.Run();
 SourceI64Conformance.Run();
+HpcFinanceRiskHostParityTests.Run(); // host oracle + source rejection, not .NET f64 guest parity
 SharedScalarParityConformance.Run();
 AttoXpScalarParityTests.Run(); // pinned .atto scalar IR + CIL evaluator only
 CfgVerifierTests.Run();
 CfgCilStressTests.Run();
 SupervisorStopLedgerSelfTest.Run();
+// The canonical Atto telemetry syntax is not an ordinary CIL call.
+// Both public frontends must reject it *specifically* until exception-safe
+// compiler lowering and NativeAOT runtime attachment are actually present.
+foreach (string source in new[] {
+    "fnc main():int{using telemetry.span() as span {return 42;}}",
+    "fnc main():int{using/*nested*/telemetry./*separator*/span() as span{return 42;}}"
+})
+{
+    RejectDiagnostic(() => OresParser.Parse(source), "E_TELEMETRY_SCOPE_UNSUPPORTED",
+        "scalar compiler cannot silently accept telemetry using syntax");
+    RejectDiagnostic(() => OresStructuredParser.Parse(source), "E_TELEMETRY_SCOPE_UNSUPPORTED",
+        "structured compiler cannot silently accept telemetry using syntax");
+}
+Require(OresStructuredParser.Parse(
+    "fnc main():int{/* using telemetry.span() as span {} */return 42;}").Body.Count == 1,
+    "commented telemetry syntax cannot affect NativeAOT admission");
 StructuredSourceTests.Run();
 StructuredCfgLoweringTests.Run();
+AttoEqualityNativeAotCandidateTests.Run();
 StructuredStaticAbiTests.Run();
 StaticFactsV0Tests.Run();
 ValueBoundaryTests.Run();
