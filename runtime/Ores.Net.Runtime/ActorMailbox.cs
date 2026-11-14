@@ -59,6 +59,10 @@ public sealed class ActorMailbox : IDisposable
     private Func<Guid> _nextNonce = Guid.NewGuid;
     private int _queuedBytes;
     private bool _closed;
+    // Closing new DATA admission must NOT discard already accepted work.
+    // Unlike Stop, draining keeps I/O retirement callbacks alive until the
+    // final physical turn has completed. This is host substrate only.
+    private bool _draining;
     private bool _disposed;
     // Host-owned logical actor I/O envelopes are revoked when this mailbox
     // generation stops. Callbacks run OUTSIDE _gate to avoid the lock order
@@ -97,7 +101,7 @@ public sealed class ActorMailbox : IDisposable
     {
         lock (_gate)
         {
-            return !_closed &&
+            return !_closed && !_draining &&
                 destination.Id == _id &&
                 destination.Generation == _generation &&
                 destination.Nonce == _nonce;
@@ -153,7 +157,7 @@ public sealed class ActorMailbox : IDisposable
 
     private void ValidateSendLocked(ActorRef destination, int length)
     {
-        if (_closed || destination.Id != _id ||
+        if (_closed || _draining || destination.Id != _id ||
             destination.Generation != _generation || destination.Nonce != _nonce)
             throw new InvalidOperationException("Actor reference is stale or mailbox is closed");
 
@@ -165,6 +169,24 @@ public sealed class ActorMailbox : IDisposable
         if (_messages.Count >= _maxMessages || _queuedBytes > _maxQueuedBytes ||
             length > _maxQueuedBytes - _queuedBytes)
             throw new InvalidOperationException("Mailbox capacity exceeded");
+    }
+
+    /// <summary>
+    /// Generation-pinned close of incoming DATA admission, without erasing
+    /// already accepted DATA. Only the owner scheduler may subsequently
+    /// consume queued messages. Stop/Dispose remain abortive and scrub bytes.
+    /// Does not signal termination or promise guest actor graph semantics.
+    /// </summary>
+    public bool TryBeginDrain(ActorRef expected)
+    {
+        lock (_gate)
+        {
+            if (_disposed || _closed || _draining || expected.Id != _id ||
+                expected.Generation != _generation || expected.Nonce != _nonce)
+                return false;
+            _draining = true;
+            return true;
+        }
     }
 
     public bool TryReceive(out byte[]? payload)
@@ -264,6 +286,7 @@ public sealed class ActorMailbox : IDisposable
             _generation++;
             _nonce = nextNonce;
             _closed = false;
+            _draining = false;
             DiscardPending();
             _queuedBytes = 0;
             callbacks = DetachIoRetireCallbacksLocked();
