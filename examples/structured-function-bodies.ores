@@ -1,0 +1,28 @@
+// Separate typed helper MethodDefs with locals, CFG loops and bool return.
+define pub fnc triangular(int count): int {
+    let int total = 0;
+    let int i = 0;
+    while i < count {
+        total = total + i;
+        i = i + 1;
+    }
+    return total;
+}
+
+define pub fnc is_ready(int total): bool {
+    let bool ready = total < 46;
+    return ready;
+}
+
+define pub fnc main(): int {
+    let int sum = triangular(10);
+    if is_ready(sum) {
+        if sum neq 46 {
+            return sum - 3;
+        } else {
+            return 0;
+        }
+    } else {
+        return 0;
+    }
+}
