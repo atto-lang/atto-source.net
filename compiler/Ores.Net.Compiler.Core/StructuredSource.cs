@@ -535,6 +535,33 @@ public static class OresStructuredParser
             localTypeScopes.RemoveAt(localTypeScopes.Count - 1);
             return (Array.AsReadOnly(body.ToArray()), terminated);
         }
+        // A keyword-delimited if arm has the same lexical scope and
+        // reachability rules as a braced block, but ends at else/fi instead
+        // of consuming braces. Nested if statements consume their own fi.
+        private (IReadOnlyList<StructuredStmt> Body, bool Returns)
+            KeywordArm(int depth, bool stopAtElse)
+        {
+            Budget(depth);
+            scopes.Add(new Dictionary<string, LocalBinding>(StringComparer.Ordinal));
+            localTypeScopes.Add(new HashSet<string>(StringComparer.Ordinal));
+            var body = new List<StructuredStmt>();
+            bool terminated = false;
+            while (Current.Text != "fi" && (!stopAtElse || Current.Text != "else"))
+            {
+                if (Current.Text.Length == 0 || Current.Text == "}")
+                    throw Error("Unterminated keyword if arm (expected else or fi)");
+                if (terminated) throw Error("Unreachable statement");
+                if (++statements > MaxStatements)
+                    throw Error("Structured statement budget exceeded");
+                var (statement, returns) = Statement(depth + 1);
+                body.Add(statement);
+                terminated = returns;
+            }
+            scopes.RemoveAt(scopes.Count - 1);
+            localTypeScopes.RemoveAt(localTypeScopes.Count - 1);
+            return (Array.AsReadOnly(body.ToArray()), terminated);
+        }
+
         private (StructuredStmt Statement, bool Returns) Statement(int depth)
         {
             Budget(depth);
@@ -628,10 +655,27 @@ public static class OresStructuredParser
             {
                 var condition = Expr(depth + 1);
                 Require(condition, IrValueType.Bool, "If condition must be bool");
-                var (yes, yesReturns) = Block(depth + 1);
+                // The two canonical delimiters are exclusive:
+                //   if condition { ... } else { ... }
+                //   if condition then ... else ... fi
+                // Never consume an optional fi after a braced arm: that could
+                // steal the terminator from an enclosing keyword if.
+                bool keywordForm = Take("then");
+                if (!keywordForm && Take(";"))
+                {
+                    Expect("then");
+                    keywordForm = true;
+                }
+                (IReadOnlyList<StructuredStmt> yes, bool yesReturns) =
+                    keywordForm ? KeywordArm(depth + 1, true) : Block(depth + 1);
                 IReadOnlyList<StructuredStmt>? no = null;
                 bool noReturns = false;
-                if (Take("else")) (no, noReturns) = Block(depth + 1);
+                if (Take("else"))
+                {
+                    (no, noReturns) = keywordForm
+                        ? KeywordArm(depth + 1, false) : Block(depth + 1);
+                }
+                if (keywordForm) Expect("fi");
                 return (new StructuredIf(at, condition, yes, no),
                     yesReturns && noReturns);
             }

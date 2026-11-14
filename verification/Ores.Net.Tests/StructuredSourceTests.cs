@@ -129,6 +129,37 @@ internal static class StructuredSourceTests
         Require(constantBool.Body[1] is StructuredIf {
             Condition: StructuredBool { Value: true }
         }, "compile-time bool may appear in typed conditionals");
+        // AttoLang conditional delimiters are not interchangeable.
+        var keywordConditional = OresStructuredParser.Parse("""
+            pub fnc main(): int {
+              if true then
+                return 42;
+              else
+                return 1;
+              fi
+            }
+            """);
+        Require(keywordConditional.Body.Count == 1 &&
+            keywordConditional.Body[0] is StructuredIf {
+                Then.Count: 1, Else.Count: 1
+            }, "then/fi if produces the same typed AST as braced if");
+        var nestedDelimiters = OresStructuredParser.Parse("""
+            pub fnc main(): int {
+              if true then
+                if true { return 42; } else { return 1; }
+              else
+                return 0;
+              fi
+            }
+            """);
+        Require(nestedDelimiters.Body[0] is StructuredIf {
+            Then.Count: 1, Else.Count: 1
+        }, "nested braced if must not consume enclosing fi");
+        Reject("fnc main():int{if true{return 42;}else{return 1;}fi}",
+            "braced if must not admit extraneous fi");
+        Reject("fnc main():int{if true then{return 42;}else{return 1;}fi}",
+            "then/fi if must not admit braced branches");
+
         var runtimeBool = OresStructuredParser.Parse("""
             fnc main():int {
                 val bool enabled = true;

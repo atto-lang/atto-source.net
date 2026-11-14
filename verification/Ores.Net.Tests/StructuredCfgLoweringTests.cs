@@ -96,6 +96,12 @@ internal static class StructuredCfgLoweringTests
             6, "runtime val has independent SSA identity");
         Check("fnc main():int{const bool b=2<3;if b{return 42;}else{return 0;}}",
             42, "compile-time boolean branch in emitted CIL");
+        Check("fnc main():int{if true then return 42; else return 1; fi}",
+            42, "then/fi conditional emits verified CIL");
+        Check("fnc main():int{if false then return 1; else return 42; fi}",
+            42, "keyword conditional false arm emits verified CIL");
+        Check("fnc main():int{if true then if true{return 42;}else{return 1;}else return 0; fi}",
+            42, "nested braced if preserves enclosing keyword fi in CIL");
         // Actual typed source-call semantics are checked in the independent
         // reference evaluator, emitted CIL interpreter and deterministic PE.
         // This is an acyclic, expression-only helper milestone, not a
