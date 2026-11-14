@@ -129,6 +129,7 @@ public static partial class OresParser
                 (i > 0 && tokens[i - 1].Text == "define" ||
                  i > 1 && tokens[i - 1].Text == "pub" &&
                  tokens[i - 2].Text == "define"))
+                throw new FormatException(
                     $"Source supervisors require typed Failure, owned CONTROL dispatch and Native AOT lowering; unsupported in .NET scalar frontend at offset {tokens[i].Offset}");
             if (tokens[i].Text == "select" &&
                 StaticSelectAdmission.IsStaticSelectFollower(tokens[i + 1].Text))
