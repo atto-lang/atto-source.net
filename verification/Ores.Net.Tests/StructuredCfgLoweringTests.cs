@@ -415,6 +415,28 @@ internal static class StructuredCfgLoweringTests
             "xor eagerly evaluates overflowing right operand");
         Check("fnc main():int{if true xor true{return 7;}else{return 42;}}",
             42, "xor boolean false result");
+        // Canonical symbolic spellings (spec ch.16) share the same typed CFG/CIL path.
+        Check("fnc main():int{if false && true{return 7;}else{return 42;}}",
+            42, "&& false branch");
+        Check("fnc main():int{if true || false{return 42;}else{return 7;}}",
+            42, "|| true branch");
+        Check("fnc main():int{let int x=9223372036854775807;" +
+            "if false && x+1>0{return 7;}else{return 42;}}",
+            42, "&& skips overflowing right operand");
+        Check("fnc main():int{let int x=9223372036854775807;" +
+            "if true || x+1>0{return 42;}else{return 7;}}",
+            42, "|| skips overflowing right operand");
+        CheckOverflow("fnc main():int{let int x=9223372036854775807;" +
+            "if false ^^ x+1>0{return 42;}else{return 7;}}",
+            "^^ eagerly evaluates overflowing right operand");
+        Check("fnc main():int{if true ^^ true{return 7;}else{return 42;}}",
+            42, "^^ boolean false result");
+        Check("fnc main():int{if true ^^ false{return 42;}else{return 7;}}",
+            42, "^^ boolean true result");
+        Check("fnc main():int{if true ^^ true && false{return 42;}else{return 7;}}",
+            42, "&& binds tighter than ^^");
+        Check("fnc main():int{if true || true ^^ true{return 42;}else{return 7;}}",
+            42, "^^ binds tighter than ||");
         Check("fnc main():int{if true != false{return 42;}else{return 7;}}",
             42, "typed bool inequality");
         Check("fnc main():int{let int n=0;while (n<3) and (n<10) {n=n+1;}return n+39;}",
