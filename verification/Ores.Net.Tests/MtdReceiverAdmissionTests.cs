@@ -35,6 +35,10 @@ internal static class MtdReceiverAdmissionTests
                 "contracts", "mtd-receiver-v1", fixture);
             Reject(File.ReadAllText(path));
         }
+        Reject("mtd (Point self) foo(): void { return; }");
+        Reject("mtd (Point mut self) mutate(): void { return; }");
+        Reject("mtd (Foo1 self) foo(): void { return; }");
+        Reject("mtd (Foo2 self) foo(): void { return; }");
         Reject("mtd (self: Point) read_x(): int { return self.x; }");
         Reject("mtd (mut self: Point) move_by(int dx): void { self.x += dx; }");
         Reject("pub mtd (mut self: Point) move_by(int dx): void { return; }");
