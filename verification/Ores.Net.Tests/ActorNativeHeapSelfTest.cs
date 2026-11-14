@@ -6,7 +6,7 @@ internal static class ActorNativeHeapSelfTest
 {
     public static void Run()
     {
-        static void Require(bool good, string reason)
+        static void Require([System.Diagnostics.CodeAnalysis.DoesNotReturnIf(false)] bool good, string reason)
         {
             if (!good) throw new Exception("actor native heap: " + reason);
         }
@@ -193,7 +193,7 @@ internal static class ActorNativeHeapSelfTest
             "replacement writes cannot affect surviving actor");
     }
 
-    private static void Require(bool good, string reason)
+    private static void Require([System.Diagnostics.CodeAnalysis.DoesNotReturnIf(false)] bool good, string reason)
     {
         if (!good)
             throw new Exception("actor native heap budget: " + reason);
