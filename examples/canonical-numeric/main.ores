@@ -1,0 +1,7 @@
+// Real guest source: imported functions are compiled from the pinned
+// byte-identical ores.core/numeric.ores; no C# numeric library is involved.
+import module numeric from "../../library/ores.core/numeric";
+
+pub fnc main(): int {
+  return numeric.clamp_int(15, 0, 10);
+}
