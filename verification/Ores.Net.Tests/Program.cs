@@ -1060,6 +1060,7 @@ Require(await RuntimeHost.ExecuteAsync(() => throw new DivideByZeroException()) 
 ActorCooperationMeterTests.Run(); // host-only, not compiled guest preemption
 ManagedSourceEmitterTests.Run();
 SourceI64Conformance.Run();
+HpcFinanceRiskHostParityTests.Run(); // host oracle + source rejection, not .NET f64 guest parity
 SharedScalarParityConformance.Run();
 AttoXpScalarParityTests.Run(); // pinned .atto scalar IR + CIL evaluator only
 CfgVerifierTests.Run();
