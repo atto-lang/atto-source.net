@@ -58,6 +58,44 @@ internal static class OptionResultTrapAdmissionTests
             throw new Exception("Structured CIL admitted or misclassified unsupported tagged source: " + source);
         }
 
+        // Exact .atto bytes are shared with the executable Java/Graal guest
+        // and LLVM's native-source gate. The current structured/CIL .NET
+        // backend must fail closed rather than accidentally promise parity.
+        string sharedSource = File.ReadAllText(Path.Combine(
+            AppContext.BaseDirectory, "trap-three-backend-target.atto"));
+        try
+        {
+            _ = OresStructuredCfgLowering.LowerModule(sharedSource);
+            throw new Exception("Unimplemented cross-backend trap guest reached .NET CFG/CIL");
+        }
+        catch (FormatException error) when
+            (error.Message.Contains(Diagnostic, StringComparison.Ordinal) &&
+             error.Message.Contains("offset ", StringComparison.Ordinal))
+        {
+            // Correct capability diagnostic, NOT an executable guest parity pass.
+        }
+        foreach (var source in new[]
+        {
+            "fnc main():int{return trap 7;}",
+            "fnc checked():int{return 7;} fnc main():int{return trap checked();}",
+            "fnc main():int{val Option<int> outcome=trap 7;return 7;}",
+            "fnc main():int{val Result<int,String> outcome=Err(\"ordinary\");return 7;}",
+            "fnc main():int{val Option<Result<int,String>> outcome=trap checked();return 7;}"
+        })
+        {
+            try
+            {
+                _ = OresStructuredCfgLowering.LowerModule(source);
+            }
+            catch (FormatException error) when
+                (error.Message.Contains(Diagnostic, StringComparison.Ordinal) &&
+                 error.Message.Contains("offset ", StringComparison.Ordinal))
+            {
+                continue;
+            }
+            throw new Exception("Unsupported native trap/Result reached verified SSA: " + source);
+        }
+
         // Reconcile with the experimental closed Option<int> path, rather
         // than applying a broad token deny that would invalidate its typed
         // Option tag and payload SSA proof.
