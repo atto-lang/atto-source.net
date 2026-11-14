@@ -1162,6 +1162,7 @@ StructuredSourceTests.Run();
 StructuredCfgLoweringTests.Run();
 AttoEqualityNativeAotCandidateTests.Run();
 StructuredStaticAbiTests.Run();
+NominalEnumV1GuestTests.Run(); // verified .atto enum source -> real CFG/CIL; native execution separately
 StaticFactsV0Tests.Run();
 ValueBoundaryTests.Run();
 Console.WriteLine("Oreslang .NET bootstrap, CFG verifier, CIL stress and structured source tests passed");
