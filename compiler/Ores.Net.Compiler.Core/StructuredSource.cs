@@ -867,20 +867,23 @@ public static partial class OresStructuredParser
             }
             if (Current.Text is "let" or "val" or "const" or "int" or "bool")
             {
-                // Bare type-first locals are immutable by default:
-                //   int x=e;  == const int x=e;
-                // Explicit let is the only rebindable scalar binding.
+                // In the v1 scalar subset, a type-first local is exactly const:
+                // both spellings need a statically evaluable initializer.
+                // val is the fixed runtime binding; let is rebindable.
                 bool typeFirstImmutable = Current.Text is "int" or "bool";
-                // A runtime-initialized readonly scalar is NOT an explicit
-                // compile-time const, even if later optimizers fold its value.
                 StructuredBindingKind kind = typeFirstImmutable
-                    ? StructuredBindingKind.Readonly
+                    ? StructuredBindingKind.Const
                     : Current.Text switch
                     {
                         "let" => StructuredBindingKind.Let,
                         "val" => StructuredBindingKind.Val,
                         _ => StructuredBindingKind.Const
                     };
+                if (!typeFirstImmutable && kind == StructuredBindingKind.Const &&
+                    index + 1 < tokens.Count && tokens[index + 1].Text == "mut")
+                    throw new FormatException(
+                        $"E_CONST_MUT_UNSUPPORTED: mutable constant instances require owned object lowering at offset {at}");
+
                 bool annotated;
                 IrValueType type = IrValueType.I64;
                 string name;
@@ -928,9 +931,11 @@ public static partial class OresStructuredParser
                 if (kind == StructuredBindingKind.Const && type == IrValueType.OptionI64)
                     throw new FormatException(
                         $"E_OPTION_CONST_UNSUPPORTED: Option<int> const folding needs tagged-value proof at offset {at}");
-                if (kind == StructuredBindingKind.Const &&
-                    IsCompileTimeScalar(initializer))
+                if (kind == StructuredBindingKind.Const)
                 {
+                    if (!IsCompileTimeScalar(initializer))
+                        throw new FormatException(
+                            $"E_NON_CONST_INITIALIZER: const scalar initializer must be compile-time evaluable at offset {initializer.Offset}");
                     try { constantValue = ConstantValue(initializer); }
                     catch (OverflowException)
                     {
@@ -1029,9 +1034,9 @@ public static partial class OresStructuredParser
             throw new FormatException($"Undefined local '{name}' at offset {at}");
         }
 
-        // A source const is a fixed binding, not a demand for compile-time
-        // evaluation. Fold pure scalar literals, retaining runtime initializer
-        // expression and immutable binding for calls/reads. Do not mask overflow.
+        // Const and bare type-first scalars must be statically evaluable.
+        // Runtime calls/read effects belong under val or let. Any failed
+        // constant evaluation rejects source before CFG/CIL emission.
         private static bool IsCompileTimeScalar(StructuredExpr expression) =>
             expression switch
             {
