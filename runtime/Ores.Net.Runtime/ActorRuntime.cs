@@ -397,6 +397,7 @@ public sealed class ActorRuntime : IDisposable
         internal Action DispatchAction { get; }
         internal int Scheduled;
         internal bool Stopping;
+        internal bool Draining;
         internal int Finalized;
         internal TaskCompletionSource Terminated { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -514,6 +515,53 @@ public sealed class ActorRuntime : IDisposable
         }
     }
 
+    /// <summary>
+    /// Host/supervisor-only graceful retirement of one actor generation.
+    /// Stops new message admission atomically, executes all previously
+    /// accepted mailbox DATA in FIFO order, then retires its private arena.
+    /// This does NOT compile an Atto source actor or link source pipe graphs.
+    /// Abortive Stop() still discards queued work and overrides a drain.
+    /// </summary>
+    public void DrainAndStop(ActorRef actor)
+    {
+        RequireHostPubSubAuthority("drain another actor's mailbox");
+        ActorCell cell = Lookup(actor);
+        bool finalizeNow = false;
+        bool scheduleFailed = false;
+        lock (cell.Gate)
+        {
+            if (actor != cell.Reference)
+                throw new InvalidOperationException("Actor reference is stale");
+            if (cell.Draining)
+                return;
+            if (cell.Stopping || !cell.Mailbox.TryBeginDrain(actor))
+                throw new InvalidOperationException("Actor is already stopping or stale");
+            cell.Draining = true;
+            if (cell.Scheduled == 0)
+            {
+                if (cell.Mailbox.QueuedMessages == 0)
+                {
+                    MarkStoppingLocked(cell);
+                    finalizeNow = true;
+                }
+                else
+                {
+                    try { scheduleFailed = !TryScheduleLocked(cell); }
+                    catch { scheduleFailed = true; }
+                    if (scheduleFailed)
+                    {
+                        MarkStoppingLocked(cell); // fail closed and scrub backlog
+                        finalizeNow = true;
+                    }
+                }
+            }
+        }
+        if (finalizeNow)
+            FinalizeCell(cell);
+        if (scheduleFailed)
+            throw new InvalidOperationException("Unable to schedule actor drain");
+    }
+
     public void Stop(ActorRef actor)
     {
         ActorCell cell = Lookup(actor);
@@ -521,7 +569,8 @@ public sealed class ActorRuntime : IDisposable
 
         lock (cell.Gate)
         {
-            if (!cell.Mailbox.Authorizes(actor))
+            if (actor != cell.Reference ||
+                (!cell.Draining && !cell.Mailbox.Authorizes(actor)))
                 throw new InvalidOperationException("Actor reference is stale");
 
             MarkStoppingLocked(cell);
@@ -714,6 +763,13 @@ public sealed class ActorRuntime : IDisposable
                     cell.Scheduled = 0;
                     if (cell.Stopping)
                     {
+                        finalize = true;
+                    }
+                    else if (cell.Draining && cell.Mailbox.QueuedMessages == 0)
+                    {
+                        // No more sends can enter this generation. This
+                        // transition is serialized with Send by cell.Gate.
+                        MarkStoppingLocked(cell);
                         finalize = true;
                     }
                     else if (cell.Mailbox.QueuedMessages != 0)
