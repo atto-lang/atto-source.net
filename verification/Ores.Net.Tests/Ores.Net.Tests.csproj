@@ -80,6 +80,12 @@
     <None Include="../../contracts/scalar/v1/**/*"
           Link="contracts/scalar/v1/%(RecursiveDir)%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/http-actor-admission/3x4.atto"
+          Link="contracts/http-actor-admission/3x4.atto"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/http-actor-v1/*.atto"
+          Link="contracts/http-actor-v1/%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/v1/fixtures/actor-pubsub*.ores"
           Link="contracts/v1/fixtures/%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest" />
