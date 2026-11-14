@@ -3,6 +3,12 @@
     <OutputType>Exe</OutputType>
   </PropertyGroup>
   <ItemGroup>
+    <None Include="../../contracts/v1/annotation-admission-v1.cases"
+          Link="annotation-admission-v1.cases"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/annotations/annotation-compiler-corpus-v2.json"
+          Link="annotation-compiler-corpus-v2.json"
+          CopyToOutputDirectory="PreserveNewest" />
     <Compile Include="../ActorGeneratedRuntimeCounterChecks.cs" Link="ActorGeneratedRuntimeCounterChecks.cs" />
     <Content Include="GeneratedOverflowCounterActor.g.cs" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../elm-composition-rejections.json" Link="elm-composition-rejections.json"
