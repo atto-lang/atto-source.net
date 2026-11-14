@@ -18,6 +18,10 @@ public sealed record ActorPipeGraphV1(
     string ScalarOracleSource)
 {
     public const string Evidence = "TYPED_SCALAR_ORACLE_ONLY_NOT_ACTOR_EXECUTION";
+    // Source admission may validate up to sixteen ordered stages. The
+    // backwards-compatible Edge property denotes the first edge only.
+    public IReadOnlyList<ActorPipeEdgeV1> Edges { get; init; } =
+        Array.Empty<ActorPipeEdgeV1>();
 }
 
 // Reuse the production structured lexer so nested comments, UTF-8 budget,
@@ -117,8 +121,8 @@ public static partial class OresStructuredParser
             Expect("define");
             Expect("actor");
             string name = Name();
-            if (_actors.Count == 2 || _actors.ContainsKey(name))
-                throw Error("duplicate actor or two-stage budget exceeded", at.Offset);
+            if (_actors.Count >= 16 || _actors.ContainsKey(name))
+                throw Error("duplicate actor or sixteen-stage budget exceeded", at.Offset);
             Expect("as");
             Expect("on_message");
             Expect("(");
@@ -152,10 +156,10 @@ public static partial class OresStructuredParser
 
         public ActorPipeGraphV1 Read()
         {
-            while (Current.Text == "define" && _actors.Count < 2)
+            while (Current.Text == "define")
                 ReadActor();
-            if (_actors.Count != 2)
-                throw Error("exactly two source-defined actors required");
+            if (_actors.Count < 2)
+                throw Error("at least two source-defined actors required");
 
             Take("pub");
             Expect("fnc");
@@ -166,42 +170,58 @@ public static partial class OresStructuredParser
             Expect("int");
             Expect("{");
 
-            var stages = new ActorPipeStageV1[2];
-            for (int i = 0; i < stages.Length; i++)
+            var stages = new List<ActorPipeStageV1>();
+            var bindings = new HashSet<string>(StringComparer.Ordinal);
+            // A nominal actor type can have multiple independently owned
+            // instances. Repeated *bindings*, not repeated nominal types,
+            // are forbidden; this is how 15-stage transform chains work.
+            while (Current.Text == "let")
             {
                 Token start = Current;
+                if (stages.Count == 16)
+                    throw Error("actor pipe exceeds sixteen-stage source budget", start.Offset);
                 Expect("let");
                 string binding = Name();
-                if (i > 0 && stages[0].Binding == binding)
+                if (!bindings.Add(binding))
                     throw Error("duplicate actor binding", start.Offset);
                 Expect("=");
                 Expect("spawn");
                 string type = Name();
                 if (!_actors.TryGetValue(type, out ActorHandler? handler))
                     throw Error("unknown actor type", start.Offset);
-                if (i > 0 && stages[0].ActorType == type)
-                    throw Error("actor graph cannot alias or reuse a source actor",
-                        start.Offset);
                 Expect("(");
                 Expect(")");
                 Expect(";");
-                stages[i] = new ActorPipeStageV1(binding, type, handler.Input,
-                    handler.Output, handler.Method, start.Offset);
+                stages.Add(new ActorPipeStageV1(binding, type, handler.Input,
+                    handler.Output, handler.Method, start.Offset));
             }
+            if (stages.Count < 2)
+                throw Error("actor pipe requires at least two owned stages");
 
-            string producer = Name();
-            Token pipe = Current;
-            Expect("pipe");
-            string consumer = Name();
+            // The source form is one contiguous, ordered pipeline. The
+            // contextual "|" alias is admitted only here, where each bound
+            // operand is statically an owned ActorRef.
+            var edges = new List<ActorPipeEdgeV1>(stages.Count - 1);
+            Token startPipe = Current;
+            string first = Name();
+            if (first != stages[0].Binding)
+                throw Error("pipe must begin at the first owned actor", startPipe.Offset);
+            for (int i = 1; i < stages.Count; i++)
+            {
+                Token pipe = Current;
+                if (!Take("pipe") && !Take("|"))
+                    throw Error("missing ordered actor pipe edge", pipe.Offset);
+                string target = Name();
+                if (target != stages[i].Binding)
+                    throw Error("pipe must follow declaration order exactly", pipe.Offset);
+                if (stages[i - 1].MessageOutput != stages[i].MessageInput)
+                    throw Error("nominal pipe output/input message type mismatch", pipe.Offset);
+                edges.Add(new ActorPipeEdgeV1(stages[i - 1].Binding,
+                    stages[i].Binding, pipe.Offset));
+            }
             Expect(";");
-            if (producer != stages[0].Binding || consumer != stages[1].Binding)
-                throw Error("edges must connect owned source then sink exactly once",
-                    pipe.Offset);
-            if (stages[0].MessageOutput != stages[1].MessageInput)
-                throw Error("nominal pipe output/input message type mismatch",
-                    pipe.Offset);
             if (stages[0].MessageInput != "int")
-                throw Error("v1 input message must be int", pipe.Offset);
+                throw Error("v1 input message must be int", startPipe.Offset);
 
             string sentTo = Name();
             Token sendAt = Current;
@@ -209,7 +229,8 @@ public static partial class OresStructuredParser
             Expect("send");
             Expect("(");
             Token literal = Current;
-            if (literal.Text.Length == 0 || !literal.Text.All(c => IsAsciiDigit(c) || c == '_') ||
+            if (literal.Text.Length == 0 ||
+                !literal.Text.All(c => IsAsciiDigit(c) || c == '_') ||
                 !long.TryParse(literal.Text.Replace("_", "", StringComparison.Ordinal),
                     NumberStyles.None, CultureInfo.InvariantCulture, out long message))
                 throw Error("v1 requires one nonnegative checked i64 input literal",
@@ -217,17 +238,16 @@ public static partial class OresStructuredParser
             _position++;
             Expect(")");
             Expect(";");
-            if (sentTo != producer)
+            if (sentTo != first)
                 throw Error("direct consumer sends bypass owned graph ingress", sendAt.Offset);
 
-            Expect("stop");
-            if (Name() != producer)
-                throw Error("producer must stop first");
-            Expect(";");
-            Expect("stop");
-            if (Name() != consumer)
-                throw Error("consumer must stop after producer");
-            Expect(";");
+            foreach (var stage in stages)
+            {
+                Expect("stop");
+                if (Name() != stage.Binding)
+                    throw Error("actors must stop in forward pipeline order");
+                Expect(";");
+            }
             Expect("return");
             Expect("0");
             Expect(";");
@@ -235,15 +255,23 @@ public static partial class OresStructuredParser
             if (Current.Text.Length != 0)
                 throw Error("unexpected declarations or trailing statements");
 
-            ActorHandler a = _actors[stages[0].ActorType];
-            ActorHandler b = _actors[stages[1].ActorType];
-            // Deliberately a scalar oracle. It proves the guest-authored
-            // handler expressions independently; it does not route mailboxes.
-            string scalar = $"fnc {a.Method}({a.Input} {a.Parameter}):{a.Output} {a.Body}\n" +
-                            $"fnc {b.Method}({b.Input} {b.Parameter}):{b.Output} {b.Body}\n" +
-                            (b.Output == "int"
-                                ? $"fnc main():int{{return {b.Method}({a.Method}({message.ToString(CultureInfo.InvariantCulture)}));}}"
-                                : "fnc main():int{return 0;}");
+            // Typed scalar handler composition is a valuable independent
+            // CIL oracle, but does NOT allocate actors or deliver mail.
+            var scalarMethods = new System.Text.StringBuilder();
+            string scalarResult = message.ToString(CultureInfo.InvariantCulture);
+            foreach (var stage in stages)
+            {
+                ActorHandler handler = _actors[stage.ActorType];
+                scalarMethods.Append("fnc ").Append(handler.Method).Append('(')
+                    .Append(handler.Input).Append(' ').Append(handler.Parameter)
+                    .Append("):").Append(handler.Output).Append(' ')
+                    .Append(handler.Body).Append('\\n');
+                scalarResult = handler.Method + "(" + scalarResult + ")";
+            }
+            string scalar = scalarMethods +
+                (stages[^1].MessageOutput == "int"
+                    ? "fnc main():int{return " + scalarResult + ";}"
+                    : "fnc main():int{return 0;}");
             try
             {
                 _ = OresStructuredCfgLowering.LowerModule(scalar);
@@ -252,8 +280,8 @@ public static partial class OresStructuredParser
             {
                 throw Error("scalar handler composition fails checked CFG: " + ex.Message);
             }
-            return new ActorPipeGraphV1(Array.AsReadOnly(stages),
-                new ActorPipeEdgeV1(producer, consumer, pipe.Offset), message, scalar);
+            return new ActorPipeGraphV1(stages.AsReadOnly(), edges[0],
+                message, scalar) { Edges = edges.AsReadOnly() };
         }
     }
 }
