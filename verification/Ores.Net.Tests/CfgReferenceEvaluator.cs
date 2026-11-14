@@ -40,6 +40,9 @@ internal static class CfgReferenceEvaluator
                     CfgOpcode.EqualBool => BoolLeft() == BoolRight(),
                     CfgOpcode.NotEqualBool => BoolLeft() != BoolRight(),
                     CfgOpcode.XorBool => BoolLeft() ^ BoolRight(),
+                    CfgOpcode.GreaterThanI64 => Left() > Right(),
+                    CfgOpcode.LessThanOrEqualI64 => Left() <= Right(),
+                    CfgOpcode.GreaterThanOrEqualI64 => Left() >= Right(),
                     _ => throw new InvalidOperationException("Unexpected CFG opcode")
                 };
             }

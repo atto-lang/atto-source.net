@@ -78,6 +78,7 @@ internal static class CfgCilTestInterpreter
                 case Code.Ceq:
                 case Code.Clt:
                 case Code.Xor:
+                case Code.Cgt:
                 {
                     long right = stack.Pop();
                     long left = stack.Pop();
@@ -90,6 +91,7 @@ internal static class CfgCilTestInterpreter
                         Code.Ceq => left == right ? 1L : 0L,
                         Code.Clt => left < right ? 1L : 0L,
                         Code.Xor => left ^ right,
+                        Code.Cgt => left > right ? 1L : 0L,
                         _ => throw new FormatException("Unexpected CFG CIL opcode")
                     });
                     break;
