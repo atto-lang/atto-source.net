@@ -80,7 +80,7 @@ internal static class ActorEmitPipeContractV3SelfTest
         }));
         ConstructorReject(() => ActorEmitPipeContractV3.Validate(new[]
         {
-            Stage("a", "\ud800", "int", "int"), Stage("b", "Sink", "int")
+            Stage("a", new string((char)0xD800, 1), "int", "int"), Stage("b", "Sink", "int")
         }));
         ConstructorReject(() => ActorEmitPipeContractV3.Validate(new[]
         {
