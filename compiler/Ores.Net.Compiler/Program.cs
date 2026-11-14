@@ -34,11 +34,14 @@ bool validEmitSource = args.Length == 4 && args[2] == "--out" &&
     (args[0] == "emit-csharp" || args[0] == "emit-fsharp");
 bool validStaticFacts = args.Length == 2 &&
     (args[0] == "static-facts" || args[0] == "static-facts-structured");
+// Explicit source-only preview. Never accept actor pipes in normal check/compile.
+bool validActorPipePlan = args.Length == 2 && args[0] == "plan-actor-pipe";
 bool moduleCommand = args.Length >= 1 && args[0] is "check-modules" or "compile-modules";
 if ((mathI64Granted && !validCheck && !validCompile) ||
-    (!validCheck && !validCompile && !validStructuredCheck && !validStructuredCompile && !validStaticFacts && !validEmitSource && !moduleCommand))
+    (!validCheck && !validCompile && !validStructuredCheck && !validStructuredCompile &&
+     !validStaticFacts && !validActorPipePlan && !validEmitSource && !moduleCommand))
 {
-    Console.Error.WriteLine("usage: oresnet check input.atto|input.ores | oresnet compile input.atto|input.ores --out path/OresGenerated.dll | oresnet check-structured input.atto|input.ores | oresnet compile-structured input.atto|input.ores --out path/OresGenerated.dll | oresnet emit-csharp input.atto|input.ores --out path/OresProgram.cs | oresnet emit-fsharp input.atto|input.ores --out path/OresProgram.fs | oresnet static-facts input.atto|input.ores | oresnet static-facts-structured input.atto|input.ores");
+    Console.Error.WriteLine("usage: oresnet check input.atto|input.ores | oresnet compile input.atto|input.ores --out path/OresGenerated.dll | oresnet check-structured input.atto|input.ores | oresnet compile-structured input.atto|input.ores --out path/OresGenerated.dll | oresnet emit-csharp input.atto|input.ores --out path/OresProgram.cs | oresnet emit-fsharp input.atto|input.ores --out path/OresProgram.fs | oresnet static-facts input.atto|input.ores | oresnet static-facts-structured input.atto|input.ores | oresnet plan-actor-pipe input.atto (typed plan only, not executable actors)");
     return 2;
 }
 
@@ -86,6 +89,33 @@ try
         !string.Equals(Path.GetExtension(args[1]), ".ores", StringComparison.OrdinalIgnoreCase))
         throw new FormatException("Static-facts export requires a .atto or .ores source file");
     var source = ReadBoundedSource(args[1], rejectBom: validStaticFacts);
+    if (validActorPipePlan)
+    {
+        string extension = Path.GetExtension(args[1]);
+        if (!string.Equals(extension, ".atto", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(extension, ".ores", StringComparison.OrdinalIgnoreCase))
+            throw new FormatException("Actor pipe plan requires an .atto or legacy .ores source file");
+        var plan = OresStructuredParser.PlanActorPipeV1(source);
+        // Full-AOT: no reflection-based JsonSerializer (IL2026/IL3050). Write the same
+        // compact object, in the same field order, with Utf8JsonWriter.
+        var planJson = new MemoryStream();
+        using (var json = new System.Text.Json.Utf8JsonWriter(planJson))
+        {
+            json.WriteStartObject();
+            json.WriteString("status", ActorPipeGraphV1.Evidence);
+            json.WriteBoolean("executable_actor_guest", false);
+            json.WriteBoolean("native_aot_verified", false);
+            json.WriteNumber("stage_count", plan.Stages.Count);
+            json.WriteStartObject("edge");
+            json.WriteString("source", plan.Edge.ProducerBinding);
+            json.WriteString("destination", plan.Edge.ConsumerBinding);
+            json.WriteEndObject();
+            json.WriteNumber("message", plan.InputMessage);
+            json.WriteEndObject();
+        }
+        Console.WriteLine(System.Text.Encoding.UTF8.GetString(planJson.ToArray()));
+        return 0;
+    }
     if (validStaticFacts)
     {
         // The production command uses the exact verified scalar IR gate.
