@@ -3,6 +3,8 @@ using Mono.Cecil.Cil;
 using Ores.Net.Compiler;
 using Ores.Net.Runtime;
 
+DeclaredActorReceiveSyntaxTests.Run();
+
 static void Require(bool value, string why)
 {
     if (!value) throw new Exception("FAILED: " + why);
