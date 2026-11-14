@@ -1,0 +1,11 @@
+// ATTO-TRAP-V1-04: exit 13, Some(None) is distinct from None.
+fnc missing(): Option<int> { return None; }
+pub fnc main(): int {
+  val Option<Option<int>> nested = trap missing();
+  if nested.is_some() then
+    if nested.unwrap().is_none() then
+      return 13;
+    fi
+  fi
+  return 0;
+}

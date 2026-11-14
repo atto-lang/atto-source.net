@@ -1,0 +1,16 @@
+// ATTO-TRAP-V1-03: exit 7, Err remains data within Some.
+fnc checked_id(int id): Result<int,String> {
+  if id < 0 then
+    return Err("invalid");
+  fi
+  return Ok(id);
+}
+pub fnc main(): int {
+  val Option<Result<int,String>> outer = trap checked_id(-1);
+  if outer.is_some() then
+    if outer.unwrap().is_err() then
+      return 7;
+    fi
+  fi
+  return 0;
+}
