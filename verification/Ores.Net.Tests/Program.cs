@@ -563,6 +563,7 @@ ActorHierarchyMlAdmissionTests.Run();
 AsyncInteropFailClosedTests.Run();
 EtsPgFailClosedTests.Run();
 await HostTaskObservationTests.Run();
+await AsyncSourceSliceTests.Run();
 
 // Source actor syntax must fail at a semantic actor boundary, never as an
 // accidental scalar-fnc parse error. Legacy actors remain rejected outright;
