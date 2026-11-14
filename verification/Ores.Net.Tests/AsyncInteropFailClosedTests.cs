@@ -9,6 +9,26 @@ internal static class AsyncInteropFailClosedTests
             source => { _ = OresStructuredParser.Parse(source); }
         ];
         _ = OresStructuredParser.Parse("fnc main():int{let int task = 42;return task;}");
+        // The shipping scalar parser has no source-language TestKit scheduler.
+        // Fail closed rather than accepting a synchronous PASS while guest
+        // callbacks, child tasks or actors might remain live.
+        foreach (var source in new[] {
+            "pub async fnc main():int{return 42;}",
+            "suspends fnc main():int{return 42;}",
+            "fnc main():int{return await 42;}",
+            "fnc main():int{return (async task || -> {return 42;})();}",
+            "fnc main():int{return (|int x| -> x)(42);}",
+            "fnc main():int{return spawn Worker();}",
+            "fnc main():int{return trap worker.send(42);}",
+            "fnc main():int{return 42;} fnc test_async():int{return 7;}"
+        })
+        {
+            try { _ = OresParser.Parse(source); }
+            catch (FormatException) { continue; }
+            throw new Exception("Unsupported native Oreslang TestKit source admitted by scalar .NET parser");
+        }
+        // Mentioning reserved test vocabulary in comments is not syntax.
+        _ = OresParser.Parse("fnc main():int{return 42;} // async await actor callback task");
         foreach (var parse in parsers)
         {
             parse("fnc main():int{return 42;} // Future.from_task(task { ignored })");
