@@ -76,6 +76,9 @@ public sealed class NativeTraceContinuationV1
         NativeTraceParentV1? Parent, Outcome Result);
 
     private readonly bool enabled;
+    // Optional same-process live activation of an ALREADY COMPILED boundary
+    // probe. Cannot create a missing CIL/AOT site or invoke a CLR JIT.
+    private readonly NativeTraceInstrumentationV1? probePolicy;
     private readonly int activeLimit;
     private readonly int receiptLimit;
     private readonly ConcurrentDictionary<Scope, byte> scopes = new();
@@ -95,6 +98,13 @@ public sealed class NativeTraceContinuationV1
         this.enabled = enabled;
         activeLimit = maxActive;
         receiptLimit = maxReceipts;
+    }
+
+    internal NativeTraceContinuationV1(NativeTraceInstrumentationV1 policy,
+        int maxActive = 64, int maxReceipts = 1024)
+        : this(enabled: false, maxActive: maxActive, maxReceipts: maxReceipts)
+    {
+        probePolicy = policy ?? throw new ArgumentNullException(nameof(policy));
     }
 
     public int Active => Volatile.Read(ref active);
@@ -144,7 +154,9 @@ public sealed class NativeTraceContinuationV1
         NativeTraceParentV1? parent = null)
     {
         ArgumentNullException.ThrowIfNull(owner);
-        if (!enabled) return null; // No entropy, guard or receipt work.
+        if (!enabled && (probePolicy is null ||
+            !probePolicy.Enabled(NativeTraceInstrumentationV1.Boundary)))
+            return null; // No entropy, scope allocation, guard or receipt work.
         if (siteId <= 0) throw new ArgumentOutOfRangeException(nameof(siteId));
         if (!ReferenceEquals(owner.Tracer, this) ||
             owner.Generation != generation || generation == 0 ||
