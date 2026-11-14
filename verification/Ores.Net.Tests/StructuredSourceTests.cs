@@ -357,6 +357,37 @@ internal static class StructuredSourceTests
         Require(constantBool.Body[1] is StructuredIf {
             Condition: StructuredBool { Value: true }
         }, "compile-time bool may appear in typed conditionals");
+        // Negated conditionals stay typed. The checked bool equality to false
+        // evaluates the predicate once and reuses the ordinary CFG branch.
+        foreach (var word in new[] { "ifnot", "unless" })
+        {
+            var negative = OresStructuredParser.Parse(
+                "fnc main():int{" + word +
+                " false then return 42; else return 0; fi}");
+            Require(negative.Body[0] is StructuredIf {
+                Condition: StructuredBinary {
+                    Operator: StructuredOperator.EqualBool,
+                    Left: StructuredBool { Value: false },
+                    Right: StructuredBool { Value: false }
+                }, word + " must lower to typed boolean inversion");
+            var nested = OresStructuredParser.Parse(
+                "fnc main():int{" + word + " true; then " +
+                "ifnot false then return 42; else return 0; fi " +
+                "else return 11; fi}");
+            Require(nested.Body[0] is StructuredIf {
+                Else: not null
+            }, "nested negated conditional keeps outer else");
+            var braced = OresStructuredParser.Parse(
+                "fnc main():int{" + word +
+                " false {return 42;}else{return 0;}fi}");
+            Require(braced.Body[0] is StructuredIf {
+                Condition: StructuredBinary { Operator: StructuredOperator.EqualBool }
+            }, word + " admits legacy brace grammar plus fi");
+            Reject("fnc main():int{" + word + " 1 then return 42; else return 0; fi}",
+                word + " rejects int truthiness");
+            Reject("fnc main():int{let int " + word + "=1;return 42;}",
+                word + " is reserved as a local name");
+        }
         // Java/LLVM/.NET scalar inference and checked-cast conformance.
         foreach (var declaration in new[] {
             "int x=7;const y=x;const int z=y as int;return z+35;",

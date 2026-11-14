@@ -1048,27 +1048,39 @@ public static partial class OresStructuredParser
                 scopes[^1].Add(name, new LocalBinding(type, kind, constantValue));
                 return (new StructuredLet(at, name, type, initializer, kind), false);
             }
-            if (Take("if"))
+            if (Current.Text is "if" or "ifnot" or "unless")
             {
+                // All three forms use the same typed CFG. Negation is checked
+                // boolean equality to false, never arithmetic minus or truthiness.
+                bool inverted = Current.Text != "if";
+                index++;
                 var condition = Expr(depth + 1);
                 Require(condition, IrValueType.Bool, "If condition must be bool");
-                bool oresDoForm = Take(";");
-                IReadOnlyList<StructuredStmt> yes;
-                bool yesReturns;
-                if (oresDoForm)
+                if (inverted)
+                    condition = CheckedBinary(at, StructuredOperator.EqualBool,
+                        condition, new StructuredBool(at, false), IrValueType.Bool);
+                // Preserve the legacy '; do ... fi' and brace spellings;
+                // canonical 'then ... fi' may omit its optional semicolon.
+                bool semicolon = Take(";");
+                bool delimited = Take("then");
+                if (semicolon && !delimited)
                 {
                     Expect("do");
-                    (yes, yesReturns) = DelimitedArm(depth + 1);
+                    delimited = true;
                 }
+                IReadOnlyList<StructuredStmt> yes;
+                bool yesReturns;
+                if (delimited) (yes, yesReturns) = DelimitedArm(depth + 1);
                 else (yes, yesReturns) = Block(depth + 1);
                 IReadOnlyList<StructuredStmt>? no = null;
                 bool noReturns = false;
                 if (Take("else"))
                 {
-                    if (oresDoForm) (no, noReturns) = DelimitedArm(depth + 1);
+                    if (delimited) (no, noReturns) = DelimitedArm(depth + 1);
                     else (no, noReturns) = Block(depth + 1);
                 }
-                if (oresDoForm) Expect("fi");
+                if (delimited) Expect("fi");
+                else Take("fi"); // Legacy braced form remains valid without fi.
                 return (new StructuredIf(at, condition, yes, no),
                     yesReturns && noReturns);
             }
@@ -1129,7 +1141,7 @@ public static partial class OresStructuredParser
             if (name.Length is < 1 or > MaxIdentifier ||
                 !(Alpha(name[0]) || name[0] == '_') ||
                 !name.Skip(1).All(c => Alpha(c) || Digit(c) || c == '_') ||
-                name is "if" or "else" or "while" or "return" or "let"
+                name is "if" or "ifnot" or "unless" or "else" or "while" or "return" or "let"
                     or "int" or "bool" or "true" or "false" or "and" or "or" or "xor"
                     or "define" or "pub" or "fnc" or "const" or "val" or "final"
                     or "struct" or "record" or "class" or "actor"
