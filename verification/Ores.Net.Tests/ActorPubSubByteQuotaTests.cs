@@ -71,12 +71,12 @@ internal static class ActorPubSubByteQuotaTests
         Require(topic.Publish(subscribers[0], payload).Accepted == 8,
             "refill graph before group close");
         group.Dispose();
-        using var replacement = runtime.PubSub.CreateGroup();
-        var fresh = replacement.DefineTopic<string>(
+        using var replacementGroup = runtime.PubSub.CreateGroup();
+        var fresh = replacementGroup.DefineTopic<string>(
             "after-close", ActorTopicDeliveryPolicy.Reliable, 1);
         for (int i = 0; i < 8; i++)
         {
-            Require(replacement.Join(subscribers[i]), "join replacement group");
+            Require(replacementGroup.Join(subscribers[i]), "join replacement group");
             Require(fresh.Subscribe(subscribers[i]), "subscribe after close");
         }
         Require(fresh.Publish(subscribers[0], payload).Accepted == 8,
