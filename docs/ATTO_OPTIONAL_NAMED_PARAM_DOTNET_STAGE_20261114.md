@@ -29,3 +29,20 @@ unproved nesting and omitted parameter signatures. Those tests are authored,
 Next: a full declaration-arity checked callable plan with named source-order
 bindings, typed `None` omissions, immutable defaults, ownership/effects and
 Native AOT guest execution receipts; then generic Option<T> beyond int.
+
+## Name-first scalar declaration subset (2026-11-14)
+
+The experimental structured compiler now parses **required scalar** helper
+parameters as either `int x` or `x: int`. Both produce the same checked
+`StructuredParameter(Name, Type)` and the same fixed-arity CIL MethodDef.
+New test-only emitted-CIL interpreter checks cover two name-first/mixed
+source examples that should return 42 if the suite is actually executed.
+
+The markers remain strictly distinct: `x?: int` and `x?: int?` fail with
+`E_OPTIONAL_FORMAL_ABI_UNSUPPORTED`, while `x: int?` fails with
+`E_OPTION_ABI_UNSUPPORTED` (required but unproved two-word Option call
+ABI). `x: int = 10` fails with
+`E_PARAMETER_DEFAULT_REQUIRES_NAME_QUESTION`. The production scalar
+frontend remains unchanged. The CIL regression cases are **authored but not
+stepfully executed**; no Native AOT guest or optional/default call parity is
+claimed.

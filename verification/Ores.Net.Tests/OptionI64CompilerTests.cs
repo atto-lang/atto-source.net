@@ -259,6 +259,10 @@ internal static class OptionI64CompilerTests
             42, "loop-carried Option pair with two scalar phi values");
         CheckModuleHelper("fnc answer():int{val Option<int> x=Some(42);return x.unwrap_or(0);}fnc main():int{return answer();}",
             42, "Option local inside statically linked helper");
+        CheckModuleHelper("fnc sum(x:int,y:int):int{return x+y;}fnc main():int{return sum(20,22);}",
+            42, "name-first scalar helper MethodDef / emitted CIL");
+        CheckModuleHelper("fnc sum(int x,y:int):int{return x+y;}fnc main():int{return sum(20,22);}",
+            42, "mixed declaration order helper MethodDef / emitted CIL");
         CheckEagerFallbackOverflow();
         CheckOptionEqualityBoundary(false, 42, false, 7, true,
             "None equals None even with different inactive payloads");
@@ -311,6 +315,11 @@ internal static class OptionI64CompilerTests
             ("no Option<bool> erasure", "fnc main():int{val Option<bool> x=None;return 0;}"),
             ("no Option helper argument ABI", "fnc get(Option<int> x):int{return 42;}fnc main():int{return 42;}"),
             ("no Option helper result ABI", "fnc get():Option<int>{return Some(42);}fnc main():int{return 42;}"),
+            ("no name-first required Option helper ABI", "fnc get(x:int?):int{return 42;}fnc main():int{return 42;}"),
+            ("no name-first omittable scalar", "fnc get(x?:int):int{return 42;}fnc main():int{return 42;}"),
+            ("no name-first omittable Option", "fnc get(x?:int?):int{return 42;}fnc main():int{return 42;}"),
+            ("no name-first scalar default", "fnc get(x?:int=42):int{return x;}fnc main():int{return 42;}"),
+            ("no default without name question", "fnc get(x:int=42):int{return x;}fnc main():int{return 42;}"),
             ("no Option const folding", "fnc main():int{const Option<int> x=Some(42);return x.unwrap_or(0);}"),
             ("no mutable borrowed Option", "fnc main():int{let Option<int> x=Some(42);let y=rt borrow x;return 0;}"),
             ("no implicit Some-as-bool", "fnc main():int{if Some(42){return 1;}return 42;}")

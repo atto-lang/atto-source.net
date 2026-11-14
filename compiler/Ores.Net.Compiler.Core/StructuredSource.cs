@@ -715,14 +715,29 @@ public static partial class OresStructuredParser
                     {
                         if (parameters.Count >= MaxParameters)
                             throw Error("Typed helper parameter budget exceeded");
+                        // Both x: int and int x use the same static ABI slot.
+                        // The name-level '?' in x?: int is a distinct,
+                        // as-yet-unlowered omission contract, not Option<T>.
+                        string? nameFirst = null;
+                        if (index + 2 < tokens.Count &&
+                            tokens[index + 1].Text == "?" &&
+                            tokens[index + 2].Text == ":")
+                            throw Error("E_OPTIONAL_FORMAL_ABI_UNSUPPORTED: name-first 'x?: T' requires checked omission and full-arity ABI");
+                        if (index + 1 < tokens.Count && tokens[index + 1].Text == ":")
+                        {
+                            nameFirst = Name();
+                            Expect(":");
+                        }
                         IrValueType type = Type();
-                        // The pair ABI is intentionally not exposed across
-                        // calls until exact typed method signatures exist.
+                        // The two-word tagged Option ABI is not exposed
+                        // across calls until checked signatures exist.
                         if (type == IrValueType.OptionI64)
                             throw Error("E_OPTION_ABI_UNSUPPORTED: Option<int> method parameters need verified two-word ABI");
-                        string parameter = Name();
-                        if (Current.Text is "?" or "=")
-                            throw Error("E_OPTIONAL_FORMAL_ABI_UNSUPPORTED: name-level '?' and parameter defaults require checked full-arity binding");
+                        string parameter = nameFirst ?? Name();
+                        if (Current.Text == "?")
+                            throw Error("E_OPTIONAL_FORMAL_ABI_UNSUPPORTED: omitted formal requires checked full-arity binding");
+                        if (Current.Text == "=")
+                            throw Error("E_PARAMETER_DEFAULT_REQUIRES_NAME_QUESTION: parameter default requires name-level '?' and checked ABI");
                         if (!parameterTypes.TryAdd(parameter,
                             new LocalBinding(type, StructuredBindingKind.Val, null)))
                             throw Error("Duplicate typed helper parameter");
