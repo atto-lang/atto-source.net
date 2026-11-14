@@ -17,6 +17,8 @@ internal static class NativeSourceIdentityV1
 
     internal static Id Parse(string? value, Kind kind)
     {
+        if (kind != Kind.Routine && kind != Kind.Site)
+            throw new FormatException("invalid source identity kind");
         string prefix = kind == Kind.Routine ? "rid_" : "sid_";
         if (value is null || value.Length != 36 ||
             !value.StartsWith(prefix, StringComparison.Ordinal))
