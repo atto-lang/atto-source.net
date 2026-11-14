@@ -244,45 +244,60 @@ public sealed unsafe class ActorNativeArena : IDisposable
         // C aligned_alloc requires a multiple of the requested alignment.
         // Physical tail padding cannot increase the actor's logical quota.
         int physicalBytes = checked((int)((next + 63L) & ~63L));
-        int additionalBytes = physicalBytes - _backingBytes;
-        // Admission is charged for physical backing before any native call.
-        // A custom tenant limit cannot bypass the global process limit.
-        _budget.Reserve(additionalBytes);
+        // Relocating a native block temporarily owns BOTH the old allocation
+        // and the complete new allocation. Charge the entire replacement
+        // before allocating it, never just the net growth delta: charging only
+        // the delta undercounts actual peak resident backing and lets tenants
+        // bypass their process/tenant memory ceilings during growth.
+        _budget.Reserve(physicalBytes);
         bool processReserved = false;
         byte* replacement = null;
         try
         {
             if (!ReferenceEquals(_budget, ActorArenaBudget.Process))
             {
-                ActorArenaBudget.Process.Reserve(additionalBytes);
+                ActorArenaBudget.Process.Reserve(physicalBytes);
                 processReserved = true;
             }
             replacement = (byte*)NativeMemory.AlignedAlloc((nuint)physicalBytes, (nuint)64);
             if (replacement == null)
                 throw new OutOfMemoryException("actor native arena growth failed");
 
-            // An uninitialized/reused object must never observe stale host data.
+            // No alias or raw span can escape the arena; all live offsets
+            // remain stable across relocation. Stage the new bytes and copy
+            // before changing any published state.
             new Span<byte>(replacement, physicalBytes).Clear();
             if (_memory != null)
-            {
                 Buffer.MemoryCopy(_memory, replacement, physicalBytes, _cursor);
-                Zero(0, _backingBytes);
-                NativeMemory.AlignedFree(_memory);
-            }
-            _memory = replacement;
-            _backingBytes = physicalBytes;
         }
         catch
         {
+            // A denied allocation or failed copy must leave the old backing
+            // usable and its reservations unchanged.
             if (replacement != null)
             {
                 CryptographicOperations.ZeroMemory(new Span<byte>(replacement, physicalBytes));
                 NativeMemory.AlignedFree(replacement);
             }
             if (processReserved)
-                ActorArenaBudget.Process.Refund(additionalBytes);
-            _budget.Refund(additionalBytes);
+                ActorArenaBudget.Process.Refund(physicalBytes);
+            _budget.Refund(physicalBytes);
             throw;
+        }
+
+        byte* oldMemory = _memory;
+        int oldBytes = _backingBytes;
+        _memory = replacement;
+        _backingBytes = physicalBytes;
+        if (oldMemory != null)
+        {
+            // Do not refund the prior native block until its bytes are scrubbed
+            // and that physical allocation has actually been released.
+            CryptographicOperations.ZeroMemory(new Span<byte>(oldMemory, oldBytes));
+            NativeMemory.AlignedFree(oldMemory);
+            if (!ReferenceEquals(_budget, ActorArenaBudget.Process))
+                ActorArenaBudget.Process.Refund(oldBytes);
+            _budget.Refund(oldBytes);
         }
     }
 

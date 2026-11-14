@@ -69,6 +69,8 @@ internal static class ActorNativeArenaSelfTest
             "stale tracked owner is reported without suppressing later cleanup");
 
         AggregateLazyGrowthBudgetRefundsAfterNativeFree();
+        GrowthChargesFullPeakBackingAndRollsBackOnQuotaDenial();
+        SiblingGrowthDenialPreservesLiveActorAndProcessBudgets();
         LazyBackingGrowthPreservesActorOffsets();
         OddQuotaBackingAlignment();
         ConcurrentDisposeDoesNotRaceNativeAccess();
@@ -171,6 +173,111 @@ internal static class ActorNativeArenaSelfTest
             "odd quota is scrubbed and reclaimed");
         actor.Dispose();
         Require(actor.BackingBytes == 0, "disposing actor returns native backing");
+    }
+
+    private static void GrowthChargesFullPeakBackingAndRollsBackOnQuotaDenial()
+    {
+        // Replacing a 4 KiB native slab with 8 KiB temporarily owns 12 KiB.
+        // A tenant budget equal to final capacity must reject this peak, not
+        // silently count only the 4 KiB delta while both blocks are resident.
+        var deniedBudget = new ActorArenaBudget(8192);
+        long processBefore = ActorArenaBudget.Process.ReservedBytes;
+        using (var actor = new ActorNativeArena(8192, 2, deniedBudget))
+        {
+            ulong root = actor.Allocate(4096, 8);
+            Require(root != 0 && actor.BackingBytes == 4096 &&
+                    deniedBudget.ReservedBytes == 4096,
+                "first backing uses only its physical slab");
+            Require(actor.WriteInt64(root, 0, 0x11223344), "root value initialized");
+            RejectInvalid(() => _ = actor.Allocate(4096, 8),
+                "growth rejected when transient physical peak exceeds tenant budget");
+            Require(actor.BackingBytes == 4096 &&
+                    actor.UsedBytes == 4096 && actor.LiveAllocations == 1 &&
+                    deniedBudget.ReservedBytes == 4096 &&
+                    ActorArenaBudget.Process.ReservedBytes == processBefore + 4096,
+                "failed growth does not mutate published backing, live count or ledger");
+            Require(actor.ReadInt64(root) == 0x11223344,
+                "denied relocation preserves live actor contents");
+        }
+        Require(deniedBudget.ReservedBytes == 0 &&
+                ActorArenaBudget.Process.ReservedBytes == processBefore,
+            "disposal scrubs and refunds rejected-growth actor");
+
+        var sufficientBudget = new ActorArenaBudget(12_288);
+        using (var actor = new ActorNativeArena(8192, 2, sufficientBudget))
+        {
+            ulong root = actor.Allocate(4096, 8);
+            Require(root != 0 && actor.WriteInt64(root, 0, 0x55667788),
+                "successful growth fixture initialized");
+            ulong tail = actor.Allocate(4096, 8);
+            Require(tail != 0 && actor.BackingBytes == 8192 &&
+                    sufficientBudget.ReservedBytes == 8192 &&
+                    ActorArenaBudget.Process.ReservedBytes == processBefore + 8192,
+                "peak 12 KiB charged before relocation, old 4 KiB refunded after free");
+            Require(actor.ReadInt64(root) == 0x55667788 &&
+                    actor.ReadInt64(tail) == 0,
+                "growth preserves prior contents and zeroes newly admitted bytes");
+        }
+        Require(sufficientBudget.ReservedBytes == 0 &&
+                ActorArenaBudget.Process.ReservedBytes == processBefore,
+            "successful growth eventually refunds all physical backing");
+    }
+
+    private static void SiblingGrowthDenialPreservesLiveActorAndProcessBudgets()
+    {
+        // Two actor-private 4 KiB slabs occupy 8 KiB. Growing A to 8 KiB
+        // requires 8 KiB of replacement backing *in addition* to both slabs,
+        // so a 12 KiB tenant cannot admit the 16 KiB transient peak.
+        const int slab = 4096;
+        var tenant = new ActorArenaBudget(3 * slab);
+        long processBefore = ActorArenaBudget.Process.ReservedBytes;
+        using var growing = new ActorNativeArena(2 * slab, 2, tenant);
+        using var sibling = new ActorNativeArena(slab, 1, tenant);
+
+        ulong root = growing.Allocate(slab, 8);
+        ulong neighbor = sibling.Allocate(slab, 8);
+        Require(root != 0 && neighbor != 0, "two actor-private backing slabs admitted");
+        Require(growing.WriteInt64(root, 0, 0x11223344) &&
+                sibling.WriteInt64(neighbor, 0, 0x55667788),
+            "distinct actor roots retain independent native contents");
+        Require(tenant.ReservedBytes == 2 * slab &&
+                ActorArenaBudget.Process.ReservedBytes == processBefore + 2 * slab,
+            "initial physical tenant and process reservations include both actors");
+
+        RejectInvalid(() => _ = growing.Allocate(slab, 8),
+            "actor A cannot borrow sibling B's physical-budget share for relocation");
+        Require(growing.BackingBytes == slab && growing.UsedBytes == slab &&
+                growing.LiveAllocations == 1 && sibling.BackingBytes == slab &&
+                sibling.UsedBytes == slab && sibling.LiveAllocations == 1 &&
+                tenant.ReservedBytes == 2 * slab &&
+                ActorArenaBudget.Process.ReservedBytes == processBefore + 2 * slab,
+            "denied growth is failure-neutral for both actor heaps and both budgets");
+        Require(growing.ReadInt64(root) == 0x11223344 &&
+                sibling.ReadInt64(neighbor) == 0x55667788,
+            "quota denial cannot alter the growing actor or its live sibling");
+
+        sibling.Dispose();
+        Require(tenant.ReservedBytes == slab &&
+                ActorArenaBudget.Process.ReservedBytes == processBefore + slab,
+            "sibling native backing is scrubbed and refunded before reuse");
+        ulong tail = growing.Allocate(slab, 8);
+        Require(tail != 0 && growing.BackingBytes == 2 * slab &&
+                growing.LiveAllocations == 2 &&
+                tenant.ReservedBytes == 2 * slab &&
+                ActorArenaBudget.Process.ReservedBytes == processBefore + 2 * slab,
+            "growth succeeds only after sibling capacity is physically returned");
+        Require(growing.ReadInt64(root) == 0x11223344 &&
+                growing.ReadInt64(tail) == 0,
+            "growth preserves the root and zero-initializes newly allocated bytes");
+        Require(!growing.WriteInt64(neighbor, 0, 99),
+            "a retired sibling handle cannot address the surviving actor");
+        RejectInvalid(() => _ = sibling.ReadInt64(neighbor),
+            "disposed sibling rejects stale access after reservation refund");
+
+        growing.Dispose();
+        Require(tenant.ReservedBytes == 0 &&
+                ActorArenaBudget.Process.ReservedBytes == processBefore,
+            "both actors refund all native reservations without double accounting");
     }
 
     private static void SteadyStateManagedAllocationBudget()
