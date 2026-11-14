@@ -568,6 +568,7 @@ VmIsolateHostTests.Run();
 VmIsolateHostHardeningTests.Run();
 OptionResultTrapAdmissionTests.Run();
 OptionI64CompilerTests.Run(); // opt-in typed Option<int> source -> verified CFG -> CIL
+FixedArrayOptionCompilerTests.Run(); // immutable Array<int>.get -> tagged Option<int> verified CIL
 SafeCollectionSourceAdmissionTests.Run(); // indexed collection access remains fail-closed
 // Shared TCP-pool capabilities are not guest-lowered by either .NET frontend.
 // Deny in both the shipping scalar CLI path and the structured CFG path;

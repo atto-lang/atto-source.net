@@ -49,6 +49,8 @@ internal static class CfgReferenceEvaluator
                     CfgOpcode.EqualI64 => Left() == Right(),
                     CfgOpcode.NotEqualI64 => Left() != Right(),
                     CfgOpcode.LessThanI64 => Left() < Right(),
+                    CfgOpcode.ArrayIndexValidI64 =>
+                        Left() >= 0 && Left() < op.I64Constant!.Value,
                     CfgOpcode.EqualBool => BoolLeft() == BoolRight(),
                     CfgOpcode.NotEqualBool => BoolLeft() != BoolRight(),
                     CfgOpcode.XorBool => BoolLeft() ^ BoolRight(),
