@@ -30,6 +30,8 @@
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/v1/hpc-finance/risk-gate-v1.tsv" Link="hpc-finance-risk-v1.tsv"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../tests/fixtures/trap-three-backend-target.atto"
+          Link="trap-three-backend-target.atto" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../tests/fixtures/actor-pipe-two-stage.atto"
           Link="actor-pipe-two-stage.atto" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/logical-word-operators-v1/**/*"
