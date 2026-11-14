@@ -1,0 +1,88 @@
+name: AttoLang NET implicit-const scalar NativeAOT parity
+on:
+  pull_request:
+    paths:
+      - 'contracts/implicit-const-scalar-v1/**'
+      - 'compiler/Ores.Net.Compiler.Core/StructuredSource.cs'
+      - 'verification/Ores.Net.Tests/StructuredSourceTests.cs'
+      - 'verification/Ores.Net.Tests/StructuredCfgLoweringTests.cs'
+      - '.github/workflows/implicit-const-scalar-parity.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  real-net-nativeaot-guest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install Native AOT toolchain
+        run: sudo apt-get update -qq && sudo apt-get install -y clang zlib1g-dev binutils file
+      - name: Exact PR head and independently pinned shared source blobs
+        shell: bash
+        env:
+          SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
+          test -z "$(git status --porcelain)"
+          test "$(find contracts/implicit-const-scalar-v1 -maxdepth 1 -type f -name '*.atto' | wc -l)" -eq 8
+          for row in \
+            'literal-equivalence a8e49769215a78946009f2cd2ac685b7c34c7804' \
+            'const-arithmetic 44daf131a7793f3b341c41a7e934cf8afe51f9db' \
+            'bool-local 52c7909c0d2ba760c000fef2cc4434aefbd91f97' \
+            'runtime-val-let fb47b57cb715ff9162de6a757ae515c1a9c19a30' \
+            'implicit-nonconst c3e5221ad48bfc8710249be41422acea41fccc8c' \
+            'explicit-nonconst 5a38a3999e3e7e2784c289ab764c68bbeefcf1af' \
+            'const-mut-scalar 2ff0af5fdcd84d1db293a6d6c1ebd82076e2e582' \
+            'const-overflow 496fe64c927b7ecee891c9e59d3583b0f2d58bed'; do
+            read -r name blob <<< "$row"
+            source="contracts/implicit-const-scalar-v1/$name.atto"
+            test -f "$source" && test ! -L "$source"
+            test "$(git hash-object --no-filters "$source")" = "$blob"
+          done
+          echo "SOURCE_HEAD=$SOURCE_HEAD SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Execute structured parser, CFG, CIL emitter and all managed verification tests
+        run: dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
+      - name: Publish full native compiler and typed structured guest
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/publish-linux.sh contracts/implicit-const-scalar-v1/literal-equivalence.atto artifacts/implicit-const-native --structured
+          test -x artifacts/compiler/linux-x64/oresnet
+          test -x artifacts/implicit-const-native/linux-x64/oreslang-app
+          bash verification/assert-linux-native-release.sh artifacts/implicit-const-native/linux-x64/oreslang-app
+          test "$(artifacts/implicit-const-native/linux-x64/oreslang-app)" = 42
+      - name: Execute structured compiler admission for all shared positives and targeted negative failures
+        shell: bash
+        run: |
+          set -euo pipefail
+          compiler=artifacts/compiler/linux-x64/oresnet
+          for name in literal-equivalence const-arithmetic bool-local runtime-val-let; do
+            "$compiler" check-structured "contracts/implicit-const-scalar-v1/$name.atto"
+          done
+          temp="$(mktemp -d)"
+          trap 'rm -rf -- "$temp"' EXIT
+          for row in \
+            'implicit-nonconst E_NON_CONST_INITIALIZER' \
+            'explicit-nonconst E_NON_CONST_INITIALIZER' \
+            'const-mut-scalar E_CONST_MUT_UNSUPPORTED' \
+            'const-overflow E_CONST_OVERFLOW'; do
+            read -r name category <<< "$row"
+            path="contracts/implicit-const-scalar-v1/$name.atto"
+            mkdir -p "$temp/$name"
+            output="$temp/$name/OresGenerated.dll"
+            if "$compiler" compile-structured "$path" --out "$output" >"$temp/$name/stdout" 2>"$temp/$name/stderr"; then
+              echo "::error::$name incorrectly compiled" >&2
+              exit 1
+            fi
+            test ! -e "$output"
+            grep -Fq "$category" "$temp/$name/stderr"
+            echo "NET_CONST_NEGATIVE|$name|$category|NO_CIL"
+          done
