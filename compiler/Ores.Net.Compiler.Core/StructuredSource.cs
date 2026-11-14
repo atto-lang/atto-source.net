@@ -20,7 +20,7 @@ public sealed record StructuredParameter(string Name, IrValueType Type);
 public sealed record StructuredFunction(string Name,
     IReadOnlyList<StructuredParameter> Parameters, IrValueType ResultType,
     StructuredExpr? ReturnValue, IReadOnlyList<StructuredStmt> Body);
-public enum StructuredOperator { Add, Subtract, Multiply, EqualI64, LessThanI64, NotEqualI64 }
+public enum StructuredOperator { Add, Subtract, Multiply, EqualI64, LessThanI64, GreaterThanI64, NotEqualI64 }
 public sealed record StructuredBinary(int At, StructuredOperator Operator,
     StructuredExpr Left, StructuredExpr Right, IrValueType ResultType)
     : StructuredExpr(At, ResultType);
@@ -75,21 +75,9 @@ public static class OresStructuredParser
         return reader.ReadImports();
     }
 
-    private static List<Token> LexLinked(string source)
-    {
-        if (source.Length > MaxChars || System.Text.Encoding.UTF8.GetByteCount(source) > MaxChars)
-            throw new FormatException("Source exceeds 1 MiB UTF-8 parser limit");
-        var lexer = new Lexer(source, true);
-        var tokens = new List<Token>();
-        do
-        {
-            tokens.Add(lexer.Read());
-            if (tokens.Count > MaxTokens) throw new FormatException("Structured token budget exceeded");
-        } while (tokens[^1].Text.Length != 0);
-        return tokens;
-    }
-
-    private static StructuredLinkedUnit ParseCore(string source, LinkedModuleContext? linking)
+    // Import discovery must enforce the same byte, NUL and UTF-16 admission
+    // as full parsing BEFORE it can resolve or probe another module.
+    private static void ValidateSourceInput(string source)
     {
         ArgumentNullException.ThrowIfNull(source);
         if (source.Length > MaxChars)
@@ -110,6 +98,24 @@ public static class OresStructuredParser
         // UTF-8 bytes, matching the disk/CLI boundary, not code-unit count.
         if (System.Text.Encoding.UTF8.GetByteCount(source) > 1_048_576)
             throw new FormatException("Source exceeds 1 MiB UTF-8 parser limit");
+    }
+
+    private static List<Token> LexLinked(string source)
+    {
+        ValidateSourceInput(source);
+        var lexer = new Lexer(source, true);
+        var tokens = new List<Token>();
+        do
+        {
+            tokens.Add(lexer.Read());
+            if (tokens.Count > MaxTokens) throw new FormatException("Structured token budget exceeded");
+        } while (tokens[^1].Text.Length != 0);
+        return tokens;
+    }
+
+    private static StructuredLinkedUnit ParseCore(string source, LinkedModuleContext? linking)
+    {
+        ValidateSourceInput(source);
         // No structural match lowering or readonly shape metadata in scalar CIL yet.
         StructuralShapeAdmission.RejectUnsupportedPatterns(source);
         var lexer = new Lexer(source, linking is not null);
@@ -120,9 +126,29 @@ public static class OresStructuredParser
         while (true)
         {
             var token = lexer.Read();
+            // Durable M0 is metadata-only in the Java compiler. Never let
+            // activity/workflow declarations silently reach scalar CIL lowering
+            // before a typed history manifest, replay ABI and ownership gate exist.
+            // Tokens are already comment/string-aware; do not regex raw source.
+            if ((token.Text is "activity" or "workflow") && tokens.Count > 0 &&
+                (tokens[^1].Text == "define" ||
+                 (tokens[^1].Text == "pub" && tokens.Count > 1 &&
+                  tokens[^2].Text == "define")))
+                throw new FormatException(
+                    $"DURABLE_M0_BACKEND_UNSUPPORTED: .NET durable {token.Text} requires versioned manifest and replay lowering at offset {token.Offset}");
             // The scalar bootstrap does not have class/actor dispatch or
             // ownership-aware lexical closures. Refuse these at source admission
             // with a stable capability diagnostic, not an accidental parse error.
+            // Structured CFG, module linking and NativeAOT have no nominal
+            // ModelGraph lowering. Reject before any source can reach SSA/CIL.
+            // Match contextual declaration modifiers, never an ordinary
+            // parameter or source comment containing the word "model".
+            if (token.Text == "model" && tokens.Count > 0 &&
+                (tokens[^1].Text == "define" ||
+                 (tokens[^1].Text == "pub" && tokens.Count > 1 &&
+                  tokens[^2].Text == "define")))
+                throw new FormatException(
+                    $"MODEL_LOWERING_UNSUPPORTED: .NET structured frontend requires typed nominal ModelGraph lowering at offset {token.Offset}");
             if (token.Text == "abstract" && tokens.Count > 0 &&
                 (tokens[^1].Text == "define" ||
                  (tokens[^1].Text == "pub" && tokens.Count > 1 &&
@@ -133,8 +159,34 @@ public static class OresStructuredParser
                 (tokens[^1].Text == "define" ||
                  (tokens[^1].Text == "pub" && tokens.Count > 1 &&
                   tokens[^2].Text == "define")))
+            {
+                // The structured scalar bootstrap cannot emit owner-backed
+                // inverted rows. Look ahead with the actual lexer (which skips
+                // comments) so an inverted STRUCT receives a stable diagnostic
+                // instead of being misreported as an inverted CLASS.
+                var invertedKind = lexer.Read();
+                if (invertedKind.Text == "struct")
+                    throw new FormatException(
+                        $"Inverted struct requires checked value-row, one-level packed columns and ownership lowering in the .NET backend at offset {token.Offset}");
+                // Only a class can receive the class-specific diagnostic.
+                // A missing or unsupported kind is a malformed declaration,
+                // not evidence that inverted class lowering was requested.
+                if (invertedKind.Text != "class")
+                    throw new FormatException(
+                        $"Inverted declaration requires class or struct kind in the .NET backend at offset {invertedKind.Offset}");
                 throw new FormatException(
                     $"Inverted class requires checked bracket-row and ownership lowering in the .NET backend at offset {token.Offset}");
+            }
+            // A supervisor is a distinct compiler-owned CONTROL authority,
+            // not a class/actor or a scalar helper. Deny it before CFG/CIL
+            // emission, including module-local and pub/define spellings.
+            // Tokenization already excludes comments and string contents.
+            if (token.Text == "supervisor" && tokens.Count > 0 &&
+                (tokens[^1].Text == "define" ||
+                 (tokens[^1].Text == "pub" && tokens.Count > 1 &&
+                  tokens[^2].Text == "define")))
+                throw new FormatException(
+                    $"Source supervisors require typed Failure, owned CONTROL dispatch and Native AOT lowering; unsupported in .NET structured frontend at offset {token.Offset}");
             if ((token.Text == "class" || token.Text == "actor") &&
                 tokens.Count > 0 &&
                 (tokens[^1].Text == "define" ||
@@ -166,6 +218,52 @@ public static class OresStructuredParser
         }
         for (int i = 0; i + 1 < tokens.Count; i++)
         {
+            // No protected state heap or virtual actor activation exists in
+            // the structured Native AOT compiler. Recognize the two-word
+            // declaration head after either visibility spelling, not merely
+            // the following generic "expected fnc" parse error.
+            if (tokens[i].Text == "define" ||
+                (tokens[i].Text == "pub" && tokens[i + 1].Text == "define"))
+            {
+                int j = tokens[i].Text == "define" ? i + 1 : i + 2;
+                if (j < tokens.Count && tokens[j].Text == "pub") j++;
+                if (j + 1 < tokens.Count &&
+                    tokens[j].Text == "state" && tokens[j + 1].Text == "container")
+                    throw new FormatException(
+                        $"STATE_CONTAINER_BACKEND_UNSUPPORTED: protected heap region and critical guard lowering required at offset {tokens[j].Offset}");
+                if (j + 1 < tokens.Count &&
+                    tokens[j].Text == "virtual" && tokens[j + 1].Text == "actor")
+                    throw new FormatException(
+                        $"VIRTUAL_ACTOR_BACKEND_UNSUPPORTED: logical key and activation fencing required at offset {tokens[j].Offset}");
+            }
+            // The separately exposed check-structured / compile-structured
+            // pipeline must not bypass the shipping scalar concurrency gate.
+            // This lexer has already removed comments, so no raw regex scan.
+            string word = tokens[i].Text;
+            string next = tokens[i + 1].Text;
+            // Compiler-owned lexical recognition: the Java/LLVM canonical
+            // telemetry scope must not accidentally become an ordinary scalar
+            // local or inert call. The current .NET CIL path has neither an
+            // exception-region cleanup protocol nor a typed suspendable frame.
+            // Lexed tokens, not raw-source regex: comments cannot authorize it.
+            if (word == "using" && next == "telemetry" && i + 4 < tokens.Count &&
+                tokens[i + 2].Text == "." && tokens[i + 3].Text == "span" &&
+                tokens[i + 4].Text == "(")
+                throw new FormatException(
+                    $"E_TELEMETRY_SCOPE_UNSUPPORTED: .NET NativeAOT requires compiler-owned begin/end, lexical cleanup and suspension-safe scope lowering at offset {tokens[i].Offset}");
+            if (word == "async" && next == "fnc")
+                throw new FormatException(
+                    $"E_CALLABLE_MODIFIERS: async fnc is removed; use suspends at offset {tokens[i].Offset}");
+            if ((word == "critical" && next == "suspends") ||
+                (word == "suspends" && next == "critical"))
+                throw new FormatException(
+                    $"E_CALLABLE_MODIFIERS: critical suspends fnc is forbidden at offset {tokens[i].Offset}");
+            if (word == "critical")
+                throw new FormatException(
+                    $"E_CRITICAL_UNSUPPORTED: structured CIL has no authenticated guard owner or FIFO continuation lowering at offset {tokens[i].Offset}");
+            if (word is "suspends" or "await")
+                throw new FormatException(
+                    $"E_SUSPENDS_UNSUPPORTED: structured CIL lacks typed suspension/continuation lowering at offset {tokens[i].Offset}");
             if (tokens[i].Text == "select" &&
                 StaticSelectAdmission.IsStaticSelectFollower(tokens[i + 1].Text))
                 throw StaticSelectAdmission.Unsupported(tokens[i].Offset);
@@ -235,6 +333,26 @@ public static class OresStructuredParser
             int offset = index;
             if (index == source.Length) return new Token("", index);
             char ch = source[index];
+            // Shared indexed-access policy applies to linked module parsing too.
+            // Strings and comments were consumed above; their brackets are inert.
+            SafeCollectionSourceAdmission.RejectUnverifiedBracket(ch, offset);
+            // Injection changes ownership and lifetime authority. The scalar
+            // CIL bootstrap cannot treat an annotation as harmless metadata.
+            // Perform this check after comments have been skipped so comment
+            // text cannot trigger a false rejection.
+            if (ch == '@')
+            {
+                int nameEnd = index + 1;
+                while (nameEnd < source.Length &&
+                       (Alpha(source[nameEnd]) || Digit(source[nameEnd]) ||
+                        source[nameEnd] == '_')) nameEnd++;
+                string name = source[(index + 1)..nameEnd];
+                if (name is "Inject" or "StateBacked" or "MutableStateContainer" or "StateContainer")
+                    throw new FormatException(
+                        $"STATE_INJECTION_UNSUPPORTED: @{name} requires typed container ownership, borrow checks and Native AOT lowering at offset {offset}");
+                throw new FormatException(
+                    $"Annotations require verified compiler lowering at offset {offset}");
+            }
             if (moduleMode && ch == '"')
             {
                 index++;
@@ -280,7 +398,18 @@ public static class OresStructuredParser
                 do { index++; } while (index < source.Length &&
                     (Alpha(source[index]) || Digit(source[index]) || source[index] == '_'));
                 string word = source[offset..index];
-                if (word is "cpu" or "gpu" ||
+                // Reject before the condition is lexed: `guard 1>0` contains
+                // characters this lexer refuses outside module mode.
+                if (word == "guard")
+                    throw new FormatException(
+                        $"GUARD_BACKEND_UNSUPPORTED: early-exit CFG and ownership lowering required at offset {offset}");
+                // Match/default is a true expression grammar extension, not a
+                // valid scalar identifier or CIL fallthrough. This lexer skips
+                // comments before this check; no source-substring blacklist.
+                if (word == "match")
+                    throw new FormatException(
+                        $"MATCH_DEFAULT_BACKEND_UNSUPPORTED: typed match requires real pattern admission, ordered CFG fallback and exhaustiveness before CIL emission at offset {offset}");
+                if (word is "cpu" or "gpu" or "quantum" ||
                     (word == "nb" && !StaticSelectAdmission.FollowedByStaticSelect(source, index)))
                     throw new FormatException(
                         $"execution region '{word}' requires verified CPU/GPU Task lowering; no implicit CPU fallback at offset {offset}");
@@ -291,8 +420,43 @@ public static class OresStructuredParser
                             $"execution task requires scheduler-aware Future/continuation lowering; no implicit inline execution at offset {offset}");
                 }
             }
+            else if (ch == '~')
+                throw new FormatException(
+                    $"TILDE_AGGREGATE_BACKEND_UNSUPPORTED: typed Map/Record literals require a checked AST, key domains, ownership, transactional constructor and NativeAOT layout at offset {offset}");
+            else if (ch == '%')
+                throw new FormatException(
+                    $"noncanonical '%' source operator; use named Integer.rem/mod at offset {offset}");
+            else if (ch == '^')
+            {
+                bool doubleCaret = index + 1 < source.Length && source[index + 1] == '^';
+                string spelling = doubleCaret ? "^^" : "^";
+                string named = doubleCaret ? "Xor(a, b)" : "Integer.bitXor(a, b)";
+                throw new FormatException(
+                    $"Reserved AttoLang operator '{spelling}'; use {named} at offset {offset}");
+            }
+            else if (ch == '!' && index + 2 < source.Length &&
+                     source[index + 1] == 'e' && source[index + 2] == 'q' &&
+                     (index + 3 == source.Length ||
+                      !(Alpha(source[index + 3]) || Digit(source[index + 3]) ||
+                        source[index + 3] == '_')))
+            {
+                // Contiguous AttoLang !eq alias; never split !equation.
+                // Lower into the existing static typed CIL NotEqualI64 path.
+                index += 3;
+            }
             else if (ch == '=' && index + 1 < source.Length &&
                      source[index + 1] == '=') index += 2;
+            // AttoLang's !eq is one indivisible binary token. It must not be
+            // lexed as unary ! + identifier eq, nor as a prefix of !eqname.
+            // Reuse the existing statically typed NotEqualI64 -> CIL Ceq+invert
+            // pipeline. Legacy != remains admitted pending a versioned strict
+            // source-profile migration; this change is additive only.
+            else if (ch == '!' && index + 2 < source.Length &&
+                     source[index + 1] == 'e' && source[index + 2] == 'q' &&
+                     (index + 3 == source.Length ||
+                      !(char.IsLetterOrDigit(source[index + 3]) ||
+                        source[index + 3] == '_')))
+                index += 3;
             else if (ch == '!' && index + 1 < source.Length &&
                      source[index + 1] == '=') index += 2;
             else if (moduleMode && index + 1 < source.Length &&
@@ -380,6 +544,11 @@ public static class OresStructuredParser
             {
                 int offset = Current.Offset;
                 string kind = Current.Text;
+                // Until the NativeAOT linker has pinned manifest-defined
+                // PackageInstanceId routing, never interpret namespace imports
+                // as a source-file wildcard or ambient search path.
+                if (kind == "namespace")
+                    throw Error("import namespace requires manifest-verified multi-file package linker");
                 if (kind is not ("fnc" or "module")) throw Error("Linked source supports fnc and module imports");
                 index++;
                 string name = Name();
@@ -448,6 +617,11 @@ public static class OresStructuredParser
                 Expect("fnc");
                 int at = Current.Offset;
                 string name = Name();
+                // This NativeAOT slice does not lower once-only initialization
+                // barriers. Do not silently compile a lifecycle hook into an
+                // ordinary public CIL method reachable through imports.
+                if (name == "init")
+                    throw Error("module init requires once-only reachable initialization lowering");
                 Expect("(");
                 if (Current.Text == "(")
                     throw Error("Tuple-v2 shorthand parameter requires typed tuple ownership/ABI lowering");
@@ -535,6 +709,32 @@ public static class OresStructuredParser
             localTypeScopes.RemoveAt(localTypeScopes.Count - 1);
             return (Array.AsReadOnly(body.ToArray()), terminated);
         }
+        // The existing bracketed CFG path remains available. Canonical ores.core
+        // also uses 'if predicate; do ... [else ...] fi' without braces.
+        // Close lexical scopes at each arm; never turn source into rewritten C#.
+        private (IReadOnlyList<StructuredStmt> Body, bool Returns) DelimitedArm(int depth)
+        {
+            Budget(depth);
+            scopes.Add(new Dictionary<string, LocalBinding>(StringComparer.Ordinal));
+            localTypeScopes.Add(new HashSet<string>(StringComparer.Ordinal));
+            var body = new List<StructuredStmt>();
+            bool terminated = false;
+            while (Current.Text is not ("else" or "fi"))
+            {
+                if (Current.Text.Length == 0 || Current.Text == "}")
+                    throw Error("Unterminated Oreslang if/do/fi arm");
+                if (terminated) throw Error("Unreachable statement");
+                if (++statements > MaxStatements)
+                    throw Error("Structured statement budget exceeded");
+                var (statement, returns) = Statement(depth + 1);
+                body.Add(statement);
+                terminated = returns;
+            }
+            scopes.RemoveAt(scopes.Count - 1);
+            localTypeScopes.RemoveAt(localTypeScopes.Count - 1);
+            return (Array.AsReadOnly(body.ToArray()), terminated);
+        }
+
         private (StructuredStmt Statement, bool Returns) Statement(int depth)
         {
             Budget(depth);
@@ -581,6 +781,9 @@ public static class OresStructuredParser
                 return (new StructuredLocalTypeDecl(at, name, kind,
                     Array.AsReadOnly(fields.ToArray())), false);
             }
+            if (Current.Text == "guard")
+                throw new FormatException(
+                    $"GUARD_BACKEND_UNSUPPORTED: early-exit CFG and ownership lowering required at offset {at}");
             if (Take("return"))
             {
                 var value = Expr(depth + 1);
@@ -670,10 +873,23 @@ public static class OresStructuredParser
             {
                 var condition = Expr(depth + 1);
                 Require(condition, IrValueType.Bool, "If condition must be bool");
-                var (yes, yesReturns) = Block(depth + 1);
+                bool oresDoForm = Take(";");
+                IReadOnlyList<StructuredStmt> yes;
+                bool yesReturns;
+                if (oresDoForm)
+                {
+                    Expect("do");
+                    (yes, yesReturns) = DelimitedArm(depth + 1);
+                }
+                else (yes, yesReturns) = Block(depth + 1);
                 IReadOnlyList<StructuredStmt>? no = null;
                 bool noReturns = false;
-                if (Take("else")) (no, noReturns) = Block(depth + 1);
+                if (Take("else"))
+                {
+                    if (oresDoForm) (no, noReturns) = DelimitedArm(depth + 1);
+                    else (no, noReturns) = Block(depth + 1);
+                }
+                if (oresDoForm) Expect("fi");
                 return (new StructuredIf(at, condition, yes, no),
                     yesReturns && noReturns);
             }
@@ -715,7 +931,7 @@ public static class OresStructuredParser
                     or "define" or "pub" or "fnc" or "const" or "val" or "final"
                     or "struct" or "record" or "class" or "actor"
                     or "module" or "import" or "from" or "as" or "end"
-                    or "routine" or "async" or "isoactor")
+                    or "routine" or "async" or "isoactor" or "guard")
                 throw new FormatException($"Invalid identifier at offset {at}");
             index++;
             return name;
@@ -759,6 +975,7 @@ public static class OresStructuredParser
                         StructuredOperator.EqualI64 => left == right ? 1L : 0L,
                         StructuredOperator.NotEqualI64 => left != right ? 1L : 0L,
                         StructuredOperator.LessThanI64 => left < right ? 1L : 0L,
+                        StructuredOperator.GreaterThanI64 => left > right ? 1L : 0L,
                         _ => throw new FormatException(
                             $"Unsupported const operator at offset {binary.Offset}")
                     };
@@ -771,10 +988,10 @@ public static class OresStructuredParser
         private StructuredExpr Equal(int depth)
         {
             var left = Compare(depth + 1);
-            while (Current.Text is "==" or "eq" or "!=" or "neq")
+            while (Current.Text is "==" or "eq" or "!=" or "neq" or "!eq")
             {
                 int at = Current.Offset;
-                bool notEqual = Current.Text is "!=" or "neq";
+                bool notEqual = Current.Text is "!=" or "neq" or "!eq";
                 index++;
                 var right = Compare(depth + 1);
                 Require(left, IrValueType.I64, "Equality requires int operands");
@@ -792,31 +1009,34 @@ public static class OresStructuredParser
             {
                 if (Current.Text == "as")
                 {
-                    int at = Current.Offset;
+                    int castAt = Current.Offset;
                     index++;
                     if (Take("?"))
                         throw new FormatException(
-                            $"Optional cast as? requires verified Option<T> lowering at offset {at}");
+                            $"Optional cast as? requires verified Option<T> lowering at offset {castAt}");
                     if (Current.Text is not ("int" or "bool"))
                         throw new FormatException(
-                            $"Checked cast requires a reifiable supported scalar target at offset {at}");
+                            $"Checked cast requires a reifiable supported scalar target at offset {castAt}");
                     IrValueType target = Type();
                     // .NET scalar bootstrap has no tagged dynamic value:
                     // checked identity is the only provable cast. Do not bitcast.
                     if (left.Type != target)
                         throw new FormatException(
-                            $"Impossible checked scalar cast at offset {at}");
+                            $"Impossible checked scalar cast at offset {castAt}");
                     // Static checked identity: deliberately retain the operand,
                     // once evaluated, rather than add a conversion node.
                     continue;
                 }
-                if (Current.Text != "<") break;
-                int compareAt = Current.Offset;
-                index++;
+                if (Current.Text is not ("<" or ">")) break;
+                int at = Current.Offset;
+                bool greater = Take(">");
+                if (!greater) Expect("<");
                 var right = Add(depth + 1);
-                Require(left, IrValueType.I64, "Less-than requires int operands");
-                Require(right, IrValueType.I64, "Less-than requires int operands");
-                left = CheckedBinary(compareAt, StructuredOperator.LessThanI64,
+                Require(left, IrValueType.I64, "Ordering requires int operands");
+                Require(right, IrValueType.I64, "Ordering requires int operands");
+                left = CheckedBinary(at, greater
+                        ? StructuredOperator.GreaterThanI64
+                        : StructuredOperator.LessThanI64,
                     left, right, IrValueType.Bool);
             }
             return left;

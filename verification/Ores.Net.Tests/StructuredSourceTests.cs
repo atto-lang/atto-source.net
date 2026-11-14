@@ -35,6 +35,20 @@ internal static class StructuredSourceTests
         throw new Exception("Unsupported receiver/capture syntax was admitted");
     }
 
+    private static void RejectScalarStateInjection(string source, string expectedDiagnostic)
+    {
+        try { _ = OresParser.Parse(source); }
+        catch (FormatException error)
+        {
+            Require(error.Message.Contains(expectedDiagnostic, StringComparison.Ordinal),
+                "scalar compiler rejected injected state for wrong reason: " + error.Message);
+            Require(error.Message.Contains("offset", StringComparison.Ordinal),
+                "scalar injection diagnostic lacks an exact source offset");
+            return;
+        }
+        throw new Exception("Scalar compiler admitted unsupported state injection");
+    }
+
     public static void Run()
     {
         // AST identity and constant provenance must stay independent: a
@@ -59,6 +73,165 @@ internal static class StructuredSourceTests
         Reject("fnc main():int{int x=7;x=8;return x;}",
             "readonly type-first rebinding is forbidden");
 
+        // Injected mutable containers are not the current scalar backend's
+        // ordinary metadata. Require a feature-specific diagnostic, not a
+        // generic invalid-character parse rejection or fake CIL success.
+        foreach (var source in new[] {
+            "@Inject(MutableStateContainer())\ndefine class Foo as\nstate {}\nend\n",
+            "@Inject(MutableStateContainer(scope = #instance))\ndefine class Foo as\nend\n",
+            "@StateBacked(MutableStateContainer(scope = #shared))\ndefine class Foo as\nend\n",
+            "@MutableStateContainer()\ndefine actor A as\nend\n",
+            "@StateContainer()\ndefine singleton S as\nend\n",
+            "@Inject(SessionState)\nfnc main():int{return 7;}",
+            "@Inject\ndefine class Foo as\nend\n",
+            "@Inject<MutableStateContainer()>\ndefine class Foo as\nend\n",
+            "@StateContainer()\ndefine class Foo as\nend\n",
+            "@Inject(SessionState)\npub fnc main():int{return 42;}\n"
+        })
+        {
+            string annotation = source.StartsWith("@Inject", StringComparison.Ordinal)
+                ? "Inject"
+                : source.StartsWith("@StateBacked", StringComparison.Ordinal)
+                    ? "StateBacked"
+                    : source.StartsWith("@MutableStateContainer", StringComparison.Ordinal)
+                        ? "MutableStateContainer"
+                        : "StateContainer";
+            RejectFeature(source, "STATE_INJECTION_UNSUPPORTED: @" + annotation);
+            RejectScalarStateInjection(source, "STATE_INJECTION_UNSUPPORTED: @" + annotation);
+        }
+        var commentOnlyInjection = OresStructuredParser.Parse(
+            "// @Inject(MutableStateContainer()) is a comment\nfnc main():int{return 7;}");
+        Require(commentOnlyInjection is not null,
+            "injection spelling inside a comment is not executable syntax");
+        _ = OresParser.Parse(
+            "// @Inject(MutableStateContainer()) is a comment\nfnc main():int{return 7;}");
+        _ = OresParser.Parse(
+            "/* outer @Inject /* inner @StateBacked */ ignored */\nfnc main():int{return 7;}");
+        RejectScalarStateInjection(
+            "// skipped @Inject\n@StateBacked(MutableStateContainer())\nfnc main():int{return 7;}",
+            "STATE_INJECTION_UNSUPPORTED: @StateBacked");
+
+        // Verify annotation offset after ignored comment trivia.
+        const string injectionOffsetProbe =
+            "/* inert @Inject(Fake()) */\n" +
+            "// inert @MutableStateContainer\n\n" +
+            " @StateBacked(MutableStateContainer())\n" +
+            "fnc main():int{return 7;}";
+        int injectionStart = injectionOffsetProbe.IndexOf("@StateBacked", StringComparison.Ordinal);
+        Require(injectionStart > 0, "missing executable annotation");
+        try {
+            _ = OresStructuredParser.Parse(injectionOffsetProbe);
+            throw new Exception("Structured parser admitted state injection");
+        } catch (FormatException error) {
+            Require(error.Message.Contains("STATE_INJECTION_UNSUPPORTED: @StateBacked", StringComparison.Ordinal)
+                && error.Message.Contains("offset " + injectionStart, StringComparison.Ordinal),
+                "structured parser used comment offset instead of executable annotation");
+        }
+        try {
+            _ = OresParser.Parse(injectionOffsetProbe);
+            throw new Exception("Scalar parser admitted state injection");
+        } catch (FormatException error) {
+            Require(error.Message.Contains("STATE_INJECTION_UNSUPPORTED: @StateBacked", StringComparison.Ordinal)
+                && error.Message.Contains("offset " + injectionStart, StringComparison.Ordinal),
+                "scalar parser used comment offset instead of executable annotation");
+        }
+
+        // Unknown annotations must be explicit errors too, not silently
+        // downgraded to scalar expression source.
+        foreach (var unknown in new[] {"@NotRegistered", "@InjectExtra"})
+        {
+            try { _ = OresParser.Parse(unknown + "\nfnc main():int{return 7;}"); }
+            catch (FormatException error)
+            {
+                Require(error.Message.Contains("Annotations require verified compiler lowering", StringComparison.Ordinal),
+                    "unknown annotation was misclassified as a state effect");
+                continue;
+            }
+            throw new Exception("Unknown scalar annotation unexpectedly compiled");
+        }
+
+        var leadingComment = OresStructuredParser.Parse(
+            "// nested annotation @StateBacked(MutableStateContainer(scope = #instance)) is inert\n"
+            + "fnc main():int{return 7;}");
+        Require(leadingComment is not null,
+            "state backing in a comment must not trigger a false-positive capability denial");
+        var blockCommentOnly = OresStructuredParser.Parse(
+            "/* outer @Inject(SessionState) /* inner @StateBacked(MutableStateContainer(scope = #instance)) */ still comment */\n"
+            + "fnc main():int{return 7;}");
+        Require(blockCommentOnly is not null,
+            "nested block comments must not mint or falsely reject container capabilities");
+        // All .NET compilation routes must fail closed on nominal ModelGraphs.
+        // The structured parser backs CFG/CIL and linked-module compilation,
+        // not only the shipping scalar expression parser.
+        foreach (var source in new[] {
+            "define model x as Identity() end",
+            "define model PriceEstimate() as Identity() end",
+            "define pub model x as Identity() end",
+            "pub define model x as Identity() end",
+            "define /* inert */ model x as Identity() end",
+            "fnc main():int{return 42;} define model x as Identity() end",
+            "fnc main():int{define model Local as Identity() end return 42;}"
+        })
+            RejectFeature(source, "MODEL_LOWERING_UNSUPPORTED");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{let int model=41;return model+1;}").Body.Count == 2,
+            "contextual model remains a valid scalar local identifier");
+        Require(OresStructuredParser.Parse(
+            "/* define model Fake as Identity() end */ fnc main():int{return 42;}").Body.Count == 1,
+            "commented-out model declarations are lexically inert");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{return 42;} // define model Fake as Identity() end").Body.Count == 1,
+            "line comment model syntax is lexically inert");
+        // No executable supervisor/CONTROL source lowering exists in the
+        // scalar NativeAOT compiler. A nominal supervisor must not downgrade
+        // to an ordinary class, actor, trait, or exported helper.
+        foreach (var source in new[] {
+            "define supervisor S1 as on_panic(f: Failure): void { return; } end",
+            "pub define supervisor S1 as on_panic(f: Failure): void { return; } end",
+            "define pub supervisor S1 as on_panic(f: Failure): void { return; } end",
+            "define supervisor S1 extends Actor as on_panic(f: Failure): void {} end",
+            "define supervisor S1 implements Observer as on_panic(f: Failure): void {} end",
+            "define supervisor S1 with RestartPolicy as on_panic(f: Failure): void {} end",
+            "define module Workers as define supervisor S1 as on_panic(f: Failure): void {} end end",
+            "fnc main():int{define supervisor Local as on_panic(f: Failure): void {} end return 42;}"
+        })
+            RejectFeature(source, "Source supervisors require typed Failure, owned CONTROL dispatch");
+        // Identical text in comments and quoted strings is not executable syntax.
+        var supervisorComment = OresStructuredParser.Parse(
+            "fnc main():int{return 42;} // define supervisor S1 extends Actor");
+        Require(supervisorComment.Body.Count == 1,
+            "comments must not create supervisor admission failures");
+        // Linked import discovery runs before full source parsing and must not
+        // inspect dependency paths for malformed input hidden in comments.
+        // The production entry point is internal; reflection is test-only.
+        var readLinkedImports = typeof(OresStructuredParser).GetMethod(
+            "ReadLinkedImports",
+            System.Reflection.BindingFlags.Static |
+            System.Reflection.BindingFlags.NonPublic)
+            ?? throw new Exception("Linked import admission entry point missing");
+        foreach (var (source, expectedError) in new (string, string)[] {
+            ("/* hidden " + '\0' + " */", "Source contains NUL"),
+            ("/* hidden " + (char)0xD800 + " */", "Invalid UTF-16"),
+            ("// hidden " + (char)0xDC00 + "\n", "Invalid UTF-16"),
+            ("/* hidden " + (char)0xDC00 + " */", "Invalid UTF-16")
+        })
+        {
+            try
+            {
+                _ = readLinkedImports.Invoke(null, new object?[] { source });
+            }
+            catch (System.Reflection.TargetInvocationException failure)
+                when (failure.InnerException is FormatException error &&
+                      error.Message.Contains(expectedError, StringComparison.Ordinal) &&
+                      error.Message.Contains("offset", StringComparison.Ordinal))
+            {
+                continue;
+            }
+            throw new Exception(
+                "Linked import discovery admitted malformed source before full parse: " +
+                expectedError);
+        }
+        _ = readLinkedImports.Invoke(null, new object?[] { "/* valid \uD83D\uDD12 */" });
 
         // Local value types are block-local declarations on the structured
         // frontend. They are admitted into the AST but deliberately rejected
@@ -351,6 +524,85 @@ internal static class StructuredSourceTests
             }
             throw new Exception(".NET frontend admitted unlowered inverted class source");
         }
+        foreach (var source in new[] {
+            "define inverted struct Position as float x; float y; end",
+            "define pub inverted struct Position as float x; end",
+            "pub define inverted struct Position as float x; end",
+            "define /* declaration comment */ inverted /* layout comment */ struct Position as float x; end"
+        })
+        {
+            try { _ = OresStructuredParser.Parse(source); }
+            catch (FormatException ex)
+            {
+                Require(ex.Message.Contains(
+                        "Inverted struct requires checked value-row, one-level packed columns and ownership lowering",
+                        StringComparison.Ordinal) &&
+                        ex.Message.Contains("offset", StringComparison.Ordinal),
+                    "inverted struct must fail through the dedicated backend gate: " + ex.Message);
+                continue;
+            }
+            throw new Exception(".NET frontend admitted unlowered inverted struct source");
+        }
+        // The lookahead must not label an absent or unrelated declaration
+        // kind as an inverted CLASS. These are malformed source admissions,
+        // not claims that any nominal or inverted lowering is supported.
+        foreach (var source in new[] {
+            "define inverted",
+            "define inverted actor Position as end",
+            "define pub inverted trait Position as end",
+            "pub define /* declaration comment */ inverted /* kind comment */ bogus Position as end"
+        })
+        {
+            try { _ = OresStructuredParser.Parse(source); }
+            catch (FormatException ex)
+            {
+                Require(ex.Message.Contains(
+                        "Inverted declaration requires class or struct kind",
+                        StringComparison.Ordinal) &&
+                        ex.Message.Contains("offset", StringComparison.Ordinal),
+                    "malformed inverted kind must fail through the dedicated gate: " + ex.Message);
+                continue;
+            }
+            throw new Exception(".NET frontend admitted malformed inverted declaration: " + source);
+        }
+        // Lexical evidence only: inert comments cannot accidentally become a
+        // source layout capability or trigger the inverted declaration gate.
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{return 42;} // define inverted struct Position") is not null,
+            "inverted declaration text inside a comment must remain inert");
+
+        // Shared implicit-val/typed-initialize feature gate. This .NET
+        // bootstrap does not have nominal class layouts or CIL constructors.
+        // Even sources accepted by Java/LLVM must reject here with an
+        // explicit unsupported-capability diagnostic, never fake execution.
+        foreach (var source in new[] {
+            "define class C as int id: 42; end",
+            "define class C as val int id: 42; end",
+            "define class C as let int id: 1; end",
+            "define class C as final int id: 1; end",
+            "define class C as const int id: 1; end",
+            "define class C as final int id; initialize(int n) -> void :: self.id=n; end end",
+            "define class C as\n final int id;\n initialize(int n) -> void\n self.id=n;\n end\nend",
+            "define class C as\n final int id;\n initialize(int n): void\n self.id=n;\n end\nend",
+            "define class C as final int id; initialize(int n): void { self.id=n; } end",
+            "define class C as initialize() -> void { return; } end",
+            "define class C as initialize(int n) as self.id=n; end end",
+            "define class C as initialize(int n) -> int { return n; } end",
+            "define class C as final int id; initialize(int n) -> void :: self.id=n; self.id=n; end end",
+            "define class C as let int id; initialize() -> void {} end",
+            "define class C as let int id; initialize(int n) -> void :: publish(self); self.id=n; end end",
+            "define class Parent as val int id; end define class Child extends Parent as initialize() -> void {} end",
+            "pub define class C as pub val int id: 42; end",
+        })
+        {
+            RejectFeature(source,
+                "Nominal class/actor methods require receiver-erased method slots");
+        }
+        // Keywords in comments must not become a global word-scanning gate.
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{/* initialize -> void :: class val */return 42;}")
+                .Body.Count == 1,
+            "class/initialize words in comments must preserve scalar execution");
 
         // Canonical Java foo() == foo(self) uses one caller-visible slot.
         // The .NET bootstrap has neither nominal class AST nor CIL dispatch:
@@ -650,6 +902,20 @@ internal static class StructuredSourceTests
         }
         Require(rejectedMutations >= 128,
             "adversarial mutation corpus must exercise substantial parser rejection");
+        // Until typed aggregate/callable lowering lands, structural source must
+        // fail closed rather than silently compiling as scalar-only CIL.
+        Reject("structural fnc main():int{return 1;}",
+            "structural declaration unsupported in bootstrap");
+        Reject("fnc main(structural Shape value):int{return 1;}",
+            "structural parameters unsupported in bootstrap");
+        Reject("fnc main():int{match 1 over on _ -> {return 1;} end}",
+            "match-over unsupported in bootstrap");
+        Reject("fnc take(tuple (int, int, string?) v):int{return 1;}",
+            "omittable positional tuple is not lowered by CIL bootstrap");
+        Reject("fnc take((int, int, string?) v):int{return 1;}",
+            "tuple shorthand is not lowered by CIL bootstrap");
+        Reject("fnc take(structural (int, int, string?) v):int{return 1;}",
+            "structural positional width view is not lowered by CIL bootstrap");
 
         // The shipping arithmetic frontend is intentionally unchanged.
         // Stage-one binding names must remain unambiguous.

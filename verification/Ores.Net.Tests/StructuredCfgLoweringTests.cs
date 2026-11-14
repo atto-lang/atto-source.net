@@ -106,6 +106,28 @@ internal static class StructuredCfgLoweringTests
         }
     }
 
+    // A generic FormatException is insufficient: malformed source can fail for
+    // unrelated reasons before reaching the typed equality operator under test.
+    private static void RejectWithDiagnostic(string source, string expected, string label)
+    {
+        try { _ = OresStructuredCfgLowering.Lower(source); }
+        catch (FormatException e)
+        {
+            if (e.Message.Contains(expected, StringComparison.Ordinal)) return;
+            throw new Exception("Wrong structured rejection for " + label +
+                ": expected '" + expected + "', got '" + e.Message + "'", e);
+        }
+        throw new Exception("Invalid structured source accepted: " + label);
+    }
+
+    private static void RejectAliasBoundary(string source, string spelling, string label)
+    {
+        int offset = source.LastIndexOf(spelling, StringComparison.Ordinal);
+        if (offset < 0 || source[offset] != '!')
+            throw new Exception("Missing operator boundary in fixture: " + label);
+        RejectWithDiagnostic(source, "Invalid character at offset " + offset, label);
+    }
+
     public static void Run()
     {
         PinnedFiveBackendCastGuests();
@@ -263,6 +285,47 @@ internal static class StructuredCfgLoweringTests
         // general function ABI or runtime call instruction.
         Check("fnc plus_one(int x):int{return x+1;}fnc main():int{return plus_one(41);}",
             42, "one typed i64 helper");
+        // A conservative *candidate audit*, not a CIL tail. or NativeAOT
+        // guarantee. It cannot authorize recursive calls or ABI transfer.
+        var simpleTail = OresStructuredCfgLowering.LowerModule(
+            "fnc inc(int x):int{return x+1;}fnc main():int{return inc(41);}");
+        var tailCandidates = CfgTailCallCandidates.Inspect(simpleTail.Main);
+        if (tailCandidates.Count != 1 || tailCandidates[0].Target != "inc")
+            throw new Exception("CFG direct return/call candidate not identified");
+        var intervening = OresStructuredCfgLowering.LowerModule(
+            "fnc inc(int x):int{return x+1;}fnc main():int{return inc(40)+1;}");
+        if (CfgTailCallCandidates.Inspect(intervening.Main).Count != 0)
+            throw new Exception("CFG falsely claimed non-tail arithmetic as tail");
+        var nested = OresStructuredCfgLowering.LowerModule(
+            "fnc inc(int x):int{return x+1;}fnc main():int{return inc(inc(40));}");
+        if (CfgTailCallCandidates.Inspect(nested.Main).Count != 1)
+            throw new Exception("CFG must identify only the outer returned call");
+
+        // The structural call candidate is NOT automatically ABI compatible:
+        // a zero-parameter main cannot musttail a one-parameter helper.
+        if (CfgSameSignatureTailCandidates.Inspect(simpleTail).Count != 0 ||
+            CfgSameSignatureTailCandidates.Inspect(nested).Count != 0)
+            throw new Exception("CFG ABI probe admitted mismatched caller parameters");
+        var sameSignature = OresStructuredCfgLowering.LowerModule(
+            "fnc inc(int x):int{return x+1;}" +
+            "fnc bridge(int n):int{return inc(n);}" +
+            "fnc main():int{return bridge(41);}");
+        var compatible = CfgSameSignatureTailCandidates.Inspect(sameSignature);
+        if (compatible.Count != 1 ||
+            compatible[0].Caller != "bridge" ||
+            compatible[0].Target != "inc")
+            throw new Exception("CFG failed to identify exact same-signature helper return");
+        var sameSignatureZero = OresStructuredCfgLowering.LowerModule(
+            "fnc answer():int{return 42;}fnc main():int{return answer();}");
+        if (CfgSameSignatureTailCandidates.Inspect(sameSignatureZero).Count != 1)
+            throw new Exception("CFG zero-parameter scalar return ABI missing");
+        var mismatchedScalarType = OresStructuredCfgLowering.LowerModule(
+            "fnc pred(int x):bool{return x==0;}" +
+            "fnc bridge(bool b):bool{return pred(0);}" +
+            "fnc main():int{return 0;}");
+        if (CfgSameSignatureTailCandidates.Inspect(mismatchedScalarType).Count != 0)
+            throw new Exception("CFG ABI gate admitted mismatched boolean/int parameter types");
+
         Check("fnc twice(int x):int{return x*2;}fnc answer():int{return twice(21);}fnc main():int{return answer();}",
             42, "chained helper functions");
         Check("fnc sum(int x,int y):int{return x+y;}fnc main():int{return sum(19,23);}",
@@ -300,6 +363,24 @@ internal static class StructuredCfgLoweringTests
             "duplicate helper declarations");
         CheckOverflow("fnc inc(int x):int{return x+1;}fnc main():int{return inc(9223372036854775807);}",
             "typed call overflow preserves checked CIL");
+
+        // These are .atto files. Check() passes them through the real
+        // structured source parser, verified CFG, deterministic CIL emission
+        // and an independent CIL evaluator, never runtime source generation.
+        string operatorDir = Path.Combine(AppContext.BaseDirectory, "contracts", "erl-otp-aot");
+        Check(File.ReadAllText(Path.Combine(operatorDir, "neq-alias-true.atto")),
+            42, "AttoLang !eq true CIL comparison");
+        Check(File.ReadAllText(Path.Combine(operatorDir, "neq-alias-false.atto")),
+            42, "AttoLang !eq false CIL comparison");
+        RejectAliasBoundary(
+            File.ReadAllText(Path.Combine(operatorDir, "neq-alias-split.atto")),
+            "! eq", "spaces must not turn ! eq into != or !eq");
+        RejectWithDiagnostic(
+            File.ReadAllText(Path.Combine(operatorDir, "neq-alias-mixed.atto")),
+            "Equality requires int operands", "no implicit bool-to-int equality");
+        RejectAliasBoundary(
+            File.ReadAllText(Path.Combine(operatorDir, "neq-alias-prefix.atto")),
+            "!equation", "!equation must not tokenize as !eq plus suffix");
 
         Check("fnc main():int{if 3 neq 4{return 42;}else{return 0;}}",
             42, "canonical neq true comparison");
