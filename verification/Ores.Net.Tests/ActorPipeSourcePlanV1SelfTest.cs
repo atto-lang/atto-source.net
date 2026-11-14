@@ -22,6 +22,8 @@ internal static class ActorPipeSourcePlanV1SelfTest
         Require(plan.Edge.ProducerBinding == "producer" &&
                 plan.Edge.ConsumerBinding == "consumer" &&
                 plan.InputMessage == 2, "owned edge and literal admission");
+        Require(plan.Edges.Count == 1 && plan.Edges[0] == plan.Edge,
+            "legacy two-stage edge must also appear in ordered edge list");
         Require(ActorPipeGraphV1.Evidence == "TYPED_SCALAR_ORACLE_ONLY_NOT_ACTOR_EXECUTION",
             "must never certify actor execution via scalar oracle");
 
@@ -61,7 +63,7 @@ internal static class ActorPipeSourcePlanV1SelfTest
             (guest.Replace("producer pipe consumer;", "producer pipe consumer; producer pipe consumer;",
                 StringComparison.Ordinal), "duplicate links"),
             (guest.Replace("let consumer = spawn Consumer();",
-                "let consumer = spawn Producer();", StringComparison.Ordinal), "reused actor type"),
+                "let producer = spawn Consumer();", StringComparison.Ordinal), "duplicate actor binding"),
             (guest.Replace("let consumer = spawn Consumer();",
                 "let consumer = spawn Unknown();", StringComparison.Ordinal), "unknown actor"),
             (guest.Replace("producer.send(2);", "consumer.send(2);",
@@ -92,6 +94,109 @@ internal static class ActorPipeSourcePlanV1SelfTest
             }
             throw new Exception("Unchecked actor source graph escaped: " + label);
         }
+
+        // A three-stage graph is checked with the same structured source
+        // lexer, per-handler CFG and actual CIL emitter. This is scalar
+        // oracle execution, NOT three independent runtime actor mailboxes.
+        string three = File.ReadAllText(Path.Combine(
+            AppContext.BaseDirectory, "actor-pipe-three-stage.atto"));
+        var threePlan = OresStructuredParser.PlanActorPipeV1(three);
+        Require(threePlan.Stages.Count == 3 && threePlan.Edges.Count == 2,
+            "three-stage source plan must preserve two ordered edges");
+        Require(threePlan.Edges[0].ProducerBinding == "source" &&
+                threePlan.Edges[0].ConsumerBinding == "middle" &&
+                threePlan.Edges[1].ProducerBinding == "middle" &&
+                threePlan.Edges[1].ConsumerBinding == "sink" &&
+                threePlan.InputMessage == 20, "three-stage owned graph");
+        // Repeat the same nominal Validate actor 14 times, but bind each
+        // actor *instance* to a distinct owner. The CIL oracle must compile
+        // Validate's typed function once and invoke it once per stage.
+        string declarations = three[..three.IndexOf(
+            "pub fnc main(): int", StringComparison.Ordinal)];
+        static string RepeatedActors(string declarations, int count)
+        {
+            var names = new List<string> { "source" };
+            for (int i = 0; i < count - 2; ++i)
+                names.Add("middle" + i);
+            names.Add("sink");
+            var body = new System.Text.StringBuilder(
+                "pub fnc main(): int {\n let source = spawn Parse();\n");
+            for (int i = 0; i < count - 2; ++i)
+                body.Append(" let middle").Append(i).Append(
+                    " = spawn Validate();\n");
+            body.Append(" let sink = spawn Sink();\n ")
+                .Append(string.Join(" pipe ", names))
+                .Append(";\n source.send(20);\n");
+            foreach (string name in names)
+                body.Append(" stop ").Append(name).Append(";\n");
+            body.Append(" return 0;\n}\n");
+            return declarations + body;
+        }
+        var sixteen = OresStructuredParser.PlanActorPipeV1(
+            RepeatedActors(declarations, 16));
+        Require(sixteen.Stages.Count == 16 && sixteen.Edges.Count == 15,
+            "16 distinct owned actor stages must share one nominal helper definition");
+        try {
+            _ = OresStructuredParser.PlanActorPipeV1(
+                RepeatedActors(declarations, 17));
+            throw new Exception("seventeenth actor escaped guest source budget");
+        }
+        catch (FormatException error) when (
+            error.Message.Contains("E_ACTOR_PIPE_PLAN_V1", StringComparison.Ordinal))
+        { /* bounded source rejection */ }
+
+        string thirdAssembly = Path.Combine(Path.GetTempPath(),
+            "ores-three-stage-scalar-oracle-" + Guid.NewGuid().ToString("N") + ".dll");
+        try
+        {
+            CilEmitter.EmitLibrary(
+                OresStructuredCfgLowering.LowerModule(threePlan.ScalarOracleSource),
+                thirdAssembly);
+            using var threeCil = AssemblyDefinition.ReadAssembly(thirdAssembly);
+            var threeProgram = threeCil.MainModule.Types.Single(t => t.Name == "OresProgram");
+            Require(threeProgram.Methods.Count == 4,
+                "three scalar CIL handlers and one Run");
+            Require(CfgCilTestInterpreter.Evaluate(
+                    threeProgram.Methods.Single(m => m.Name == "Run")) == 42,
+                "compiled three-stage scalar oracle must produce 42");
+        }
+        finally { if (File.Exists(thirdAssembly)) File.Delete(thirdAssembly); }
+
+        foreach (string alias in new[] { "source | middle pipe sink;",
+                                         "source pipe middle | sink;" })
+        {
+            string altered = three.Replace("source pipe middle pipe sink;",
+                alias, StringComparison.Ordinal);
+            Require(altered != three &&
+                    OresStructuredParser.PlanActorPipeV1(altered).Edges.Count == 2,
+                "contextual | and pipe alias share typed ordered graph plan");
+        }
+        foreach (var (wrong, reason) in new[] {
+            (three.Replace("source pipe middle pipe sink;",
+                "source pipe sink pipe middle;", StringComparison.Ordinal),
+                "out-of-order pipeline"),
+            (three.Replace("source pipe middle pipe sink;",
+                "source pipe middle pipe middle;", StringComparison.Ordinal),
+                "duplicated downstream stage"),
+            (three.Replace("source.send(20);", "sink.send(20);",
+                StringComparison.Ordinal), "direct sink send"),
+            (three.Replace("stop middle;", "stop source;",
+                StringComparison.Ordinal), "duplicate stop"),
+            (three.Replace("on_message(int n): int { return n * 2; }",
+                "on_message(bool n): int { return 1; }", StringComparison.Ordinal),
+                "typed middle mismatch")
+        })
+        {
+            Require(wrong != three, "negative source mutation must change: " + reason);
+            try { _ = OresStructuredParser.PlanActorPipeV1(wrong); }
+            catch (FormatException error) when (
+                error.Message.Contains("E_ACTOR_PIPE_PLAN_V1", StringComparison.Ordinal))
+            { continue; }
+            throw new Exception("Unchecked three-stage source graph escaped: " + reason);
+        }
+        RejectProduction(() => OresParser.Parse(three), "three-stage shipping compiler");
+        RejectProduction(() => OresStructuredParser.Parse(three),
+            "three-stage structured compiler");
 
         // Inert comments cannot synthesize an edge or damage a typed plan.
         string withComments = guest.Replace("producer pipe consumer;",

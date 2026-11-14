@@ -1,0 +1,76 @@
+name: .NET NativeAOT near-zero-GC host probe (not guest)
+on:
+  pull_request:
+    paths:
+      - 'runtime/Ores.Net.Runtime/ActorNativeArena.cs'
+      - 'runtime/Ores.Net.Runtime/ActorArenaBudget.cs'
+      - 'runtime/Ores.Net.Runtime/NativeTraceContinuationV1.cs'
+      - 'verification/Ores.Net.NearZeroGcProbe/**'
+      - '.github/workflows/net-near-zero-gc-nativeaot.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  near-zero-gc-host:
+    name: host-nativeaot (${{ matrix.os }}, ${{ matrix.rid }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            rid: linux-x64
+            binary: Ores.Net.NearZeroGcProbe
+          - os: windows-2022
+            rid: win-x64
+            binary: Ores.Net.NearZeroGcProbe.exe
+    steps:
+      - name: Checkout exact source revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact HEAD, clean tree and immutable proof sources
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          git rev-parse 'HEAD^{tree}'
+          for file in runtime/Ores.Net.Runtime/ActorNativeArena.cs \
+                      runtime/Ores.Net.Runtime/ActorArenaBudget.cs \
+                      runtime/Ores.Net.Runtime/NativeTraceContinuationV1.cs \
+                      verification/Ores.Net.NearZeroGcProbe/Program.cs \
+                      verification/Ores.Net.NearZeroGcProbe/Ores.Net.NearZeroGcProbe.csproj; do
+            test "$(git hash-object "$file")" = "$(git rev-parse "HEAD:$file")"
+            echo "$file $(git rev-parse "HEAD:$file")"
+          done
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.x'
+      - name: Execute managed host probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet run --project verification/Ores.Net.NearZeroGcProbe/Ores.Net.NearZeroGcProbe.csproj -c Release -p:PublishAot=false |
+            tee "$RUNNER_TEMP/near-zero-gc-managed.log"
+          grep -Fx 'PASS NET_NATIVEAOT_NEAR_ZERO_GC_HOST_V1|native_ops=50000|disabled_probes=50000|invalid_headers=70000|on_spans=512|guest_atto=NOT_EXECUTED' "$RUNNER_TEMP/near-zero-gc-managed.log"
+          grep -E '^NET_NATIVEAOT_NEAR_ZERO_GC_METRICS_V1\|native_alloc_bytes=0\|native_gc_collections=0\|disabled_alloc_bytes=0\|invalid_alloc_bytes=0\|enabled_alloc_bytes=[1-9][0-9]*\|' "$RUNNER_TEMP/near-zero-gc-managed.log"
+      - name: Publish and execute real native HOST binary
+        shell: bash
+        env:
+          RID: ${{ matrix.rid }}
+          BINARY: ${{ matrix.binary }}
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/near-zero-gc-aot"
+          dotnet publish verification/Ores.Net.NearZeroGcProbe/Ores.Net.NearZeroGcProbe.csproj -c Release -r "$RID" -p:PublishAot=true -p:SelfContained=true -o "$output"
+          test -f "$output/$BINARY"
+          "$output/$BINARY" | tee "$RUNNER_TEMP/near-zero-gc-native.log"
+          grep -Fx 'PASS NET_NATIVEAOT_NEAR_ZERO_GC_HOST_V1|native_ops=50000|disabled_probes=50000|invalid_headers=70000|on_spans=512|guest_atto=NOT_EXECUTED' "$RUNNER_TEMP/near-zero-gc-native.log"
+          grep -E '^NET_NATIVEAOT_NEAR_ZERO_GC_METRICS_V1\|native_alloc_bytes=0\|native_gc_collections=0\|disabled_alloc_bytes=0\|invalid_alloc_bytes=0\|enabled_alloc_bytes=[1-9][0-9]*\|' "$RUNNER_TEMP/near-zero-gc-native.log"
+          sha256sum "$output/$BINARY"

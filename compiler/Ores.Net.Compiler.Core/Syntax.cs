@@ -72,6 +72,66 @@ public static partial class OresParser
         {
             var token = lexer.Read();
             tokens.Add(token);
+            // Multiple actor forward signatures and file namespace headers
+            // require an actual nominal actor linker and NativeAOT CIL actor
+            // lowering. Detect at the token boundary, before later syntax is
+            // mistaken for an executable scalar helper.
+            int i = tokens.Count - 1;
+            if ((token.Text is "actor" or "isoactor") &&
+                i > 0 &&
+                (tokens[i - 1].Text == "declare" ||
+                 (i > 1 && tokens[i - 1].Text == "pub" &&
+                  tokens[i - 2].Text == "declare")))
+                throw new FormatException(
+                    $"ACTOR_FORWARD_NATIVEAOT_UNSUPPORTED: actor forward requires nominal actor identity, ownership and executable CIL lowering at offset {token.Offset}");
+            if (token.Text == "namespace" && i > 0 && tokens[i - 1].Text == "use")
+                throw new FormatException(
+                    $"NAMESPACE_RUNTIME_NATIVEAOT_UNSUPPORTED: file namespace requires verified nominal actor/linker identity at offset {token.Offset}");
+            // Fail at the completed typed receiver header, before tokenizing
+            // body operations or field syntax not in the scalar grammar.
+            int receiverAt = tokens.Count - 1;
+            if (token.Text == ":" &&
+                ((receiverAt >= 3 &&
+                  tokens[receiverAt - 1].Text == "self" &&
+                  tokens[receiverAt - 2].Text == "(" &&
+                  tokens[receiverAt - 3].Text == "mtd") ||
+                 (receiverAt >= 4 &&
+                  tokens[receiverAt - 1].Text == "self" &&
+                  tokens[receiverAt - 2].Text == "mut" &&
+                  tokens[receiverAt - 3].Text == "(" &&
+                  tokens[receiverAt - 4].Text == "mtd")))
+            {
+                int methodIndex = tokens[receiverAt - 2].Text == "("
+                    ? receiverAt - 3 : receiverAt - 4;
+                if (methodIndex == 0 ||
+                    (tokens[methodIndex - 1].Text != "fnc" &&
+                     tokens[methodIndex - 1].Text != "routine"))
+                    throw new FormatException(
+                        $"MTD_RECEIVER_NATIVEAOT_UNSUPPORTED: typed receiver methods need nominal class slots, borrow checking and CIL lowering at offset {tokens[methodIndex].Offset}");
+            }
+            // Fail closed on canonical type-first mtd (Foo self) and
+            // (Foo mut self) as soon as the header is complete. These are
+            // valid AttoLang declarations, but this NativeAOT frontend has
+            // no actor/class receiver slots or method borrowing ABI.
+            if (token.Text == ")" &&
+                ((receiverAt >= 4 &&
+                  tokens[receiverAt - 1].Text == "self" &&
+                  tokens[receiverAt - 3].Text == "(" &&
+                  tokens[receiverAt - 4].Text == "mtd") ||
+                 (receiverAt >= 5 &&
+                  tokens[receiverAt - 1].Text == "self" &&
+                  tokens[receiverAt - 2].Text == "mut" &&
+                  tokens[receiverAt - 4].Text == "(" &&
+                  tokens[receiverAt - 5].Text == "mtd")))
+            {
+                int methodIndex = tokens[receiverAt - 2].Text == "mut"
+                    ? receiverAt - 5 : receiverAt - 4;
+                if (methodIndex == 0 ||
+                    (tokens[methodIndex - 1].Text != "fnc" &&
+                     tokens[methodIndex - 1].Text != "routine"))
+                    throw new FormatException(
+                        $"MTD_RECEIVER_NATIVEAOT_UNSUPPORTED: typed receiver methods need nominal actor/class slots, ownership and CIL lowering at offset {tokens[methodIndex].Offset}");
+            }
             if (tokens.Count > MaxTokens)
                 throw new FormatException("Token count exceeds bootstrap limit");
             if (token.Text.Length == 0) break;

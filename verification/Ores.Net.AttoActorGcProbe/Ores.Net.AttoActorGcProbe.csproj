@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <PublishAot>true</PublishAot>
+    <SelfContained>true</SelfContained>
+    <PublishTrimmed>true</PublishTrimmed>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../runtime/Ores.Net.Runtime/Ores.Net.Runtime.csproj" />
+    <!-- The workflow regenerates this C# from source, byte-compares it against
+         the reviewed golden, then statically links this exact generated file. -->
+    <Compile Include="../Ores.Net.Tests/GeneratedMessageCounterActor.g.cs"
+             Link="GeneratedMessageCounterActor.g.cs" />
+  </ItemGroup>
+</Project>
