@@ -47,6 +47,22 @@ internal static class MtdReceiverAdmissionTests
             OresParser.Parse(ordinary) is null)
             throw new Exception("mtd comment incorrectly enabled a receiver feature gate");
 
+        // Contextual 'mtd' after fnc is a callable name, not a declaration
+        // marker. The scalar frontend may reject name-first parameters for
+        // other reasons, but must never misreport external-method support.
+        foreach (var parse in new Func<string, object>[] {
+            source => OresStructuredParser.Parse(source),
+            source => OresParser.Parse(source)
+        })
+        {
+            try { _ = parse("fnc mtd(self: int): int { return self; }"); }
+            catch (FormatException ex)
+            {
+                if (ex.Message.Contains(Diagnostic, StringComparison.Ordinal))
+                    throw new Exception("ordinary function named mtd misclassified");
+            }
+        }
+
         var helper = OresStructuredParser.Parse(
             "fnc mtd(int value):int{return value;} fnc main():int{return mtd(42);}");
         if (helper.Body.Count == 0)
