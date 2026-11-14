@@ -1,5 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <RuntimeFrameworkVersion>10.0.14</RuntimeFrameworkVersion>
+    <IlcPackageVersion>10.0.14</IlcPackageVersion>
     <OutputType>Exe</OutputType>
     <AssemblyName>oresnet</AssemblyName>
     <PublishAot>true</PublishAot>
@@ -10,6 +12,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Ores.Net.Compiler.Core/Ores.Net.Compiler.Core.csproj" />
+    <ProjectReference Include="../../runtime/Ores.Net.Runtime/Ores.Net.Runtime.csproj" />
   </ItemGroup>
   <Import Project="../../build/StrictNativeAot.targets" />
 </Project>

@@ -1,0 +1,51 @@
+name: NET10 supervisor DATA fence host parity
+on:
+  pull_request:
+    paths:
+      - 'runtime/Ores.Net.Runtime/ActorRuntime.cs'
+      - 'verification/Ores.Net.Tests/SupervisorDataFenceParitySelfTest.cs'
+      - 'verification/Ores.Net.Tests/Program.cs'
+      - '.github/workflows/net-supervisor-data-fence-parity-v1.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  managed-real-runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@d4c94342e560b34958eacfc5d055d21461ed1c5d
+        with:
+          dotnet-version: '10.0.x'
+      - name: Verify exact original source head and parity blobs
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          test "$(git hash-object runtime/Ores.Net.Runtime/ActorRuntime.cs)" = 35df8453491e00fd65ad7e280917a9ccbab0f3e6
+          test "$(git hash-object verification/Ores.Net.Tests/SupervisorDataFenceParitySelfTest.cs)" = 89b6878d79ae1c75f552288d3697a04aa0150d02
+          test "$(git hash-object verification/Ores.Net.Tests/Program.cs)" = 154c0fe78c99b47903532371b70aadc7ec2bd013
+      - name: Execute actual NET10 host ActorRuntime send/STOP and native cleanup test
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet --info
+          dotnet run --project verification/Ores.Net.Tests -c Release \
+            2>&1 | tee "$RUNNER_TEMP/net-supervisor-data-fence.log"
+          grep -F 'NET_SUPERVISOR_DATA_FENCE_HOST_PASS|attempts=6144|' "$RUNNER_TEMP/net-supervisor-data-fence.log"
+          grep -F '|sibling=1|nativeaot_guest=0|supervision_tree=0' "$RUNNER_TEMP/net-supervisor-data-fence.log"
+      - name: Verify original source head remains unchanged
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"

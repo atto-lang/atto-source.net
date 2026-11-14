@@ -51,6 +51,146 @@ internal static class StructuredSourceTests
 
     public static void Run()
     {
+        // Java/LLVM receiver spellings must never be mistaken for scalar
+        // helpers or emitted as CIL while nominal method lowering is absent.
+        // These are fail-closed capability checks, NOT overload execution.
+        foreach (var source in new[] {
+            "define class Foo as x():void {} end",
+            "define class Foo as x(mut self)():void {} end",
+            "define class Foo as x(string a):void {} y(mut self, int x):void {} end",
+            "define class Foo as x(self)(int n):void {} end",
+            "define class Foo as x(self, int n):void {} end",
+        })
+            RejectFeature(source, "Nominal class/actor methods require receiver-erased method slots");
+
+        // Unlike a generic unsupported-target rejection, duplicate instance
+        // methods now fail in compiler-owned source admission before CIL.
+        // This remains only signature checking; accepted classes cannot
+        // execute until the typed owner/borrow/virtual-call pipeline exists.
+        foreach (var (source, slot) in new (string, string)[] {
+            ("define class Foo as x():void {} x(mut self)():void {} end", "x/0"),
+            // Arrow return notation reaches the same declaration identity
+            // gate; a generic scalar lexer rejection is insufficient.
+            ("define class Foo as x()->void {} x(mut self)()->void {} end", "x/0"),
+            ("define class Foo as x(int n)->int {} x(mut self, int n):int {} end", "x/1"),
+            ("define class Foo as x(mut self)(int n)->int {} x(int n)->int {} end", "x/1"),
+            ("define actor Foo as x()->void {} x(mut self)()->void {} end", "x/0"),
+            ("define class Foo as x(mut self)():void {} x():void {} end", "x/0"),
+            ("define class Foo as x(int n):void {} x(mut self, int n):void {} end", "x/1"),
+            ("define class Foo as x(mut self, int n):void {} x(int n):void {} end", "x/1"),
+            ("define class Foo as x(self):int {} x(mut self):int {} end", "x/0"),
+            ("define class Foo as x(self, int n):int {} x(mut self)(int n):int {} end", "x/1"),
+            // Typed legacy receivers are the same caller-visible selector.
+            ("define class Foo as x():void {} x(self Foo)():void {} end", "x/0"),
+            ("define class Foo as x(self Foo)():void {} x():void {} end", "x/0"),
+            ("define class Foo as x(int n):int {} x(self Foo)(int n):int {} end", "x/1"),
+            ("define class Foo as x(self Foo)(int n):int {} x(int n):int {} end", "x/1"),
+            ("define class Foo as x(int n):int {} x(mut self Foo, int n):int {} end", "x/1"),
+            ("define class Foo as x(mut self Foo)(int n):int {} x(int n):int {} end", "x/1"),
+            ("define class Foo as x(self Foo, int n):int {} x(mut self Foo)(int n):int {} end", "x/1"),
+            // Legacy class fnc is an instance declaration, unlike static fnc.
+            ("define class Foo as fnc x():void {} x(mut self)():void {} end", "x/0"),
+            ("define class Foo as x(mut self)():void {} fnc x():void {} end", "x/0"),
+            ("define class Foo as fnc x(int n):int {} method x(mut self, int n):int {} end", "x/1"),
+            ("define class Foo as method x(mut self, int n):int {} fnc x(int n):int {} end", "x/1"),
+            ("define pub class Foo as pub fnc x():void {} x(mut self)():void {} end", "x/0"),
+            ("pub define class Foo as x(int n):int {} pub fnc x(mut self, int n):int {} end", "x/1"),
+            ("define actor Foo as fnc x():void {} x(mut self)():void {} end", "x/0"),
+            ("define actor Foo as x(int n):int {} fnc x(mut self, int n):int {} end", "x/1"),
+            ("define actor Foo as x():void {} x(mut self)():void {} end", "x/0"),
+            ("define actor Foo as x(mut self)():void {} x():void {} end", "x/0"),
+            ("define actor Foo as x(int n):void {} x(mut self, int n):void {} end", "x/1"),
+            ("define actor Foo as x(mut self, int n):void {} x(int n):void {} end", "x/1")
+        })
+            RejectFeature(source, "Duplicate nominal method slot 'Foo::Instance::" + slot + "'");
+
+        // Static callables have their own owner/name/value-arity identity:
+        // static-static duplicates reject, but static-instance pairs coexist.
+        foreach (var (source, slot) in new (string, string)[] {
+            ("define class Foo as static fnc x():void {} static fnc x()->void {} end", "x/0"),
+            ("define class Foo as static fnc x()->void {} static fnc x():void {} end", "x/0"),
+            ("define class Foo as static fnc x(int n):int {} pub static fnc x(int n)->int {} end", "x/1"),
+            ("define class Foo as pub static fnc x(int n)->int {} static fnc x(int n):int {} end", "x/1")
+        })
+            RejectFeature(source, "Duplicate nominal method slot 'Foo::Static::" + slot + "'");
+
+        // Same arity under different method names is not a collision,
+        // comments are not lexical declarations, and constructor body calls
+        // must not create phantom method slots.
+        foreach (var validButNotExecutable in new[] {
+            "define class Foo as x(int n):int {} y(mut self, int n):int {} end",
+            "define class Foo as x()->void {} y(mut self)()->void {} end",
+            "define class Foo as x():void {} /* x(mut self)():void {} */ y():void {} end",
+            "define class Foo as x():void {} constructor(){x();x();} end",
+            "define class Foo as static fnc x():void {} x(mut self)():void {} end",
+            "define class Foo as x():void {} static fnc x():void {} end",
+            "define class Foo as static fnc x(int n)->int {} x(mut self, int n)->int {} end",
+            "define class Foo as static fnc x():void {} static fnc y():void {} end",
+            // Unsupported malformed typed receivers must not be mistaken for
+            // valid duplicate declarations in the preliminary signature scan.
+            "define class Foo as x(int n):int {} x(self Other)(int n):int {} end",
+            "define class Foo as x(int n):int {} x(mut self Other)(int n):int {} end",
+            "define class Foo as x(int n):int {} x(self)(self):int {} end",
+            "define class Foo as x(self Foo)(int n):int {} y(mut self Foo)(int n):int {} end",
+            "define actor Foo as x():void {} y(mut self)():void {} end"
+        })
+            RejectFeature(validButNotExecutable,
+                "Nominal class/actor methods require receiver-erased method slots");
+
+        // AST identity and constant provenance must stay independent: a
+        // default readonly typed binding has distinct source provenance.
+        var immutableDefaults = OresStructuredParser.Parse(
+            "fnc main():int{int x=7;bool good=true;const int c=7;val int v=7;let int m=7;return x;}");
+        Require(immutableDefaults.Body[0] is StructuredLet {
+            Name: "x", Kind: StructuredBindingKind.Readonly, ValueType: IrValueType.I64
+        }, "int x must be a readonly non-rebindable binding");
+        Require(immutableDefaults.Body[1] is StructuredLet {
+            Name: "good", Kind: StructuredBindingKind.Readonly, ValueType: IrValueType.Bool
+        }, "bool x must be a readonly non-constexpr binding");
+        Require(immutableDefaults.Body[2] is StructuredLet {
+            Name: "c", Kind: StructuredBindingKind.Const
+        }, "explicit const retains source kind independently of constant folding");
+        Require(immutableDefaults.Body[3] is StructuredLet {
+            Name: "v", Kind: StructuredBindingKind.Val
+        }, "val remains an independent single-assignment spelling");
+        Require(immutableDefaults.Body[4] is StructuredLet {
+            Name: "m", Kind: StructuredBindingKind.Let
+        }, "let remains the only rebindable local");
+        Reject("fnc main():int{int x=7;x=8;return x;}",
+            "readonly type-first rebinding is forbidden");
+        // A runtime-valued const remains a legal immutable *binding*:
+        // lexical one-time evaluation and readonly do not imply constexpr.
+        var runtimeConstAndReadonly = OresStructuredParser.Parse(
+            "fnc inc(int p):int{return p+1;}" +
+            "fnc main():int{int typed=inc(40);const inferred=inc(41);" +
+            "const int annotated=inc(42);val int snap=typed;" +
+            "let int mutable=7;mutable=8;return inferred;}");
+        Require(runtimeConstAndReadonly.Body[0] is StructuredLet {
+            Name: "typed", Kind: StructuredBindingKind.Readonly,
+            Initializer: StructuredCall { Name: "inc" }
+        }, "type-first runtime helper retains readonly binding with call");
+        Require(runtimeConstAndReadonly.Body[1] is StructuredLet {
+            Name: "inferred", Kind: StructuredBindingKind.Const,
+            Initializer: StructuredCall { Name: "inc" }
+        }, "const from runtime helper must remain a call, not folded or rejected");
+        Require(runtimeConstAndReadonly.Body[2] is StructuredLet {
+            Name: "annotated", Kind: StructuredBindingKind.Const,
+            Initializer: StructuredCall { Name: "inc" }
+        }, "annotated const from runtime helper remains a call");
+        Require(runtimeConstAndReadonly.Body[3] is StructuredLet {
+            Name: "snap", Kind: StructuredBindingKind.Val,
+            Initializer: StructuredRead { Name: "typed" }
+        }, "val may capture readonly runtime referent without rebinding it");
+        Require(runtimeConstAndReadonly.Body[5] is StructuredSet { Name: "mutable" },
+            "explicit let rebinding remains a separate permission");
+        Reject("fnc inc(int p):int{return p+1;}" +
+               "fnc main():int{const int x=inc(41);x=0;return x;}",
+            "runtime-initialized const must still deny assignment");
+        Reject("fnc inc(int p):int{return p+1;}" +
+               "fnc main():int{int x=inc(41);x=0;return x;}",
+            "runtime-initialized type-first must still deny assignment");
+
+
         // Injected mutable containers are not the current scalar backend's
         // ordinary metadata. Require a feature-specific diagnostic, not a
         // generic invalid-character parse rejection or fake CIL success.
@@ -303,6 +443,68 @@ internal static class StructuredSourceTests
         Require(constantBool.Body[1] is StructuredIf {
             Condition: StructuredBool { Value: true }
         }, "compile-time bool may appear in typed conditionals");
+        // Java/LLVM/.NET scalar inference and checked-cast conformance.
+        foreach (var declaration in new[] {
+            "int x=7;const y=x;const int z=y as int;return z+35;",
+            "bool flag=true;if flag{return 42;}else{return 0;}",
+            "int x=(2+5) as int;return x+35;",
+            "const int x=7;const y=7 as int;return x+y+28;",
+            "const x=7;const int y=x as int;return y+35;",
+            "const x:int=7;return x+35;",
+            "const x=7 as int;return x+35;",
+            "return (7 as int)+35;",
+            "return (7 as int as int)+35;",
+            "const x=(2+5) as int;return x+35;",
+            "const x=7 as int as int;return x+35;",
+            "const x=7;const y=x as int;return y+35;",
+            "const x=true; if x {return 42;}else{return 0;}",
+            "const bool x=true as bool;if x{return 42;}else{return 0;}",
+            "const x=(7 eq 7) as bool;if x{return 42;}else{return 0;}",
+            "let x=7 as int;x=42;return x;",
+            "val x=42;const y=x as int;return y;",
+            "val bool x=true;const y=x as bool;if y{return 42;}else{return 0;}",
+            "const x=7;if true{const nested=x as int;return nested+35;}else{return 0;}",
+            "const x=7;return (x+35) as int;"
+        })
+        {
+            var unit = OresStructuredParser.Parse("fnc main():int{" + declaration + "}");
+            Require(unit.Body.Count > 0, "valid inferred/cast source rejected: " + declaration);
+        }
+        var checkedBindings = OresStructuredParser.Parse(
+            "fnc main():int{const int x=7;const y=7 as int;const z=7;return x+y+z+21;}");
+        foreach (var statement in checkedBindings.Body.Take(3))
+            Require(statement is StructuredLet {
+                Kind: StructuredBindingKind.Const, ValueType: IrValueType.I64
+            }, "all three scalar declarations infer identical immutable int type");
+        var inferredBool = OresStructuredParser.Parse(
+            "fnc main():int{const ok=true as bool;if ok{return 42;}else{return 0;}}");
+        Require(inferredBool.Body[0] is StructuredLet {
+            Kind: StructuredBindingKind.Const, ValueType: IrValueType.Bool
+        }, "bool cast must preserve bool inference, never i64 storage type");
+        foreach (var invalid in new[] {
+            "int x=true;return 42;",
+            "bool x=7;return 42;",
+            "int x=7;x=8;return x;",
+            "const x=7 as bool;return 42;",
+            "return 7 as bool;",
+            "return true as int;",
+            "return 9223372036854775808 as int;",
+            "const x=true as int;return 42;",
+            "const x=7 as? int;return 42;",
+            "const x=7 as Thing;return 42;",
+            "const int x=true;return 42;",
+            "const bool x=7;return 42;",
+            "const x=true;const int y=x;return 42;",
+            "const x=7;const bool y=x;return 42;",
+            "const x=7 as bool as int;return 42;",
+            "const x=7 as int;x=8;return 42;",
+            "const bool x=7 as int;return 42;",
+            "const x=true;return x+1;",
+            "let x=true;x=7;return 42;",
+            "const x=missing;return 42;",
+            "const x=x;return 42;"
+        }) Reject("fnc main():int{" + invalid + "}", "scalar cast/inference fail-closed " + invalid);
+
         var runtimeBool = OresStructuredParser.Parse("""
             fnc main():int {
                 val bool enabled = true;
@@ -319,10 +521,19 @@ internal static class StructuredSourceTests
             "const is immutable");
         Reject("fnc main():int{val bool v=true;if v {v=false;}return 1;}",
             "nested blocks cannot mutate outer val");
-        Reject("fnc main():int{let int x=2;const int c=x;return c;}",
-            "mutable input cannot become compile-time constant");
-        Reject("fnc main():int{val int x=2;const int c=x;return c;}",
-            "runtime single-write val is not const");
+        // Unlike a compile-time constant-expression requirement, Oreslang
+        // const is an immutable *binding* and may be initialized at runtime.
+        foreach (var source in new[] {
+            "fnc main():int{let int x=2;const int c=x;return c;}",
+            "fnc main():int{val int x=2;const int c=x;return c;}"
+        })
+        {
+            var runtimeConst = OresStructuredParser.Parse(source);
+            Require(runtimeConst.Body[1] is StructuredLet {
+                Name: "c", Kind: StructuredBindingKind.Const,
+                Initializer: StructuredRead { Type: IrValueType.I64 }
+            }, "runtime-initialized const must not acquire fake compile-time value");
+        }
         Reject("fnc main():int{const int x=9223372036854775807+1;return x;}",
             "const arithmetic must trap during admission");
         Reject("fnc main():int{const int x=-(-9223372036854775808);return x;}",
@@ -571,23 +782,23 @@ internal static class StructuredSourceTests
             "Invalid UTF-16");
         BlockCommentReject("fnc main():int{return 1;} /* " + ((char)0) + " */",
             "Source contains NUL");
-        // Structural admission runs before lexing and owns the public
-        // 64-level limit. Preserve its canonical failure instead of expecting
-        // the private lexer's larger defensive bound to be reached.
+        // Structural admission runs before lexing and enforces the spec ch.16
+        // limit (128, "block comment nesting exceeds 128"), the same bound and
+        // wording as the other .NET lexers and Java/LLVM.
         const string commentPrefix = "fnc main():int{return 1;} ";
         Require(OresStructuredParser.Parse(commentPrefix +
-            string.Concat(Enumerable.Repeat("/*", 64)) +
-            string.Concat(Enumerable.Repeat("*/", 64))).Body.Count == 1,
-            "64 nested comments must remain valid at the admission boundary");
+            string.Concat(Enumerable.Repeat("/*", 128)) +
+            string.Concat(Enumerable.Repeat("*/", 128))).Body.Count == 1,
+            "128 nested comments must remain valid at the admission boundary");
         try
         {
             _ = OresStructuredParser.Parse(commentPrefix +
-                string.Concat(Enumerable.Repeat("/*", 65)) +
-                string.Concat(Enumerable.Repeat("*/", 65)));
-            throw new Exception("65 nested comments bypassed structural admission");
+                string.Concat(Enumerable.Repeat("/*", 129)) +
+                string.Concat(Enumerable.Repeat("*/", 129)));
+            throw new Exception("129 nested comments bypassed structural admission");
         }
         catch (FormatException ex) when (ex.Message ==
-            $"Structural admission comment nesting exceeded at offset {commentPrefix.Length + 128}") { }
+            $"block comment nesting exceeds 128 at offset {commentPrefix.Length + 256}") { }
 
 
         const string sum = """
@@ -852,8 +1063,51 @@ internal static class StructuredSourceTests
             "unreachable after both branches return");
         Reject("fnc main():int{if true {let int x=1;}return x;}",
             "block local escaped scope");
-        Reject("fnc main():int{let bool x=true==false;return 0;}",
-            "bool equality unsupported in first CFG slice");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{let bool x=true==false;return 0;}").Body[0]
+            is StructuredLet { Initializer: StructuredBinary {
+                Operator: StructuredOperator.EqualBool } },
+            "bool equality has typed CFG representation");
+        var logicalAst = OresStructuredParser.Parse(
+            "fnc main():int{if false or true xor true and false{return 42;}else{return 7;}}");
+        Require(logicalAst.Body[0] is StructuredIf {
+            Condition: StructuredBinary { Operator: StructuredOperator.LogicalOr,
+                Right: StructuredBinary { Operator: StructuredOperator.LogicalXor,
+                    Right: StructuredBinary { Operator: StructuredOperator.LogicalAnd } } }
+        }, "logical precedence is and > xor > or");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{const bool x=true xor false;return x ? 42 : 7;}").Body[1]
+            is StructuredReturn { Value: StructuredConditional { ResultType: IrValueType.I64 } },
+            "conditional and compile-time boolean XOR are typed");
+        Reject("fnc and():int{return 0;}fnc main():int{return 42;}",
+            "logical keywords are reserved as function names");
+        Reject("fnc main():int{let bool or=true;return 42;}",
+            "logical keywords are reserved as locals");
+        Reject("fnc main():int{if 1 and true{return 1;}else{return 2;}}",
+            "and rejects non-boolean LHS");
+        Reject("fnc main():int{if false or 1{return 1;}else{return 2;}}",
+            "or rejects non-boolean RHS");
+        Reject("fnc main():int{if true xor 1{return 1;}else{return 2;}}",
+            "xor rejects non-boolean RHS");
+        Reject("fnc main():int{if 1 && true{return 1;}else{return 2;}}",
+            "&& rejects non-boolean LHS");
+        Reject("fnc main():int{if false || 1{return 1;}else{return 2;}}",
+            "|| rejects non-boolean RHS");
+        Reject("fnc main():int{if true ^^ 1{return 1;}else{return 2;}}",
+            "^^ rejects non-boolean RHS");
+        Reject("fnc main():int{if true ^ false{return 1;}else{return 2;}}",
+            "single ^ stays out of the grammar");
+        Reject("fnc main():int{if true==1{return 1;}else{return 2;}}",
+            "bool/int equality mixing rejected");
+        Reject("fnc main():int{const bool b=false xor (9223372036854775807+1>0);" +
+            "return b ? 42 : 7;}",
+            "const XOR must evaluate overflowing right operand");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{/* and or xor */ let int android=42;return android;}").Body.Count == 2,
+            "comments and identifiers with operator substrings are not keywords");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{let int AND=42;return AND;}").Body.Count == 2,
+            "lowercase logical word reservation is case-sensitive");
         Reject("fnc main():int{let bool b=true;return b+1;}",
             "boolean arithmetic");
         Reject("fnc main():int{let int x=1/2;return x;}",

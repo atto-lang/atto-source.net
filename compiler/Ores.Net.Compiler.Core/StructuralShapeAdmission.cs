@@ -31,8 +31,8 @@ public static class StructuralShapeAdmission
                 {
                     if (source[i] == '/' && i + 1 < source.Length && source[i + 1] == '*')
                     {
-                        if (++depth > 64)
-                            throw new FormatException($"Structural admission comment nesting exceeded at offset {i}");
+                        if (++depth > 128)
+                            throw new FormatException($"block comment nesting exceeds 128 at offset {i}");
                         i += 2;
                     }
                     else if (source[i] == '*' && i + 1 < source.Length && source[i + 1] == '/')
