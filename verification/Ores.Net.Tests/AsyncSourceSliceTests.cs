@@ -149,22 +149,22 @@ internal static class AsyncSourceSliceTests
         throw new Exception("Inline conversion lost targeted scheduler-boundary diagnostic");
         targeted_diagnostic:;
 
-        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var release = new TaskCompletionSource<long>(
+        var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstRelease = new TaskCompletionSource<long>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         int calls = 0;
         await using (var scope = new OresTaskScope(maxProducers: 1, maxObservers: 2))
         {
             var producer = scope.Start(async _ => {
                 Interlocked.Increment(ref calls);
-                started.TrySetResult();
-                return await release.Task.ConfigureAwait(false);
+                firstStarted.TrySetResult();
+                return await firstRelease.Task.ConfigureAwait(false);
             });
             var future = scope.FromTask(producer);
             Require(future.ProducerId == producer.ProducerId,
                 "Future retains original producer identity");
             Require(!ReferenceEquals(future, producer), "Future and Task are distinct handles");
-            await started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
             try { _ = scope.Start(_ => ValueTask.FromResult(99L)); }
             catch (InvalidOperationException) { goto quota_verified; }
             throw new Exception("Producer quota not enforced before execution");
@@ -191,7 +191,7 @@ internal static class AsyncSourceSliceTests
                 "Detaching an observer is not physical producer retirement");
             Require(scope.ActiveProducers == 1 && calls == 1,
                 "Cancelled observer must not stop or replay producer");
-            release.TrySetResult(42);
+            firstRelease.TrySetResult(42);
             Require(await siblingObserver == 42, "Independent sibling value");
             var retirement = await producer.Retirement;
             Require(retirement.ProducerId == producer.ProducerId &&
