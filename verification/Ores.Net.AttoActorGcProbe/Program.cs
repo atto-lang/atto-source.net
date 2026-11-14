@@ -76,6 +76,18 @@ Require(runtime.NativeReservedBytes > 0 &&
         runtime.NativeReservedBytes <= initialBudgetBytes,
     "native state reservations must remain bounded from actor spawn");
 
+if (nativeQueuedStorage)
+{
+    long reserved = runtime.NativeReservedBytes;
+    bool oversizedRejected = false;
+    try { runtime.Send(guest, new byte[17]); }
+    catch (ArgumentOutOfRangeException) { oversizedRejected = true; }
+    Require(oversizedRejected && runtime.NativeReservedBytes == reserved &&
+            runtime.CompletedMessages == 0,
+        "native slot size admission must fail without scheduling or quota mutation");
+}
+
+
 void SendAndVerifyBatch(int count)
 {
     long expected = Interlocked.Read(ref receipts) + count;
