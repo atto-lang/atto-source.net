@@ -265,8 +265,11 @@ public static partial class OresStructuredParser
             {
                 int methodIndex = tokens[receiverAt - 2].Text == "("
                     ? receiverAt - 3 : receiverAt - 4;
-                throw new FormatException(
-                    $"MTD_RECEIVER_NATIVEAOT_UNSUPPORTED: typed receiver methods need nominal class slots, borrow checking and CIL lowering at offset {tokens[methodIndex].Offset}");
+                if (methodIndex == 0 ||
+                    (tokens[methodIndex - 1].Text != "fnc" &&
+                     tokens[methodIndex - 1].Text != "routine"))
+                    throw new FormatException(
+                        $"MTD_RECEIVER_NATIVEAOT_UNSUPPORTED: typed receiver methods need nominal class slots, borrow checking and CIL lowering at offset {tokens[methodIndex].Offset}");
             }
             if (token.Text == "{") braceDepth++;
             else if (token.Text == "}" && braceDepth > 0) braceDepth--;
@@ -275,19 +278,6 @@ public static partial class OresStructuredParser
             if (token.Text.Length == 0) break;
         }
         RejectActorPipe(tokens); // deny source graphs before CFG/CIL admission
-        // A canonical receiver-first mtd is not a scalar helper. Deny before
-        // any structured SSA/CIL emission; avoid rejecting ordinary identifiers
-        // named mtd or mtd text inside comments and string literals.
-        for (int i = 0; i + 3 < tokens.Count; i++)
-        {
-            if (tokens[i].Text != "mtd" || tokens[i + 1].Text != "(") continue;
-            int p = i + 2;
-            if (tokens[p].Text == "mut") p++;
-            if (p + 1 < tokens.Count && tokens[p].Text == "self" &&
-                tokens[p + 1].Text == ":")
-                throw new FormatException(
-                    $"MTD_RECEIVER_NATIVEAOT_UNSUPPORTED: typed receiver methods need nominal class slots, borrow checking and CIL lowering at offset {tokens[i].Offset}");
-        }
         for (int i = 0; i + 1 < tokens.Count; i++)
         {
             // No protected state heap or virtual actor activation exists in
