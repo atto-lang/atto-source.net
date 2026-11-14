@@ -43,7 +43,10 @@ public readonly record struct GuestEffectStatus(GuestEffectKind Kind, uint Code)
     public GuestEffectStatus Normalize()
     {
         if ((byte)Kind > (byte)GuestEffectKind.ProcessExit ||
-            (Kind == GuestEffectKind.Return && Code != 0))
+            (Kind == GuestEffectKind.Return && Code != 0) ||
+            // Code zero is reserved for success; a thrown guest Error
+            // must have a nonzero identity before any typed catch can run.
+            (Kind == GuestEffectKind.Throw && Code == 0))
             return new GuestEffectStatus(GuestEffectKind.Fatal, 0xFFFFFFFDu);
         return this;
     }
