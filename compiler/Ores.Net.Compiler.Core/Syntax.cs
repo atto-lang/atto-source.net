@@ -6,7 +6,7 @@ public abstract record Expression;
 public sealed record Literal(long Value) : Expression;
 public sealed record Unary(char Operator, Expression Value) : Expression;
 public sealed record Binary(char Operator, Expression Left, Expression Right) : Expression;
-// Named intrinsic only. The '^' operator remains forbidden in Oreslang.
+// Named intrinsic only. Single '^' is not AttoLang syntax ('^^' is boolean XOR).
 public sealed record NamedBitXor(Expression Left, Expression Right) : Expression;
 // Closed-world CLR intrinsic: exact System.Math.Abs(Int64), no dynamic binding.
 public sealed record DotnetMathAbsI64(Expression Value) : Expression;
@@ -411,6 +411,11 @@ public static partial class OresParser
                         $"STATE_INJECTION_UNSUPPORTED: @{name} requires typed container ownership, borrow checks and Native AOT lowering at offset {start}");
                 throw new FormatException($"Annotations require verified compiler lowering at offset {start}");
             }
+            if (ch is '\'' or '"' or '\u0060')
+            {
+                _i = QuotedSourceSyntax.Scan(text, start);
+                return new Token(text[start.._i], start);
+            }
             // Lexical-context guard: comments/whitespace were skipped above.
             // Preserve ordinary identifiers 'with(x)' and inert comments.
             bool precededByWith = previousWasWith;
@@ -472,6 +477,11 @@ public static partial class OresParser
                     (text[_i] is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_'))
                     _i++;
                 var word = text[start.._i];
+                // G0: do not allow unlowered native authority to be spelled as
+                // an ordinary identifier, parameter, member or callable.
+                if (word == "unsafe")
+                    throw new FormatException(
+                        $"unsafe boundary requires checked effects, native grants and Native AOT lowering at offset {start}");
                 previousWasWith = word == "with";
                 // G0: unsupported unsafe source must not become a normal
                 // identifier, callable, member or intrinsic in scalar CIL.
@@ -581,13 +591,16 @@ public static partial class OresParser
                 throw new FormatException($"noncanonical '%' source operator; use named Integer.rem/mod at offset {start}");
             if (ch == '^')
             {
-                // Reserved AttoLang syntax is rejected after lexical trivia and
-                // before any scalar instruction reaches typed IR or CIL.
-                bool doubleCaret = _i + 1 < text.Length && text[_i + 1] == '^';
-                string spelling = doubleCaret ? "^^" : "^";
-                string named = doubleCaret ? "Xor(a, b)" : "Integer.bitXor(a, b)";
+                // Rejected after lexical trivia and before any scalar instruction
+                // reaches typed IR or CIL. `^^` is the canonical boolean XOR
+                // (spec ch.16), but this frontend only types int scalars, so any
+                // `^^` here has non-bool operands; the structured frontend lowers
+                // it. Single `^` is not AttoLang syntax (use Integer.bitXor).
+                if (_i + 1 < text.Length && text[_i + 1] == '^')
+                    throw new FormatException(
+                        $"Logical operator requires bool operands: '^^' in scalar int source at offset {start}");
                 throw new FormatException(
-                    $"Reserved AttoLang operator '{spelling}'; use {named} at offset {start}");
+                    $"Reserved AttoLang operator '^'; use Integer.bitXor(a, b) at offset {start}");
             }
             throw new FormatException($"Invalid character at offset {start}");
         }
@@ -718,6 +731,9 @@ public static partial class OresParser
         private Expression ParseUnary(int depth)
         {
             CheckDepth(depth);
+            if (Current.Text.Length > 0 && Current.Text[0] is '\'' or '"' or '\u0060')
+                throw new FormatException(
+                    $"STRING_BACKEND_UNSUPPORTED: quoted strings and template interpolation require typed String CIL/NativeAOT lowering at offset {Current.Offset}");
             if (Current.Text == "rt")
             {
                 int at = Current.Offset;

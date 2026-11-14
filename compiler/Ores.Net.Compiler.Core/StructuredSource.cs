@@ -61,6 +61,8 @@ public sealed record StructuredLet(int At, string Name, IrValueType ValueType,
 public sealed record StructuredSet(int At, string Name, StructuredExpr Value)
     : StructuredStmt(At);
 public sealed record StructuredReturn(int At, StructuredExpr Value) : StructuredStmt(At);
+// Explicit return; and compiler-inserted void fallthrough share a terminator.
+public sealed record StructuredReturnVoid(int At) : StructuredStmt(At);
 public sealed record StructuredIf(int At, StructuredExpr Condition,
     IReadOnlyList<StructuredStmt> Then, IReadOnlyList<StructuredStmt>? Else)
     : StructuredStmt(At);
@@ -422,21 +424,9 @@ public static partial class OresStructuredParser
                 throw new FormatException(
                     $"Annotations require verified compiler lowering at offset {offset}");
             }
-            if (moduleMode && ch == '"')
+            if (ch is '\'' or '"' or '\u0060')
             {
-                index++;
-                while (index < source.Length && source[index] != '"')
-                {
-                    if (source[index] is '\r' or '\n' or '\0')
-                        throw new FormatException($"Invalid string literal at offset {offset}");
-                    if (source[index++] == '\\')
-                    {
-                        if (index == source.Length) break;
-                        index++;
-                    }
-                }
-                if (index == source.Length) throw new FormatException($"Unterminated string at offset {offset}");
-                index++;
+                index = QuotedSourceSyntax.Scan(source, offset);
                 return new Token(source[offset..index], offset);
             }
             if (Digit(ch))
@@ -502,11 +492,11 @@ public static partial class OresStructuredParser
                     $"noncanonical '%' source operator; use named Integer.rem/mod at offset {offset}");
             else if (ch == '^')
             {
-                bool doubleCaret = index + 1 < source.Length && source[index + 1] == '^';
-                string spelling = doubleCaret ? "^^" : "^";
-                string named = doubleCaret ? "Xor(a, b)" : "Integer.bitXor(a, b)";
-                throw new FormatException(
-                    $"Reserved AttoLang operator '{spelling}'; use {named} at offset {offset}");
+                // `^^` is the canonical eager boolean XOR (spec ch.16); single `^`
+                // stays out of the grammar (integer XOR is Integer.bitXor).
+                if (index + 1 < source.Length && source[index + 1] == '^') index += 2;
+                else throw new FormatException(
+                    $"Reserved AttoLang operator '^'; use Integer.bitXor(a, b) at offset {offset}");
             }
             else if (ch == '!' && index + 2 < source.Length &&
                      source[index + 1] == 'e' && source[index + 2] == 'q' &&
@@ -535,7 +525,8 @@ public static partial class OresStructuredParser
                      source[index + 1] == '=') index += 2;
             else if (index + 1 < source.Length &&
                 (((ch == '<' || ch == '>') && source[index + 1] == '=') ||
-                 (moduleMode && (source.Substring(index, 2) is "->" or "&&" or "||"))))
+                 (source.Substring(index, 2) is "&&" or "||") ||
+                 (moduleMode && source.Substring(index, 2) is "->")))
                 index += 2;
             else if (ch == '|' && !moduleMode)
                 throw new FormatException(
@@ -650,8 +641,10 @@ public static partial class OresStructuredParser
                 string name = Name();
                 Expect("from");
                 string quoted = Current.Text;
-                if (quoted.Length < 3 || quoted[0] != '"' || quoted[^1] != '"' || quoted.Contains('\\'))
-                    throw Error("Import requires an unescaped local source string");
+                if (quoted.Length < 3 ||
+                    (quoted[0] != '"' && quoted[0] != '\'') ||
+                    quoted[^1] != quoted[0] || quoted.Contains('\\'))
+                    throw Error("Import requires an unescaped single- or double-quoted local source string");
                 // Reject before physical lookup and graph linking, independently
                 // of the standalone scalar parser's generic import denial.
                 UnsafeStdlibImportAdmission.RequireGuestSafe(quoted[1..^1]);
@@ -753,7 +746,7 @@ public static partial class OresStructuredParser
                 }
                 if (Current.Text == "(")
                     throw Error("Tuple-v2 shorthand return requires typed tuple ownership/ABI lowering");
-                IrValueType resultType = Type();
+                IrValueType resultType = Take("void") ? IrValueType.Void : Type();
                 if (resultType == IrValueType.OptionI64)
                     throw Error("E_OPTION_ABI_UNSUPPORTED: Option<int> method results need verified two-word ABI");
                 if (name == "main" && entry)
@@ -763,7 +756,7 @@ public static partial class OresStructuredParser
                     if (parameters.Count != 0 || resultType != IrValueType.I64)
                         throw new FormatException($"main must have signature ():int at offset {at}");
                     var (body, returns) = Block(0);
-                    if (!returns) throw Error("Not every path returns int");
+                    if (!returns) throw Error("RETURN_EXPLICIT_REQUIRED: not every main path returns int");
                     return Finish("main", body);
                 }
                 if (visible.ContainsKey(name))
@@ -776,8 +769,16 @@ public static partial class OresStructuredParser
                 scopes.Add(parameterTypes);
                 var (helperBody, helperReturns) = Block(0);
                 scopes.RemoveAt(scopes.Count - 1);
-                if (!helperReturns)
-                    throw Error("Not every typed helper path returns");
+                if (!helperReturns && resultType != IrValueType.Void)
+                    throw Error("RETURN_EXPLICIT_REQUIRED: not every non-void helper path returns");
+                if (!helperReturns && resultType == IrValueType.Void)
+                {
+                    // Compiler-owned empty-stack terminator for permissible
+                    // void fallthrough, not an implicit source value return.
+                    var completed = helperBody.ToList();
+                    completed.Add(new StructuredReturnVoid(at));
+                    helperBody = Array.AsReadOnly(completed.ToArray());
+                }
                 StructuredExpr? inlineReturn =
                     helperBody.Count == 1 && helperBody[0] is StructuredReturn only
                         ? only.Value : null;
@@ -891,6 +892,15 @@ public static partial class OresStructuredParser
                     $"GUARD_BACKEND_UNSUPPORTED: early-exit CFG and ownership lowering required at offset {at}");
             if (Take("return"))
             {
+                if (activeReturnType == IrValueType.Void)
+                {
+                    if (Current.Text != ";")
+                        throw Error("RETURN_VOID_VALUE: void function cannot return a value");
+                    Expect(";");
+                    return (new StructuredReturnVoid(at), true);
+                }
+                if (Current.Text == ";")
+                    throw Error("RETURN_VALUE_REQUIRED: non-void function requires a value");
                 var value = Expr(depth + 1);
                 Require(value, activeReturnType,
                     "Return value does not match function result type");
@@ -1167,7 +1177,7 @@ public static partial class OresStructuredParser
         {
             Budget(depth);
             var left = LogicalXor(depth + 1);
-            while (Current.Text == "or")
+            while (Current.Text is "or" or "||")
             {
                 int at = Current.Offset;
                 index++;
@@ -1183,7 +1193,7 @@ public static partial class OresStructuredParser
         {
             Budget(depth);
             var left = LogicalAnd(depth + 1);
-            while (Current.Text == "xor")
+            while (Current.Text is "xor" or "^^")
             {
                 int at = Current.Offset;
                 index++;
@@ -1199,7 +1209,7 @@ public static partial class OresStructuredParser
         {
             Budget(depth);
             var left = Equal(depth + 1);
-            while (Current.Text == "and")
+            while (Current.Text is "and" or "&&")
             {
                 int at = Current.Offset;
                 index++;
@@ -1320,6 +1330,9 @@ public static partial class OresStructuredParser
         private StructuredExpr Unary(int depth)
         {
             Budget(depth);
+            if (Current.Text.Length > 0 && Current.Text[0] is '\'' or '"' or '\u0060')
+                throw new FormatException(
+                    $"STRING_BACKEND_UNSUPPORTED: quoted strings and template interpolation require typed String CFG/CIL/NativeAOT lowering at offset {Current.Offset}");
             if (Current.Text == "rt")
             {
                 int at = Current.Offset;

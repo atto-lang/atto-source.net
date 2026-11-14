@@ -3,6 +3,12 @@
     <OutputType>Exe</OutputType>
   </PropertyGroup>
   <ItemGroup>
+    <None Include="../../contracts/v1/annotation-admission-v1.cases"
+          Link="annotation-admission-v1.cases"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/annotations/annotation-compiler-corpus-v2.json"
+          Link="annotation-compiler-corpus-v2.json"
+          CopyToOutputDirectory="PreserveNewest" />
     <Compile Include="../ActorGeneratedRuntimeCounterChecks.cs" Link="ActorGeneratedRuntimeCounterChecks.cs" />
     <Content Include="GeneratedOverflowCounterActor.g.cs" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../elm-composition-rejections.json" Link="elm-composition-rejections.json"
@@ -78,6 +84,9 @@
     <ProjectReference Include="../../runtime/Ores.Net.Runtime/Ores.Net.Runtime.csproj" />
     <Content Include="GeneratedCounterActor.g.cs" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="GeneratedMessageCounterActor.g.cs" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="GeneratedExternalCounterActor.g.cs" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/actor-counter-identical-source-v1/corpus.json"
+          Link="actor-counter-corpus.json" CopyToOutputDirectory="PreserveNewest" />
     <!-- Independent metadata inspection runs only in the test process. -->
     <PackageReference Include="Mono.Cecil" Version="0.11.6" />
   </ItemGroup>

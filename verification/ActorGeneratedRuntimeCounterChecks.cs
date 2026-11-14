@@ -110,6 +110,10 @@ internal static class ActorGeneratedRuntimeCounterChecks
             ActorExecutionContext execution = context.Execution;
             try { checkedState.AddInt64(context, 0, 1); throw new Exception("overflow admitted"); }
             catch (OverflowException) { }
+            // A critical-read borrows the native arena, copies an i64 and
+            // releases the reader before this actor can write again.
+            long detached = checkedState.ReadInt64(context, 0);
+            Require(detached == long.MaxValue, "critical-read returned unexpected native value");
             checkedResult.Enqueue(checkedState.AddInt64(context, 0, 0));
             Require(ReferenceEquals(execution, context.Execution), "critical operation replaced execution context");
         });
@@ -119,8 +123,12 @@ internal static class ActorGeneratedRuntimeCounterChecks
 
         var rejected = new ConcurrentQueue<bool>();
         ActorRef foreign = runtime.Spawn(ActorKind.Shared, (context, _) => {
-            try { checkedState.AddInt64(context, 0, -1); rejected.Enqueue(false); }
-            catch (InvalidOperationException) { rejected.Enqueue(true); }
+            bool readDenied = false, writeDenied = false;
+            try { checkedState.ReadInt64(context, 0); }
+            catch (InvalidOperationException) { readDenied = true; }
+            try { checkedState.AddInt64(context, 0, -1); }
+            catch (InvalidOperationException) { writeDenied = true; }
+            rejected.Enqueue(readDenied && writeDenied);
         });
         runtime.Send(foreign, ReadOnlySpan<byte>.Empty);
         Wait(() => rejected.Count == 1, "foreign actor check did not execute");
@@ -128,6 +136,58 @@ internal static class ActorGeneratedRuntimeCounterChecks
         runtime.Send(checkedActor, ReadOnlySpan<byte>.Empty);
         Wait(() => checkedResult.Count == 2, "foreign attempt damaged rightful owner");
         Require(checkedResult.All(value => value == long.MaxValue), "foreign attempt mutated state");
+        // Canonical multi-file external receive source, compiled to a closed
+        // NativeAOT handler rather than a host-synthesized fixed counter tick.
+        // ActorMail<int> is eight little-endian bytes; on input 4 the private
+        // receive calls self.end(), which retires its actor generation.
+        int actorsBefore = runtime.LiveActors;
+        ActorRef declaredA = DeclaredActor_Counter.SpawnRuntime(runtime, supervisor);
+        ActorRef declaredB = DeclaredActor_Counter.SpawnRuntime(runtime, supervisor);
+        foreach (long input in new long[] { 1, 2, 3, 4 })
+        {
+            BinaryPrimitives.WriteInt64LittleEndian(incoming, input);
+            runtime.Send(declaredA, incoming);
+        }
+        foreach (long input in new long[] { 7, 8, 4 })
+        {
+            BinaryPrimitives.WriteInt64LittleEndian(incoming, input);
+            runtime.Send(declaredB, incoming);
+        }
+        Wait(() => replies.Count(x => x.Actor == declaredA.Id) == 4 &&
+                   replies.Count(x => x.Actor == declaredB.Id) == 3,
+            "compiled external receive did not deliver all source-computed replies");
+        Require(replies.Where(x => x.Actor == declaredA.Id).Select(x => x.Value)
+                .SequenceEqual(new long[] { 1, 3, 6, 10 }),
+            "declared external receiver A computed wrong state");
+        Require(replies.Where(x => x.Actor == declaredB.Id).Select(x => x.Value)
+                .SequenceEqual(new long[] { 7, 15, 19 }),
+            "declared external receiver B shared actor-private state");
+        Wait(() => runtime.LiveActors == actorsBefore,
+            "compiled self.end did not retire both private actor incarnations");
+        bool staleStopDenied = false;
+        try { runtime.Send(declaredA, incoming); }
+        catch (InvalidOperationException) { staleStopDenied = true; }
+        Require(staleStopDenied, "retired external receive actor accepted stale send");
+
+        long faultsBeforeDeclared = runtime.FaultedTurns;
+        ActorRef malformedDeclared = DeclaredActor_Counter.SpawnRuntime(runtime, supervisor);
+        runtime.Send(malformedDeclared, ReadOnlySpan<byte>.Empty);
+        Wait(() => runtime.FaultedTurns > faultsBeforeDeclared,
+            "malformed ActorMail<int> did not fault its private receiver");
+        Wait(() => runtime.LiveActors == actorsBefore,
+            "malformed external receiver was not retired");
+        ActorRef declaredFresh = DeclaredActor_Counter.SpawnRuntime(runtime, supervisor);
+        BinaryPrimitives.WriteInt64LittleEndian(incoming, 1);
+        runtime.Send(declaredFresh, incoming);
+        Wait(() => replies.Any(x => x.Actor == declaredFresh.Id),
+            "fresh external receiver did not survive sibling fault");
+        Require(replies.Where(x => x.Actor == declaredFresh.Id).Single().Value == 1,
+            "fresh declared receiver inherited stale state");
+        runtime.Stop(declaredFresh);
+        Wait(() => runtime.LiveActors == actorsBefore,
+            "fresh external receiver did not reclaim its actor generation");
+        Console.WriteLine("DECLARED_EXTERNAL_RECEIVE_NATIVE_PASS source_handler=true two_actor_isolation=true self_end=true stale_send_denied=true malformed_mail_fault=true");
+
         runtime.Dispose();
         Require(runtime.NativeReservedBytes == 0, "native state/frame budget leaked at retirement");
         CheckSchedulerQuotaRefund();
