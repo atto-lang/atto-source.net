@@ -6,6 +6,8 @@ public enum IrValueType
 {
     I64,
     Bool,
+    // Method result only. Void must not be an SSA value, local, or parameter.
+    Void,
     // Source-only tagged (is_some:bool, value:i64) pair in the closed
     // structured Option<int> slice. It NEVER occupies a single CFG SSA slot
     // or CIL local: only its verified primitive components can be emitted.
