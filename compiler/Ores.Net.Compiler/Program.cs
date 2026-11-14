@@ -29,6 +29,11 @@ bool validDeclaredReceiveSyntax = args.Length == 2 &&
 // FFI pins and hot swap, plus transitive native/PInvoke allocation closure.
 bool validCompile = args.Length == 4 && args[0] == "compile" && args[2] == "--out";
 // Opt-in verification lane only: never silently broaden shipping scalar check/compile.
+// Separate opt-in nominal enum guest/compiler slice; shipping scalar and
+// structured entrypoints retain their fail-closed ADT admission boundaries.
+bool validEnumCheck = args.Length == 2 && args[0] == "check-enum-v1";
+bool validEnumCompile = args.Length == 4 &&
+    args[0] == "compile-enum-v1" && args[2] == "--out";
 bool validStructuredCheck = args.Length == 2 && args[0] == "check-structured";
 bool validStructuredCompile = args.Length == 4 &&
     args[0] == "compile-structured" && args[2] == "--out";
@@ -41,10 +46,10 @@ bool validStaticFacts = args.Length == 2 &&
 bool validActorPipePlan = args.Length == 2 && args[0] == "plan-actor-pipe";
 bool moduleCommand = args.Length >= 1 && args[0] is "check-modules" or "compile-modules";
 if ((mathI64Granted && !validCheck && !validCompile) ||
-    (!validCheck && !validDeclaredReceiveSyntax && !validCompile && !validStructuredCheck && !validStructuredCompile &&
+    (!validCheck && !validEnumCheck && !validEnumCompile && !validDeclaredReceiveSyntax && !validCompile && !validStructuredCheck && !validStructuredCompile &&
      !validStaticFacts && !validActorPipePlan && !validEmitActorSource && !validEmitSource && !moduleCommand))
 {
-    Console.Error.WriteLine("usage: oresnet check input.atto|input.ores | oresnet compile input.atto|input.ores --out path/OresGenerated.dll | oresnet check-structured input.atto|input.ores | oresnet compile-structured input.atto|input.ores --out path/OresGenerated.dll | oresnet emit-csharp input.atto|input.ores --out path/OresProgram.cs | oresnet emit-fsharp input.atto|input.ores --out path/OresProgram.fs | oresnet static-facts input.atto|input.ores | oresnet static-facts-structured input.atto|input.ores | oresnet plan-actor-pipe input.atto (typed plan only, not executable actors) | oresnet emit-actor-csharp Counter.atto --out path/Actor_Counter.g.cs | oresnet check-declared-receive-syntax receive.atto (syntax only, NOT guest execution)");
+    Console.Error.WriteLine("usage: oresnet check-enum-v1 FILE.atto | oresnet compile-enum-v1 FILE.atto --out path/OresGenerated.dll | oresnet check input.atto|input.ores | oresnet compile input.atto|input.ores --out path/OresGenerated.dll | oresnet check-structured input.atto|input.ores | oresnet compile-structured input.atto|input.ores --out path/OresGenerated.dll | oresnet emit-csharp input.atto|input.ores --out path/OresProgram.cs | oresnet emit-fsharp input.atto|input.ores --out path/OresProgram.fs | oresnet static-facts input.atto|input.ores | oresnet static-facts-structured input.atto|input.ores | oresnet plan-actor-pipe input.atto (typed plan only, not executable actors) | oresnet emit-actor-csharp Counter.atto --out path/Actor_Counter.g.cs | oresnet check-declared-receive-syntax receive.atto (syntax only, NOT guest execution)");
     return 2;
 }
 
@@ -139,6 +144,24 @@ try
         Console.WriteLine(args[0] == "static-facts"
             ? StaticFactsV0Exporter.FromCompiledScalarSource(source)
             : StaticFactsV0Exporter.FromStructuredSource(source));
+        return 0;
+    }
+    if (validEnumCheck || validEnumCompile)
+    {
+        if (!string.Equals(Path.GetExtension(args[1]), ".atto",
+            StringComparison.OrdinalIgnoreCase))
+            throw new FormatException("Nominal enum v1 requires canonical .atto source");
+        var module = OresNominalEnumV1.LowerModule(source);
+        if (validEnumCompile)
+        {
+            if (!string.Equals(Path.GetFileName(args[3]), "OresGenerated.dll",
+                StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Generated assembly must be named OresGenerated.dll");
+            CilEmitter.EmitLibrary(module, args[3]);
+            Console.WriteLine("Emitted verified nominal enum v1 CIL: " +
+                Path.GetFullPath(args[3]));
+        }
+        else Console.WriteLine("Verified nominal enum v1 source and CFG: OK");
         return 0;
     }
     if (validEmitActorSource)
