@@ -24,7 +24,7 @@ public static class ExecutionGraphV1
     }
 
     public sealed record Node(int Id, Domain Domain, Operation Operation,
-        Kind Result, IReadOnlyList<int> Inputs, long Constant);
+        Kind ResultKind, IReadOnlyList<int> Inputs, long Constant);
 
     public sealed class Ref<T>
     {
@@ -206,7 +206,7 @@ public static class ExecutionGraphV1
                 for (int j = 0; j < copiedInputs.Length; j++)
                     copiedInputs[j] = sourceInputs[j];
                 frozen[i] = new Node(original.Id, original.Domain, original.Operation,
-                    original.Result, Array.AsReadOnly(copiedInputs), original.Constant);
+                    original.ResultKind, Array.AsReadOnly(copiedInputs), original.Constant);
             }
             nodes = frozen;
             for (int i = 0; i < nodes.Length; i++)
@@ -241,7 +241,7 @@ public static class ExecutionGraphV1
                         throw new ArgumentException("invalid typed graph opcode");
                 }
             }
-            if (nodes[output].Result != kind) throw new ArgumentException("invalid typed graph output kind");
+            if (nodes[output].ResultKind != kind) throw new ArgumentException("invalid typed graph output kind");
             _nodes = Array.AsReadOnly(nodes);
             _output = output;
             ResultKind = kind;
@@ -250,12 +250,12 @@ public static class ExecutionGraphV1
         private static void Signature(Node[] nodes, Node node, Domain domain, Kind kind,
                                       params Kind[] inputs)
         {
-            if (node.Domain != domain || node.Result != kind || node.Inputs.Count != inputs.Length)
+            if (node.Domain != domain || node.ResultKind != kind || node.Inputs.Count != inputs.Length)
                 throw new ArgumentException("invalid typed graph operation signature");
             for (int i = 0; i < inputs.Length; i++)
             {
                 int dependency = node.Inputs[i];
-                if (dependency < 0 || dependency >= node.Id || nodes[dependency].Result != inputs[i])
+                if (dependency < 0 || dependency >= node.Id || nodes[dependency].ResultKind != inputs[i])
                     throw new ArgumentException("invalid typed graph operand kind");
             }
         }
@@ -320,6 +320,21 @@ public static class ExecutionGraphV1
             int inlineAttempted = 0;
             bool accepted = false;
             int submittingThread = Environment.CurrentManagedThreadId;
+            // Admission decision (0 pending, 1 accepted, 2 rejected), published before the
+            // completion signal so callbacks never block on or read a Task result.
+            int admittedState = 0;
+            // Runs only after admission has completed; never waits.
+            void RunAdmitted()
+            {
+                try
+                {
+                    if (System.Threading.Volatile.Read(ref admittedState) != 1
+                            || ticket.Cancelled) return;
+                    ticket.Complete(Evaluate(() => ticket.Cancelled));
+                }
+                catch (OperationCanceledException) { ticket.Cancel(); }
+                catch (Exception ex) { ticket.Fail(ex); }
+            }
             try
             {
                 AdmitCpu();
@@ -336,14 +351,23 @@ public static class ExecutionGraphV1
                             System.Threading.Interlocked.Exchange(ref inlineAttempted, 1);
                             return;
                         }
-                        if (!admission.Task.Wait(TimeSpan.FromSeconds(30)))
+                        if (!admission.Task.IsCompleted)
                         {
-                            ticket.RejectExecutor(new TimeoutException(
-                                "host CPU graph executor admission timed out"));
+                            // Async-only runtime boundary: never park this executor thread on
+                            // admission. SubmitCpu always settles it in its finally block, so
+                            // re-enter through the same executor once the decision exists.
+                            admission.Task.ContinueWith(
+                                _ =>
+                                {
+                                    try { schedule(RunAdmitted); }
+                                    catch (Exception ex) { ticket.RejectExecutor(ex); }
+                                },
+                                System.Threading.CancellationToken.None,
+                                System.Threading.Tasks.TaskContinuationOptions.ExecuteSynchronously,
+                                System.Threading.Tasks.TaskScheduler.Default);
                             return;
                         }
-                        if (!admission.Task.Result || ticket.Cancelled) return;
-                        ticket.Complete(Evaluate(() => ticket.Cancelled));
+                        RunAdmitted();
                     }
                     catch (OperationCanceledException) { ticket.Cancel(); }
                     catch (Exception ex) { ticket.Fail(ex); }
@@ -355,7 +379,11 @@ public static class ExecutionGraphV1
                     accepted = true;
             }
             catch (Exception ex) { ticket.RejectExecutor(ex); }
-            finally { admission.TrySetResult(accepted); }
+            finally
+            {
+                System.Threading.Volatile.Write(ref admittedState, accepted ? 1 : 2);
+                admission.TrySetResult(accepted);
+            }
             return ticket;
         }
     }

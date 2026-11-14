@@ -92,6 +92,27 @@ public static class OwnedF32GraphV1
         int inlineAttempted = 0;
         bool accepted = false;
         int submittingThread = Environment.CurrentManagedThreadId;
+        // Admission decision (0 pending, 1 accepted, 2 rejected), published before the
+        // completion signal; callbacks never block on or read a Task result.
+        int admittedState = 0;
+        void RunAdmitted()
+        {
+            try
+            {
+                if (Volatile.Read(ref admittedState) != 1 || ticket.Cancelled) return;
+
+                OwnedF32RegionV1.ExecuteCpuRegion(
+                    input, output, source, destination, scale, bias);
+
+                // Cancellation after the worker began cannot roll back
+                // committed F32 bytes, but it suppresses graph/result
+                // publication.
+                if (ticket.Cancelled) return;
+                long value = scalar.ExecuteCpu();
+                if (!ticket.Cancelled) ticket.Complete(value);
+            }
+            catch (Exception ex) { ticket.Fail(ex); }
+        }
 
         try
         {
@@ -131,23 +152,23 @@ public static class OwnedF32GraphV1
                         return;
                     }
 
-                    if (!admission.Task.Wait(TimeSpan.FromSeconds(30)))
+                    if (!admission.Task.IsCompleted)
                     {
-                        ticket.RejectExecutor(new TimeoutException(
-                            "owned F32 graph executor admission timed out"));
+                        // Async-only runtime boundary: never park this executor thread.
+                        // The submitting call settles admission in its finally block;
+                        // re-enter through the same executor once it has.
+                        admission.Task.ContinueWith(
+                            _ =>
+                            {
+                                try { schedule(RunAdmitted); }
+                                catch (Exception ex) { ticket.RejectExecutor(ex); }
+                            },
+                            CancellationToken.None,
+                            TaskContinuationOptions.ExecuteSynchronously,
+                            TaskScheduler.Default);
                         return;
                     }
-                    if (!admission.Task.Result || ticket.Cancelled) return;
-
-                    OwnedF32RegionV1.ExecuteCpuRegion(
-                        input, output, source, destination, scale, bias);
-
-                    // Cancellation after the worker began cannot roll back
-                    // committed F32 bytes, but it suppresses graph/result
-                    // publication.
-                    if (ticket.Cancelled) return;
-                    long value = scalar.ExecuteCpu();
-                    if (!ticket.Cancelled) ticket.Complete(value);
+                    RunAdmitted();
                 }
                 catch (Exception ex) { ticket.Fail(ex); }
             });
@@ -159,7 +180,11 @@ public static class OwnedF32GraphV1
                 accepted = true;
         }
         catch (Exception ex) { ticket.RejectExecutor(ex); }
-        finally { admission.TrySetResult(accepted); }
+        finally
+        {
+            Volatile.Write(ref admittedState, accepted ? 1 : 2);
+            admission.TrySetResult(accepted);
+        }
 
         return ticket;
     }
