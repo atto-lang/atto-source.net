@@ -419,6 +419,17 @@ internal static class StructuredSourceTests
             "const x=x;return 42;"
         }) Reject("fnc main():int{" + invalid + "}", "scalar cast/inference fail-closed " + invalid);
 
+        var keywordTail = OresStructuredParser.Parse("""
+            pub fnc main():int { if true then let int val=5, val+42 else 1 fi }
+            """);
+        Require(keywordTail.Body[0] is StructuredIf {
+            Then.Count: 2, Else.Count: 1,
+            KeywordDelimited: true
+        }, "keyword local sequence retains typed source provenance");
+        Reject("fnc main():int{if true{ return 42;}else{return 1;}fi}",
+            "extraneous fi after brace if must be rejected");
+        Reject("fnc main():int{if true then 42 else 1 fi fi}",
+            "extraneous fi after keyword if must be rejected");
         var runtimeBool = OresStructuredParser.Parse("""
             fnc main():int {
                 val bool enabled = true;

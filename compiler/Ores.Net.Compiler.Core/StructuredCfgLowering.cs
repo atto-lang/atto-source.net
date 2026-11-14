@@ -431,6 +431,13 @@ public static class OresStructuredCfgLowering
                         }
                         break;
                     }
+                    case StructuredValueStatement discarded:
+                    {
+                        Block evalBlock = current;
+                        _ = Expression(discarded.Value, ref evalBlock, variables);
+                        current = evalBlock;
+                        break;
+                    }
                     case StructuredReturn returned:
                     {
                         Block evalBlock = current;

@@ -386,6 +386,14 @@ internal static class StructuredCfgLoweringTests
             6, "runtime val has independent SSA identity");
         Check("fnc main():int{const bool b=2<3;if b{return 42;}else{return 0;}}",
             42, "compile-time boolean branch in emitted CIL");
+        Check("fnc main():int{if true then 42; else 1; fi}",
+            42, "keyword tail value in emitted CIL");
+        Check("fnc main():int{if false then 1 else 42 fi}",
+            42, "keyword false arm tail value without semicolon");
+        Check("fnc main():int{if true then let int val=5, val+42 else 1 fi}",
+            47, "comma-local tail result from emitted CIL");
+        Check("fnc main():int{if true then 1; else 0; fi return 99;}",
+            99, "non-tail keyword values do not return early");
         // Same byte-identical portable .atto fixture as Java #2648 and LLVM
         // #1554; evaluate compiler-owned CFG AND actual emitted CIL.
         const string logicalFixture = "contracts/logical-word-operators-v1/scalar-parity.atto";
