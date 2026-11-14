@@ -9,8 +9,9 @@ public static class ActorPubSubSourceAdmission
 {
     public const string Diagnostic =
         "native ActorGroup/Topic source lowering unsupported";
-    public const string PipeDiagnostic =
-        "native actor pipe source lowering unsupported";
+    // Actor pipe rejection has one owner: ActorPipeAdmission (#440), whose
+    // diagnostic and offset are shared with the Java/LLVM parity fixtures.
+    public const string PipeDiagnostic = ActorPipeAdmission.Diagnostic;
 
     public static void RejectUnsupported(string source)
     {
@@ -153,7 +154,7 @@ public static class ActorPubSubSourceAdmission
             "then" or "fi" or "end" or "else" or "as" or "case" or "over");
 
     private static FormatException PipeUnsupported(int offset) =>
-        new($"{PipeDiagnostic} at offset {offset}");
+        ActorPipeAdmission.Unsupported(offset);
 
     private static FormatException Unsupported(int offset) =>
         new($"{Diagnostic} at offset {offset}");
