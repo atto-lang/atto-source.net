@@ -81,6 +81,18 @@ public static partial class OresParser
 
     private static void RejectUnsupportedScalarTokens(List<Token> tokens)
     {
+        // Standalone Go-style mtd declarations cannot become a scalar
+        // function or be silently ignored by the production NativeAOT path.
+        for (int i = 0; i + 3 < tokens.Count; i++)
+        {
+            if (tokens[i].Text != "mtd" || tokens[i + 1].Text != "(") continue;
+            int p = i + 2;
+            if (tokens[p].Text == "mut") p++;
+            if (p + 1 < tokens.Count && tokens[p].Text == "self" &&
+                tokens[p + 1].Text == ":")
+                throw new FormatException(
+                    $"MTD_RECEIVER_NATIVEAOT_UNSUPPORTED: typed receiver methods need nominal class slots, borrow checking and CIL lowering at offset {tokens[i].Offset}");
+        }
         // Source actors are a semantic boundary, not an alternate spelling of scalar
         // functions. Canonical isolated actors already got the schema-aware rejection
         // (RejectUnsupportedSourceActors); every other actor declaration fails here,
