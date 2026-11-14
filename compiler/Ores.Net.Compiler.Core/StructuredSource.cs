@@ -518,7 +518,8 @@ public static partial class OresStructuredParser
                      source[index + 1] == '=') index += 2;
             else if (index + 1 < source.Length &&
                 (((ch == '<' || ch == '>') && source[index + 1] == '=') ||
-                 (moduleMode && (source.Substring(index, 2) is "->" or "&&" or "||"))))
+                 source.Substring(index, 2) is "->" or "::" ||
+                 (moduleMode && (source.Substring(index, 2) is "&&" or "||"))))
                 index += 2;
             else if (ch == '|' && !moduleMode)
                 throw new FormatException(
@@ -561,6 +562,9 @@ public static partial class OresStructuredParser
         private string? declaredModule;
         private int index, statements;
         private IrValueType activeReturnType = IrValueType.I64;
+        // Only the scalar binding clause of an explicit -> Type :: body
+        // admits comma as a statement boundary. Nested ordinary blocks do not.
+        private bool commaBindingTerminator;
         // Track actual AST height, not just grammar recursion depth. A flat
         // 50,000-term sum must not construct a 50,000-level tree for later passes.
         // Records have structural equality; identity avoids recursive hashing.
@@ -696,7 +700,7 @@ public static partial class OresStructuredParser
                 }
                 if (Current.Text is "class" or "actor")
                     throw Error("Nominal class/actor methods require receiver-erased method slots, type/borrow checking and Native AOT CIL lowering; unsupported in .NET structured frontend");
-                Expect("fnc");
+                if (!Take("fnc")) Expect("routine");
                 int at = Current.Offset;
                 string name = Name();
                 // This NativeAOT slice does not lower once-only initialization
@@ -729,11 +733,8 @@ public static partial class OresStructuredParser
                     while (Take(","));
                 }
                 Expect(")");
-                if (!Take(":"))
-                {
-                    if (linking is null) Expect(":");
-                    else Expect("->");
-                }
+                bool arrowReturn = Take("->");
+                if (!arrowReturn) Expect(":");
                 if (Current.Text == "(")
                     throw Error("Tuple-v2 shorthand return requires typed tuple ownership/ABI lowering");
                 IrValueType resultType = Type();
@@ -745,7 +746,8 @@ public static partial class OresStructuredParser
                     activeReturnType = IrValueType.I64;
                     if (parameters.Count != 0 || resultType != IrValueType.I64)
                         throw new FormatException($"main must have signature ():int at offset {at}");
-                    var (body, returns) = Block(0);
+                    var (body, returns) = arrowReturn && Current.Text == "::"
+                        ? CommaBody(0) : Block(0);
                     if (!returns) throw Error("Not every path returns int");
                     return Finish("main", body);
                 }
@@ -757,7 +759,8 @@ public static partial class OresStructuredParser
                 // parser as main. The separate MethodDef ABI isolates locals.
                 activeReturnType = resultType;
                 scopes.Add(parameterTypes);
-                var (helperBody, helperReturns) = Block(0);
+                var (helperBody, helperReturns) = arrowReturn && Current.Text == "::"
+                    ? CommaBody(0) : Block(0);
                 scopes.RemoveAt(scopes.Count - 1);
                 if (!helperReturns)
                     throw Error("Not every typed helper path returns");
@@ -774,6 +777,80 @@ public static partial class OresStructuredParser
                 functionOrder.Add(methodName);
             }
         }
+        /// <summary>
+        /// Typed comma expression body. A final expression implicitly returns;
+        /// previous bindings and intermediate expressions preserve strict order
+        /// through the existing structured AST/CIL local machinery. This parser
+        /// remains a scalar subset: nominal class/actor methods fail closed.
+        /// </summary>
+        private (IReadOnlyList<StructuredStmt> Body, bool Returns) CommaBody(int depth)
+        {
+            Budget(depth);
+            Expect("::");
+            scopes.Add(new Dictionary<string, LocalBinding>(StringComparer.Ordinal));
+            localTypeScopes.Add(new HashSet<string>(StringComparer.Ordinal));
+            var body = new List<StructuredStmt>();
+            bool terminated = false;
+            while (Current.Text != "end")
+            {
+                if (Current.Text.Length == 0) throw Error("Unterminated comma expression body");
+                if (Current.Text == ",") throw Error("Empty comma expression body item");
+                if (terminated) throw Error("Unreachable comma expression body item");
+                if (++statements > MaxStatements)
+                    throw Error("Structured statement budget exceeded");
+                if (Current.Text is "let" or "val" or "const" or "int" or "bool")
+                {
+                    bool previous = commaBindingTerminator;
+                    commaBindingTerminator = true;
+                    try
+                    {
+                        var (declaration, returns) = Statement(depth + 1);
+                        body.Add(declaration);
+                        terminated = returns;
+                    }
+                    finally { commaBindingTerminator = previous; }
+                    if (!Take(",")) throw Error("Comma body local requires following ','");
+                    if (Current.Text is "," or "end" or "")
+                        throw Error("Comma body requires an item after ','");
+                    continue;
+                }
+                if (Current.Text == "return")
+                {
+                    var (returned, returns) = Statement(depth + 1);
+                    body.Add(returned);
+                    terminated = returns;
+                    if (Current.Text != "end") throw Error("Return must terminate comma body");
+                    continue;
+                }
+                int at = Current.Offset;
+                var expression = Expr(depth + 1);
+                if (Take(","))
+                {
+                    if (Current.Text is "," or "end" or "")
+                        throw Error("Comma body requires an item after ','");
+                    // A hidden local forces exactly-once evaluation in source
+                    // order, including any checked helper-call side effects.
+                    string temporary = "$comma_effect_" + body.Count.ToString(CultureInfo.InvariantCulture);
+                    if (scopes[^1].ContainsKey(temporary))
+                        throw Error("Duplicate compiler-owned comma temporary");
+                    scopes[^1].Add(temporary,
+                        new LocalBinding(expression.Type, StructuredBindingKind.Readonly, null));
+                    body.Add(new StructuredLet(at, temporary, expression.Type, expression,
+                        StructuredBindingKind.Readonly));
+                    continue;
+                }
+                Require(expression, activeReturnType,
+                    "Comma body result does not match callable result type");
+                body.Add(new StructuredReturn(at, expression));
+                terminated = true;
+            }
+            Expect("end");
+            scopes.RemoveAt(scopes.Count - 1);
+            localTypeScopes.RemoveAt(localTypeScopes.Count - 1);
+            if (!terminated) throw Error("Non-void comma body requires terminal expression");
+            return (Array.AsReadOnly(body.ToArray()), true);
+        }
+
         private (IReadOnlyList<StructuredStmt> Body, bool Returns) Block(int depth)
         {
             Budget(depth);
@@ -956,7 +1033,7 @@ public static partial class OresStructuredParser
                         ? new StructuredBool(initializer.Offset, constantValue.Value != 0)
                         : new StructuredInt(initializer.Offset, constantValue.Value);
                 }
-                Expect(";");
+                if (!commaBindingTerminator || Current.Text != ",") Expect(";");
                 // Bind only after checking initializer (no self-reference).
                 scopes[^1].Add(name, new LocalBinding(type, kind, constantValue));
                 return (new StructuredLet(at, name, type, initializer, kind), false);
