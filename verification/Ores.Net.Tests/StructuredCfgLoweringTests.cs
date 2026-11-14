@@ -208,8 +208,8 @@ internal static class StructuredCfgLoweringTests
         // already-lowered native callable. The structured CIL backend has
         // scalar :: bodies but no closure frames or tuple lambda dispatch.
         foreach (string notYetLowered in new[] {
-            "fnc main():int{val callback=|| -> int => 42;return callback();}",
-            "fnc main() -> int :: 5 |> |n| -> int => n + 1 end",
+            "fnc main():int{val callback=|| => int -> 42;return callback();}",
+            "fnc main() -> int :: 5 |> |n| => int -> n + 1 end",
             "fnc main() -> int :: 5 |> |n| -> val int x = n + 1, x end",
             "fnc main():int{val callback=|| -> int :: int x=5,x+3 end;return callback();}"
         })
