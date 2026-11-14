@@ -400,6 +400,7 @@ HeapContainerSourceBoundaryTests.Run(); // actual scalar compiler fail-closed he
 StructuralPatternAdmissionTests.Run();
 AdtSourceAdmissionTests.Run();
 NumericSeparatorParityTests.Run();
+ExplicitExportSyntaxTests.Run();
 CrossBackendCheckedI64ParityTests.Run();
 AsyncInteropFailClosedTests.Run();
 await HostTaskObservationTests.Run();
