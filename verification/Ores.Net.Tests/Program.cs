@@ -563,8 +563,6 @@ Require(OresParser.Parse(
     "fnc main():int{return 1;} /* enum Color /* enum Mode */ end */") is Literal,
     "nested block-comment enum words must not trigger overload admission");
 
-TaskI64SourceTests.Run();
-await RootTaskI64Tests.Run();
 DotnetHostImportTests.Run(); // compiled System.Math.Abs(i64) CIL metadata and fail-closed imports
 VmIsolateHostTests.Run();
 VmIsolateHostHardeningTests.Run();
@@ -658,6 +656,8 @@ AsyncInteropFailClosedTests.Run();
 EtsPgFailClosedTests.Run();
 await HostTaskObservationTests.Run();
 await AsyncSourceSliceTests.Run();
+TaskI64SourceTests.Run();
+await RootTaskI64Tests.Run();
 
 // Source actor syntax must fail at a semantic actor boundary, never as an
 // accidental scalar-fnc parse error. Legacy actors remain rejected outright;
