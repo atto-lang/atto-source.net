@@ -567,7 +567,7 @@ public static partial class OresParser
             // Lex assignment punctuation so unsupported declarations are rejected
             // at their declaration, rather than at a later initializer. The
             // arithmetic parser still has no assignment production.
-            if ("()+-*/{}:;.,=?|<>".IndexOf(ch) >= 0)
+            if ("()+-*/{}:;,.=?[]<>~|".IndexOf(ch) >= 0)
             {
                 _i++;
                 return new Token(text[start.._i], start);
@@ -767,6 +767,44 @@ public static partial class OresParser
             }
             // The scalar subset admits only this one typed Integer intrinsic.
             // Parser-owned name resolution rejects arbitrary Integer.* calls.
+            // A first native, escaping-free product construction slice:
+            // Tuple.of(<i64 literals...>)[constant_slot] / ~tuple(...)[slot].
+            // All operands are pure checked constants, so projecting the
+            // selected SSA scalar preserves the exact source evaluation
+            // behavior without allocating a host tuple or losing an effect.
+            if (Current.Text is "Tuple" or "Record" or "Entry" or "Pair" or "~")
+            {
+                int at = Current.Offset;
+                if (Take("~"))
+                {
+                    if (Take("tuple")) return ParseScalarizedTupleFactory(depth + 1, at);
+                    if (Take("record")) return ParseScalarizedRecordFactory(depth + 1, at);
+                    if (Take("entry")) return ParseScalarizedBinaryProductFactory(depth + 1, at, isEntry: true);
+                    if (Take("pair")) return ParseScalarizedBinaryProductFactory(depth + 1, at, isEntry: false);
+                    throw new FormatException(
+                        $"E_COLLECTION_FACTORY_UNSUPPORTED: ~kind requires verified owned collection lowering at offset {at}");
+                }
+                if (Take("Tuple"))
+                {
+                    Expect(".");
+                    Expect("of");
+                    return ParseScalarizedTupleFactory(depth + 1, at);
+                }
+                if (Take("Record"))
+                {
+                    Expect(".");
+                    Expect("of");
+                    return ParseScalarizedRecordFactory(depth + 1, at);
+                }
+                bool isEntry = Take("Entry");
+                if (!isEntry) Expect("Pair");
+                Expect(".");
+                Expect("of");
+                return ParseScalarizedBinaryProductFactory(depth + 1, at, isEntry);
+            }
+            if (Current.Text is "Map" or "Array" or "List" or "Vector" or "Set")
+                throw new FormatException(
+                    $"E_COLLECTION_FACTORY_UNSUPPORTED: {Current.Text}.of requires owned typed aggregate and NativeAOT CIL lowering at offset {Current.Offset}");
             if (Take("Integer"))
             {
                 Expect(".");
@@ -805,6 +843,177 @@ public static partial class OresParser
                 NumberStyles.None, CultureInfo.InvariantCulture, out long result))
                 throw new FormatException($"Invalid i64 at offset {tokens[_index - 1].Offset}");
             return new Literal(result);
+        }
+
+        // A nominal Entry<K,V> and a Pair<A,B> remain different source
+        // families: an Entry exposes only .key/.value; a Pair exposes only
+        // .first/.second. The scalar bootstrap can represent neither as an
+        // escaping object. A checked pure literal immediate projection is
+        // valid without silently allocating a host tuple/dictionary or
+        // introducing unproven ownership/actor-heap transport.
+        private Expression ParseScalarizedBinaryProductFactory(int depth, int at, bool isEntry)
+        {
+            CheckDepth(depth);
+            if (Take("<"))
+            {
+                Expect("int");
+                Expect(",");
+                Expect("int");
+                Expect(">");
+            }
+            Expect("(");
+            long first = ReadPureI64Literal();
+            Expect(",");
+            long second = ReadPureI64Literal();
+            Expect(")");
+            if (!Take("."))
+                throw new FormatException(
+                    $"E_BINARY_PRODUCT_ESCAPE_UNSUPPORTED: Entry/Pair requires an owned nominal aggregate at offset {at}");
+            string field = Current.Text;
+            int fieldAt = Current.Offset;
+            _index++;
+            if (isEntry)
+            {
+                if (field == "key") return new Literal(first);
+                if (field == "value") return new Literal(second);
+                throw new FormatException($"E_ENTRY_FIELD: only key/value projections are supported at offset {fieldAt}");
+            }
+            if (field == "first") return new Literal(first);
+            if (field == "second") return new Literal(second);
+            throw new FormatException($"E_PAIR_FIELD: only first/second projections are supported at offset {fieldAt}");
+        }
+
+        // This is not an escaped Tuple<T...> value: the scalar bootstrap
+        // emits an i64 result, not an owning container. Require an immediate
+        // constant-index projection, bounded arity, and pure literal operands.
+        // If any operand may execute guest code or overflow, refuse the
+        // scalarization instead of silently dropping its evaluation.
+        private Expression ParseScalarizedTupleFactory(int depth, int at)
+        {
+            CheckDepth(depth);
+            int? explicitArity = null;
+            if (Take("<"))
+            {
+                int count = 0;
+                do
+                {
+                    Expect("int");
+                    if (++count > 32)
+                        throw new FormatException($"E_TUPLE_BUDGET: over 32 tuple type slots at offset {at}");
+                }
+                while (Take(","));
+                Expect(">");
+                explicitArity = count;
+            }
+
+            Expect("(");
+            var values = new List<long>();
+            if (Current.Text != ")")
+            {
+                do
+                {
+                    if (values.Count >= 32)
+                        throw new FormatException($"E_TUPLE_BUDGET: over 32 elements at offset {at}");
+                    int operandAt = Current.Offset;
+                    string sign = "";
+                    if (Current.Text is "+" or "-")
+                    {
+                        sign = Current.Text;
+                        _index++;
+                    }
+                    string raw = Current.Text;
+                    if (raw.Length == 0 || raw[0] is < '0' or > '9')
+                        throw new FormatException(
+                            $"E_TUPLE_LITERAL_ONLY: scalarized tuple requires side-effect-free i64 literal operands at offset {operandAt}");
+                    _index++;
+                    if (!long.TryParse(sign + raw.Replace("_", "", StringComparison.Ordinal),
+                            NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out long n))
+                        throw new FormatException($"E_TUPLE_RANGE: invalid signed i64 at offset {operandAt}");
+                    values.Add(n);
+                }
+                while (Take(",") && Current.Text != ")");
+            }
+            Expect(")");
+            if (explicitArity.HasValue && explicitArity.Value != values.Count)
+                throw new FormatException($"E_TUPLE_ARITY: tuple witness/operand count mismatch at offset {at}");
+
+            if (!Take("["))
+                throw new FormatException(
+                    $"E_TUPLE_ESCAPE_UNSUPPORTED: tuple value requires native product storage; only immediate constant-index projection is admitted at offset {at}");
+            string indexText = Current.Text;
+            int indexAt = Current.Offset;
+            if (indexText.Length == 0 || indexText[0] is < '0' or > '9' ||
+                !int.TryParse(indexText.Replace("_", "", StringComparison.Ordinal),
+                    NumberStyles.None, CultureInfo.InvariantCulture, out int index))
+                throw new FormatException($"E_TUPLE_INDEX: tuple projection needs nonnegative constant index at offset {indexAt}");
+            _index++;
+            Expect("]");
+            if (index >= values.Count)
+                throw new FormatException($"E_TUPLE_BOUNDS: tuple index out of range at offset {indexAt}");
+            return new Literal(values[index]);
+        }
+
+        // Readonly record scalarization is legal only for an immediate static
+        // field projection of a closed, all-literal shape. No record reference
+        // enters the scalar SSA, so the projection cannot escape or alias a
+        // host object. All field values are pure checked i64 literals.
+        private Expression ParseScalarizedRecordFactory(int depth, int at)
+        {
+            CheckDepth(depth);
+            Expect("(");
+            var fields = new Dictionary<string, long>(StringComparer.Ordinal);
+            if (Current.Text != ")")
+            {
+                do
+                {
+                    if (fields.Count >= 32)
+                        throw new FormatException($"E_RECORD_BUDGET: over 32 fields at offset {at}");
+                    string field = Current.Text;
+                    int fieldAt = Current.Offset;
+                    if (field.Length == 0 ||
+                        !(field[0] is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or '_') ||
+                        field.Any(c => !(c is >= 'a' and <= 'z' or >= 'A' and <= 'Z'
+                            or >= '0' and <= '9' or '_')))
+                        throw new FormatException(
+                            $"E_RECORD_STATIC_FIELD: record field must be static ASCII identifier at offset {fieldAt}");
+                    _index++;
+                    Expect(":");
+                    long value = ReadPureI64Literal();
+                    if (!fields.TryAdd(field, value))
+                        throw new FormatException($"E_RECORD_DUPLICATE: duplicate field at offset {fieldAt}");
+                }
+                while (Take(",") && Current.Text != ")");
+            }
+            Expect(")");
+            if (!Take("."))
+                throw new FormatException(
+                    $"E_RECORD_ESCAPE_UNSUPPORTED: record requires typed storage; only immediate field projection is admitted at offset {at}");
+            int nameAt = Current.Offset;
+            string member = Current.Text;
+            _index++;
+            if (!fields.TryGetValue(member, out long projected))
+                throw new FormatException($"E_RECORD_FIELD: unknown or inaccessible record field at offset {nameAt}");
+            return new Literal(projected);
+        }
+
+        private long ReadPureI64Literal()
+        {
+            int at = Current.Offset;
+            string sign = "";
+            if (Current.Text is "+" or "-")
+            {
+                sign = Current.Text;
+                _index++;
+            }
+            string raw = Current.Text;
+            if (raw.Length == 0 || raw[0] is < '0' or > '9')
+                throw new FormatException(
+                    $"E_AGGREGATE_LITERAL_ONLY: scalarized fields require pure i64 literals at offset {at}");
+            _index++;
+            if (!long.TryParse(sign + raw.Replace("_", "", StringComparison.Ordinal),
+                    NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out long value))
+                throw new FormatException($"E_AGGREGATE_I64_RANGE: invalid signed i64 at offset {at}");
+            return value;
         }
 
         private static void CheckDepth(int depth)
