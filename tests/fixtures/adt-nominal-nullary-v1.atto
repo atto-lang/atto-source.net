@@ -1,0 +1,17 @@
+// Source-defined enum: symbols have nominal owner and variant identity.
+// First executable .NET NativeAOT v1 slice has only one locally constructed
+// nullary enum, fully checked arms, and a private compiler tag representation.
+define enum Light as
+  Red = 1
+  Green = 2
+  Yellow = 3
+end
+
+pub fnc main(): int {
+  val Light active = Light.Green;
+  match active over
+    on Light.Red -> { return 10; }
+    on Light.Green -> { return 20; }
+    on Light.Yellow -> { return 30; }
+  end
+}

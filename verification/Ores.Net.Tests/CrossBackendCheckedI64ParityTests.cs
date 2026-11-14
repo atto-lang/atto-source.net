@@ -1,11 +1,37 @@
 using Ores.Net.Compiler;
+using System.Security.Cryptography;
+using System.Text;
+using Mono.Cecil;
 
 static class CrossBackendCheckedI64ParityTests
 {
     private const string Header = "// oreslang:checked-i64-v1\n";
+    private static readonly string[] WaveSourceSha256 =
+    {
+        "2d186d0c400c23c6fcdf1df963580351eacea82250097a1cd083a1cc308b40f5",
+        "73e5fc703df0b0d3af6898c156ff105ec28e8dfc639f2a02ccca0f1cd3c69dd8",
+        "2ca62fbe11d05cb219a4be255669842994c279e0e0a5208fbc3d3a0e4c047d29",
+        "efb740b31d72bfdc1eecc8a7eb87a7b84c8961f444fbbcc08a142ca54cf7c97b",
+        "391467d7baf7b84b339a63e55be2395d9a8a4d92b5719f249df428b34bac7ccd",
+        "d1fa2dc614cd61c442ab1bfa5683fac50cc9d72139e0dcdf0a67b3610d427bd6",
+        "0322dc2a7d48fed12d917aaaf2a50c025b77402a2b21fdbb87224fece59b44b0",
+        "3483cb15d4b2f2c24f90ba65e55e886b59eaea2190aa9c18f8ed10badba04e76",
+        "939b28fccd280d8a3690ebd4d874f263a9ddfe0c87d420d93b9bd684ffe34074",
+        "873112bfda242442d29a8b2ba9f74bc494db44e4e66ac51484ad886786bb525b",
+        "2ee8ae2204d348d177a995e1086543fbc9fcff3d66c80827d40468f2953a9157",
+        "171928949cd43a61f2072f311f94e27f697968848d07b1b90affc9e061d3c41e",
+        "61cf977237ae559e2a759efde340e31b62f95a244702b94f8641ff24931ebecf",
+        "a1da8a0e27b1a72a6371447868cd75d192f3b0da18122c53ac48cfc848f2320f",
+        "ea84b5d71bbb8a7356fe87b70c04a0518da28c53fb2e271d2b6429bbe6a44581",
+        "ba3cd5f0d90f7b6f9c4776561f5b7149dfd2c7d420492fe98df3f249a3fb9922",
+    };
+
 
     public static void Run()
     {
+        OreslanaPortableScalarCilBoundary();
+        RemovedPercentSourceOperator();
+        ReservedSourceOperatorsAndIr();
         foreach (var (name, expression, expected) in new (string, string, long)[]
         {
             ("precedence", "2 + 3 * 4", 14L),
@@ -15,13 +41,90 @@ static class CrossBackendCheckedI64ParityTests
             ("min", "-9223372036854775808", long.MinValue),
             ("zero", "0", 0L),
             ("signed multiplication", "-7 * -6", 42L),
+            ("wave/grouped precedence", "(2 + 3) * 8 + 2", 42L),
+            ("wave/double negation", "-(-42)", 42L),
+            ("wave/left associative subtraction", "(100 - 16) - 42", 42L),
+            ("wave/signed multiplication", "-7 * -6", 42L),
+            ("wave/negative multiplication chain", "(7 - 14) * -6", 42L),
+            ("wave/i64 max minus large", "9223372036854775807 - 9223372036854775765", 42L),
+            ("wave/i64 min plus max", "-9223372036854775808 + 9223372036854775807 + 43", 42L),
+            ("wave/nested grouping", "2 * (3 + 4) * 3", 42L),
+            ("wave/left associative product", "2 * 3 * 7", 42L),
+            ("wave/paired negative differences", "(0 - 7) * (0 - 6)", 42L),
+            ("wave/grouped zero difference", "(21 + 21) + (0 - 0)", 42L),
+            ("wave/six times seven", "6 * 7", 42L),
+            ("wave/parenthesized negative product", "(-7) * (-6)", 42L),
+            ("wave/max self cancellation", "9223372036854775807 - 9223372036854775807 + 42", 42L),
+            ("wave/min self cancellation", "-9223372036854775808 - (-9223372036854775808) + 42", 42L),
+            ("wave/unit multiplication group", "(100 - 58) * (0 + 1)", 42L),
         })
         {
-            var ast = OresParser.Parse(Header + "define pub fnc main(): int { return " + expression + "; }");
+            string source;
+            if (name.StartsWith("wave/", StringComparison.Ordinal))
+            {
+                var id = name switch
+                {
+                    "wave/grouped precedence" => 34,
+                    "wave/double negation" => 35,
+                    "wave/left associative subtraction" => 36,
+                    "wave/signed multiplication" => 37,
+                    "wave/negative multiplication chain" => 38,
+                    "wave/i64 max minus large" => 39,
+                    "wave/i64 min plus max" => 40,
+                    "wave/nested grouping" => 41,
+                    "wave/left associative product" => 50,
+                    "wave/paired negative differences" => 51,
+                    "wave/grouped zero difference" => 52,
+                    "wave/six times seven" => 53,
+                    "wave/parenthesized negative product" => 54,
+                    "wave/max self cancellation" => 55,
+                    "wave/min self cancellation" => 56,
+                    "wave/unit multiplication group" => 57,
+                    _ => throw new InvalidOperationException("unknown wave scalar case")
+                };
+                source = "// " + id +
+                    ": candidate source-identical checked-i64 scalar program.\n" +
+                    "// Expected integer result 42; guest execution on each backend is unverified.\n" +
+                    "pub fnc main(): int { return " + expression + "; }\n";
+                var actualSha = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(source)))
+                    .ToLowerInvariant();
+                if (actualSha != WaveSourceSha256[id >= 50 ? id - 42 : id - 34])
+                    throw new Exception("FAIL: Oreslang source bytes differ from shared parity case " + id);
+            }
+            else
+            {
+                source = Header + "define pub fnc main(): int { return " + expression + "; }";
+            }
+            var ast = OresParser.Parse(source);
             var ir = OresIrLowering.Lower(ast);
             var actual = OresIrReferenceEvaluator.Evaluate(ir);
             if (actual != expected)
                 throw new Exception($"FAILED: cross-backend checked-i64 {name}: expected {expected}, got {actual}");
+            // Independently verify emitted CIL as well as typed OresIR.
+            // This remains a CIL interpreter receipt, not NativeAOT execution.
+            if (name.StartsWith("wave/", StringComparison.Ordinal))
+            {
+                var folder = Path.Combine(Path.GetTempPath(),
+                    "oresnet-wave-" + Guid.NewGuid().ToString("N"));
+                try
+                {
+                    Directory.CreateDirectory(folder);
+                    var binary = Path.Combine(folder, "OresGenerated.dll");
+                    CilEmitter.EmitLibrary(ir, binary);
+                    using var assembly = AssemblyDefinition.ReadAssembly(binary);
+                    var method = assembly.MainModule.Types
+                        .Single(t => t.FullName == "Oreslang.Generated.OresProgram")
+                        .Methods.Single(m => m.Name == "Run");
+                    var actualCil = CilReferenceEvaluator.Evaluate(method);
+                    if (actualCil != expected)
+                        throw new Exception($"FAILED: emitted CIL {name}: expected {expected}, got {actualCil}");
+                }
+                finally
+                {
+                    if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+                }
+            }
+
         }
 
         foreach (var (name, expression) in new (string, string)[]
@@ -54,5 +157,368 @@ static class CrossBackendCheckedI64ParityTests
             return;
         }
         throw new Exception("FAILED: int/int division was admitted without float lowering");
+    }
+
+    private static void OreslanaPortableScalarCilBoundary()
+    {
+        // Oreslana/Orestra scalar candidates: shipping parser, verified OresIR, emitted CIL evaluator.
+        // THIS IS NOT A Native AOT guest execution certificate, nor class/actor support.
+        foreach (var (name, expression, expected) in new (string, string, long)[]
+        {
+            ("capacity-zero", "(4096 - 64) + (32 * 2) - 4096", 0L),
+            ("nonzero-execution", "73", 73L),
+            ("i64-upper-bound", "(9223372036854775807 - 9223372036854775800) * 6", 42L),
+            ("orestra-reservation-zero", "(1000 - 600) - 400", 0L),
+            ("orestra-subtract-first-boundary", "(9223372036854775807 - 9223372036854775700) - 65", 42L),
+            ("orestra-nonzero-entry-canary", "73", 73L),
+        })
+        {
+            var source = "pub fnc main(): int { return " + expression + "; }\n";
+            var ir = OresIrLowering.Lower(OresParser.Parse(source));
+            long reference = OresIrReferenceEvaluator.Evaluate(ir);
+            if (reference != expected)
+                throw new Exception("Portable application OresIR scalar mismatch: " + name);
+            var folder = Path.Combine(Path.GetTempPath(),
+                "oresnet-oreslana-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(folder);
+            try
+            {
+                var binary = Path.Combine(folder, "OresGenerated.dll");
+                CilEmitter.EmitLibrary(ir, binary);
+                using var assembly = AssemblyDefinition.ReadAssembly(binary);
+                var methodInfo = assembly.MainModule.Types
+                    .Single(t => t.FullName == "Oreslang.Generated.OresProgram")
+                    .Methods.Single(m => m.Name == "Run");
+                var actual = CilReferenceEvaluator.Evaluate(methodInfo);
+                if (actual != expected)
+                    throw new Exception("Portable application emitted CIL scalar mismatch: " + name);
+            }
+            finally
+            {
+                Directory.Delete(folder, recursive: true);
+            }
+        }
+        // Do not promote silent wraparound or disguised overflow as parity.
+        bool overflowRejected = false;
+        try
+        {
+            var ir = OresIrLowering.Lower(OresParser.Parse(
+                "pub fnc main(): int { return (9223372036854775807 + 1) * 0; }"));
+            _ = OresIrReferenceEvaluator.Evaluate(ir);
+        }
+        catch (OverflowException)
+        {
+            overflowRejected = true;
+        }
+        if (!overflowRejected)
+            throw new Exception("Oreslana signed64 intermediate overflow did not trap");
+
+        // Shipping .NET is scalar-only. Never accidentally admit classes,
+        // mutable arrays or Option payloads through its scalar parser.
+        foreach (var unsupported in new[]
+        {
+            "define pub class OreslanaLedger as end",
+            "pub fnc main(): int { let mut Array<int> balances = new Array<int>(); return 0; }",
+            "pub fnc main(): int { return Some(42).unwrap(); }",
+        })
+        {
+            try
+            {
+                _ = OresParser.Parse(unsupported);
+            }
+            catch (FormatException)
+            {
+                continue;
+            }
+            throw new Exception("shipping .NET scalar compiler misadvertised Oreslana ledger support");
+        }
+    }
+
+    private static void ReservedSourceOperatorsAndIr()
+    {
+        // Actual shipping scalar/structured lexers must agree before they
+        // construct any typed SSA or CIL. Include both caret spellings.
+        var denied = new (string Expr, string Diagnostic)[]
+        {
+            ("7%3", "noncanonical '%' source operator"),
+            ("-7%-3", "noncanonical '%' source operator"),
+            ("(8%3)*2", "noncanonical '%' source operator"),
+            ("7 % (1+1)", "noncanonical '%' source operator"),
+            ("-9223372036854775808%-1", "noncanonical '%' source operator"),
+            ("7%0", "noncanonical '%' source operator"),
+            ("7^3", "Reserved AttoLang operator '^'"),
+            ("7 ^ 3", "Reserved AttoLang operator '^'"),
+            ("-7^3", "Reserved AttoLang operator '^'"),
+            ("7^(-3)", "Reserved AttoLang operator '^'"),
+            ("(7^3)", "Reserved AttoLang operator '^'"),
+            ("7^3^1", "Reserved AttoLang operator '^'"),
+            ("7^ ^3", "Reserved AttoLang operator '^'"),
+            ("9223372036854775807^1", "Reserved AttoLang operator '^'"),
+            ("7^^3", "Reserved AttoLang operator '^^'"),
+            ("7 ^^ 3", "Reserved AttoLang operator '^^'"),
+            ("-7^^3", "Reserved AttoLang operator '^^'"),
+            ("7^^(1+2)", "Reserved AttoLang operator '^^'"),
+            ("7^^3^^1", "Reserved AttoLang operator '^^'"),
+            ("-9223372036854775808^^-1", "Reserved AttoLang operator '^^'"),
+            ("(7^^3)", "Reserved AttoLang operator '^^'"),
+            ("7 ^^ -3", "Reserved AttoLang operator '^^'"),
+            ("20%6%3", "noncanonical '%' source operator"),
+            ("7%-(1+1)", "noncanonical '%' source operator")
+        };
+        foreach (var (expression, expected) in denied)
+        {
+            string source = "fnc main():int{return " + expression + ";}";
+            foreach (var (frontend, parse) in new (string, Action)[]
+            {
+                ("scalar", () => { _ = OresParser.Parse(source); }),
+                ("structured", () => { _ = OresStructuredParser.Parse(source); })
+            })
+            {
+                try { parse(); }
+                catch (FormatException error) when
+                    (error.Message.Contains(expected, StringComparison.Ordinal) &&
+                     error.Message.Contains("offset", StringComparison.Ordinal))
+                { continue; }
+                throw new Exception($"FAILED: {frontend} admitted reserved operator in {expression}");
+            }
+        }
+
+        // A pre-lexical substring gate would reject these legal sources.
+        foreach (string source in new[]
+        {
+            "fnc main():int{return 40+2;} // % ^ ^^\n",
+            "fnc main():int{return 40 /* % /* ^ ^^ */ % */ +2;}",
+            "fnc main():int{return 40+2;} // ^ ^^\u2028"
+        })
+        {
+            if (OresIrReferenceEvaluator.Evaluate(OresIrLowering.Lower(OresParser.Parse(source))) != 42)
+                throw new Exception("FAILED: reserved-operator scalar comment control");
+            if (OresStructuredParser.Parse(source).Body.Count != 1)
+                throw new Exception("FAILED: reserved-operator structured comment control");
+        }
+
+        foreach (char op in new[] { '%', '^' })
+        {
+            try { _ = OresIrLowering.Lower(new Binary(op, new Literal(7), new Literal(3))); }
+            catch (FormatException) { continue; }
+            throw new Exception($"FAILED: forged AST {op} reached verified OresIR");
+        }
+
+        // The old verifier accepted a nonzero literal RHS. Reject that as
+        // well as zero and -1 before any CIL/native code can be emitted.
+        foreach (long divisor in new long[] { 0, 3, -1 })
+        {
+            var instructions = new[]
+            {
+                new IrInstruction(0, IrOpcode.ConstantI64, IrValueType.I64, Constant: 7),
+                new IrInstruction(1, IrOpcode.ConstantI64, IrValueType.I64, Constant: divisor),
+                new IrInstruction(2, IrOpcode.SignedRemainderLiteral, IrValueType.I64, Left: 0, Right: 1)
+            };
+            try { _ = OresIrVerifier.Verify(new IrFunction("main", IrValueType.I64, instructions, 2)); }
+            catch (FormatException error) when
+                (error.Message.Contains("Removed Oreslang operator '%'", StringComparison.Ordinal))
+            { continue; }
+            throw new Exception("FAILED: retired IR opcode accepted divisor " + divisor);
+        }
+    }
+
+    private static void RemovedPercentSourceOperator()
+    {
+        // The canonical Oreslang grammar has no percent operator. Reject
+        // every historic spelling *before* producing OresIR or CIL.
+        foreach (string expression in new[]
+        {
+            "-7 % 3", "7 % -3", "-7 % -3", "8 % 3 * 2",
+            "20 % 6 % 3", "-9223372036854775808 % -1",
+            "-9223372036854775808 % -9223372036854775808",
+            "9223372036854775807 % -9223372036854775808",
+            "7 % 0", "7 % (1+1)", "7 % -(1+1)",
+            "7 % -9223372036854775809"
+        })
+        {
+            try
+            {
+                _ = OresParser.Parse(Header + "pub fnc main():int{return " + expression + ";}");
+            }
+            catch (FormatException ex) when (ex.Message.Contains("noncanonical '%' source operator", StringComparison.Ordinal))
+            {
+                continue;
+            }
+            throw new Exception("Noncanonical percent source was admitted: " + expression);
+        }
+        var positive = OresIrLowering.Lower(OresParser.Parse(
+            Header + "pub fnc main():int{return 7*6;}"));
+        if (OresIrReferenceEvaluator.Evaluate(positive) != 42)
+            throw new Exception("Canonical multiply baseline regressed");
+        // '%' remains valid text inside lexical comments, never as an
+        // executable operator. Guard against a crude pre-lexical filter.
+        var commentProgram = OresIrLowering.Lower(OresParser.Parse(
+            Header + "pub fnc main():int{return 42;} // % comment only"));
+        if (OresIrReferenceEvaluator.Evaluate(commentProgram) != 42)
+            throw new Exception("Percent in a comment corrupted parsing");
+
+        // The IR is untrusted; a source parser's admission does not grant
+        // externally constructed IR the right to use arbitrary divisors.
+        foreach (long divisor in new long[] { 0, -1 })
+        {
+            var operations = new[]
+            {
+                new IrInstruction(0, IrOpcode.ConstantI64, IrValueType.I64, Constant: 7),
+                divisor == 0
+                    ? new IrInstruction(1, IrOpcode.ConstantI64, IrValueType.I64, Constant: 0)
+                    : new IrInstruction(1, IrOpcode.CheckedSubtract, IrValueType.I64,
+                        Left: 0, Right: 0),
+                new IrInstruction(2, IrOpcode.SignedRemainderLiteral, IrValueType.I64,
+                    Left: 0, Right: 1)
+            };
+            try
+            {
+                _ = OresIrVerifier.Verify(new IrFunction("main", IrValueType.I64, operations, 2));
+            }
+            catch (FormatException)
+            {
+                continue;
+            }
+            throw new Exception("Untrusted remainder IR escaped literal divisor gate");
+        }
+    }
+    private static void OresllmScalarIntersectionCases()
+    {
+        // Actual .NET parser -> OresIR -> CIL reference interpreter, NOT NativeAOT.
+        // These 28 expressions match contracts/oresllm-parity/v1/scalar.json.
+        foreach (var (expression, expected) in new (string, long)[]
+        {
+            ("0", 0L),
+            ("42", 42L),
+            ("2 + 3 * 4", 14L),
+            ("(2 + 3) * 4", 20L),
+            ("-7 + 3", -4L),
+            ("-7 * -6", 42L),
+            ("9223372036854775807", long.MaxValue),
+            ("-9223372036854775808", long.MinValue),
+            ("9223372036854775807 - 1", long.MaxValue - 1L),
+            ("-9223372036854775808 + 1", long.MinValue + 1L),
+            ("1 - 9", -8L),
+            ("(-5) * (3 + 4)", -35L),
+            ("(17 - 2) * 3", 45L),
+            ("0 - (4 * 5)", -20L),
+            ("1 + (2 * (3 + 4))", 15L),
+            ("-(-5)", 5L),
+            ("0 * 9223372036854775807", 0L),
+        })
+        {
+            var source = Header + "pub fnc main():int{return " + expression + ";}";
+            var ast = OresParser.Parse(source);
+            var ir = OresIrLowering.Lower(ast);
+            long fromIr = OresIrReferenceEvaluator.Evaluate(ir);
+            if (fromIr != expected)
+                throw new Exception($"OresLLM i64 managed IR mismatch: {expression}: {fromIr} vs {expected}");
+            var folder = Path.Combine(Path.GetTempPath(), "oresnet-oresllm-" +
+                Guid.NewGuid().ToString("N"));
+            var file = Path.Combine(folder, "OresGenerated.dll");
+            try
+            {
+                CilEmitter.EmitLibrary(ir, file);
+                using var assembly = AssemblyDefinition.ReadAssembly(file);
+                var method = assembly.MainModule.Types
+                    .Single(t => t.FullName == "Oreslang.Generated.OresProgram")
+                    .Methods.Single(f => f.Name == "Run");
+                long fromCil = CilReferenceEvaluator.Evaluate(method);
+                if (fromCil != expected)
+                    throw new Exception($"OresLLM i64 CIL mismatch: {expression}: {fromCil} vs {expected}");
+            }
+            finally
+            {
+                if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+            }
+        }
+
+        foreach (string expression in new[]
+        {
+            "9223372036854775807 + 1",
+            "-9223372036854775808 - 1",
+            "9223372036854775807 * 2",
+            "-(-9223372036854775808)",
+            "(9223372036854775807 + 1) * 0",
+            "0 - (9223372036854775807 + 1)",
+        })
+        {
+            var ast = OresParser.Parse(Header + "pub fnc main():int{return " + expression + ";}");
+            var ir = OresIrLowering.Lower(ast);
+            bool irTrapped = false;
+            try { _ = OresIrReferenceEvaluator.Evaluate(ir); }
+            catch (OverflowException) { irTrapped = true; }
+            if (!irTrapped)
+                throw new Exception("OresLLM checked overflow admitted in IR: " + expression);
+
+            // Independent emitted-CIL interpretation must also trap. IR-only
+            // overflow evidence cannot certify the managed backend lowering.
+            var folder = Path.Combine(Path.GetTempPath(), "oresnet-overflow-" +
+                Guid.NewGuid().ToString("N"));
+            var file = Path.Combine(folder, "OresGenerated.dll");
+            try
+            {
+                CilEmitter.EmitLibrary(ir, file);
+                using var assembly = AssemblyDefinition.ReadAssembly(file);
+                var method = assembly.MainModule.Types
+                    .Single(t => t.FullName == "Oreslang.Generated.OresProgram")
+                    .Methods.Single(f => f.Name == "Run");
+                bool cilTrapped = false;
+                try { _ = CilReferenceEvaluator.Evaluate(method); }
+                catch (OverflowException) { cilTrapped = true; }
+                if (!cilTrapped)
+                    throw new Exception("OresLLM checked overflow admitted in CIL: " + expression);
+            }
+            finally
+            {
+                if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+            }
+        }
+
+        foreach (string expression in new[]
+        {
+            "unknown_value", "7 / 2", "5 ^ 3", "5 ^^ 3", "1__0"
+        })
+        {
+            try { _ = OresParser.Parse(Header + "pub fnc main():int{return " + expression + ";}"); }
+            catch (FormatException) { continue; }
+            throw new Exception("OresLLM unsupported expression admitted: " + expression);
+        }
+    }
+
+    private static void SupplementalScalarArithmeticCases()
+    {
+        // Supplemental parser -> verified IR -> emitted CIL reference checks.
+        // Not counted as NativeAOT or shared-manifest execution.
+        foreach (var (expression, expected) in new (string, long)[]
+        {
+            ("-7 * 0", 0L),
+            ("2 * ((5 * 3 + 1) - 9) * 3", 42L), // OresLLM scalar gradient (not autograd)
+            ("(2 + 3) * (10 - 2)", 40L),
+            ("9223372036854775807 - 9223372036854775807", 0L),
+        })
+        {
+            var ast = OresParser.Parse(Header + "pub fnc main():int{return " + expression + ";}");
+            var ir = OresIrLowering.Lower(ast);
+            if (OresIrReferenceEvaluator.Evaluate(ir) != expected)
+                throw new Exception("Supplemental OresLLM IR mismatch: " + expression);
+            var folder = Path.Combine(Path.GetTempPath(), "oresnet-supplemental-" +
+                Guid.NewGuid().ToString("N"));
+            var file = Path.Combine(folder, "OresGenerated.dll");
+            try
+            {
+                CilEmitter.EmitLibrary(ir, file);
+                using var assembly = AssemblyDefinition.ReadAssembly(file);
+                var method = assembly.MainModule.Types
+                    .Single(t => t.FullName == "Oreslang.Generated.OresProgram")
+                    .Methods.Single(f => f.Name == "Run");
+                if (CilReferenceEvaluator.Evaluate(method) != expected)
+                    throw new Exception("Supplemental OresLLM CIL mismatch: " + expression);
+            }
+            finally
+            {
+                if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+            }
+        }
     }
 }

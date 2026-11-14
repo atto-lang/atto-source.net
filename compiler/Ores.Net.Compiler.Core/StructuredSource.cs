@@ -7,17 +7,57 @@ namespace Ores.Net.Compiler;
 public abstract record StructuredExpr(int Offset, IrValueType Type);
 public sealed record StructuredInt(int At, long Value) : StructuredExpr(At, IrValueType.I64);
 public sealed record StructuredBool(int At, bool Value) : StructuredExpr(At, IrValueType.Bool);
+// A closed, allocation-free Option<int> source type. Lowering expands it into
+// two independently verified SSA primitives (tag + payload), never a sentinel.
+// No Option<T> ABI, nested Option, type erasure or implicit unwrap is authorized.
+public sealed record StructuredSome(int At, StructuredExpr Payload)
+    : StructuredExpr(At, IrValueType.OptionI64);
+public sealed record StructuredNone(int At) : StructuredExpr(At, IrValueType.OptionI64);
+public sealed record StructuredOptionPresent(int At, StructuredExpr Option)
+    : StructuredExpr(At, IrValueType.Bool);
+public sealed record StructuredOptionAbsent(int At, StructuredExpr Option)
+    : StructuredExpr(At, IrValueType.Bool);
+// Closed tagged equality: compare declared Option<int> tags before active payloads.
+// Neither a None payload nor an untyped scalar may influence the result.
+public sealed record StructuredOptionEqual(int At, StructuredExpr LeftOption,
+    StructuredExpr RightOption, bool Negated)
+    : StructuredExpr(At, IrValueType.Bool);
+public sealed record StructuredOptionOr(int At, StructuredExpr Option, StructuredExpr Fallback)
+    : StructuredExpr(At, IrValueType.I64);
 public sealed record StructuredRead(int At, string Name, IrValueType ValueType)
     : StructuredExpr(At, ValueType);
 public sealed record StructuredNegate(int At, StructuredExpr Value)
     : StructuredExpr(At, IrValueType.I64);
-public enum StructuredOperator { Add, Subtract, Multiply, EqualI64, LessThanI64 }
+public sealed record StructuredConditional(int At, StructuredExpr Test,
+    StructuredExpr WhenTrue, StructuredExpr WhenFalse, IrValueType ResultType)
+    : StructuredExpr(At, ResultType);
+// First typed call milestone: statically resolved, expression-only helpers.
+// Calls are expanded into verified SSA before emitting any CIL.
+public sealed record StructuredCall(int At, string Name,
+    IReadOnlyList<StructuredExpr> Arguments, IrValueType ResultType)
+    : StructuredExpr(At, ResultType);
+public sealed record StructuredParameter(string Name, IrValueType Type);
+public sealed record StructuredFunction(string Name,
+    IReadOnlyList<StructuredParameter> Parameters, IrValueType ResultType,
+    StructuredExpr? ReturnValue, IReadOnlyList<StructuredStmt> Body);
+public enum StructuredOperator { Add, Subtract, Multiply, EqualI64, LessThanI64, GreaterThanI64, NotEqualI64,
+    LessThanOrEqualI64, GreaterThanOrEqualI64,
+    EqualBool, NotEqualBool, LogicalAnd, LogicalOr, LogicalXor }
 public sealed record StructuredBinary(int At, StructuredOperator Operator,
     StructuredExpr Left, StructuredExpr Right, IrValueType ResultType)
     : StructuredExpr(At, ResultType);
 public abstract record StructuredStmt(int Offset);
+// Compile-time const, single-assignment val, and mutable let are distinct
+// source bindings; the experimental structured AST preserves that distinction.
+public enum StructuredBindingKind { Let, Val, Const, Readonly }
+public enum StructuredLocalTypeKind { Struct, Record }
+public sealed record StructuredLocalField(string Name, IrValueType Type);
+public sealed record StructuredLocalTypeDecl(int At, string Name,
+    StructuredLocalTypeKind Kind, IReadOnlyList<StructuredLocalField> Fields)
+    : StructuredStmt(At);
 public sealed record StructuredLet(int At, string Name, IrValueType ValueType,
-    StructuredExpr Initializer) : StructuredStmt(At);
+    StructuredExpr Initializer, StructuredBindingKind Kind = StructuredBindingKind.Let)
+    : StructuredStmt(At);
 public sealed record StructuredSet(int At, string Name, StructuredExpr Value)
     : StructuredStmt(At);
 public sealed record StructuredReturn(int At, StructuredExpr Value) : StructuredStmt(At);
@@ -26,21 +66,40 @@ public sealed record StructuredIf(int At, StructuredExpr Condition,
     : StructuredStmt(At);
 public sealed record StructuredWhile(int At, StructuredExpr Condition,
     IReadOnlyList<StructuredStmt> Body) : StructuredStmt(At);
-public sealed record StructuredProgram(string Name, IReadOnlyList<StructuredStmt> Body);
+public sealed record StructuredProgram(string Name, IReadOnlyList<StructuredStmt> Body,
+    IReadOnlyDictionary<string, StructuredFunction>? Functions = null,
+    IReadOnlyList<string>? FunctionOrder = null);
 
 /// <summary>
 /// Narrow checked parser for a single int-returning main, initialized locals,
 /// assignments, if/else, while and returns. No CIL or runtime execution.
 /// </summary>
-public static class OresStructuredParser
+public static partial class OresStructuredParser
 {
     private const int MaxChars = 1_048_576;
     private const int MaxTokens = 100_000;
     private const int MaxStatements = 16_384;
     private const int MaxDepth = 128;
     private const int MaxIdentifier = 128;
+    private const int MaxHelpers = 64;
+    private const int MaxParameters = 16;
+    private const int MaxLocalTypeFields = 64;
 
     public static StructuredProgram Parse(string source)
+        => ParseCore(source, null).Program;
+
+    internal static StructuredLinkedUnit ParseLinked(string source, LinkedModuleContext linking)
+        => ParseCore(source, linking);
+
+    internal static IReadOnlyList<SourceImport> ReadLinkedImports(string source)
+    {
+        var reader = new Reader(LexLinked(source));
+        return reader.ReadImports();
+    }
+
+    // Import discovery must enforce the same byte, NUL and UTF-16 admission
+    // as full parsing BEFORE it can resolve or probe another module.
+    private static void ValidateSourceInput(string source)
     {
         ArgumentNullException.ThrowIfNull(source);
         if (source.Length > MaxChars)
@@ -61,16 +120,79 @@ public static class OresStructuredParser
         // UTF-8 bytes, matching the disk/CLI boundary, not code-unit count.
         if (System.Text.Encoding.UTF8.GetByteCount(source) > 1_048_576)
             throw new FormatException("Source exceeds 1 MiB UTF-8 parser limit");
+    }
+
+    private static List<Token> LexLinked(string source)
+    {
+        ValidateSourceInput(source);
+        var lexer = new Lexer(source, true);
+        var tokens = new List<Token>();
+        do
+        {
+            tokens.Add(lexer.Read());
+            if (tokens.Count > MaxTokens) throw new FormatException("Structured token budget exceeded");
+        } while (tokens[^1].Text.Length != 0);
+        RejectActorPipe(tokens); // before any module graph/import resolution
+        return tokens;
+    }
+
+    private static void RejectActorPipe(List<Token> tokens)
+    {
+        for (int i = 0; i + 1 < tokens.Count; i++)
+        {
+            if (ActorPipeAdmission.IsReservedForm(
+                i > 2 ? tokens[i - 3].Text : "",
+                i > 1 ? tokens[i - 2].Text : "",
+                i > 0 ? tokens[i - 1].Text : "",
+                tokens[i].Text, tokens[i + 1].Text))
+                throw ActorPipeAdmission.Unsupported(tokens[i].Offset);
+        }
+    }
+
+    private static StructuredLinkedUnit ParseCore(string source, LinkedModuleContext? linking)
+    {
+        ValidateSourceInput(source);
+        ActorPubSubSourceAdmission.RejectUnsupported(source);
         // No structural match lowering or readonly shape metadata in scalar CIL yet.
         StructuralShapeAdmission.RejectUnsupportedPatterns(source);
-        var lexer = new Lexer(source);
+        var lexer = new Lexer(source, linking is not null);
         var tokens = new List<Token>();
+        // Distinguish a forbidden local nominal declaration from an
+        // unsupported top-level class/actor before either reaches lowering.
+        int braceDepth = 0;
         while (true)
         {
             var token = lexer.Read();
+            // Comments and trivia are already stripped by this Lexer. Deny
+            // namespace member access until ETS/pg isolation, ownership,
+            // generational table handles and mailbox ingress exist in Native AOT.
+            if (token.Text == "." && tokens.Count > 0 &&
+                (tokens[^1].Text is "ets" or "pg"))
+                throw new FormatException(
+                    $"ETS/pg guest APIs require authenticated isolate, table and actor-mailbox lowering (unsupported .NET bootstrap) at offset {token.Offset}");
+            // Durable M0 is metadata-only in the Java compiler. Never let
+            // activity/workflow declarations silently reach scalar CIL lowering
+            // before a typed history manifest, replay ABI and ownership gate exist.
+            // Tokens are already comment/string-aware; do not regex raw source.
+            if ((token.Text is "activity" or "workflow") && tokens.Count > 0 &&
+                (tokens[^1].Text == "define" ||
+                 (tokens[^1].Text == "pub" && tokens.Count > 1 &&
+                  tokens[^2].Text == "define")))
+                throw new FormatException(
+                    $"DURABLE_M0_BACKEND_UNSUPPORTED: .NET durable {token.Text} requires versioned manifest and replay lowering at offset {token.Offset}");
             // The scalar bootstrap does not have class/actor dispatch or
             // ownership-aware lexical closures. Refuse these at source admission
             // with a stable capability diagnostic, not an accidental parse error.
+            // Structured CFG, module linking and NativeAOT have no nominal
+            // ModelGraph lowering. Reject before any source can reach SSA/CIL.
+            // Match contextual declaration modifiers, never an ordinary
+            // parameter or source comment containing the word "model".
+            if (token.Text == "model" && tokens.Count > 0 &&
+                (tokens[^1].Text == "define" ||
+                 (tokens[^1].Text == "pub" && tokens.Count > 1 &&
+                  tokens[^2].Text == "define")))
+                throw new FormatException(
+                    $"MODEL_LOWERING_UNSUPPORTED: .NET structured frontend requires typed nominal ModelGraph lowering at offset {token.Offset}");
             if (token.Text == "abstract" && tokens.Count > 0 &&
                 (tokens[^1].Text == "define" ||
                  (tokens[^1].Text == "pub" && tokens.Count > 1 &&
@@ -81,15 +203,46 @@ public static class OresStructuredParser
                 (tokens[^1].Text == "define" ||
                  (tokens[^1].Text == "pub" && tokens.Count > 1 &&
                   tokens[^2].Text == "define")))
+            {
+                // The structured scalar bootstrap cannot emit owner-backed
+                // inverted rows. Look ahead with the actual lexer (which skips
+                // comments) so an inverted STRUCT receives a stable diagnostic
+                // instead of being misreported as an inverted CLASS.
+                var invertedKind = lexer.Read();
+                if (invertedKind.Text == "struct")
+                    throw new FormatException(
+                        $"Inverted struct requires checked value-row, one-level packed columns and ownership lowering in the .NET backend at offset {token.Offset}");
+                // Only a class can receive the class-specific diagnostic.
+                // A missing or unsupported kind is a malformed declaration,
+                // not evidence that inverted class lowering was requested.
+                if (invertedKind.Text != "class")
+                    throw new FormatException(
+                        $"Inverted declaration requires class or struct kind in the .NET backend at offset {invertedKind.Offset}");
                 throw new FormatException(
                     $"Inverted class requires checked bracket-row and ownership lowering in the .NET backend at offset {token.Offset}");
+            }
+            // A supervisor is a distinct compiler-owned CONTROL authority,
+            // not a class/actor or a scalar helper. Deny it before CFG/CIL
+            // emission, including module-local and pub/define spellings.
+            // Tokenization already excludes comments and string contents.
+            if (token.Text == "supervisor" && tokens.Count > 0 &&
+                (tokens[^1].Text == "define" ||
+                 (tokens[^1].Text == "pub" && tokens.Count > 1 &&
+                  tokens[^2].Text == "define")))
+                throw new FormatException(
+                    $"Source supervisors require typed Failure, owned CONTROL dispatch and Native AOT lowering; unsupported in .NET structured frontend at offset {token.Offset}");
             if ((token.Text == "class" || token.Text == "actor") &&
                 tokens.Count > 0 &&
                 (tokens[^1].Text == "define" ||
                  (tokens[^1].Text == "pub" && tokens.Count > 1 &&
                   tokens[^2].Text == "define")))
+            {
+                if (braceDepth > 0)
+                    throw new FormatException(
+                        $"Local class/actor declarations are not permitted at offset {token.Offset}");
                 throw new FormatException(
                     $"Nominal class/actor methods require receiver-erased method slots, type/borrow checking and Native AOT CIL lowering; unsupported in .NET structured frontend at offset {token.Offset}");
+            }
             if (token.Text is "lex" or "nlex")
             {
                 int after = token.Offset + token.Text.Length;
@@ -101,12 +254,61 @@ public static class OresStructuredParser
                         $"Lexical captures require checked closure lowering at offset {token.Offset}");
             }
             tokens.Add(token);
+            if (token.Text == "{") braceDepth++;
+            else if (token.Text == "}" && braceDepth > 0) braceDepth--;
             if (tokens.Count > MaxTokens)
                 throw new FormatException("Structured token budget exceeded");
             if (token.Text.Length == 0) break;
         }
+        RejectActorPipe(tokens); // deny source graphs before CFG/CIL admission
         for (int i = 0; i + 1 < tokens.Count; i++)
         {
+            // No protected state heap or virtual actor activation exists in
+            // the structured Native AOT compiler. Recognize the two-word
+            // declaration head after either visibility spelling, not merely
+            // the following generic "expected fnc" parse error.
+            if (tokens[i].Text == "define" ||
+                (tokens[i].Text == "pub" && tokens[i + 1].Text == "define"))
+            {
+                int j = tokens[i].Text == "define" ? i + 1 : i + 2;
+                if (j < tokens.Count && tokens[j].Text == "pub") j++;
+                if (j + 1 < tokens.Count &&
+                    tokens[j].Text == "state" && tokens[j + 1].Text == "container")
+                    throw new FormatException(
+                        $"STATE_CONTAINER_BACKEND_UNSUPPORTED: protected heap region and critical guard lowering required at offset {tokens[j].Offset}");
+                if (j + 1 < tokens.Count &&
+                    tokens[j].Text == "virtual" && tokens[j + 1].Text == "actor")
+                    throw new FormatException(
+                        $"VIRTUAL_ACTOR_BACKEND_UNSUPPORTED: logical key and activation fencing required at offset {tokens[j].Offset}");
+            }
+            // The separately exposed check-structured / compile-structured
+            // pipeline must not bypass the shipping scalar concurrency gate.
+            // This lexer has already removed comments, so no raw regex scan.
+            string word = tokens[i].Text;
+            string next = tokens[i + 1].Text;
+            // Compiler-owned lexical recognition: the Java/LLVM canonical
+            // telemetry scope must not accidentally become an ordinary scalar
+            // local or inert call. The current .NET CIL path has neither an
+            // exception-region cleanup protocol nor a typed suspendable frame.
+            // Lexed tokens, not raw-source regex: comments cannot authorize it.
+            if (word == "using" && next == "telemetry" && i + 4 < tokens.Count &&
+                tokens[i + 2].Text == "." && tokens[i + 3].Text == "span" &&
+                tokens[i + 4].Text == "(")
+                throw new FormatException(
+                    $"E_TELEMETRY_SCOPE_UNSUPPORTED: .NET NativeAOT requires compiler-owned begin/end, lexical cleanup and suspension-safe scope lowering at offset {tokens[i].Offset}");
+            if (word == "async" && next == "fnc")
+                throw new FormatException(
+                    $"E_CALLABLE_MODIFIERS: async fnc is removed; use suspends at offset {tokens[i].Offset}");
+            if ((word == "critical" && next == "suspends") ||
+                (word == "suspends" && next == "critical"))
+                throw new FormatException(
+                    $"E_CALLABLE_MODIFIERS: critical suspends fnc is forbidden at offset {tokens[i].Offset}");
+            if (word == "critical")
+                throw new FormatException(
+                    $"E_CRITICAL_UNSUPPORTED: structured CIL has no authenticated guard owner or FIFO continuation lowering at offset {tokens[i].Offset}");
+            if (word is "suspends" or "await")
+                throw new FormatException(
+                    $"E_SUSPENDS_UNSUPPORTED: structured CIL lacks typed suspension/continuation lowering at offset {tokens[i].Offset}");
             if (tokens[i].Text == "select" &&
                 StaticSelectAdmission.IsStaticSelectFollower(tokens[i + 1].Text))
                 throw StaticSelectAdmission.Unsupported(tokens[i].Offset);
@@ -119,13 +321,17 @@ public static class OresStructuredParser
                 throw new FormatException(
                     $"Tuple-v2 explicit spread requires single-evaluation checked lowering at offset {tokens[i].Offset}");
         }
-        return new Reader(tokens).ReadProgram();
+        var reader = new Reader(tokens, linking);
+        return linking is null
+            ? new StructuredLinkedUnit(reader.ReadProgram(), null, new Dictionary<string, StructuredFunction>())
+            : reader.ReadLinkedUnit();
     }
 
     private readonly record struct Token(string Text, int Offset);
-    private sealed class Lexer(string source)
+    private sealed class Lexer(string source, bool moduleMode = false)
     {
         private int index;
+        private bool previousWasWith;
         public Token Read()
         {
             while (index < source.Length)
@@ -173,6 +379,49 @@ public static class OresStructuredParser
             int offset = index;
             if (index == source.Length) return new Token("", index);
             char ch = source[index];
+            bool precededByWith = previousWasWith;
+            previousWasWith = false;
+            if (precededByWith && ch == '{')
+                throw new FormatException(
+                    $"WITH_BACKEND_UNSUPPORTED: immutable with requires checked rt copy/take, "
+                    + $"owned field layout/drop and Native AOT reconstruction at offset {index}");
+            // Keep safe-collection denial from current main in the separate
+            // structured/linked parser, including when Option<int> is enabled.
+            SafeCollectionSourceAdmission.RejectUnverifiedBracket(ch, offset);
+            // Injection changes ownership and lifetime authority. The scalar
+            // CIL bootstrap cannot treat an annotation as harmless metadata.
+            // Perform this check after comments have been skipped so comment
+            // text cannot trigger a false rejection.
+            if (ch == '@')
+            {
+                int nameEnd = index + 1;
+                while (nameEnd < source.Length &&
+                       (Alpha(source[nameEnd]) || Digit(source[nameEnd]) ||
+                        source[nameEnd] == '_')) nameEnd++;
+                string name = source[(index + 1)..nameEnd];
+                if (name is "Inject" or "StateBacked" or "MutableStateContainer" or "StateContainer")
+                    throw new FormatException(
+                        $"STATE_INJECTION_UNSUPPORTED: @{name} requires typed container ownership, borrow checks and Native AOT lowering at offset {offset}");
+                throw new FormatException(
+                    $"Annotations require verified compiler lowering at offset {offset}");
+            }
+            if (moduleMode && ch == '"')
+            {
+                index++;
+                while (index < source.Length && source[index] != '"')
+                {
+                    if (source[index] is '\r' or '\n' or '\0')
+                        throw new FormatException($"Invalid string literal at offset {offset}");
+                    if (source[index++] == '\\')
+                    {
+                        if (index == source.Length) break;
+                        index++;
+                    }
+                }
+                if (index == source.Length) throw new FormatException($"Unterminated string at offset {offset}");
+                index++;
+                return new Token(source[offset..index], offset);
+            }
             if (Digit(ch))
             {
                 index++;
@@ -201,12 +450,23 @@ public static class OresStructuredParser
                 do { index++; } while (index < source.Length &&
                     (Alpha(source[index]) || Digit(source[index]) || source[index] == '_'));
                 string word = source[offset..index];
-                // Structured/static-facts parser must not classify reserved
-                // unsafe source as a harmless scalar construct.
+                // The linked-module lexer also enforces the unsafe keyword
+                // reservation before typed module binding and CIL emission.
                 if (word == "unsafe")
                     throw new FormatException(
-                        $"unsafe boundary requires checked effects and Native AOT lowering at offset {offset}");
-                if (word is "cpu" or "gpu" ||
+                        $"unsafe boundary requires checked effects, native grants and Native AOT lowering at offset {offset}");
+                // Reject before the condition is lexed: `guard 1>0` contains
+                // characters this lexer refuses outside module mode.
+                if (word == "guard")
+                    throw new FormatException(
+                        $"GUARD_BACKEND_UNSUPPORTED: early-exit CFG and ownership lowering required at offset {offset}");
+                // Match/default is a true expression grammar extension, not a
+                // valid scalar identifier or CIL fallthrough. This lexer skips
+                // comments before this check; no source-substring blacklist.
+                if (word == "match")
+                    throw new FormatException(
+                        $"MATCH_DEFAULT_BACKEND_UNSUPPORTED: typed match requires real pattern admission, ordered CFG fallback and exhaustiveness before CIL emission at offset {offset}");
+                if (word is "cpu" or "gpu" or "quantum" ||
                     (word == "nb" && !StaticSelectAdmission.FollowedByStaticSelect(source, index)))
                     throw new FormatException(
                         $"execution region '{word}' requires verified CPU/GPU Task lowering; no implicit CPU fallback at offset {offset}");
@@ -217,27 +477,90 @@ public static class OresStructuredParser
                             $"execution task requires scheduler-aware Future/continuation lowering; no implicit inline execution at offset {offset}");
                 }
             }
+            else if (ch == '~')
+                throw new FormatException(
+                    $"TILDE_AGGREGATE_BACKEND_UNSUPPORTED: typed Map/Record literals require a checked AST, key domains, ownership, transactional constructor and NativeAOT layout at offset {offset}");
+            else if (ch == '%')
+                throw new FormatException(
+                    $"noncanonical '%' source operator; use named Integer.rem/mod at offset {offset}");
+            else if (ch == '^')
+            {
+                bool doubleCaret = index + 1 < source.Length && source[index + 1] == '^';
+                string spelling = doubleCaret ? "^^" : "^";
+                string named = doubleCaret ? "Xor(a, b)" : "Integer.bitXor(a, b)";
+                throw new FormatException(
+                    $"Reserved AttoLang operator '{spelling}'; use {named} at offset {offset}");
+            }
+            else if (ch == '!' && index + 2 < source.Length &&
+                     source[index + 1] == 'e' && source[index + 2] == 'q' &&
+                     (index + 3 == source.Length ||
+                      !(Alpha(source[index + 3]) || Digit(source[index + 3]) ||
+                        source[index + 3] == '_')))
+            {
+                // Contiguous AttoLang !eq alias; never split !equation.
+                // Lower into the existing static typed CIL NotEqualI64 path.
+                index += 3;
+            }
             else if (ch == '=' && index + 1 < source.Length &&
                      source[index + 1] == '=') index += 2;
-            else if (ch == '|')
+            // AttoLang's !eq is one indivisible binary token. It must not be
+            // lexed as unary ! + identifier eq, nor as a prefix of !eqname.
+            // Reuse the existing statically typed NotEqualI64 -> CIL Ceq+invert
+            // pipeline. Legacy != remains admitted pending a versioned strict
+            // source-profile migration; this change is additive only.
+            else if (ch == '!' && index + 2 < source.Length &&
+                     source[index + 1] == 'e' && source[index + 2] == 'q' &&
+                     (index + 3 == source.Length ||
+                      !(char.IsLetterOrDigit(source[index + 3]) ||
+                        source[index + 3] == '_')))
+                index += 3;
+            else if (ch == '!' && index + 1 < source.Length &&
+                     source[index + 1] == '=') index += 2;
+            else if (index + 1 < source.Length &&
+                (((ch == '<' || ch == '>') && source[index + 1] == '=') ||
+                 (moduleMode && (source.Substring(index, 2) is "->" or "&&" or "||"))))
+                index += 2;
+            else if (ch == '|' && !moduleMode)
                 throw new FormatException(
                     $"Lexical captures require checked closure lowering at offset {offset}");
-            else if ("()+-*{}:;=<.,?".IndexOf(ch) >= 0) index++;
+            else if ("()+-*{}:;=<>.,?".IndexOf(ch) >= 0 ||
+                (moduleMode && "[]/>!|&".IndexOf(ch) >= 0)) index++;
             else throw new FormatException($"Invalid character at offset {offset}");
             var tokenText = source[offset..index];
-            if (tokenText == "import")
+            if (tokenText == "import" && !moduleMode)
                 throw new FormatException("source imports require verified module graph lowering");
             if (tokenText == "enum")
                 throw new FormatException(
                     $"nominal enum overloads require compiler-bound dispatch (unsupported .NET bootstrap) at offset {offset}");
+            previousWasWith = tokenText == "with";
+            // The opt-in structured compiler has independently verified closed
+            // Option<int> lowering; unlike the shipping scalar frontend it
+            // must admit Option/Some/None tokens. Everything else in the
+            // tagged family is still unsupported, even when reached via
+            // linked-unit discovery, and must fail before typed SSA/CIL.
+            // This is a complete-token check after skipping source trivia.
+            if (tokenText is "Result" or "Ok" or "Err" or "trap")
+                throw new FormatException(
+                    $"Option/Result/trap requires verified tagged-sum CIL and NativeAOT guest-control lowering at offset {offset}");
             return new Token(tokenText, offset);
         }
     }
 
-    private sealed class Reader(List<Token> tokens)
+    private sealed class Reader(List<Token> tokens, LinkedModuleContext? linking = null)
     {
-        private readonly List<Dictionary<string, IrValueType>> scopes = new();
+        private sealed record LocalBinding(IrValueType Type, StructuredBindingKind Kind,
+            long? ConstantValue);
+        private readonly List<Dictionary<string, LocalBinding>> scopes = new();
+        private readonly List<HashSet<string>> localTypeScopes = new();
+        private readonly Dictionary<string, StructuredFunction> functions = linking is null
+            ? new(StringComparer.Ordinal) : new(linking.Methods, StringComparer.Ordinal);
+        private readonly Dictionary<string, StructuredFunction> visible = linking is null
+            ? new(StringComparer.Ordinal) : new(linking.Bindings, StringComparer.Ordinal);
+        private readonly Dictionary<string, StructuredFunction> exports = new(StringComparer.Ordinal);
+        private readonly List<string> functionOrder = linking is null ? new() : new(linking.MethodOrder);
+        private string? declaredModule;
         private int index, statements;
+        private IrValueType activeReturnType = IrValueType.I64;
         // Track actual AST height, not just grammar recursion depth. A flat
         // 50,000-term sum must not construct a 50,000-level tree for later passes.
         // Records have structural equality; identity avoids recursive hashing.
@@ -252,6 +575,16 @@ public static class OresStructuredParser
             if (height > MaxDepth)
                 throw new FormatException($"Structured AST depth exceeds limit at offset {at}");
             var node = new StructuredBinary(at, op, left, right, resultType);
+            expressionHeights.Add(node, height);
+            return node;
+        }
+        private StructuredExpr CheckedConditional(int at, StructuredExpr test,
+            StructuredExpr yes, StructuredExpr no)
+        {
+            int height = Math.Max(Height(test), Math.Max(Height(yes), Height(no))) + 1;
+            if (height > MaxDepth)
+                throw new FormatException($"Structured AST depth exceeds limit at offset {at}");
+            var node = new StructuredConditional(at, test, yes, no, yes.Type);
             expressionHeights.Add(node, height);
             return node;
         }
@@ -281,48 +614,172 @@ public static class OresStructuredParser
         {
             if (depth > MaxDepth) throw Error("Structured syntax nesting exceeds limit");
         }
-        public StructuredProgram ReadProgram()
+        public StructuredProgram ReadProgram() => ReadDeclarations(true);
+
+        internal IReadOnlyList<SourceImport> ReadImports()
         {
-            bool defined = false, exposed = false;
-            while (Current.Text is "define" or "pub")
+            var imports = new List<SourceImport>();
+            while (Take("import"))
             {
-                if (Take("define"))
-                {
-                    if (defined) throw Error("Duplicate define modifier");
-                    defined = true;
-                }
-                else
-                {
-                    Expect("pub");
-                    if (exposed) throw Error("Duplicate pub modifier");
-                    exposed = true;
-                }
+                int offset = Current.Offset;
+                string kind = Current.Text;
+                // Until the NativeAOT linker has pinned manifest-defined
+                // PackageInstanceId routing, never interpret namespace imports
+                // as a source-file wildcard or ambient search path.
+                if (kind == "namespace")
+                    throw Error("import namespace requires manifest-verified multi-file package linker");
+                if (kind is not ("fnc" or "module")) throw Error("Linked source supports fnc and module imports");
+                index++;
+                string name = Name();
+                Expect("from");
+                string quoted = Current.Text;
+                if (quoted.Length < 3 || quoted[0] != '"' || quoted[^1] != '"' || quoted.Contains('\\'))
+                    throw Error("Import requires an unescaped local source string");
+                // Reject before physical lookup and graph linking, independently
+                // of the standalone scalar parser's generic import denial.
+                UnsafeStdlibImportAdmission.RequireGuestSafe(quoted[1..^1]);
+                index++;
+                Expect(";");
+                if (imports.Count >= 64) throw Error("Import declaration budget exceeded");
+                imports.Add(new SourceImport(kind, name, quoted[1..^1], offset));
             }
-            // Preserve the canonical receiver-erased class-method contract
-            // without falsely admitting syntax that the CIL/Native AOT backend
-            // cannot yet compile. This non-executing parser is scalar-only.
-            if (Current.Text is "class" or "actor")
-                throw Error("Nominal class/actor methods require receiver-erased method slots, type/borrow checking and Native AOT CIL lowering; unsupported in .NET structured frontend");
-            Expect("fnc");
-            Expect("main");
-            Expect("(");
-            if (Current.Text == "(")
-                throw Error("Tuple-v2 shorthand parameter requires typed tuple ownership/ABI lowering");
-            Expect(")");
-            Expect(":");
-            if (Current.Text == "(")
-                throw Error("Tuple-v2 shorthand return requires typed tuple ownership/ABI lowering");
-            Expect("int");
-            var (body, returns) = Block(0);
-            if (!returns) throw Error("Not every path returns int");
+            return imports.AsReadOnly();
+        }
+
+        internal StructuredLinkedUnit ReadLinkedUnit()
+        {
+            _ = ReadImports();
+            if (Current.Text == "define" && index + 1 < tokens.Count && tokens[index + 1].Text == "module")
+            {
+                index += 2;
+                declaredModule = Name();
+                Expect("as");
+            }
+            var program = ReadDeclarations(linking!.Entry);
+            return new StructuredLinkedUnit(program, declaredModule,
+                new System.Collections.ObjectModel.ReadOnlyDictionary<string, StructuredFunction>(exports));
+        }
+
+        private StructuredProgram Finish(string name, IReadOnlyList<StructuredStmt> body)
+        {
+            if (declaredModule is not null) Expect("end");
             if (Current.Text.Length != 0) throw Error("Unexpected trailing token");
-            return new StructuredProgram("main", body);
+            return new StructuredProgram(name, body,
+                new System.Collections.ObjectModel.ReadOnlyDictionary<string, StructuredFunction>(
+                    new Dictionary<string, StructuredFunction>(functions, StringComparer.Ordinal)),
+                Array.AsReadOnly(functionOrder.ToArray()));
+        }
+
+        private StructuredProgram ReadDeclarations(bool entry)
+        {
+            // Acyclic helper declarations must precede main. The declaration
+            // registry only contains *fully typechecked* earlier functions:
+            // recursion, mutual recursion and forward references fail closed.
+            while (true)
+            {
+                if (!entry && (Current.Text.Length == 0 || Current.Text == "end"))
+                    return Finish("library", Array.Empty<StructuredStmt>());
+                bool defined = false, exposed = false;
+                while (Current.Text is "define" or "pub")
+                {
+                    if (Take("define"))
+                    {
+                        if (defined) throw Error("Duplicate define modifier");
+                        defined = true;
+                    }
+                    else
+                    {
+                        Expect("pub");
+                        if (exposed) throw Error("Duplicate pub modifier");
+                        exposed = true;
+                    }
+                }
+                if (Current.Text is "class" or "actor")
+                    throw Error("Nominal class/actor methods require receiver-erased method slots, type/borrow checking and Native AOT CIL lowering; unsupported in .NET structured frontend");
+                Expect("fnc");
+                int at = Current.Offset;
+                string name = Name();
+                // This NativeAOT slice does not lower once-only initialization
+                // barriers. Do not silently compile a lifecycle hook into an
+                // ordinary public CIL method reachable through imports.
+                if (name == "init")
+                    throw Error("module init requires once-only reachable initialization lowering");
+                Expect("(");
+                if (Current.Text == "(")
+                    throw Error("Tuple-v2 shorthand parameter requires typed tuple ownership/ABI lowering");
+                var parameters = new List<StructuredParameter>();
+                var parameterTypes = new Dictionary<string, LocalBinding>(StringComparer.Ordinal);
+                if (Current.Text != ")")
+                {
+                    do
+                    {
+                        if (parameters.Count >= MaxParameters)
+                            throw Error("Typed helper parameter budget exceeded");
+                        IrValueType type = Type();
+                        // The pair ABI is intentionally not exposed across
+                        // calls until exact typed method signatures exist.
+                        if (type == IrValueType.OptionI64)
+                            throw Error("E_OPTION_ABI_UNSUPPORTED: Option<int> method parameters need verified two-word ABI");
+                        string parameter = Name();
+                        if (!parameterTypes.TryAdd(parameter,
+                            new LocalBinding(type, StructuredBindingKind.Val, null)))
+                            throw Error("Duplicate typed helper parameter");
+                        parameters.Add(new StructuredParameter(parameter, type));
+                    }
+                    while (Take(","));
+                }
+                Expect(")");
+                if (!Take(":"))
+                {
+                    if (linking is null) Expect(":");
+                    else Expect("->");
+                }
+                if (Current.Text == "(")
+                    throw Error("Tuple-v2 shorthand return requires typed tuple ownership/ABI lowering");
+                IrValueType resultType = Type();
+                if (resultType == IrValueType.OptionI64)
+                    throw Error("E_OPTION_ABI_UNSUPPORTED: Option<int> method results need verified two-word ABI");
+                if (name == "main" && entry)
+                {
+                    if (visible.ContainsKey(name)) throw Error("Entry main conflicts with an imported callable");
+                    activeReturnType = IrValueType.I64;
+                    if (parameters.Count != 0 || resultType != IrValueType.I64)
+                        throw new FormatException($"main must have signature ():int at offset {at}");
+                    var (body, returns) = Block(0);
+                    if (!returns) throw Error("Not every path returns int");
+                    return Finish("main", body);
+                }
+                if (visible.ContainsKey(name))
+                    throw new FormatException($"Duplicate typed helper at offset {at}");
+                if (functions.Count >= MaxHelpers)
+                    throw Error("Typed helper declaration budget exceeded");
+                // All helper bodies now share the same checked typed block
+                // parser as main. The separate MethodDef ABI isolates locals.
+                activeReturnType = resultType;
+                scopes.Add(parameterTypes);
+                var (helperBody, helperReturns) = Block(0);
+                scopes.RemoveAt(scopes.Count - 1);
+                if (!helperReturns)
+                    throw Error("Not every typed helper path returns");
+                StructuredExpr? inlineReturn =
+                    helperBody.Count == 1 && helperBody[0] is StructuredReturn only
+                        ? only.Value : null;
+                string methodName = linking?.CanonicalName(name) ?? name;
+                var declaration = new StructuredFunction(methodName,
+                    Array.AsReadOnly(parameters.ToArray()), resultType,
+                    inlineReturn, helperBody);
+                functions.Add(methodName, declaration);
+                visible.Add(name, declaration);
+                if (exposed) exports.Add(name, declaration);
+                functionOrder.Add(methodName);
+            }
         }
         private (IReadOnlyList<StructuredStmt> Body, bool Returns) Block(int depth)
         {
             Budget(depth);
             Expect("{");
-            scopes.Add(new Dictionary<string, IrValueType>(StringComparer.Ordinal));
+            scopes.Add(new Dictionary<string, LocalBinding>(StringComparer.Ordinal));
+            localTypeScopes.Add(new HashSet<string>(StringComparer.Ordinal));
             var body = new List<StructuredStmt>();
             bool terminated = false;
             while (Current.Text != "}")
@@ -337,42 +794,194 @@ public static class OresStructuredParser
             }
             Expect("}");
             scopes.RemoveAt(scopes.Count - 1);
+            localTypeScopes.RemoveAt(localTypeScopes.Count - 1);
             return (Array.AsReadOnly(body.ToArray()), terminated);
         }
+        // The existing bracketed CFG path remains available. Canonical ores.core
+        // also uses 'if predicate; do ... [else ...] fi' without braces.
+        // Close lexical scopes at each arm; never turn source into rewritten C#.
+        private (IReadOnlyList<StructuredStmt> Body, bool Returns) DelimitedArm(int depth)
+        {
+            Budget(depth);
+            scopes.Add(new Dictionary<string, LocalBinding>(StringComparer.Ordinal));
+            localTypeScopes.Add(new HashSet<string>(StringComparer.Ordinal));
+            var body = new List<StructuredStmt>();
+            bool terminated = false;
+            while (Current.Text is not ("else" or "fi"))
+            {
+                if (Current.Text.Length == 0 || Current.Text == "}")
+                    throw Error("Unterminated Oreslang if/do/fi arm");
+                if (terminated) throw Error("Unreachable statement");
+                if (++statements > MaxStatements)
+                    throw Error("Structured statement budget exceeded");
+                var (statement, returns) = Statement(depth + 1);
+                body.Add(statement);
+                terminated = returns;
+            }
+            scopes.RemoveAt(scopes.Count - 1);
+            localTypeScopes.RemoveAt(localTypeScopes.Count - 1);
+            return (Array.AsReadOnly(body.ToArray()), terminated);
+        }
+
         private (StructuredStmt Statement, bool Returns) Statement(int depth)
         {
             Budget(depth);
             int at = Current.Offset;
+            if (Current.Text is "class" or "actor" ||
+                (Current.Text == "define" && index + 1 < tokens.Count &&
+                 (tokens[index + 1].Text is "class" or "actor")))
+                throw new FormatException(
+                    $"Local class/actor declarations are not permitted; use a local struct/record value type or a top-level nominal type at offset {at}");
+            if (Current.Text is "struct" or "record")
+            {
+                var kind = Current.Text == "struct"
+                    ? StructuredLocalTypeKind.Struct
+                    : StructuredLocalTypeKind.Record;
+                index++;
+                int nameAt = Current.Offset;
+                string name = Name();
+                if (localTypeScopes.Any(scope => scope.Contains(name)))
+                    throw new FormatException(
+                        $"Duplicate local value type '{name}' at offset {nameAt}");
+                Expect("{");
+                var fields = new List<StructuredLocalField>();
+                var fieldNames = new HashSet<string>(StringComparer.Ordinal);
+                while (Current.Text != "}")
+                {
+                    if (Current.Text.Length == 0)
+                        throw Error("Unterminated local value type");
+                    if (fields.Count >= MaxLocalTypeFields)
+                        throw Error("Local value type field budget exceeded");
+                    var fieldType = Type();
+                    int fieldAt = Current.Offset;
+                    string fieldName = Name();
+                    if (!fieldNames.Add(fieldName))
+                        throw new FormatException(
+                            $"Duplicate local value-type field '{fieldName}' at offset {fieldAt}");
+                    fields.Add(new StructuredLocalField(fieldName, fieldType));
+                    if (Take(";") || Take(",")) continue;
+                    if (Current.Text != "}")
+                        throw Error("Expected ',', ';' or '}' after local value-type field");
+                }
+                Expect("}");
+                Take(";");
+                localTypeScopes[^1].Add(name);
+                return (new StructuredLocalTypeDecl(at, name, kind,
+                    Array.AsReadOnly(fields.ToArray())), false);
+            }
+            if (Current.Text == "guard")
+                throw new FormatException(
+                    $"GUARD_BACKEND_UNSUPPORTED: early-exit CFG and ownership lowering required at offset {at}");
             if (Take("return"))
             {
                 var value = Expr(depth + 1);
-                Require(value, IrValueType.I64, "Return must be int");
+                Require(value, activeReturnType,
+                    "Return value does not match function result type");
                 Expect(";");
                 return (new StructuredReturn(at, value), true);
             }
-            if (Take("let"))
+            if (Current.Text is "let" or "val" or "const" or "int" or "bool")
             {
-                var type = Type();
-                int nameAt = Current.Offset;
-                string name = Name();
+                // Bare type-first locals are immutable by default:
+                //   int x=e;  == const int x=e;
+                // Explicit let is the only rebindable scalar binding.
+                bool typeFirstImmutable = Current.Text is "int" or "bool";
+                // A runtime-initialized readonly scalar is NOT an explicit
+                // compile-time const, even if later optimizers fold its value.
+                StructuredBindingKind kind = typeFirstImmutable
+                    ? StructuredBindingKind.Readonly
+                    : Current.Text switch
+                    {
+                        "let" => StructuredBindingKind.Let,
+                        "val" => StructuredBindingKind.Val,
+                        _ => StructuredBindingKind.Const
+                    };
+                bool annotated;
+                IrValueType type = IrValueType.I64;
+                string name;
+                int nameAt;
+                if (typeFirstImmutable)
+                {
+                    annotated = true;
+                    type = Type();
+                    nameAt = Current.Offset;
+                    name = Name();
+                }
+                else
+                {
+                    index++;
+                    // Prefix forms admit const int x=e, const x:int=e, const x=e.
+                    // A declaration's type is a check; it is not a cast.
+                    annotated = Current.Text is "int" or "bool" or "Option"; // type-first incl. closed Option<int>
+                    if (annotated)
+                    {
+                        type = Type();
+                        nameAt = Current.Offset;
+                        name = Name();
+                    }
+                    else
+                    {
+                        nameAt = Current.Offset;
+                        name = Name();
+                        if (Take(":"))
+                        {
+                            type = Type();
+                            annotated = true;
+                        }
+                    }
+                }
                 if (scopes.Any(scope => scope.ContainsKey(name)))
                     throw new FormatException($"Duplicate local binding at offset {nameAt}");
                 Expect("=");
                 var initializer = Expr(depth + 1);
-                Require(initializer, type, "Local initializer has wrong type");
+                if (annotated)
+                    Require(initializer, type, "Local initializer has wrong type");
+                else
+                    type = initializer.Type; // No i64 fallback for bool or unsupported types.
+                long? constantValue = null;
+                // Any const Option<int> fails closed, not only scalar-shaped initializers.
+                if (kind == StructuredBindingKind.Const && type == IrValueType.OptionI64)
+                    throw new FormatException(
+                        $"E_OPTION_CONST_UNSUPPORTED: Option<int> const folding needs tagged-value proof at offset {at}");
+                if (kind == StructuredBindingKind.Const &&
+                    IsCompileTimeScalar(initializer))
+                {
+                    try { constantValue = ConstantValue(initializer); }
+                    catch (OverflowException)
+                    {
+                        throw new FormatException(
+                            $"Compile-time const overflow at offset {initializer.Offset}");
+                    }
+                    initializer = type == IrValueType.Bool
+                        ? new StructuredBool(initializer.Offset, constantValue.Value != 0)
+                        : new StructuredInt(initializer.Offset, constantValue.Value);
+                }
                 Expect(";");
                 // Bind only after checking initializer (no self-reference).
-                scopes[^1].Add(name, type);
-                return (new StructuredLet(at, name, type, initializer), false);
+                scopes[^1].Add(name, new LocalBinding(type, kind, constantValue));
+                return (new StructuredLet(at, name, type, initializer, kind), false);
             }
             if (Take("if"))
             {
                 var condition = Expr(depth + 1);
                 Require(condition, IrValueType.Bool, "If condition must be bool");
-                var (yes, yesReturns) = Block(depth + 1);
+                bool oresDoForm = Take(";");
+                IReadOnlyList<StructuredStmt> yes;
+                bool yesReturns;
+                if (oresDoForm)
+                {
+                    Expect("do");
+                    (yes, yesReturns) = DelimitedArm(depth + 1);
+                }
+                else (yes, yesReturns) = Block(depth + 1);
                 IReadOnlyList<StructuredStmt>? no = null;
                 bool noReturns = false;
-                if (Take("else")) (no, noReturns) = Block(depth + 1);
+                if (Take("else"))
+                {
+                    if (oresDoForm) (no, noReturns) = DelimitedArm(depth + 1);
+                    else (no, noReturns) = Block(depth + 1);
+                }
+                if (oresDoForm) Expect("fi");
                 return (new StructuredIf(at, condition, yes, no),
                     yesReturns && noReturns);
             }
@@ -386,10 +995,13 @@ public static class OresStructuredParser
             }
             int variableAt = Current.Offset;
             string variable = Name();
-            var typeOfVariable = Lookup(variable, variableAt);
+            var binding = Lookup(variable, variableAt);
+            if (binding.Kind != StructuredBindingKind.Let)
+                throw new FormatException(
+                    $"Cannot reassign {binding.Kind.ToString().ToLowerInvariant()} binding '{variable}' at offset {variableAt}");
             Expect("=");
             var assigned = Expr(depth + 1);
-            Require(assigned, typeOfVariable, "Assignment has wrong type");
+            Require(assigned, binding.Type, "Assignment has wrong type");
             Expect(";");
             return (new StructuredSet(at, variable, assigned), false);
         }
@@ -397,7 +1009,15 @@ public static class OresStructuredParser
         {
             if (Take("int")) return IrValueType.I64;
             if (Take("bool")) return IrValueType.Bool;
-            throw Error("Expected int or bool type");
+            if (Take("Option"))
+            {
+                Expect("<");
+                if (!Take("int"))
+                    throw Error("E_OPTION_I64_ONLY: this NativeAOT slice admits only Option<int>; no nested or erased generic Option");
+                Expect(">");
+                return IrValueType.OptionI64;
+            }
+            throw Error("Expected int, bool or closed Option<int> type");
         }
         private string Name()
         {
@@ -407,46 +1027,243 @@ public static class OresStructuredParser
                 !(Alpha(name[0]) || name[0] == '_') ||
                 !name.Skip(1).All(c => Alpha(c) || Digit(c) || c == '_') ||
                 name is "if" or "else" or "while" or "return" or "let"
-                    or "int" or "bool" or "true" or "false"
-                    or "define" or "pub" or "fnc" or "const" or "final")
+                    or "int" or "bool" or "true" or "false" or "and" or "or" or "xor"
+                    or "define" or "pub" or "fnc" or "const" or "val" or "final"
+                    or "struct" or "record" or "class" or "actor"
+                    or "module" or "import" or "from" or "as" or "end"
+                    or "routine" or "async" or "isoactor" or "guard"
+                    or "Some" or "None" or "Option")
                 throw new FormatException($"Invalid identifier at offset {at}");
             index++;
             return name;
         }
-        private IrValueType Lookup(string name, int at)
+        private LocalBinding Lookup(string name, int at)
         {
             for (int i = scopes.Count - 1; i >= 0; i--)
-                if (scopes[i].TryGetValue(name, out var type)) return type;
+                if (scopes[i].TryGetValue(name, out var binding)) return binding;
             throw new FormatException($"Undefined local '{name}' at offset {at}");
         }
-        private StructuredExpr Expr(int depth) => Equal(depth + 1);
-        private StructuredExpr Equal(int depth)
+
+        // A source const is a fixed binding, not a demand for compile-time
+        // evaluation. Fold pure scalar literals, retaining runtime initializer
+        // expression and immutable binding for calls/reads. Do not mask overflow.
+        private static bool IsCompileTimeScalar(StructuredExpr expression) =>
+            expression switch
+            {
+                StructuredInt or StructuredBool => true,
+                StructuredNegate unary => IsCompileTimeScalar(unary.Value),
+                StructuredBinary binary => IsCompileTimeScalar(binary.Left)
+                                           && IsCompileTimeScalar(binary.Right),
+                _ => false
+            };
+
+        private static long ConstantValue(StructuredExpr expression)
         {
-            var left = Compare(depth + 1);
-            while (Current.Text == "==")
+            switch (expression)
+            {
+                case StructuredInt intLiteral: return intLiteral.Value;
+                case StructuredBool boolLiteral: return boolLiteral.Value ? 1L : 0L;
+                case StructuredNegate negate:
+                    return checked(-ConstantValue(negate.Value));
+                case StructuredConditional conditional:
+                    return ConstantValue(conditional.Test) != 0
+                        ? ConstantValue(conditional.WhenTrue)
+                        : ConstantValue(conditional.WhenFalse);
+                case StructuredBinary binary:
+                    long left = ConstantValue(binary.Left);
+                    if (binary.Operator == StructuredOperator.LogicalAnd && left == 0)
+                        return 0;
+                    if (binary.Operator == StructuredOperator.LogicalOr && left != 0)
+                        return 1;
+                    long right = ConstantValue(binary.Right);
+                    return binary.Operator switch
+                    {
+                        StructuredOperator.Add => checked(left + right),
+                        StructuredOperator.Subtract => checked(left - right),
+                        StructuredOperator.Multiply => checked(left * right),
+                        StructuredOperator.EqualI64 => left == right ? 1L : 0L,
+                        StructuredOperator.NotEqualI64 => left != right ? 1L : 0L,
+                        StructuredOperator.LessThanI64 => left < right ? 1L : 0L,
+                        StructuredOperator.GreaterThanI64 => left > right ? 1L : 0L,
+                        StructuredOperator.LessThanOrEqualI64 => left <= right ? 1L : 0L,
+                        StructuredOperator.GreaterThanOrEqualI64 => left >= right ? 1L : 0L,
+                        StructuredOperator.EqualBool => left == right ? 1L : 0L,
+                        StructuredOperator.NotEqualBool => left != right ? 1L : 0L,
+                        StructuredOperator.LogicalAnd => left != 0 && right != 0 ? 1L : 0L,
+                        StructuredOperator.LogicalOr => left != 0 || right != 0 ? 1L : 0L,
+                        StructuredOperator.LogicalXor => (left != 0) ^ (right != 0) ? 1L : 0L,
+                        _ => throw new FormatException(
+                            $"Unsupported const operator at offset {binary.Offset}")
+                    };
+                default:
+                    throw new FormatException(
+                        $"const initializer must be a compile-time scalar at offset {expression.Offset}");
+            }
+        }
+        // Only closed Option<int> inspection operations are admitted.
+        // Eager unwrap_or evaluates its fallback exactly once, even for Some.
+        // Unsafe .unwrap(), ?. chaining and implicit conversion are forbidden.
+        private StructuredExpr OptionPostfix(StructuredExpr option, int depth)
+        {
+            if (option.Type != IrValueType.OptionI64 || !Take("."))
+                return option;
+            int at = Current.Offset;
+            if (Take("is_some"))
+            {
+                Expect("(");
+                Expect(")");
+                return new StructuredOptionPresent(at, option);
+            }
+            if (Take("is_none"))
+            {
+                Expect("(");
+                Expect(")");
+                return new StructuredOptionAbsent(at, option);
+            }
+            if (Take("unwrap_or"))
+            {
+                Expect("(");
+                var fallback = Expr(depth + 1);
+                Require(fallback, IrValueType.I64, "Option<int>.unwrap_or fallback must be int");
+                Expect(")");
+                return new StructuredOptionOr(at, option, fallback);
+            }
+            throw Error("E_OPTION_METHOD_UNSUPPORTED: use is_some(), is_none(), or unwrap_or(int)");
+        }
+        private StructuredExpr Expr(int depth) => Conditional(depth + 1);
+        private StructuredExpr Conditional(int depth)
+        {
+            Budget(depth);
+            var test = LogicalOr(depth + 1);
+            if (Current.Text != "?") return test;
+            int at = Current.Offset;
+            index++;
+            Require(test, IrValueType.Bool, "Conditional test requires bool");
+            var yes = Expr(depth + 1);
+            Expect(":");
+            var no = Conditional(depth + 1);
+            if (yes.Type != no.Type)
+                throw new FormatException($"Conditional result types differ at offset {at}");
+            return CheckedConditional(at, test, yes, no);
+        }
+        private StructuredExpr LogicalOr(int depth)
+        {
+            Budget(depth);
+            var left = LogicalXor(depth + 1);
+            while (Current.Text == "or")
             {
                 int at = Current.Offset;
                 index++;
-                var right = Compare(depth + 1);
-                Require(left, IrValueType.I64, "Equality requires int operands");
-                Require(right, IrValueType.I64, "Equality requires int operands");
-                left = CheckedBinary(at, StructuredOperator.EqualI64,
+                var right = LogicalXor(depth + 1);
+                Require(left, IrValueType.Bool, "Logical operator requires bool operands");
+                Require(right, IrValueType.Bool, "Logical operator requires bool operands");
+                left = CheckedBinary(at, StructuredOperator.LogicalOr,
                     left, right, IrValueType.Bool);
+            }
+            return left;
+        }
+        private StructuredExpr LogicalXor(int depth)
+        {
+            Budget(depth);
+            var left = LogicalAnd(depth + 1);
+            while (Current.Text == "xor")
+            {
+                int at = Current.Offset;
+                index++;
+                var right = LogicalAnd(depth + 1);
+                Require(left, IrValueType.Bool, "Logical operator requires bool operands");
+                Require(right, IrValueType.Bool, "Logical operator requires bool operands");
+                left = CheckedBinary(at, StructuredOperator.LogicalXor,
+                    left, right, IrValueType.Bool);
+            }
+            return left;
+        }
+        private StructuredExpr LogicalAnd(int depth)
+        {
+            Budget(depth);
+            var left = Equal(depth + 1);
+            while (Current.Text == "and")
+            {
+                int at = Current.Offset;
+                index++;
+                var right = Equal(depth + 1);
+                Require(left, IrValueType.Bool, "Logical operator requires bool operands");
+                Require(right, IrValueType.Bool, "Logical operator requires bool operands");
+                left = CheckedBinary(at, StructuredOperator.LogicalAnd,
+                    left, right, IrValueType.Bool);
+            }
+            return left;
+        }
+        private StructuredExpr Equal(int depth)
+        {
+            var left = Compare(depth + 1);
+            while (Current.Text is "==" or "eq" or "!=" or "neq" or "!eq")
+            {
+                int at = Current.Offset;
+                bool notEqual = Current.Text is "!=" or "neq" or "!eq";
+                index++;
+                var right = Compare(depth + 1);
+                if (left.Type == IrValueType.OptionI64 ||
+                    right.Type == IrValueType.OptionI64)
+                {
+                    Require(left, IrValueType.OptionI64,
+                        "E_OPTION_EQUALITY_TYPE: Option<int> equality requires two Option<int> operands");
+                    Require(right, IrValueType.OptionI64,
+                        "E_OPTION_EQUALITY_TYPE: Option<int> equality requires two Option<int> operands");
+                    left = new StructuredOptionEqual(at, left, right, notEqual);
+                }
+                else
+                {
+                    if (left.Type != right.Type)
+                        throw new FormatException($"Equality requires matching int or bool operands at offset {at}");
+                    var op = left.Type == IrValueType.Bool
+                        ? (notEqual ? StructuredOperator.NotEqualBool : StructuredOperator.EqualBool)
+                        : (notEqual ? StructuredOperator.NotEqualI64 : StructuredOperator.EqualI64);
+                    left = CheckedBinary(at, op, left, right, IrValueType.Bool);
+                }
             }
             return left;
         }
         private StructuredExpr Compare(int depth)
         {
             var left = Add(depth + 1);
-            while (Current.Text == "<")
+            while (true)
             {
+                if (Current.Text == "as")
+                {
+                    int castAt = Current.Offset;
+                    index++;
+                    if (Take("?"))
+                        throw new FormatException(
+                            $"Optional cast as? requires verified Option<T> lowering at offset {castAt}");
+                    if (Current.Text is not ("int" or "bool"))
+                        throw new FormatException(
+                            $"Checked cast requires a reifiable supported scalar target at offset {castAt}");
+                    IrValueType target = Type();
+                    // .NET scalar bootstrap has no tagged dynamic value:
+                    // checked identity is the only provable cast. Do not bitcast.
+                    if (left.Type != target)
+                        throw new FormatException(
+                            $"Impossible checked scalar cast at offset {castAt}");
+                    // Static checked identity: deliberately retain the operand,
+                    // once evaluated, rather than add a conversion node.
+                    continue;
+                }
+                if (Current.Text is not ("<" or ">" or "<=" or ">=")) break;
                 int at = Current.Offset;
+                StructuredOperator comparison = Current.Text switch
+                {
+                    "<" => StructuredOperator.LessThanI64,
+                    ">" => StructuredOperator.GreaterThanI64,
+                    "<=" => StructuredOperator.LessThanOrEqualI64,
+                    ">=" => StructuredOperator.GreaterThanOrEqualI64,
+                    _ => throw Error("Unrecognized relational operator")
+                };
                 index++;
                 var right = Add(depth + 1);
-                Require(left, IrValueType.I64, "Less-than requires int operands");
-                Require(right, IrValueType.I64, "Less-than requires int operands");
-                left = CheckedBinary(at, StructuredOperator.LessThanI64,
-                    left, right, IrValueType.Bool);
+                Require(left, IrValueType.I64, "Comparison requires int operands");
+                Require(right, IrValueType.I64, "Comparison requires int operands");
+                left = CheckedBinary(at, comparison, left, right, IrValueType.Bool);
             }
             return left;
         }
@@ -533,9 +1350,19 @@ public static class OresStructuredParser
             {
                 var inner = Expr(depth + 1);
                 Expect(")");
-                return inner;
+                return OptionPostfix(inner, depth);
             }
             int offset = Current.Offset;
+            if (Take("Some"))
+            {
+                Expect("(");
+                var payload = Expr(depth + 1);
+                Require(payload, IrValueType.I64, "Some(int) payload must be int");
+                Expect(")");
+                return OptionPostfix(new StructuredSome(offset, payload), depth);
+            }
+            if (Take("None"))
+                return OptionPostfix(new StructuredNone(offset), depth);
             if (Take("true")) return new StructuredBool(offset, true);
             if (Take("false")) return new StructuredBool(offset, false);
             string raw = Current.Text;
@@ -548,7 +1375,57 @@ public static class OresStructuredParser
                 return new StructuredInt(offset, n);
             }
             var name = Name();
-            return new StructuredRead(offset, name, Lookup(name, offset));
+            bool localBinding = scopes.Any(scope => scope.ContainsKey(name));
+            // Option methods on local values must not be reinterpreted as
+            // linked module qualification or static method dispatch.
+            if (localBinding && Lookup(name, offset).Type == IrValueType.OptionI64)
+                return OptionPostfix(new StructuredRead(offset, name, IrValueType.OptionI64), depth);
+            if (linking is not null)
+                while (Take("."))
+                {
+                    if (localBinding) throw Error("Qualified access on local values requires nominal type lowering");
+                    name += "." + Name();
+                }
+            if (Take("("))
+            {
+                if (localBinding) throw Error("Local value is not a statically bound callable");
+                if (!visible.TryGetValue(name, out var target))
+                    throw new FormatException(
+                        $"Undefined, recursive or forward typed helper call at offset {offset}");
+                var args = new List<StructuredExpr>();
+                if (Current.Text != ")")
+                {
+                    do
+                    {
+                        if (args.Count >= MaxParameters)
+                            throw Error("Typed helper call argument budget exceeded");
+                        args.Add(Expr(depth + 1));
+                    }
+                    while (Take(","));
+                }
+                Expect(")");
+                if (args.Count != target.Parameters.Count)
+                    throw new FormatException($"Typed helper call arity mismatch at offset {offset}");
+                for (int i = 0; i < args.Count; i++)
+                    Require(args[i], target.Parameters[i].Type, "Typed helper argument type mismatch");
+                int height = 1;
+                foreach (var arg in args) height = Math.Max(height, Height(arg) + 1);
+                if (height > MaxDepth)
+                    throw new FormatException($"Typed helper call AST depth exceeds limit at offset {offset}");
+                var node = new StructuredCall(offset, target.Name,
+                    Array.AsReadOnly(args.ToArray()), target.ResultType);
+                expressionHeights.Add(node, height);
+                return node;
+            }
+            var binding = Lookup(name, offset);
+            if (binding.Kind == StructuredBindingKind.Const && binding.ConstantValue.HasValue)
+            {
+                long constant = binding.ConstantValue.Value;
+                return binding.Type == IrValueType.Bool
+                    ? new StructuredBool(offset, constant != 0)
+                    : new StructuredInt(offset, constant);
+            }
+            return new StructuredRead(offset, name, binding.Type);
         }
         private static void Require(StructuredExpr expression,
             IrValueType expected, string reason)

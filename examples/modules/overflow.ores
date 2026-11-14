@@ -1,0 +1,2 @@
+import fnc twice from "./base";
+pub fnc main(): int { return twice(9223372036854775807); }
