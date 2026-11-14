@@ -114,18 +114,18 @@ internal static class StructuredSourceTests
             "nested block comments must not mint or falsely reject container capabilities");
 
         // AST identity and constant provenance must stay independent: a
-        // default readonly typed binding is NOT an explicit constexpr const.
+        // default readonly typed binding has distinct source provenance.
         var immutableDefaults = OresStructuredParser.Parse(
             "fnc main():int{int x=7;bool good=true;const int c=7;val int v=7;let int m=7;return x;}");
         Require(immutableDefaults.Body[0] is StructuredLet {
             Name: "x", Kind: StructuredBindingKind.Readonly, ValueType: IrValueType.I64
-        }, "int x must be a readonly non-constexpr binding");
+        }, "int x must be a readonly non-rebindable binding");
         Require(immutableDefaults.Body[1] is StructuredLet {
             Name: "good", Kind: StructuredBindingKind.Readonly, ValueType: IrValueType.Bool
         }, "bool x must be a readonly non-constexpr binding");
         Require(immutableDefaults.Body[2] is StructuredLet {
             Name: "c", Kind: StructuredBindingKind.Const
-        }, "explicit const retains its constexpr identity");
+        }, "explicit const retains source kind independently of constant folding");
         Require(immutableDefaults.Body[3] is StructuredLet {
             Name: "v", Kind: StructuredBindingKind.Val
         }, "val remains an independent single-assignment spelling");
@@ -134,6 +134,38 @@ internal static class StructuredSourceTests
         }, "let remains the only rebindable local");
         Reject("fnc main():int{int x=7;x=8;return x;}",
             "readonly type-first rebinding is forbidden");
+        // A runtime-valued const remains a legal immutable *binding*:
+        // lexical one-time evaluation and readonly do not imply constexpr.
+        var runtimeConstAndReadonly = OresStructuredParser.Parse(
+            "fnc inc(int p):int{return p+1;}" +
+            "fnc main():int{int typed=inc(40);const inferred=inc(41);" +
+            "const int annotated=inc(42);val int snap=typed;" +
+            "let int mutable=7;mutable=8;return inferred;}");
+        Require(runtimeConstAndReadonly.Body[0] is StructuredLet {
+            Name: "typed", Kind: StructuredBindingKind.Readonly,
+            Initializer: StructuredCall { Name: "inc" }
+        }, "type-first runtime helper retains readonly binding with call");
+        Require(runtimeConstAndReadonly.Body[1] is StructuredLet {
+            Name: "inferred", Kind: StructuredBindingKind.Const,
+            Initializer: StructuredCall { Name: "inc" }
+        }, "const from runtime helper must remain a call, not folded or rejected");
+        Require(runtimeConstAndReadonly.Body[2] is StructuredLet {
+            Name: "annotated", Kind: StructuredBindingKind.Const,
+            Initializer: StructuredCall { Name: "inc" }
+        }, "annotated const from runtime helper remains a call");
+        Require(runtimeConstAndReadonly.Body[3] is StructuredLet {
+            Name: "snap", Kind: StructuredBindingKind.Val,
+            Initializer: StructuredRead { Name: "typed" }
+        }, "val may capture readonly runtime referent without rebinding it");
+        Require(runtimeConstAndReadonly.Body[5] is StructuredSet { Name: "mutable" },
+            "explicit let rebinding remains a separate permission");
+        Reject("fnc inc(int p):int{return p+1;}" +
+               "fnc main():int{const int x=inc(41);x=0;return x;}",
+            "runtime-initialized const must still deny assignment");
+        Reject("fnc inc(int p):int{return p+1;}" +
+               "fnc main():int{int x=inc(41);x=0;return x;}",
+            "runtime-initialized type-first must still deny assignment");
+
 
         // Injected mutable containers are not the current scalar backend's
         // ordinary metadata. Require a feature-specific diagnostic, not a

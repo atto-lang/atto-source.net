@@ -410,6 +410,7 @@ ExplicitExportSyntaxTests.Run();
 CrossBackendCheckedI64ParityTests.Run();
 ActorHierarchyMlAdmissionTests.Run();
 AsyncInteropFailClosedTests.Run();
+EtsPgFailClosedTests.Run();
 await HostTaskObservationTests.Run();
 
 // Source actor syntax must fail at a semantic actor boundary, never as an
@@ -541,6 +542,7 @@ BoundedDemandI64PortSelfTest.Run(); // host scalar adapter; NOT source Flow<T> o
 SelectableI64FutureSelfTest.Run();
 ActorDispatchDomainsSelfTest.Run();
 ActorRuntimeSelfTest.Run();
+ActorRuntimeGracefulDrainSelfTest.Run(); // HOST only; not guest pipe lowering
 ActorPubSubSelfTest.Run();
 ActorPubSubTurnAuthorityTests.Run();
 ActorPubSubByteQuotaTests.Run();
