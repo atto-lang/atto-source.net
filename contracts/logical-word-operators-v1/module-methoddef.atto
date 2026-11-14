@@ -1,0 +1,22 @@
+// MethodDef and SSA logical-word NativeAOT probe.
+// This guest must return 42 without invoking the overflowing helper.
+fnc overflow_if_called():bool {
+    return 9223372036854775807 + 1 > 0;
+}
+
+fnc choose(bool lhs, bool rhs):bool {
+    let bool both = lhs and rhs;
+    return both or (lhs xor rhs);
+}
+
+fnc main():int {
+    let int n = 0;
+    while n < 2 and (n < 3 or false) {
+        n = n + 1;
+    }
+    if (true or overflow_if_called()) and choose(true, false) and n == 2 {
+        return (false xor true) ? 42 : 7;
+    } else {
+        return 7;
+    }
+}

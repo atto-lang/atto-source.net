@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace Ores.Net.Runtime;
@@ -16,6 +17,8 @@ public sealed record ActorMetadataSnapshot(
 /// This object owns no OS descriptors and never aliases process stdin/stdout/stderr.
 /// It is a bounded in-memory transport intended for the future source-level
 /// io.in/io.out/io.err/io.events/io.meta lowering.
+/// An ActorRef is only an incarnation fence in this host substrate; source-level
+/// actor-vs-bridge read/write capabilities still require separate enforcement.
 /// </summary>
 public sealed class ActorIoEnvelope
 {
@@ -35,6 +38,9 @@ public sealed class ActorIoEnvelope
     private int _outputBytes;
     private int _errorBytes;
     private int _eventBytes;
+    private bool _inputClosed;
+    private bool _outputClosed;
+    private bool _retired;
     private ulong _metadataVersion = 1;
     private IReadOnlyDictionary<string, string> _metadata =
         new ReadOnlyDictionary<string, string>(new Dictionary<string, string>());
@@ -46,6 +52,10 @@ public sealed class ActorIoEnvelope
         if (!_mailbox.Authorizes(_boundActor))
             throw new InvalidOperationException(
                 "Actor I/O envelope requires a live actor generation");
+        // Registration is generation-checked again under the mailbox lock.
+        // Mailbox STOP, Dispose and Restart detach and invoke this retirement
+        // callback outside that lock to avoid I/O -> mailbox inversion.
+        _mailbox.RegisterIoRetirement(_boundActor, Retire);
     }
 
     public bool TryFeedInput(ActorRef actor, ReadOnlySpan<byte> data)
@@ -53,7 +63,7 @@ public sealed class ActorIoEnvelope
         lock (_gate)
         {
             RequireCurrent(actor);
-            return TryEnqueueBytes(_input, ref _inputBytes, data);
+            return !_inputClosed && TryEnqueueBytes(_input, ref _inputBytes, data);
         }
     }
 
@@ -71,7 +81,7 @@ public sealed class ActorIoEnvelope
         lock (_gate)
         {
             RequireCurrent(actor);
-            return TryEnqueueBytes(_output, ref _outputBytes, data);
+            return !_outputClosed && TryEnqueueBytes(_output, ref _outputBytes, data);
         }
     }
 
@@ -81,6 +91,78 @@ public sealed class ActorIoEnvelope
         {
             RequireCurrent(actor);
             return TryDequeueBytes(_output, ref _outputBytes, out data);
+        }
+    }
+
+    /// <summary>Close the inbound byte writer. Already admitted records remain readable.</summary>
+    /// <remarks>EOF is observed only after the inbound queue has drained.
+    /// It does not close the actor mailbox or terminate the actor.</remarks>
+    public bool CloseInput(ActorRef actor)
+    {
+        lock (_gate)
+        {
+            RequireCurrent(actor);
+            if (_inputClosed) return false;
+            _inputClosed = true;
+            return true;
+        }
+    }
+
+    public bool InputAtEof(ActorRef actor)
+    {
+        lock (_gate)
+        {
+            RequireCurrent(actor);
+            return _inputClosed && _input.Count == 0;
+        }
+    }
+
+    /// <summary>Close the outbound byte writer without discarding unread output.</summary>
+    public bool CloseOutput(ActorRef actor)
+    {
+        lock (_gate)
+        {
+            RequireCurrent(actor);
+            if (_outputClosed) return false;
+            _outputClosed = true;
+            return true;
+        }
+    }
+
+    public bool OutputAtEof(ActorRef actor)
+    {
+        lock (_gate)
+        {
+            RequireCurrent(actor);
+            return _outputClosed && _output.Count == 0;
+        }
+    }
+
+    /// <summary>
+    /// Trusted host/runtime retirement of this exact actor I/O generation.
+    /// This does not stop the actor, close OS descriptors or send supervisor CONTROL.
+    /// Unread byte records are erased; already delivered buffers belong to callers.
+    /// </summary>
+    public void Retire()
+    {
+        lock (_gate)
+        {
+            if (_retired) return;
+            _retired = true;
+            _inputClosed = true;
+            _outputClosed = true;
+            foreach (var record in _input) CryptographicOperations.ZeroMemory(record);
+            foreach (var record in _output) CryptographicOperations.ZeroMemory(record);
+            _input.Clear();
+            _output.Clear();
+            _errors.Clear();
+            _events.Clear();
+            _inputBytes = 0;
+            _outputBytes = 0;
+            _errorBytes = 0;
+            _eventBytes = 0;
+            _metadata = new ReadOnlyDictionary<string, string>(
+                new Dictionary<string, string>());
         }
     }
 
@@ -184,7 +266,7 @@ public sealed class ActorIoEnvelope
         // An envelope belongs to exactly one actor incarnation. Even a fresh,
         // valid ActorRef after mailbox restart cannot reopen records retained
         // by an older generation; the supervisor must construct a new envelope.
-        if (actor != _boundActor || !_mailbox.Authorizes(actor))
+        if (_retired || actor != _boundActor || !_mailbox.Authorizes(actor))
             throw new InvalidOperationException(
                 "Actor I/O capability is stale, foreign, retired, or belongs to another generation");
     }
