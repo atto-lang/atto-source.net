@@ -485,11 +485,11 @@ public static partial class OresStructuredParser
                     $"noncanonical '%' source operator; use named Integer.rem/mod at offset {offset}");
             else if (ch == '^')
             {
-                bool doubleCaret = index + 1 < source.Length && source[index + 1] == '^';
-                string spelling = doubleCaret ? "^^" : "^";
-                string named = doubleCaret ? "Xor(a, b)" : "Integer.bitXor(a, b)";
-                throw new FormatException(
-                    $"Reserved AttoLang operator '{spelling}'; use {named} at offset {offset}");
+                // `^^` is the canonical eager boolean XOR (spec ch.16); single `^`
+                // stays out of the grammar (integer XOR is Integer.bitXor).
+                if (index + 1 < source.Length && source[index + 1] == '^') index += 2;
+                else throw new FormatException(
+                    $"Reserved AttoLang operator '^'; use Integer.bitXor(a, b) at offset {offset}");
             }
             else if (ch == '!' && index + 2 < source.Length &&
                      source[index + 1] == 'e' && source[index + 2] == 'q' &&
@@ -518,7 +518,8 @@ public static partial class OresStructuredParser
                      source[index + 1] == '=') index += 2;
             else if (index + 1 < source.Length &&
                 (((ch == '<' || ch == '>') && source[index + 1] == '=') ||
-                 (moduleMode && (source.Substring(index, 2) is "->" or "&&" or "||"))))
+                 (source.Substring(index, 2) is "&&" or "||") ||
+                 (moduleMode && source.Substring(index, 2) is "->")))
                 index += 2;
             else if (ch == '|' && !moduleMode)
                 throw new FormatException(
@@ -1150,7 +1151,7 @@ public static partial class OresStructuredParser
         {
             Budget(depth);
             var left = LogicalXor(depth + 1);
-            while (Current.Text == "or")
+            while (Current.Text is "or" or "||")
             {
                 int at = Current.Offset;
                 index++;
@@ -1166,7 +1167,7 @@ public static partial class OresStructuredParser
         {
             Budget(depth);
             var left = LogicalAnd(depth + 1);
-            while (Current.Text == "xor")
+            while (Current.Text is "xor" or "^^")
             {
                 int at = Current.Offset;
                 index++;
@@ -1182,7 +1183,7 @@ public static partial class OresStructuredParser
         {
             Budget(depth);
             var left = Equal(depth + 1);
-            while (Current.Text == "and")
+            while (Current.Text is "and" or "&&")
             {
                 int at = Current.Offset;
                 index++;

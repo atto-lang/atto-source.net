@@ -6,7 +6,7 @@ public abstract record Expression;
 public sealed record Literal(long Value) : Expression;
 public sealed record Unary(char Operator, Expression Value) : Expression;
 public sealed record Binary(char Operator, Expression Left, Expression Right) : Expression;
-// Named intrinsic only. The '^' operator remains forbidden in Oreslang.
+// Named intrinsic only. Single '^' is not AttoLang syntax ('^^' is boolean XOR).
 public sealed record NamedBitXor(Expression Left, Expression Right) : Expression;
 // Closed-world CLR intrinsic: exact System.Math.Abs(Int64), no dynamic binding.
 public sealed record DotnetMathAbsI64(Expression Value) : Expression;
@@ -566,13 +566,16 @@ public static partial class OresParser
                 throw new FormatException($"noncanonical '%' source operator; use named Integer.rem/mod at offset {start}");
             if (ch == '^')
             {
-                // Reserved AttoLang syntax is rejected after lexical trivia and
-                // before any scalar instruction reaches typed IR or CIL.
-                bool doubleCaret = _i + 1 < text.Length && text[_i + 1] == '^';
-                string spelling = doubleCaret ? "^^" : "^";
-                string named = doubleCaret ? "Xor(a, b)" : "Integer.bitXor(a, b)";
+                // Rejected after lexical trivia and before any scalar instruction
+                // reaches typed IR or CIL. `^^` is the canonical boolean XOR
+                // (spec ch.16), but this frontend only types int scalars, so any
+                // `^^` here has non-bool operands; the structured frontend lowers
+                // it. Single `^` is not AttoLang syntax (use Integer.bitXor).
+                if (_i + 1 < text.Length && text[_i + 1] == '^')
+                    throw new FormatException(
+                        $"Logical operator requires bool operands: '^^' in scalar int source at offset {start}");
                 throw new FormatException(
-                    $"Reserved AttoLang operator '{spelling}'; use {named} at offset {start}");
+                    $"Reserved AttoLang operator '^'; use Integer.bitXor(a, b) at offset {start}");
             }
             throw new FormatException($"Invalid character at offset {start}");
         }
