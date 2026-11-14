@@ -48,14 +48,14 @@ internal static class GuestCooperationBudgetSelfTest
 
         foreach (ulong invalid in new[] { 0UL, 100_000_001UL })
         {
-            bool rejected = false;
+            bool invalidRejected = false;
             try { _ = new GuestCooperationBudget(invalid); }
-            catch (ArgumentOutOfRangeException) { rejected = true; }
-            Require(rejected, "invalid budget must fail");
+            catch (ArgumentOutOfRangeException) { invalidRejected = true; }
+            Require(invalidRejected, "invalid budget must fail");
         }
         // Eight 127-step turns cannot defeat the lifetime sampling cadence.
         var shortTurns = new GuestCooperationBudget(10_000);
-        int charged = 0, polls = 0;
+        int charged = 0, shortPolls = 0;
         for (int turn = 0; turn < 8; turn++)
         {
             shortTurns.BeginDispatch();
@@ -64,12 +64,12 @@ internal static class GuestCooperationBudgetSelfTest
                 charged++;
                 bool due = shortTurns.ChargeBackedge();
                 Require(due == (charged % 128 == 0), "short-turn evasion");
-                if (due) polls++;
+                if (due) shortPolls++;
             }
             Require(shortTurns.BackedgesThisDispatch == 127,
                 "dispatch fairness count");
         }
-        Require(polls == 7 && shortTurns.RemainingFuel == 10_000 - 8UL * 127,
+        Require(shortPolls == 7 && shortTurns.RemainingFuel == 10_000 - 8UL * 127,
             "short-turn sampling and fuel conservation");
 
         // A rejected weighted charge must not advance the slow-poll counter.
