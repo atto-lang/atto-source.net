@@ -142,7 +142,7 @@ public static class OresStructuredCfgLowering
         // Each fixed-array element is its own previously verified SSA i64.
         // This prevents guest pointers, unchecked native loads, aliases,
         // resize or managed CLR arrays in the first immutable value slice.
-        private IReadOnlyList<int> ArrayElements(StructuredExpr array, Block block,
+        private IReadOnlyList<int> ArrayElements(StructuredExpr array, ref Block block,
             Dictionary<string, Binding> variables)
         {
             switch (array)
@@ -156,7 +156,7 @@ public static class OresStructuredCfgLowering
                     {
                         if (literal.Elements[i].Type != IrValueType.I64)
                             throw new FormatException("E_ARRAY_TYPE: expected int value");
-                        values[i] = Expression(literal.Elements[i], block, variables);
+                        values[i] = Expression(literal.Elements[i], ref block, variables);
                     }
                     return Array.AsReadOnly(values);
                 }
@@ -200,10 +200,10 @@ public static class OresStructuredCfgLowering
                 {
                     // Evaluate the array elements first, then index once.
                     // Every element is a value, never an address/loan.
-                    var elements = ArrayElements(get.Array, block, variables);
+                    var elements = ArrayElements(get.Array, ref block, variables);
                     if (get.Index.Type != IrValueType.I64)
                         throw new FormatException("E_ARRAY_INDEX_TYPE: expected int index");
-                    int index = Expression(get.Index, block, variables);
+                    int index = Expression(get.Index, ref block, variables);
                     int tag = Emit(block, CfgOpcode.ArrayIndexValidI64,
                         IrValueType.Bool, left: index, value: elements.Count);
                     int selected = Emit(block, CfgOpcode.ConstantI64,
@@ -479,7 +479,8 @@ public static class OresStructuredCfgLowering
                         {
                             if (declaration.Kind != StructuredBindingKind.Val)
                                 throw new FormatException("E_ARRAY_IMMUTABLE_ONLY: fixed array must be val");
-                            var elements = ArrayElements(declaration.Initializer, current, variables);
+                            var elements = ArrayElements(declaration.Initializer, ref evalBlock, variables);
+                            current = evalBlock;
                             variables.Add(declaration.Name, new Binding(
                                 IrValueType.FixedArrayI64, -1, Elements: elements));
                         }
