@@ -41,7 +41,7 @@ internal static class ExecutionGraphV1Tests
         var a = cpu.CpuI64(20L);
         var b = cpu.CpuI64(22L);
         var plan = cpu.Build(cpu.CpuAdd(a, b));
-        Need(plan.ResultKind == ExecutionGraphV1.Kind.HostI64, "result kind");
+        Need(plan.OutputKind == ExecutionGraphV1.Kind.HostI64, "result kind");
         Need(plan.ExecuteCpu() == 42, "checked CPU arithmetic");
         var readyQueue = new Queue<Action>();
         var submitted = plan.SubmitCpu(readyQueue.Enqueue);

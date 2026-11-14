@@ -24,7 +24,7 @@ public static class ExecutionGraphV1
     }
 
     public sealed record Node(int Id, Domain Domain, Operation Operation,
-        Kind ResultKind, IReadOnlyList<int> Inputs, long Constant);
+        Kind OutputKind, IReadOnlyList<int> Inputs, long Constant);
 
     public sealed class Ref<T>
     {
@@ -173,7 +173,7 @@ public static class ExecutionGraphV1
     {
         private readonly IReadOnlyList<Node> _nodes;
         private readonly int _output;
-        public Kind ResultKind { get; }
+        public Kind OutputKind { get; }
 
         internal Plan(Node[] nodes, int output, Kind kind)
         {
@@ -206,7 +206,7 @@ public static class ExecutionGraphV1
                 for (int j = 0; j < copiedInputs.Length; j++)
                     copiedInputs[j] = sourceInputs[j];
                 frozen[i] = new Node(original.Id, original.Domain, original.Operation,
-                    original.ResultKind, Array.AsReadOnly(copiedInputs), original.Constant);
+                    original.OutputKind, Array.AsReadOnly(copiedInputs), original.Constant);
             }
             nodes = frozen;
             for (int i = 0; i < nodes.Length; i++)
@@ -241,21 +241,21 @@ public static class ExecutionGraphV1
                         throw new ArgumentException("invalid typed graph opcode");
                 }
             }
-            if (nodes[output].ResultKind != kind) throw new ArgumentException("invalid typed graph output kind");
+            if (nodes[output].OutputKind != kind) throw new ArgumentException("invalid typed graph output kind");
             _nodes = Array.AsReadOnly(nodes);
             _output = output;
-            ResultKind = kind;
+            OutputKind = kind;
         }
 
         private static void Signature(Node[] nodes, Node node, Domain domain, Kind kind,
                                       params Kind[] inputs)
         {
-            if (node.Domain != domain || node.ResultKind != kind || node.Inputs.Count != inputs.Length)
+            if (node.Domain != domain || node.OutputKind != kind || node.Inputs.Count != inputs.Length)
                 throw new ArgumentException("invalid typed graph operation signature");
             for (int i = 0; i < inputs.Length; i++)
             {
                 int dependency = node.Inputs[i];
-                if (dependency < 0 || dependency >= node.Id || nodes[dependency].ResultKind != inputs[i])
+                if (dependency < 0 || dependency >= node.Id || nodes[dependency].OutputKind != inputs[i])
                     throw new ArgumentException("invalid typed graph operand kind");
             }
         }

@@ -123,7 +123,7 @@ public static class OwnedF32GraphV1
             ArgumentNullException.ThrowIfNull(scalar);
 
             if (!scalar.CpuOnly ||
-                scalar.ResultKind != ExecutionGraphV1.Kind.HostI64)
+                scalar.OutputKind != ExecutionGraphV1.Kind.HostI64)
                 throw new NotSupportedException(
                     "device/transfer graph or non-I64 result unsupported; no CPU fallback");
 
