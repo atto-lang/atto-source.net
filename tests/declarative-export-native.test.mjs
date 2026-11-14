@@ -25,7 +25,8 @@ test('package scope, nominal class and duplicate exports fail closed until real 
   for (const [name, code] of [
     ['export-pkg-main-unsupported.atto', 'EXPORT_PACKAGE_LINKER_UNSUPPORTED'],
     ['export-class-unsupported.atto', 'EXPORT_BACKEND_UNSUPPORTED'],
-    ['export-duplicate.atto', 'EXPORT_DUPLICATE']
+    ['export-duplicate.atto', 'EXPORT_DUPLICATE'],
+    ['export-missing-pub.atto', 'EXPORT_PUB_REQUIRED']
   ]) {
     const result = check(name);
     assert.notEqual(result.status, 0, name);
