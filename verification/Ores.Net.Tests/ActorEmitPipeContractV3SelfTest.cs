@@ -117,6 +117,28 @@ internal static class ActorEmitPipeContractV3SelfTest
             "parser-owned mutable emit list must be copied");
         Require(frozen.EmitTypes is not string[], "typed observations must not expose writable array");
 
+        // Do not confuse the opt-in compiler *plan* above with actual
+        // .atto->CIL/NativeAOT guests. All three canonical sources must
+        // remain rejected by both shipping compiler admission paths.
+        foreach (string file in new[]
+        {
+            "double-42.atto",
+            "int-to-bool.atto",
+            "reject-inconsistent-emits.atto"
+        })
+        {
+            string source = File.ReadAllText(Path.Combine(
+                AppContext.BaseDirectory, "contracts", "actor-pipe-emitted-v3", file));
+            static void RejectGuest(Action parse, string label)
+            {
+                try { parse(); }
+                catch (FormatException) { return; }
+                throw new Exception("Actor v3 source unexpectedly entered executable CIL: " + label);
+            }
+            RejectGuest(() => OresParser.Parse(source), file + " scalar");
+            RejectGuest(() => OresStructuredParser.Parse(source), file + " structured");
+        }
+
         Console.WriteLine("ACTOR_PIPE_V3_TYPED_EMIT_CONTRACT_PASS|java_llvm_net|"
             + "HOST_COMPILER_ONLY_NOT_GUEST_EXECUTION");
     }
