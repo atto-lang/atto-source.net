@@ -1,0 +1,12 @@
+// Canonical AttoLang eq/neq/!eq scalar guest; same bytes for LLVM and .NET.
+pub fnc main(): int {
+    let int a = 7;
+    let int b = 8;
+    if a eq b { return 1; }
+    if a neq b {
+        if a !eq b {
+            return (a + b) * 2 + 12;
+        }
+    }
+    return 0;
+}

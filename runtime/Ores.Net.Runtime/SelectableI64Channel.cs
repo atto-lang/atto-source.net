@@ -472,3 +472,107 @@ public sealed class SelectableI64Channel
         }
     }
 }
+
+
+    public enum ReadStatus
+        WouldBlock,
+
+        internal ReadResult(ReadStatus status, long value = default)
+            Status = status;
+
+        public ReadStatus Status { get; }
+
+    public enum WriteStatus
+        WouldBlock,
+
+
+
+
+
+
+
+
+    public bool Closed
+
+
+
+
+
+
+        var readers = CreateNotificationBatch();
+        var writers = CreateNotificationBatch();
+            Capture(_readers, readers);
+            Capture(_writers, writers);
+        readers.Dispatch();
+        writers.Dispatch();
+
+
+                result = new ReadResult(ReadStatus.WouldBlock);
+
+                if (!_closed)
+                    result = new ReadResult(ReadStatus.WouldBlock);
+                    return false;
+                result = new ReadResult(ReadStatus.Eof);
+
+            if (_closed && _count == 1)
+                Capture(_readers, notifications);
+            else
+
+            var value = _values[_head];
+            result = new ReadResult(ReadStatus.Value, value);
+
+        out WriteStatus result,
+
+                result = WriteStatus.WouldBlock;
+                result = WriteStatus.Closed;
+                result = WriteStatus.WouldBlock;
+
+            result = WriteStatus.Written;
+
+
+    public ReadResult TryReadResult()
+        ReadResult result;
+                return new ReadResult(
+                    _closed ? ReadStatus.Eof : ReadStatus.WouldBlock);
+
+            if (_closed && _count == 1)
+                Capture(_readers, notifications);
+            else
+
+            var value = _values[_head];
+            result = new ReadResult(ReadStatus.Value, value);
+        return result;
+
+        var result = TryReadResult();
+        if (result.Status == ReadStatus.Value)
+            value = result.Value;
+        value = default;
+        return false;
+
+
+
+
+
+                : _count != _values.Length || _closed;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,6 @@
+import module left from "./left";
+import module right from "./right";
+
+pub fnc main(): int {
+  return left.value(10) + right.value(11);
+}
