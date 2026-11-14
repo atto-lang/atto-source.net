@@ -20,8 +20,10 @@ const name_ok = s => typeof s === 'string' && /^[\x20-\x7e]{1,180}$/.test(s)
   && s.trim() === s && !/\s{2,}/.test(s);
 const housekeeping = new Set(['set up job', 'complete job', 'initialize containers',
   'start containers', 'stop containers']);
+// Advisory step-name classification, not proof of executed compiler guest work.
+const setupOnly = /^(?:(?:run\s+)?actions\/(?:checkout|setup-[a-z0-9_-]+|cache|upload-artifact|download-artifact)(?:@|\/|$)|(?:run\s+)?(?:checkout|check out|setup|set up|cache|restore cache|save cache|upload artifacts?|download artifacts?|install dependencies|npm ci|npm install|pnpm install|yarn install|dotnet restore|cargo fetch)(?:[\s:_-]|$))/i;
 const meaningful = s => name_ok(s) && !housekeeping.has(s.toLowerCase())
-  && !/^(?:pre|post)(?:[\s:_-]|$)/i.test(s);
+  && !/^(?:pre|post)(?:[\s:_-]|$)/i.test(s) && !setupOnly.test(s);
 const own = (o, k) => o !== null && typeof o === 'object'
   && Object.prototype.hasOwnProperty.call(o, k);
 
