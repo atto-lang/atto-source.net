@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <PublishAot>true</PublishAot>
+    <SelfContained>true</SelfContained>
+    <PublishTrimmed>true</PublishTrimmed>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../runtime/Ores.Net.Runtime/Ores.Net.Runtime.csproj" />
+    <Compile Include="../Ores.Net.Tests/ActorPubSubSelfTest.cs" Link="ActorPubSubSelfTest.cs" />
+    <Compile Include="../Ores.Net.Tests/ActorPubSubTurnAuthorityTests.cs" Link="ActorPubSubTurnAuthorityTests.cs" />
+    <Compile Include="../Ores.Net.Tests/ActorPubSubByteQuotaTests.cs" Link="ActorPubSubByteQuotaTests.cs" />
+  </ItemGroup>
+</Project>
