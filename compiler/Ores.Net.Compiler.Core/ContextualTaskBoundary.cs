@@ -23,7 +23,8 @@ internal static class ContextualTaskBoundary
                 && source[index + 1] == '/')
             {
                 index += 2;
-                while (index < source.Length && source[index] != '\n')
+                while (index < source.Length &&
+                       source[index] is not ('\n' or '\r' or '\u0085' or '\u2028' or '\u2029'))
                     index++;
                 continue;
             }
@@ -58,3 +59,4 @@ internal static class ContextualTaskBoundary
         return false;
     }
 }
+

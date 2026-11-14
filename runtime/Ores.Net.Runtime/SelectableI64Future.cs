@@ -267,3 +267,129 @@ public sealed class ActorGenerationFence
             _owner.RunIfCurrent(_generation, callback);
     }
 }
+
+/// Runtime-only selectable signed-i64 Future. Completion is immutable and
+/// non-consuming: independent selects may observe the same terminal result.
+/// Readiness callbacks are advisory and must revalidate their subscription
+/// inside SelectArbiter.Registration.TryWin.
+    private const int MaxWaiterLimit = 4096;
+
+    public enum FutureStatus
+        Pending,
+        Value,
+        Failed,
+        Cancelled
+
+    public readonly struct Result
+        internal Result(FutureStatus status, long value, Exception? error)
+            Status = status;
+            Value = value;
+            Error = error;
+
+        public FutureStatus Status { get; }
+        public long Value { get; }
+        public Exception? Error { get; }
+
+
+    private ulong _nextWaiterId = 1;
+
+        if (maxWaiters <= 0 || maxWaiters > MaxWaiterLimit)
+            throw new ArgumentOutOfRangeException(nameof(maxWaiters),
+                $"Future maxWaiters must be in 1..{MaxWaiterLimit}");
+
+        for (var i = 0; i < maxWaiters; i++)
+
+
+
+
+
+        Subscription subscription;
+            var index = -1;
+                if (!_waiters[i].Active)
+                {
+                    index = i;
+                    break;
+                }
+            if (index < 0)
+                throw new InvalidOperationException(
+                    "Future select waiter capacity exhausted");
+            if (_nextWaiterId == ulong.MaxValue)
+                throw new OverflowException(
+                    "Future select waiter identity exhausted");
+
+            var id = _nextWaiterId++;
+            subscription = new Subscription(this, index, id);
+            var waiter = _waiters[index];
+            waiter.Id = id;
+
+            try
+                notify(subscription);
+                _ = subscription.Close();
+
+        return subscription;
+
+    public bool TryCommit(Subscription subscription, out Result result)
+            if (!MatchesLocked(subscription) ||
+                _status == FutureStatus.Pending)
+                result = new Result(FutureStatus.Pending, default, null);
+
+            CloseLocked(_waiters[subscription.Index]);
+            result = new Result(_status, _value, _error);
+
+        Complete(FutureStatus.Value, value, null);
+
+    public bool Fail(Exception error)
+        return Complete(FutureStatus.Failed, default, error);
+
+        Complete(FutureStatus.Cancelled, default, null);
+
+    private bool Complete(
+        FutureStatus status,
+        long value,
+        Exception? error)
+
+
+
+            _status = status;
+
+        Exception? first = null;
+            try
+                callbacks[i]!(subscriptions[i]!);
+            catch (Exception notificationError)
+                first ??= notificationError;
+
+        if (first is not null)
+                _notificationFailure ??= first;
+
+
+    private bool MatchesLocked(Subscription subscription)
+        if (!ReferenceEquals(subscription.Owner, this) ||
+            (uint)subscription.Index >= (uint)_waiters.Length)
+        var waiter = _waiters[subscription.Index];
+        return waiter.Active && waiter.Id == subscription.Id;
+
+    private bool Close(Subscription subscription)
+            if (!MatchesLocked(subscription)) return false;
+            CloseLocked(_waiters[subscription.Index]);
+
+    private static void CloseLocked(Waiter waiter)
+        waiter.Active = false;
+        waiter.Notify = null;
+
+        private readonly int _index;
+        private readonly ulong _id;
+
+        internal Subscription(
+            SelectableI64Future owner,
+            int index,
+            ulong id)
+            _index = index;
+            _id = id;
+
+        internal int Index => _index;
+        internal ulong Id => _id;
+
+            get
+                lock (_owner._gate)
+                    return _owner.MatchesLocked(this);
+
