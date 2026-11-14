@@ -11,6 +11,9 @@ public sealed record StructuredRead(int At, string Name, IrValueType ValueType)
     : StructuredExpr(At, ValueType);
 public sealed record StructuredNegate(int At, StructuredExpr Value)
     : StructuredExpr(At, IrValueType.I64);
+public sealed record StructuredConditional(int At, StructuredExpr Test,
+    StructuredExpr WhenTrue, StructuredExpr WhenFalse, IrValueType ResultType)
+    : StructuredExpr(At, ResultType);
 // First typed call milestone: statically resolved, expression-only helpers.
 // Calls are expanded into verified SSA before emitting any CIL.
 public sealed record StructuredCall(int At, string Name,
@@ -21,7 +24,8 @@ public sealed record StructuredFunction(string Name,
     IReadOnlyList<StructuredParameter> Parameters, IrValueType ResultType,
     StructuredExpr? ReturnValue, IReadOnlyList<StructuredStmt> Body);
 public enum StructuredOperator { Add, Subtract, Multiply, EqualI64, LessThanI64, GreaterThanI64, NotEqualI64,
-    LessThanOrEqualI64, GreaterThanOrEqualI64 }
+    LessThanOrEqualI64, GreaterThanOrEqualI64,
+    EqualBool, NotEqualBool, LogicalAnd, LogicalOr, LogicalXor }
 public sealed record StructuredBinary(int At, StructuredOperator Operator,
     StructuredExpr Left, StructuredExpr Right, IrValueType ResultType)
     : StructuredExpr(At, ResultType);
@@ -512,6 +516,16 @@ public static class OresStructuredParser
             expressionHeights.Add(node, height);
             return node;
         }
+        private StructuredExpr CheckedConditional(int at, StructuredExpr test,
+            StructuredExpr yes, StructuredExpr no)
+        {
+            int height = Math.Max(Height(test), Math.Max(Height(yes), Height(no))) + 1;
+            if (height > MaxDepth)
+                throw new FormatException($"Structured AST depth exceeds limit at offset {at}");
+            var node = new StructuredConditional(at, test, yes, no, yes.Type);
+            expressionHeights.Add(node, height);
+            return node;
+        }
         private StructuredExpr CheckedNegate(int at, StructuredExpr value)
         {
             int height = Height(value) + 1;
@@ -930,7 +944,7 @@ public static class OresStructuredParser
                 !(Alpha(name[0]) || name[0] == '_') ||
                 !name.Skip(1).All(c => Alpha(c) || Digit(c) || c == '_') ||
                 name is "if" or "else" or "while" or "return" or "let"
-                    or "int" or "bool" or "true" or "false"
+                    or "int" or "bool" or "true" or "false" or "and" or "or" or "xor"
                     or "define" or "pub" or "fnc" or "const" or "val" or "final"
                     or "struct" or "record" or "class" or "actor"
                     or "module" or "import" or "from" or "as" or "end"
@@ -967,8 +981,16 @@ public static class OresStructuredParser
                 case StructuredBool boolLiteral: return boolLiteral.Value ? 1L : 0L;
                 case StructuredNegate negate:
                     return checked(-ConstantValue(negate.Value));
+                case StructuredConditional conditional:
+                    return ConstantValue(conditional.Test) != 0
+                        ? ConstantValue(conditional.WhenTrue)
+                        : ConstantValue(conditional.WhenFalse);
                 case StructuredBinary binary:
                     long left = ConstantValue(binary.Left);
+                    if (binary.Operator == StructuredOperator.LogicalAnd && left == 0)
+                        return 0;
+                    if (binary.Operator == StructuredOperator.LogicalOr && left != 0)
+                        return 1;
                     long right = ConstantValue(binary.Right);
                     return binary.Operator switch
                     {
@@ -981,6 +1003,11 @@ public static class OresStructuredParser
                         StructuredOperator.GreaterThanI64 => left > right ? 1L : 0L,
                         StructuredOperator.LessThanOrEqualI64 => left <= right ? 1L : 0L,
                         StructuredOperator.GreaterThanOrEqualI64 => left >= right ? 1L : 0L,
+                        StructuredOperator.EqualBool => left == right ? 1L : 0L,
+                        StructuredOperator.NotEqualBool => left != right ? 1L : 0L,
+                        StructuredOperator.LogicalAnd => left != 0 && right != 0 ? 1L : 0L,
+                        StructuredOperator.LogicalOr => left != 0 || right != 0 ? 1L : 0L,
+                        StructuredOperator.LogicalXor => (left != 0) ^ (right != 0) ? 1L : 0L,
                         _ => throw new FormatException(
                             $"Unsupported const operator at offset {binary.Offset}")
                     };
@@ -989,7 +1016,70 @@ public static class OresStructuredParser
                         $"const initializer must be a compile-time scalar at offset {expression.Offset}");
             }
         }
-        private StructuredExpr Expr(int depth) => Equal(depth + 1);
+        private StructuredExpr Expr(int depth) => Conditional(depth + 1);
+        private StructuredExpr Conditional(int depth)
+        {
+            Budget(depth);
+            var test = LogicalOr(depth + 1);
+            if (Current.Text != "?") return test;
+            int at = Current.Offset;
+            index++;
+            Require(test, IrValueType.Bool, "Conditional test requires bool");
+            var yes = Expr(depth + 1);
+            Expect(":");
+            var no = Conditional(depth + 1);
+            if (yes.Type != no.Type)
+                throw new FormatException($"Conditional result types differ at offset {at}");
+            return CheckedConditional(at, test, yes, no);
+        }
+        private StructuredExpr LogicalOr(int depth)
+        {
+            Budget(depth);
+            var left = LogicalXor(depth + 1);
+            while (Current.Text == "or")
+            {
+                int at = Current.Offset;
+                index++;
+                var right = LogicalXor(depth + 1);
+                Require(left, IrValueType.Bool, "Logical operator requires bool operands");
+                Require(right, IrValueType.Bool, "Logical operator requires bool operands");
+                left = CheckedBinary(at, StructuredOperator.LogicalOr,
+                    left, right, IrValueType.Bool);
+            }
+            return left;
+        }
+        private StructuredExpr LogicalXor(int depth)
+        {
+            Budget(depth);
+            var left = LogicalAnd(depth + 1);
+            while (Current.Text == "xor")
+            {
+                int at = Current.Offset;
+                index++;
+                var right = LogicalAnd(depth + 1);
+                Require(left, IrValueType.Bool, "Logical operator requires bool operands");
+                Require(right, IrValueType.Bool, "Logical operator requires bool operands");
+                left = CheckedBinary(at, StructuredOperator.LogicalXor,
+                    left, right, IrValueType.Bool);
+            }
+            return left;
+        }
+        private StructuredExpr LogicalAnd(int depth)
+        {
+            Budget(depth);
+            var left = Equal(depth + 1);
+            while (Current.Text == "and")
+            {
+                int at = Current.Offset;
+                index++;
+                var right = Equal(depth + 1);
+                Require(left, IrValueType.Bool, "Logical operator requires bool operands");
+                Require(right, IrValueType.Bool, "Logical operator requires bool operands");
+                left = CheckedBinary(at, StructuredOperator.LogicalAnd,
+                    left, right, IrValueType.Bool);
+            }
+            return left;
+        }
         private StructuredExpr Equal(int depth)
         {
             var left = Compare(depth + 1);
@@ -999,11 +1089,12 @@ public static class OresStructuredParser
                 bool notEqual = Current.Text is "!=" or "neq" or "!eq";
                 index++;
                 var right = Compare(depth + 1);
-                Require(left, IrValueType.I64, "Equality requires int operands");
-                Require(right, IrValueType.I64, "Equality requires int operands");
-                left = CheckedBinary(at,
-                    notEqual ? StructuredOperator.NotEqualI64 : StructuredOperator.EqualI64,
-                    left, right, IrValueType.Bool);
+                if (left.Type != right.Type)
+                    throw new FormatException($"Equality requires matching int or bool operands at offset {at}");
+                var op = left.Type == IrValueType.Bool
+                    ? (notEqual ? StructuredOperator.NotEqualBool : StructuredOperator.EqualBool)
+                    : (notEqual ? StructuredOperator.NotEqualI64 : StructuredOperator.EqualI64);
+                left = CheckedBinary(at, op, left, right, IrValueType.Bool);
             }
             return left;
         }

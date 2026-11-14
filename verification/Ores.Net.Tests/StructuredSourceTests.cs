@@ -945,8 +945,43 @@ internal static class StructuredSourceTests
             "unreachable after both branches return");
         Reject("fnc main():int{if true {let int x=1;}return x;}",
             "block local escaped scope");
-        Reject("fnc main():int{let bool x=true==false;return 0;}",
-            "bool equality unsupported in first CFG slice");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{let bool x=true==false;return 0;}").Body[0]
+            is StructuredLet { Initializer: StructuredBinary {
+                Operator: StructuredOperator.EqualBool } },
+            "bool equality has typed CFG representation");
+        var logicalAst = OresStructuredParser.Parse(
+            "fnc main():int{if false or true xor true and false{return 42;}else{return 7;}}");
+        Require(logicalAst.Body[0] is StructuredIf {
+            Condition: StructuredBinary { Operator: StructuredOperator.LogicalOr,
+                Right: StructuredBinary { Operator: StructuredOperator.LogicalXor,
+                    Right: StructuredBinary { Operator: StructuredOperator.LogicalAnd } } }
+        }, "logical precedence is and > xor > or");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{const bool x=true xor false;return x ? 42 : 7;}").Body[1]
+            is StructuredReturn { Value: StructuredConditional { ResultType: IrValueType.I64 } },
+            "conditional and compile-time boolean XOR are typed");
+        Reject("fnc and():int{return 0;}fnc main():int{return 42;}",
+            "logical keywords are reserved as function names");
+        Reject("fnc main():int{let bool or=true;return 42;}",
+            "logical keywords are reserved as locals");
+        Reject("fnc main():int{if 1 and true{return 1;}else{return 2;}}",
+            "and rejects non-boolean LHS");
+        Reject("fnc main():int{if false or 1{return 1;}else{return 2;}}",
+            "or rejects non-boolean RHS");
+        Reject("fnc main():int{if true xor 1{return 1;}else{return 2;}}",
+            "xor rejects non-boolean RHS");
+        Reject("fnc main():int{if true==1{return 1;}else{return 2;}}",
+            "bool/int equality mixing rejected");
+        Reject("fnc main():int{const bool b=false xor (9223372036854775807+1>0);" +
+            "return b ? 42 : 7;}",
+            "const XOR must evaluate overflowing right operand");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{/* and or xor */ let int android=42;return android;}").Body.Count == 2,
+            "comments and identifiers with operator substrings are not keywords");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{let int AND=42;return AND;}").Body.Count == 2,
+            "lowercase logical word reservation is case-sensitive");
         Reject("fnc main():int{let bool b=true;return b+1;}",
             "boolean arithmetic");
         Reject("fnc main():int{let int x=1/2;return x;}",

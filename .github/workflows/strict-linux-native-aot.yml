@@ -152,6 +152,40 @@ jobs:
           test "$(artifacts/parity/linux-x64/oreslang-app)" = 42
           test "$(artifacts/apps/linux-x64/oreslang-app)" = 14
           echo 'LINUX_NET_NATIVE_AOT_STRUCTURED_SSA_CIL_EXECUTED_45'
+      - name: Execute exact Java/LLVM logical .atto fixture in real Linux Native AOT
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture=contracts/logical-word-operators-v1/scalar-parity.atto
+          expected_blob=9e3d2d230faaba5e1ccfeaf1c4449c0c2a120c34
+          test "$(git hash-object -- "$fixture")" = "$expected_blob" || {
+            echo "Java/LLVM logical fixture mismatch" >&2
+            exit 1
+          }
+          compiler=artifacts/compiler/linux-x64/oresnet
+          "$compiler" check-structured "$fixture"
+          bash scripts/publish-linux.sh "$fixture" artifacts/logical-word-parity --structured
+          app=artifacts/logical-word-parity/linux-x64/oreslang-app
+          bash verification/assert-linux-native-release.sh "$app"
+          test "$("$app")" = 42
+          echo "LINUX_NET_LOGICAL_WORDS_NATIVE_AOT_42|blob=$expected_blob"
+          # Independently linked bool helpers use real CIL MethodDef calls.
+          # This guest would overflow if the short-circuit RHS were executed.
+          module=contracts/logical-word-operators-v1/module-methoddef.atto
+          module_blob=e55a0c9a1c004f4b64d318c7cdd25cc4b5873d64
+          test "$(git hash-object -- "$module")" = "$module_blob" || {
+            echo "Pinned logical MethodDef fixture mismatch" >&2
+            exit 1
+          }
+          "$compiler" check-structured "$module"
+          bash scripts/publish-linux.sh "$module" artifacts/logical-word-module --structured
+          methoddef=artifacts/logical-word-module/linux-x64/oreslang-app
+          bash verification/assert-linux-native-release.sh "$methoddef"
+          test "$("$methoddef")" = 42
+          # Both previously published guests must remain source-isolated.
+          test "$("$app")" = 42
+          test "$(artifacts/structured/linux-x64/oreslang-app)" = 45
+          echo "LINUX_NET_LOGICAL_METHODDEF_NATIVE_AOT_42|blob=$module_blob"
       - name: Execute canonical .atto signed relational source in Linux Native AOT
         shell: bash
         run: |
@@ -278,7 +312,7 @@ jobs:
           stdout="$("$guest")"
           test "$stdout" = 42
           mkdir -p artifacts/evidence
-          printf '{"schema":"oreslang.net.exact_head_native_aot_v1","repository":"%s","source_head_sha":"%s","tree_sha":"%s","run_id":%s,"run_attempt":%s,"runner_os":"Linux","target_rid":"linux-x64","checks":["managed-tests","native-compiler","native-app","negative-source-no-cil","source-isolation-4","flags2env-client-abi-status42","canonical-precedence","structured-ssa-cil-native45","signed-relational-atto-native42","sidecar-negative","dotnet-host-import-capability-abs-max42-and-denied-file"],"relational_fixture_blob_sha":"%s","relational_compiler_sha256":"%s","relational_generated_cil_sha256":"%s","relational_guest_sha256":"%s","relational_guest_stdout":"%s","source_only":false,"independently_verified":false}\n' \
+          printf '{"schema":"oreslang.net.exact_head_native_aot_v1","repository":"%s","source_head_sha":"%s","tree_sha":"%s","run_id":%s,"run_attempt":%s,"runner_os":"Linux","target_rid":"linux-x64","checks":["managed-tests","native-compiler","native-app","negative-source-no-cil","source-isolation-4","flags2env-client-abi-status42","canonical-precedence","structured-ssa-cil-native45","signed-relational-atto-native42","logical-word-native42","logical-word-methoddef-native42","sidecar-negative","dotnet-host-import-capability-abs-max42-and-denied-file"],"relational_fixture_blob_sha":"%s","relational_compiler_sha256":"%s","relational_generated_cil_sha256":"%s","relational_guest_sha256":"%s","relational_guest_stdout":"%s","source_only":false,"independently_verified":false}\n' \
             "$GITHUB_REPOSITORY" "$EXPECTED_HEAD" "$tree" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
             "$fixture_blob" "$compiler_sha256" "$generated_sha256" "$guest_sha256" "$stdout" > artifacts/evidence/linux-native-aot.json
       - name: Upload Linux native executables and evidence
@@ -293,6 +327,8 @@ jobs:
             artifacts/parity-precedence/linux-x64/oreslang-app
             artifacts/flags2env-client/linux-x64/oreslang-app
             artifacts/structured/linux-x64/oreslang-app
+            artifacts/logical-word-parity/linux-x64/oreslang-app
+            artifacts/logical-word-module/linux-x64/oreslang-app
             artifacts/relational/linux-x64/oreslang-app
             artifacts/generated/linux-x64/OresGenerated.dll
             artifacts/dotnet-host-interop/linux-x64/oreslang-app

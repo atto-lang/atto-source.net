@@ -31,7 +31,7 @@ test -s "$generated" || { echo "No guest CIL" >&2; exit 1; }
 mkdir -p "$(dirname -- "$rejected")"
 for case_id in mixed-bool split suffix; do
   case "$case_id" in
-    mixed-bool) bad="$negative"; expected="Equality requires int operands" ;;
+    mixed-bool) bad="$negative"; expected="Equality requires matching int or bool operands" ;;
     split) bad="$root/examples/atto-neq-split-reject.atto"; expected="Invalid character at offset" ;;
     suffix) bad="$root/examples/atto-neq-suffix-reject.atto"; expected="Invalid character at offset" ;;
   esac
