@@ -924,12 +924,13 @@ public static class OresStructuredParser
                 else
                     type = initializer.Type; // No i64 fallback for bool or unsupported types.
                 long? constantValue = null;
+                // Any const Option<int> fails closed, not only scalar-shaped initializers.
+                if (kind == StructuredBindingKind.Const && type == IrValueType.OptionI64)
+                    throw new FormatException(
+                        $"E_OPTION_CONST_UNSUPPORTED: Option<int> const folding needs tagged-value proof at offset {at}");
                 if (kind == StructuredBindingKind.Const &&
                     IsCompileTimeScalar(initializer))
                 {
-                    if (type == IrValueType.OptionI64)
-                        throw new FormatException(
-                            $"E_OPTION_CONST_UNSUPPORTED: Option<int> const folding needs tagged-value proof at offset {at}");
                     try { constantValue = ConstantValue(initializer); }
                     catch (OverflowException)
                     {
