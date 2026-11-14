@@ -281,7 +281,7 @@ class ScalarHarnessTest(unittest.TestCase):
             "net": {
                 "reject.unknown": "oresnet: Expected integer at offset 29",
                 "reject.division": "oresnet: Division requires float result lowering; unsupported in the i64 source subset",
-                "reject.actor": "oresnet: Expected 'fnc' at offset 7",
+                "reject.actor": "oresnet: Source actor lowering requires sealed state/handle_state and scheduler-owned logical continuation frames at offset 7",
                 "reject.async": "oresnet: Expected 'fnc' at offset 4",
                 "reject.structural": "oresnet: Expected integer at offset 29",
             },

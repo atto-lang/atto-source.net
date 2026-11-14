@@ -3,6 +3,8 @@ using Mono.Cecil.Cil;
 using Ores.Net.Compiler;
 using Ores.Net.Runtime;
 
+DeclaredActorReceiveSyntaxTests.Run();
+
 static void Require(bool value, string why)
 {
     if (!value) throw new Exception("FAILED: " + why);
@@ -219,6 +221,32 @@ RejectDiagnostic(
 Require(OresParser.Parse("fnc main():int{return 1;} // any unknown ?") is Literal,
     "opaque-top and ternary tokens in comments remain lexically invisible");
 
+
+foreach (var wrapperCase in new[] {
+    (
+        "fnc main():int{ val nested: Future<Future<int>> = value; return 1; }",
+        "Nested Future remains nested; implicit Future flatten is forbidden"
+    ),
+    (
+        "fnc main():int{ val nested: Future<Future<Option<int>>> = value; return 1; }",
+        "Nested Future remains nested; implicit Future flatten is forbidden"
+    ),
+    (
+        "fnc main():int{ val nested: Option<Option<int>> = value; return 1; }",
+        "Nested Option remains nested; implicit Option flatten is forbidden"
+    ),
+    (
+        "fnc main():int{ val nested: Option<Option<Future<int>>> = value; return 1; }",
+        "Nested Option remains nested; implicit Option flatten is forbidden"
+    )
+})
+    RejectDiagnostic(
+        () => OresParser.Parse(wrapperCase.Item1),
+        wrapperCase.Item2,
+        "nested wrapper must fail closed without implicit canonicalization");
+Require(OresParser.Parse(
+    "fnc main():int{return 1;} // Future<Future<int>> Option<Option<int>>") is Literal,
+    "nested-wrapper tokens in comments remain lexically invisible");
 // Two-word runtime declaration kinds must never become scalar CIL or
 // unguarded native state. They are distinct from ordinary actor declarations.
 foreach (var (source, code) in new[] {
@@ -318,9 +346,12 @@ Require(OresParser.Parse(
     "fnc main():int{return 1;} /* enum Color /* enum Mode */ end */") is Literal,
     "nested block-comment enum words must not trigger overload admission");
 
+DotnetHostImportTests.Run(); // compiled System.Math.Abs(i64) CIL metadata and fail-closed imports
 VmIsolateHostTests.Run();
 VmIsolateHostHardeningTests.Run();
 OptionResultTrapAdmissionTests.Run();
+OptionI64CompilerTests.Run(); // opt-in typed Option<int> source -> verified CFG -> CIL
+SafeCollectionSourceAdmissionTests.Run(); // indexed collection access remains fail-closed
 // Shared TCP-pool capabilities are not guest-lowered by either .NET frontend.
 // Deny in both the shipping scalar CLI path and the structured CFG path;
 // a host-only HTTP/1.1 socket provider is not an actor-shared pool.
@@ -363,27 +394,83 @@ Require(OresParser.Parse(
     "model text in line comments remains inert");
 
 CriticalSuspendsBoundaryTests.Run(); // compiler-owned scalar admission, not runtime critical support
+AttoSemanticNegativeGateTests.Run(); // canonical .atto negatives + IR/CIL positive controls (not NativeAOT)
 AsyncOnlyIoPolicyTests.Run();
 CapabilityIoLifecycleV1SelfTest.Run();
+ActorStateSchemaAdmissionTests.Run();
+ActorStateLayoutIntegrationTests.Run();
+ActorGeneratedCounterTests.Run();
 SourceByteBudgetTests.Run();
 ElmCompositionAdmissionTests.Run();
 HeapContainerSourceBoundaryTests.Run(); // actual scalar compiler fail-closed heap/container checks
 StructuralPatternAdmissionTests.Run();
 AdtSourceAdmissionTests.Run();
 NumericSeparatorParityTests.Run();
+ExplicitExportSyntaxTests.Run();
 CrossBackendCheckedI64ParityTests.Run();
+ActorHierarchyMlAdmissionTests.Run();
 AsyncInteropFailClosedTests.Run();
 await HostTaskObservationTests.Run();
 
-// The canonical actor negative includes a later assignment. Lex its punctuation
-// while preserving the precise unsupported top-level declaration diagnostic.
-try
-{
-    OresParser.Parse("define actor Worker as { pub fnc on_message(int n): int { return n; } }\n" +
-        "pub fnc main(): int { const worker = spawn Worker(); stop worker; return 43; }\n");
-    throw new Exception("Unsupported actor declaration was admitted");
-}
-catch (FormatException ex) when (ex.Message == "Expected 'fnc' at offset 7") { }
+// Source actor syntax must fail at a semantic actor boundary, never as an
+// accidental scalar-fnc parse error. Legacy actors remain rejected outright;
+// canonical isolated actors first validate a bounded sealed state schema.
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define actor Worker as { pub fnc on_message(int n): int { return n; } }"),
+    "sealed state/handle_state and scheduler-owned logical continuation frames",
+    "legacy source actor must remain fail closed");
+
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as state { count: int = 0; enabled: bool = true; } " +
+        "pub increment(): int { return self.handle_state(critical |s| -> s.count); } end"),
+    "Source actor state schema parsed; sealed handle_state and generation-fenced logical-turn lowering is unavailable",
+    "canonical isolated actor schema must reach the precise lowering boundary");
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as state { count: int = 0; count: int = 1; } end"),
+    "Duplicate actor state field 'count'",
+    "duplicate isolated actor state field");
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as state { label: float = 0; } end"),
+    "Actor state schema admits only int/bool fields",
+    "unsupported isolated actor state type");
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as state { count: int = 9223372036854775808; } end"),
+    "Actor int state default overflows signed i64",
+    "isolated actor state i64 overflow");
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as state { count: int = -9223372036854775808; } end"),
+    "Source actor state schema parsed; sealed handle_state and generation-fenced logical-turn lowering is unavailable",
+    "signed i64 minimum actor state default reaches the lowering boundary");
+var actorStateOverflowFields = string.Join(" ", Enumerable.Range(0, 17)
+    .Select(i => $"f{i}: int = 0;"));
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as state { " + actorStateOverflowFields + " } end"),
+    "Actor state schema field limit exceeded (16)",
+    "isolated actor state field count is bounded");
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as state { enabled: bool = 1; } end"),
+    "Actor bool state default must be true or false",
+    "isolated actor bool default");
+RejectDiagnostic(
+    () => OresParser.Parse("define isolated actor Counter as state { } end"),
+    "Actor state schema requires at least one field",
+    "isolated actor empty state schema");
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as let count: int = 0; end"),
+    "Isolated actor requires sealed state",
+    "isolated actor cannot fall back to legacy scalar fields");
+Require(OresParser.Parse(
+    "fnc main():int{return 1;} /* define isolated actor Ghost as state { count:int=0; } */") is Literal,
+    "actor keywords in comments remain lexically invisible");
 Reject(() => OresParser.Parse("fnc main():int { return 1=2; }"), "assignment expression");
 Reject(() => OresParser.Parse("fnc main():int { const x = 1; return x; }"), "local assignment");
 
@@ -445,19 +532,30 @@ ActorFinalizationV1SelfTest.Run();
 ActorMailboxAuthorizationPrioritySelfTest.Run();
 ActorMailboxPrivateDataSelfTest.Run();
 ActorArenaSelfTest.Run();
+StateRegionLoanProvenanceSelfTest.Run();
+ActorIsolationAccessV1SelfTest.Run();
 ActorShardColumnsSelfTest.Run();
 SelectArbiterSelfTest.Run();
 SelectableI64ChannelSelfTest.Run();
+BoundedDemandI64PortSelfTest.Run(); // host scalar adapter; NOT source Flow<T> or Native AOT guest proof
 SelectableI64FutureSelfTest.Run();
 ActorDispatchDomainsSelfTest.Run();
 ActorRuntimeSelfTest.Run();
 ActorRuntimeGracefulDrainSelfTest.Run(); // HOST only; not guest pipe lowering
 SupervisorDataFenceParitySelfTest.Run(); // HOST only; stop-vs-send and sibling parity
+ActorPubSubSelfTest.Run();
+ActorPubSubTurnAuthorityTests.Run();
+ActorPubSubByteQuotaTests.Run();
+ActorPubSubSourceAdmissionTests.Run();
 ActorPipeAdmissionTests.Run(); // compiler gate only; no executable actor guest yet
 ActorPipeSourcePlanV1SelfTest.Run(); // checked scalar CIL oracle, not actor delivery
+NativeTraceContinuationV1SelfTest.Run(); // host-owned W3C scopes; not guest CIL instrumentation
 UniversalHotLoadV1SelfTest.Run();
 ActorFrameStackSelfTest.Run(); // host-only actor logical frames; not guest/AOT evidence
+ActorGuestFrameGateSelfTest.Run(); // terminal compiled-guest frame seam, host-only
 ActorScalarFrameAbiSelfTest.Run(); // verified CFG layout/native spill boundary, not guest execution
+BatchedCheckpointV1SelfTest.Run(); // host contract only; no compiled guest safepoints yet
+CfgActorScalarBoundaryPlanSelfTest.Run(); // compiler-only verified CFG liveness; NOT guest CIL
 ProjectRootSourceTests.Run(); // host-only resolver, not linked .NET source imports
 ActorNativeArenaSelfTest.Run();
 
@@ -988,8 +1086,23 @@ static byte[] PendingOwnedBuffer(ActorMailbox actor)
 {
     var field = typeof(ActorMailbox).GetField("_messages",
         System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-    Require(field is not null, "mailbox test can inspect private queue");
-    return ((Queue<byte[]>)field!.GetValue(actor)!).Peek();
+    var messages = field?.GetValue(actor) as System.Collections.IEnumerable;
+    Require(messages is not null && actor.QueuedMessages == 1,
+        "mailbox test can inspect exactly one pending envelope");
+    var iterator = messages!.GetEnumerator();
+    Require(iterator.MoveNext(), "mailbox test has a pending envelope");
+    var envelope = iterator.Current;
+    Require(envelope is not null && !iterator.MoveNext(),
+        "mailbox test has exactly one pending envelope");
+    var envelopeType = envelope!.GetType();
+    var flags = System.Reflection.BindingFlags.Instance |
+        System.Reflection.BindingFlags.Public;
+    var isControl = envelopeType.GetProperty("IsControl", flags)?.GetValue(envelope);
+    Require(isControl is bool control && !control,
+        "mailbox test inspects a USER envelope, never scheduler control");
+    var owned = envelopeType.GetProperty("Payload", flags)?.GetValue(envelope) as byte[];
+    Require(owned is not null, "mailbox test captures owned USER payload");
+    return owned!;
 }
 
 var originalInput = new byte[] { 9, 8, 7, 6 };
@@ -1022,16 +1135,37 @@ Require(await RuntimeHost.ExecuteAsync(() => throw new OverflowException()) == 7
 Require(await RuntimeHost.ExecuteAsync(() => throw new DivideByZeroException()) == 70,
     "divide zero error returned");
 
+ActorCooperationMeterTests.Run(); // host-only, not compiled guest preemption
 ManagedSourceEmitterTests.Run();
 SourceI64Conformance.Run();
+HpcFinanceRiskHostParityTests.Run(); // host oracle + source rejection, not .NET f64 guest parity
 SharedScalarParityConformance.Run();
 AttoXpScalarParityTests.Run(); // pinned .atto scalar IR + CIL evaluator only
 CfgVerifierTests.Run();
 CfgCilStressTests.Run();
 SupervisorStopLedgerSelfTest.Run();
+// The canonical Atto telemetry syntax is not an ordinary CIL call.
+// Both public frontends must reject it *specifically* until exception-safe
+// compiler lowering and NativeAOT runtime attachment are actually present.
+foreach (string source in new[] {
+    "fnc main():int{using telemetry.span() as span {return 42;}}",
+    "fnc main():int{using/*nested*/telemetry./*separator*/span() as span{return 42;}}"
+})
+{
+    RejectDiagnostic(() => OresParser.Parse(source), "E_TELEMETRY_SCOPE_UNSUPPORTED",
+        "scalar compiler cannot silently accept telemetry using syntax");
+    RejectDiagnostic(() => OresStructuredParser.Parse(source), "E_TELEMETRY_SCOPE_UNSUPPORTED",
+        "structured compiler cannot silently accept telemetry using syntax");
+}
+Require(OresStructuredParser.Parse(
+    "fnc main():int{/* using telemetry.span() as span {} */return 42;}").Body.Count == 1,
+    "commented telemetry syntax cannot affect NativeAOT admission");
 StructuredSourceTests.Run();
 StructuredCfgLoweringTests.Run();
+AttoEqualityNativeAotCandidateTests.Run();
 StructuredStaticAbiTests.Run();
+NominalEnumV1GuestTests.Run(); // verified .atto enum source -> real CFG/CIL; native execution separately
+NominalEnumFunctionV2GuestTests.Run(); // source-nominal arg/result -> actual private MethodDef call
 StaticFactsV0Tests.Run();
 ValueBoundaryTests.Run();
 Console.WriteLine("Oreslang .NET bootstrap, CFG verifier, CIL stress and structured source tests passed");
