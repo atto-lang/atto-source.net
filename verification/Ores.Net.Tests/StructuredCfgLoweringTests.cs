@@ -204,6 +204,33 @@ internal static class StructuredCfgLoweringTests
             "fnc main() -> int :: bool x = true, x end"
         })
             Reject(bad, "comma-body syntax, binding or return type must fail closed");
+        Check("""
+            fnc main() -> int ::
+                int x = 5,
+                return x + 37
+            end
+            """, 42, "comma body explicit return without semicolon");
+        Check("""
+            fnc main() -> int ::
+                int x = 5,
+                return x + 37;
+            end
+            """, 42, "comma body explicit return with semicolon");
+        Check("""
+            fnc plus(int a, int b): int { return a + b; }
+            fnc main() -> int ::
+                int x = plus(5, 7),
+                int y = plus(x, 29),
+                y + 1
+            end
+            """, 42, "nested call commas and sequential local visibility");
+        foreach (string badBody in new[] {
+            "fnc main() -> int :: int x = 5, return true end",
+            "fnc main() -> int :: int x = 5, return x + 1, end",
+            "fnc main() -> int :: int x = 5, return x + 1; x end",
+            "fnc main() -> int :: int x = 5 x + 1 end"
+        })
+            Reject(badBody, "comma body typed return and separator fail closed");
         // Pipeline and lambda syntax must never masquerade as an
         // already-lowered native callable. The structured CIL backend has
         // scalar :: bodies but no closure frames or tuple lambda dispatch.
