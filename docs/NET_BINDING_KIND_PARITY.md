@@ -1,23 +1,30 @@
-# .NET typed scalar binding-kind parity (experimental)
+# .NET scalar binding, inference and cast parity (experimental)
 
-Reference: [Java LANGUAGE.md / Bindings](https://github.com/ores-truffle-oreslang/oreslang-source.java/blob/main/docs/LANGUAGE.md). Java distinguishes `const` (compile-time), `val` (runtime single assignment) and `let` (mutable).
+Reference implementation: the Java/GraalVM Oreslang type checker.
+Implementation: `compiler/Ores.Net.Compiler.Core/StructuredSource.cs` (structured parser + typed CFG/CIL bootstrap only).
 
-This change admits all three **only in `OresStructuredParser`**, with an explicit `int` or `bool` type:
+## Canonical forms
 
 ```ores
-fnc main():int {
-    const int limit = 6 * 7;
-    val int snapshot = limit;
-    let int current = snapshot;
-    current = current + 1;
-    return current;
-}
+const int x = 7;
+const y = 7 as int;
+const z = 7;
+const w: int = 7;
 ```
 
-- `const` initializers must be scalar, pure, compile-time evaluable expressions; checked i64 overflow is rejected during parsing. Initializers and references to earlier `const` values are canonicalized to typed literals before CFG/CIL lowering.
-- `val` may read runtime locals but cannot be assigned again.
-- `let` preserves mutable-local behavior.
-- Duplicate declarations, self references and attempts to reassign `val`/`const` are rejected, including from nested blocks.
-- The source subset is intentionally narrower than Java's inference, objects, destructuring and non-scalar constants. Unsupported forms continue to fail closed.
+All four yield a fixed, readonly scalar binding with static type `int`.
+The declaration type checks the initializer; `as int` checks the expression before type inference; bare `const z` infers from the initializer *without* a cast.
+`const` is an immutable binding, **not** an instruction to eagerly execute every initializer at compile time. Statically evaluable pure scalar expressions may be folded using checked signed-i64 operations. Runtime-dependent expressions retain their typed SSA initializer and cannot be rebound.
 
-**Non-claim:** this is a typed structured-parser and AST-contract improvement, not a shipping scalar `oresnet check/compile` feature. Structured CFG/CIL execution is under review in #155 and #185. Do not claim generated CIL or Native AOT parity until this branch and those dependencies receive exact-head executed tests and independent review. Source-org Actions currently fail before runner allocation; zero-step runs are not evidence. Do not export private source to another organization without approval.
+`let x = 7` remains explicitly rebindable, and `val x = 7` remains fixed. Only `int` and `bool` are currently admitted by the .NET structured scalar subset.
+
+A checked `as` identity cast for `int` and `bool` emits no conversion, reinterprets no pointer, and does not grant mutability. Unrelated casts such as `true as int` are rejected at source admission. `as?`, nominal/dynamic casts, generic/ADT/Option type inference, and `string` are **unsupported** in the .NET scalar bootstrap and must fail closed.
+
+## Verification scope
+
+`StructuredSourceTests` checks AST binding type/mutability, runtime initializer preservation, negative misuse, chained casts and scalar inference.
+`StructuredCfgLoweringTests` checks emitted CIL against a separate CFG reference evaluator and enforces deterministic PE bytes for checked cases.
+These tests require actual tool execution; merely committing them does not count as a passed test.
+
+The legacy arithmetic `OresParser` remains a separate minimal compiler. This is not a claim that every .NET CLI/AOT path supports arbitrary Java Oreslang source or that .NET has full Java casting parity.
+Check exact-head NativeAOT and executed steps plus independent review before merge. A source-org zero-step Actions failure is runner admission, not evidence of typechecker behavior.
