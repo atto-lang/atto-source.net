@@ -353,15 +353,11 @@ public static class ExecutionGraphV1
                         }
                         if (!admission.Task.IsCompleted)
                         {
-                            // Async-only runtime boundary: never park this executor thread on
-                            // admission. SubmitCpu always settles it in its finally block, so
-                            // re-enter through the same executor once the decision exists.
+                            // Async-only runtime boundary: never park this executor thread, and never
+                            // invoke the one-shot executor twice. The submitting call settles admission
+                            // in its finally block; this one bounded continuation finishes the work.
                             admission.Task.ContinueWith(
-                                _ =>
-                                {
-                                    try { schedule(RunAdmitted); }
-                                    catch (Exception ex) { ticket.RejectExecutor(ex); }
-                                },
+                                _ => RunAdmitted(),
                                 System.Threading.CancellationToken.None,
                                 System.Threading.Tasks.TaskContinuationOptions.ExecuteSynchronously,
                                 System.Threading.Tasks.TaskScheduler.Default);

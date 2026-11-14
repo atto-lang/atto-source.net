@@ -154,15 +154,11 @@ public static class OwnedF32GraphV1
 
                     if (!admission.Task.IsCompleted)
                     {
-                        // Async-only runtime boundary: never park this executor thread.
-                        // The submitting call settles admission in its finally block;
-                        // re-enter through the same executor once it has.
+                        // Async-only runtime boundary: never park this executor thread, and never
+                        // invoke the one-shot executor twice. The submitting call settles admission
+                        // in its finally block; this one bounded continuation finishes the work.
                         admission.Task.ContinueWith(
-                            _ =>
-                            {
-                                try { schedule(RunAdmitted); }
-                                catch (Exception ex) { ticket.RejectExecutor(ex); }
-                            },
+                            _ => RunAdmitted(),
                             CancellationToken.None,
                             TaskContinuationOptions.ExecuteSynchronously,
                             TaskScheduler.Default);
