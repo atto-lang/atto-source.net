@@ -22,6 +22,9 @@ const long maximumObservedBytesPerMessage = 8192;
 // managed Envelope/byte[] objects and per-turn ActorContext metadata. Do NOT
 // present this measurement as a zero-allocation guest message fast path.
 bool requireNativeAot = Environment.GetEnvironmentVariable("ATTO_REQUIRE_NATIVE_AOT") == "1";
+bool nativeQueuedStorage = Environment.GetEnvironmentVariable("ATTO_NATIVE_MAILBOX") == "1";
+// Both variants execute identical source-generated actor code. Native storage
+// still makes an owned managed copy at receive; this is NOT zero-GC mail.
 bool dynamicCodeSupported = RuntimeFeature.IsDynamicCodeSupported;
 if (requireNativeAot)
     Require(!dynamicCodeSupported, "Native AOT binary still admits runtime dynamic code");
@@ -40,6 +43,7 @@ var options = new ActorRuntimeOptions
     MessagesPerDispatch = 32,
     MailboxMessages = 128,
     MailboxBytes = 4096,
+    NativeMailboxSlotBytes = nativeQueuedStorage ? 16 : 0,
     ActorPersistentBytes = 256,
     ActorScratchBytes = 64,
     ActorStackBytes = 16,
@@ -170,6 +174,7 @@ Require(runtime.NativeReservedBytes == 0 &&
 string mode = requireNativeAot ? "nativeaot" : "managed";
 Console.WriteLine("ATTO_ACTOR_MAILBOX_GC_METRICS_V1" +
     "|mode=" + mode +
+    "|mailbox_storage=" + (nativeQueuedStorage ? "native_copy_on_dequeue" : "managed_copy_on_send") +
     "|warmup=" + warmupMessages +
     "|sampled=" + sampledMessages +
     "|managed_total_allocated_bytes=" + allocated +
