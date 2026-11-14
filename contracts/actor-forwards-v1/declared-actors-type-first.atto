@@ -14,13 +14,13 @@ mtd (Foo2 self) foo(): int {
   return 42;
 }
 
-mtd (Foo1 self) receive(ActorMail<String> mail): void {
+mtd (Foo1 mut self) receive(ActorMail<String> mail): void {
   self.send(self.foo());
   self.end();
   return;
 }
 
-mtd (Foo2 self) receive(ActorMail<String> mail): void {
+mtd (Foo2 mut self) receive(ActorMail<String> mail): void {
   self.send(self.foo());
   self.end();
   return;
