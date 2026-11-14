@@ -193,8 +193,9 @@ public unsafe sealed class NativeFixedBufferPoolV1 : IDisposable
             ref Slot slot = ref CheckOwner(lease, owner);
             if (_retiring || lease.Escrowed || slot.Writer || slot.Readers == int.MaxValue)
                 throw new InvalidOperationException("Read loan denied");
+            var loan = new Loan(this, lease, false);
             ++slot.Readers;
-            return new Loan(this, lease, false);
+            return loan;
         }
     }
 
@@ -205,8 +206,9 @@ public unsafe sealed class NativeFixedBufferPoolV1 : IDisposable
             ref Slot slot = ref CheckOwner(lease, owner);
             if (_retiring || lease.Escrowed || slot.Writer || slot.Readers != 0)
                 throw new InvalidOperationException("Exclusive write loan denied");
+            var loan = new Loan(this, lease, true);
             slot.Writer = true;
-            return new Loan(this, lease, true);
+            return loan;
         }
     }
 
@@ -276,8 +278,9 @@ public unsafe sealed class NativeFixedBufferPoolV1 : IDisposable
             ref Slot slot = ref CheckOwner(lease, sender);
             if (_retiring || lease.Escrowed || slot.Readers != 0 || slot.Writer)
                 throw new InvalidOperationException("Transfer admission denied");
+            var escrow = new Escrow(this, lease);
             lease.Escrowed = true;
-            return new Escrow(this, lease);
+            return escrow;
         }
     }
 
