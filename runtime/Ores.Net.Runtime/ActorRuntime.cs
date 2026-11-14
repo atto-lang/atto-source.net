@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Security.Cryptography;
+using System.Runtime.CompilerServices;
 using System.Threading;
 
 namespace Ores.Net.Runtime;
@@ -435,6 +436,16 @@ public sealed class ActorRuntime : IDisposable
     public ActorRef Spawn(ActorKind kind, ActorMessageHandler handler)
     {
         ArgumentNullException.ThrowIfNull(handler);
+        // A C# async lambda can otherwise bind to this void-returning delegate
+        // as async-void. It returns to RunCell at the first suspension, which
+        // would end the physical actor turn and allow the next message to run
+        // while the continuation later resumes outside actor admission.
+        // Oreslang suspension requires a compiler/runtime-owned logical turn
+        // ledger; until that exists on this host surface, fail closed.
+        if (handler.Method.IsDefined(typeof(AsyncStateMachineAttribute), inherit: false))
+            throw new ArgumentException(
+                "async/async-void host actor handlers are forbidden; suspension requires scheduler-owned logical actor continuation lowering",
+                nameof(handler));
         if (kind is not (ActorKind.Private or ActorKind.Shared or ActorKind.Untrusted))
             throw new ArgumentOutOfRangeException(nameof(kind));
 

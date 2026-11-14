@@ -8,6 +8,7 @@ internal static class ActorRuntimeSelfTest
         DemandBackedActorRuntimeReusesQuotaAfterStop();
         ThreeKindsUseAssignedDomainsAndActorArenas();
         UnknownActorKindFailsBeforeNativeAllocation();
+        AsyncVoidHostHandlerFailsBeforeNativeAllocation();
         RejectedMessagesDoNotStartCarriers();
         ForgedSameIdCannotObserveTermination();
         OneActorNeverRunsTwoHandlersConcurrently();
@@ -75,6 +76,33 @@ internal static class ActorRuntimeSelfTest
         Require(runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0 &&
                 runtime.StartedCarrierThreads == 0,
             "invalid kind must not consume actor, native-memory or carrier capacity");
+    }
+
+    private static void AsyncVoidHostHandlerFailsBeforeNativeAllocation()
+    {
+        using var runtime = new ActorRuntime(Options());
+        ActorMessageHandler asyncVoid = async (_, _) =>
+        {
+            await Task.Yield();
+        };
+
+        bool rejected = false;
+        try
+        {
+            _ = runtime.Spawn(ActorKind.Private, asyncVoid);
+        }
+        catch (ArgumentException ex) when (ex.ParamName == "handler")
+        {
+            rejected = ex.Message.Contains(
+                "suspension requires scheduler-owned logical actor continuation lowering",
+                StringComparison.Ordinal);
+        }
+
+        Require(rejected,
+            "async-void handler must fail before it can escape the actor turn");
+        Require(runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0 &&
+                runtime.StartedCarrierThreads == 0,
+            "rejected async handler consumes no actor, arena or carrier capacity");
     }
 
     private static void RejectedMessagesDoNotStartCarriers()
