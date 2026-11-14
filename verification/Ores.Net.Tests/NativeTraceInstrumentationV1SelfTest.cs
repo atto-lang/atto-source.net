@@ -54,6 +54,36 @@ internal static class NativeTraceInstrumentationV1SelfTest
         Check(!boundaries.Enabled(NativeTraceInstrumentationV1.Boundary),
             "disable takes effect immediately");
 
+        // The same NativeAOT-compiled recorder must activate/deactivate
+        // dormant boundary probes at runtime without restart/recompile.
+        var liveRecorder = new NativeTraceContinuationV1(boundaries,
+            maxActive: 2, maxReceipts: 4);
+        var hostOwner = liveRecorder.MintOwner(21);
+        Check(liveRecorder.Begin(hostOwner, 21, 71) is null,
+            "disabled native AOT recorder makes no span");
+        boundaries.Configure(NativeTraceInstrumentationV1.Boundary, true);
+        var activeSpan = liveRecorder.Begin(hostOwner, 21, 71);
+        Check(activeSpan is not null && liveRecorder.Active == 1,
+            "on activates existing native recorder site");
+        boundaries.Configure(0, true);
+        Check(liveRecorder.Begin(hostOwner, 21, 72) is null,
+            "off prevents new scopes in same process");
+        Check(liveRecorder.Finish(hostOwner, activeSpan!, 21,
+            NativeTraceContinuationV1.Outcome.Ok),
+            "scope begun before off still finishes exactly once");
+        Check(liveRecorder.Active == 0 && liveRecorder.Completed == 1 &&
+            liveRecorder.PollReceipt()?.SiteId == 71,
+            "in-flight span finishes after runtime reconfiguration");
+        boundaries.Configure(NativeTraceInstrumentationV1.Boundary, true);
+        var nextSpan = liveRecorder.Begin(hostOwner, 21, 73);
+        Check(nextSpan is not null &&
+            liveRecorder.Finish(hostOwner, nextSpan!, 21,
+                NativeTraceContinuationV1.Outcome.Ok),
+            "second on records in same native image");
+        Check(liveRecorder.Completed == 2 &&
+            liveRecorder.PollReceipt()?.SiteId == 73 && liveRecorder.Dropped == 0,
+            "exact two spans recorded in off/on/off/on cycle");
+
         var adaptive = new NativeTraceInstrumentationV1(
             NativeTraceInstrumentationV1.BuildMode.Adaptive);
         Check(adaptive.CanRecompile &&
