@@ -72,6 +72,21 @@ public static partial class OresParser
         {
             var token = lexer.Read();
             tokens.Add(token);
+            // Multiple actor forward signatures and file namespace headers
+            // require an actual nominal actor linker and NativeAOT CIL actor
+            // lowering. Detect at the token boundary, before later syntax is
+            // mistaken for an executable scalar helper.
+            int i = tokens.Count - 1;
+            if (token.Text is "actor" or "isoactor" &&
+                i > 0 &&
+                (tokens[i - 1].Text == "declare" ||
+                 (i > 1 && tokens[i - 1].Text == "pub" &&
+                  tokens[i - 2].Text == "declare")))
+                throw new FormatException(
+                    $"ACTOR_FORWARD_NATIVEAOT_UNSUPPORTED: actor forward requires nominal actor identity, ownership and executable CIL lowering at offset {token.Offset}");
+            if (token.Text == "namespace" && i > 0 && tokens[i - 1].Text == "use")
+                throw new FormatException(
+                    $"NAMESPACE_RUNTIME_NATIVEAOT_UNSUPPORTED: file namespace requires verified nominal actor/linker identity at offset {token.Offset}");
             // Fail at the completed typed receiver header, before tokenizing
             // body operations or field syntax not in the scalar grammar.
             int receiverAt = tokens.Count - 1;
