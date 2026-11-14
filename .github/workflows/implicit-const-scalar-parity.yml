@@ -65,7 +65,7 @@ jobs:
         run: |
           set -euo pipefail
           compiler=artifacts/compiler/linux-x64/oresnet
-          for name in literal-equivalence const-arithmetic bool-local runtime-val-let; do
+          for name in literal-equivalence const-arithmetic bool-local runtime-val-let const-reference; do
             "$compiler" check-structured "contracts/implicit-const-scalar-v1/$name.atto"
           done
           temp="$(mktemp -d)"
