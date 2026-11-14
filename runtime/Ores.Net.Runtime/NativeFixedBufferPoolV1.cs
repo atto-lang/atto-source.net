@@ -271,6 +271,40 @@ public unsafe sealed class NativeFixedBufferPoolV1 : IDisposable
         }
     }
 
+    // Bulk copies keep byte payloads off the managed heap and never expose
+    // native pointers outside a verified active loan and the pool lock.
+    private void CheckRange(int offset, int length)
+    {
+        if (offset < 0 || length < 0 || offset > _slotSize ||
+            length > _slotSize - offset)
+            throw new ArgumentOutOfRangeException(nameof(offset),
+                "Pooled buffer view exceeds its fixed native slot");
+    }
+
+    public void WriteBytes(Loan loan, int offset, ReadOnlySpan<byte> source)
+    {
+        lock (_gate)
+        {
+            CheckLoan(loan, true);
+            CheckRange(offset, source.Length);
+            source.CopyTo(new Span<byte>(
+                _memory + checked(loan.Lease.SlotIndex * _slotSize + offset),
+                source.Length));
+        }
+    }
+
+    public void ReadBytes(Loan loan, int offset, Span<byte> destination)
+    {
+        lock (_gate)
+        {
+            CheckLoan(loan, false);
+            CheckRange(offset, destination.Length);
+            new ReadOnlySpan<byte>(
+                _memory + checked(loan.Lease.SlotIndex * _slotSize + offset),
+                destination.Length).CopyTo(destination);
+        }
+    }
+
     public Escrow BeginTransfer(Lease lease, FixedBufferActorIdentity sender)
     {
         lock (_gate)
