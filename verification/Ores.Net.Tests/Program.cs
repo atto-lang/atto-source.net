@@ -101,6 +101,108 @@ Require(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
     "mutated manifest must not retain approved source-free reference digest");
 Console.WriteLine("DURABLE_M0_REFERENCE_ONLY|sha256=" + durableM0PinnedSha +
     "|bytes=1671|not_guest_execution");
+// Cross-backend namespace/lifecycle parity: the NativeAOT compiler does
+// not yet implement manifest-indexed namespace import or once-only init.
+// Unreachable files do not enter the graph, and unsupported imports fail
+// before CIL emission rather than executing an ambient package.
+{
+    string root = Path.Combine(Path.GetTempPath(), "oreslang-ns-parity-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    try
+    {
+        string main = Path.Combine(root, "main.ores");
+        string startup = Path.Combine(root, "startup.ores");
+        string unrelated = Path.Combine(root, "unrelated.ores");
+        File.WriteAllText(unrelated, "not valid ores source");
+        File.WriteAllText(main, "fnc main()->int { return 1; }");
+        Require(OresSourceModuleCompiler.Compile(main, new[] { root }).Sources.Count == 1,
+            "unreferenced namespace provider must not enter NativeAOT module graph");
+
+        File.WriteAllText(main,
+            "import namespace billing as payments from \"checkout\"; fnc main()->int { return 1; }");
+        RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
+            "manifest-verified multi-file package linker",
+            "namespace import needs exact manifest ownership");
+
+        // Standalone compilation must also refuse lifecycle hooks; only
+        // checking linked dependency imports is insufficient.
+        File.WriteAllText(main, "fnc init()->int { return 9; } fnc main()->int { return 1; }");
+        RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
+            "once-only reachable initialization lowering",
+            "standalone private init cannot be compiled as an ordinary callable");
+        File.WriteAllText(main, "pub fnc init()->int { return 9; } fnc main()->int { return 1; }");
+        RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
+            "once-only reachable initialization lowering",
+            "standalone public init cannot be compiled as an ordinary callable");
+
+        File.WriteAllText(startup, "pub fnc init()->int { return 9; }");
+        File.WriteAllText(main,
+            "import fnc init from \"./startup.ores\"; fnc main()->int { return init(); }");
+        RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
+            "once-only reachable initialization lowering",
+            "lifecycle init cannot become an ordinary imported callable");
+
+        // Rejection must reach transitive linked sources and module wrappers:
+        // a caller cannot suppress init admission by changing the import kind.
+        File.WriteAllText(startup,
+            "define module Startup as pub fnc init()->int { return 9; } end");
+        File.WriteAllText(main,
+            "import module Startup from \"./startup.ores\"; fnc main()->int { return 1; }");
+        RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
+            "once-only reachable initialization lowering",
+            "linked module-scoped init requires a verified once-only lifecycle");
+
+        File.WriteAllText(startup,
+            "import namespace billing from \"checkout\"; pub fnc helper()->int { return 2; }");
+        File.WriteAllText(main,
+            "import fnc helper from \"./startup.ores\"; fnc main()->int { return helper(); }");
+        RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
+            "manifest-verified multi-file package linker",
+            "transitively linked namespace import must reject before CIL emission");
+
+        // Additional cross-backend regression #1: the same-package +/
+        // selector cannot bypass the missing manifest-owned namespace graph.
+        File.WriteAllText(main,
+            "import namespace billing from \"+/\"; fnc main()->int { return 1; }");
+        RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
+            "manifest-verified multi-file package linker",
+            "unverified same-package namespace import must fail before CIL");
+
+        // Regression #2: even a qualified scalar call cannot authorize an
+        // unpinned namespace import by satisfying a lexical name.
+        File.WriteAllText(main,
+            "import namespace billing as payments from \"checkout\"; " +
+            "fnc main()->int { return payments.answer(); }");
+        RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
+            "manifest-verified multi-file package linker",
+            "qualified namespace calls require package-authenticated providers");
+
+        // Regression #3: transitive imports with +/ are just as forbidden
+        // as direct imports until the NativeAOT namespace linker exists.
+        File.WriteAllText(startup,
+            "import namespace billing from \"+/\"; pub fnc helper()->int { return 2; }");
+        File.WriteAllText(main,
+            "import fnc helper from \"./startup.ores\"; fnc main()->int { return helper(); }");
+        RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
+            "manifest-verified multi-file package linker",
+            "transitive same-package namespace import must fail before CIL");
+
+        // Regression #4: an unreachable file containing forbidden namespace
+        // syntax must remain outside the reachable compilation closure.
+        File.WriteAllText(unrelated,
+            "import namespace billing from \"checkout\"; fnc bad()->int { return 999; }");
+        File.WriteAllText(main, "fnc main()->int { return 1; }");
+        Require(OresSourceModuleCompiler.Compile(main, new[] { root }).Sources.Count == 1,
+            "unreachable namespace source must not enter the NativeAOT linker");
+
+        // A failed admission must not contaminate a later independent
+        // compilation; unrelated files remain outside the reachable graph.
+        File.WriteAllText(main, "fnc main()->int { return 1; }");
+        Require(OresSourceModuleCompiler.Compile(main, new[] { root }).Sources.Count == 1,
+            "rejected import must not alter subsequent standalone compilation");
+    }
+    finally { Directory.Delete(root, true); }
+}
 
 // Opaque top types and value-producing conditionals are language-reserved,
  // but this i64-only bootstrap has no tagged dynamic-value ABI or typed CFG
@@ -172,6 +274,28 @@ foreach (var source in new[] {
     "define class X as foo(int x):int {return x;} foo(self,int x):int {return x;} end"
 })
     Reject(() => OresParser.Parse(source), "unimplemented class method receiver parity");
+// Source supervisors are not scalar functions. The shipping parser must
+// reject typed CONTROL authority before a generic fnc diagnostic or CIL.
+foreach (var source in new[] {
+    "define supervisor S1 as on_panic(f: Failure): void { return; } end",
+    "pub define supervisor S1 as end",
+    "define pub supervisor S1 as end",
+    "define supervisor S1 extends Actor as end",
+    "define supervisor S1 implements Observer as end",
+    "define supervisor S1 with RestartPolicy as end",
+    "define supervisor actor S1 as end",
+})
+    RejectDiagnostic(
+        () => OresParser.Parse(source),
+        "Source supervisors require typed Failure, owned CONTROL dispatch",
+        "shipping scalar source supervisor must fail before CIL");
+Require(OresParser.Parse(
+    "fnc main():int{return 42;} // define supervisor Fake extends Actor") is Literal,
+    "source supervisor words in scalar comments must not be CONTROL");
+Require(OresParser.Parse(
+    "fnc main():int{return 42;} /* define /* supervisor */ supervisor S1 */") is Literal,
+    "nested scalar source comments must not be CONTROL");
+
 // Nominal enum overloads require compiler-owned type identities and an
 // executable selected-slot ABI. The scalar .NET frontend must not accept
 // their source syntax before those paths exist (including case payloads).
@@ -194,11 +318,61 @@ Require(OresParser.Parse(
     "fnc main():int{return 1;} /* enum Color /* enum Mode */ end */") is Literal,
     "nested block-comment enum words must not trigger overload admission");
 
+DotnetHostImportTests.Run(); // compiled System.Math.Abs(i64) CIL metadata and fail-closed imports
+VmIsolateHostTests.Run();
+VmIsolateHostHardeningTests.Run();
 OptionResultTrapAdmissionTests.Run();
+SafeCollectionSourceAdmissionTests.Run(); // exact parser/typed-IR and structured-CFG collection denial
+// Shared TCP-pool capabilities are not guest-lowered by either .NET frontend.
+// Deny in both the shipping scalar CLI path and the structured CFG path;
+// a host-only HTTP/1.1 socket provider is not an actor-shared pool.
+Require(OresParser.Parse("fnc main():int{return 42;} // tcp.pool") is Literal,
+    "a TCP-pool marker in a source comment must not affect scalar execution");
+foreach (var source in new[] {
+    "fnc main():int{return tcp.pool(1);}",
+    "fnc main():int{return pool.acquire_async(1);}",
+    "fnc main():int{return lease.exchange_async(42);}",
+    "fnc main():int{return await pool.acquire_async(1);}",
+    "fnc main():int{return rt share payload;}"
+})
+{
+    foreach (var parse in new Action<string>[] {
+        text => { _ = OresParser.Parse(text); },
+        text => { _ = OresStructuredParser.Parse(text); }
+    })
+    {
+        try { parse(source); }
+        catch (FormatException ex) when (!string.IsNullOrWhiteSpace(ex.Message)) { continue; }
+        throw new Exception("Unsupported TCP-pool guest effect reached .NET lowering: " + source);
+    }
+}
+// A model declaration must be explicitly denied before scalar IR/CIL emission.
+// Both public declaration orders share the same unsupported diagnostic.
+foreach (var source in new[] {
+    "define model PriceEstimate() as AddTax(10) end",
+    "define model x as Identity() end",
+    "define pub model PriceEstimate() as AddTax(10) end",
+    "pub define model PriceEstimate() as AddTax(10) end",
+    "define /* comment */ model PriceEstimate() as AddTax(10) end"
+})
+    RejectDiagnostic(() => OresParser.Parse(source), "MODEL_LOWERING_UNSUPPORTED",
+        "unlowered .NET nominal ModelGraph");
+Require(OresParser.Parse(
+    "fnc main():int{return 42;} /* define model Fake as Op() end */") is Literal,
+    "commented-out model declarations are inert");
+Require(OresParser.Parse(
+    "fnc main():int{return 42;} // define model Fake as Op() end") is Literal,
+    "model text in line comments remains inert");
+
+CriticalSuspendsBoundaryTests.Run(); // compiler-owned scalar admission, not runtime critical support
+AttoSemanticNegativeGateTests.Run(); // canonical .atto negatives + IR/CIL positive controls (not NativeAOT)
 AsyncOnlyIoPolicyTests.Run();
+CapabilityIoLifecycleV1SelfTest.Run();
 SourceByteBudgetTests.Run();
 ElmCompositionAdmissionTests.Run();
+HeapContainerSourceBoundaryTests.Run(); // actual scalar compiler fail-closed heap/container checks
 StructuralPatternAdmissionTests.Run();
+AdtSourceAdmissionTests.Run();
 NumericSeparatorParityTests.Run();
 CrossBackendCheckedI64ParityTests.Run();
 AsyncInteropFailClosedTests.Run();
@@ -216,20 +390,79 @@ catch (FormatException ex) when (ex.Message == "Expected 'fnc' at offset 7") { }
 Reject(() => OresParser.Parse("fnc main():int { return 1=2; }"), "assignment expression");
 Reject(() => OresParser.Parse("fnc main():int { const x = 1; return x; }"), "local assignment");
 
+// Immutable-default v1 / five-backend admission (common-source #203).
+// Shipping scalar .NET has no locals. Reject all new spellings BEFORE
+// CIL/Native AOT emission; a generic parse rejection is not proof that
+// readonly semantics have been implemented. The structured path is
+// separately staged in #201/#282 and requires real Native AOT validation.
+foreach (var source in new[] {
+    "fnc main():int { int x = 7; return x; }",
+    "fnc main():int { const x = 7; return x; }",
+    "fnc main():int { const int x = 7; return x; }",
+    "fnc main():int { const x: int = 7; return x; }",
+    "fnc main():int { int x = 7; int y = x * 3; return y; }",
+    "fnc main():int { int x = 7; x = 8; return x; }",
+    "fnc main():int { int x = 7; x += 1; return x; }",
+    "fnc main():int { const x = 7; x = 8; return x; }",
+    "fnc main():int { int x = x + 1; return x; }",
+    "fnc main():int { int x = y; int y = 7; return x; }",
+    "fnc main():int { int x = 7; int x = 8; return x; }",
+    "fnc main():int { const x; return 7; }",
+    "fnc main():int { const x = undefined_name; return x; }",
+    "fnc main():int { string x = 7; return 0; }",
+    "fnc main():int { const unused = 9223372036854775807 + 1; return 7; }",
+    "fnc main(int x):int { const y = x + 1; return y; }"
+}) {
+    Reject(() => OresParser.Parse(source),
+        "shipping scalar compiler must fail closed on immutable-default locals");
+}
+// False keyword detection from comments would change scalar semantics.
+Require(OresParser.Parse("fnc main():int{return 42;} // const x = 7;") is Literal,
+    "immutable declaration comment must not be compiled as a binding");
+
+
+// The .NET scalar compiler must NOT claim guest access to host slab pins or
+// raw TCP pooling until a typed actor-ownership lowering and NativeAOT
+// transport boundary are actually implemented.
+foreach (var source in new[] {
+    "fnc main():int{return FrozenTcpSlab.pin();}",
+    "fnc main():int{return FrozenBytes.read_at(0);}",
+    "fnc main():int{return SharedBuffer.pin();}",
+    "fnc main():int{return TcpPool.acquire_async();}",
+    "fnc main():int{return rt share socket;}",
+    "fnc main():int{return rt mut share socket;}"
+}) {
+    Reject(() => OresParser.Parse(source),
+        "unsupported host-only TCP slab or guest pooling source");
+}
+
+FrozenTcpSlabSelfTest.Run(); // host-only immutable shared-buffer parity
+TcpPoolLeaseLedgerSelfTest.Run(); // trusted TCP lease authority, no socket I/O
+await TcpPoolPhysicalCloseLoopbackSelfTest.RunAsync(); // host-only real TCP close fence
+ActorIoEnvelopeSelfTest.Run();
 ActorRefNoWireSelfTest.Run();
 ActorMailboxBoundsSelfTest.Run();
 SelectContinuationFenceSelfTest.Run();
 ActorMailboxRestartAtomicitySelfTest.Run();
+ActorFinalizationV1SelfTest.Run();
 ActorMailboxAuthorizationPrioritySelfTest.Run();
 ActorMailboxPrivateDataSelfTest.Run();
 ActorArenaSelfTest.Run();
+ActorIsolationAccessV1SelfTest.Run();
 ActorShardColumnsSelfTest.Run();
 SelectArbiterSelfTest.Run();
 SelectableI64ChannelSelfTest.Run();
+BoundedDemandI64PortSelfTest.Run(); // host scalar adapter; NOT source Flow<T> or Native AOT guest proof
 SelectableI64FutureSelfTest.Run();
 ActorDispatchDomainsSelfTest.Run();
 ActorRuntimeSelfTest.Run();
+NativeTraceContinuationV1SelfTest.Run(); // host-owned W3C scopes; not guest CIL instrumentation
+UniversalHotLoadV1SelfTest.Run();
+ActorFrameStackSelfTest.Run(); // host-only actor logical frames; not guest/AOT evidence
+ActorScalarFrameAbiSelfTest.Run(); // verified CFG layout/native spill boundary, not guest execution
+CfgActorScalarBoundaryPlanSelfTest.Run(); // compiler-only verified CFG liveness; NOT guest CIL
 ProjectRootSourceTests.Run(); // host-only resolver, not linked .NET source imports
+ActorNativeArenaSelfTest.Run();
 
 // Import parity is deliberately not claimed for the .NET scalar compiler.
 // Each form must fail at lexical admission with a specific import diagnostic,
@@ -792,14 +1025,33 @@ Require(await RuntimeHost.ExecuteAsync(() => throw new OverflowException()) == 7
 Require(await RuntimeHost.ExecuteAsync(() => throw new DivideByZeroException()) == 70,
     "divide zero error returned");
 
+ActorCooperationMeterTests.Run(); // host-only, not compiled guest preemption
 ManagedSourceEmitterTests.Run();
 SourceI64Conformance.Run();
 SharedScalarParityConformance.Run();
 AttoXpScalarParityTests.Run(); // pinned .atto scalar IR + CIL evaluator only
 CfgVerifierTests.Run();
 CfgCilStressTests.Run();
+SupervisorStopLedgerSelfTest.Run();
+// The canonical Atto telemetry syntax is not an ordinary CIL call.
+// Both public frontends must reject it *specifically* until exception-safe
+// compiler lowering and NativeAOT runtime attachment are actually present.
+foreach (string source in new[] {
+    "fnc main():int{using telemetry.span() as span {return 42;}}",
+    "fnc main():int{using/*nested*/telemetry./*separator*/span() as span{return 42;}}"
+})
+{
+    RejectDiagnostic(() => OresParser.Parse(source), "E_TELEMETRY_SCOPE_UNSUPPORTED",
+        "scalar compiler cannot silently accept telemetry using syntax");
+    RejectDiagnostic(() => OresStructuredParser.Parse(source), "E_TELEMETRY_SCOPE_UNSUPPORTED",
+        "structured compiler cannot silently accept telemetry using syntax");
+}
+Require(OresStructuredParser.Parse(
+    "fnc main():int{/* using telemetry.span() as span {} */return 42;}").Body.Count == 1,
+    "commented telemetry syntax cannot affect NativeAOT admission");
 StructuredSourceTests.Run();
 StructuredCfgLoweringTests.Run();
+AttoEqualityNativeAotCandidateTests.Run();
 StructuredStaticAbiTests.Run();
 StaticFactsV0Tests.Run();
 ValueBoundaryTests.Run();

@@ -1,5 +1,7 @@
 using Mono.Cecil;
 using Mono.Cecil.Cil;
+using System.Security.Cryptography;
+using System.Text;
 using Ores.Net.Compiler;
 
 internal static class StructuredCfgLoweringTests
@@ -104,8 +106,62 @@ internal static class StructuredCfgLoweringTests
         throw new Exception("Invalid structured source accepted: " + label);
     }
 
+    private static void PinnedFiveBackendCastGuests()
+    {
+        // Same exact .ores source files as the Java/LLVM/Wasm/Cranelift
+        // candidates. CFG evaluation, emitted CIL interpretation and
+        // deterministic assembly bytes are separate from NativeAOT execution.
+        (string File, string GitBlob)[] fixtures =
+        {
+            ("45-cast-int-literal.ores", "69cecd231d32bf70ea36424e59c932861d01fe44"),
+            ("46-chained-cast-int.ores", "b088dd3f5e3114be4affbb4935582b58f010d75f"),
+            ("47-grouped-cast-multiply.ores", "9ebc3f7bc230557fe2f2639172883bb2f4589464"),
+            ("48-readonly-local-cast.ores", "87d0773504e0d22fc3cf1ee76755b36a2fc415c6"),
+            ("49-const-typed-identity.ores", "bff7c6070008c5c6a8b3316e8a289f93d3f8c5b3")
+        };
+        foreach (var fixture in fixtures)
+        {
+            string file = Path.Combine(AppContext.BaseDirectory, "parity", fixture.File);
+            byte[] sourceBytes = File.ReadAllBytes(file);
+            if (sourceBytes.Length == 0 || sourceBytes.Length >= 8192)
+                throw new Exception("Invalid pinned Oreslang guest size: " + fixture.File);
+            byte[] header = Encoding.ASCII.GetBytes("blob " + sourceBytes.Length);
+            byte[] objectBytes = new byte[header.Length + 1 + sourceBytes.Length];
+            header.CopyTo(objectBytes, 0);
+            sourceBytes.CopyTo(objectBytes, header.Length + 1);
+            string actualBlob = Convert.ToHexString(SHA1.HashData(objectBytes)).ToLowerInvariant();
+            if (actualBlob != fixture.GitBlob)
+                throw new Exception("Oreslang source-byte drift: " + fixture.File);
+            Check(Encoding.UTF8.GetString(sourceBytes), 42,
+                "shared native i64 cast fixture " + fixture.File);
+        }
+    }
+
+    // A generic FormatException is insufficient: malformed source can fail for
+    // unrelated reasons before reaching the typed equality operator under test.
+    private static void RejectWithDiagnostic(string source, string expected, string label)
+    {
+        try { _ = OresStructuredCfgLowering.Lower(source); }
+        catch (FormatException e)
+        {
+            if (e.Message.Contains(expected, StringComparison.Ordinal)) return;
+            throw new Exception("Wrong structured rejection for " + label +
+                ": expected '" + expected + "', got '" + e.Message + "'", e);
+        }
+        throw new Exception("Invalid structured source accepted: " + label);
+    }
+
+    private static void RejectAliasBoundary(string source, string spelling, string label)
+    {
+        int offset = source.LastIndexOf(spelling, StringComparison.Ordinal);
+        if (offset < 0 || source[offset] != '!')
+            throw new Exception("Missing operator boundary in fixture: " + label);
+        RejectWithDiagnostic(source, "Invalid character at offset " + offset, label);
+    }
+
     public static void Run()
     {
+        PinnedFiveBackendCastGuests();
         const string sum = """
             define pub fnc main():int {
                 let int total=0;
@@ -168,11 +224,140 @@ internal static class StructuredCfgLoweringTests
             "invalid arrow comparison");
         Reject("fnc main():int{if 1 =< 0{return 42;}return 0;}",
             "invalid reverse comparison");
+        // Genuine type-first readonly bindings in the EXPERIMENTAL structured
+        // source -> verified CFG -> deterministic CIL interpreter path.
+        // This is not a released Windows/Linux Native AOT guest receipt.
+        foreach (var (source, expected, label) in new[] {
+            ("fnc main():int{int x=7;return x;}", 7L, "readonly int literal"),
+            ("fnc main():int{const x=7;return x;}", 7L, "existing constexpr"),
+            ("fnc main():int{const int x=7;return x;}", 7L, "typed constexpr"),
+            ("fnc main():int{const x:int=7;return x;}", 7L, "name-first constexpr"),
+            ("fnc main():int{int x=7;int y=x*3;return y;}", 21L, "readonly SSA dependencies"),
+            ("fnc main():int{int x=7;return x+1;}", 8L, "readonly scalar read"),
+            ("fnc main():int{bool yes=true;if yes{return 42;}else{return 0;}}",
+                42L, "readonly bool flow"),
+            ("fnc main():int{let int x=7;x=8;return x;}", 8L, "existing explicit let")
+        }) Check(source, expected, label);
+        foreach (var (source, label) in new[] {
+            ("fnc main():int{int x=7;x=8;return x;}", "readonly rebinding"),
+            ("fnc main():int{int x=7;int x=8;return x;}", "duplicate local"),
+            ("fnc main():int{int x=7;return x+undefined_name;}", "unknown name"),
+            ("fnc main():int{int x=x+1;return x;}", "self initializer"),
+            ("fnc main():int{int x=true;return x;}", "typed int/bool mismatch"),
+            ("fnc main():int{bool yes=7;return 42;}", "typed bool/int mismatch"),
+            ("fnc main():int{int x;return 42;}", "initializer mandatory")
+        }) Reject(source, label);
+        CheckOverflow(
+            "fnc main():int{int unused=9223372036854775807+1;return 7;}",
+            "unused readonly runtime initializer still traps");
+        // Statement-bodied helpers (a runtime-readonly local inside the callee)
+        // need the independent MethodDef ABI, which is not implemented yet.
+        // Until it is, lowering must fail closed with that exact diagnostic
+        // rather than fold the helper or fabricate a CIL result.
+        RejectWithDiagnostic("fnc plus_one(int p):int{int local=p+1;return local;}" +
+                "fnc main():int{return plus_one(41);}",
+            "Statement-bodied helper requires the independent MethodDef ABI",
+            "statement-bodied helper stays fail-closed until MethodDef ABI");
+        Reject("fnc plus_one(int p):int{int local=p+1;local=0;return local;}" +
+                "fnc main():int{return plus_one(41);}",
+            "runtime readonly helper local cannot be reassigned");
+
+
+
         Check(File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
             "structured-bindings42.ores")),
             42, "real const/val/let source through verified CFG and CIL");
         Check("fnc main():int{const int c=40+2;return c;}",
             42, "compile-time const typed SSA");
+        Check(File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
+            "scalar-cast-inference-five-backend.ores")),
+            42, "byte-identical five-backend immutable/inference/cast core");
+        // Sources are copied verbatim from the five-compiler Git blob contract.
+        // Check compiles and independently interprets actual emitted CIL;
+        // a rejected source must never reach PE publication.
+        Check(File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
+            "portable-checked-cast-positive-v2.ores")),
+            42, "exact-byte identity-cast guest shared with Java LLVM Wasm Cranelift");
+        Reject(File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
+            "portable-checked-cast-negative-v2.ores")),
+            "exact-byte impossible int-to-bool cast may not reach CIL");
+        Check("fnc main():int{bool flag=true;if flag{return 42;}else{return 0;}}",
+            42, "type-first bool is immutable typed SSA");
+        Check("fnc main():int{int x=(2+5) as int;return x+35;}",
+            42, "type-first int with checked identity cast");
+        Check("fnc plus(int n):int{return n+1;}fnc main():int{int x=plus(41);return x;}",
+            42, "type-first immutable runtime helper result");
+        Reject("fnc main():int{int x=7;x=8;return x;}",
+            "type-first int binding is immutable by default");
+        Reject("fnc main():int{int x=true;return 0;}",
+            "type-first int initializer type mismatch");
+        Reject("fnc main():int{bool x=7;return 0;}",
+            "type-first bool initializer type mismatch");
+
+        // Compiler-backed .NET evidence: each source passes typed admission,
+        // independent CFG reference evaluation, actual CIL interpretation,
+        // and deterministic PE byte reproduction.
+        foreach (var (source, label) in new[] {
+            ("fnc main():int{const int x=7;const y=7 as int;return x+y+28;}", "explicit-annotation equals inferred checked cast"),
+            ("fnc main():int{const x=7;const y=x as int;return y+35;}", "unannotated int inference"),
+            ("fnc main():int{const x:int=7;return x+35;}", "name-first typed annotation"),
+            ("fnc main():int{const x=(2+5) as int;return x+35;}", "parenthesized additive cast"),
+            ("fnc main():int{const x=7 as int as int;return x+35;}", "chained identity proofs"),
+            ("fnc main():int{const yes=true as bool;if yes{return 42;}else{return 0;}}", "bool inference never int"),
+            ("fnc main():int{const yes=(6*7 eq 42) as bool;if yes{return 42;}else{return 0;}}", "bool comparison checked cast"),
+            ("fnc main():int{let x=7 as int;x=42;return x;}", "explicit let permits rebinding"),
+            ("fnc main():int{let int x=40;const y=x;return y+2;}", "const runtime initializer is fixed binding"),
+            ("fnc plus(int n):int{return n+1;}fnc main():int{const x=plus(41) as int;return x;}", "checked cast of function result"),
+            ("fnc plus(int n):int{return n+1;}fnc main():int{const x=plus(41);return x;}", "inferred function result without cast"),
+            ("fnc main():int{const x=7;if true{const z=x as int;return z+35;}else{return 0;}}", "scope-local inference"),
+            ("fnc main():int{const x=true as bool as bool;if x{return 42;}else{return 0;}}", "chained bool identity casts"),
+            ("fnc main():int{val x=7;const y=x as int;return y+35;}", "inferred val preserves int"),
+            ("fnc main():int{let x=7;x=42;return x;}", "inferred let preserves mutable int"),
+            ("fnc main():int{let x=false;x=true;if x{return 42;}else{return 0;}}", "inferred mutable bool"),
+            ("fnc yes():bool{return true;}fnc main():int{const x=yes();if x{return 42;}else{return 0;}}", "inferred bool helper result"),
+            ("fnc yes():bool{return true;}fnc main():int{const x=yes() as bool;if x{return 42;}else{return 0;}}", "checked bool helper result"),
+            ("fnc seven():int{return 7 as int;}fnc main():int{return seven()+35;}", "checked identity cast at helper return"),
+            ("fnc main():int{const a=7;const b=a;const c=b as int;return c+35;}", "multi-hop int inference"),
+            ("fnc main():int{const a=true;const b=a;const c=b as bool;if c{return 42;}else{return 0;}}", "multi-hop bool inference"),
+            ("fnc main():int{const x=(-9223372036854775808) as int;if x<0{return 42;}else{return 0;}}", "checked min-i64 identity cast"),
+            ("fnc main():int{const x=9223372036854775807 as int;if 0<x{return 42;}else{return 0;}}", "checked max-i64 identity cast"),
+            ("fnc main():int{const x:bool=true as bool;if x{return 42;}else{return 0;}}", "name-first bool annotation with identity cast"),
+            ("fnc main():int{return (7 as int)+(35 as int);}", "two checked identity operands"),
+            ("fnc main():int{return ((2+5) as int)*6;}", "cast binds before multiplication"),
+            ("fnc main():int{return (7 as int as int)*6;}", "chained cast binds before multiplication"),
+            ("fnc main():int{const x=7 as int;const y=x as int;return y*6;}", "checked cast through inferred constant reference"),
+            ("fnc main():int{let x=7;x=x+1;x=x+34;return x;}", "SSA let multiwrite matches Cranelift LLVM"),
+            ("fnc main():int{let x=7;const snap=x;x=42;return snap+35;}", "const captures prior SSA version"),
+            ("fnc main():int{let x=7;val snap=x;x=42;return snap+35;}", "val captures prior SSA version"),
+            ("fnc main():int{let x=7;const snap=x as int;x=42;return snap+35;}", "checked cast snapshot cannot alias mutable local"),
+            ("fnc main():int{let x=7 as int;x=(x+35) as int;return x;}", "cast applied to mutable SSA replacement"),
+            ("fnc main():int{const base=7;let x=base;x=42;return x;}", "mutable sourced from immutable const")
+        })
+            Check(source, 42, "scalar cast/inference " + label);
+        foreach (var (source, label) in new[] {
+            ("fnc main():int{const x=7 as bool;return 42;}", "int-to-bool cast"),
+            ("fnc main():int{const x=true as int;return 42;}", "bool-to-int cast"),
+            ("fnc main():int{const x=7 as? int;return 42;}", "optional cast without tagged Option lowering"),
+            ("fnc main():int{const x=7 as Phantom;return 42;}", "nominal cast without runtime tag"),
+            ("fnc main():int{const x=true;return x+1;}", "inferred bool arithmetic"),
+            ("fnc main():int{const x=7 as int;x=8;return 42;}", "cast does not grant mutation"),
+            ("fnc main():int{const x=false as int;return 0;}", "false cannot cast to int"),
+            ("fnc main():int{const x=0 as bool;return 0;}", "zero cannot cast to bool"),
+            ("fnc main():int{const x=(2+5) as bool;return 0;}", "int expression cannot cast to bool"),
+            ("fnc main():int{const x=(7 eq 7) as int;return 0;}", "bool expression cannot cast to int"),
+            ("fnc yes():bool{return true;}fnc main():int{const x=yes() as int;return 0;}", "bool helper cannot cast to int"),
+            ("fnc seven():int{return 7;}fnc main():int{const x=seven() as bool;return 0;}", "int helper cannot cast to bool"),
+            ("fnc main():int{const x=true as? bool;return 0;}", "optional bool cast lacks Option lowering"),
+            ("fnc main():int{let x=true;x=7;return 0;}", "inferred bool let rejects int write"),
+            ("fnc main():int{let x=7;x=false;return 0;}", "inferred int let rejects bool write"),
+            ("fnc main():int{const x=true as bool as int;return 0;}", "identity chain cannot cross scalar types"),
+            ("fnc main():int{const x=7;const y=x as bool;return 0;}", "inferred int variable cannot cast to bool"),
+            ("fnc main():int{return (7 as int) as bool;}", "nested int cast may not reinterpret bool"),
+            ("fnc main():int{return (false as bool) as int;}", "nested bool cast may not reinterpret int"),
+            ("fnc main():int{return (7 as int) as? int;}", "nested optional cast requires tagged Option"),
+            ("fnc main():int{return (7 as int)+true;}", "identity cast does not permit bool arithmetic")
+        })
+            Reject(source, "scalar cast/inference " + label);
         Check("fnc main():int{let int x=5;val int y=x+1;x=x+1;return y;}",
             6, "runtime val has independent SSA identity");
         Check("fnc main():int{const bool b=2<3;if b{return 42;}else{return 0;}}",
@@ -183,6 +368,47 @@ internal static class StructuredCfgLoweringTests
         // general function ABI or runtime call instruction.
         Check("fnc plus_one(int x):int{return x+1;}fnc main():int{return plus_one(41);}",
             42, "one typed i64 helper");
+        // A conservative *candidate audit*, not a CIL tail. or NativeAOT
+        // guarantee. It cannot authorize recursive calls or ABI transfer.
+        var simpleTail = OresStructuredCfgLowering.LowerModule(
+            "fnc inc(int x):int{return x+1;}fnc main():int{return inc(41);}");
+        var tailCandidates = CfgTailCallCandidates.Inspect(simpleTail.Main);
+        if (tailCandidates.Count != 1 || tailCandidates[0].Target != "inc")
+            throw new Exception("CFG direct return/call candidate not identified");
+        var intervening = OresStructuredCfgLowering.LowerModule(
+            "fnc inc(int x):int{return x+1;}fnc main():int{return inc(40)+1;}");
+        if (CfgTailCallCandidates.Inspect(intervening.Main).Count != 0)
+            throw new Exception("CFG falsely claimed non-tail arithmetic as tail");
+        var nested = OresStructuredCfgLowering.LowerModule(
+            "fnc inc(int x):int{return x+1;}fnc main():int{return inc(inc(40));}");
+        if (CfgTailCallCandidates.Inspect(nested.Main).Count != 1)
+            throw new Exception("CFG must identify only the outer returned call");
+
+        // The structural call candidate is NOT automatically ABI compatible:
+        // a zero-parameter main cannot musttail a one-parameter helper.
+        if (CfgSameSignatureTailCandidates.Inspect(simpleTail).Count != 0 ||
+            CfgSameSignatureTailCandidates.Inspect(nested).Count != 0)
+            throw new Exception("CFG ABI probe admitted mismatched caller parameters");
+        var sameSignature = OresStructuredCfgLowering.LowerModule(
+            "fnc inc(int x):int{return x+1;}" +
+            "fnc bridge(int n):int{return inc(n);}" +
+            "fnc main():int{return bridge(41);}");
+        var compatible = CfgSameSignatureTailCandidates.Inspect(sameSignature);
+        if (compatible.Count != 1 ||
+            compatible[0].Caller != "bridge" ||
+            compatible[0].Target != "inc")
+            throw new Exception("CFG failed to identify exact same-signature helper return");
+        var sameSignatureZero = OresStructuredCfgLowering.LowerModule(
+            "fnc answer():int{return 42;}fnc main():int{return answer();}");
+        if (CfgSameSignatureTailCandidates.Inspect(sameSignatureZero).Count != 1)
+            throw new Exception("CFG zero-parameter scalar return ABI missing");
+        var mismatchedScalarType = OresStructuredCfgLowering.LowerModule(
+            "fnc pred(int x):bool{return x==0;}" +
+            "fnc bridge(bool b):bool{return pred(0);}" +
+            "fnc main():int{return 0;}");
+        if (CfgSameSignatureTailCandidates.Inspect(mismatchedScalarType).Count != 0)
+            throw new Exception("CFG ABI gate admitted mismatched boolean/int parameter types");
+
         Check("fnc twice(int x):int{return x*2;}fnc answer():int{return twice(21);}fnc main():int{return answer();}",
             42, "chained helper functions");
         Check("fnc sum(int x,int y):int{return x+y;}fnc main():int{return sum(19,23);}",
@@ -220,6 +446,24 @@ internal static class StructuredCfgLoweringTests
             "duplicate helper declarations");
         CheckOverflow("fnc inc(int x):int{return x+1;}fnc main():int{return inc(9223372036854775807);}",
             "typed call overflow preserves checked CIL");
+
+        // These are .atto files. Check() passes them through the real
+        // structured source parser, verified CFG, deterministic CIL emission
+        // and an independent CIL evaluator, never runtime source generation.
+        string operatorDir = Path.Combine(AppContext.BaseDirectory, "contracts", "erl-otp-aot");
+        Check(File.ReadAllText(Path.Combine(operatorDir, "neq-alias-true.atto")),
+            42, "AttoLang !eq true CIL comparison");
+        Check(File.ReadAllText(Path.Combine(operatorDir, "neq-alias-false.atto")),
+            42, "AttoLang !eq false CIL comparison");
+        RejectAliasBoundary(
+            File.ReadAllText(Path.Combine(operatorDir, "neq-alias-split.atto")),
+            "! eq", "spaces must not turn ! eq into != or !eq");
+        RejectWithDiagnostic(
+            File.ReadAllText(Path.Combine(operatorDir, "neq-alias-mixed.atto")),
+            "Equality requires int operands", "no implicit bool-to-int equality");
+        RejectAliasBoundary(
+            File.ReadAllText(Path.Combine(operatorDir, "neq-alias-prefix.atto")),
+            "!equation", "!equation must not tokenize as !eq plus suffix");
 
         Check("fnc main():int{if 3 neq 4{return 42;}else{return 0;}}",
             42, "canonical neq true comparison");
@@ -288,10 +532,10 @@ internal static class StructuredCfgLoweringTests
         Reject("fnc main():int{const int x=1;x=2;return x;}", "const reassignment");
         Reject("fnc main():int{val int x=1;if true{x=2;}return x;}",
             "val cannot be mutated inside nested block");
-        Reject("fnc main():int{let int x=42;const int y=x;return y;}",
-            "const cannot capture mutable binding");
-        Reject("fnc main():int{val int x=42;const int y=x;return y;}",
-            "const cannot depend on runtime val");
+        Check("fnc main():int{let int x=40;const int y=x;return y+2;}",
+            42, "const eagerly snapshots current mutable binding value");
+        Check("fnc main():int{val int x=40;const int y=x;return y+2;}",
+            42, "const accepts runtime single-assignment source value");
         Reject("fnc main():int{const int x=9223372036854775807+1;return x;}",
             "const overflow is rejected before CIL");
 
@@ -299,6 +543,8 @@ internal static class StructuredCfgLoweringTests
             "checked negation");
         CheckOverflow("fnc main():int{val int n=9223372036854775807;return n+1;}",
             "runtime val checked overflow in emitted CIL");
+        CheckOverflow("fnc main():int{int unused=9223372036854775807+1;return 7;}",
+            "immutable-default unused initializer remains eager and checked");
         CheckOverflow("fnc main():int{return 9223372036854775807+1;}",
             "checked addition");
         CheckOverflow("fnc main():int{return 9223372036854775807*2;}",

@@ -84,7 +84,7 @@ jobs:
           $global:LASTEXITCODE = 0 # Expected negative test exit codes must not fail the step
       - name: Publish native compiler and native application
         shell: pwsh
-        run: ./scripts/publish-windows.ps1 -Source examples/hello.ores -Rid win-x64
+        run: ./scripts/publish-windows.ps1 -Source examples/hello.ores -Rid win-x64 -TenantIsolateSmoke
       - name: Exercise the released Native AOT compiler CLI
         shell: pwsh
         run: ./verification/assert-native-compiler-cli.ps1 -Compiler ./artifacts/compiler/win-x64/oresnet.exe -ValidSource examples/hello.ores
@@ -129,6 +129,41 @@ jobs:
           if (Test-Path ./artifacts/apps/win-x64/oreslang-app.runtimeconfig.json) {
             throw 'Native AOT output includes runtimeconfig'
           }
+      - name: Execute authorized CLR Abs and Max through Windows Native AOT
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $compiler = './artifacts/compiler/win-x64/oresnet.exe'
+          $source = 'examples/hostinterop-math-max.atto'
+          & $compiler check $source
+          if ($LASTEXITCODE -eq 0) {
+            throw 'CLR Math import was accepted without compiler capability'
+          }
+          $denied = 'artifacts/rejected-host-interop/win-x64/OresGenerated.dll'
+          New-Item -ItemType Directory -Force (Split-Path -Parent $denied) | Out-Null
+          Remove-Item -LiteralPath $denied -Force -ErrorAction SilentlyContinue
+          & $compiler compile $source --out $denied
+          if ($LASTEXITCODE -eq 0 -or (Test-Path -LiteralPath $denied)) {
+            throw 'Unauthorized CLR host import emitted CIL on Windows'
+          }
+          & $compiler check $source --capability interop.dotnet.math-i64
+          if ($LASTEXITCODE -ne 0) { throw 'Authorized CLR Math import was denied' }
+          & $compiler compile examples/hostinterop-denied-file.atto --out $denied --capability interop.dotnet.math-i64
+          if ($LASTEXITCODE -eq 0 -or (Test-Path -LiteralPath $denied)) {
+            throw 'Unauthorized CLR System.IO.File was emitted'
+          }
+          $global:LASTEXITCODE = 0
+          ./scripts/publish-windows.ps1 -Source $source -Rid win-x64 -Output artifacts/dotnet-host-max -DotnetMath
+          if ($LASTEXITCODE -ne 0) { throw 'Windows CLR NativeAOT publish failed' }
+          $binary = './artifacts/dotnet-host-max/win-x64/oreslang-app.exe'
+          $output = & $binary
+          if ($LASTEXITCODE -ne 0 -or ($output -join "").Trim() -ne '42') {
+            throw "Expected actual CLR Abs+Max NativeAOT guest output 42: $output"
+          }
+          if (Test-Path ./artifacts/dotnet-host-max/win-x64/OresGenerated.dll) {
+            throw 'Host interop NativeAOT output unexpectedly contains generated managed DLL'
+          }
+          $global:LASTEXITCODE = 0
       - name: Confirm strict Native AOT PE and reject managed assembly
         shell: pwsh
         run: |

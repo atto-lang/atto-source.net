@@ -204,6 +204,8 @@ public static class OresStructuredCfgLowering
                 {
                     int left = Expression(binary.Left, block, variables);
                     int right = Expression(binary.Right, block, variables);
+                    // Left then right are fully evaluated above (eager left-to-right);
+                    // each relation maps to its own verified CFG opcode.
                     var opcode = binary.Operator switch
                     {
                         StructuredOperator.Add => CfgOpcode.CheckedAdd,
