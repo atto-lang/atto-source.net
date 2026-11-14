@@ -83,6 +83,8 @@ internal static class NativeTraceInstrumentationV1SelfTest
         Check(liveRecorder.Completed == 2 &&
             liveRecorder.PollReceipt()?.SiteId == 73 && liveRecorder.Dropped == 0,
             "exact two spans recorded in off/on/off/on cycle");
+        // Restore the independent denial fixture's initial OFF configuration.
+        boundaries.Configure(0, true);
 
         var adaptive = new NativeTraceInstrumentationV1(
             NativeTraceInstrumentationV1.BuildMode.Adaptive);
