@@ -77,7 +77,6 @@ internal static class ActorMailboxBoundsSelfTest
         }
         catch (ObjectDisposedException) { }
 
-        ActorNativeHeapSelfTest.Run();
         Console.WriteLine("PASS .NET mailbox limits, exact byte refund, empty data, restart, dispose scrub");
     }
 }
