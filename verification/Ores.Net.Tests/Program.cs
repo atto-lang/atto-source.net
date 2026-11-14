@@ -3,6 +3,10 @@ using Mono.Cecil.Cil;
 using Ores.Net.Compiler;
 using Ores.Net.Runtime;
 
+DeclaredActorReceiveSyntaxTests.Run();
+MtdReceiverAdmissionTests.Run();
+ActorForwardNamespaceAdmissionTests.Run();
+
 static void Require(bool value, string why)
 {
     if (!value) throw new Exception("FAILED: " + why);
@@ -29,6 +33,145 @@ static void InvalidSend(Action action, string why)
     catch (InvalidOperationException) { return; }
     throw new Exception("Expected mailbox rejection: " + why);
 }
+
+// Portable annotation admission parity: parse the same immutable corpus used
+// by Java/LLVM/WASM/Forge, but assert BOTH independent .NET source frontends.
+{
+    var corpus = Path.Combine(AppContext.BaseDirectory, "annotation-admission-v1.cases");
+    var ids = new HashSet<string>(StringComparer.Ordinal);
+    int passes = 0, rejects = 0;
+    foreach (var line in File.ReadAllLines(corpus, System.Text.Encoding.UTF8))
+    {
+        if (string.IsNullOrWhiteSpace(line) || line.StartsWith('#')) continue;
+        var fields = line.Split('|');
+        Require(fields.Length == 7, "annotation corpus row width");
+        var id = fields[0];
+        Require(System.Text.RegularExpressions.Regex.IsMatch(id, @"^[a-z][a-z_0-9]*$"),
+            "invalid annotation corpus id: " + id);
+        Require(ids.Add(id), "duplicate annotation corpus id: " + id);
+        for (int index = 1; index <= 5; ++index)
+            Require(fields[index] is "pass" or "reject", "invalid annotation expectation: " + id);
+        var bytes = Convert.FromBase64String(fields[6]);
+        Require(Convert.ToBase64String(bytes) == fields[6], "noncanonical annotation source " + id);
+        var source = new System.Text.UTF8Encoding(false, true).GetString(bytes);
+        Require(System.Text.Encoding.UTF8.GetBytes(source).SequenceEqual(bytes),
+            "noncanonical UTF-8 annotation source " + id);
+        if (fields[4] == "reject")
+        {
+            rejects++;
+            RejectDiagnostic(() => OresParser.Parse(source),
+                "Annotations require verified compiler lowering",
+                "scalar annotation parity " + id);
+            RejectDiagnostic(() => OresStructuredParser.Parse(source),
+                "Annotations require verified compiler lowering",
+                "structured annotation parity " + id);
+        }
+        else
+        {
+            passes++;
+            Require(OresParser.Parse(source) is Literal,
+                "scalar annotation positive " + id);
+            Require(OresStructuredParser.Parse(source) is not null,
+                "structured annotation positive " + id);
+        }
+    }
+    Require(ids.Count == 17 && passes == 3 && rejects == 14,
+        "annotation admission corpus completeness");
+}
+
+// Candidate AttoLang v2 placement matrix is shared byte-for-byte with the
+// conformance repository. These .NET expectations remain REJECT on BOTH frontends
+// until typed AST/HIR, effect checking and Native AOT lowering are executable.
+{
+    var path = Path.Combine(AppContext.BaseDirectory, "annotation-compiler-corpus-v2.json");
+    var corpusBytes = File.ReadAllBytes(path);
+    var gitHeader = System.Text.Encoding.ASCII.GetBytes($"blob {corpusBytes.Length}\0");
+    var gitInput = new byte[gitHeader.Length + corpusBytes.Length];
+    gitHeader.CopyTo(gitInput, 0);
+    corpusBytes.CopyTo(gitInput, gitHeader.Length);
+    var blob = Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(gitInput))
+        .ToLowerInvariant();
+    Require(blob == "de694e726cceb87c43e0684cad36619a85f90343",
+        "shared v2 annotation corpus Git blob identity");
+    using var document = System.Text.Json.JsonDocument.Parse(corpusBytes);
+    var root = document.RootElement;
+    Require(root.GetProperty("schema_version").GetString() ==
+        "attolang.annotation-compiler-corpus/v2", "annotation v2 schema version");
+    Require(root.GetProperty("status").GetString() ==
+        "CANDIDATE_EXPECTATIONS_NOT_EXECUTED", "annotation v2 is not guest proof");
+    var backendNames = new[] { "java", "llvm", "net", "wasm", "forge" };
+    Require(root.GetProperty("backend_order").EnumerateArray()
+        .Select(x => x.GetString()).SequenceEqual(backendNames),
+        "annotation v2 ordered backend inventory");
+    var rows = root.GetProperty("cases").EnumerateArray().ToArray();
+    Require(rows.Length == 15, "annotation v2 candidate corpus completeness");
+    var ids = new HashSet<string>(StringComparer.Ordinal);
+    foreach (var row in rows)
+    {
+        var id = row.GetProperty("id").GetString()
+            ?? throw new Exception("missing annotation case id");
+        Require(ids.Add(id), "duplicate annotation v2 case: " + id);
+        var expected = row.GetProperty("expected");
+        Require(expected.EnumerateObject().Select(x => x.Name).SequenceEqual(backendNames),
+            "v2 case backend key drift: " + id);
+        Require(expected.GetProperty("net").GetString() == "reject",
+            "unearned .NET annotation support: " + id);
+        var source = row.GetProperty("source").GetString()
+            ?? throw new Exception("missing annotation source");
+        Require(source.EndsWith('\n') && !source.Contains('\r') &&
+            source.Contains('@'), "invalid candidate source boundaries: " + id);
+        if (source.StartsWith('@'))
+        {
+            // Annotation was the first active source token; a generic parse
+            // failure is insufficient evidence for our typed-AOT rejection gate.
+            RejectDiagnostic(() => OresParser.Parse(source),
+                "Annotations require verified compiler lowering",
+                "v2 scalar annotation case " + id);
+            RejectDiagnostic(() => OresStructuredParser.Parse(source),
+                "Annotations require verified compiler lowering",
+                "v2 structured annotation case " + id);
+        }
+        else
+        {
+            // Class/actor lowering is currently unsupported; this is only
+            // an overall rejection, NOT proof of an annotation-specific gate.
+            Reject(() => OresParser.Parse(source), "v2 scalar nested case " + id);
+            Reject(() => OresStructuredParser.Parse(source), "v2 structured nested case " + id);
+        }
+    }
+    // All six common comment endings must not conceal a later live @Doc token.
+    foreach (var eol in new[] { "\n", "\r", "\r\n", "\u0085", "\u2028", "\u2029" })
+    {
+        var live = "fnc main():int{return 42;} // inert" + eol + "@Doc(\"active\")";
+        Reject(() => OresParser.Parse(live), "scalar live annotation after comment boundary");
+        Reject(() => OresStructuredParser.Parse(live),
+            "structured live annotation after comment boundary");
+        var inert = "fnc main():int{return 42;} // @Doc(\"inert\")" + eol;
+        Require(OresParser.Parse(inert) is Literal,
+            "scalar annotation in comment is not active");
+        Require(OresStructuredParser.Parse(inert) is not null,
+            "structured annotation in comment is not active");
+    }
+}
+
+// Annotation effects cannot be erased by either Native AOT source path.
+foreach (var annotation in new[] {
+    "@Ret(int)", "@FromJson(\"id\")", "@Critical(1)",
+    "@RequiresPermission(\"ffi\")", "@UnknownMacro", "@ActorMaxThreads"
+})
+{
+    var source = annotation + "\nfnc main(): int { return 42; }";
+    RejectDiagnostic(() => OresParser.Parse(source),
+        "Annotations require verified compiler lowering",
+        "scalar Native AOT annotation " + annotation);
+    RejectDiagnostic(() => OresStructuredParser.Parse(source),
+        "Annotations require verified compiler lowering",
+        "structured Native AOT annotation " + annotation);
+}
+Require(OresParser.Parse("fnc main():int{return 42;} // @Ret(int)") is Literal,
+    "annotation in scalar comment remains inert");
+Require(OresStructuredParser.Parse("fnc main():int{return 42;} // @Ret(int)") is not null,
+    "annotation in structured comment remains inert");
 
 // Durable M0 is not lowered by the .NET Native AOT compiler. Exercise the
 // real structured lexer/parser boundary, not a source-substring approximation.
@@ -395,27 +538,83 @@ CriticalSuspendsBoundaryTests.Run(); // compiler-owned scalar admission, not run
 AttoSemanticNegativeGateTests.Run(); // canonical .atto negatives + IR/CIL positive controls (not NativeAOT)
 AsyncOnlyIoPolicyTests.Run();
 CapabilityIoLifecycleV1SelfTest.Run();
+ActorStateSchemaAdmissionTests.Run();
+ActorStateLayoutIntegrationTests.Run();
+ActorGeneratedCounterTests.Run();
+DeclaredActorCounterV2Tests.Run();
 SourceByteBudgetTests.Run();
 ElmCompositionAdmissionTests.Run();
 HeapContainerSourceBoundaryTests.Run(); // actual scalar compiler fail-closed heap/container checks
 StructuralPatternAdmissionTests.Run();
+QuotedTemplateSourceTests.Run(); // real source lexers and single-quote import graph
 AdtSourceAdmissionTests.Run();
 NumericSeparatorParityTests.Run();
 ExplicitExportSyntaxTests.Run();
 CrossBackendCheckedI64ParityTests.Run();
 ActorHierarchyMlAdmissionTests.Run();
 AsyncInteropFailClosedTests.Run();
+EtsPgFailClosedTests.Run();
 await HostTaskObservationTests.Run();
 
-// The canonical actor negative includes a later assignment. Lex its punctuation
-// while preserving the precise unsupported top-level declaration diagnostic.
-try
-{
-    OresParser.Parse("define actor Worker as { pub fnc on_message(int n): int { return n; } }\n" +
-        "pub fnc main(): int { const worker = spawn Worker(); stop worker; return 43; }\n");
-    throw new Exception("Unsupported actor declaration was admitted");
-}
-catch (FormatException ex) when (ex.Message == "Expected 'fnc' at offset 7") { }
+// Source actor syntax must fail at a semantic actor boundary, never as an
+// accidental scalar-fnc parse error. Legacy actors remain rejected outright;
+// canonical isolated actors first validate a bounded sealed state schema.
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define actor Worker as { pub fnc on_message(int n): int { return n; } }"),
+    "sealed state/handle_state and scheduler-owned logical continuation frames",
+    "legacy source actor must remain fail closed");
+
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as state { count: int = 0; enabled: bool = true; } " +
+        "pub increment(): int { return self.handle_state(critical |s| -> s.count); } end"),
+    "Source actor state schema parsed; sealed handle_state and generation-fenced logical-turn lowering is unavailable",
+    "canonical isolated actor schema must reach the precise lowering boundary");
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as state { count: int = 0; count: int = 1; } end"),
+    "Duplicate actor state field 'count'",
+    "duplicate isolated actor state field");
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as state { label: float = 0; } end"),
+    "Actor state schema admits only int/bool fields",
+    "unsupported isolated actor state type");
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as state { count: int = 9223372036854775808; } end"),
+    "Actor int state default overflows signed i64",
+    "isolated actor state i64 overflow");
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as state { count: int = -9223372036854775808; } end"),
+    "Source actor state schema parsed; sealed handle_state and generation-fenced logical-turn lowering is unavailable",
+    "signed i64 minimum actor state default reaches the lowering boundary");
+var actorStateOverflowFields = string.Join(" ", Enumerable.Range(0, 17)
+    .Select(i => $"f{i}: int = 0;"));
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as state { " + actorStateOverflowFields + " } end"),
+    "Actor state schema field limit exceeded (16)",
+    "isolated actor state field count is bounded");
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as state { enabled: bool = 1; } end"),
+    "Actor bool state default must be true or false",
+    "isolated actor bool default");
+RejectDiagnostic(
+    () => OresParser.Parse("define isolated actor Counter as state { } end"),
+    "Actor state schema requires at least one field",
+    "isolated actor empty state schema");
+RejectDiagnostic(
+    () => OresParser.Parse(
+        "define isolated actor Counter as let count: int = 0; end"),
+    "Isolated actor requires sealed state",
+    "isolated actor cannot fall back to legacy scalar fields");
+Require(OresParser.Parse(
+    "fnc main():int{return 1;} /* define isolated actor Ghost as state { count:int=0; } */") is Literal,
+    "actor keywords in comments remain lexically invisible");
 Reject(() => OresParser.Parse("fnc main():int { return 1=2; }"), "assignment expression");
 Reject(() => OresParser.Parse("fnc main():int { const x = 1; return x; }"), "local assignment");
 
@@ -486,6 +685,8 @@ BoundedDemandI64PortSelfTest.Run(); // host scalar adapter; NOT source Flow<T> o
 SelectableI64FutureSelfTest.Run();
 ActorDispatchDomainsSelfTest.Run();
 ActorRuntimeSelfTest.Run();
+ActorRuntimeGracefulDrainSelfTest.Run(); // HOST only; not guest pipe lowering
+SupervisorDataFenceParitySelfTest.Run(); // HOST only; stop-vs-send and sibling parity
 ActorPubSubSelfTest.Run();
 ActorPubSubTurnAuthorityTests.Run();
 ActorPubSubByteQuotaTests.Run();
@@ -493,6 +694,7 @@ ActorPubSubSourceAdmissionTests.Run();
 ActorPipeAdmissionTests.Run(); // compiler gate only; no executable actor guest yet
 ActorPipeSourcePlanV1SelfTest.Run(); // checked scalar CIL oracle, not actor delivery
 NativeTraceContinuationV1SelfTest.Run(); // host-owned W3C scopes; not guest CIL instrumentation
+NativeTraceInstrumentationV1SelfTest.Run(); // NativeAOT host AOT/JIT dispatch; no compiler or OTLP claim
 UniversalHotLoadV1SelfTest.Run();
 ActorFrameStackSelfTest.Run(); // host-only actor logical frames; not guest/AOT evidence
 ActorGuestFrameGateSelfTest.Run(); // terminal compiled-guest frame seam, host-only
@@ -1029,8 +1231,23 @@ static byte[] PendingOwnedBuffer(ActorMailbox actor)
 {
     var field = typeof(ActorMailbox).GetField("_messages",
         System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-    Require(field is not null, "mailbox test can inspect private queue");
-    return ((Queue<byte[]>)field!.GetValue(actor)!).Peek();
+    var messages = field?.GetValue(actor) as System.Collections.IEnumerable;
+    Require(messages is not null && actor.QueuedMessages == 1,
+        "mailbox test can inspect exactly one pending envelope");
+    var iterator = messages!.GetEnumerator();
+    Require(iterator.MoveNext(), "mailbox test has a pending envelope");
+    var envelope = iterator.Current;
+    Require(envelope is not null && !iterator.MoveNext(),
+        "mailbox test has exactly one pending envelope");
+    var envelopeType = envelope!.GetType();
+    var flags = System.Reflection.BindingFlags.Instance |
+        System.Reflection.BindingFlags.Public;
+    var isControl = envelopeType.GetProperty("IsControl", flags)?.GetValue(envelope);
+    Require(isControl is bool control && !control,
+        "mailbox test inspects a USER envelope, never scheduler control");
+    var owned = envelopeType.GetProperty("Payload", flags)?.GetValue(envelope) as byte[];
+    Require(owned is not null, "mailbox test captures owned USER payload");
+    return owned!;
 }
 
 var originalInput = new byte[] { 9, 8, 7, 6 };
@@ -1092,6 +1309,9 @@ StructuredSourceTests.Run();
 StructuredCfgLoweringTests.Run();
 AttoEqualityNativeAotCandidateTests.Run();
 StructuredStaticAbiTests.Run();
+NominalEnumV1GuestTests.Run(); // verified .atto enum source -> real CFG/CIL; native execution separately
+NominalEnumFunctionV2GuestTests.Run(); // source-nominal arg/result -> actual private MethodDef call
+ExplicitReturnFlowTests.Run(); // nonvoid explicit + void fallthrough CIL proof
 StaticFactsV0Tests.Run();
 ValueBoundaryTests.Run();
 Console.WriteLine("Oreslang .NET bootstrap, CFG verifier, CIL stress and structured source tests passed");

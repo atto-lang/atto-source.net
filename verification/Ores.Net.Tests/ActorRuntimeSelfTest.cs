@@ -8,6 +8,7 @@ internal static class ActorRuntimeSelfTest
         DemandBackedActorRuntimeReusesQuotaAfterStop();
         ThreeKindsUseAssignedDomainsAndActorArenas();
         UnknownActorKindFailsBeforeNativeAllocation();
+        AsyncVoidHostHandlerFailsBeforeNativeAllocation();
         RejectedMessagesDoNotStartCarriers();
         ForgedSameIdCannotObserveTermination();
         OneActorNeverRunsTwoHandlersConcurrently();
@@ -144,6 +145,33 @@ internal static class ActorRuntimeSelfTest
         Require(runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0 &&
                 runtime.StartedCarrierThreads == 0,
             "invalid kind must not consume actor, native-memory or carrier capacity");
+    }
+
+    private static void AsyncVoidHostHandlerFailsBeforeNativeAllocation()
+    {
+        using var runtime = new ActorRuntime(Options());
+        ActorMessageHandler asyncVoid = async (_, _) =>
+        {
+            await Task.Yield();
+        };
+
+        bool rejected = false;
+        try
+        {
+            _ = runtime.Spawn(ActorKind.Private, asyncVoid);
+        }
+        catch (ArgumentException ex) when (ex.ParamName == "handler")
+        {
+            rejected = ex.Message.Contains(
+                "suspension requires scheduler-owned logical actor continuation lowering",
+                StringComparison.Ordinal);
+        }
+
+        Require(rejected,
+            "async-void handler must fail before it can escape the actor turn");
+        Require(runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0 &&
+                runtime.StartedCarrierThreads == 0,
+            "rejected async handler consumes no actor, arena or carrier capacity");
     }
 
     private static void RejectedMessagesDoNotStartCarriers()
@@ -579,10 +607,24 @@ internal static class ActorRuntimeSelfTest
 
             var messagesField = typeof(ActorMailbox).GetField(
                 "_messages", BindingFlags.Instance | BindingFlags.NonPublic);
-            if (messagesField?.GetValue(mailbox) is not Queue<byte[]> messages ||
-                messages.Count != 1)
+            if (messagesField?.GetValue(mailbox) is not System.Collections.IEnumerable messages ||
+                mailbox.QueuedMessages != 1)
                 throw new Exception("Could not capture pending envelope");
-            byte[] ownedEnvelope = messages.Peek();
+            // The mailbox stores typed USER/CONTROL envelopes, not raw byte[]
+            // entries. Capture the actual queued USER payload so the existing
+            // failed-turn zeroization oracle still observes the owned buffer.
+            var iterator = messages.GetEnumerator();
+            if (!iterator.MoveNext() || iterator.Current is not object envelope ||
+                iterator.MoveNext())
+                throw new Exception("Expected exactly one pending envelope");
+            var envelopeType = envelope.GetType();
+            var payloadProperty = envelopeType.GetProperty(
+                "Payload", BindingFlags.Instance | BindingFlags.Public);
+            var controlProperty = envelopeType.GetProperty(
+                "IsControl", BindingFlags.Instance | BindingFlags.Public);
+            if (payloadProperty?.GetValue(envelope) is not byte[] ownedEnvelope ||
+                controlProperty?.GetValue(envelope) is not bool isControl || isControl)
+                throw new Exception("Expected one pending user-data envelope");
             release.Set();
             Require(WaitUntil(() => runtime.LiveActors == 0),
                 "turn-admission failure must retire its actor");

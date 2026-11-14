@@ -83,8 +83,12 @@ internal static class ActorMailboxBoundsSelfTest
             System.Reflection.BindingFlags.Instance |
             System.Reflection.BindingFlags.NonPublic)
             ?? throw new Exception("Cannot inspect owned mailbox DATA for scrubbing");
-        var queue = (Queue<byte[]>)pendingField.GetValue(disposable)!;
-        var ownedBytes = queue.Peek();
+        var queue = (System.Collections.IEnumerable)pendingField.GetValue(disposable)!;
+        var enumerator = queue.GetEnumerator();
+        if (!enumerator.MoveNext()) throw new Exception("Missing owned mailbox envelope");
+        object envelope = enumerator.Current;
+        var ownedBytes = (byte[])(envelope.GetType().GetProperty("Payload")?.GetValue(envelope)
+            ?? throw new Exception("Missing owned DATA payload"));
         sensitive[0] = 99;
         if (ownedBytes[0] != 7)
             throw new Exception("Mailbox did not take a private DATA copy");
