@@ -84,7 +84,7 @@ jobs:
           $global:LASTEXITCODE = 0 # Expected negative test exit codes must not fail the step
       - name: Publish native compiler and native application
         shell: pwsh
-        run: ./scripts/publish-windows.ps1 -Source examples/hello.ores -Rid win-x64
+        run: ./scripts/publish-windows.ps1 -Source examples/hello.ores -Rid win-x64 -TenantIsolateSmoke
       - name: Exercise the released Native AOT compiler CLI
         shell: pwsh
         run: ./verification/assert-native-compiler-cli.ps1 -Compiler ./artifacts/compiler/win-x64/oresnet.exe -ValidSource examples/hello.ores
@@ -129,6 +129,41 @@ jobs:
           if (Test-Path ./artifacts/apps/win-x64/oreslang-app.runtimeconfig.json) {
             throw 'Native AOT output includes runtimeconfig'
           }
+      - name: Execute authorized CLR Abs and Max through Windows Native AOT
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $compiler = './artifacts/compiler/win-x64/oresnet.exe'
+          $source = 'examples/hostinterop-math-max.atto'
+          & $compiler check $source
+          if ($LASTEXITCODE -eq 0) {
+            throw 'CLR Math import was accepted without compiler capability'
+          }
+          $denied = 'artifacts/rejected-host-interop/win-x64/OresGenerated.dll'
+          New-Item -ItemType Directory -Force (Split-Path -Parent $denied) | Out-Null
+          Remove-Item -LiteralPath $denied -Force -ErrorAction SilentlyContinue
+          & $compiler compile $source --out $denied
+          if ($LASTEXITCODE -eq 0 -or (Test-Path -LiteralPath $denied)) {
+            throw 'Unauthorized CLR host import emitted CIL on Windows'
+          }
+          & $compiler check $source --capability interop.dotnet.math-i64
+          if ($LASTEXITCODE -ne 0) { throw 'Authorized CLR Math import was denied' }
+          & $compiler compile examples/hostinterop-denied-file.atto --out $denied --capability interop.dotnet.math-i64
+          if ($LASTEXITCODE -eq 0 -or (Test-Path -LiteralPath $denied)) {
+            throw 'Unauthorized CLR System.IO.File was emitted'
+          }
+          $global:LASTEXITCODE = 0
+          ./scripts/publish-windows.ps1 -Source $source -Rid win-x64 -Output artifacts/dotnet-host-max -DotnetMath
+          if ($LASTEXITCODE -ne 0) { throw 'Windows CLR NativeAOT publish failed' }
+          $binary = './artifacts/dotnet-host-max/win-x64/oreslang-app.exe'
+          $output = & $binary
+          if ($LASTEXITCODE -ne 0 -or ($output -join "").Trim() -ne '42') {
+            throw "Expected actual CLR Abs+Max NativeAOT guest output 42: $output"
+          }
+          if (Test-Path ./artifacts/dotnet-host-max/win-x64/OresGenerated.dll) {
+            throw 'Host interop NativeAOT output unexpectedly contains generated managed DLL'
+          }
+          $global:LASTEXITCODE = 0
       - name: Confirm strict Native AOT PE and reject managed assembly
         shell: pwsh
         run: |
@@ -234,6 +269,46 @@ jobs:
             throw "Structured Native AOT expected 45, got '$output'"
           }
 
+      - name: Execute canonical .atto signed relational source in Windows Native AOT
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $source = (Resolve-Path 'examples/structured-signed-comparisons.atto').Path
+          $actualBlob = (& git hash-object -- $source).Trim()
+          if ($LASTEXITCODE -ne 0 -or $actualBlob -cne '31a49e3087276f83aecb183c6d4813a1c3d1b1f1') {
+            throw "Signed comparison fixture blob mismatch: $actualBlob"
+          }
+          $compiler = (Resolve-Path './artifacts/compiler/win-x64/oresnet.exe').Path
+          $folder = Join-Path $env:RUNNER_TEMP 'ores-signed-relational-native'
+          New-Item -ItemType Directory -Path $folder -Force | Out-Null
+          $scalar = Join-Path $folder 'scalar/OresGenerated.dll'
+          New-Item -ItemType Directory -Path (Split-Path -Parent $scalar) -Force | Out-Null
+          Remove-Item -LiteralPath $scalar -Force -ErrorAction SilentlyContinue
+          & $compiler compile $source --out $scalar
+          if ($LASTEXITCODE -eq 0 -or (Test-Path -LiteralPath $scalar)) {
+            throw 'Shipping scalar compiler admitted relational .atto source'
+          }
+          & $compiler check-structured $source
+          if ($LASTEXITCODE -ne 0) { throw 'Structured signed comparison admission failed' }
+          $generated = Join-Path $folder 'OresGenerated.dll'
+          Remove-Item -LiteralPath $generated -Force -ErrorAction SilentlyContinue
+          & $compiler compile-structured $source --out $generated
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $generated)) {
+            throw 'Signed comparison CIL was not generated'
+          }
+          $project = 'host/Ores.Net.NativeHost/Ores.Net.NativeHost.csproj'
+          $out = 'artifacts/relational-native/win-x64'
+          dotnet clean $project -c Release -r win-x64 "-p:GeneratedAssembly=$generated"
+          if ($LASTEXITCODE -ne 0) { throw 'Relational Native AOT host clean failed' }
+          dotnet publish $project -c Release -r win-x64 -o $out "-p:GeneratedAssembly=$generated" -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'Relational Native AOT publish failed' }
+          $binary = Join-Path $out 'oreslang-app.exe'
+          ./verification/assert-native-release.ps1 -Binary $binary -Rid win-x64
+          $output = & $binary
+          if ($LASTEXITCODE -ne 0 -or ($output | Out-String).Trim() -cne '42') {
+            throw "Native signed comparison guest expected 42, got '$output'"
+          }
+          Write-Host 'WINDOWS_NET_NATIVE_AOT_SIGNED_RELATIONAL_ATTO_EXECUTED_42'
       - name: Execute typed source helper calls in real Windows Native AOT
         shell: pwsh
         run: |
@@ -400,6 +475,24 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $tree -notmatch '^[0-9a-fA-F]{40}$') {
             throw 'Cannot resolve checkout Git tree'
           }
+          $fixture = 'examples/structured-signed-comparisons.atto'
+          $fixtureBlob = (& git hash-object -- $fixture).Trim()
+          if ($LASTEXITCODE -ne 0 -or $fixtureBlob -cne '31a49e3087276f83aecb183c6d4813a1c3d1b1f1') {
+            throw 'Signed relational fixture changed before evidence collection'
+          }
+          $compiler = './artifacts/compiler/win-x64/oresnet.exe'
+          $generated = Join-Path $env:RUNNER_TEMP 'ores-signed-relational-native/OresGenerated.dll'
+          $guest = './artifacts/relational-native/win-x64/oreslang-app.exe'
+          foreach ($artifact in @($compiler, $generated, $guest)) {
+            if (-not (Test-Path -LiteralPath $artifact -PathType Leaf)) {
+              throw "Signed relational artifact absent: $artifact"
+            }
+          }
+          # Confirm the same native executable still returns 42 at receipt time.
+          $guestStdout = & $guest
+          if ($LASTEXITCODE -ne 0 -or ($guestStdout | Out-String).Trim() -cne '42') {
+            throw 'Signed relational native guest failed during receipt collection'
+          }
           $receipt = [ordered]@{
             schema = 'oreslang.net.exact_head_native_aot_v1'
             repository = $env:GITHUB_REPOSITORY
@@ -410,7 +503,13 @@ jobs:
             runner_os = $env:RUNNER_OS
             target_rid = 'win-x64'
             checks = @('managed-regressions','native-compiler','native-app',
-                       'native-PE','arithmetic-negative','CFG-native-execution')
+                       'native-PE','arithmetic-negative','CFG-native-execution',
+                       'signed-relational-atto-native42')
+            relational_fixture_blob_sha = $fixtureBlob
+            relational_compiler_sha256 = (Get-FileHash -LiteralPath $compiler -Algorithm SHA256).Hash.ToLowerInvariant()
+            relational_generated_cil_sha256 = (Get-FileHash -LiteralPath $generated -Algorithm SHA256).Hash.ToLowerInvariant()
+            relational_guest_sha256 = (Get-FileHash -LiteralPath $guest -Algorithm SHA256).Hash.ToLowerInvariant()
+            relational_guest_stdout = ($guestStdout | Out-String).Trim()
             source_only = $false
             independently_verified = $false
           }
@@ -420,7 +519,10 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: oreslang-net-aot-proof-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/oreslang-net-aot-receipt.json
+          path: |
+            ${{ runner.temp }}/oreslang-net-aot-receipt.json
+            artifacts/relational-native/win-x64/oreslang-app.exe
+            artifacts/compiler/win-x64/oresnet.exe
           if-no-files-found: error
           retention-days: 14
       - name: Upload native executable

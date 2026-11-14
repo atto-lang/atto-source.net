@@ -1,6 +1,8 @@
 name: Source-free runner admission canary
 
 on:
+  # Manual runner admission re-probe; this workflow cannot read or export source.
+  workflow_dispatch: {}
   pull_request:
     branches:
       - main
@@ -36,8 +38,38 @@ jobs:
           [[ "$EXPECTED_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
           test "$GITHUB_RUN_ID" = "$EXPECTED_RUN_ID"
           test "$GITHUB_RUN_ATTEMPT" = "$EXPECTED_RUN_ATTEMPT"
+          [[ "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$GITHUB_SHA" = "${{ github.sha }}"
           printf 'SOURCE_FREE_RUNNER_CANARY=EXECUTED repository=%s repository_id=%s run_id=%s attempt=%s runner_name=%s runner_os=%s\n' \
             "$EXPECTED_REPOSITORY" "$EXPECTED_REPOSITORY_ID" "$EXPECTED_RUN_ID" \
             "$EXPECTED_RUN_ATTEMPT" "$RUNNER_NAME" "$RUNNER_OS"
+          printf 'SOURCE_FREE_PROBE_METADATA=OBSERVED event=%s sha=%s ref=%s\n' "$GITHUB_EVENT_NAME" "$GITHUB_SHA" "$GITHUB_REF"
           echo "This canary proves command execution only; external API evidence must verify runner_id > 0."
           echo "It does not certify compiler execution, compiled .ores guest execution, artifacts, or backend parity."
+  windows-admission:
+    runs-on: windows-2022
+    timeout-minutes: 5
+    steps:
+      - name: Prove Windows runner admission without private source
+        shell: pwsh
+        env:
+          EXPECTED_REPOSITORY: ${{ github.repository }}
+          EXPECTED_REPOSITORY_ID: ${{ github.repository_id }}
+          EXPECTED_RUN_ID: ${{ github.run_id }}
+          EXPECTED_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:RUNNER_NAME -or $env:RUNNER_OS -cne 'Windows') { throw 'Windows runner unavailable' }
+          if ($env:GITHUB_REPOSITORY -cne $env:EXPECTED_REPOSITORY) { throw 'Repository mismatch' }
+          if ($env:EXPECTED_REPOSITORY_ID -cnotmatch '^[1-9][0-9]*$') { throw 'Repository ID missing' }
+          if ($env:GITHUB_RUN_ID -cne $env:EXPECTED_RUN_ID) { throw 'Run mismatch' }
+          if ($env:GITHUB_RUN_ATTEMPT -cne $env:EXPECTED_RUN_ATTEMPT) { throw 'Attempt mismatch' }
+          Write-Output "SOURCE_FREE_WINDOWS_ADMITTED repo=$env:EXPECTED_REPOSITORY id=$env:EXPECTED_REPOSITORY_ID run=$env:EXPECTED_RUN_ID attempt=$env:EXPECTED_RUN_ATTEMPT"
+      - name: Verify independent Windows dotnet SDK availability
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sdk = @(dotnet --list-sdks)
+          if ($LASTEXITCODE -ne 0 -or $sdk.Count -eq 0) { throw 'No dotnet SDK' }
+          $sdk | Write-Output
+          Write-Output 'SOURCE_FREE_WINDOWS_DOTNET_AVAILABLE'
