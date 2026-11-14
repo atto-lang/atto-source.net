@@ -531,8 +531,8 @@ internal static class ActorRuntimeSelfTest
     // though the production actor-cell field still exists. Root only that
     // exact test-required member; do not bypass the error-path assertion.
     [System.Diagnostics.CodeAnalysis.DynamicDependency(
-        "<Mailbox>k__BackingField",
-        "Ores.Net.Runtime.ActorRuntime+ActorCell",
+        System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.NonPublicFields,
+        "Ores.Net.Runtime.ActorRuntime.ActorCell",
         "Ores.Net.Runtime")]
     private static void FailedTurnAdmissionScrubsDequeuedMessage()
     {
