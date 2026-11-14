@@ -1,0 +1,2 @@
+// Unsupported: !eq cannot split a longer identifier.
+fnc main():int { if 7 !eqvalue 8 { return 1; } return 0; }

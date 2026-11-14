@@ -1,0 +1,107 @@
+name: Async interop I-01 host subset
+
+on:
+  push:
+    branches: ['interop/i01-observer-isolation-20261027']
+  pull_request:
+    paths:
+      - 'runtime/Ores.Net.Runtime/**'
+      - 'compiler/Ores.Net.Compiler.Core/**'
+      - 'verification/**'
+      - '.github/workflows/async-interop-i01.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: async-interop-i01-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host-subset:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            rid: linux-x64
+            binary: Ores.Net.InteropProbe
+            compiler: oresnet
+          - os: windows-2022
+            rid: win-x64
+            binary: Ores.Net.InteropProbe.exe
+            compiler: oresnet.exe
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact source commit and clean tree
+        shell: pwsh
+        run: |
+          $expected = '${{ github.event.pull_request.head.sha || github.sha }}'
+          if ($expected -notmatch '^[0-9a-f]{40}$') { throw 'Invalid source commit' }
+          $actual = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $expected -cne $actual) { throw 'Source head mismatch' }
+          if (git status --porcelain) { throw 'Dirty source checkout' }
+          git rev-parse 'HEAD^{tree}'
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.x'
+      - name: Run managed compiler rejection and host runtime tests
+        shell: pwsh
+        run: |
+          dotnet run --project verification/Ores.Net.Tests -c Release
+          if ($LASTEXITCODE -ne 0) { throw 'Managed suite failed' }
+      - name: Publish host-only NativeAOT probe
+        shell: pwsh
+        run: |
+          dotnet publish verification/Ores.Net.InteropProbe -c Release -r '${{ matrix.rid }}' -p:PublishAot=true --self-contained true -o artifacts/interop-probe
+          if ($LASTEXITCODE -ne 0) { throw 'NativeAOT publish failed' }
+      - name: Publish real native compiler and verify fail-closed admission
+        shell: pwsh
+        run: |
+          dotnet publish compiler/Ores.Net.Compiler -c Release -r '${{ matrix.rid }}' -p:PublishAot=true --self-contained true -o artifacts/interop-compiler
+          if ($LASTEXITCODE -ne 0) { throw 'Native compiler publish failed' }
+          ./verification/assert-async-interop-admission.ps1 -Compiler './artifacts/interop-compiler/${{ matrix.compiler }}' | Tee-Object artifacts/interop-compiler/admission-trace.txt
+      - name: Execute native host subset and record scoped receipt
+        shell: pwsh
+        run: |
+          $binary = './artifacts/interop-probe/${{ matrix.binary }}'
+          $output = & $binary
+          $code = $LASTEXITCODE
+          $output | Set-Content artifacts/interop-probe/trace.txt
+          if ($code -ne 0) { throw 'Native host subset failed' }
+          $marker = 'NET_HOST_OBSERVER_I01_SUBSET_EXECUTED; race_iterations=128; guest_verified=false'
+          if ($output -cnotcontains $marker) { throw 'Missing scoped execution marker' }
+          $sha = (git rev-parse HEAD).Trim()
+          $tree = (git rev-parse 'HEAD^{tree}').Trim()
+          git diff --exit-code
+          if ($LASTEXITCODE -ne 0) { throw 'Tracked source changed during execution' }
+          [ordered]@{
+            schema = 'net-host-observer-subset-v1'
+            source_commit = $sha
+            source_tree = $tree
+            binary_sha256 = (Get-FileHash $binary -Algorithm SHA256).Hash.ToLowerInvariant()
+            compiler_sha256 = (Get-FileHash './artifacts/interop-compiler/${{ matrix.compiler }}' -Algorithm SHA256).Hash.ToLowerInvariant()
+            native_compiler_containment_cases = 8
+            backend = 'net'
+            profile = '${{ matrix.rid }}-nativeaot-host'
+            exit_code = $code
+            race_iterations = 128
+            guest_verified = $false
+            full_i01_verified = $false
+            producer_quiescence_verified = $false
+            run_id = '${{ github.run_id }}'
+            run_attempt = '${{ github.run_attempt }}'
+          } | ConvertTo-Json | Set-Content artifacts/interop-probe/receipt.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: net-i01-host-subset-${{ matrix.rid }}-${{ github.run_attempt }}
+          path: |
+            artifacts/interop-probe/trace.txt
+            artifacts/interop-probe/receipt.json
+            artifacts/interop-compiler/admission-trace.txt
+          if-no-files-found: error

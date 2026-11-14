@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "scope": "host-provider-only-not-Oreslang-source-parity",
+  "source_commit": "464c704c5f0cb51cc0a271d2d21a9b2b95ee0b17",
+  "source_tree": "96f473b2e77b28a4aa226b30ad7d8fb559d82fb1",
+  "rid": "osx-arm64",
+  "sdk": "10.0.100",
+  "publish_aot": true,
+  "binary_sha256": "d935b70d6da30246e02eaf4db5c2432e3f07cf092a3303f5e3e2ac9c814c50a0",
+  "binary_format": "Mach-O 64-bit executable arm64",
+  "exit_code": 0,
+  "probe_output": "PASS .NET HTTP real sockets: fresh shared/private actors, transfer/claim revocation, arena body, one writer, HEAD, limits, concurrency, faults, deadlines, finalization and zero native leaks",
+  "unverified": [
+    "Actual Spin and router Oreslang source compilation",
+    "Guest async/await and HTTP intrinsic binding",
+    "Linux and Windows Native AOT execution",
+    "Streaming/chunk APIs, middleware and full Spin suite"
+  ]
+}
