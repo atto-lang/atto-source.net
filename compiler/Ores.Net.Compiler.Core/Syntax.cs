@@ -6,13 +6,18 @@ public abstract record Expression;
 public sealed record Literal(long Value) : Expression;
 public sealed record Unary(char Operator, Expression Value) : Expression;
 public sealed record Binary(char Operator, Expression Left, Expression Right) : Expression;
+// Named intrinsic only. The '^' operator remains forbidden in Oreslang.
+public sealed record NamedBitXor(Expression Left, Expression Right) : Expression;
+// Closed-world CLR intrinsic: exact System.Math.Abs(Int64), no dynamic binding.
+public sealed record DotnetMathAbsI64(Expression Value) : Expression;
+public sealed record DotnetMathMaxI64(Expression Left, Expression Right) : Expression;
 
 public static class OresParser
 {
     private const int MaxDepth = 128;
     private const int MaxTokens = 100_000;
 
-    public static Expression Parse(string source)
+    public static Expression Parse(string source, DotnetHostImportPolicy? policy = null)
     {
         ArgumentNullException.ThrowIfNull(source);
         if (source.Length > 1_048_576)
@@ -47,11 +52,54 @@ public static class OresParser
         }
         for (int i = 0; i + 1 < tokens.Count; i++)
         {
+            // Both shipped scalar and structured frontends must reject a
+            // nominal supervisor BEFORE source/IR lowering. Check tokens,
+            // not substrings: nested comments and lookalike identifiers do
+            // not mint supervisor CONTROL authority.
+            if (tokens[i].Text == "supervisor" &&
+                (i > 0 && tokens[i - 1].Text == "define" ||
+                 i > 1 && tokens[i - 1].Text == "pub" &&
+                 tokens[i - 2].Text == "define"))
+                throw new FormatException(
+                    $"Source supervisors require typed Failure, owned CONTROL dispatch and Native AOT lowering; unsupported in .NET scalar frontend at offset {tokens[i].Offset}");
             if (tokens[i].Text == "select" &&
                 StaticSelectAdmission.IsStaticSelectFollower(tokens[i + 1].Text))
                 throw StaticSelectAdmission.Unsupported(tokens[i].Offset);
         }
-        return new Reader(tokens).ParseProgram();
+        // The shipping i64 frontend has no coroutine frames, bounded FIFO
+        // critical admission, or authenticated guard owner. Reject with an
+        // explicit compiler-owned capability diagnostic, not a generic parser
+        // error that could be misreported as feature parity. Lexer-produced
+        // tokens keep these words in strings/comments lexically invisible.
+        for (int i = 0; i + 1 < tokens.Count; i++)
+        {
+            string word = tokens[i].Text;
+            string next = tokens[i + 1].Text;
+            // Compiler-owned lexical recognition: the Java/LLVM canonical
+            // telemetry scope must not accidentally become an ordinary scalar
+            // local or inert call. The current .NET CIL path has neither an
+            // exception-region cleanup protocol nor a typed suspendable frame.
+            // Lexed tokens, not raw-source regex: comments cannot authorize it.
+            if (word == "using" && next == "telemetry" && i + 4 < tokens.Count &&
+                tokens[i + 2].Text == "." && tokens[i + 3].Text == "span" &&
+                tokens[i + 4].Text == "(")
+                throw new FormatException(
+                    $"E_TELEMETRY_SCOPE_UNSUPPORTED: .NET NativeAOT requires compiler-owned begin/end, lexical cleanup and suspension-safe scope lowering at offset {tokens[i].Offset}");
+            if (word == "async" && next == "fnc")
+                throw new FormatException(
+                    $"E_CALLABLE_MODIFIERS: async fnc is removed; use suspends at offset {tokens[i].Offset}");
+            if ((word == "critical" && next == "suspends") ||
+                (word == "suspends" && next == "critical"))
+                throw new FormatException(
+                    $"E_CALLABLE_MODIFIERS: critical suspends fnc is forbidden at offset {tokens[i].Offset}");
+            if (word == "critical")
+                throw new FormatException(
+                    $"E_CRITICAL_UNSUPPORTED: guarded admission and non-suspending body effect checks require verified .NET lowering at offset {tokens[i].Offset}");
+            if (word is "suspends" or "await")
+                throw new FormatException(
+                    $"E_SUSPENDS_UNSUPPORTED: suspension requires .NET continuation/effect lowering at offset {tokens[i].Offset}");
+        }
+        return new Reader(tokens, policy ?? DotnetHostImportPolicy.DenyAll).ParseProgram();
     }
 
     private readonly record struct Token(string Text, int Offset);
@@ -102,6 +150,23 @@ public static class OresParser
             var start = _i;
             if (_i == text.Length) return new Token("", start);
             var ch = text[_i];
+            // No unchecked array access can enter the shipping scalar CIL path.
+            SafeCollectionSourceAdmission.RejectUnverifiedBracket(ch, start);
+            // Scalar and structured CIL frontends must agree: state-changing
+            // annotations are compiler effects, never inert metadata. Check
+            // only lexed tokens, after comments have been skipped.
+            if (ch == '@')
+            {
+                int nameEnd = _i + 1;
+                while (nameEnd < text.Length &&
+                    (text[nameEnd] is >= 'a' and <= 'z' or >= 'A' and <= 'Z'
+                        or >= '0' and <= '9' or '_')) nameEnd++;
+                string name = text[(_i + 1)..nameEnd];
+                if (name is "Inject" or "StateBacked" or "MutableStateContainer" or "StateContainer")
+                    throw new FormatException(
+                        $"STATE_INJECTION_UNSUPPORTED: @{name} requires typed container ownership, borrow checks and Native AOT lowering at offset {start}");
+                throw new FormatException($"Annotations require verified compiler lowering at offset {start}");
+            }
             if (ch is >= '0' and <= '9')
             {
                 // Match the reference's decimal digit separators without
@@ -150,8 +215,19 @@ public static class OresParser
                 // project-root, zed package or bare import declarations until
                 // a verified source graph / native AOT linker exists.
                 if (word == "import")
-                    throw new FormatException("source imports require verified module graph lowering");
-                if (word is "cpu" or "gpu" ||
+                {
+                    // General imports remain unsupported by this scalar compiler.
+                    // Only the pinned 'import dotnet' adapter may enter the reader.
+                    int next = _i;
+                    while (next < text.Length && char.IsWhiteSpace(text[next])) next++;
+                    const string hostKeyword = "dotnet";
+                    if (!text.AsSpan(next).StartsWith(hostKeyword, StringComparison.Ordinal) ||
+                        (next + hostKeyword.Length < text.Length &&
+                        (char.IsLetterOrDigit(text[next + hostKeyword.Length]) ||
+                         text[next + hostKeyword.Length] == '_')))
+                        throw new FormatException("source imports require verified module graph lowering");
+                }
+                if (word is "cpu" or "gpu" or "quantum" ||
                     (word == "nb" && !StaticSelectAdmission.FollowedByStaticSelect(text, _i)))
                     throw new FormatException(
                         $"execution region '{word}' requires verified CPU/GPU Task lowering; no implicit CPU fallback at offset {start}");
@@ -164,10 +240,42 @@ public static class OresParser
                 if (word == "enum")
                     throw new FormatException(
                         $"nominal enum overloads require compiler-bound dispatch (unsupported .NET bootstrap) at offset {start}");
+                // The shipping i64-only frontend has no tagged sum storage,
+                // constructor discriminants, payload lifetime handling or
+                // ordinary-throw-to-Option trap lowering. Keep an explicit
+                // unsupported-feature category rather than a generic parse
+                // error that might be mistaken for an ADT semantic rejection.
+                // This check occurs after comment/trivia skipping; an inert
+                // comment is never proof that executable tagged source exists.
+                if (word is "Option" or "Result" or "Some" or "None" or "Ok" or "Err" or "trap")
+                    throw new FormatException(
+                        $"Option/Result/trap requires verified tagged-sum CIL and NativeAOT guest-control lowering at offset {start}");
+                // Reject here, not only in the reader: a guard condition such
+                // as `1>0` contains characters this scalar lexer cannot lex,
+                // which would otherwise surface as a generic lexer error.
+                if (word == "guard")
+                    throw new FormatException(
+                        $"GUARD_BACKEND_UNSUPPORTED: early-exit CFG and ownership lowering required at offset {start}");
                 if (word is "gen" or "generator")
                     throw new FormatException(
                         $"generator declarations require iterator-frame and continuation lowering in .NET Native AOT backend at offset {start}");
                 return new Token(word, start);
+            }
+            if (ch == '"')
+            {
+                // Host assembly/type names are literal-only. Reject interpolation,
+                // escapes, unclosed strings and line breaks before any resolution.
+                _i++;
+                while (_i < text.Length && text[_i] != '"')
+                {
+                    if (text[_i] is '\\' or '\n' or '\r' or '\u0085' or '\u2028' or '\u2029')
+                        throw new FormatException($"Invalid host import literal at offset {start}");
+                    _i++;
+                }
+                if (_i == text.Length)
+                    throw new FormatException($"Unterminated host import literal at offset {start}");
+                _i++;
+                return new Token(text[start.._i], start);
             }
             // Recognize the contiguous operator as one token, but never
             // attempt a scalar-only approximation of named-call lowering.
@@ -184,18 +292,31 @@ public static class OresParser
             // Lex assignment punctuation so unsupported declarations are rejected
             // at their declaration, rather than at a later initializer. The
             // arithmetic parser still has no assignment production.
-            if ("()+-*/%{}:;.=?".IndexOf(ch) >= 0)
+            if ("()+-*/{}:;.,=?".IndexOf(ch) >= 0)
             {
                 _i++;
                 return new Token(text[start.._i], start);
+            }
+            if (ch == '%')
+                throw new FormatException($"noncanonical '%' source operator; use named Integer.rem/mod at offset {start}");
+            if (ch == '^')
+            {
+                // Reserved AttoLang syntax is rejected after lexical trivia and
+                // before any scalar instruction reaches typed IR or CIL.
+                bool doubleCaret = _i + 1 < text.Length && text[_i + 1] == '^';
+                string spelling = doubleCaret ? "^^" : "^";
+                string named = doubleCaret ? "Xor(a, b)" : "Integer.bitXor(a, b)";
+                throw new FormatException(
+                    $"Reserved AttoLang operator '{spelling}'; use {named} at offset {start}");
             }
             throw new FormatException($"Invalid character at offset {start}");
         }
     }
 
-    private sealed class Reader(List<Token> tokens)
+    private sealed class Reader(List<Token> tokens, DotnetHostImportPolicy policy)
     {
         private int _index;
+        private string? _dotnetMathAlias;
         private Token Current => tokens[_index];
 
         private bool Take(string value)
@@ -213,6 +334,27 @@ public static class OresParser
 
         public Expression ParseProgram()
         {
+            if (Take("import"))
+            {
+                Expect("dotnet");
+                // An import is an authority request, not an authority grant.
+                // Deny before interpreting even a permitted System.Math alias.
+                policy.RequireMathI64();
+                // Explicit, finite v0 target. No dynamic assembly loading,
+                // arbitrary reflection, overload inference or host object escape.
+                if (Current.Text != "\"System.Math\"")
+                    throw new FormatException("DOTNET_INTEROP_UNSUPPORTED: only System.Math is allowlisted");
+                _index++;
+                Expect("as");
+                string alias = Current.Text;
+                if (alias.Length == 0 || alias[0] is not (>= 'A' and <= 'Z' or >= 'a' and <= 'z' or '_') ||
+                    alias.Any(ch => ch is not (>= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_')) ||
+                    alias is "Integer" or "main" or "int" or "fnc" or "return")
+                    throw new FormatException("Invalid or reserved dotnet import alias");
+                _index++;
+                _dotnetMathAlias = alias;
+                Expect(";");
+            }
             bool defined = false, exposed = false;
             while (Current.Text is "define" or "pub")
             {
@@ -228,6 +370,15 @@ public static class OresParser
                     exposed = true;
                 }
             }
+            if (Current.Text == "state" && _index + 1 < tokens.Count && tokens[_index + 1].Text == "container")
+                throw new FormatException($"STATE_CONTAINER_BACKEND_UNSUPPORTED: protected heap region and critical guard lowering required at offset {Current.Offset}");
+            if (Current.Text == "virtual" && _index + 1 < tokens.Count && tokens[_index + 1].Text == "actor")
+                throw new FormatException($"VIRTUAL_ACTOR_BACKEND_UNSUPPORTED: logical key and activation fencing required at offset {Current.Offset}");
+            // Scalar CIL and NativeAOT do not lower nominal ModelGraphs.
+            // 'model' is contextual, not globally reserved.
+            if (Current.Text == "model")
+                throw new FormatException(
+                    $"MODEL_LOWERING_UNSUPPORTED: .NET requires typed nominal ModelGraph lowering at offset {Current.Offset}");
             Expect("fnc");
             Expect("main");
             Expect("(");
@@ -235,6 +386,9 @@ public static class OresParser
             if (!Take(":")) Expect("->");
             Expect("int");
             Expect("{");
+            if (Current.Text == "guard")
+                throw new FormatException(
+                    $"GUARD_BACKEND_UNSUPPORTED: early-exit CFG and ownership lowering required at offset {Current.Offset}");
             Expect("return");
             var expression = ParseAdd(0);
             Expect(";");
@@ -267,7 +421,7 @@ public static class OresParser
         {
             CheckDepth(depth);
             Expression left = ParseUnary(depth + 1);
-            while (Current.Text is "*" or "/" or "%")
+            while (Current.Text is "*" or "/")
             {
                 char op = Current.Text[0];
                 // Reference Oreslang int/int has a float result. This i64-only
@@ -276,26 +430,7 @@ public static class OresParser
                     throw new FormatException("Division requires float result lowering; unsupported in the i64 source subset");
                 _index++;
                 var rhs = ParseUnary(depth + 1);
-                if (op == '%')
-                {
-                    // Portable P0 subset: a syntactically signed nonzero
-                    // integer literal is required. No dynamic zero/error
-                    // effects or untyped CLR remainder fallbacks.
-                    long divisor = rhs switch
-                    {
-                        Literal literal => literal.Value,
-                        Unary { Operator: '+', Value: Literal literal } => literal.Value,
-                        Unary { Operator: '-', Value: Literal literal }
-                            when literal.Value != long.MinValue => -literal.Value,
-                        _ => throw new FormatException(
-                            "Remainder requires a signed integer literal divisor")
-                    };
-                    if (divisor == 0)
-                        throw new FormatException("Remainder divisor cannot be zero");
-                    left = new Binary('%', left, new Literal(divisor));
-                }
-                else
-                    left = new Binary(op, left, rhs);
+                left = new Binary(op, left, rhs);
             }
             return left;
         }
@@ -326,6 +461,43 @@ public static class OresParser
 
                 throw new FormatException(
                     $"Runtime ownership operation requires typed lowering; unsupported in the .NET scalar backend at offset {at}");
+            }
+            if (_dotnetMathAlias is not null && Take(_dotnetMathAlias))
+            {
+                Expect(".");
+                if (Take("Abs"))
+                {
+                    Expect("(");
+                    var value = ParseAdd(depth + 1);
+                    Expect(")");
+                    return new DotnetMathAbsI64(value);
+                }
+                if (Take("Max"))
+                {
+                    Expect("(");
+                    var left = ParseAdd(depth + 1);
+                    Expect(",");
+                    var right = ParseAdd(depth + 1);
+                    Expect(")");
+                    return new DotnetMathMaxI64(left, right);
+                }
+                throw new FormatException(
+                    $"DOTNET_INTEROP_UNSUPPORTED: only Math.Abs(i64) and Math.Max(i64,i64) are allowlisted at offset {Current.Offset}");
+            }
+            // The scalar subset admits only this one typed Integer intrinsic.
+            // Parser-owned name resolution rejects arbitrary Integer.* calls.
+            if (Take("Integer"))
+            {
+                Expect(".");
+                if (!Take("bitXor"))
+                    throw new FormatException(
+                        $"Unsupported Integer intrinsic at offset {Current.Offset}");
+                Expect("(");
+                var left = ParseAdd(depth + 1);
+                Expect(",");
+                var right = ParseAdd(depth + 1);
+                Expect(")");
+                return new NamedBitXor(left, right);
             }
             if (Take("+")) return new Unary('+', ParseUnary(depth + 1));
             if (Take("-"))
