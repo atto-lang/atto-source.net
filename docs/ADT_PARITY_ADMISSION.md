@@ -28,9 +28,14 @@ has verified closed `Option<int>` (tag: Bool, payload: signed i64),
 blanket lexer denial of `Option`, `Some` and `None` in independent
 PR #468 **must not** be merged unchanged on top of #428. The production
 `OresParser` continues to reject all ADT source. The experimental
-structured lexer refuses `Result`, `Ok`, `Err` and `trap` with the
-same stable unsupported-feature diagnostic, in addition to rejecting
-unsupported generic Option shapes and unsafe operations during typing.
+structured lexer refuses `Result`, `Ok`, and `Err` with the same stable
+unsupported-feature diagnostic. The candidate phase-one `trap expression`
+frontend only admits a synchronous checked `int` payload and lowers it as a
+real typed `Some(int)` through the existing verified `Option<int>` SSA/CIL
+path. Its normal outcome is `Some(value)`; terminal checked arithmetic
+panic still bypasses `trap`. `trap fnc`, bool/Option payloads, `Result`,
+nested sums, ordinary-throw catching, and suspended expressions remain
+explicitly unsupported.
 
 The structured lexer regression checks both outcomes: actual closed
 `Option<int>` source is admitted, but unsupported `Result`/trap source
@@ -38,3 +43,14 @@ never reaches verified CFG/CIL, even in the presence of comments or longer
 identifiers. This is an implementation-layer boundary, **not** a claim of
 NativeAOT executed guest conformance; exact-head stepful tests and reviewer
 approval remain mandatory.
+
+
+## Cross-backend trap native guest candidate (November 2026)
+
+Identical Git blobs of `trap-int-native42.atto` are pinned in the Java JUnit,
+LLVM Clang AOT and .NET NativeAOT candidate branches. The guest must return
+signed integer 42 through the single `Option<int>` `Some(42)` layer. Checked
+overflow must terminate rather than manufacture `None`. This candidate
+subset is **not** nested `Option<Result<int,String>>` or ordinary-error
+unwinding parity: those are rejected in the .NET compiler until the typed
+nested sum, ownership and guest exception ABI are implemented and verified.
