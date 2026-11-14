@@ -513,7 +513,7 @@ internal static class StructuredCfgLoweringTests
             "! eq", "spaces must not turn ! eq into != or !eq");
         RejectWithDiagnostic(
             File.ReadAllText(Path.Combine(operatorDir, "neq-alias-mixed.atto")),
-            "Equality requires int operands", "no implicit bool-to-int equality");
+            "Equality requires matching int or bool operands", "no implicit bool-to-int equality");
         RejectAliasBoundary(
             File.ReadAllText(Path.Combine(operatorDir, "neq-alias-prefix.atto")),
             "!equation", "!equation must not tokenize as !eq plus suffix");
