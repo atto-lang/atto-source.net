@@ -167,6 +167,69 @@ public sealed class ActorMailbox : IDisposable
             throw new InvalidOperationException("Mailbox capacity exceeded");
     }
 
+    /// <summary>
+    /// Host-only transactional admission for one actor receive turn. All
+    /// emitted DATA frames reach this *single* target mailbox together, or
+    /// none do. A batch acknowledgement means mailbox admission, not remote
+    /// processing or exactly-once execution.
+    ///
+    /// This is NOT forward_all across separate mailboxes: fan-out requires
+    /// per-edge partial-success receipts unless a higher-level coordinator
+    /// explicitly implements cross-mailbox transactions.
+    /// </summary>
+    public void SendBatchAtomic(
+        ActorRef destination, IReadOnlyList<ReadOnlyMemory<byte>> messages)
+    {
+        ArgumentNullException.ThrowIfNull(messages);
+        lock (_gate)
+        {
+            // Authorize before inspecting untrusted payload sizes. The
+            // generation and nonce are checked under the very same lock
+            // that publishes all envelopes and serializes Stop/Restart.
+            ValidateSendLocked(destination, 0);
+            if (messages.Count == 0) return;
+            if (messages.Count > _maxMessages - _messages.Count)
+                throw new InvalidOperationException("Mailbox capacity exceeded");
+
+            var total = 0;
+            foreach (var message in messages)
+            {
+                if (message.Length > MaxMessageBytes)
+                    throw new ArgumentOutOfRangeException(nameof(messages),
+                        "Message exceeds 1 MiB");
+                // Subtraction avoids signed arithmetic wraparound and
+                // rejects the whole receive turn without partial publication.
+                if (message.Length > _maxQueuedBytes - _queuedBytes - total)
+                    throw new InvalidOperationException("Mailbox capacity exceeded");
+                total += message.Length;
+            }
+
+            // Pre-size all storage and snapshot borrowed sender memory
+            // before the first queue mutation. Copy failures leave the
+            // mailbox, generation and counters exactly as they were.
+            var owned = new byte[messages.Count][];
+            try
+            {
+                for (var i = 0; i < messages.Count; ++i)
+                    owned[i] = messages[i].ToArray();
+                _messages.EnsureCapacity(checked(_messages.Count + owned.Length));
+                // Queue.Enqueue cannot grow after EnsureCapacity. Under our
+                // exclusive lock, Stop and readers cannot observe a prefix.
+                foreach (var payload in owned)
+                    _messages.Enqueue(payload);
+                _queuedBytes += total;
+            }
+            catch
+            {
+                // Some arrays may already be copied when allocation fails.
+                // Never leave copies of rejected actor DATA in managed heap.
+                foreach (var payload in owned)
+                    if (payload is not null) CryptographicOperations.ZeroMemory(payload);
+                throw;
+            }
+        }
+    }
+
     public bool TryReceive(out byte[]? payload)
     {
         lock (_gate)
