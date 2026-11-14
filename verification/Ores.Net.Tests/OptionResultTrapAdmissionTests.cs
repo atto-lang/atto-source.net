@@ -35,6 +35,57 @@ internal static class OptionResultTrapAdmissionTests
             throw new Exception("Scalar CIL admitted or misclassified tagged source: " + source);
         }
 
+        // Structured/linked CIL has a separately verified closed Option<int>
+        // lane. Unsupported Result/Ok/Err/trap must retain the stable
+        // refusal diagnostic instead of silently becoming scalar SSA.
+        foreach (var source in new[]
+        {
+            "fnc main():int{return Ok(7);}",
+            "fnc main():int{return Err(7);}",
+            "fnc main():int{return Result(7);}",
+            "fnc main():int{val Result<int,int> x=Ok(7);return 7;}",
+            "fnc main():int{return trap(7);}",
+            "trap fnc main():int{return 7;}"
+        })
+        {
+            try { _ = OresStructuredParser.Parse(source); }
+            catch (FormatException error) when (
+                error.Message.Contains(Diagnostic, StringComparison.Ordinal) &&
+                error.Message.Contains("offset ", StringComparison.Ordinal))
+            {
+                continue;
+            }
+            throw new Exception("Structured CIL admitted or misclassified unsupported tagged source: " + source);
+        }
+
+        // Reconcile with the experimental closed Option<int> path, rather
+        // than applying a broad token deny that would invalidate its typed
+        // Option tag and payload SSA proof.
+        var closedOption = OresStructuredParser.Parse(
+            "pub fnc main():int{val Option<int> x=Some(42);return x.unwrap_or(0);}");
+        if (closedOption.Body.Count == 0)
+            throw new Exception("Structured CIL lost verified closed Option<int> admission");
+        foreach (var source in new[]
+        {
+            "fnc main():int{return 7;} // Result Ok Err trap",
+            "fnc main():int{return 7;} /* Result /* Ok Err */ trap */",
+            "fnc main():int{return 7;} // ResultValue Okapi ErrorCode"
+        })
+        {
+            if (OresStructuredParser.Parse(source).Body.Count != 1)
+                throw new Exception("Structured lexer treated ADT source trivia as executable code");
+        }
+        try
+        {
+            _ = OresStructuredParser.Parse("fnc main():int{return ResultValue;}");
+            throw new Exception("Unsupported scalar name was unexpectedly admitted");
+        }
+        catch (FormatException error) when (
+            !error.Message.Contains(Diagnostic, StringComparison.Ordinal))
+        {
+            // Correct: a longer identifier is not a reserved ADT token.
+        }
+
         // The lexer must not treat words in source trivia as code.
         foreach (var source in new[]
         {
