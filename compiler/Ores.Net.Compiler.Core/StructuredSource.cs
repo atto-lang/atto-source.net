@@ -524,7 +524,7 @@ public static partial class OresStructuredParser
             // tagged family is still unsupported, even when reached via
             // linked-unit discovery, and must fail before typed SSA/CIL.
             // This is a complete-token check after skipping source trivia.
-            if (tokenText is "Result" or "Ok" or "Err" or "trap")
+            if (tokenText is "Result" or "Ok" or "Err")
                 throw new FormatException(
                     $"Option/Result/trap requires verified tagged-sum CIL and NativeAOT guest-control lowering at offset {offset}");
             return new Token(tokenText, offset);
@@ -679,6 +679,9 @@ public static partial class OresStructuredParser
                         exposed = true;
                     }
                 }
+                if (Current.Text == "trap")
+                    throw new FormatException(
+                        $"Option/Result/trap requires verified tagged-sum CIL and NativeAOT guest-control lowering at offset {Current.Offset}: trap function modifier is unsupported");
                 if (Current.Text is "class" or "actor")
                     throw Error("Nominal class/actor methods require receiver-erased method slots, type/borrow checking and Native AOT CIL lowering; unsupported in .NET structured frontend");
                 Expect("fnc");
@@ -1017,7 +1020,7 @@ public static partial class OresStructuredParser
                     or "struct" or "record" or "class" or "actor"
                     or "module" or "import" or "from" or "as" or "end"
                     or "routine" or "async" or "isoactor" or "guard"
-                    or "Some" or "None" or "Option")
+                    or "Some" or "None" or "Option" or "trap")
                 throw new FormatException($"Invalid identifier at offset {at}");
             index++;
             return name;
@@ -1288,6 +1291,27 @@ public static partial class OresStructuredParser
         private StructuredExpr Unary(int depth)
         {
             Budget(depth);
+            // First executable caller-side trap slice: the structured compiler
+            // admits only synchronous int expressions. Every admitted operation
+            // is defined to complete normally or raise a terminal checked
+            // arithmetic failure, which must NOT be swallowed into None.
+            // The operand is evaluated exactly once by the existing Some(int)
+            // tagged SSA/CIL lowering; never erase the Option boundary.
+            if (Current.Text == "trap")
+            {
+                int at = Current.Offset;
+                index++;
+                var operand = Unary(depth + 1);
+                if (operand.Type != IrValueType.I64)
+                    throw new FormatException(
+                        $"E_TRAP_PROFILE_UNSUPPORTED: only non-throwing synchronous int operands have verified Option<int> CIL lowering at offset {at}");
+                int height = Height(operand) + 1;
+                if (height > MaxDepth)
+                    throw new FormatException($"Structured trap AST depth exceeds limit at offset {at}");
+                var wrapped = new StructuredSome(at, operand);
+                expressionHeights.Add(wrapped, height);
+                return OptionPostfix(wrapped, depth);
+            }
             if (Current.Text == "rt")
             {
                 int at = Current.Offset;
