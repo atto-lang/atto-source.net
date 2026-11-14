@@ -405,21 +405,9 @@ public static partial class OresStructuredParser
                 throw new FormatException(
                     $"Annotations require verified compiler lowering at offset {offset}");
             }
-            if (moduleMode && ch == '"')
+            if (ch is '\'' or '"' or '\u0060')
             {
-                index++;
-                while (index < source.Length && source[index] != '"')
-                {
-                    if (source[index] is '\r' or '\n' or '\0')
-                        throw new FormatException($"Invalid string literal at offset {offset}");
-                    if (source[index++] == '\\')
-                    {
-                        if (index == source.Length) break;
-                        index++;
-                    }
-                }
-                if (index == source.Length) throw new FormatException($"Unterminated string at offset {offset}");
-                index++;
+                index = QuotedSourceSyntax.Scan(source, offset);
                 return new Token(source[offset..index], offset);
             }
             if (Digit(ch))
@@ -634,8 +622,10 @@ public static partial class OresStructuredParser
                 string name = Name();
                 Expect("from");
                 string quoted = Current.Text;
-                if (quoted.Length < 3 || quoted[0] != '"' || quoted[^1] != '"' || quoted.Contains('\\'))
-                    throw Error("Import requires an unescaped local source string");
+                if (quoted.Length < 3 ||
+                    (quoted[0] != '"' && quoted[0] != '\'') ||
+                    quoted[^1] != quoted[0] || quoted.Contains('\\'))
+                    throw Error("Import requires an unescaped single- or double-quoted local source string");
                 // Reject before physical lookup and graph linking, independently
                 // of the standalone scalar parser's generic import denial.
                 UnsafeStdlibImportAdmission.RequireGuestSafe(quoted[1..^1]);
@@ -1304,6 +1294,9 @@ public static partial class OresStructuredParser
         private StructuredExpr Unary(int depth)
         {
             Budget(depth);
+            if (Current.Text.Length > 0 && Current.Text[0] is '\'' or '"' or '\u0060')
+                throw new FormatException(
+                    $"STRING_BACKEND_UNSUPPORTED: quoted strings and template interpolation require typed String CFG/CIL/NativeAOT lowering at offset {Current.Offset}");
             if (Current.Text == "rt")
             {
                 int at = Current.Offset;

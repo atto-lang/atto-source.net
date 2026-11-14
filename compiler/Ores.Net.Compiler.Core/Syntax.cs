@@ -396,6 +396,11 @@ public static partial class OresParser
             var start = _i;
             if (_i == text.Length) return new Token("", start);
             var ch = text[_i];
+            if (ch is '\'' or '"' or '\u0060')
+            {
+                _i = QuotedSourceSyntax.Scan(text, start);
+                return new Token(text[start.._i], start);
+            }
             // Lexical-context guard: comments/whitespace were skipped above.
             // Preserve ordinary identifiers 'with(x)' and inert comments.
             bool precededByWith = previousWasWith;
@@ -706,6 +711,9 @@ public static partial class OresParser
         private Expression ParseUnary(int depth)
         {
             CheckDepth(depth);
+            if (Current.Text.Length > 0 && Current.Text[0] is '\'' or '"' or '\u0060')
+                throw new FormatException(
+                    $"STRING_BACKEND_UNSUPPORTED: quoted strings and template interpolation require typed String CIL/NativeAOT lowering at offset {Current.Offset}");
             if (Current.Text == "rt")
             {
                 int at = Current.Offset;
