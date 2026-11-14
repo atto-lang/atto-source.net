@@ -50,27 +50,9 @@ public static class OresParser
                 throw new FormatException("Token count exceeds bootstrap limit");
             if (token.Text.Length == 0) break;
         }
-        // Nested wrappers are semantically distinct source types. The scalar
-        // bootstrap does not lower them yet, but it must reject them for that
-        // reason rather than recursively canonicalizing/adopting host Tasks or
-        // Options. Ordinary await/unwrap remove one layer; flatten is explicit.
-        for (int i = 0; i + 3 < tokens.Count; i++)
-        {
-            if (tokens[i].Text == "Future" &&
-                tokens[i + 1].Text == "<" &&
-                tokens[i + 2].Text == "Future" &&
-                tokens[i + 3].Text == "<")
-                throw new FormatException(
-                    $"Nested Future remains nested; implicit Future flatten is forbidden; " +
-                    $".NET source Future continuation lowering is unavailable at offset {tokens[i].Offset}");
-            if (tokens[i].Text == "Option" &&
-                tokens[i + 1].Text == "<" &&
-                tokens[i + 2].Text == "Option" &&
-                tokens[i + 3].Text == "<")
-                throw new FormatException(
-                    $"Nested Option remains nested; implicit Option flatten is forbidden; " +
-                    $".NET source Option lowering is unavailable at offset {tokens[i].Offset}");
-        }
+        // Nested Future/Option wrappers are rejected inside the lexer (see
+        // Lexer.NestedSameWrapper): this scalar lexer never emits '<' tokens,
+        // so a post-lex token scan could not observe them.
         for (int i = 0; i + 1 < tokens.Count; i++)
         {
             // Both shipped scalar and structured frontends must reject a
@@ -129,45 +111,67 @@ public static class OresParser
     {
         private int _i;
 
-        public Token Read()
+        // Whitespace, line comments and nested block comments. Shared by Read()
+        // and lexical lookahead so comments stay invisible in both.
+        private static int SkipTrivia(string text, int i)
         {
-            while (_i < text.Length)
+            while (i < text.Length)
             {
-                if (char.IsWhiteSpace(text[_i])) { _i++; continue; }
-                if (text[_i] == '/' && _i + 1 < text.Length && text[_i + 1] == '/')
+                if (char.IsWhiteSpace(text[i])) { i++; continue; }
+                if (text[i] == '/' && i + 1 < text.Length && text[i + 1] == '/')
                 {
-                    _i += 2;
-                    while (_i < text.Length && text[_i] is not ('\n' or '\r' or '\u0085' or '\u2028' or '\u2029')) _i++;
+                    i += 2;
+                    while (i < text.Length && text[i] is not ('\n' or '\r' or '\u0085' or '\u2028' or '\u2029')) i++;
                     continue;
                 }
                 // Keep comments lexically invisible even when they occur
                 // between a tagged namespace and '.' in a rejected pipeline.
-                if (text[_i] == '/' && _i + 1 < text.Length && text[_i + 1] == '*')
+                if (text[i] == '/' && i + 1 < text.Length && text[i + 1] == '*')
                 {
-                    var offset = _i;
-                    _i += 2;
+                    var offset = i;
+                    i += 2;
                     var depth = 1;
                     while (depth > 0)
                     {
-                        if (_i == text.Length)
+                        if (i == text.Length)
                             throw new FormatException($"Unterminated block comment at offset {offset}");
-                        if (_i + 1 < text.Length && text[_i] == '/' && text[_i + 1] == '*')
+                        if (i + 1 < text.Length && text[i] == '/' && text[i + 1] == '*')
                         {
                             if (++depth > 128)
                                 throw new FormatException($"Block comment nesting exceeds 128 at offset {offset}");
-                            _i += 2;
+                            i += 2;
                         }
-                        else if (_i + 1 < text.Length && text[_i] == '*' && text[_i + 1] == '/')
+                        else if (i + 1 < text.Length && text[i] == '*' && text[i + 1] == '/')
                         {
                             depth--;
-                            _i += 2;
+                            i += 2;
                         }
-                        else _i++;
+                        else i++;
                     }
                     continue;
                 }
                 break;
             }
+            return i;
+        }
+
+        // True when `wrapper` (just read, ending at i) is followed by
+        // '<' wrapper '<' -- e.g. Future<Future<...  -- ignoring trivia.
+        private static bool NestedSameWrapper(string text, int i, string wrapper)
+        {
+            i = SkipTrivia(text, i);
+            if (i >= text.Length || text[i] != '<') return false;
+            i = SkipTrivia(text, i + 1);
+            int word = i;
+            while (i < text.Length && (char.IsLetterOrDigit(text[i]) || text[i] == '_')) i++;
+            if (!text.AsSpan(word, i - word).SequenceEqual(wrapper)) return false;
+            i = SkipTrivia(text, i);
+            return i < text.Length && text[i] == '<';
+        }
+
+        public Token Read()
+        {
+            _i = SkipTrivia(text, _i);
             var start = _i;
             if (_i == text.Length) return new Token("", start);
             var ch = text[_i];
@@ -263,6 +267,16 @@ public static class OresParser
                 // error that might be mistaken for an ADT semantic rejection.
                 // This check occurs after comment/trivia skipping; an inert
                 // comment is never proof that executable tagged source exists.
+                // Nested wrappers are semantically distinct source types
+                // (contracts/v1/strict-wrapper-nesting-v1.json). Reject them
+                // for that reason, before the generic tagged-sum gate and
+                // before '<' would fail as incidental punctuation.
+                if (word is "Future" or "Option" && NestedSameWrapper(text, _i, word))
+                    throw new FormatException(word == "Future"
+                        ? $"Nested Future remains nested; implicit Future flatten is forbidden; " +
+                          $".NET source Future continuation lowering is unavailable at offset {start}"
+                        : $"Nested Option remains nested; implicit Option flatten is forbidden; " +
+                          $".NET source Option lowering is unavailable at offset {start}");
                 if (word is "Option" or "Result" or "Some" or "None" or "Ok" or "Err" or "trap")
                     throw new FormatException(
                         $"Option/Result/trap requires verified tagged-sum CIL and NativeAOT guest-control lowering at offset {start}");
