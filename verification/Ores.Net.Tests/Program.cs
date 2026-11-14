@@ -400,6 +400,7 @@ CapabilityIoLifecycleV1SelfTest.Run();
 ActorStateSchemaAdmissionTests.Run();
 ActorStateLayoutIntegrationTests.Run();
 ActorGeneratedCounterTests.Run();
+DeclaredActorCounterV2Tests.Run();
 SourceByteBudgetTests.Run();
 ElmCompositionAdmissionTests.Run();
 HeapContainerSourceBoundaryTests.Run(); // actual scalar compiler fail-closed heap/container checks
@@ -543,6 +544,7 @@ SelectableI64FutureSelfTest.Run();
 ActorDispatchDomainsSelfTest.Run();
 ActorRuntimeSelfTest.Run();
 ActorRuntimeGracefulDrainSelfTest.Run(); // HOST only; not guest pipe lowering
+SupervisorDataFenceParitySelfTest.Run(); // HOST only; stop-vs-send and sibling parity
 ActorPubSubSelfTest.Run();
 ActorPubSubTurnAuthorityTests.Run();
 ActorPubSubByteQuotaTests.Run();
