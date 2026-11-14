@@ -108,6 +108,43 @@ internal static class ActorPipeSourcePlanV1SelfTest
                 threePlan.Edges[1].ProducerBinding == "middle" &&
                 threePlan.Edges[1].ConsumerBinding == "sink" &&
                 threePlan.InputMessage == 20, "three-stage owned graph");
+        // Repeat the same nominal Validate actor 14 times, but bind each
+        // actor *instance* to a distinct owner. The CIL oracle must compile
+        // Validate's typed function once and invoke it once per stage.
+        string declarations = three[..three.IndexOf(
+            "pub fnc main(): int", StringComparison.Ordinal)];
+        static string RepeatedActors(string declarations, int count)
+        {
+            var names = new List<string> { "source" };
+            for (int i = 0; i < count - 2; ++i)
+                names.Add("middle" + i);
+            names.Add("sink");
+            var body = new System.Text.StringBuilder(
+                "pub fnc main(): int {\n let source = spawn Parse();\n");
+            for (int i = 0; i < count - 2; ++i)
+                body.Append(" let middle").Append(i).Append(
+                    " = spawn Validate();\n");
+            body.Append(" let sink = spawn Sink();\n ")
+                .Append(string.Join(" pipe ", names))
+                .Append(";\n source.send(20);\n");
+            foreach (string name in names)
+                body.Append(" stop ").Append(name).Append(";\n");
+            body.Append(" return 0;\n}\n");
+            return declarations + body;
+        }
+        var sixteen = OresStructuredParser.PlanActorPipeV1(
+            RepeatedActors(declarations, 16));
+        Require(sixteen.Stages.Count == 16 && sixteen.Edges.Count == 15,
+            "16 distinct owned actor stages must share one nominal helper definition");
+        try {
+            _ = OresStructuredParser.PlanActorPipeV1(
+                RepeatedActors(declarations, 17));
+            throw new Exception("seventeenth actor escaped guest source budget");
+        }
+        catch (FormatException error) when (
+            error.Message.Contains("E_ACTOR_PIPE_PLAN_V1", StringComparison.Ordinal))
+        { /* bounded source rejection */ }
+
         string thirdAssembly = Path.Combine(Path.GetTempPath(),
             "ores-three-stage-scalar-oracle-" + Guid.NewGuid().ToString("N") + ".dll");
         try
