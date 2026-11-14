@@ -44,7 +44,7 @@ internal static class OptionResultTrapAdmissionTests
             "fnc main():int{return Err(7);}",
             "fnc main():int{return Result(7);}",
             "fnc main():int{val Result<int,int> x=Ok(7);return 7;}",
-            "fnc main():int{return trap(7);}",
+            "fnc main():int{return trap true;}",
             "trap fnc main():int{return 7;}"
         })
         {
@@ -76,9 +76,9 @@ internal static class OptionResultTrapAdmissionTests
         }
         foreach (var source in new[]
         {
-            "fnc main():int{return trap 7;}",
-            "fnc checked():int{return 7;} fnc main():int{return trap checked();}",
-            "fnc main():int{val Option<int> outcome=trap 7;return 7;}",
+            "fnc main():int{return trap false;}",
+            "fnc checked():bool{return true;} fnc main():int{return (trap checked()).is_some();}",
+            "fnc main():int{val Option<int> outcome=trap Some(7);return 7;}",
             "fnc main():int{val Result<int,String> outcome=Err(\"ordinary\");return 7;}",
             "fnc main():int{val Option<Result<int,String>> outcome=trap checked();return 7;}"
         })
