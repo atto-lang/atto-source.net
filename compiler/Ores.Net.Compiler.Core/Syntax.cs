@@ -106,6 +106,12 @@ public static partial class OresParser
         // so a post-lex token scan could not observe them.
         for (int i = 0; i + 1 < tokens.Count; i++)
         {
+            // Native AOT has no isolate-scoped ETS, local pg actor membership
+            // or mailbox delivery lowering. Reject before OresIR/CIL emission.
+            // The lexer has already stripped comments, so trivia is harmless.
+            if ((tokens[i].Text is "ets" or "pg") && tokens[i + 1].Text == ".")
+                throw new FormatException(
+                    $"ETS/pg guest APIs require authenticated isolate, table and actor-mailbox lowering (unsupported .NET bootstrap) at offset {tokens[i].Offset}");
             // Actor 'pipe' is a contextual graph operator, not scalar '|>'.
             // Shared token-aware admission keeps comments and identifier 'pipe'
             // inert while forbidding untyped graph lowering to Native AOT.
@@ -324,6 +330,7 @@ public static partial class OresParser
     private sealed class Lexer(string text)
     {
         private int _i;
+        private bool previousWasWith;
 
         // Whitespace, line comments and nested block comments. Shared by Read()
         // and lexical lookahead so comments stay invisible in both.
@@ -392,6 +399,14 @@ public static partial class OresParser
             if (ch == '@')
                 throw new FormatException(
                     $"Annotations require typed target validation and Native AOT lowering; unsupported in .NET scalar compiler at offset {start}");
+            // Lexical-context guard: comments/whitespace were skipped above.
+            // Preserve ordinary identifiers 'with(x)' and inert comments.
+            bool precededByWith = previousWasWith;
+            previousWasWith = false;
+            if (precededByWith && ch == '{')
+                throw new FormatException(
+                    $"WITH_BACKEND_UNSUPPORTED: immutable with requires checked rt copy/take, "
+                    + $"owned field layout/drop and Native AOT reconstruction at offset {_i}");
             // No unchecked array access can enter the shipping scalar CIL path.
             SafeCollectionSourceAdmission.RejectUnverifiedBracket(ch, start);
             // Scalar and structured CIL frontends must agree: state-changing
@@ -445,6 +460,7 @@ public static partial class OresParser
                     (text[_i] is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_'))
                     _i++;
                 var word = text[start.._i];
+                previousWasWith = word == "with";
                 // G0: unsupported unsafe source must not become a normal
                 // identifier, callable, member or intrinsic in scalar CIL.
                 if (word == "unsafe")
