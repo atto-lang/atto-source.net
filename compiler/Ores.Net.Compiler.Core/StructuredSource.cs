@@ -173,6 +173,7 @@ public static partial class OresStructuredParser
         // Distinguish a forbidden local nominal declaration from an
         // unsupported top-level class/actor before either reaches lowering.
         int braceDepth = 0;
+        int firstNominalOffset = -1;
         while (true)
         {
             var token = lexer.Read();
@@ -253,8 +254,7 @@ public static partial class OresStructuredParser
                 if (braceDepth > 0)
                     throw new FormatException(
                         $"Local class/actor declarations are not permitted at offset {token.Offset}");
-                throw new FormatException(
-                    $"Nominal class/actor methods require receiver-erased method slots, type/borrow checking and Native AOT CIL lowering; unsupported in .NET structured frontend at offset {token.Offset}");
+                if (firstNominalOffset < 0) firstNominalOffset = token.Offset;
             }
             if (token.Text is "lex" or "nlex")
             {
@@ -335,6 +335,14 @@ public static partial class OresStructuredParser
         }
         RejectActorPipe(tokens); // deny source graphs before CFG/CIL admission
         RejectUnsupportedMutableSharing(tokens);
+        if (firstNominalOffset >= 0)
+        {
+            RejectDuplicateNominalMethodSlots(tokens);
+            // Duplicate declarations are diagnosed above, but valid source
+            // remains unsupported until typed owner/borrow and CIL lowering.
+            throw new FormatException(
+                $"Nominal class/actor methods require receiver-erased method slots, type/borrow checking and Native AOT CIL lowering; unsupported in .NET structured frontend at offset {firstNominalOffset}");
+        }
         for (int i = 0; i + 1 < tokens.Count; i++)
         {
             // No protected state heap or virtual actor activation exists in
@@ -414,6 +422,224 @@ public static partial class OresStructuredParser
         return linking is null
             ? new StructuredLinkedUnit(reader.ReadProgram(), null, new Dictionary<string, StructuredFunction>())
             : reader.ReadLinkedUnit();
+    }
+
+    // Syntax-only method-slot admission over tokens produced by the *same*
+    // production lexer. This intentionally does not construct an executable
+    // class AST or allow nominal source through to CIL. Ignore malformed or
+    // richer declarations here: their ordinary capability gate stays closed.
+    private static void RejectDuplicateNominalMethodSlots(IReadOnlyList<Token> tokens)
+    {
+        for (int i = 0; i + 3 < tokens.Count; i++)
+        {
+            if (tokens[i].Text != "define") continue;
+            int head = i + 1;
+            if (tokens[head].Text == "pub") head++;
+            if (head + 3 >= tokens.Count ||
+                tokens[head].Text is not ("class" or "actor") ||
+                !IsSimpleNominalWord(tokens[head + 1].Text) ||
+                tokens[head + 2].Text != "as") continue;
+            string owner = tokens[head + 1].Text;
+            var slots = new NominalReceiverMethodSlots();
+            int member = head + 3;
+            int examined = 0;
+            while (member < tokens.Count && tokens[member].Text != "end")
+            {
+                if (++examined > MaxTokens)
+                    throw new FormatException("Nominal method admission token budget exceeded");
+                // A constructor or unsupported declaration may contain a
+                // body. Never count calls inside that body as class methods.
+                if (tokens[member].Text == "{")
+                {
+                    int braces = 1;
+                    member++;
+                    while (member < tokens.Count && braces > 0)
+                    {
+                        if (tokens[member].Text == "{") braces++;
+                        else if (tokens[member].Text == "}") braces--;
+                        member++;
+                    }
+                    if (braces != 0) return; // unsupported malformed body
+                    continue;
+                }
+                int cursor = member;
+                if (tokens[cursor].Text is "pub" or "private") cursor++;
+                bool staticMethod = cursor < tokens.Count &&
+                    tokens[cursor].Text == "static";
+                if (staticMethod)
+                {
+                    // Static source methods use the same duplicate registry
+                    // but a disjoint namespace and NO injected receiver.
+                    cursor++;
+                    if (cursor >= tokens.Count || tokens[cursor].Text != "fnc")
+                    {
+                        member++;
+                        continue;
+                    }
+                    cursor++;
+                }
+                else if (cursor < tokens.Count &&
+                    (tokens[cursor].Text is "mtd" or "method" or "fnc"))
+                    cursor++;
+                if (cursor < tokens.Count && tokens[cursor].Text == "constructor")
+                {
+                    // Constructors do not occupy ordinary method slots.
+                    // Skip the signature and its body without counting calls.
+                    member = cursor + 1;
+                    while (member < tokens.Count &&
+                           tokens[member].Text is not ("{" or ";" or "end"))
+                        member++;
+                    if (member < tokens.Count && tokens[member].Text == ";")
+                        member++;
+                    continue;
+                }
+                if (cursor + 1 >= tokens.Count ||
+                    !IsSimpleNominalWord(tokens[cursor].Text) ||
+                    tokens[cursor + 1].Text != "(")
+                {
+                    // Avoid interpreting an expression or field initializer
+                    // as a method declaration. Class lowering stays disabled.
+                    member++;
+                    continue;
+                }
+                string name = tokens[cursor].Text;
+                if (name is "constructor" or "fnc" or "static") {
+                    member++;
+                    continue;
+                }
+                int scan = cursor + 1;
+                if (!TryReadNominalFormals(tokens, ref scan, out var first, owner, !staticMethod))
+                {
+                    member++;
+                    continue;
+                }
+                bool explicitSelf = first.Count > 0 &&
+                    (first[0] is "self" or "mut self");
+                bool mutableSelf = first.Count > 0 && first[0] == "mut self";
+                int values = explicitSelf ? first.Count - 1 : first.Count;
+                if (explicitSelf && first.Count == 1 &&
+                    scan < tokens.Count && tokens[scan].Text == "(")
+                {
+                    if (!TryReadNominalFormals(tokens, ref scan, out var second, owner, false))
+                    {
+                        member++;
+                        continue;
+                    }
+                    values = second.Count;
+                }
+                // Only claim declaration identity for complete, simple
+                // signatures with braced bodies, not accidental calls.
+                if (scan + 2 >= tokens.Count ||
+                    tokens[scan].Text is not (":" or "->") ||
+                    !IsSimpleNominalWord(tokens[scan + 1].Text) ||
+                    tokens[scan + 2].Text != "{")
+                {
+                    member++;
+                    continue;
+                }
+                try
+                {
+                    slots.DeclareLowered(owner, name, checked(values + (staticMethod ? 0 : 1)),
+                        staticMethod ? ReceiverMethodNamespace.Static : ReceiverMethodNamespace.Instance,
+                        explicitSelf: explicitSelf, mutableSelf: mutableSelf);
+                }
+                catch (FormatException error)
+                {
+                    throw new FormatException(
+                        $"{error.Message}; nominal class/actor methods require receiver-erased method slots, " +
+                        $"type/borrow checking and Native AOT CIL lowering at offset {tokens[cursor].Offset}", error);
+                }
+                int depth = 1;
+                scan += 3;
+                while (scan < tokens.Count && depth > 0)
+                {
+                    if (tokens[scan].Text == "{") depth++;
+                    else if (tokens[scan].Text == "}") depth--;
+                    scan++;
+                }
+                if (depth != 0) return; // malformed source stays fail-closed
+                member = scan;
+            }
+            i = Math.Max(i,member);
+        }
+    }
+
+    private static bool IsSimpleNominalWord(string value)
+    {
+        if (value.Length is < 1 or > MaxIdentifier) return false;
+        if (!(value[0] is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or '_'))
+            return false;
+        return value.Skip(1).All(c =>
+            c is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' or '_');
+    }
+
+    private static bool TryReadNominalFormals(
+        IReadOnlyList<Token> tokens, ref int scan, out List<string> parameters,
+        string owner, bool allowReceiver)
+    {
+        parameters = new List<string>();
+        if (scan >= tokens.Count || tokens[scan++].Text != "(") return false;
+        bool expectValue = true;
+        while (scan < tokens.Count)
+        {
+            string next = tokens[scan].Text;
+            if (next == ")")
+            {
+                if (expectValue && parameters.Count > 0) return false;
+                scan++;
+                return true;
+            }
+            if (next == "," || next == "(" || next == "{" || next == "}")
+                return false;
+            // Parse only scalar name/type groups, with no nested generics
+            // or function type expressions in this syntax-only step.
+            var parts = new List<string>();
+            while (scan < tokens.Count &&
+                   tokens[scan].Text is not ("," or ")"))
+            {
+                if (!IsSimpleNominalWord(tokens[scan].Text) || parts.Count >= 4)
+                    return false;
+                parts.Add(tokens[scan++].Text);
+            }
+            if (parts.Count is < 1 or > 3) return false;
+            bool bareOrTypedReadSelf = parts[0] == "self";
+            bool bareOrTypedMutSelf = parts.Count >= 2 &&
+                parts[0] == "mut" && parts[1] == "self";
+            if (bareOrTypedReadSelf || bareOrTypedMutSelf)
+            {
+                // Typed legacy receivers are declaration metadata, not values.
+                // Only accept a typed receiver matching the nominal owner;
+                // malformed or foreign receiver types stay fail-closed without
+                // manufacturing a duplicate-method error.
+                if (!allowReceiver || parameters.Count != 0) return false;
+                if (bareOrTypedReadSelf)
+                {
+                    if (parts.Count > 2 ||
+                        (parts.Count == 2 && parts[1] != owner)) return false;
+                    parameters.Add("self");
+                }
+                else
+                {
+                    if (parts.Count < 2 || parts.Count > 3 ||
+                        (parts.Count == 3 && parts[2] != owner)) return false;
+                    parameters.Add("mut self");
+                }
+            }
+            else
+            {
+                // Ordinary parameters require a type and a binding name;
+                // a lone word cannot accidentally become an argument.
+                if (parts.Count == 1 || parts[0] == "mut") return false;
+                parameters.Add(string.Join(" ", parts));
+            }
+            if (scan < tokens.Count && tokens[scan].Text == ",")
+            {
+                scan++;
+                expectValue=true;
+            }
+            else expectValue=false;
+        }
+        return false;
     }
 
     private readonly record struct Token(string Text, int Offset);
@@ -554,6 +780,12 @@ public static partial class OresStructuredParser
                             $"execution task requires scheduler-aware Future/continuation lowering; no implicit inline execution at offset {offset}");
                 }
             }
+            // A source-level method may spell its result type with '->'.
+            // Tokenize the pair even in scalar mode so nominal declarations
+            // reach their bounded duplicate-slot check. The scalar Reader
+            // still rejects arrow syntax outside its admitted grammar.
+            else if (ch == '-' && index + 1 < source.Length &&
+                     source[index + 1] == '>') index += 2;
             else if (ch == '~')
                 throw new FormatException(
                     $"TILDE_AGGREGATE_BACKEND_UNSUPPORTED: typed Map/Record literals require a checked AST, key domains, ownership, transactional constructor and NativeAOT layout at offset {offset}");

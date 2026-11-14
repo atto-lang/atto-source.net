@@ -1,0 +1,59 @@
+name: .NET owned F32 exact-head
+
+on:
+  push:
+    branches:
+      - feat/net-owned-f32-cpu-region-v1-20261017
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  owned-f32-managed:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact private source commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Verify repository identity and immutable commit
+        shell: bash
+        env:
+          EXPECTED: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          test "$(git remote get-url origin | sed -E 's#^https://github.com/##; s#\.git$##')" = 'ores-truffle-oreslang/oreslang-source.net'
+      - name: Set up reviewed .NET 10 SDK
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.x'
+      - name: Execute exact managed compiler, graph and F32 verifier
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet --info
+          dotnet build verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
+          mkdir -p dop-evidence
+          dotnet run --no-build --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release | tee dop-evidence/managed-verification.log
+          printf 'SOURCE_SHA=%s\n' "$(git rev-parse HEAD)"
+          printf 'SOURCE_TREE=%s\n' "$(git rev-parse HEAD^{tree})"
+          printf '%s\n' 'SCOPE=managed owned F32 CPU region plus cancellable one-shot host-I64 graph; no Native AOT certification, device GPU or guest source lowering'
+
+      - name: Create exact-head .NET evidence
+        shell: bash
+        env:
+          TEST_RUN: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          printf 'SOURCE_SHA=%s\nSOURCE_TREE=%s\nRUN=%s\nDOTNET_VERIFIER=PASS\n' \
+            "$(git rev-parse HEAD)" "$(git rev-parse HEAD^{tree})" "$TEST_RUN" > dop-evidence/exact-source.txt
+      - name: Upload SHA-bound managed verifier evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: net-owned-f32-${{ github.sha }}
+          path: dop-evidence/
+          if-no-files-found: error

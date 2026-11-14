@@ -51,6 +51,92 @@ internal static class StructuredSourceTests
 
     public static void Run()
     {
+        // Java/LLVM receiver spellings must never be mistaken for scalar
+        // helpers or emitted as CIL while nominal method lowering is absent.
+        // These are fail-closed capability checks, NOT overload execution.
+        foreach (var source in new[] {
+            "define class Foo as x():void {} end",
+            "define class Foo as x(mut self)():void {} end",
+            "define class Foo as x(string a):void {} y(mut self, int x):void {} end",
+            "define class Foo as x(self)(int n):void {} end",
+            "define class Foo as x(self, int n):void {} end",
+        })
+            RejectFeature(source, "Nominal class/actor methods require receiver-erased method slots");
+
+        // Unlike a generic unsupported-target rejection, duplicate instance
+        // methods now fail in compiler-owned source admission before CIL.
+        // This remains only signature checking; accepted classes cannot
+        // execute until the typed owner/borrow/virtual-call pipeline exists.
+        foreach (var (source, slot) in new (string, string)[] {
+            ("define class Foo as x():void {} x(mut self)():void {} end", "x/0"),
+            // Arrow return notation reaches the same declaration identity
+            // gate; a generic scalar lexer rejection is insufficient.
+            ("define class Foo as x()->void {} x(mut self)()->void {} end", "x/0"),
+            ("define class Foo as x(int n)->int {} x(mut self, int n):int {} end", "x/1"),
+            ("define class Foo as x(mut self)(int n)->int {} x(int n)->int {} end", "x/1"),
+            ("define actor Foo as x()->void {} x(mut self)()->void {} end", "x/0"),
+            ("define class Foo as x(mut self)():void {} x():void {} end", "x/0"),
+            ("define class Foo as x(int n):void {} x(mut self, int n):void {} end", "x/1"),
+            ("define class Foo as x(mut self, int n):void {} x(int n):void {} end", "x/1"),
+            ("define class Foo as x(self):int {} x(mut self):int {} end", "x/0"),
+            ("define class Foo as x(self, int n):int {} x(mut self)(int n):int {} end", "x/1"),
+            // Typed legacy receivers are the same caller-visible selector.
+            ("define class Foo as x():void {} x(self Foo)():void {} end", "x/0"),
+            ("define class Foo as x(self Foo)():void {} x():void {} end", "x/0"),
+            ("define class Foo as x(int n):int {} x(self Foo)(int n):int {} end", "x/1"),
+            ("define class Foo as x(self Foo)(int n):int {} x(int n):int {} end", "x/1"),
+            ("define class Foo as x(int n):int {} x(mut self Foo, int n):int {} end", "x/1"),
+            ("define class Foo as x(mut self Foo)(int n):int {} x(int n):int {} end", "x/1"),
+            ("define class Foo as x(self Foo, int n):int {} x(mut self Foo)(int n):int {} end", "x/1"),
+            // Legacy class fnc is an instance declaration, unlike static fnc.
+            ("define class Foo as fnc x():void {} x(mut self)():void {} end", "x/0"),
+            ("define class Foo as x(mut self)():void {} fnc x():void {} end", "x/0"),
+            ("define class Foo as fnc x(int n):int {} method x(mut self, int n):int {} end", "x/1"),
+            ("define class Foo as method x(mut self, int n):int {} fnc x(int n):int {} end", "x/1"),
+            ("define pub class Foo as pub fnc x():void {} x(mut self)():void {} end", "x/0"),
+            ("pub define class Foo as x(int n):int {} pub fnc x(mut self, int n):int {} end", "x/1"),
+            ("define actor Foo as fnc x():void {} x(mut self)():void {} end", "x/0"),
+            ("define actor Foo as x(int n):int {} fnc x(mut self, int n):int {} end", "x/1"),
+            ("define actor Foo as x():void {} x(mut self)():void {} end", "x/0"),
+            ("define actor Foo as x(mut self)():void {} x():void {} end", "x/0"),
+            ("define actor Foo as x(int n):void {} x(mut self, int n):void {} end", "x/1"),
+            ("define actor Foo as x(mut self, int n):void {} x(int n):void {} end", "x/1")
+        })
+            RejectFeature(source, "Duplicate nominal method slot 'Foo::Instance::" + slot + "'");
+
+        // Static callables have their own owner/name/value-arity identity:
+        // static-static duplicates reject, but static-instance pairs coexist.
+        foreach (var (source, slot) in new (string, string)[] {
+            ("define class Foo as static fnc x():void {} static fnc x()->void {} end", "x/0"),
+            ("define class Foo as static fnc x()->void {} static fnc x():void {} end", "x/0"),
+            ("define class Foo as static fnc x(int n):int {} pub static fnc x(int n)->int {} end", "x/1"),
+            ("define class Foo as pub static fnc x(int n)->int {} static fnc x(int n):int {} end", "x/1")
+        })
+            RejectFeature(source, "Duplicate nominal method slot 'Foo::Static::" + slot + "'");
+
+        // Same arity under different method names is not a collision,
+        // comments are not lexical declarations, and constructor body calls
+        // must not create phantom method slots.
+        foreach (var validButNotExecutable in new[] {
+            "define class Foo as x(int n):int {} y(mut self, int n):int {} end",
+            "define class Foo as x()->void {} y(mut self)()->void {} end",
+            "define class Foo as x():void {} /* x(mut self)():void {} */ y():void {} end",
+            "define class Foo as x():void {} constructor(){x();x();} end",
+            "define class Foo as static fnc x():void {} x(mut self)():void {} end",
+            "define class Foo as x():void {} static fnc x():void {} end",
+            "define class Foo as static fnc x(int n)->int {} x(mut self, int n)->int {} end",
+            "define class Foo as static fnc x():void {} static fnc y():void {} end",
+            // Unsupported malformed typed receivers must not be mistaken for
+            // valid duplicate declarations in the preliminary signature scan.
+            "define class Foo as x(int n):int {} x(self Other)(int n):int {} end",
+            "define class Foo as x(int n):int {} x(mut self Other)(int n):int {} end",
+            "define class Foo as x(int n):int {} x(self)(self):int {} end",
+            "define class Foo as x(self Foo)(int n):int {} y(mut self Foo)(int n):int {} end",
+            "define actor Foo as x():void {} y(mut self)():void {} end"
+        })
+            RejectFeature(validButNotExecutable,
+                "Nominal class/actor methods require receiver-erased method slots");
+
         // AST identity and constant provenance must stay independent: a
         // default readonly typed binding has distinct source provenance.
         var immutableDefaults = OresStructuredParser.Parse(

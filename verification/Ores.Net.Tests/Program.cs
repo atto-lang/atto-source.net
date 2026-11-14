@@ -509,7 +509,14 @@ foreach (var source in new[] {
     "define class X1 as foo():void {} end",
     "define class X2 as foo(self):void {} end",
     "define class X as foo():void {} foo(self):void {} end",
-    "define class X as foo(int x):int {return x;} foo(self,int x):int {return x;} end"
+    "define class X as foo(int x):int {return x;} foo(self,int x):int {return x;} end",
+    "define class X as x():void {} x(mut self)():void {} end",
+    "define class X as x(mut self)():void {} x():void {} end",
+    "define class X as x(int n):void {} x(mut self,int n):void {} end",
+    "define class X as x(self)(int n):void {} end",
+    "define class X as x(string a):void {} y(mut self,int x):void {} end",
+    "define actor X as x():void {} x(mut self)():void {} end",
+    "define actor X as x(int n):void {} x(mut self,int n):void {} end"
 })
     Reject(() => OresParser.Parse(source), "unimplemented class method receiver parity");
 // Source supervisors are not scalar functions. The shipping parser must
@@ -612,6 +619,29 @@ ActorStateLayoutIntegrationTests.Run();
 ActorGeneratedCounterTests.Run();
 DeclaredActorCounterV2Tests.Run();
 SourceByteBudgetTests.Run();
+ExecutionGraphV1Tests.Run();
+OwnedF32RegionV1Tests.Run();
+OwnedF32GraphV1Tests.Run();
+
+// The scalar bootstrap must reserve each execution-domain/nb form and
+// reject it before emitting a misleading CIL host fallback.
+foreach (var forbidden in new[] {
+    "gpu {}", "cpu {}", "nb gpu {}", "nb cpu {}",
+    "gpu { cpu { gpu {} } }", "nb gpu { nb cpu {} }",
+    "gpu", "cpu", "nb"
+})
+{
+    try { _ = OresParser.Parse("fnc main():int{return " + forbidden + ";}"); }
+    catch (FormatException ex) when (ex.Message.Contains(
+        // Main's execution-region admission (newer) owns the wording; the
+        // contract is the explicit refusal of any implicit CPU fallback.
+        "no implicit CPU fallback",
+        StringComparison.Ordinal)) { continue; }
+    throw new Exception("Unsupported execution domain was not specifically rejected: " + forbidden);
+}
+Require(OresParser.Parse("fnc main():int{return 42;} // nb gpu { cpu {} }") is Literal,
+    "commented execution keywords must not be admitted as code");
+
 ActorPipelineSelectorTests.Run(); // v1 selector-only contract
 ElmCompositionAdmissionTests.Run();
 HeapContainerSourceBoundaryTests.Run(); // actual scalar compiler fail-closed heap/container checks
@@ -625,6 +655,7 @@ ActorHierarchyMlAdmissionTests.Run();
 AsyncInteropFailClosedTests.Run();
 EtsPgFailClosedTests.Run();
 await HostTaskObservationTests.Run();
+await AsyncSourceSliceTests.Run();
 
 // Source actor syntax must fail at a semantic actor boundary, never as an
 // accidental scalar-fnc parse error. Legacy actors remain rejected outright;
@@ -1359,6 +1390,7 @@ SharedScalarParityConformance.Run();
 AttoXpScalarParityTests.Run(); // pinned .atto scalar IR + CIL evaluator only
 CfgVerifierTests.Run();
 CfgCilStressTests.Run();
+NominalReceiverMethodSlotTests.Run();
 SupervisorStopLedgerSelfTest.Run();
 // The canonical Atto telemetry syntax is not an ordinary CIL call.
 // Both public frontends must reject it *specifically* until exception-safe
