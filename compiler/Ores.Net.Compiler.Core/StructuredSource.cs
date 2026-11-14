@@ -757,7 +757,7 @@ public static class OresStructuredParser
             Expect("=");
             var assigned = Expr(depth + 1);
             Require(assigned, binding.Type, "Assignment has wrong type");
-            Expect(";");
+            StatementDelimiter();
             return (new StructuredSet(at, variable, assigned), false);
         }
         private IrValueType Type()

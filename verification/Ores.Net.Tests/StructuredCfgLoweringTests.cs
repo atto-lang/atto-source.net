@@ -102,6 +102,10 @@ internal static class StructuredCfgLoweringTests
             42, "keyword tail branch without semicolon");
         Check("fnc main():int{if true then let int val=5, val+42 else 1 fi}",
             47, "comma sequencing with contextual val local");
+        Check("fnc main():int{let int x=1;if true then x=5, x+37 else 1 fi}",
+            42, "comma sequencing respects mutable local assignment");
+        Check("fnc main():int{if true then let int x=5, x+37 else 1 fi}",
+            42, "branch-local comma binding does not escape its lexical scope");
         Check("fnc main():int{if true then 41; else 1; fi return 99;}",
             99, "non-tail conditional does not return early");
         Check("fnc main():int{if true then return 42; else return 1; fi}",
