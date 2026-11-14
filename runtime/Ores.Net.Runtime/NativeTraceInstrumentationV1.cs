@@ -102,7 +102,7 @@ internal sealed class NativeTraceVersionedDispatchV1<T> where T : class
         NativeTraceCodeIdentityV1 Identity, ulong Generation,
         int ProbeMask, T Executable, bool IsPrecompiledAot);
 
-    private sealed class Generation
+    internal sealed class Generation
     {
         internal readonly ulong Id;
         internal readonly T Target;
