@@ -49,18 +49,56 @@ export function assess(snapshot, backend, number, expected_head) {
       || pr.head?.sha !== expected_head) {
     deny('PR_HEAD_OR_MERGE_STATE');
   }
+  // Bind the PR's reviewed base to the actual main commit from the same read.
+  const mainSha = snapshot?.main?.commit?.sha;
+  if (typeof mainSha !== 'string' || !SHA.test(mainSha)
+      || pr?.base?.sha !== mainSha) {
+    deny('PR_BASE_SHA_NOT_VERIFIED');
+  }
   const author = pr?.user?.login;
   const reviews = snapshot?.reviews;
   if (!Array.isArray(reviews) || reviews.length > 99 || !name_ok(author)) {
     deny('UNTRUSTED_REVIEW_SET');
   } else {
     const latest = new Map();
+    const reviewIds = new Set();
+    const canonicalTime = value => {
+      if (typeof value !== 'string'
+          || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value))
+        return false;
+      const ms = Date.parse(value);
+      if (!Number.isFinite(ms)) return false;
+      const normalized = new Date(ms).toISOString();
+      return normalized === value || normalized.replace('.000Z', 'Z') === value;
+    };
     for (const r of reviews) {
       const login = r?.user?.login;
-      if (!name_ok(login) || !name_ok(r?.state)) { deny('MALFORMED_REVIEW'); continue; }
-      // GitHub COMMENTED does not revoke a prior APPROVED/CHANGES_REQUESTED state.
-      // DISMISSED and later submitted decisive reviews do supersede it.
-      if (r.state !== 'COMMENTED') latest.set(login.toLowerCase(), r);
+      if (!name_ok(login) || !['APPROVED', 'CHANGES_REQUESTED',
+          'DISMISSED', 'COMMENTED', 'PENDING'].includes(r?.state)) {
+        deny('MALFORMED_REVIEW'); continue;
+      }
+      if (!Number.isSafeInteger(r?.id) || r.id < 1 || reviewIds.has(r.id)) {
+        deny('INVALID_OR_DUPLICATE_REVIEW_ID'); continue;
+      }
+      reviewIds.add(r.id);
+      if (r.state !== 'PENDING' && !canonicalTime(r.submitted_at)) {
+        deny('INVALID_REVIEW_TIMESTAMP'); continue;
+      }
+      // A comment is not a submitted approval or revocation. A pending
+      // unsubmitted review is also not a decisive review.
+      if (r.state === 'COMMENTED' || r.state === 'PENDING') continue;
+      const key = login.toLowerCase();
+      const prev = latest.get(key);
+      if (!prev) { latest.set(key, r); continue; }
+      const nextTime = Date.parse(r.submitted_at);
+      const prevTime = Date.parse(prev.submitted_at);
+      // Both ID and timestamp must describe the same submission order.
+      // Never make array/page order a substitute for authenticated chronology.
+      if ((r.id > prev.id && nextTime < prevTime)
+          || (r.id < prev.id && nextTime > prevTime)) {
+        deny('CONTRADICTORY_REVIEW_ORDER'); continue;
+      }
+      if (r.id > prev.id) latest.set(key, r);
     }
     // Exactly one of the designated reviewers may approve, but never the author.
     // The diagnostic remains advisory and cannot authorize merging.
@@ -179,7 +217,44 @@ export async function inspect_live(backend, number, expected_head, get = gh_json
         || page.total_count >= 100) throw new Error('incomplete job pagination');
     runs.push({run, jobs: page.jobs});
   }
-  return assess({repo, main, pr, reviews: reviewPage, runs}, backend, number, expected_head);
+  const decision = assess({repo, main, pr, reviews: reviewPage, runs},
+    backend, number, expected_head);
+  if (decision.decision === 'BLOCKED') return decision;
+
+  // The first five GETs are concurrent and the jobs are read later. An old
+  // approval, moved head or a successful older run attempt can otherwise
+  // combine into an advisory-positive snapshot that never existed together.
+  // This is a bounded readback, NOT a transactional GitHub snapshot, required
+  // check enforcement, or an authorization to merge.
+  const evidenceIdentity = (r, m, p, reviews, page) => {
+    const canonical = (items, project) => Array.isArray(items)
+      ? items.map(project).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))
+      : null;
+    return JSON.stringify({
+      repo: [r?.id, r?.full_name, r?.private, r?.archived, r?.disabled],
+      main: [m?.name, m?.protected, m?.commit?.sha],
+      pr: [p?.number, p?.state, p?.draft, p?.mergeable,
+        p?.base?.ref, p?.base?.sha, p?.base?.repo?.id,
+        p?.head?.sha, p?.head?.repo?.id, p?.user?.login],
+      reviews: canonical(reviews, x =>
+        [x?.id, x?.user?.login, x?.state, x?.commit_id, x?.submitted_at]),
+      runs: [page?.total_count, canonical(page?.workflow_runs, x =>
+        [x?.id, x?.head_sha, x?.event, x?.status, x?.conclusion,
+          x?.run_attempt, x?.repository?.id, x?.head_repository?.id])],
+    });
+  };
+  const initial = evidenceIdentity(repo, main, pr, reviewPage, runPage);
+  const [lastRepo, lastMain, lastPr, lastReviews, lastRuns] = await Promise.all([
+    get(prefix.slice(0, -1), token), get(prefix + 'branches/main', token),
+    get(prefix + 'pulls/' + number, token),
+    get(prefix + 'pulls/' + number + '/reviews?per_page=100', token),
+    get(prefix + 'actions/runs?head_sha=' + expected_head + '&event=pull_request&per_page=100', token),
+  ]);
+  if (initial !== evidenceIdentity(lastRepo, lastMain, lastPr,
+      lastReviews, lastRuns)) {
+    throw new Error('MERGE_DIAGNOSTIC_UNVERIFIED: GitHub evidence changed during collection');
+  }
+  return decision;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
