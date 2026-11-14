@@ -4,6 +4,7 @@ using Ores.Net.Compiler;
 using Ores.Net.Runtime;
 
 DeclaredActorReceiveSyntaxTests.Run();
+MtdReceiverAdmissionTests.Run();
 
 static void Require(bool value, string why)
 {
