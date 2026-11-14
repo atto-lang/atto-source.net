@@ -557,7 +557,9 @@ foreach (var forbidden in new[] {
 {
     try { _ = OresParser.Parse("fnc main():int{return " + forbidden + ";}"); }
     catch (FormatException ex) when (ex.Message.Contains(
-        "CPU/GPU execution domain and nb graph lowering unsupported; no implicit CPU fallback",
+        // Main's execution-region admission (newer) owns the wording; the
+        // contract is the explicit refusal of any implicit CPU fallback.
+        "no implicit CPU fallback",
         StringComparison.Ordinal)) { continue; }
     throw new Exception("Unsupported execution domain was not specifically rejected: " + forbidden);
 }
