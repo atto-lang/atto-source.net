@@ -84,6 +84,9 @@
     <ProjectReference Include="../../runtime/Ores.Net.Runtime/Ores.Net.Runtime.csproj" />
     <Content Include="GeneratedCounterActor.g.cs" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="GeneratedMessageCounterActor.g.cs" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="GeneratedExternalCounterActor.g.cs" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/actor-counter-identical-source-v1/corpus.json"
+          Link="actor-counter-corpus.json" CopyToOutputDirectory="PreserveNewest" />
     <!-- Independent metadata inspection runs only in the test process. -->
     <PackageReference Include="Mono.Cecil" Version="0.11.6" />
   </ItemGroup>
