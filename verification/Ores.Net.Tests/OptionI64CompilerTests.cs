@@ -94,6 +94,37 @@ internal static class OptionI64CompilerTests
         finally { Directory.Delete(temp, recursive: true); }
     }
 
+    private static void CheckTrapOverflowBypassesOption()
+    {
+        // trap is not catch-all. A checked i64 overflow is terminal and must
+        // not become a successful Option<int> or an ordinary None.
+        const string source =
+            "fnc main():int{val Option<int> x=trap (9223372036854775807+1);return x.unwrap_or(0);}";
+        var module = OresStructuredCfgLowering.LowerModule(source);
+        bool referenceFailed = false;
+        try { _ = CfgReferenceEvaluator.Evaluate(module.Main); }
+        catch (OverflowException) { referenceFailed = true; }
+        if (!referenceFailed)
+            throw new Exception("trap swallowed checked overflow in verified CFG");
+        var temp = Path.Combine(Path.GetTempPath(), "atto-trap-cil-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(temp);
+        try
+        {
+            string output = Path.Combine(temp, "OresGenerated.dll");
+            CilEmitter.EmitLibrary(module, output);
+            using var assembly = AssemblyDefinition.ReadAssembly(output);
+            var method = assembly.MainModule.Types.Single(type =>
+                type.FullName == "Oreslang.Generated.OresProgram")
+                .Methods.Single(candidate => candidate.Name == "Run");
+            bool cilFailed = false;
+            try { _ = CfgCilTestInterpreter.Evaluate(method); }
+            catch (OverflowException) { cilFailed = true; }
+            if (!cilFailed)
+                throw new Exception("trap swallowed checked overflow in emitted CIL");
+        }
+        finally { Directory.Delete(temp, recursive: true); }
+    }
+
     private static void Reject(string source, string label)
     {
         try { _ = OresStructuredCfgLowering.LowerModule(source); }
@@ -203,6 +234,15 @@ internal static class OptionI64CompilerTests
         const string some = "pub fnc main():int{val Option<int> value=Some(42);return value.unwrap_or(0);}";
         const string none = "pub fnc main():int{val Option<int> value=None;return value.unwrap_or(42);}";
         Check(some, 42, "Some(42) tagged payload");
+        Check("pub fnc main():int{val Option<int> wrapped=trap 42;return wrapped.unwrap_or(0);}",
+            42, "trap int literal emits actual tagged Some");
+        Check("fnc main():int{val Option<int> wrapped=trap (40+2);return wrapped.unwrap_or(0);}",
+            42, "trap parenthesized expression retains all operands");
+        Check("fnc main():int{if (trap 0).is_some(){return 42;}return 0;}",
+            42, "trap Some(0) uses the tag, not nonzero payload");
+        CheckModuleHelper("fnc add_one(int x):int{return x+1;}fnc main():int{val Option<int> wrapped=trap add_one(41);return wrapped.unwrap_or(0);}",
+            42, "trap typed helper exactly once through native CIL");
+
         Check(none, 42, "None fallback");
         Check("fnc main():int{if None eq None{return 42;}return 0;}",
             42, "None equals None");
@@ -250,6 +290,7 @@ internal static class OptionI64CompilerTests
         CheckModuleHelper("fnc answer():int{val Option<int> x=Some(42);return x.unwrap_or(0);}fnc main():int{return answer();}",
             42, "Option local inside statically linked helper");
         CheckEagerFallbackOverflow();
+        CheckTrapOverflowBypassesOption();
         CheckOptionEqualityBoundary(false, 42, false, 7, true,
             "None equals None even with different inactive payloads");
         CheckOptionEqualityBoundary(false, long.MinValue, false, long.MaxValue, true,
@@ -289,6 +330,10 @@ internal static class OptionI64CompilerTests
             ("Option cannot compare to bool", "fnc main():int{if None eq true{return 1;}return 0;}"),
             ("Option cannot order by payload", "fnc main():int{if Some(1)<Some(2){return 1;}return 0;}"),
             ("no nested Option flatten", "fnc main():int{val Option<Option<int>> x=Some(None);return 0;}"),
+            ("trap refuses nested Option", "fnc main():int{val Option<int> x=trap Some(7);return 0;}"),
+            ("trap refuses bool payload", "fnc main():int{val Option<int> x=trap true;return 0;}"),
+            ("trap does not implicitly convert Option to int", "fnc main():int{return trap 7;}"),
+            ("trap unary precedence is explicit", "fnc main():int{return (trap 7)+2;}"),
             ("no nested Some coercion", "fnc main():int{return Some(None).unwrap_or(0);}"),
             ("no Option<bool> erasure", "fnc main():int{val Option<bool> x=None;return 0;}"),
             ("no Option helper argument ABI", "fnc get(Option<int> x):int{return 42;}fnc main():int{return 42;}"),
