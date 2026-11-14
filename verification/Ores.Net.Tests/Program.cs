@@ -402,6 +402,7 @@ AdtSourceAdmissionTests.Run();
 NumericSeparatorParityTests.Run();
 ExplicitExportSyntaxTests.Run();
 CrossBackendCheckedI64ParityTests.Run();
+ActorHierarchyMlAdmissionTests.Run();
 AsyncInteropFailClosedTests.Run();
 await HostTaskObservationTests.Run();
 
