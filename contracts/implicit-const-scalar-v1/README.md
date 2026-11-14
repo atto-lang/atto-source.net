@@ -24,6 +24,13 @@ at the tested immutable source heads. The companion exact-head CI workflow in
 each repository is the intended compiler execution gate, not a proof until it
 actually runs the compiler and collects real execution/diagnostic evidence.
 
+Compiler diagnostic IDs in these fixtures are mapped to language-spec semantic
+categories: `E_NON_CONST_INITIALIZER` → `non_const_initializer`;
+`E_IMMUTABLE_REBIND` → `immutable_reassignment`;
+`E_CONST_MUT_UNSUPPORTED` → `invalid_const_mut_target` (scalar only);
+`E_CONST_OVERFLOW` → checked `const_eval_overflow`. Unsupported global or
+aggregate `const mut` remains outside this contract.
+
 **Boundaries:** this is the *scalar* subset only. Java has legacy aggregate
 `const mut` = mutable reference behavior to migrate independently; LLVM and
 .NET lack verified fresh owned mutable constant aggregate materialization.
