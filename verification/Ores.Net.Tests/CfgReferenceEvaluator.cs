@@ -24,6 +24,8 @@ internal static class CfgReferenceEvaluator
             {
                 long Left() => (long)values[op.Left!.Value];
                 long Right() => (long)values[op.Right!.Value];
+                bool BoolLeft() => (bool)values[op.Left!.Value];
+                bool BoolRight() => (bool)values[op.Right!.Value];
                 bool OptionEqualI64()
                 {
                     // Keep the test-only interpreter independent of emitted
@@ -47,6 +49,12 @@ internal static class CfgReferenceEvaluator
                     CfgOpcode.EqualI64 => Left() == Right(),
                     CfgOpcode.NotEqualI64 => Left() != Right(),
                     CfgOpcode.LessThanI64 => Left() < Right(),
+                    CfgOpcode.EqualBool => BoolLeft() == BoolRight(),
+                    CfgOpcode.NotEqualBool => BoolLeft() != BoolRight(),
+                    CfgOpcode.XorBool => BoolLeft() ^ BoolRight(),
+                    CfgOpcode.GreaterThanI64 => Left() > Right(),
+                    CfgOpcode.LessThanOrEqualI64 => Left() <= Right(),
+                    CfgOpcode.GreaterThanOrEqualI64 => Left() >= Right(),
                     CfgOpcode.BoolNot => !(bool)values[op.Left!.Value],
                     CfgOpcode.OptionEqualI64 => OptionEqualI64(),
                     CfgOpcode.OptionOrI64 =>

@@ -201,6 +201,12 @@ internal static class CfgCilEmitter
                         case CfgOpcode.EqualI64:
                         case CfgOpcode.NotEqualI64:
                         case CfgOpcode.LessThanI64:
+                        case CfgOpcode.GreaterThanI64:
+                        case CfgOpcode.LessThanOrEqualI64:
+                        case CfgOpcode.GreaterThanOrEqualI64:
+                        case CfgOpcode.EqualBool:
+                        case CfgOpcode.NotEqualBool:
+                        case CfgOpcode.XorBool:
                             il.LoadLocal(op.Left!.Value);
                             il.LoadLocal(op.Right!.Value);
                             il.OpCode(op.Opcode switch
@@ -212,11 +218,19 @@ internal static class CfgCilEmitter
                                 CfgOpcode.EqualI64 => ILOpCode.Ceq,
                                 CfgOpcode.NotEqualI64 => ILOpCode.Ceq,
                                 CfgOpcode.LessThanI64 => ILOpCode.Clt,
+                                CfgOpcode.GreaterThanI64 => ILOpCode.Cgt,
+                                CfgOpcode.LessThanOrEqualI64 => ILOpCode.Cgt,
+                                CfgOpcode.GreaterThanOrEqualI64 => ILOpCode.Clt,
+                                CfgOpcode.EqualBool => ILOpCode.Ceq,
+                                CfgOpcode.NotEqualBool => ILOpCode.Ceq,
+                                CfgOpcode.XorBool => ILOpCode.Xor,
                                 _ => throw new FormatException("Unverified CFG opcode")
                             });
-                            if (op.Opcode == CfgOpcode.NotEqualI64)
+                            if (op.Opcode is CfgOpcode.NotEqualI64 or CfgOpcode.NotEqualBool or
+                                CfgOpcode.LessThanOrEqualI64 or
+                                CfgOpcode.GreaterThanOrEqualI64)
                             {
-                                // ceq returns int32; compare with false to invert it.
+                                // ceq/clt/cgt return int32; compare with false to invert it.
                                 // This is deterministic, verifiable CIL without a
                                 // branch, dynamic dispatch or helper call.
                                 il.LoadConstantI4(0);
