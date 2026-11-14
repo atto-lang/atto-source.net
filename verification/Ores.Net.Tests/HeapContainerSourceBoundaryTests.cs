@@ -15,12 +15,11 @@ internal static class HeapContainerSourceBoundaryTests
         // checked scalar OresIR and emitted as CIL. A Tuple value is permitted
         // only when an immediate constant-index projection proves it cannot
         // escape: no unverified owning heap representation is manufactured.
+        // Tuple constant-index projections (`Tuple.of(..)[i]`) stay out: main's
+        // SafeCollectionSourceAdmission rejects every bracket until checked
+        // bounds / Option results / ref32 lowering exists.
         var closedProducts = new (string Source, long Expected)[]
         {
-            ("pub fnc main():int{return Tuple.of(11, 23)[1] + 19;}", 42),
-            ("pub fnc main():int{return ~tuple(11, 23)[1] + 19;}", 42),
-            ("pub fnc main():int{return Tuple.of<int,int>(11, 23)[0] + 31;}", 42),
-            ("pub fnc main():int{return Tuple.of(-9223372036854775808, 42)[1];}", 42),
             ("pub fnc main():int{return Record.of(low: 11, high: 23).high + 19;}", 42),
             ("pub fnc main():int{return ~record(low: 11, high: 23).high + 19;}", 42),
             ("pub fnc main():int{return Record.of(a: -9223372036854775808, b: 42).b;}", 42),
