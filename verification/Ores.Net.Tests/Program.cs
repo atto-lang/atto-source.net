@@ -471,6 +471,7 @@ await TcpPoolPhysicalCloseLoopbackSelfTest.RunAsync(); // host-only real TCP clo
 ActorIoEnvelopeSelfTest.Run();
 ActorRefNoWireSelfTest.Run();
 ActorMailboxBoundsSelfTest.Run();
+ActorMailboxAtomicBatchSelfTest.Run(); // HOST-only single-mailbox turn transaction, not source actor CIL
 SelectContinuationFenceSelfTest.Run();
 ActorMailboxRestartAtomicitySelfTest.Run();
 ActorFinalizationV1SelfTest.Run();
