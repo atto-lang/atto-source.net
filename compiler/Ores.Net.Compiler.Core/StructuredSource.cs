@@ -163,6 +163,13 @@ public static partial class OresStructuredParser
         while (true)
         {
             var token = lexer.Read();
+            // Comments and trivia are already stripped by this Lexer. Deny
+            // namespace member access until ETS/pg isolation, ownership,
+            // generational table handles and mailbox ingress exist in Native AOT.
+            if (token.Text == "." && tokens.Count > 0 &&
+                (tokens[^1].Text is "ets" or "pg"))
+                throw new FormatException(
+                    $"ETS/pg guest APIs require authenticated isolate, table and actor-mailbox lowering (unsupported .NET bootstrap) at offset {token.Offset}");
             // Durable M0 is metadata-only in the Java compiler. Never let
             // activity/workflow declarations silently reach scalar CIL lowering
             // before a typed history manifest, replay ABI and ownership gate exist.

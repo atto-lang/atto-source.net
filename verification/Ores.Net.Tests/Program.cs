@@ -410,6 +410,7 @@ ExplicitExportSyntaxTests.Run();
 CrossBackendCheckedI64ParityTests.Run();
 ActorHierarchyMlAdmissionTests.Run();
 AsyncInteropFailClosedTests.Run();
+EtsPgFailClosedTests.Run();
 await HostTaskObservationTests.Run();
 
 // Source actor syntax must fail at a semantic actor boundary, never as an

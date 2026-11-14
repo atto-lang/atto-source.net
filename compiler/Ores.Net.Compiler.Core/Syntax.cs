@@ -106,6 +106,12 @@ public static partial class OresParser
         // so a post-lex token scan could not observe them.
         for (int i = 0; i + 1 < tokens.Count; i++)
         {
+            // Native AOT has no isolate-scoped ETS, local pg actor membership
+            // or mailbox delivery lowering. Reject before OresIR/CIL emission.
+            // The lexer has already stripped comments, so trivia is harmless.
+            if ((tokens[i].Text is "ets" or "pg") && tokens[i + 1].Text == ".")
+                throw new FormatException(
+                    $"ETS/pg guest APIs require authenticated isolate, table and actor-mailbox lowering (unsupported .NET bootstrap) at offset {tokens[i].Offset}");
             // Actor 'pipe' is a contextual graph operator, not scalar '|>'.
             // Shared token-aware admission keeps comments and identifier 'pipe'
             // inert while forbidding untyped graph lowering to Native AOT.
