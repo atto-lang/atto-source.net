@@ -105,8 +105,11 @@ internal static class ActorScalarFrameAbiSelfTest
         {
             if (data.Span[0] == 1)
             {
+                var mutableTypes = plan.EncodeTypeTags();
                 saved = ActorScalarFrameAbiV1.Push(context,
-                    plan.EncodeTypeTags(), plan.BlockCount);
+                    mutableTypes, plan.BlockCount);
+                // A mutable caller array must not change issued type authority.
+                mutableTypes[1] = 2;
                 ActorScalarFrameAbiV1.WriteBool(context, saved, 0, true);
                 ActorScalarFrameAbiV1.WriteI64(context, saved, 1, 42);
                 ActorScalarFrameAbiV1.SetProgramCounter(context, saved,
@@ -115,10 +118,15 @@ internal static class ActorScalarFrameAbiSelfTest
                 return;
             }
 
+            RejectInvalid(() => { _ = ActorScalarFrameAbiV1.ReadI64(context, saved!, 1); },
+                "new DATA cannot read an earlier invocation typed frame");
+            saved = ActorScalarFrameAbiV1.Push(context, plan.EncodeTypeTags(), plan.BlockCount);
+            ActorScalarFrameAbiV1.WriteBool(context, saved, 0, true);
+            ActorScalarFrameAbiV1.WriteI64(context, saved, 1, 42);
             Require(ActorScalarFrameAbiV1.ReadProgramCounter(context, saved!) == 0 &&
                     ActorScalarFrameAbiV1.ReadBool(context, saved!, 0) &&
                     ActorScalarFrameAbiV1.ReadI64(context, saved!, 1) == 42,
-                "typed PC/bool/i64 native bytes survive carrier turn handoff");
+                "fresh invocation owns its typed PC/bool/i64 native bytes");
             Span<byte> headerBytes = stackalloc byte[16];
             context.ReadStackFrame(saved!, 0, headerBytes);
             Require(headerBytes[0] == (byte)'A' && headerBytes[1] == (byte)'T' &&
@@ -138,6 +146,34 @@ internal static class ActorScalarFrameAbiSelfTest
                 "int slot cannot masquerade as bool");
             RejectInvalid(() => ActorScalarFrameAbiV1.WriteBool(context, saved!, 1, false),
                 "verified i64 slot cannot be rewritten as bool");
+
+            // Direct raw writes are still trusted-host APIs. They may corrupt
+            // native tags, but cannot retype the independent sealed CFG schema.
+            byte[] originalI64 = new byte[ActorScalarFrameAbiV1.SlotBytes];
+            context.ReadStackFrame(saved!, ActorScalarFrameAbiV1.HeaderBytes +
+                ActorScalarFrameAbiV1.SlotBytes, originalI64);
+            var forgedBool = new byte[ActorScalarFrameAbiV1.SlotBytes];
+            forgedBool[0] = 2;
+            forgedBool[1] = 2;
+            forgedBool[8] = 1;
+            context.WriteStackFrame(saved!, ActorScalarFrameAbiV1.HeaderBytes +
+                ActorScalarFrameAbiV1.SlotBytes, forgedBool);
+            RejectInvalid(() => { _ = ActorScalarFrameAbiV1.ReadBool(context, saved!, 1); },
+                "forged native bool tags cannot retype an issued i64 slot");
+            RejectInvalid(() => ActorScalarFrameAbiV1.WriteBool(context, saved!, 1, true),
+                "forged native tag must not authorize type-changing writes");
+            context.WriteStackFrame(saved!, ActorScalarFrameAbiV1.HeaderBytes +
+                ActorScalarFrameAbiV1.SlotBytes, originalI64);
+            Require(ActorScalarFrameAbiV1.ReadI64(context, saved!, 1) == 42,
+                "restoring the original bytes preserves the sealed i64 schema");
+
+            context.WriteStackFrame(saved!, 8, new byte[] { 2, 0, 0, 0 });
+            RejectInvalid(() => { _ = ActorScalarFrameAbiV1.ReadProgramCounter(context, saved!); },
+                "forged block-count header cannot redefine verified CFG layout");
+            context.WriteStackFrame(saved!, 8, new byte[] { 1, 0, 0, 0 });
+            Require(ActorScalarFrameAbiV1.ReadProgramCounter(context, saved!) == 0,
+                "restored block count re-admits the original sealed frame");
+
             RejectRange(() => ActorScalarFrameAbiV1.SetProgramCounter(
                 context, saved!, plan.BlockCount),
                 "compiler PC bounds enforced");
