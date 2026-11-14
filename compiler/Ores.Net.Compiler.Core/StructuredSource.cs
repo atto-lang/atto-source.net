@@ -163,6 +163,13 @@ public static partial class OresStructuredParser
         while (true)
         {
             var token = lexer.Read();
+            // Comments and trivia are already stripped by this Lexer. Deny
+            // namespace member access until ETS/pg isolation, ownership,
+            // generational table handles and mailbox ingress exist in Native AOT.
+            if (token.Text == "." && tokens.Count > 0 &&
+                (tokens[^1].Text is "ets" or "pg"))
+                throw new FormatException(
+                    $"ETS/pg guest APIs require authenticated isolate, table and actor-mailbox lowering (unsupported .NET bootstrap) at offset {token.Offset}");
             // Durable M0 is metadata-only in the Java compiler. Never let
             // activity/workflow declarations silently reach scalar CIL lowering
             // before a typed history manifest, replay ABI and ownership gate exist.
@@ -324,6 +331,7 @@ public static partial class OresStructuredParser
     private sealed class Lexer(string source, bool moduleMode = false)
     {
         private int index;
+        private bool previousWasWith;
         public Token Read()
         {
             while (index < source.Length)
@@ -371,6 +379,12 @@ public static partial class OresStructuredParser
             int offset = index;
             if (index == source.Length) return new Token("", index);
             char ch = source[index];
+            bool precededByWith = previousWasWith;
+            previousWasWith = false;
+            if (precededByWith && ch == '{')
+                throw new FormatException(
+                    $"WITH_BACKEND_UNSUPPORTED: immutable with requires checked rt copy/take, "
+                    + $"owned field layout/drop and Native AOT reconstruction at offset {index}");
             // Keep safe-collection denial from current main in the separate
             // structured/linked parser, including when Option<int> is enabled.
             SafeCollectionSourceAdmission.RejectUnverifiedBracket(ch, offset);
@@ -518,6 +532,7 @@ public static partial class OresStructuredParser
             if (tokenText == "enum")
                 throw new FormatException(
                     $"nominal enum overloads require compiler-bound dispatch (unsupported .NET bootstrap) at offset {offset}");
+            previousWasWith = tokenText == "with";
             // The opt-in structured compiler has independently verified closed
             // Option<int> lowering; unlike the shipping scalar frontend it
             // must admit Option/Some/None tokens. Everything else in the
