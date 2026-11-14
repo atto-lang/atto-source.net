@@ -37,7 +37,7 @@ define module collections as
   }
 
   pub fnc map_vector<T, U>(Vector<T> values, Fnc<U(T)> transform): Vector<U> {
-    let mut Vector<U> output = new Array<U>();
+    let mut Vector<U> output = new Vector<U>();
     val int original_size = values.size;
     for (let i = 0; i < original_size; i++) do
       output.add(transform(values.get(i)));
@@ -46,7 +46,7 @@ define module collections as
   }
 
   pub fnc filter_vector<T>(Vector<T> values, Fnc<bool(T)> predicate): Vector<T> {
-    let mut Vector<T> output = new Array<T>();
+    let mut Vector<T> output = new Vector<T>();
     val int original_size = values.size;
     for (let i = 0; i < original_size; i++) do
       val T element = values.get(i);
