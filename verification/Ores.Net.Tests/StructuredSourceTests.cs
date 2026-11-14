@@ -51,6 +51,28 @@ internal static class StructuredSourceTests
 
     public static void Run()
     {
+        // AST identity and constant provenance must stay independent: a
+        // default readonly typed binding is NOT an explicit constexpr const.
+        var immutableDefaults = OresStructuredParser.Parse(
+            "fnc main():int{int x=7;bool good=true;const int c=7;val int v=7;let int m=7;return x;}");
+        Require(immutableDefaults.Body[0] is StructuredLet {
+            Name: "x", Kind: StructuredBindingKind.Readonly, ValueType: IrValueType.I64
+        }, "int x must be a readonly non-constexpr binding");
+        Require(immutableDefaults.Body[1] is StructuredLet {
+            Name: "good", Kind: StructuredBindingKind.Readonly, ValueType: IrValueType.Bool
+        }, "bool x must be a readonly non-constexpr binding");
+        Require(immutableDefaults.Body[2] is StructuredLet {
+            Name: "c", Kind: StructuredBindingKind.Const
+        }, "explicit const retains its constexpr identity");
+        Require(immutableDefaults.Body[3] is StructuredLet {
+            Name: "v", Kind: StructuredBindingKind.Val
+        }, "val remains an independent single-assignment spelling");
+        Require(immutableDefaults.Body[4] is StructuredLet {
+            Name: "m", Kind: StructuredBindingKind.Let
+        }, "let remains the only rebindable local");
+        Reject("fnc main():int{int x=7;x=8;return x;}",
+            "readonly type-first rebinding is forbidden");
+
         // Injected mutable containers are not the current scalar backend's
         // ordinary metadata. Require a feature-specific diagnostic, not a
         // generic invalid-character parse rejection or fake CIL success.
@@ -303,6 +325,68 @@ internal static class StructuredSourceTests
         Require(constantBool.Body[1] is StructuredIf {
             Condition: StructuredBool { Value: true }
         }, "compile-time bool may appear in typed conditionals");
+        // Java/LLVM/.NET scalar inference and checked-cast conformance.
+        foreach (var declaration in new[] {
+            "int x=7;const y=x;const int z=y as int;return z+35;",
+            "bool flag=true;if flag{return 42;}else{return 0;}",
+            "int x=(2+5) as int;return x+35;",
+            "const int x=7;const y=7 as int;return x+y+28;",
+            "const x=7;const int y=x as int;return y+35;",
+            "const x:int=7;return x+35;",
+            "const x=7 as int;return x+35;",
+            "return (7 as int)+35;",
+            "return (7 as int as int)+35;",
+            "const x=(2+5) as int;return x+35;",
+            "const x=7 as int as int;return x+35;",
+            "const x=7;const y=x as int;return y+35;",
+            "const x=true; if x {return 42;}else{return 0;}",
+            "const bool x=true as bool;if x{return 42;}else{return 0;}",
+            "const x=(7 eq 7) as bool;if x{return 42;}else{return 0;}",
+            "let x=7 as int;x=42;return x;",
+            "val x=42;const y=x as int;return y;",
+            "val bool x=true;const y=x as bool;if y{return 42;}else{return 0;}",
+            "const x=7;if true{const nested=x as int;return nested+35;}else{return 0;}",
+            "const x=7;return (x+35) as int;"
+        })
+        {
+            var unit = OresStructuredParser.Parse("fnc main():int{" + declaration + "}");
+            Require(unit.Body.Count > 0, "valid inferred/cast source rejected: " + declaration);
+        }
+        var checkedBindings = OresStructuredParser.Parse(
+            "fnc main():int{const int x=7;const y=7 as int;const z=7;return x+y+z+21;}");
+        foreach (var statement in checkedBindings.Body.Take(3))
+            Require(statement is StructuredLet {
+                Kind: StructuredBindingKind.Const, ValueType: IrValueType.I64
+            }, "all three scalar declarations infer identical immutable int type");
+        var inferredBool = OresStructuredParser.Parse(
+            "fnc main():int{const ok=true as bool;if ok{return 42;}else{return 0;}}");
+        Require(inferredBool.Body[0] is StructuredLet {
+            Kind: StructuredBindingKind.Const, ValueType: IrValueType.Bool
+        }, "bool cast must preserve bool inference, never i64 storage type");
+        foreach (var invalid in new[] {
+            "int x=true;return 42;",
+            "bool x=7;return 42;",
+            "int x=7;x=8;return x;",
+            "const x=7 as bool;return 42;",
+            "return 7 as bool;",
+            "return true as int;",
+            "return 9223372036854775808 as int;",
+            "const x=true as int;return 42;",
+            "const x=7 as? int;return 42;",
+            "const x=7 as Thing;return 42;",
+            "const int x=true;return 42;",
+            "const bool x=7;return 42;",
+            "const x=true;const int y=x;return 42;",
+            "const x=7;const bool y=x;return 42;",
+            "const x=7 as bool as int;return 42;",
+            "const x=7 as int;x=8;return 42;",
+            "const bool x=7 as int;return 42;",
+            "const x=true;return x+1;",
+            "let x=true;x=7;return 42;",
+            "const x=missing;return 42;",
+            "const x=x;return 42;"
+        }) Reject("fnc main():int{" + invalid + "}", "scalar cast/inference fail-closed " + invalid);
+
         var runtimeBool = OresStructuredParser.Parse("""
             fnc main():int {
                 val bool enabled = true;
@@ -319,10 +403,19 @@ internal static class StructuredSourceTests
             "const is immutable");
         Reject("fnc main():int{val bool v=true;if v {v=false;}return 1;}",
             "nested blocks cannot mutate outer val");
-        Reject("fnc main():int{let int x=2;const int c=x;return c;}",
-            "mutable input cannot become compile-time constant");
-        Reject("fnc main():int{val int x=2;const int c=x;return c;}",
-            "runtime single-write val is not const");
+        // Unlike a compile-time constant-expression requirement, Oreslang
+        // const is an immutable *binding* and may be initialized at runtime.
+        foreach (var source in new[] {
+            "fnc main():int{let int x=2;const int c=x;return c;}",
+            "fnc main():int{val int x=2;const int c=x;return c;}"
+        })
+        {
+            var runtimeConst = OresStructuredParser.Parse(source);
+            Require(runtimeConst.Body[1] is StructuredLet {
+                Name: "c", Kind: StructuredBindingKind.Const,
+                Initializer: StructuredRead { Type: IrValueType.I64 }
+            }, "runtime-initialized const must not acquire fake compile-time value");
+        }
         Reject("fnc main():int{const int x=9223372036854775807+1;return x;}",
             "const arithmetic must trap during admission");
         Reject("fnc main():int{const int x=-(-9223372036854775808);return x;}",

@@ -27,7 +27,7 @@ public sealed record StructuredBinary(int At, StructuredOperator Operator,
 public abstract record StructuredStmt(int Offset);
 // Compile-time const, single-assignment val, and mutable let are distinct
 // source bindings; the experimental structured AST preserves that distinction.
-public enum StructuredBindingKind { Let, Val, Const }
+public enum StructuredBindingKind { Let, Val, Const, Readonly }
 public enum StructuredLocalTypeKind { Struct, Record }
 public sealed record StructuredLocalField(string Name, IrValueType Type);
 public sealed record StructuredLocalTypeDecl(int At, string Name,
@@ -792,25 +792,67 @@ public static class OresStructuredParser
                 Expect(";");
                 return (new StructuredReturn(at, value), true);
             }
-            if (Current.Text is "let" or "val" or "const")
+            if (Current.Text is "let" or "val" or "const" or "int" or "bool")
             {
-                StructuredBindingKind kind = Current.Text switch
+                // Bare type-first locals are immutable by default:
+                //   int x=e;  == const int x=e;
+                // Explicit let is the only rebindable scalar binding.
+                bool typeFirstImmutable = Current.Text is "int" or "bool";
+                // A runtime-initialized readonly scalar is NOT an explicit
+                // compile-time const, even if later optimizers fold its value.
+                StructuredBindingKind kind = typeFirstImmutable
+                    ? StructuredBindingKind.Readonly
+                    : Current.Text switch
+                    {
+                        "let" => StructuredBindingKind.Let,
+                        "val" => StructuredBindingKind.Val,
+                        _ => StructuredBindingKind.Const
+                    };
+                bool annotated;
+                IrValueType type = IrValueType.I64;
+                string name;
+                int nameAt;
+                if (typeFirstImmutable)
                 {
-                    "let" => StructuredBindingKind.Let,
-                    "val" => StructuredBindingKind.Val,
-                    _ => StructuredBindingKind.Const
-                };
-                index++;
-                var type = Type();
-                int nameAt = Current.Offset;
-                string name = Name();
+                    annotated = true;
+                    type = Type();
+                    nameAt = Current.Offset;
+                    name = Name();
+                }
+                else
+                {
+                    index++;
+                    // Prefix forms admit const int x=e, const x:int=e, const x=e.
+                    // A declaration's type is a check; it is not a cast.
+                    annotated = Current.Text is "int" or "bool";
+                    if (annotated)
+                    {
+                        type = Type();
+                        nameAt = Current.Offset;
+                        name = Name();
+                    }
+                    else
+                    {
+                        nameAt = Current.Offset;
+                        name = Name();
+                        if (Take(":"))
+                        {
+                            type = Type();
+                            annotated = true;
+                        }
+                    }
+                }
                 if (scopes.Any(scope => scope.ContainsKey(name)))
                     throw new FormatException($"Duplicate local binding at offset {nameAt}");
                 Expect("=");
                 var initializer = Expr(depth + 1);
-                Require(initializer, type, "Local initializer has wrong type");
+                if (annotated)
+                    Require(initializer, type, "Local initializer has wrong type");
+                else
+                    type = initializer.Type; // No i64 fallback for bool or unsupported types.
                 long? constantValue = null;
-                if (kind == StructuredBindingKind.Const)
+                if (kind == StructuredBindingKind.Const &&
+                    IsCompileTimeScalar(initializer))
                 {
                     try { constantValue = ConstantValue(initializer); }
                     catch (OverflowException)
@@ -901,8 +943,19 @@ public static class OresStructuredParser
             throw new FormatException($"Undefined local '{name}' at offset {at}");
         }
 
-        // This closed scalar subset evaluates const initializers at admission
-        // time with checked i64 semantics. Calls and runtime locals fail closed.
+        // A source const is a fixed binding, not a demand for compile-time
+        // evaluation. Fold pure scalar literals, retaining runtime initializer
+        // expression and immutable binding for calls/reads. Do not mask overflow.
+        private static bool IsCompileTimeScalar(StructuredExpr expression) =>
+            expression switch
+            {
+                StructuredInt or StructuredBool => true,
+                StructuredNegate unary => IsCompileTimeScalar(unary.Value),
+                StructuredBinary binary => IsCompileTimeScalar(binary.Left)
+                                           && IsCompileTimeScalar(binary.Right),
+                _ => false
+            };
+
         private static long ConstantValue(StructuredExpr expression)
         {
             switch (expression)
@@ -952,8 +1005,29 @@ public static class OresStructuredParser
         private StructuredExpr Compare(int depth)
         {
             var left = Add(depth + 1);
-            while (Current.Text is "<" or ">")
+            while (true)
             {
+                if (Current.Text == "as")
+                {
+                    int castAt = Current.Offset;
+                    index++;
+                    if (Take("?"))
+                        throw new FormatException(
+                            $"Optional cast as? requires verified Option<T> lowering at offset {castAt}");
+                    if (Current.Text is not ("int" or "bool"))
+                        throw new FormatException(
+                            $"Checked cast requires a reifiable supported scalar target at offset {castAt}");
+                    IrValueType target = Type();
+                    // .NET scalar bootstrap has no tagged dynamic value:
+                    // checked identity is the only provable cast. Do not bitcast.
+                    if (left.Type != target)
+                        throw new FormatException(
+                            $"Impossible checked scalar cast at offset {castAt}");
+                    // Static checked identity: deliberately retain the operand,
+                    // once evaluated, rather than add a conversion node.
+                    continue;
+                }
+                if (Current.Text is not ("<" or ">")) break;
                 int at = Current.Offset;
                 bool greater = Take(">");
                 if (!greater) Expect("<");
@@ -1104,9 +1178,9 @@ public static class OresStructuredParser
                 return node;
             }
             var binding = Lookup(name, offset);
-            if (binding.Kind == StructuredBindingKind.Const)
+            if (binding.Kind == StructuredBindingKind.Const && binding.ConstantValue.HasValue)
             {
-                long constant = binding.ConstantValue!.Value;
+                long constant = binding.ConstantValue.Value;
                 return binding.Type == IrValueType.Bool
                     ? new StructuredBool(offset, constant != 0)
                     : new StructuredInt(offset, constant);
