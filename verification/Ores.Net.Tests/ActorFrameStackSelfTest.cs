@@ -426,7 +426,7 @@ internal static class ActorFrameStackSelfTest
             when (denied.Message.Contains(
                       "Actor logical frame authority cannot be", StringComparison.Ordinal) ||
                   denied.Message.Contains(
-                      "Actor execution authority cannot be serialized", StringComparison.Ordinal))
+                      "Actor execution authority cannot be", StringComparison.Ordinal))
         {
             // A generic NativeAOT serializer-metadata failure is NOT evidence
             // that the actor handle's deliberate no-wire converter ran.
