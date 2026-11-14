@@ -550,6 +550,29 @@ ActorStateLayoutIntegrationTests.Run();
 ActorGeneratedCounterTests.Run();
 DeclaredActorCounterV2Tests.Run();
 SourceByteBudgetTests.Run();
+ExecutionGraphV1Tests.Run();
+OwnedF32RegionV1Tests.Run();
+OwnedF32GraphV1Tests.Run();
+
+// The scalar bootstrap must reserve each execution-domain/nb form and
+// reject it before emitting a misleading CIL host fallback.
+foreach (var forbidden in new[] {
+    "gpu {}", "cpu {}", "nb gpu {}", "nb cpu {}",
+    "gpu { cpu { gpu {} } }", "nb gpu { nb cpu {} }",
+    "gpu", "cpu", "nb"
+})
+{
+    try { _ = OresParser.Parse("fnc main():int{return " + forbidden + ";}"); }
+    catch (FormatException ex) when (ex.Message.Contains(
+        // Main's execution-region admission (newer) owns the wording; the
+        // contract is the explicit refusal of any implicit CPU fallback.
+        "no implicit CPU fallback",
+        StringComparison.Ordinal)) { continue; }
+    throw new Exception("Unsupported execution domain was not specifically rejected: " + forbidden);
+}
+Require(OresParser.Parse("fnc main():int{return 42;} // nb gpu { cpu {} }") is Literal,
+    "commented execution keywords must not be admitted as code");
+
 ActorPipelineSelectorTests.Run(); // v1 selector-only contract
 ElmCompositionAdmissionTests.Run();
 HeapContainerSourceBoundaryTests.Run(); // actual scalar compiler fail-closed heap/container checks
