@@ -77,7 +77,7 @@ public static partial class OresParser
             // lowering. Detect at the token boundary, before later syntax is
             // mistaken for an executable scalar helper.
             int i = tokens.Count - 1;
-            if (token.Text is "actor" or "isoactor" &&
+            if ((token.Text is "actor" or "isoactor") &&
                 i > 0 &&
                 (tokens[i - 1].Text == "declare" ||
                  (i > 1 && tokens[i - 1].Text == "pub" &&
