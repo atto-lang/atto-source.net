@@ -68,6 +68,9 @@ internal static class ActorNativeArenaSelfTest
         Require(!staleScope.CleanupOk && arena.LiveAllocations == 0,
             "stale tracked owner is reported without suppressing later cleanup");
 
+        AggregateLazyGrowthBudgetRefundsAfterNativeFree();
+        LazyBackingGrowthPreservesActorOffsets();
+        OddQuotaBackingAlignment();
         ConcurrentDisposeDoesNotRaceNativeAccess();
         RejectUnboundedNativeArenaReservation();
         PersistentRootAndTemporaryTailChurn();
@@ -75,6 +78,99 @@ internal static class ActorNativeArenaSelfTest
         SteadyStateManagedAllocationBudget();
         PersistentRootManagedAllocationBudget();
         Console.WriteLine("PASS .NET unmanaged actor arena, primitive handles, stack cleanup scopes");
+    }
+
+    private static void AggregateLazyGrowthBudgetRefundsAfterNativeFree()
+    {
+        var quota = new ActorArenaBudget(256);
+        long processBefore = ActorArenaBudget.Process.ReservedBytes;
+        using var actorA = new ActorNativeArena(128, 2, quota);
+        using var actorB = new ActorNativeArena(128, 2, quota);
+        using var actorC = new ActorNativeArena(128, 2, quota);
+        Require(quota.ReservedBytes == 0, "constructors do not precharge native capacity");
+
+        ulong a = actorA.Allocate(8);
+        ulong b = actorB.Allocate(8);
+        Require(a != 0 && b != 0 && quota.ReservedBytes == 256,
+            "separate actors charge actual native backing to tenant quota");
+        Require(actorA.WriteInt64(a, 0, 101) && actorB.WriteInt64(b, 0, 202),
+            "both actors retain private bytes at aggregate budget limit");
+        RejectInvalid(() => _ = actorC.Allocate(8),
+            "third actor is rejected before native growth exceeds tenant quota");
+        Require(actorC.BackingBytes == 0 && quota.ReservedBytes == 256,
+            "rejected growth never publishes backing or leaks reservation");
+
+        actorA.Dispose();
+        Require(quota.ReservedBytes == 128 && actorB.ReadInt64(b) == 202,
+            "scrubbed actor A physically refunds quota while B survives");
+        ulong c = actorC.Allocate(8);
+        Require(c != 0 && actorC.ReadInt64(c) == 0,
+            "actor C can use returned capacity and sees only zeroed memory");
+        actorB.Dispose();
+        actorC.Dispose();
+        Require(quota.ReservedBytes == 0 &&
+                ActorArenaBudget.Process.ReservedBytes == processBefore,
+            "tenant and process budgets return to original values exactly once");
+    }
+
+    private static void LazyBackingGrowthPreservesActorOffsets()
+    {
+        // Maximum actor heap capacity is a quota, not 64 MiB eagerly mapped.
+        using var actorA = new ActorNativeArena(20 * 1024, 8);
+        using var actorB = new ActorNativeArena(20 * 1024, 8);
+        Require(actorA.BackingBytes == 0 && actorB.BackingBytes == 0,
+            "fresh actors do not eagerly allocate their maximum native backing");
+        ulong aRoot = actorA.Allocate(16, 8);
+        ulong bRoot = actorB.Allocate(16, 8);
+        Require(aRoot != 0 && bRoot != 0, "independent actor root admission");
+        Require(actorA.BackingBytes == 4096 && actorB.BackingBytes == 4096,
+            "first payload commits only a small aligned native slab");
+        Require(actorA.WriteInt64(aRoot, 0, 101) &&
+                actorB.WriteInt64(bRoot, 0, 202),
+            "independent actor roots initialized");
+
+        ulong growing = actorA.Allocate(8192, 64);
+        Require(growing != 0 && actorA.BackingBytes >= 8192 + 16,
+            "actor A grows only when allocation needs additional bytes");
+        Require(actorB.BackingBytes == 4096,
+            "growth does not allocate or mutate a sibling actor heap");
+        Require(actorA.ReadInt64(aRoot) == 101 && actorB.ReadInt64(bRoot) == 202,
+            "growth preserves live allocation handles and private bytes");
+        Require(actorA.ReadInt64(growing) == 0,
+            "newly grown native memory is zero initialized");
+        Require(actorA.WriteInt64(growing, 0, 303) &&
+                actorA.ReadInt64(growing) == 303,
+            "new allocation usable after relocation");
+
+        int beforeFailure = actorA.BackingBytes;
+        Require(actorA.Allocate(20 * 1024, 8) == ActorNativeArena.InvalidHandle,
+            "per-actor maximum rejects over-quota growth");
+        Require(actorA.BackingBytes == beforeFailure &&
+                actorA.ReadInt64(aRoot) == 101 &&
+                actorA.ReadInt64(growing) == 303,
+            "failed growth leaves live heap contents and accounting unchanged");
+        Require(!actorA.WriteInt64(bRoot, 0, 999),
+            "same logical slot in a foreign arena is not a transferable handle");
+        Require(actorA.Drop(growing) && actorA.Drop(aRoot) && actorB.Drop(bRoot),
+            "all native payload ownership deterministically released");
+    }
+
+    private static void OddQuotaBackingAlignment()
+    {
+        using var actor = new ActorNativeArena(129, 3);
+        Require(actor.BackingBytes == 0, "odd actor quota has no initial native slab");
+        ulong a = actor.Allocate(16, 16);
+        ulong b = actor.Allocate(64, 64);
+        Require(a != 0 && b != 0,
+            "growth uses a 64-byte aligned physical slab even for odd logical quotas");
+        Require(actor.BackingBytes >= 129,
+            "native backing is rounded to its allocator alignment");
+        Require(actor.Allocate(32, 8) == ActorNativeArena.InvalidHandle,
+            "physical alignment padding never increases logical actor quota");
+        Require(actor.Drop(b) && actor.Drop(a),
+            "odd quota is scrubbed and reclaimed");
+        actor.Dispose();
+        Require(actor.BackingBytes == 0, "disposing actor returns native backing");
     }
 
     private static void SteadyStateManagedAllocationBudget()
