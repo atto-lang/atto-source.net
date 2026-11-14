@@ -113,6 +113,8 @@ public static class ActorIncrementSourceEmitter
         b.AppendLine("        });");
         b.AppendLine("    }");
         b.AppendLine("}");
-        return b.ToString();
+        // Match the checked-in LF-only source goldens on Windows and Linux.
+        // A NativeAOT source identity must be based on bytes, not the host OS.
+        return b.ToString().Replace("\r\n", "\n", StringComparison.Ordinal);
     }
 }

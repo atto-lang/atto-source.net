@@ -15,6 +15,9 @@
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../value-boundary-rejections.json" Link="value-boundary-rejections.json"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/v1/actor-pipeline-routing-v1.json"
+          Link="actor-pipeline-routing-v1.json"
+          CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/actor-counter-identical-source-v1/corpus.json"
           Link="contracts/actor-counter-identical-source-v1/corpus.json"
           CopyToOutputDirectory="PreserveNewest" />
@@ -22,6 +25,12 @@
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/durable-m0/v1/checkout.atto"
           Link="contracts/durable-m0/v1/checkout.atto"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/mtd-receiver-v1/*.atto"
+          Link="contracts/mtd-receiver-v1/%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/actor-forwards-v1/*.atto"
+          Link="contracts/actor-forwards-v1/%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/durable-m0/v1/manifest-v1.json"
           Link="contracts/durable-m0/v1/manifest-v1.json"
@@ -43,6 +52,13 @@
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../tests/fixtures/actor-pipe-two-stage.atto"
           Link="actor-pipe-two-stage.atto" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../tests/fixtures/actor-pipe-three-stage.atto"
+          Link="actor-pipe-three-stage.atto" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Portable source candidates remain fail-closed until real NativeAOT
+         actor graph and source-bound emit lowering exists. -->
+    <None Include="../../contracts/actor-pipe-emitted-v3/*.atto"
+          Link="contracts/actor-pipe-emitted-v3/%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/logical-word-operators-v1/**/*"
           Link="contracts/logical-word-operators-v1/%(RecursiveDir)%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest" />

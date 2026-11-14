@@ -1,0 +1,4 @@
+// Canonical read receiver; .NET must reject until checked nominal CIL lowering.
+mtd (self: Point) read_x(): int {
+  return self.x;
+}
