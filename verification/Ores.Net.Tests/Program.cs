@@ -400,6 +400,7 @@ HeapContainerSourceBoundaryTests.Run(); // actual scalar compiler fail-closed he
 StructuralPatternAdmissionTests.Run();
 AdtSourceAdmissionTests.Run();
 NumericSeparatorParityTests.Run();
+ExplicitExportSyntaxTests.Run();
 CrossBackendCheckedI64ParityTests.Run();
 ActorHierarchyMlAdmissionTests.Run();
 AsyncInteropFailClosedTests.Run();
@@ -475,6 +476,7 @@ ActorFinalizationV1SelfTest.Run();
 ActorMailboxAuthorizationPrioritySelfTest.Run();
 ActorMailboxPrivateDataSelfTest.Run();
 ActorArenaSelfTest.Run();
+StateRegionLoanProvenanceSelfTest.Run();
 ActorIsolationAccessV1SelfTest.Run();
 ActorShardColumnsSelfTest.Run();
 SelectArbiterSelfTest.Run();
@@ -1061,6 +1063,7 @@ Require(await RuntimeHost.ExecuteAsync(() => throw new DivideByZeroException()) 
 ActorCooperationMeterTests.Run(); // host-only, not compiled guest preemption
 ManagedSourceEmitterTests.Run();
 SourceI64Conformance.Run();
+HpcFinanceRiskHostParityTests.Run(); // host oracle + source rejection, not .NET f64 guest parity
 SharedScalarParityConformance.Run();
 AttoXpScalarParityTests.Run(); // pinned .atto scalar IR + CIL evaluator only
 CfgVerifierTests.Run();

@@ -20,9 +20,15 @@
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/v1/source-i64/portable-i64.v1.json" Link="portable-i64.v1.json"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/v1/state-region-provenance-v1.json" Link="state-region-provenance-v1.json"
+          CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../examples/structured-bindings42.ores" Link="structured-bindings42.ores"
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../examples/actor-counter-target.ores" Link="actor-counter-target.ores"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/v1/hpc-finance/guest-manifest.json" Link="hpc-finance-guests-v1.json"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/v1/hpc-finance/risk-gate-v1.tsv" Link="hpc-finance-risk-v1.tsv"
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../tests/fixtures/actor-pipe-two-stage.atto"
           Link="actor-pipe-two-stage.atto" CopyToOutputDirectory="PreserveNewest" />
