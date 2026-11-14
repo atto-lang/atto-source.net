@@ -257,17 +257,26 @@ internal static class SelectContinuationFenceSelfTest
         DeliveryRechecksGenerationAfterQueueing();
     }
 }
+using Ores.Net.Runtime;
 
 // No actor scheduler integration is assumed: this verifies the fence's
 // bounded, generation-owned ticket admission and terminal shutdown contract.
+internal static class SelectContinuationFenceSelfTest
+{
     private static void Require(bool ok, string why)
+    {
         if (!ok) throw new Exception("select continuation fence: " + why);
+    }
 
     private static void Reject<T>(Action action, string why) where T : Exception
+    {
         try { action(); }
         catch (T) { return; }
         throw new Exception("select continuation fence admitted " + why);
+    }
 
+    public static void Run()
+    {
         Reject<ArgumentOutOfRangeException>(
             () => _ = new SelectContinuationFence(generation: 0),
             "zero generation");
@@ -358,6 +367,7 @@ internal static class SelectContinuationFenceSelfTest
         var replay = replayFence.Register(9);
         int replayWinners = 0;
         Parallel.For(0, 128, _ =>
+        {
             if (replayFence.TryConsume(replay))
                 Interlocked.Increment(ref replayWinners);
         });
@@ -372,6 +382,7 @@ internal static class SelectContinuationFenceSelfTest
             SelectContinuationFence.Ticket>();
         int rejected = 0;
         Parallel.For(0, 128, _ =>
+        {
             try { accepted.Add(parallelFence.Register(10)); }
             catch (InvalidOperationException)
             {
@@ -383,6 +394,7 @@ internal static class SelectContinuationFenceSelfTest
                 accepted.All(ticket => ticket.Active),
             "concurrent admission must preserve exact capacity");
         Parallel.ForEach(accepted, ticket =>
+        {
             if (!ticket.Close())
                 throw new Exception("concurrent ticket retirement failed");
         });
@@ -435,6 +447,8 @@ internal static class SelectContinuationFenceSelfTest
         // Exercise the four competing linearization points repeatedly.
         // Consumption and ticket close are mutually exclusive; advance may
         // win either side, but terminal close always leaves no live receipts.
+        for (var round = 0; round < 256; round++)
+        {
             var stressedFence = new SelectContinuationFence(
                 generation: 22, maxTickets: 1);
             var stressedTicket = stressedFence.Register(22);
@@ -454,5 +468,8 @@ internal static class SelectContinuationFenceSelfTest
                     !stressedFence.TryConsume(stressedTicket) &&
                     !stressedFence.Advance(stressedFence.Generation),
                 "256-round terminal lifecycle race preserves ticket isolation");
+        }
 
         Console.WriteLine("Select continuation fence lifecycle checks passed");
+    }
+}
