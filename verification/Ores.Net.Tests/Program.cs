@@ -543,6 +543,7 @@ ActorStateLayoutIntegrationTests.Run();
 ActorGeneratedCounterTests.Run();
 DeclaredActorCounterV2Tests.Run();
 SourceByteBudgetTests.Run();
+ActorPipelineSelectorTests.Run(); // v1 selector-only contract
 ElmCompositionAdmissionTests.Run();
 HeapContainerSourceBoundaryTests.Run(); // actual scalar compiler fail-closed heap/container checks
 StructuralPatternAdmissionTests.Run();

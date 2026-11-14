@@ -15,6 +15,9 @@
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../value-boundary-rejections.json" Link="value-boundary-rejections.json"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/v1/actor-pipeline-routing-v1.json"
+          Link="actor-pipeline-routing-v1.json"
+          CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/actor-counter-identical-source-v1/corpus.json"
           Link="contracts/actor-counter-identical-source-v1/corpus.json"
           CopyToOutputDirectory="PreserveNewest" />
