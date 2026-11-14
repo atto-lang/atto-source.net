@@ -1,4 +1,5 @@
 using Mono.Cecil;
+using Mono.Cecil.Cil;
 using System.Security.Cryptography;
 using System.Text;
 using Ores.Net.Compiler;
@@ -64,6 +65,36 @@ internal static class StructuredCfgLoweringTests
             catch (OverflowException) { cilTrapped = true; }
             if (!cilTrapped)
                 throw new Exception("Structured CIL lost checked overflow: " + label);
+        }
+        finally { Directory.Delete(folder, recursive: true); }
+    }
+
+    // Inspect emitted PE opcodes: unsigned CIL comparisons can pass positive-only tests.
+    // This is an IL-shape gate, separate from reference and interpreted execution.
+    private static void CheckSignedOpcode(string comparison, Code expected, bool inverted)
+    {
+        var graph = OresStructuredCfgLowering.Lower(
+            "fnc main():int{if " + comparison + "{return 42;}else{return 0;}}");
+        string folder = Path.Combine(Path.GetTempPath(),
+            "ores-relational-il-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            string path = Path.Combine(folder, "OresGenerated.dll");
+            CilEmitter.EmitLibrary(graph, path);
+            using var assembly = AssemblyDefinition.ReadAssembly(path);
+            var run = assembly.MainModule.Types.Single(t =>
+                t.FullName == "Oreslang.Generated.OresProgram")
+                .Methods.Single(m => m.Name == "Run");
+            var codes = run.Body.Instructions.Select(i => i.OpCode.Code).ToArray();
+            int index = Array.IndexOf(codes, expected);
+            bool hasInversion = index >= 0 && index + 2 < codes.Length &&
+                codes[index + 1] == Code.Ldc_I4_0 && codes[index + 2] == Code.Ceq;
+            int relationalOps = codes.Count(c => c is Code.Clt or Code.Cgt or
+                Code.Clt_Un or Code.Cgt_Un);
+            if (index < 0 || relationalOps != 1 || hasInversion != inverted ||
+                codes.Contains(Code.Clt_Un) || codes.Contains(Code.Cgt_Un))
+                throw new Exception("Unsigned/malformed comparison CIL: " + comparison);
         }
         finally { Directory.Delete(folder, recursive: true); }
     }
@@ -143,6 +174,56 @@ internal static class StructuredCfgLoweringTests
             }
             """;
         Check(sum, 45, "two loop-carried SSA values sum 0..9");
+        // Signed relational source must execute through verified CFG and
+        // emitted CIL; parser-only acceptance is not parity evidence.
+        Check(File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
+            "structured-signed-comparisons.atto")), 42,
+            "canonical .atto signed comparisons and typed helper");
+        foreach (var (comparison, result) in new (string, bool)[] {
+            ("-7 > -8", true), ("-8 > -7", false),
+            ("7 >= 7", true), ("7 >= 8", false),
+            ("7 <= 7", true), ("8 <= 7", false),
+            ("-9223372036854775808 > -9223372036854775808", false),
+            ("9223372036854775807 > -9223372036854775808", true),
+            ("-9223372036854775808 <= -9223372036854775808", true),
+            ("9223372036854775807 >= 9223372036854775807", true),
+            ("-9223372036854775808 >= 9223372036854775807", false),
+            ("9223372036854775807 <= -9223372036854775808", false)
+        })
+            Check("fnc main():int{if " + comparison +
+                "{return 42;}else{return 0;}}", result ? 42 : 0,
+                "signed relational CIL: " + comparison);
+        Check("fnc main():int{const bool within = -9223372036854775808 <= " +
+            "9223372036854775807;if within{return 42;}return 0;}", 42,
+            "compile-time bool relational evaluation");
+        CheckSignedOpcode("-9223372036854775808 < 0", Code.Clt, false);
+        CheckSignedOpcode("-9223372036854775808 > 0", Code.Cgt, false);
+        CheckSignedOpcode("-9223372036854775808 <= 0", Code.Cgt, true);
+        CheckSignedOpcode("-9223372036854775808 >= 0", Code.Clt, true);
+        Check("fnc main():int{let int lhs=-8;val int rhs=-7;if lhs<=rhs{return 42;}return 0;}",
+            42, "runtime local signed comparison");
+        Check("fnc main():int{let int x=0;while x<3{x=x+1;}if x>=3{return 42;}return 0;}",
+            42, "relational operator after loop SSA join");
+        Check("fnc main():int{const bool no=7>8;if no{return 0;}return 42;}",
+            42, "compile-time false signed relation");
+        Check("fnc main():int{if false{if (9223372036854775807+1)>=0{return 0;}}return 42;}",
+            42, "unselected signed comparison cannot overflow");
+        CheckOverflow("fnc main():int{if 0<=(9223372036854775807+1){return 1;}return 0;}",
+            "right signed-comparison operand overflow");
+
+        CheckOverflow(
+            "fnc main():int{if (9223372036854775807+1)>=0{return 1;}return 0;}",
+            "relational operand overflow must not wrap or be skipped");
+        Reject("fnc main():int{if true > 1{return 42;}return 0;}",
+            "bool/int greater-than type mismatch");
+        Reject("fnc main():int{if 1 <= false{return 42;}return 0;}",
+            "int/bool less-than-or-equal type mismatch");
+        Reject("fnc main():int{if 1 < 2 > 0{return 42;}return 0;}",
+            "relational chaining cannot coerce bool to int");
+        Reject("fnc main():int{if 1 => 0{return 42;}return 0;}",
+            "invalid arrow comparison");
+        Reject("fnc main():int{if 1 =< 0{return 42;}return 0;}",
+            "invalid reverse comparison");
         // Genuine type-first readonly bindings in the EXPERIMENTAL structured
         // source -> verified CFG -> deterministic CIL interpreter path.
         // This is not a released Windows/Linux Native AOT guest receipt.
