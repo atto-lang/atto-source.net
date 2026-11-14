@@ -823,7 +823,7 @@ public static partial class OresStructuredParser
                     var (body, returns) = Block(0);
                     var (tailBody, tailReturns) = LowerTail(body);
                     if (!returns && !tailReturns)
-                        throw Error("RETURN_VALUE_REQUIRED: not every main path yields int");
+                        throw Error("RETURN_EXPLICIT_REQUIRED: not every main path returns int or yields a tail value");
                     return Finish("main", tailBody);
                 }
                 if (visible.ContainsKey(name))
@@ -843,7 +843,7 @@ public static partial class OresStructuredParser
                     helperReturns |= loweredTail.Returns;
                 }
                 if (!helperReturns && resultType != IrValueType.Void)
-                    throw Error("RETURN_VALUE_REQUIRED: not every non-void helper path yields a value");
+                    throw Error("RETURN_EXPLICIT_REQUIRED: not every non-void helper path returns or yields a tail value");
                 if (!helperReturns && resultType == IrValueType.Void)
                 {
                     // Compiler-owned empty-stack terminator for permissible
@@ -915,6 +915,10 @@ public static partial class OresStructuredParser
         {
             Budget(depth);
             Expect("{");
+            // Braced arms must not inherit comma-delimiter permissions from
+            // a surrounding then/fi arm.
+            int enclosingKeywordDepth = keywordArmDepth;
+            keywordArmDepth = 0;
             scopes.Add(new Dictionary<string, LocalBinding>(StringComparer.Ordinal));
             localTypeScopes.Add(new HashSet<string>(StringComparer.Ordinal));
             var body = new List<StructuredStmt>();
@@ -932,6 +936,7 @@ public static partial class OresStructuredParser
             Expect("}");
             scopes.RemoveAt(scopes.Count - 1);
             localTypeScopes.RemoveAt(localTypeScopes.Count - 1);
+            keywordArmDepth = enclosingKeywordDepth;
             return (Array.AsReadOnly(body.ToArray()), terminated);
         }
         // The existing bracketed CFG path remains available. Canonical ores.core
