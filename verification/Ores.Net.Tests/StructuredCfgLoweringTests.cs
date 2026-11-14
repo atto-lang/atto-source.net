@@ -362,6 +362,59 @@ internal static class StructuredCfgLoweringTests
             6, "runtime val has independent SSA identity");
         Check("fnc main():int{const bool b=2<3;if b{return 42;}else{return 0;}}",
             42, "compile-time boolean branch in emitted CIL");
+        // Same byte-identical portable .atto fixture as Java #2648 and LLVM
+        // #1554; evaluate compiler-owned CFG AND actual emitted CIL.
+        const string logicalFixture = "contracts/logical-word-operators-v1/scalar-parity.atto";
+        var logicalBytes = File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, logicalFixture));
+        var blobHeader = System.Text.Encoding.ASCII.GetBytes("blob " + logicalBytes.Length + "\0");
+        var blobBytes = new byte[blobHeader.Length + logicalBytes.Length];
+        blobHeader.CopyTo(blobBytes, 0);
+        logicalBytes.CopyTo(blobBytes, blobHeader.Length);
+        var logicalBlobSha = Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(blobBytes))
+            .ToLowerInvariant();
+        if (logicalBlobSha != "9e3d2d230faaba5e1ccfeaf1c4449c0c2a120c34")
+            throw new Exception("Cross-backend logical .atto fixture blob drift");
+        Check(new System.Text.UTF8Encoding(false, true).GetString(logicalBytes),
+            42, "exact Java/LLVM logical truth-table fixture through typed CFG/CIL");
+        Check("fnc main():int{if false and true{return 7;}else{return 42;}}",
+            42, "logical and false branch");
+        Check("fnc main():int{if true or false{return 42;}else{return 7;}}",
+            42, "logical or true branch");
+        Check("fnc main():int{let int x=9223372036854775807;" +
+            "if false and x+1>0{return 7;}else{return 42;}}",
+            42, "and skips overflowing right operand");
+        Check("fnc main():int{let int x=9223372036854775807;" +
+            "if true or x+1>0{return 42;}else{return 7;}}",
+            42, "or skips overflowing right operand");
+        CheckOverflow("fnc main():int{let int x=9223372036854775807;" +
+            "if false xor x+1>0{return 42;}else{return 7;}}",
+            "xor eagerly evaluates overflowing right operand");
+        Check("fnc main():int{if true xor true{return 7;}else{return 42;}}",
+            42, "xor boolean false result");
+        Check("fnc main():int{if true != false{return 42;}else{return 7;}}",
+            42, "typed bool inequality");
+        Check("fnc main():int{let int n=0;while (n<3) and (n<10) {n=n+1;}return n+39;}",
+            42, "loop condition short-circuits through SSA backedges");
+        Check("fnc inc(int x):int{return x+1;}" +
+            "fnc main():int{return inc((false xor true) ? 41 : 0);}",
+            42, "ternary and eager xor inside typed call argument");
+        Check("fnc main():int{if true or (false and true){return 42;}else{return 7;}}",
+            42, "nested logical short-circuit branches");
+        Check("fnc main():int{const bool b=false and (9223372036854775807+1>0);" +
+            "return b ? 7 : 42;}",
+            42, "compile-time false and skips unchecked RHS");
+        Check("fnc main():int{const bool b=true or (9223372036854775807+1>0);" +
+            "return b ? 42 : 7;}",
+            42, "compile-time true or skips unchecked RHS");
+        Check("fnc main():int{let bool b=true; b=false;" +
+            "if (b or true) and (true xor false) {return 42;}else{return 7;}}",
+            42, "logical word expressions and assignments");
+        // Lower() intentionally inlines simple helper bodies. Exercise the
+        // *shipping* --structured linked-MethodDef path independently so a
+        // passing reference interpreter cannot masquerade as NativeAOT ABI
+        // evidence. The platform CI additionally executes the native binary.
+        StructuredCfgModuleParityTests.Run();
+
         // Actual typed source-call semantics are checked in the independent
         // reference evaluator, emitted CIL interpreter and deterministic PE.
         // This is an acyclic, expression-only helper milestone, not a
@@ -460,7 +513,7 @@ internal static class StructuredCfgLoweringTests
             "! eq", "spaces must not turn ! eq into != or !eq");
         RejectWithDiagnostic(
             File.ReadAllText(Path.Combine(operatorDir, "neq-alias-mixed.atto")),
-            "Equality requires int operands", "no implicit bool-to-int equality");
+            "Equality requires matching int or bool operands", "no implicit bool-to-int equality");
         RejectAliasBoundary(
             File.ReadAllText(Path.Combine(operatorDir, "neq-alias-prefix.atto")),
             "!equation", "!equation must not tokenize as !eq plus suffix");
@@ -479,8 +532,12 @@ internal static class StructuredCfgLoweringTests
             42, "symbolic equality retains existing semantics");
         Reject("fnc main():int{if 1 ne 2{return 42;}return 0;}",
             "ne is not an Oreslang inequality operator");
-        Reject("fnc main():int{if true neq false{return 42;}return 0;}",
-            "i64 comparison must not accept bool operands");
+        // Spec ch. 16: eq/neq are the canonical comparisons. With bool equality
+        // admitted, matching bool operands compare; mixed int/bool still rejects.
+        Check("fnc main():int{if true neq false{return 42;}return 0;}",
+            42, "neq compares matching bool operands");
+        RejectWithDiagnostic("fnc main():int{if 1 neq true{return 42;}return 0;}",
+            "Equality requires matching int or bool operands", "neq rejects mixed int/bool operands");
         Reject("fnc main():int{if 1 ! 2{return 42;}return 0;}",
             "bare exclamation is not an admitted operator");
         Check("fnc main():int{return 2+3*4;}", 14, "arithmetic");

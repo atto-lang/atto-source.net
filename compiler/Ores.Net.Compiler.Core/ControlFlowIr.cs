@@ -18,7 +18,10 @@ public enum CfgOpcode
     NotEqualI64,
     GreaterThanI64,
     LessThanOrEqualI64,
-    GreaterThanOrEqualI64
+    GreaterThanOrEqualI64,
+    EqualBool,
+    NotEqualBool,
+    XorBool
 }
 
 public readonly record struct CfgParameter(int Id, IrValueType Type);
@@ -353,6 +356,17 @@ public static class OresCfgVerifier
                             throw new FormatException("Malformed CFG binary operation");
                         Use(i, opIndex, op.Left.Value, IrValueType.I64);
                         Use(i, opIndex, op.Right.Value, IrValueType.I64);
+                        break;
+                    case CfgOpcode.EqualBool:
+                    case CfgOpcode.NotEqualBool:
+                    case CfgOpcode.XorBool:
+                        RequireType(op.Type, IrValueType.Bool);
+                        if (op.Left is null || op.Right is null ||
+                            op.I64Constant is not null || op.BoolConstant is not null ||
+                            op.Target is not null || op.Arguments is not null)
+                            throw new FormatException("Malformed CFG bool operation");
+                        Use(i, opIndex, op.Left.Value, IrValueType.Bool);
+                        Use(i, opIndex, op.Right.Value, IrValueType.Bool);
                         break;
                     default:
                         throw new FormatException("Unknown CFG opcode");
