@@ -1,0 +1,38 @@
+name: .NET capability I/O host lifecycle (reference only)
+on:
+  pull_request:
+    paths:
+      - 'runtime/Ores.Net.Runtime/HostCapabilityIoLifecycleV1.cs'
+      - 'verification/Ores.Net.Tests/CapabilityIoLifecycleV1SelfTest.cs'
+      - 'verification/Ores.Net.Tests/Program.cs'
+      - '.github/workflows/capability-io-lifecycle-v1.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  reference:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify source commit and tree
+        shell: bash
+        env:
+          EXPECTED_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+          git diff --quiet HEAD --
+          test -z "$(git ls-files --others --exclude-standard)"
+          test -z "$(git ls-files --others --ignored --exclude-standard)"
+          echo "REFERENCE_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.x'
+      - name: Run exact-head managed host reference regressions
+        run: dotnet run -c Release --project verification/Ores.Net.Tests
+      - name: Classification
+        run: echo 'HOST_REFERENCE_ONLY_NO_NATIVEAOT_GUEST_OR_NETWORK_PARITY'
