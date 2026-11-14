@@ -7,7 +7,10 @@ namespace Ores.Net.Compiler;
 /// Opt-in, closed-source-shape nominal enum frontend. This is an actual
 /// source -> typed CFG -> CIL path, but deliberately NOT general ADT support:
 /// one locally constructed nullary enum and an exhaustive scalar match.
-/// No numeric guest access to tags, no public enum parameters, no actor mail.
+/// V2 also permits a single *internal* nominal-typed helper with one
+/// nominal argument and nominal result. Those types are proven at the source
+/// boundary before lowering to internal static i64 ABI slots; no raw numeric
+/// enum argument, public nominal ABI, payload or actor message is admitted.
 /// </summary>
 public static class OresNominalEnumV1
 {
@@ -190,17 +193,86 @@ public static class OresNominalEnumV1
             if (variants.Count < 2)
                 throw new FormatException("ADT v1 requires at least two closed nominal cases");
 
+            // Explicit nominal typed function boundary. Parameters and
+            // results must match the declared source enum owner. The
+            // lowered i64 MethodDef ABI is private and statically linked.
+            StructuredFunction? helper = null;
+            if (Take("fnc"))
+            {
+                string helperName = Name();
+                if (helperName == owner || variants.Any(v => v.Name == helperName))
+                    throw new FormatException("ADT v2 helper conflicts with nominal symbol");
+                Need("("); Need(owner);
+                string parameterName = Name();
+                if (parameterName == owner || parameterName == helperName)
+                    throw new FormatException("ADT v2 helper parameter shadows a nominal symbol");
+                Need(")"); Need(":"); Need(owner); Need("{");
+                Need("match"); Need(parameterName); Need("over");
+                var helperArms = new List<(Variant Case, Variant Returned)>();
+                var helperSeen = new HashSet<string>(StringComparer.Ordinal);
+                while (Take("on"))
+                {
+                    var q = Qualified();
+                    if (q.Owner != owner)
+                        throw new FormatException("ADT v2 helper pattern has foreign nominal owner");
+                    Variant matchedCase = variants.Find(v => v.Name == q.Case)
+                        ?? throw new FormatException("ADT v2 helper pattern has unknown case");
+                    if (!helperSeen.Add(matchedCase.Name))
+                        throw new FormatException("ADT v2 helper has duplicate nominal match case");
+                    Need("->"); Need("{"); Need("return");
+                    var returned = Qualified();
+                    if (returned.Owner != owner)
+                        throw new FormatException("ADT v2 helper return has foreign nominal owner");
+                    Variant returnedCase = variants.Find(v => v.Name == returned.Case)
+                        ?? throw new FormatException("ADT v2 helper returns unknown nominal case");
+                    Need(";"); Need("}");
+                    helperArms.Add((matchedCase, returnedCase));
+                }
+                Need("end"); Need("}");
+                if (helperSeen.Count != variants.Count)
+                    throw new FormatException("ADT v2 helper has nonexhaustive nominal match");
+                StructuredStmt helperCase = new StructuredReturn(0,
+                    new StructuredInt(0, helperArms[^1].Returned.Tag));
+                for (int i = helperArms.Count - 2; i >= 0; --i)
+                {
+                    var cond = new StructuredBinary(0, StructuredOperator.EqualI64,
+                        new StructuredRead(0, parameterName, IrValueType.I64),
+                        new StructuredInt(0, helperArms[i].Case.Tag), IrValueType.Bool);
+                    helperCase = new StructuredIf(0, cond,
+                        new StructuredStmt[] {
+                            new StructuredReturn(0, new StructuredInt(0, helperArms[i].Returned.Tag))
+                        }, new StructuredStmt[] { helperCase });
+                }
+                helper = new StructuredFunction(helperName,
+                    new StructuredParameter[] { new(parameterName, IrValueType.I64) },
+                    IrValueType.I64, null, new StructuredStmt[] { helperCase });
+            }
+
             Need("pub"); Need("fnc"); Need("main"); Need("("); Need(")");
             Need(":"); Need("int"); Need("{");
             Need("val"); Need(owner);
             string variable = Name();
             Need("=");
+            bool invokeHelper = helper is not null && Current.Value == helper.Name;
+            if (invokeHelper)
+            {
+                index++; // helper name: already resolved as the exact local function
+                Need("(");
+            }
             var constructed = Qualified();
             if (constructed.Owner != owner)
                 throw new FormatException("ADT v1 constructor has foreign nominal owner");
             var selected = variants.Find(v => v.Name == constructed.Case)
                 ?? throw new FormatException("ADT v1 unknown nominal constructor variant");
+            if (invokeHelper) Need(")");
             Need(";");
+            // Nominal source check precedes this private scalar lowering.
+            // No guest may call this helper with an integer or foreign enum.
+            StructuredExpr initializer = invokeHelper
+                ? new StructuredCall(0, helper!.Name,
+                    new StructuredExpr[] { new StructuredInt(0, selected.Tag) },
+                    IrValueType.I64)
+                : new StructuredInt(0, selected.Tag);
 
             Need("match"); Need(variable); Need("over");
             var arms = new List<(Variant Case, long Result)>();
@@ -229,7 +301,7 @@ public static class OresNominalEnumV1
             var body = new List<StructuredStmt>
             {
                 new StructuredLet(0, variable, IrValueType.I64,
-                    new StructuredInt(0, selected.Tag), StructuredBindingKind.Val)
+                    initializer, StructuredBindingKind.Val)
             };
 
             // All possible tags are known from the one checked local value.
@@ -248,10 +320,11 @@ public static class OresNominalEnumV1
                     new StructuredStmt[] { branchBody });
             }
             body.Add(branchBody);
+            var functions = new Dictionary<string, StructuredFunction>(StringComparer.Ordinal);
+            if (helper is not null) functions.Add(helper.Name, helper);
+            var order = helper is null ? Array.Empty<string>() : new[] { helper.Name };
             return OresStructuredCfgLowering.LowerModule(
-                new StructuredProgram("main", body,
-                    new Dictionary<string, StructuredFunction>(StringComparer.Ordinal),
-                    Array.Empty<string>()));
+                new StructuredProgram("main", body, functions, order));
         }
     }
 }
