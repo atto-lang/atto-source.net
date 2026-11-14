@@ -493,6 +493,7 @@ ActorPubSubSourceAdmissionTests.Run();
 ActorPipeAdmissionTests.Run(); // compiler gate only; no executable actor guest yet
 ActorPipeSourcePlanV1SelfTest.Run(); // checked scalar CIL oracle, not actor delivery
 NativeTraceContinuationV1SelfTest.Run(); // host-owned W3C scopes; not guest CIL instrumentation
+NativeTraceInstrumentationV1SelfTest.Run(); // NativeAOT host AOT/JIT dispatch; no compiler or OTLP claim
 UniversalHotLoadV1SelfTest.Run();
 ActorFrameStackSelfTest.Run(); // host-only actor logical frames; not guest/AOT evidence
 ActorGuestFrameGateSelfTest.Run(); // terminal compiled-guest frame seam, host-only
