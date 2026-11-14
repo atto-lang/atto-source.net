@@ -161,6 +161,58 @@ internal static class StructuredCfgLoweringTests
 
     public static void Run()
     {
+        // These cases pass the real structured typed CFG + generated CIL
+        // reference interpreter. They do not claim native host execution.
+        Check("""
+            fnc plus(int a, int b): int { return a + b; }
+            fnc add(int n) -> int ::
+                int x = plus(2, 3),
+                x + n
+            end
+            fnc main() -> int ::
+                add(37)
+            end
+            """, 42, "comma fnc body with immutable runtime local and final result");
+        Check("""
+            routine twice(int n) -> int ::
+                int factor = 2,
+                factor * n
+            end
+            routine main() -> int ::
+                twice(21)
+            end
+            """, 42, "comma routine body and terminal expression");
+        Check("""
+            fnc main() -> int ::
+                int x = 1,
+                int y = 40,
+                x + y + 1
+            end
+            """, 42, "multiple sequenced immutable scalar locals");
+        Check("""
+            fnc main() -> int ::
+                int x = 41,
+                x + 1
+            end
+            """, 42, "comma body exactly-once final expression");
+        foreach (string bad in new[] {
+            "fnc main() -> int :: int x = 5,, x end",
+            "fnc main() -> int :: int x = 5, end",
+            "fnc main() -> int :: , 42 end",
+            "fnc main() -> int :: int x = true, x end",
+            "fnc main() -> int :: int x = 5, x = 7, x end",
+            "fnc main() -> int :: bool x = true, x end"
+        })
+            Reject(bad, "comma-body syntax, binding or return type must fail closed");
+        RejectWithDiagnostic("""
+            define class Counter as
+                mtd add(mut self, int n) -> int ::
+                    n + 1
+                end
+            end
+            fnc main(): int { return 42; }
+            """, "Nominal class/actor methods require",
+            "dotnet nominal method remains unsupported, not falsely certified");
         PinnedFiveBackendCastGuests();
         const string sum = """
             define pub fnc main():int {
