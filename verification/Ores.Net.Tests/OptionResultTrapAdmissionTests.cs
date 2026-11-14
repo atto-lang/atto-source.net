@@ -5,8 +5,65 @@ internal static class OptionResultTrapAdmissionTests
     private const string Diagnostic =
         "Option/Result/trap requires verified tagged-sum CIL and NativeAOT guest-control lowering";
 
+    // This corpus is the exact shared nine-case .atto acceptance set, not a
+    // copied text interpretation. A rejected case is NOT a runtime parity pass.
+    private static void VerifyCanonicalSourceIsStillFailClosed()
+    {
+        string[] names =
+        [
+            "01-some-int.atto", "02-some-result-ok.atto",
+            "03-some-result-err.atto", "04-some-none.atto",
+            "05-ordinary-throw.atto", "06-panic-bypass.atto",
+            "07-exactly-once.atto", "08-type-mismatch.atto",
+            "09-result-is-not-throw.atto"
+        ];
+        string[] blobs =
+        [
+            "d0ec8a9bc9e73e016cf1c31e2cb35cb84ac281c7",
+            "8dd86350bdfa4dc90e47b7dd5f44bd82b0266157",
+            "0f431f23d40d46cacd07d81714780e0061b6413e",
+            "038d5bfe66996efff91400a8d699dac3e6f43f54",
+            "57a646240880dfc4b633c2f9eeb5b9278dd0022f",
+            "7b674493d50e688666b1fa37f59b990a27f109e4",
+            "6547de51bc2be9b52eca35359a00b692ed434cfb",
+            "057544faa452e4942143503499c4a7b76072ff17",
+            "c5a427450943ac32824e42c1261401777080724e"
+        ];
+        for (int i = 0; i < names.Length; i++)
+        {
+            var raw = File.ReadAllBytes(Path.Combine(
+                AppContext.BaseDirectory, "caller-trap-parity", names[i]));
+            byte[] header = System.Text.Encoding.ASCII.GetBytes(
+                "blob " + raw.Length + "\0");
+            using var digest = System.Security.Cryptography.SHA1.Create();
+            digest.TransformBlock(header, 0, header.Length, null, 0);
+            digest.TransformFinalBlock(raw, 0, raw.Length);
+            string actual = Convert.ToHexString(digest.Hash!).ToLowerInvariant();
+            if (actual != blobs[i])
+                throw new Exception("Canonical Atto caller-trap guest was modified: " + names[i]);
+
+            string source = System.Text.Encoding.UTF8.GetString(raw);
+            try
+            {
+                _ = OresStructuredCfgLowering.LowerModule(source);
+            }
+            catch (FormatException)
+            {
+                // Current NativeAOT CIL does NOT support any full canonical
+                // cases, including unwrap(), typed Result and ordinary throw.
+                // This only confirms an unsupported feature fails closed.
+                continue;
+            }
+            throw new Exception(
+                "UNVERIFIED_PARITY: canonical Atto source reached CIL " +
+                "without native guest semantics: " + names[i]);
+        }
+    }
+
     public static void Run()
     {
+        VerifyCanonicalSourceIsStillFailClosed();
+
         // 12 genuine source spellings, none of which may be lowered as an
         // untyped scalar, or falsely counted as a semantic negative pass.
         string[] unimplemented =
