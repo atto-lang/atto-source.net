@@ -96,16 +96,24 @@ try
             !string.Equals(extension, ".ores", StringComparison.OrdinalIgnoreCase))
             throw new FormatException("Actor pipe plan requires an .atto or legacy .ores source file");
         var plan = OresStructuredParser.PlanActorPipeV1(source);
-        Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new
+        // Full-AOT: no reflection-based JsonSerializer (IL2026/IL3050). Write the same
+        // compact object, in the same field order, with Utf8JsonWriter.
+        var planJson = new MemoryStream();
+        using (var json = new System.Text.Json.Utf8JsonWriter(planJson))
         {
-            status = ActorPipeGraphV1.Evidence,
-            executable_actor_guest = false,
-            native_aot_verified = false,
-            stage_count = plan.Stages.Count,
-            edge = new { source = plan.Edge.ProducerBinding,
-                destination = plan.Edge.ConsumerBinding },
-            message = plan.InputMessage
-        }));
+            json.WriteStartObject();
+            json.WriteString("status", ActorPipeGraphV1.Evidence);
+            json.WriteBoolean("executable_actor_guest", false);
+            json.WriteBoolean("native_aot_verified", false);
+            json.WriteNumber("stage_count", plan.Stages.Count);
+            json.WriteStartObject("edge");
+            json.WriteString("source", plan.Edge.ProducerBinding);
+            json.WriteString("destination", plan.Edge.ConsumerBinding);
+            json.WriteEndObject();
+            json.WriteNumber("message", plan.InputMessage);
+            json.WriteEndObject();
+        }
+        Console.WriteLine(System.Text.Encoding.UTF8.GetString(planJson.ToArray()));
         return 0;
     }
     if (validStaticFacts)
