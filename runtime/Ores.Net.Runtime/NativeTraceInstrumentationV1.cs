@@ -37,6 +37,12 @@ internal sealed class NativeTraceInstrumentationV1
     internal BuildMode Build { get; }
     internal long Version { get { lock (gate) return version; } }
     internal int ActiveMask => Volatile.Read(ref activeMask);
+    // A single locked observation prevents policy-version/mask tearing across
+    // an OFF->ON transition. Callers must not compose two separate reads.
+    internal (long Version, int Mask) Snapshot()
+    {
+        lock (gate) return (version, activeMask);
+    }
     internal bool CanRecompile => Build == BuildMode.Adaptive;
 
     // No allocation, clock, dynamic call or I/O on the disabled probe path.
@@ -190,9 +196,10 @@ internal sealed class NativeTraceVersionedDispatchV1<T> where T : class
             // Policy can be revoked while a trusted compiler publishes outside
             // this lock. Never enter a variant whose probe authority is gone.
             var selected = active;
+            var currentPolicy = policy.Snapshot();
             if (selected.ProbeMask != 0 &&
-                (selected.PolicyVersion != policy.Version ||
-                 (selected.ProbeMask & ~policy.ActiveMask) != 0))
+                (selected.PolicyVersion != currentPolicy.Version ||
+                 (selected.ProbeMask & ~currentPolicy.Mask) != 0))
                 selected = baseline;
             ++selected.Pins;
             return new Lease(this, selected);
@@ -227,7 +234,8 @@ internal sealed class NativeTraceVersionedDispatchV1<T> where T : class
                 return PublishResult.Incompatible;
             if (deepJit == candidate.IsPrecompiledAot)
                 return PublishResult.Unsupported;
-            if ((candidate.ProbeMask & ~policy.ActiveMask) != 0)
+            var currentPolicy = policy.Snapshot();
+            if ((candidate.ProbeMask & ~currentPolicy.Mask) != 0)
                 return PublishResult.Unauthorized;
             if (candidate.Generation <= highestGeneration || highestGeneration == ulong.MaxValue)
                 return PublishResult.StaleGeneration;
@@ -237,7 +245,7 @@ internal sealed class NativeTraceVersionedDispatchV1<T> where T : class
             // Only future invocations see the new target; old pinned scopes
             // retain the old generation until their logical completion.
             var next = new Generation(candidate.Generation, candidate.Executable,
-                candidate.ProbeMask, policy.Version);
+                candidate.ProbeMask, currentPolicy.Version);
             retained.Add(next);
             active = next;
             highestGeneration = next.Id;
