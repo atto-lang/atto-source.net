@@ -1,0 +1,39 @@
+name: actor-counter-contract-only-NOT-GUEST-PARITY
+on:
+  pull_request:
+    paths:
+      - 'contracts/actor-counter-identical-source-v1/**'
+      - 'tools/actor-counter-parity.mjs'
+      - 'tests/actor-counter-parity.test.mjs'
+      - '.github/workflows/actor-counter-contract-only.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: counter-contract-only-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  static-corpus-integrity-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Verify selected Git blobs are identical-source contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "SOURCE_HEAD=$(git rev-parse HEAD)"
+          echo "SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+          test "$(git hash-object contracts/actor-counter-identical-source-v1/corpus.json)" = 526595b444aaf761dc75c44ad9b39a08d45341aa
+          test "$(git hash-object tools/actor-counter-parity.mjs)" = cefef62458f8e50790ee40a49d9cf21ac1d676ef
+          test "$(git hash-object tests/actor-counter-parity.test.mjs)" = f3cf178210d45e0a3dd1c588cea8c2ce2c5be240
+      - name: Run source-integrity and lifecycle-spoofing tests (NOT guest execution)
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --version
+          node --test tests/actor-counter-parity.test.mjs
+          node tools/actor-counter-parity.mjs verify
+          echo 'ATTO_COUNTER_EVIDENCE=CONTRACT_ONLY; GUEST_NOT_EXECUTED; NO_BACKEND_CERTIFICATION'

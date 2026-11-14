@@ -1,0 +1,104 @@
+// Generated from verification/contracts/core-math-i64.json; no host-language algorithms.
+// Each mismatch returns a distinct negative case index; success returns 24.
+// The canonical .ores dependency remains unchanged.
+import module numeric from "../../library/ores.core/numeric";
+
+pub fnc main(): int {
+  // 1: min-int64-lowest
+  if numeric.min_int(-9223372036854775808, 9223372036854775807) != -9223372036854775808; do
+    return -1;
+  fi
+  // 2: min-int64-swapped
+  if numeric.min_int(9223372036854775807, -9223372036854775808) != -9223372036854775808; do
+    return -2;
+  fi
+  // 3: min-equality
+  if numeric.min_int(7, 7) != 7; do
+    return -3;
+  fi
+  // 4: min-large-precise
+  if numeric.min_int(9007199254740993, 9007199254740992) != 9007199254740992; do
+    return -4;
+  fi
+  // 5: min-negative
+  if numeric.min_int(-7, -9) != -9; do
+    return -5;
+  fi
+  // 6: min-near-upper
+  if numeric.min_int(9223372036854775807, 9223372036854775806) != 9223372036854775806; do
+    return -6;
+  fi
+  // 7: max-int64-highest
+  if numeric.max_int(-9223372036854775808, 9223372036854775807) != 9223372036854775807; do
+    return -7;
+  fi
+  // 8: max-int64-swapped
+  if numeric.max_int(9223372036854775807, -9223372036854775808) != 9223372036854775807; do
+    return -8;
+  fi
+  // 9: max-equality
+  if numeric.max_int(-7, -7) != -7; do
+    return -9;
+  fi
+  // 10: max-large-precise
+  if numeric.max_int(9007199254740993, 9007199254740992) != 9007199254740993; do
+    return -10;
+  fi
+  // 11: max-negative
+  if numeric.max_int(-7, -9) != -7; do
+    return -11;
+  fi
+  // 12: max-zero
+  if numeric.max_int(0, -1) != 0; do
+    return -12;
+  fi
+  // 13: clamp-below
+  if numeric.clamp_int(-9223372036854775808, -12, 13) != -12; do
+    return -13;
+  fi
+  // 14: clamp-above
+  if numeric.clamp_int(9223372036854775807, -12, 13) != 13; do
+    return -14;
+  fi
+  // 15: clamp-inside
+  if numeric.clamp_int(0, -12, 13) != 0; do
+    return -15;
+  fi
+  // 16: clamp-low-bound
+  if numeric.clamp_int(-12, -12, 13) != -12; do
+    return -16;
+  fi
+  // 17: clamp-high-bound
+  if numeric.clamp_int(13, -12, 13) != 13; do
+    return -17;
+  fi
+  // 18: clamp-equal
+  if numeric.clamp_int(11, 11, 11) != 11; do
+    return -18;
+  fi
+  // 19: clamp-inverted-returns-lower
+  if numeric.clamp_int(0, 9223372036854775807, -9223372036854775808) != 9223372036854775807; do
+    return -19;
+  fi
+  // 20: clamp-inverted-extreme
+  if numeric.clamp_int(-9223372036854775808, 9223372036854775807, -9223372036854775808) != 9223372036854775807; do
+    return -20;
+  fi
+  // 21: clamp-all-extreme
+  if numeric.clamp_int(9223372036854775807, -9223372036854775808, 9223372036854775807) != 9223372036854775807; do
+    return -21;
+  fi
+  // 22: clamp-large-inside
+  if numeric.clamp_int(9007199254740993, 9007199254740992, 9007199254740994) != 9007199254740993; do
+    return -22;
+  fi
+  // 23: clamp-all-zero
+  if numeric.clamp_int(0, 0, 0) != 0; do
+    return -23;
+  fi
+  // 24: clamp-inverted-near
+  if numeric.clamp_int(100, 10, 9) != 10; do
+    return -24;
+  fi
+  return 24;
+}

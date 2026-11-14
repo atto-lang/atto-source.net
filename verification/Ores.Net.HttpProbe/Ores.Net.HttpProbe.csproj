@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <PublishAot>true</PublishAot>
+    <StripSymbols>true</StripSymbols>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../runtime/Ores.Net.Runtime.Http/Ores.Net.Runtime.Http.csproj" />
+  </ItemGroup>
+</Project>
