@@ -32,10 +32,12 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
           test -z "$(git status --porcelain)"
-          test "$(find contracts/implicit-const-scalar-v1 -maxdepth 1 -type f -name '*.atto' | wc -l)" -eq 9
+          test "$(find contracts/implicit-const-scalar-v1 -maxdepth 1 -type f -name '*.atto' | wc -l)" -eq 11
           for row in \
             'literal-equivalence a8e49769215a78946009f2cd2ac685b7c34c7804' \
             'const-reference a1ebef245f6357ca712b30d9e02d379da3e65abc' \
+            'implicit-rebind ebc0c31b84869774bd398c9c469bfda58334acc0' \
+            'explicit-rebind 87dd9e7483254a0ecb8865d72e5e6e9ee337d4e7' \
             'const-arithmetic 44daf131a7793f3b341c41a7e934cf8afe51f9db' \
             'bool-local 52c7909c0d2ba760c000fef2cc4434aefbd91f97' \
             'runtime-val-let fb47b57cb715ff9162de6a757ae515c1a9c19a30' \
@@ -74,7 +76,9 @@ jobs:
             'implicit-nonconst E_NON_CONST_INITIALIZER' \
             'explicit-nonconst E_NON_CONST_INITIALIZER' \
             'const-mut-scalar E_CONST_MUT_UNSUPPORTED' \
-            'const-overflow E_CONST_OVERFLOW'; do
+            'const-overflow E_CONST_OVERFLOW' \
+            'implicit-rebind E_IMMUTABLE_REBIND' \
+            'explicit-rebind E_IMMUTABLE_REBIND'; do
             read -r name category <<< "$row"
             path="contracts/implicit-const-scalar-v1/$name.atto"
             mkdir -p "$temp/$name"
