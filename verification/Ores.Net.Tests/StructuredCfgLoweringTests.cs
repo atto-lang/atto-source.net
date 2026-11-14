@@ -213,6 +213,7 @@ internal static class StructuredCfgLoweringTests
             ("9223372036854775807 >= 9223372036854775807", true),
             ("-9223372036854775808 >= 9223372036854775807", false),
             ("9223372036854775807 <= -9223372036854775808", false)
+        })
             Check("fnc main():int{if " + comparison +
                 "{return 42;}else{return 0;}}", result ? 42 : 0,
                 "signed relational CIL: " + comparison);
