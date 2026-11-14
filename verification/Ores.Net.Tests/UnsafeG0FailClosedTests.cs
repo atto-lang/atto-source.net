@@ -62,7 +62,7 @@ internal static class UnsafeG0FailClosedTests
         {
             try { parse(tooDeep); }
             catch (FormatException ex) when (
-                ex.Message.Contains("Block comment nesting exceeds 128",
+                ex.Message.Contains("block comment nesting exceeds 128",
                     StringComparison.Ordinal)) { continue; }
             throw new Exception("overnested source did not fail closed");
         }
