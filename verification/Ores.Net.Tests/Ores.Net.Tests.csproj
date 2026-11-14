@@ -49,6 +49,8 @@
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../tests/fixtures/actor-pipe-two-stage.atto"
           Link="actor-pipe-two-stage.atto" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../tests/fixtures/actor-pipe-three-stage.atto"
+          Link="actor-pipe-three-stage.atto" CopyToOutputDirectory="PreserveNewest" />
     <!-- Portable source candidates remain fail-closed until real NativeAOT
          actor graph and source-bound emit lowering exists. -->
     <None Include="../../contracts/actor-pipe-emitted-v3/*.atto"
