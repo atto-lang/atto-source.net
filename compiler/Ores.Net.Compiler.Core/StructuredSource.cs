@@ -418,6 +418,11 @@ public static class OresStructuredParser
                 do { index++; } while (index < source.Length &&
                     (Alpha(source[index]) || Digit(source[index]) || source[index] == '_'));
                 string word = source[offset..index];
+                // The linked-module lexer also enforces the unsafe keyword
+                // reservation before typed module binding and CIL emission.
+                if (word == "unsafe")
+                    throw new FormatException(
+                        $"unsafe boundary requires checked effects, native grants and Native AOT lowering at offset {offset}");
                 // Reject before the condition is lexed: `guard 1>0` contains
                 // characters this lexer refuses outside module mode.
                 if (word == "guard")
@@ -588,6 +593,9 @@ public static class OresStructuredParser
                 string quoted = Current.Text;
                 if (quoted.Length < 3 || quoted[0] != '"' || quoted[^1] != '"' || quoted.Contains('\\'))
                     throw Error("Import requires an unescaped local source string");
+                // Reject before physical lookup and graph linking, independently
+                // of the standalone scalar parser's generic import denial.
+                UnsafeStdlibImportAdmission.RequireGuestSafe(quoted[1..^1]);
                 index++;
                 Expect(";");
                 if (imports.Count >= 64) throw Error("Import declaration budget exceeded");
