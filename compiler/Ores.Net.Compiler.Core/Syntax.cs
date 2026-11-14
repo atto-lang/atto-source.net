@@ -406,6 +406,21 @@ public static partial class OresParser
             }
             // No unchecked array access can enter the shipping scalar CIL path.
             SafeCollectionSourceAdmission.RejectUnverifiedBracket(ch, start);
+            // Scalar and structured CIL frontends must agree: state-changing
+            // annotations are compiler effects, never inert metadata. Check
+            // only lexed tokens, after comments have been skipped.
+            if (ch == '@')
+            {
+                int nameEnd = _i + 1;
+                while (nameEnd < text.Length &&
+                    (text[nameEnd] is >= 'a' and <= 'z' or >= 'A' and <= 'Z'
+                        or >= '0' and <= '9' or '_')) nameEnd++;
+                string name = text[(_i + 1)..nameEnd];
+                if (name is "Inject" or "StateBacked" or "MutableStateContainer" or "StateContainer")
+                    throw new FormatException(
+                        $"STATE_INJECTION_UNSUPPORTED: @{name} requires typed container ownership, borrow checks and Native AOT lowering at offset {start}");
+                throw new FormatException($"Annotations require verified compiler lowering at offset {start}");
+            }
             if (ch is >= '0' and <= '9')
             {
                 // Match the reference's decimal digit separators without
