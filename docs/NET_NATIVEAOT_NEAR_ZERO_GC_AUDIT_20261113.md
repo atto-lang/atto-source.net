@@ -20,3 +20,30 @@ The self-test warms all negative parser branches, then checks 70,000 rejected he
 ## Evidence boundaries
 
 The regression is registered in `verification/Ores.Net.Tests/NativeTraceContinuationV1SelfTest.cs` and executed by the existing managed test runner. The runner is **not** an independent proof until a real job executes. Existing actor-native-arena allocation tests demonstrate a narrowly scoped primitive numeric-handle fast path, not a whole-process GC-free runtime. Neither the tracing host subset nor a source-only fixture counts as compiled AttoLang parity.
+
+
+## Executable Native AOT near-zero-GC host probe (candidate)
+
+New standalone `verification/Ores.Net.NearZeroGcProbe` executes the actual
+runtime native-arena and W3C scope implementations in managed .NET and,
+when authorized runner capacity exists, as compiled Linux x64 and Windows x64
+Native AOT binaries. It is **host-only**: it does not compile a guest `.atto`.
+
+Acceptance oracles (after warmup, same physical thread):
+
+- 50,000 numeric-handle native arena allocate/read/write/drop cycles with a
+  persistent actor root: **zero CLR allocated bytes and zero CLR collections**;
+  all native tenant/process reservations refunded after physical disposal.
+- 50,000 disabled trace probes: **zero managed allocations**, no scopes,
+  random IDs, receipts or drops.
+- 70,000 malformed W3C headers: **zero managed allocations** and strict rejection.
+- 512 enabled traced scopes: **nonzero managed allocations reported explicitly**,
+  at most eight retained receipts, exact drop accounting and terminal completion.
+
+The workflow checks exact source/blob SHA, managed execution, native binary
+execution on two operating systems, positive proof markers and artifact SHA-256.
+A source-organization zero-step failure is **NOT_EXECUTED**, not a failing C#
+assertion. Evidence at this newly authored source SHA remains **NOT EXECUTED**
+until a runner completes its steps. An approved private runner destination is
+not currently listed in the repository's protected export policy. Do not use an
+unapproved cross-organization private-source mirror.
