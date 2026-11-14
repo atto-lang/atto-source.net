@@ -51,16 +51,16 @@ internal static class StructuredSourceTests
 
     public static void Run()
     {
-        // AST identity and constant provenance must stay independent: a
-        // default readonly typed binding is NOT an explicit constexpr const.
+        // Type-first scalar locals are explicit const equivalents, with identical
+        // compile-time evaluation and fixed-binding behavior.
         var immutableDefaults = OresStructuredParser.Parse(
             "fnc main():int{int x=7;bool good=true;const int c=7;val int v=7;let int m=7;return x;}");
         Require(immutableDefaults.Body[0] is StructuredLet {
-            Name: "x", Kind: StructuredBindingKind.Readonly, ValueType: IrValueType.I64
-        }, "int x must be a readonly non-constexpr binding");
+            Name: "x", Kind: StructuredBindingKind.Const, ValueType: IrValueType.I64
+        }, "int x must be compile-time const");
         Require(immutableDefaults.Body[1] is StructuredLet {
-            Name: "good", Kind: StructuredBindingKind.Readonly, ValueType: IrValueType.Bool
-        }, "bool x must be a readonly non-constexpr binding");
+            Name: "good", Kind: StructuredBindingKind.Const, ValueType: IrValueType.Bool
+        }, "bool x must be compile-time const");
         Require(immutableDefaults.Body[2] is StructuredLet {
             Name: "c", Kind: StructuredBindingKind.Const
         }, "explicit const retains its constexpr identity");
@@ -72,6 +72,20 @@ internal static class StructuredSourceTests
         }, "let remains the only rebindable local");
         Reject("fnc main():int{int x=7;x=8;return x;}",
             "readonly type-first rebinding is forbidden");
+        // Both spellings must be rejected for the same targeted semantic reason.
+        RejectFeature("fnc main():int{int x=runtime_value();return x;}",
+            "E_NON_CONST_INITIALIZER");
+        RejectFeature("fnc main():int{const int x=runtime_value();return x;}",
+            "E_NON_CONST_INITIALIZER");
+        RejectFeature("fnc main():int{const mut int x=42;return x;}",
+            "E_CONST_MUT_UNSUPPORTED");
+        var shorthandConstant = OresStructuredParser.Parse(
+            "fnc main():int{int answer=6*7;return answer;}");
+        Require(shorthandConstant.Body[0] is StructuredLet {
+            Name: "answer", Kind: StructuredBindingKind.Const,
+            Initializer: StructuredInt { Value: 42 }
+        }, "implicit const must be folded like explicit const");
+
 
         // Injected mutable containers are not the current scalar backend's
         // ordinary metadata. Require a feature-specific diagnostic, not a
@@ -343,9 +357,7 @@ internal static class StructuredSourceTests
             "const bool x=true as bool;if x{return 42;}else{return 0;}",
             "const x=(7 eq 7) as bool;if x{return 42;}else{return 0;}",
             "let x=7 as int;x=42;return x;",
-            "val x=42;const y=x as int;return y;",
-            "val bool x=true;const y=x as bool;if y{return 42;}else{return 0;}",
-            "const x=7;if true{const nested=x as int;return nested+35;}else{return 0;}",
+                                    "const x=7;if true{const nested=x as int;return nested+35;}else{return 0;}",
             "const x=7;return (x+35) as int;"
         })
         {
@@ -384,7 +396,9 @@ internal static class StructuredSourceTests
             "const x=true;return x+1;",
             "let x=true;x=7;return 42;",
             "const x=missing;return 42;",
-            "const x=x;return 42;"
+            "const x=x;return 42;",
+            "val x=42;const y=x as int;return y;",
+            "val bool x=true;const y=x as bool;return 42;"
         }) Reject("fnc main():int{" + invalid + "}", "scalar cast/inference fail-closed " + invalid);
 
         var runtimeBool = OresStructuredParser.Parse("""
