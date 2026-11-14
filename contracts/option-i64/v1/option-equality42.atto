@@ -1,0 +1,10 @@
+pub fnc main():int {
+  val Option<int> empty = None;
+  val Option<int> zero = Some(0);
+  if empty neq empty { return 0; }
+  if zero eq empty { return 0; }
+  if zero eq Some(0) {
+    if zero neq Some(1) { return 42; }
+  }
+  return 0;
+}

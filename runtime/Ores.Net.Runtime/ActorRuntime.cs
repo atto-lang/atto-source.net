@@ -1,4 +1,6 @@
+using System.Collections.Generic;
 using System.Security.Cryptography;
+using System.Runtime.CompilerServices;
 using System.Threading;
 
 namespace Ores.Net.Runtime;
@@ -18,6 +20,10 @@ public sealed class ActorRuntimeOptions
     public int MailboxBytes { get; init; } = 4 * ActorMailbox.MaxMessageBytes;
     public int ActorPersistentBytes { get; init; } = 1024 * 1024;
     public int ActorScratchBytes { get; init; } = 64 * 1024;
+    // Opt-in non-realtime profile. Logical quotas remain fixed while physical
+    // native backing is charged and acquired on the first guest allocation.
+    // Eager/prefault deployment remains the default until native AOT gates run.
+    public bool DemandBackedActorHeaps { get; init; } = false;
     // 0 chooses a bounded default (one quarter of the actor persistent arena,
     // capped at 64 KiB). All frames share that actor's existing native budget.
     public int ActorStackBytes { get; init; } = 0;
@@ -77,20 +83,26 @@ public sealed class ActorContext
 {
     private readonly ActorArena _arena;
     private readonly ActorArenaTurn _turn;
-    private readonly ActorFrameStack _stack;
+    private readonly ActorExecutionStack _stack;
+    private readonly object _guestFrameGate = new();
+    private readonly List<ActorStackFrameHandle> _guestFrames = new();
+    private bool _guestFrameFaulted;
 
     internal ActorContext(ActorRef self, ActorKind kind,
-        ActorArena arena, ActorArenaTurn turn, ActorFrameStack stack)
+        ActorArena arena, ActorArenaTurn turn,
+        ActorExecutionContext execution)
     {
         Self = self;
         Kind = kind;
         _arena = arena;
         _turn = turn;
-        _stack = stack;
+        _stack = execution.Stack;
+        Execution = execution;
     }
 
     public ActorRef Self { get; }
     public ActorKind Kind { get; }
+    public ActorExecutionContext Execution { get; }
 
     // Host capability providers must enforce the same physical-turn authority
     // as actor memory access. A retained context is not a reusable credential.
@@ -140,6 +152,134 @@ public sealed class ActorContext
 
     public void PopStackFrame(ActorStackFrameHandle frame) =>
         _stack.Pop(_turn, frame);
+
+    // Compiler-owned guest frame calls are intentionally separate from the
+    // failure-neutral host stack API above. The shipping synchronous actor
+    // runtime has no ownership protocol for parking compiled guest frames.
+    // Once a guest frame operation fails, the whole handler fails at exit
+    // even when a host callback catches the original exception.
+    public ActorStackFrameHandle GuestPushStackFrame(int bytes, int alignment = 8)
+    {
+        lock (_guestFrameGate)
+        {
+            RequireGuestFrameTurn();
+            try
+            {
+                ActorStackFrameHandle frame = _stack.Push(_turn, bytes, alignment);
+                _guestFrames.Add(frame);
+                return frame;
+            }
+            catch (Exception)
+            {
+                _guestFrameFaulted = true;
+                throw;
+            }
+        }
+    }
+
+    public void GuestReadStackFrame(ActorStackFrameHandle frame, int offset,
+        Span<byte> destination)
+    {
+        lock (_guestFrameGate)
+        {
+            RequireGuestFrameTurn();
+            RequireGuestFrameHandle(frame);
+            try { _stack.Read(_turn, frame, offset, destination); }
+            catch (Exception)
+            {
+                _guestFrameFaulted = true;
+                throw;
+            }
+        }
+    }
+
+    public void GuestWriteStackFrame(ActorStackFrameHandle frame, int offset,
+        ReadOnlySpan<byte> source)
+    {
+        lock (_guestFrameGate)
+        {
+            RequireGuestFrameTurn();
+            RequireGuestFrameHandle(frame);
+            try { _stack.Write(_turn, frame, offset, source); }
+            catch (Exception)
+            {
+                _guestFrameFaulted = true;
+                throw;
+            }
+        }
+    }
+
+    public void GuestPopStackFrame(ActorStackFrameHandle frame)
+    {
+        lock (_guestFrameGate)
+        {
+            RequireGuestFrameTurn();
+            if (_guestFrames.Count == 0 ||
+                !ReferenceEquals(_guestFrames[^1], frame))
+            {
+                _guestFrameFaulted = true;
+                throw new InvalidOperationException(
+                    "Compiled guest stack pop violates strict LIFO");
+            }
+
+            try
+            {
+                _stack.Pop(_turn, frame);
+                _guestFrames.RemoveAt(_guestFrames.Count - 1);
+            }
+            catch (Exception)
+            {
+                _guestFrameFaulted = true;
+                throw;
+            }
+        }
+    }
+
+    internal void ValidateGuestFrameExit()
+    {
+        // Never try to admit a new physical turn here. Concurrent STOP may
+        // have retired the arena while the handler was unwinding.
+        lock (_guestFrameGate)
+        {
+            if (_guestFrameFaulted || _guestFrames.Count != 0)
+                throw new InvalidOperationException(
+                    "Compiled guest actor frame fault or unbalanced synchronous handler");
+        }
+    }
+
+    private void RequireGuestFrameTurn()
+    {
+        // Authenticate the exact carrier and turn before any state mutation.
+        // A stolen or expired context must not poison a healthy actor.
+        _arena.ValidateActiveTurn(_turn);
+        if (_guestFrameFaulted)
+            throw new InvalidOperationException(
+                "Compiled guest frame execution already faulted");
+    }
+
+    private void RequireGuestFrameHandle(ActorStackFrameHandle frame)
+    {
+        if (!_guestFrames.Contains(frame))
+        {
+            _guestFrameFaulted = true;
+            throw new InvalidOperationException(
+                "Compiled guest frame handle is foreign, stale, or host-owned");
+        }
+    }
+    // Internal compiler/runtime ABI authority: never expose sealed type
+    // descriptors as guest values or permit caller-provided raw tags to mint
+    // type authority on an already-issued activation.
+    internal void SealScalarFrame(ActorStackFrameHandle frame,
+        ReadOnlySpan<byte> declaredTypes, int blockCount) =>
+        _stack.SealScalarFrame(_turn, frame, declaredTypes, blockCount);
+
+    internal void ValidateScalarFrameHeader(
+        ActorStackFrameHandle frame, int slots, int blocks) =>
+        _stack.ValidateScalarHeader(_turn, frame, slots, blocks);
+
+    internal void ValidateScalarFrameSlot(
+        ActorStackFrameHandle frame, int slot, byte kind) =>
+        _stack.ValidateScalarSlot(_turn, frame, slot, kind);
 
     public ActorShardColumns CreateShard(int rows, int fields,
         ActorDataLayout layout, int lanes = 1) =>
@@ -191,6 +331,29 @@ public sealed class ActorRuntime : IDisposable
     [ThreadStatic]
     private static ActorRuntime? s_currentRuntime;
 
+    // ExecutionContext flows into Task.Run and other managed offloads,
+    // unlike ThreadStatic. Keep the actor-origin marker in captured tasks
+    // even after the physical turn returns. Such tasks must never acquire
+    // host/supervisor ActorRef pubsub authority by changing carrier threads.
+    // This is defense in depth, NOT an unforgeable guest capability: a trusted
+    // raw C# host handler can suppress ExecutionContext flow. Compiler guest
+    // lowering must use context-bound intrinsics, never these host overloads.
+    // A boolean sentinel cannot keep a retired ActorRuntime alive in a
+    // captured asynchronous ExecutionContext.
+    private static readonly AsyncLocal<bool> s_actorOrigin = new();
+
+    // The actor dispatcher is the physical guest authority boundary.
+    // A carrier must never call manager/host ActorRef pubsub APIs on behalf
+    // of an arbitrary actor; source lowering uses ActorContext-checked
+    // intrinsics that expire when the physical turn ends.
+    internal static void RequireHostPubSubAuthority(string operation)
+    {
+        if (s_currentRuntime is not null || s_actorOrigin.Value)
+            throw new System.Security.SecurityException(
+                "actor code cannot " + operation +
+                "; use a turn-scoped actor capability instead");
+    }
+
     private readonly object _gate = new();
     // A second Dispose caller must wait for worker joining and reclamation,
     // not merely observe the _closed admission flag and return prematurely.
@@ -199,6 +362,7 @@ public sealed class ActorRuntime : IDisposable
     private readonly ActorRuntimeOptions _options;
     private readonly ActorArenaBudget _nativeBudget;
     private readonly ActorDispatchDomains _domains;
+    private readonly ActorPubSub _pubSub;
 
     private ulong _nextActorId;
     private bool _closed;
@@ -217,7 +381,7 @@ public sealed class ActorRuntime : IDisposable
             Kind = kind;
             Mailbox = mailbox;
             Arena = arena;
-            Stack = new ActorFrameStack(arena, stackBytes, maxStackFrames);
+            FrameStorage = new ActorFrameStorage(arena, stackBytes, maxStackFrames);
             Handler = handler;
             Reference = mailbox.CurrentRef;
             DispatchAction = Dispatch;
@@ -227,12 +391,16 @@ public sealed class ActorRuntime : IDisposable
         internal ActorKind Kind { get; }
         internal ActorMailbox Mailbox { get; }
         internal ActorArena Arena { get; }
-        internal ActorFrameStack Stack { get; }
+        internal ActorFrameStorage FrameStorage { get; }
+        internal ulong NextExecutionSequence;
         internal ActorMessageHandler Handler { get; }
         internal ActorRef Reference { get; }
         internal Action DispatchAction { get; }
         internal int Scheduled;
         internal bool Stopping;
+        // Graceful close rejects new DATA while accepted queued turns drain.
+        // Stop() remains a distinct immediate abort that scrubs pending data.
+        internal bool Draining;
         internal int Finalized;
         internal TaskCompletionSource Terminated { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -247,7 +415,16 @@ public sealed class ActorRuntime : IDisposable
         _options = options;
         _nativeBudget = new ActorArenaBudget(options.NativeBudgetBytes);
         _domains = new ActorDispatchDomains(options.Dispatcher);
+        _pubSub = new ActorPubSub(
+            maxGroups: Math.Min(options.MaxActors, 4096),
+            maxGroupsPerActor: 64,
+            maxTopics: 4096,
+            // Shared ActorGroup admission quota is 64 per actor, matching
+            // the Java/Graal bounded cooperation contract.
+            maxSubscriptionsPerActor: 64);
     }
+
+    public ActorPubSub PubSub => _pubSub;
 
     public int LiveActors
     {
@@ -262,6 +439,16 @@ public sealed class ActorRuntime : IDisposable
     public ActorRef Spawn(ActorKind kind, ActorMessageHandler handler)
     {
         ArgumentNullException.ThrowIfNull(handler);
+        // A C# async lambda can otherwise bind to this void-returning delegate
+        // as async-void. It returns to RunCell at the first suspension, which
+        // would end the physical actor turn and allow the next message to run
+        // while the continuation later resumes outside actor admission.
+        // Oreslang suspension requires a compiler/runtime-owned logical turn
+        // ledger; until that exists on this host surface, fail closed.
+        if (handler.Method.IsDefined(typeof(AsyncStateMachineAttribute), inherit: false))
+            throw new ArgumentException(
+                "async/async-void host actor handlers are forbidden; suspension requires scheduler-owned logical actor continuation lowering",
+                nameof(handler));
         if (kind is not (ActorKind.Private or ActorKind.Shared or ActorKind.Untrusted))
             throw new ArgumentOutOfRangeException(nameof(kind));
 
@@ -288,7 +475,8 @@ public sealed class ActorRuntime : IDisposable
                     _options.ActorMaxAllocations,
                     _options.ActorMaxLifetimePins,
                     _options.ActorMaxReadLoans,
-                    _nativeBudget);
+                    _nativeBudget,
+                    _options.DemandBackedActorHeaps);
 
                 int stackBytes = _options.ActorStackBytes == 0
                     ? Math.Min(64 * 1024, Math.Max(1, _options.ActorPersistentBytes / 4))
@@ -296,6 +484,15 @@ public sealed class ActorRuntime : IDisposable
                 var cell = new ActorCell(this, kind, mailbox, arena, handler,
                     stackBytes, _options.ActorMaxStackFrames);
                 _actors.Add(candidateId, cell);
+                try
+                {
+                    _pubSub.RegisterActor(cell.Reference, kind);
+                }
+                catch
+                {
+                    _actors.Remove(candidateId);
+                    throw;
+                }
                 _nextActorId = candidateId;
                 return cell.Reference;
             }
@@ -313,9 +510,9 @@ public sealed class ActorRuntime : IDisposable
 
         lock (cell.Gate)
         {
-            if (cell.Stopping || !cell.Mailbox.Authorizes(destination))
+            if (cell.Stopping || cell.Draining || !cell.Mailbox.Authorizes(destination))
                 throw new InvalidOperationException(
-                    "Actor reference is stale or actor is stopping");
+                    "Actor reference is stale or actor is stopping or draining");
             // Do not start a carrier for a message that cannot enter the
             // mailbox. Send revalidates after scheduling before publication.
             cell.Mailbox.ValidateAdmission(destination, payload.Length);
@@ -329,6 +526,55 @@ public sealed class ActorRuntime : IDisposable
 
             cell.Mailbox.Send(destination, payload);
         }
+    }
+
+    /// <summary>
+    /// Gracefully seal admission for this exact ActorRef incarnation, then
+    /// drain all already accepted DATA turns before retiring its arena. This
+    /// host primitive is NOT a source-level pipe or a supervisor-controlled
+    /// graph-completion guarantee. Pipeline callers must wait for upstream
+    /// retirement BEFORE sealing downstream admission. Stop() remains abortive.
+    /// </summary>
+    public Task DrainAndStop(ActorRef actor)
+    {
+        ActorCell cell = Lookup(actor);
+        Task completion = cell.Terminated.Task; // generation-bound terminal receipt
+        bool finalizeNow = false;
+        lock (cell.Gate)
+        {
+            if (cell.Stopping || !cell.Mailbox.Authorizes(actor))
+                throw new InvalidOperationException("Actor reference is stale or stopping");
+            if (cell.Draining)
+                return completion;
+            cell.Draining = true;
+            if (cell.Scheduled == 0)
+            {
+                if (cell.Mailbox.QueuedMessages == 0)
+                {
+                    MarkStoppingLocked(cell); // no pending DATA to discard
+                    finalizeNow = true;
+                }
+                else
+                {
+                    // Scheduling failure must NOT strand previously admitted
+                    // DATA behind a half-published terminal transition.
+                    try
+                    {
+                        if (!TryScheduleLocked(cell))
+                            throw new InvalidOperationException(
+                                "Actor dispatch queue cannot admit graceful drain");
+                    }
+                    catch
+                    {
+                        cell.Draining = false;
+                        throw;
+                    }
+                }
+            }
+        }
+        if (finalizeNow)
+            FinalizeCell(cell);
+        return completion;
     }
 
     public void Stop(ActorRef actor)
@@ -367,9 +613,9 @@ public sealed class ActorRuntime : IDisposable
 
     public void Dispose()
     {
-        if (ReferenceEquals(s_currentRuntime, this))
+        if (ReferenceEquals(s_currentRuntime, this) || s_actorOrigin.Value)
             throw new InvalidOperationException(
-                "ActorRuntime.Dispose cannot run from one of its actor carriers");
+                "ActorRuntime.Dispose cannot run from an actor carrier or actor-origin offload");
 
         // Hold across joins and final reclamation, not just the _closed check.
         lock (_disposeGate)
@@ -400,6 +646,8 @@ public sealed class ActorRuntime : IDisposable
             // All queued/running dispatch tokens have returned at this point.
             foreach (ActorCell cell in cells)
                 FinalizeCell(cell);
+
+            _pubSub.Close();
         }
     }
 
@@ -438,7 +686,9 @@ public sealed class ActorRuntime : IDisposable
     private void RunCell(ActorCell cell)
     {
         ActorRuntime? previous = s_currentRuntime;
+        bool previousOrigin = s_actorOrigin.Value;
         s_currentRuntime = this;
+        s_actorOrigin.Value = true;
         bool finalize = false;
 
         try
@@ -479,9 +729,24 @@ public sealed class ActorRuntime : IDisposable
                 {
                     using (turn)
                     {
+                        if (cell.NextExecutionSequence == ulong.MaxValue)
+                            throw new InvalidOperationException("Actor invocation identity exhausted");
+                        var execution = new ActorExecutionContext(
+                            cell.Reference, ++cell.NextExecutionSequence, cell.FrameStorage);
+                        execution.Stack.Begin(turn);
                         var context = new ActorContext(
-                            cell.Reference, cell.Kind, cell.Arena, turn, cell.Stack);
-                        cell.Handler(context, payload);
+                            cell.Reference, cell.Kind, cell.Arena, turn, execution);
+                        try
+                        {
+                            cell.Handler(context, payload);
+                            // Swallowing a quota fault cannot turn this receive
+                            // into successful completion of its actor generation.
+                            execution.Stack.ValidateSynchronousTurnExit(turn);
+                            // Any failed compiled-guest frame operation is terminal for this turn,
+                            // even if the handler caught it (#409 guest frame gate).
+                            context.ValidateGuestFrameExit();
+                        }
+                        finally { execution.Stack.Complete(turn); }
                     }
                     succeeded = true;
                 }
@@ -530,6 +795,13 @@ public sealed class ActorRuntime : IDisposable
                             finalize = true;
                         }
                     }
+                    else if (cell.Draining)
+                    {
+                        // The final turn has returned and no accepted DATA
+                        // remain. Only now may Stop scrub/retire the arena.
+                        MarkStoppingLocked(cell);
+                        finalize = true;
+                    }
                 }
 
                 if (finalize)
@@ -540,6 +812,7 @@ public sealed class ActorRuntime : IDisposable
                 // Even a failure during dispatch-token teardown must not
                 // poison a reusable carrier's thread-static runtime identity.
                 s_currentRuntime = previous;
+                s_actorOrigin.Value = previousOrigin;
             }
         }
     }
@@ -562,6 +835,7 @@ public sealed class ActorRuntime : IDisposable
         cell.Mailbox.Stop();
         cell.Arena.Retire();
         cell.Arena.TryReclaim();
+        _pubSub.RetireActor(cell.Reference);
 
         lock (_gate)
         {
