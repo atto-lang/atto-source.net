@@ -509,8 +509,7 @@ public sealed class ActorRuntime : IDisposable
             }
             catch
             {
-                // A failed actor admission must refund BOTH the actor arena and
-                // its optional preallocated native mailbox slab.
+                // Rollback must refund the native queued slab AND actor arena.
                 arena?.Dispose();
                 mailbox?.Dispose();
                 throw;
@@ -726,10 +725,9 @@ public sealed class ActorRuntime : IDisposable
                     }
                     catch (Exception)
                     {
-                        // The opt-in native mailbox copies to an owned
-                        // managed array at delivery. If that allocation or
-                        // loan admission fails, do not reschedule a poisoned
-                        // mailbox or strand native leases on its queue.
+                        // Native queue delivery may allocate a managed owned
+                        // copy. Faulted dequeue must stop the actor instead
+                        // of leaking native leases or rescheduling forever.
                         Interlocked.Increment(ref _faultedTurns);
                         MarkStoppingLocked(cell);
                         break;
