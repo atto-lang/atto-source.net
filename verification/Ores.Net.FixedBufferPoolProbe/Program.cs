@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using Ores.Net.Runtime;
 
 static void Require(bool ok, string message)
@@ -30,16 +31,77 @@ using (var write = pool.BorrowWrite(first, sender))
     Deny(() => pool.BorrowWrite(first, sender), "writer denies writer");
     Deny(() => pool.BeginTransfer(first, sender), "loan denies transfer");
     Deny(() => pool.Release(first, sender), "loan denies release");
+
+    // A narrow native scalar transport primitive; this is not yet a mailbox.
+    Span<byte> incoming = stackalloc byte[8];
+    Span<byte> observed = stackalloc byte[8];
+    for (int i = 0; i < 512; ++i)
+    {
+        BinaryPrimitives.WriteInt64LittleEndian(incoming, i);
+        pool.WriteBytes(write, 1, incoming);
+        pool.ReadBytes(write, 1, observed);
+        Require(incoming.SequenceEqual(observed), "bulk copied bytes differ");
+    }
+    _ = GC.GetAllocatedBytesForCurrentThread();
+    long before = GC.GetAllocatedBytesForCurrentThread();
+    bool coherent = true;
+    for (int i = 0; i < 50_000; ++i)
+    {
+        BinaryPrimitives.WriteInt64LittleEndian(incoming, i);
+        pool.WriteBytes(write, 1, incoming);
+        pool.ReadBytes(write, 1, observed);
+        if (!incoming.SequenceEqual(observed)) { coherent = false; break; }
+    }
+    long managedDelta = GC.GetAllocatedBytesForCurrentThread() - before;
+    Require(coherent && managedDelta == 0,
+        "50k warmed native bulk operations must allocate zero CLR bytes");
+    pool.WriteBytes(write, 16, ReadOnlySpan<byte>.Empty);
+    pool.ReadBytes(write, 16, Span<byte>.Empty);
+    byte[] tooLong = new byte[2];
+    bool boundsRejected = false;
+    try { pool.ReadBytes(write, 15, tooLong); }
+    catch (ArgumentOutOfRangeException) { boundsRejected = true; }
+    Require(boundsRejected, "bulk read past end must reject");
+    boundsRejected = false;
+    try { pool.WriteBytes(write, -1, tooLong); }
+    catch (ArgumentOutOfRangeException) { boundsRejected = true; }
+    Require(boundsRejected, "negative bulk write offset must reject");
+    pool.ReadBytes(write, 1, observed);
+    Require(BinaryPrimitives.ReadInt64LittleEndian(observed) == 49_999L,
+        "out of bounds write must not mutate the slot");
+
 }
 using (var read = pool.BorrowRead(first, sender))
 {
     Require(pool.ReadByte(read, 0) == 0x5a, "read loan preserves bytes");
     Deny(() => pool.BorrowWrite(first, sender), "reader denies writer");
 }
+// Preserve source-owner authority on native bulk reads and writes.
+using (var read = pool.BorrowRead(first, sender))
+{
+    byte[] target = new byte[8];
+    pool.ReadBytes(read, 1, target);
+    Require(BinaryPrimitives.ReadInt64LittleEndian(target) == 49_999L,
+        "read loan bulk scalar state");
+    bool deniedWrite = false;
+    try { pool.WriteBytes(read, 1, target); }
+    catch (InvalidOperationException) { deniedWrite = true; }
+    Require(deniedWrite, "read loan must not authorize bulk write");
+}
 Deny(() => pool.BorrowRead(first, reincarnated), "stale incarnation");
 Deny(() => pool.Release(first, wrongTenant), "wrong tenant");
 var aborted = pool.BeginTransfer(first, sender);
 Deny(() => pool.BorrowRead(first, sender), "escrow denies sender access");
+bool escrowDenied = false;
+try
+{
+    using var forbidden = pool.BorrowRead(first, sender);
+    byte[] bytes = new byte[8];
+    pool.ReadBytes(forbidden, 1, bytes);
+}
+catch (InvalidOperationException) { escrowDenied = true; }
+Require(escrowDenied, "escrowed slot cannot expose bulk data");
+
 Deny(() => pool.BeginTransfer(first, sender), "escrow denies second transfer");
 Deny(() => pool.CommitTransfer(aborted, wrongTenant), "cross tenant denied");
 Require(ReferenceEquals(pool.AbortTransfer(aborted), first), "abort restores exact lease");
