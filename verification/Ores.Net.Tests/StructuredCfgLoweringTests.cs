@@ -605,8 +605,8 @@ internal static class StructuredCfgLoweringTests
             "checked negation");
         CheckOverflow("fnc main():int{val int n=9223372036854775807;return n+1;}",
             "runtime val checked overflow in emitted CIL");
-        CheckOverflow("fnc main():int{int unused=9223372036854775807+1;return 7;}",
-            "immutable-default unused initializer remains eager and checked");
+        RejectWithDiagnostic("fnc main():int{int unused=9223372036854775807+1;return 7;}",
+            "E_CONST_OVERFLOW", "unused implicit const must reject before CIL, even if unread");
         CheckOverflow("fnc main():int{return 9223372036854775807+1;}",
             "checked addition");
         CheckOverflow("fnc main():int{return 9223372036854775807*2;}",
