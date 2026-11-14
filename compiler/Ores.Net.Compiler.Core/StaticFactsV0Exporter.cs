@@ -22,14 +22,21 @@ public static class StaticFactsV0Exporter
     /// Production compiler path: the same signed-i64 parser and frozen, verified
     /// SSA OresIR used by oresnet check/compile. Calls/loops cannot enter it.
     /// </summary>
-    public static string FromCompiledScalarSource(string source)
+    public static string FromCompiledScalarSource(string source,
+        DotnetHostImportPolicy? policy = null)
     {
         ValidateSource(source);
-        var expression = OresParser.Parse(source);
-        VerifiedIrFunction function = OresIrLowering.Lower(expression);
+        var expression = OresParser.Parse(source, policy);
+        VerifiedIrFunction function = OresIrLowering.Lower(expression, policy: policy);
         if (function.Name != "main" || function.ResultType != IrValueType.I64 ||
             function.Instructions.Count == 0)
             throw Unsupported("non-main or unverified scalar function");
+        // The v0 analyzer reports zero call edges and zero sinks. A verified
+        // CLR method reference is still a foreign call and cannot be erased
+        // from those facts, even for a currently pure allowlisted Math method.
+        if (function.Instructions.Any(instruction =>
+                instruction.Opcode is IrOpcode.DotnetMathAbsI64 or IrOpcode.DotnetMathMaxI64))
+            throw Unsupported("CLR host imports and external method-call edges");
         return WriteFacts(source, Array.Empty<string>());
     }
 
@@ -43,6 +50,11 @@ public static class StaticFactsV0Exporter
         ValidateSource(source);
         StructuredProgram program = OresStructuredParser.Parse(source);
         if (program.Name != "main") throw Unsupported("non-main structured program");
+        // v0 exports one main with *zero* call edges. A helper declaration,
+        // even if currently uncalled, invalidates that graph contract: never
+        // emit a misleading source-identity fact report with hidden functions.
+        if (program.Functions is { Count: > 0 })
+            throw Unsupported("typed helper functions and call graph");
         var visitor = new StructuredVisitor();
         visitor.Statements(program.Body, 1);
         return WriteFacts(source, visitor.LoopIds);

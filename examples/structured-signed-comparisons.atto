@@ -1,0 +1,17 @@
+// Signed i64 relational comparisons yielding bool.
+// Experimental structured CFG/CIL, not shipping scalar check/compile.
+define pub fnc greater_than(int lhs, int rhs): bool {
+    return lhs > rhs;
+}
+define pub fnc main(): int {
+    const bool min_below_max = -9223372036854775808 <= 9223372036854775807;
+    val bool max_is_maximum = 9223372036854775807 >= 9223372036854775807;
+    if min_below_max {
+        if max_is_maximum {
+            if greater_than(9223372036854775807, -9223372036854775808) {
+                return 42;
+            }
+        }
+    }
+    return 0;
+}
