@@ -149,6 +149,10 @@ public static class ExplicitExportSyntax
         internal ExplicitExportDeclaration Parse()
         {
             Expect("export");
+            // Canonical AttoLang spelling is export pub Name; or
+            // export pub[pkg] class Name;. Preserve old export[pkg]
+            // source compatibility while migrating its producers.
+            Take("pub");
             var scope = ParseScope();
             ExplicitExportKind? kind = ParseKind();
 
