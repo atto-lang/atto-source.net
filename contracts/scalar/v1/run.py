@@ -179,7 +179,7 @@ NEGATIVE_DIAGNOSTICS = {
     "net": {
         "reject.unknown": r"oresnet: Expected integer at offset (?P<offset>[0-9]+)",
         "reject.division": r"oresnet: Division requires float result lowering; unsupported in the i64 source subset",
-        "reject.actor": r"oresnet: Expected 'fnc' at offset (?P<offset>[0-9]+)",
+        "reject.actor": r"oresnet: Source actor lowering requires sealed state/handle_state and scheduler-owned logical continuation frames at offset (?P<offset>[0-9]+)",
         "reject.async": r"oresnet: Expected 'fnc' at offset (?P<offset>[0-9]+)",
         "reject.structural": r"oresnet: Expected integer at offset (?P<offset>[0-9]+)",
     },
