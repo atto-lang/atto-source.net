@@ -16,8 +16,10 @@ is not executable parity evidence.
 | `explicit-nonconst.atto` | Reject E_NON_CONST_INITIALIZER before executable output |
 | `const-mut-scalar.atto` | Reject E_CONST_MUT_UNSUPPORTED |
 | `const-overflow.atto` | Reject E_CONST_OVERFLOW before executable output |
+| `implicit-rebind.atto` | Reject E_IMMUTABLE_REBIND before executable output |
+| `explicit-rebind.atto` | Reject E_IMMUTABLE_REBIND before executable output |
 
-Nine fixture blob SHAs MUST match exactly across the three compiler repositories
+Eleven fixture blob SHAs MUST match exactly across the three compiler repositories
 at the tested immutable source heads. The companion exact-head CI workflow in
 each repository is the intended compiler execution gate, not a proof until it
 actually runs the compiler and collects real execution/diagnostic evidence.
