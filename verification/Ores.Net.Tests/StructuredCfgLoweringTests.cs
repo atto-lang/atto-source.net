@@ -174,6 +174,30 @@ internal static class StructuredCfgLoweringTests
             }
             """;
         Check(sum, 45, "two loop-carried SSA values sum 0..9");
+        // Three literal spellings are equivalent, but const is NOT a
+        // compile-time initializer requirement. All four observations travel
+        // through real generated CIL and its checked reference evaluator.
+        foreach (var (source, label) in new[] {
+            ("fnc main():int{int x=7;return x;}", "type-first literal"),
+            ("fnc main():int{const x=7;return x;}", "inferred const literal"),
+            ("fnc main():int{const int x=7;return x;}", "typed const literal"),
+            ("fnc inc(int p):int{return p+1;}fnc main():int{int x=inc(6);return x;}",
+                "type-first runtime helper"),
+            ("fnc inc(int p):int{return p+1;}fnc main():int{const x=inc(6);return x;}",
+                "const runtime helper must remain legal"),
+            ("fnc inc(int p):int{return p+1;}fnc main():int{const int x=inc(6);return x;}",
+                "typed const runtime helper must remain legal")
+        })
+            Check(source, 7, "binding equivalence with CIL: " + label);
+        Check("fnc main():int{let int x=7;x=8;return x;}",
+            8, "explicit let actually rebinds in emitted CIL");
+        Reject("fnc inc(int p):int{return p+1;}" +
+               "fnc main():int{const int x=inc(6);x=8;return x;}",
+            "readonly runtime const cannot rebind after successful call parse");
+        Reject("fnc inc(int p):int{return p+1;}" +
+               "fnc main():int{int x=inc(6);x=8;return x;}",
+            "type-first readonly cannot rebind after successful call parse");
+
         // Signed relational source must execute through verified CFG and
         // emitted CIL; parser-only acceptance is not parity evidence.
         Check(File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
@@ -391,6 +415,28 @@ internal static class StructuredCfgLoweringTests
             "xor eagerly evaluates overflowing right operand");
         Check("fnc main():int{if true xor true{return 7;}else{return 42;}}",
             42, "xor boolean false result");
+        // Canonical symbolic spellings (spec ch.16) share the same typed CFG/CIL path.
+        Check("fnc main():int{if false && true{return 7;}else{return 42;}}",
+            42, "&& false branch");
+        Check("fnc main():int{if true || false{return 42;}else{return 7;}}",
+            42, "|| true branch");
+        Check("fnc main():int{let int x=9223372036854775807;" +
+            "if false && x+1>0{return 7;}else{return 42;}}",
+            42, "&& skips overflowing right operand");
+        Check("fnc main():int{let int x=9223372036854775807;" +
+            "if true || x+1>0{return 42;}else{return 7;}}",
+            42, "|| skips overflowing right operand");
+        CheckOverflow("fnc main():int{let int x=9223372036854775807;" +
+            "if false ^^ x+1>0{return 42;}else{return 7;}}",
+            "^^ eagerly evaluates overflowing right operand");
+        Check("fnc main():int{if true ^^ true{return 7;}else{return 42;}}",
+            42, "^^ boolean false result");
+        Check("fnc main():int{if true ^^ false{return 42;}else{return 7;}}",
+            42, "^^ boolean true result");
+        Check("fnc main():int{if true ^^ true && false{return 42;}else{return 7;}}",
+            42, "&& binds tighter than ^^");
+        Check("fnc main():int{if true || true ^^ true{return 42;}else{return 7;}}",
+            42, "^^ binds tighter than ||");
         Check("fnc main():int{if true != false{return 42;}else{return 7;}}",
             42, "typed bool inequality");
         Check("fnc main():int{let int n=0;while (n<3) and (n<10) {n=n+1;}return n+39;}",

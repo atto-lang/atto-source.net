@@ -400,16 +400,19 @@ CapabilityIoLifecycleV1SelfTest.Run();
 ActorStateSchemaAdmissionTests.Run();
 ActorStateLayoutIntegrationTests.Run();
 ActorGeneratedCounterTests.Run();
+DeclaredActorCounterV2Tests.Run();
 SourceByteBudgetTests.Run();
 ElmCompositionAdmissionTests.Run();
 HeapContainerSourceBoundaryTests.Run(); // actual scalar compiler fail-closed heap/container checks
 StructuralPatternAdmissionTests.Run();
+QuotedTemplateSourceTests.Run(); // real source lexers and single-quote import graph
 AdtSourceAdmissionTests.Run();
 NumericSeparatorParityTests.Run();
 ExplicitExportSyntaxTests.Run();
 CrossBackendCheckedI64ParityTests.Run();
 ActorHierarchyMlAdmissionTests.Run();
 AsyncInteropFailClosedTests.Run();
+EtsPgFailClosedTests.Run();
 await HostTaskObservationTests.Run();
 
 // Source actor syntax must fail at a semantic actor boundary, never as an
@@ -541,6 +544,8 @@ BoundedDemandI64PortSelfTest.Run(); // host scalar adapter; NOT source Flow<T> o
 SelectableI64FutureSelfTest.Run();
 ActorDispatchDomainsSelfTest.Run();
 ActorRuntimeSelfTest.Run();
+ActorRuntimeGracefulDrainSelfTest.Run(); // HOST only; not guest pipe lowering
+SupervisorDataFenceParitySelfTest.Run(); // HOST only; stop-vs-send and sibling parity
 ActorPubSubSelfTest.Run();
 ActorPubSubTurnAuthorityTests.Run();
 ActorPubSubByteQuotaTests.Run();
@@ -1164,6 +1169,7 @@ AttoEqualityNativeAotCandidateTests.Run();
 StructuredStaticAbiTests.Run();
 NominalEnumV1GuestTests.Run(); // verified .atto enum source -> real CFG/CIL; native execution separately
 NominalEnumFunctionV2GuestTests.Run(); // source-nominal arg/result -> actual private MethodDef call
+ExplicitReturnFlowTests.Run(); // nonvoid explicit + void fallthrough CIL proof
 StaticFactsV0Tests.Run();
 ValueBoundaryTests.Run();
 Console.WriteLine("Oreslang .NET bootstrap, CFG verifier, CIL stress and structured source tests passed");

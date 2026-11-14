@@ -29,6 +29,36 @@ public sealed class ActorNativeScalarState
         _kinds = kinds.ToArray();
     }
 
+    /// <summary>
+    /// Compiler-owned critical-read of one actor-local native i64 cell.
+    /// Returns only a detached Copy scalar. The capability and the arena
+    /// read loan remain private and are disposed before caller Send().
+    /// A foreign actor, wrong generation, or off-carrier access is denied.
+    /// </summary>
+    public long ReadInt64(ActorContext context, int field)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        context.ValidateActiveTurn();
+        if ((uint)field >= (uint)_kinds.Length || _kinds[field] != 1)
+            throw new InvalidOperationException("Scalar state field is not int64");
+        if (Interlocked.CompareExchange(ref _executing, 1, 0) != 0)
+            throw new InvalidOperationException("Scalar state is physically in use");
+        try
+        {
+            context.ValidateActiveTurn();
+            if (!_initialized || context.Self != _owner || _storage is null)
+                throw new InvalidOperationException("Missing or foreign native scalar state owner");
+            ActorArenaHandle storage = _storage;
+            using (context.BorrowRead(storage))
+            {
+                Span<byte> detached = stackalloc byte[sizeof(long)];
+                context.Read(storage, field * sizeof(long), detached);
+                return BinaryPrimitives.ReadInt64LittleEndian(detached);
+            }
+        }
+        finally { Volatile.Write(ref _executing, 0); }
+    }
+
     public long AddInt64(ActorContext context, int field, long delta)
     {
         ArgumentNullException.ThrowIfNull(context);
