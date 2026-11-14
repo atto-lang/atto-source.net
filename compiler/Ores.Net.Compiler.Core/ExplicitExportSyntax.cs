@@ -258,11 +258,11 @@ public static class ExplicitExportSyntax
                             "Symbol binding aliases are unsupported in v1");
                     throw Error("EXPORT_SYMBOL_IDENTITY_MISMATCH", "expected exact Symbol self-identity");
                 }
-                string external = "#" + Name("EXPORT_SYMBOL_IDENTITY_MISMATCH");
-                if (!string.Equals(source, external, StringComparison.Ordinal))
+                string symbolExternal = "#" + Name("EXPORT_SYMBOL_IDENTITY_MISMATCH");
+                if (!string.Equals(source, symbolExternal, StringComparison.Ordinal))
                     throw Error("EXPORT_SYMBOL_IDENTITY_MISMATCH",
                         "Symbol export cannot substitute nominal identity");
-                return new ExplicitExportItem(source, external, Symbol: true, SelfIdentity: true);
+                return new ExplicitExportItem(source, symbolExternal, Symbol: true, SelfIdentity: true);
             }
 
             string local = Name("EXPORT_MALFORMED_TARGET");
