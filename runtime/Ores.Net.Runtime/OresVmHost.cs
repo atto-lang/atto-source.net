@@ -141,6 +141,16 @@ public sealed partial class OresVmHost
             throw new InvalidOperationException("stale or foreign actor ticket");
     }
 
+    /// <summary>
+    /// Canonical TenantVM name for TRUSTED host-only admission. The returned
+    /// legacy IsolateHandle does not represent an enforced hostile-tenant
+    /// VM boundary. NativeVmIsolate continues to fail closed in CreateIsolate.
+    /// </summary>
+    public IsolateHandle CreateTrustedTenantVm(string tenantId, int maxActors = 64,
+        int maxResourcePins = 1024, long maxQueuedMailBytes = 16L * 1024 * 1024)
+        => CreateIsolate(tenantId, maxActors, maxResourcePins,
+            IsolationMode.TrustedInProcess, maxQueuedMailBytes);
+
     public IsolateHandle CreateIsolate(string tenantId, int maxActors = 64, int maxResourcePins = 1024,
         IsolationMode isolation = IsolationMode.TrustedInProcess, long maxQueuedMailBytes = 16L * 1024 * 1024)
     {

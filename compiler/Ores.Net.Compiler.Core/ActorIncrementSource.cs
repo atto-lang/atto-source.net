@@ -109,8 +109,10 @@ public static partial class OresParser
         Expect("write");
         Expect("{");
         Expect("return");
-        Expect("self");
-        Expect(".");
+        // Only the statically verified state intrinsic may omit self.
+        // This is not general name-based method dispatch.
+        bool explicitSelf = Take("self");
+        if (explicitSelf) Expect(".");
         Expect("handle_state");
         Expect("(");
         int criticalOffset = At().Offset;
@@ -171,6 +173,12 @@ public static partial class OresParser
         if (At().Text.Length != 0)
             throw new FormatException($"Unexpected trailing actor source at offset {At().Offset}");
 
+        // Lexical parameters may not shadow implicit receiver authority.
+        // Explicit self.handle_state is unambiguous for a parameter named
+        // handle_state, but neither spelling permits a redefined self.
+        if (scalarMailParameter == "self" || parameter == "self" ||
+            (!explicitSelf && scalarMailParameter == "handle_state"))
+            throw new FormatException("Actor self/state intrinsic is shadowed");
         if (scalarMailParameter == parameter
             || writeReceiver != parameter || readReceiver != parameter ||
             returnReceiver != parameter || writeField != readField ||

@@ -1,0 +1,4 @@
+// Must fail: !equation is not the !eq operator.
+fnc main(): int {
+  if 3 !equation 4 { return 42; } else { return 0; }
+}

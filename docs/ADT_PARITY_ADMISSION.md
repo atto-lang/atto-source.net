@@ -19,3 +19,22 @@ closed exhaustiveness and ownership-safe CIL/Native AOT lowering, then execute
 positive and semantic negative cases on a verified exact compiler tree.
 Do not count generic `FormatException`, zero-step Actions or host-only tests
 as certified guest semantics. Keep draft until reviewed, stepful CI runs.
+
+## Merge-order reconciliation with structured Option<int> (#428)
+
+The experimental `check-structured` / `compile-structured` lane in PR #428
+has verified closed `Option<int>` (tag: Bool, payload: signed i64),
+`Some`/`None`, tag queries and exact tagged equality. Consequently,
+blanket lexer denial of `Option`, `Some` and `None` in independent
+PR #468 **must not** be merged unchanged on top of #428. The production
+`OresParser` continues to reject all ADT source. The experimental
+structured lexer refuses `Result`, `Ok`, `Err` and `trap` with the
+same stable unsupported-feature diagnostic, in addition to rejecting
+unsupported generic Option shapes and unsafe operations during typing.
+
+The structured lexer regression checks both outcomes: actual closed
+`Option<int>` source is admitted, but unsupported `Result`/trap source
+never reaches verified CFG/CIL, even in the presence of comments or longer
+identifiers. This is an implementation-layer boundary, **not** a claim of
+NativeAOT executed guest conformance; exact-head stepful tests and reviewer
+approval remain mandatory.

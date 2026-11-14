@@ -61,6 +61,11 @@ jobs:
           dotnet run --project compiler/Ores.Net.Compiler -c Release -- emit-actor-csharp examples/actor-overflow-counter.atto --out verification/Ores.Net.Tests/GeneratedOverflowCounterActor.g.cs
           dotnet run --project compiler/Ores.Net.Compiler -c Release -- emit-actor-csharp examples/actor-message-counter.atto --out verification/Ores.Net.Tests/GeneratedMessageCounterActor.g.cs
           git diff --exit-code -- verification/Ores.Net.Tests/GeneratedCounterActor.g.cs verification/Ores.Net.Tests/GeneratedOverflowCounterActor.g.cs verification/Ores.Net.Tests/GeneratedMessageCounterActor.g.cs
+      - name: Verify omitted-self source generates identical native actor
+        run: |
+          set -euo pipefail
+          dotnet run --project compiler/Ores.Net.Compiler -c Release -- emit-actor-csharp examples/actor-implicit-counter.atto --out artifacts/implicit/GeneratedMessageCounterActor.g.cs
+          cmp artifacts/implicit/GeneratedMessageCounterActor.g.cs verification/Ores.Net.Tests/GeneratedMessageCounterActor.g.cs
       - name: Run complete managed verification
         run: dotnet run --project verification/Ores.Net.Tests -c Release
       - name: Publish static native actor probe
