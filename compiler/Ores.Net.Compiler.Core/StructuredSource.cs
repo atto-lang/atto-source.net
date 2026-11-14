@@ -247,6 +247,21 @@ public static partial class OresStructuredParser
                         $"Lexical captures require checked closure lowering at offset {token.Offset}");
             }
             tokens.Add(token);
+            // Multiple actor forward signatures and file namespace headers
+            // require an actual nominal actor linker and NativeAOT CIL actor
+            // lowering. Detect at the token boundary, before later syntax is
+            // mistaken for an executable scalar helper.
+            int i = tokens.Count - 1;
+            if (token.Text is "actor" or "isoactor" &&
+                i > 0 &&
+                (tokens[i - 1].Text == "declare" ||
+                 (i > 1 && tokens[i - 1].Text == "pub" &&
+                  tokens[i - 2].Text == "declare")))
+                throw new FormatException(
+                    $"ACTOR_FORWARD_NATIVEAOT_UNSUPPORTED: actor forward requires nominal actor identity, ownership and executable CIL lowering at offset {token.Offset}");
+            if (token.Text == "namespace" && i > 0 && tokens[i - 1].Text == "use")
+                throw new FormatException(
+                    $"NAMESPACE_RUNTIME_NATIVEAOT_UNSUPPORTED: file namespace requires verified nominal actor/linker identity at offset {token.Offset}");
             // Reject as soon as the typed receiver header completes: later
             // body syntax may be outside this limited scalar lexer entirely.
             // Waiting for EOF could report an unrelated invalid character
