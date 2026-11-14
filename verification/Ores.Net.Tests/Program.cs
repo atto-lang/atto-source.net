@@ -693,6 +693,7 @@ ActorPubSubByteQuotaTests.Run();
 ActorPubSubSourceAdmissionTests.Run();
 ActorPipeAdmissionTests.Run(); // compiler gate only; no executable actor guest yet
 ActorPipeSourcePlanV1SelfTest.Run(); // checked scalar CIL oracle, not actor delivery
+ActorEmitPipeContractV3SelfTest.Run(); // compiled-type contract ONLY, no source-emitted actor guest
 NativeTraceContinuationV1SelfTest.Run(); // host-owned W3C scopes; not guest CIL instrumentation
 NativeTraceInstrumentationV1SelfTest.Run(); // NativeAOT host AOT/JIT dispatch; no compiler or OTLP claim
 UniversalHotLoadV1SelfTest.Run();
