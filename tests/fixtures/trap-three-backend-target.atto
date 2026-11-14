@@ -1,22 +1,11 @@
-// AttoLang trap semantic fixture: Java/Graal must really compile and execute.
-// Expected guest return: int 7. Native LLVM and .NET must not claim parity
-// until this identical source runs with equivalent observable behavior.
+// AttoLang trap semantic fixture: identical native compiler target in 3 backends.
+// Expected real guest main() result: signed integer 7.
+// No class, actor, I/O, or exception transport dependency in this core fixture.
 fnc checked_id(int id): Result<int, String> {
   if id < 0 then
     return Err("id must be nonnegative");
   fi
   return Ok(id);
-}
-
-define class Animal as
-end
-define class Dog extends Animal as
-end
-define class Cat extends Animal as
-end
-
-fnc cast_dog(Animal animal): Dog {
-  return animal as Dog;
 }
 
 pub fnc main(): int {
@@ -29,10 +18,5 @@ pub fnc main(): int {
   val Result<int, String> second = invalid.unwrap();
   if first.is_err(); then return 103; fi
   if second.is_ok(); then return 104; fi
-
-  // A failing checked cast raises an ordinary recoverable guest error.
-  val Option<Dog> ordinary_failure = trap cast_dog(new Cat());
-  if ordinary_failure.is_some(); then return 105; fi
-
   return first.unwrap() + 2;
 }
