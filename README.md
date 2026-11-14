@@ -235,7 +235,14 @@ This remains runtime-only. It does not enable source `Channel<T>` or
 `select`; generic typed channels, Future arms, close/EOF semantics, actor-lane
 continuations, suspension and compiler lowering remain pending.
 
+### Selectable i64 channel substrate
 
+Stacked on the runtime `SelectArbiter`, the .NET runtime now has a bounded
+`SelectableI64Channel` proof for the first scalar select profile. Readable and
+writable readiness subscriptions are revocable, selected reads consume only
+inside the arbiter conditional commit, selected writes publish only inside that
+same transaction, and stale captured readiness notifications revalidate their
+subscription identity before touching the buffer.
 
 Close is also a terminal readiness event: buffered values drain before EOF,
 an empty closed channel commits selectable EOF, and a selected write against a
