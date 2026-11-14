@@ -87,7 +87,7 @@ internal static class QuotedTemplateSourceTests
             Fail("pub fnc main():int { return " + CommentDepth(128) + "; }",
                 "STRING_BACKEND_UNSUPPORTED", structured);
             Fail("pub fnc main():int { return " + CommentDepth(129) + "; }",
-                "Comment nesting limit", structured);
+                "block comment nesting exceeds 128", structured);
         }
         // Legal import specifiers are actual source syntax and resolve exactly
         // through the compiler graph; this is more than a host-only scanner.
