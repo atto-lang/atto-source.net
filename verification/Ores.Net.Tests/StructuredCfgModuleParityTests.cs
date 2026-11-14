@@ -110,8 +110,8 @@ internal static class StructuredCfgModuleParityTests
         Check("fnc identity(bool b):bool{return b;}" +
               "fnc main():int{return identity(true or false and false) ? 42 : 7;}",
             42, "logical expression inside helper call argument");
-        Check("fnc answer(int n):int{let int result=7;" +
-              "while n<2 and (n<3 or false){result=result+17;n=n+1;}" +
+        Check("fnc answer(int n):int{let int result=7;let int i=n;" +
+              "while i<2 and (i<3 or false){result=result+17;i=i+1;}" +
               "return result+1;}" +
               "fnc main():int{return answer(0);}",
             42, "MethodDef loop-header condition and SSA backedges");
