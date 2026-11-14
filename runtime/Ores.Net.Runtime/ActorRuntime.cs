@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Security.Cryptography;
 using System.Threading;
 
@@ -82,6 +83,9 @@ public sealed class ActorContext
     private readonly ActorArena _arena;
     private readonly ActorArenaTurn _turn;
     private readonly ActorExecutionStack _stack;
+    private readonly object _guestFrameGate = new();
+    private readonly List<ActorStackFrameHandle> _guestFrames = new();
+    private bool _guestFrameFaulted;
 
     internal ActorContext(ActorRef self, ActorKind kind,
         ActorArena arena, ActorArenaTurn turn,
@@ -148,6 +152,119 @@ public sealed class ActorContext
     public void PopStackFrame(ActorStackFrameHandle frame) =>
         _stack.Pop(_turn, frame);
 
+    // Compiler-owned guest frame calls are intentionally separate from the
+    // failure-neutral host stack API above. The shipping synchronous actor
+    // runtime has no ownership protocol for parking compiled guest frames.
+    // Once a guest frame operation fails, the whole handler fails at exit
+    // even when a host callback catches the original exception.
+    public ActorStackFrameHandle GuestPushStackFrame(int bytes, int alignment = 8)
+    {
+        lock (_guestFrameGate)
+        {
+            RequireGuestFrameTurn();
+            try
+            {
+                ActorStackFrameHandle frame = _stack.Push(_turn, bytes, alignment);
+                _guestFrames.Add(frame);
+                return frame;
+            }
+            catch (Exception)
+            {
+                _guestFrameFaulted = true;
+                throw;
+            }
+        }
+    }
+
+    public void GuestReadStackFrame(ActorStackFrameHandle frame, int offset,
+        Span<byte> destination)
+    {
+        lock (_guestFrameGate)
+        {
+            RequireGuestFrameTurn();
+            RequireGuestFrameHandle(frame);
+            try { _stack.Read(_turn, frame, offset, destination); }
+            catch (Exception)
+            {
+                _guestFrameFaulted = true;
+                throw;
+            }
+        }
+    }
+
+    public void GuestWriteStackFrame(ActorStackFrameHandle frame, int offset,
+        ReadOnlySpan<byte> source)
+    {
+        lock (_guestFrameGate)
+        {
+            RequireGuestFrameTurn();
+            RequireGuestFrameHandle(frame);
+            try { _stack.Write(_turn, frame, offset, source); }
+            catch (Exception)
+            {
+                _guestFrameFaulted = true;
+                throw;
+            }
+        }
+    }
+
+    public void GuestPopStackFrame(ActorStackFrameHandle frame)
+    {
+        lock (_guestFrameGate)
+        {
+            RequireGuestFrameTurn();
+            if (_guestFrames.Count == 0 ||
+                !ReferenceEquals(_guestFrames[^1], frame))
+            {
+                _guestFrameFaulted = true;
+                throw new InvalidOperationException(
+                    "Compiled guest stack pop violates strict LIFO");
+            }
+
+            try
+            {
+                _stack.Pop(_turn, frame);
+                _guestFrames.RemoveAt(_guestFrames.Count - 1);
+            }
+            catch (Exception)
+            {
+                _guestFrameFaulted = true;
+                throw;
+            }
+        }
+    }
+
+    internal void ValidateGuestFrameExit()
+    {
+        // Never try to admit a new physical turn here. Concurrent STOP may
+        // have retired the arena while the handler was unwinding.
+        lock (_guestFrameGate)
+        {
+            if (_guestFrameFaulted || _guestFrames.Count != 0)
+                throw new InvalidOperationException(
+                    "Compiled guest actor frame fault or unbalanced synchronous handler");
+        }
+    }
+
+    private void RequireGuestFrameTurn()
+    {
+        // Authenticate the exact carrier and turn before any state mutation.
+        // A stolen or expired context must not poison a healthy actor.
+        _arena.ValidateActiveTurn(_turn);
+        if (_guestFrameFaulted)
+            throw new InvalidOperationException(
+                "Compiled guest frame execution already faulted");
+    }
+
+    private void RequireGuestFrameHandle(ActorStackFrameHandle frame)
+    {
+        if (!_guestFrames.Contains(frame))
+        {
+            _guestFrameFaulted = true;
+            throw new InvalidOperationException(
+                "Compiled guest frame handle is foreign, stale, or host-owned");
+        }
+    }
     // Internal compiler/runtime ABI authority: never expose sealed type
     // descriptors as guest values or permit caller-provided raw tags to mint
     // type authority on an already-issued activation.
@@ -562,6 +679,9 @@ public sealed class ActorRuntime : IDisposable
                             // Swallowing a quota fault cannot turn this receive
                             // into successful completion of its actor generation.
                             execution.Stack.ValidateSynchronousTurnExit(turn);
+                            // Any failed compiled-guest frame operation is terminal for this turn,
+                            // even if the handler caught it (#409 guest frame gate).
+                            context.ValidateGuestFrameExit();
                         }
                         finally { execution.Stack.Complete(turn); }
                     }
