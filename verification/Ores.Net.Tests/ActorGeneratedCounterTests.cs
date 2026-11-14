@@ -59,8 +59,80 @@ internal static class ActorGeneratedCounterTests
         Require(ActorIncrementSourceEmitter.EmitCSharp(OresParser.InspectSynchronousActorIncrement(overflowSource))
                 .Replace("\r\n", "\n", StringComparison.Ordinal) == overflowGolden.Replace("\r\n", "\n", StringComparison.Ordinal),
             "overflow source/golden mismatch");
+        // This is a genuine source-checked message-payload guest slice:
+        // a single owned `int incoming` drives the actor-local checked add,
+        // not a trusted-host fabricated value or legacy fixed +1 control tick.
+        var messageSource = CounterSource
+            .Replace("actor Counter as", "actor MessageCounter as", StringComparison.Ordinal)
+            .Replace("increment(): int", "increment(int incoming): int", StringComparison.Ordinal)
+            .Replace("s.count + 1", "s.count + incoming", StringComparison.Ordinal);
+        var messageIr = OresParser.InspectSynchronousActorIncrement(messageSource);
+        Require(messageIr.ScalarMailParameter == "incoming" && messageIr.Delta == 0 &&
+            messageIr.Schema.ActorName == "MessageCounter",
+            "typed mailbox input did not survive checked source IR");
+        var messageGolden = File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
+            "GeneratedMessageCounterActor.g.cs"));
+        var messageGenerated = ActorIncrementSourceEmitter.EmitCSharp(messageIr);
+        Require(messageGenerated.Replace("\r\n", "\n", StringComparison.Ordinal) ==
+                messageGolden.Replace("\r\n", "\n", StringComparison.Ordinal),
+            "typed-mail generated NativeAOT source differs from checked golden");
+        // Omitted self is only a source syntax alias for the same compiler
+        // intrinsic and must generate identical static NativeAOT code.
+        var implicitSelfSource = CounterSource.Replace("return self.handle_state(",
+            "return handle_state(", StringComparison.Ordinal);
+        var implicitSelfIr = OresParser.InspectSynchronousActorIncrement(implicitSelfSource);
+        Require(ActorIncrementSourceEmitter.EmitCSharp(implicitSelfIr) == generated,
+            "omitted-self literal source diverged from explicit self");
+        var implicitMessageSource = messageSource.Replace("return self.handle_state(",
+            "return handle_state(", StringComparison.Ordinal);
+        var implicitMessageIr = OresParser.InspectSynchronousActorIncrement(implicitMessageSource);
+        Require(implicitMessageIr.ScalarMailParameter == "incoming" &&
+                ActorIncrementSourceEmitter.EmitCSharp(implicitMessageIr) == messageGenerated,
+            "omitted-self typed-mail source must preserve owned input");
+        Reject(implicitMessageSource.Replace("incoming", "handle_state", StringComparison.Ordinal),
+            "method parameter shadows omitted-self state intrinsic");
+        Reject(messageSource.Replace("incoming", "self", StringComparison.Ordinal),
+            "message parameter shadows actor self");
+        Reject(implicitMessageSource.Replace("critical-write |s|", "critical-write |self|",
+                StringComparison.Ordinal).Replace("s.count", "self.count", StringComparison.Ordinal),
+            "borrowed state parameter shadows actor self");
+        Reject(implicitSelfSource.Replace("return handle_state(",
+                "return state.handle_state(", StringComparison.Ordinal),
+            "arbitrary receiver cannot invoke sealed state intrinsic");
+        Require(messageGenerated.Contains("ReadInt64LittleEndian(message.Span)", StringComparison.Ordinal) &&
+            messageGenerated.Contains("state.AddInt64(context, 0, delta)", StringComparison.Ordinal) &&
+            !messageGenerated.Contains("Call_increment(", StringComparison.Ordinal) &&
+            !messageGenerated.Contains("Dispatch_increment(", StringComparison.Ordinal),
+            "typed source mail must never fall back to no-arg host dispatch");
+        Reject(messageSource.Replace("s.count + incoming", "s.count + unknown", StringComparison.Ordinal),
+            "unbound message name");
+        Reject(messageSource.Replace("increment(int incoming)", "increment(int incoming, int extra)",
+            StringComparison.Ordinal), "multiple message captures");
+        Reject(messageSource.Replace("int incoming", "borrow int incoming", StringComparison.Ordinal),
+            "borrowed message captured across mailbox");
+        Reject(messageSource.Replace("s.count + incoming", "s.count + 1", StringComparison.Ordinal),
+            "message parameter cannot be ignored");
+        Reject(messageSource.Replace("critical-write", "critical-read", StringComparison.Ordinal),
+            "typed mail must not authorize reader mutation");
+        foreach (var reserved in new[] {
+            "receive", "init", "send", "end", "tear_down", "on_start",
+            "on_stop", "on_restart", "on_panic", "on_throw",
+            "on_throws", "on_raise", "on_recover", "handle_state"
+        })
+        {
+            Reject(messageSource.Replace("increment(int incoming)",
+                reserved + "(int incoming)", StringComparison.Ordinal),
+                "privileged actor hook selector: " + reserved);
+        }
+
         Reject(CounterSource.Replace("critical-write", "critical-read", StringComparison.Ordinal), "read loan cannot increment");
+        Reject(CounterSource.Replace("critical-write", "critical", StringComparison.Ordinal),
+            "bare legacy critical must not be granted an exclusive write loan");
         Reject(CounterSource.Replace("critical-write", "critical -write", StringComparison.Ordinal), "split critical mode");
+        Reject(CounterSource.Replace("critical-write", "critical- write", StringComparison.Ordinal),
+            "spaced critical mode suffix");
+        Reject(CounterSource.Replace("critical-write", "critical--write", StringComparison.Ordinal),
+            "double-hyphen critical mode");
         Require(generated.Contains("public static class Actor_Counter", StringComparison.Ordinal) &&
             generated.Contains("public const string ActorLayoutIdentity = \"Counter|1:I\";", StringComparison.Ordinal) &&
             generated.Contains("public static long Call_increment(OresVmHost.ActorDispatchScope scope)", StringComparison.Ordinal) &&

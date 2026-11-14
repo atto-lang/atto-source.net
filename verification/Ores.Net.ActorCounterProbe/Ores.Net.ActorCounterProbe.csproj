@@ -11,6 +11,7 @@
   <ItemGroup>
     <Compile Include="../ActorGeneratedRuntimeCounterChecks.cs" Link="ActorGeneratedRuntimeCounterChecks.cs" />
     <Compile Include="../Ores.Net.Tests/GeneratedOverflowCounterActor.g.cs" Link="GeneratedOverflowCounterActor.g.cs" />
+    <Compile Include="../Ores.Net.Tests/GeneratedMessageCounterActor.g.cs" Link="GeneratedMessageCounterActor.g.cs" />
     <ProjectReference Include="../../runtime/Ores.Net.Runtime/Ores.Net.Runtime.csproj" />
     <!-- Statically compile the emitter's reviewed golden, not a runtime plugin. -->
     <Compile Include="../Ores.Net.Tests/GeneratedCounterActor.g.cs"

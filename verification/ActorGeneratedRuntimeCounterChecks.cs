@@ -45,6 +45,63 @@ internal static class ActorGeneratedRuntimeCounterChecks
         Wait(() => replies.Count == 7, "fresh source actor failed after peer retirement");
         Require(replies.Last().Actor == fresh.Id && replies.Last().Value == 1, "fresh actor inherited state");
 
+        // A distinct compiler-checked .atto source form takes one owned i64
+        // mailbox argument. The statically generated method decodes the wire
+        // before entering actor-owned native state; replies are produced by
+        // actual private ActorRuntime DATA turns (never by a host replay loop).
+        ActorRef messageA = Actor_MessageCounter.SpawnRuntime(runtime, supervisor);
+        ActorRef messageB = Actor_MessageCounter.SpawnRuntime(runtime, supervisor);
+        Span<byte> incoming = stackalloc byte[8];
+        foreach (long value in new long[] { 1, 2, 3, 4 })
+        {
+            BinaryPrimitives.WriteInt64LittleEndian(incoming, value);
+            runtime.Send(messageA, incoming);
+        }
+        foreach (long value in new long[] { 7, 8 })
+        {
+            BinaryPrimitives.WriteInt64LittleEndian(incoming, value);
+            runtime.Send(messageB, incoming);
+        }
+        Wait(() => replies.Count == 13, "typed-mail actors did not issue all real mailbox replies");
+        Require(replies.Where(x => x.Actor == messageA.Id).Select(x => x.Value)
+                .SequenceEqual(new long[] { 1, 3, 6, 10 }),
+            "typed-mail counter must produce exact canonical 1|3|6|10 prefix");
+        Require(replies.Where(x => x.Actor == messageB.Id).Select(x => x.Value)
+                .SequenceEqual(new long[] { 7, 15 }),
+            "typed-mail second actor reused another actor's native state");
+
+        // Signed i64 arithmetic overflows without a partial state write. An
+        // overflowing source-generated actor must not poison its sibling.
+        BinaryPrimitives.WriteInt64LittleEndian(incoming, long.MaxValue);
+        runtime.Send(messageA, incoming);
+        Wait(() => runtime.FaultedTurns >= 2, "typed-mail overflow was not fail-stop");
+        BinaryPrimitives.WriteInt64LittleEndian(incoming, 1);
+        runtime.Send(messageB, incoming);
+        Wait(() => replies.Count == 14, "typed-mail peer stopped after sibling overflow");
+        Require(replies.Where(x => x.Actor == messageB.Id).Select(x => x.Value)
+                .SequenceEqual(new long[] { 7, 15, 16 }),
+            "typed-mail overflow damaged sibling's private native state");
+
+        // Signed wire decoding must not accidentally coerce negative input
+        // into an unsigned delta. This remains one checked actor-local turn.
+        BinaryPrimitives.WriteInt64LittleEndian(incoming, -4);
+        runtime.Send(messageB, incoming);
+        Wait(() => replies.Count == 15, "negative signed mailbox value was not processed");
+        Require(replies.Where(x => x.Actor == messageB.Id).Select(x => x.Value)
+                .SequenceEqual(new long[] { 7, 15, 16, 12 }),
+            "signed mailbox input was not decoded as i64");
+
+        // Every invalid frame length must terminate only its receiving actor;
+        // one malformed message may not turn into a partial state write.
+        foreach (var length in new[] { 0, 7, 9 })
+        {
+            ActorRef malformedMail = Actor_MessageCounter.SpawnRuntime(runtime, supervisor);
+            runtime.Send(malformedMail, new byte[length]);
+        }
+        Wait(() => runtime.FaultedTurns >= 5,
+            "malformed typed-mail lengths must fail before native state mutation");
+        Require(replies.Count == 15, "malformed mailbox frames generated spurious replies");
+
         // Direct runtime negative: rollback and finally must release the exact
         // 16-byte stack budget while preserving this execution context.
         var checkedState = new ActorNativeScalarState(new long[] { long.MaxValue }, new byte[] { 1 });
@@ -74,7 +131,7 @@ internal static class ActorGeneratedRuntimeCounterChecks
         runtime.Dispose();
         Require(runtime.NativeReservedBytes == 0, "native state/frame budget leaked at retirement");
         CheckSchedulerQuotaRefund();
-        Console.WriteLine("ACTOR_GENERATED_PRODUCTION_RUNTIME_PASS source_mailbox=true native_state=true execution_stack=true overflow_peer_survival=true retired_native_bytes=0");
+        Console.WriteLine("ACTOR_GENERATED_PRODUCTION_RUNTIME_PASS source_mailbox=true native_state=true execution_stack=true overflow_peer_survival=true retired_native_bytes=0 scalar_i64_mail=true mailbox_counter_1_3_6_10=true");
     }
 
     private static void CheckSchedulerQuotaRefund()

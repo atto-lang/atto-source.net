@@ -15,7 +15,8 @@ public static class ActorIncrementSourceEmitter
         ArgumentNullException.ThrowIfNull(method);
         var schema = method.Schema;
         var layoutIdentity = ActorStateLayoutPlan.FromSchema(schema).LayoutIdentity;
-        if (method.Delta != 1 ||
+        if ((method.ScalarMailParameter is null && method.Delta != 1) ||
+            (method.ScalarMailParameter is not null && method.Delta != 0) ||
             method.FieldIndex < 0 || method.FieldIndex >= schema.Fields.Count ||
             schema.Fields[method.FieldIndex].Name != method.FieldName ||
             schema.Fields[method.FieldIndex].Kind != ActorStateFieldKind.Int64)
@@ -60,20 +61,26 @@ public static class ActorIncrementSourceEmitter
         b.AppendLine("        }");
         b.AppendLine("        catch { host.RetireActor(isolate, actor); throw; }");
         b.AppendLine("    }");
-        b.Append("    public static long Call_").Append(method.MethodName)
-            .AppendLine("(OresVmHost.ActorDispatchScope scope)");
-        b.AppendLine("    {");
-        b.Append("        return scope.AddInt64(")
-            .Append(method.FieldIndex.ToString(CultureInfo.InvariantCulture))
-            .AppendLine(", 1L);");
-        b.AppendLine("    }");
-        b.Append("    public static long Dispatch_").Append(method.MethodName).AppendLine("(");
-        b.AppendLine("        OresVmHost.ActorScheduler scheduler, OresVmHost.IsolateHandle isolate,");
-        b.AppendLine("        OresVmHost.ActorTicket actor)");
-        b.AppendLine("    {");
-        b.Append("        return scheduler.DispatchNext(isolate, actor, ActorLayoutIdentity, Call_")
-            .Append(method.MethodName).AppendLine(");");
-        b.AppendLine("    }");
+        // Never reinterpret guest mailbox input as a legacy fixed +1 host
+        // control tick. Those no-argument host APIs are emitted only for the
+        // source-literal mode, not a typed incoming message.
+        if (method.ScalarMailParameter is null)
+        {
+            b.Append("    public static long Call_").Append(method.MethodName)
+                .AppendLine("(OresVmHost.ActorDispatchScope scope)");
+            b.AppendLine("    {");
+            b.Append("        return scope.AddInt64(")
+                .Append(method.FieldIndex.ToString(CultureInfo.InvariantCulture))
+                .AppendLine(", 1L);");
+            b.AppendLine("    }");
+            b.Append("    public static long Dispatch_").Append(method.MethodName).AppendLine("(");
+            b.AppendLine("        OresVmHost.ActorScheduler scheduler, OresVmHost.IsolateHandle isolate,");
+            b.AppendLine("        OresVmHost.ActorTicket actor)");
+            b.AppendLine("    {");
+            b.Append("        return scheduler.DispatchNext(isolate, actor, ActorLayoutIdentity, Call_")
+                .Append(method.MethodName).AppendLine(");");
+            b.AppendLine("    }");
+        }
         b.AppendLine("    // Production mailbox dispatch: native state and execution-owned frames.");
         b.AppendLine("    public static ActorRef SpawnRuntime(ActorRuntime runtime, ActorRef replyTo)");
         b.AppendLine("    {");
@@ -86,9 +93,19 @@ public static class ActorIncrementSourceEmitter
         b.AppendLine(" });");
         b.AppendLine("        return runtime.Spawn(ActorKind.Private, (context, message) =>");
         b.AppendLine("        {");
-        b.AppendLine("            if (!message.IsEmpty) throw new System.InvalidOperationException(\"Expected zero-argument actor message\");");
-        b.Append("            long result = state.AddInt64(context, ")
-            .Append(method.FieldIndex.ToString(CultureInfo.InvariantCulture)).AppendLine(", 1L);");
+        if (method.ScalarMailParameter is null)
+        {
+            b.AppendLine("            if (!message.IsEmpty) throw new System.InvalidOperationException(\"Expected zero-argument actor message\");");
+            b.Append("            long result = state.AddInt64(context, ")
+                .Append(method.FieldIndex.ToString(CultureInfo.InvariantCulture)).AppendLine(", 1L);");
+        }
+        else
+        {
+            b.AppendLine("            if (message.Length != 8) throw new System.InvalidOperationException(\"Expected one 8-byte signed actor message\");");
+            b.AppendLine("            long delta = System.Buffers.Binary.BinaryPrimitives.ReadInt64LittleEndian(message.Span);");
+            b.Append("            long result = state.AddInt64(context, ")
+                .Append(method.FieldIndex.ToString(CultureInfo.InvariantCulture)).AppendLine(", delta);");
+        }
         b.AppendLine("            System.Span<byte> reply = stackalloc byte[16];");
         b.AppendLine("            System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(reply, context.Self.Id);");
         b.AppendLine("            System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(reply[8..], result);");
