@@ -1,0 +1,1 @@
+pub fnc main(): int { int result = 20 * 2 + 2; return result; }
