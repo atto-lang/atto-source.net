@@ -897,7 +897,7 @@ public static class OresStructuredParser
                     index++;
                     // Prefix forms admit const int x=e, const x:int=e, const x=e.
                     // A declaration's type is a check; it is not a cast.
-                    annotated = Current.Text is "int" or "bool";
+                    annotated = Current.Text is "int" or "bool" or "Option"; // type-first incl. closed Option<int>
                     if (annotated)
                     {
                         type = Type();
