@@ -397,6 +397,7 @@ public static partial class OresParser
             // Scalar and structured CIL frontends must agree: state-changing
             // annotations are compiler effects, never inert metadata. Check
             // only lexed tokens, after comments have been skipped.
+            if (ch == '@')
             {
                 int nameEnd = _i + 1;
                 while (nameEnd < text.Length &&

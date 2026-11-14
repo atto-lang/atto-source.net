@@ -381,6 +381,7 @@ public static partial class OresStructuredParser
             // CIL bootstrap cannot treat an annotation as harmless metadata.
             // Perform this check after comments have been skipped so comment
             // text cannot trigger a false rejection.
+            if (ch == '@')
             {
                 int nameEnd = index + 1;
                 while (nameEnd < source.Length &&
@@ -390,6 +391,7 @@ public static partial class OresStructuredParser
                 if (name is "Inject" or "StateBacked" or "MutableStateContainer" or "StateContainer")
                     throw new FormatException(
                         $"STATE_INJECTION_UNSUPPORTED: @{name} requires typed container ownership, borrow checks and Native AOT lowering at offset {offset}");
+                throw new FormatException(
                     $"Annotations require verified compiler lowering at offset {offset}");
             }
             if (moduleMode && ch == '"')
