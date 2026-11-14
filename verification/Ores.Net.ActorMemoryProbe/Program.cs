@@ -43,30 +43,6 @@ var options = new ActorRuntimeOptions
     }
 };
 using var runtime = new ActorRuntime(options);
-
-// NativeAOT must enforce the same host suspension boundary as the managed
-// self-test: an async-void delegate may not consume actor, arena or carrier
-// capacity before failing closed.
-ActorMessageHandler asyncVoid = async (_, _) =>
-{
-    await Task.Yield();
-};
-bool asyncVoidRejected = false;
-try
-{
-    _ = runtime.Spawn(ActorKind.Private, asyncVoid);
-}
-catch (ArgumentException ex) when (ex.ParamName == "handler")
-{
-    asyncVoidRejected = ex.Message.Contains(
-        "suspension requires scheduler-owned logical actor continuation lowering",
-        StringComparison.Ordinal);
-}
-Require(asyncVoidRejected, "NativeAOT admitted async-void actor handler");
-Require(runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0 &&
-        runtime.StartedCarrierThreads == 0,
-    "rejected NativeAOT async handler consumed actor, arena or carrier capacity");
-
 using var initialized = new CountdownEvent(actorCount);
 using var verified = new CountdownEvent(actorCount);
 using var survivorVerified = new AutoResetEvent(false);

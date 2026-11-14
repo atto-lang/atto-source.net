@@ -1,0 +1,77 @@
+name: Actor native state and execution frames
+on:
+  push:
+    paths:
+      - 'compiler/**'
+      - 'runtime/**'
+      - 'examples/actor*counter.atto'
+      - 'verification/**'
+      - '.github/workflows/actor-native-state-frames-exact-head.yml'
+  pull_request:
+    paths:
+      - 'compiler/**'
+      - 'runtime/**'
+      - 'examples/actor*counter.atto'
+      - 'verification/ActorGeneratedRuntimeCounterChecks.cs'
+      - 'verification/Ores.Net.ActorCounterProbe/**'
+      - 'verification/Ores.Net.Tests/**'
+      - '.github/workflows/actor-native-state-frames-exact-head.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  exact-native-counter:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            rid: linux-x64
+            executable: Ores.Net.ActorCounterProbe
+          - os: windows-latest
+            rid: win-x64
+            executable: Ores.Net.ActorCounterProbe.exe
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.100'
+      - name: Verify exact source identity
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          echo "SOURCE_HEAD=$SOURCE_SHA"
+          echo "SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+          dotnet --info
+      - name: Regenerate both actual source actors
+        run: |
+          set -euo pipefail
+          dotnet run --project compiler/Ores.Net.Compiler -c Release -- emit-actor-csharp examples/actor-counter.atto --out verification/Ores.Net.Tests/GeneratedCounterActor.g.cs
+          dotnet run --project compiler/Ores.Net.Compiler -c Release -- emit-actor-csharp examples/actor-overflow-counter.atto --out verification/Ores.Net.Tests/GeneratedOverflowCounterActor.g.cs
+          git diff --exit-code -- verification/Ores.Net.Tests/GeneratedCounterActor.g.cs verification/Ores.Net.Tests/GeneratedOverflowCounterActor.g.cs
+      - name: Run complete managed verification
+        run: dotnet run --project verification/Ores.Net.Tests -c Release
+      - name: Publish static native actor probe
+        run: dotnet publish verification/Ores.Net.ActorCounterProbe -c Release -r '${{ matrix.rid }}' --self-contained true -o artifacts/native-counter
+      - name: Execute source-generated actors in native binary
+        run: |
+          set -euo pipefail
+          for round in 1 2 3; do
+            "./artifacts/native-counter/${{ matrix.executable }}" | tee "artifacts/native-counter-round-$round.log"
+            grep -F 'ACTOR_GENERATED_PRODUCTION_RUNTIME_PASS source_mailbox=true native_state=true execution_stack=true overflow_peer_survival=true retired_native_bytes=0' "artifacts/native-counter-round-$round.log"
+            grep -F 'NATIVE_COUNTER_DYNAMIC_CODE_DISABLED' "artifacts/native-counter-round-$round.log"
+          done
+          shopt -s globstar nullglob nocaseglob
+          dlls=(artifacts/native-counter/**/*.dll)
+          test "${#dlls[@]}" -eq 0

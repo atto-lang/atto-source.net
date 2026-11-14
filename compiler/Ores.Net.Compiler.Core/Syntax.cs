@@ -12,12 +12,37 @@ public sealed record NamedBitXor(Expression Left, Expression Right) : Expression
 public sealed record DotnetMathAbsI64(Expression Value) : Expression;
 public sealed record DotnetMathMaxI64(Expression Left, Expression Right) : Expression;
 
-public static class OresParser
+public static partial class OresParser
 {
     private const int MaxDepth = 128;
     private const int MaxTokens = 100_000;
 
+    /// <summary>
+    /// Inspect the bounded actor schema without lowering executable guest code.
+    /// The returned metadata is not scheduler admission authority.
+    /// </summary>
+    public static ActorStateSchemaMetadata InspectActorStateSchema(string source)
+    {
+        var schema = FindActorStateSchema(Tokenize(source));
+        return schema ?? throw new FormatException(
+            "Source must contain a canonical isolated actor state declaration");
+    }
+
     public static Expression Parse(string source, DotnetHostImportPolicy? policy = null)
+    {
+        var tokens = Tokenize(source);
+        RejectUnsupportedSourceActors(tokens);
+        RejectUnsupportedScalarTokens(tokens);
+        for (int i = 0; i + 1 < tokens.Count; i++)
+        {
+            if (tokens[i].Text == "select" &&
+                StaticSelectAdmission.IsStaticSelectFollower(tokens[i + 1].Text))
+                throw StaticSelectAdmission.Unsupported(tokens[i].Offset);
+        }
+        return new Reader(tokens, policy ?? DotnetHostImportPolicy.DenyAll).ParseProgram();
+    }
+
+    private static List<Token> Tokenize(string source)
     {
         ArgumentNullException.ThrowIfNull(source);
         if (source.Length > 1_048_576)
@@ -51,9 +76,31 @@ public static class OresParser
                 throw new FormatException("Token count exceeds bootstrap limit");
             if (token.Text.Length == 0) break;
         }
-        // Source actor declarations are rejected inside the lexer (see
-        // Lexer.SourceActorOffset), before later unlexable syntax such as
-        // `critical |s| -> ...` can surface as a generic character error.
+        return tokens;
+    }
+
+    private static void RejectUnsupportedScalarTokens(List<Token> tokens)
+    {
+        // Source actors are a semantic boundary, not an alternate spelling of scalar
+        // functions. Canonical isolated actors already got the schema-aware rejection
+        // (RejectUnsupportedSourceActors); every other actor declaration fails here,
+        // before scalar parsing can misdiagnose it as fnc. Forms with their own gates
+        // keep them: 'define virtual actor' and 'define supervisor ...'.
+        for (int i = 0; i < tokens.Count; i++)
+        {
+            if (tokens[i].Text != "define")
+                continue;
+            int limit = Math.Min(tokens.Count, i + 5);
+            for (int j = i + 1; j < limit; j++)
+            {
+                if (tokens[j].Text is "virtual" or "supervisor" or "class" or "enum" or "fnc" or "routine")
+                    break;
+                if (tokens[j].Text == "actor")
+                    throw new FormatException(
+                        $"Source actor lowering requires sealed state/handle_state and " +
+                        $"scheduler-owned logical continuation frames at offset {tokens[j].Offset}");
+            }
+        }
         // Nested Future/Option wrappers are rejected inside the lexer (see
         // Lexer.NestedSameWrapper): this scalar lexer never emits '<' tokens,
         // so a post-lex token scan could not observe them.
@@ -115,9 +162,163 @@ public static class OresParser
                 throw new FormatException(
                     $"E_SUSPENDS_UNSUPPORTED: suspension requires .NET continuation/effect lowering at offset {tokens[i].Offset}");
         }
-        return new Reader(tokens, policy ?? DotnetHostImportPolicy.DenyAll).ParseProgram();
     }
 
+    private static void RejectUnsupportedSourceActors(List<Token> tokens)
+    {
+        var schema = FindActorStateSchema(tokens);
+        if (schema is not null)
+            throw new FormatException(
+                $"Source actor state schema parsed; sealed handle_state and " +
+                $"generation-fenced logical-turn lowering is unavailable at offset {schema.StateOffset}");
+    }
+
+    private static ActorStateSchemaMetadata? FindActorStateSchema(List<Token> tokens)
+    {
+        static bool IsIdentifier(Token token)
+        {
+            if (token.Text.Length == 0 ||
+                token.Text[0] is not (>= 'A' and <= 'Z' or >= 'a' and <= 'z' or '_'))
+                return false;
+            for (int k = 1; k < token.Text.Length; k++)
+                if (token.Text[k] is not (>= 'A' and <= 'Z' or >= 'a' and <= 'z' or
+                    >= '0' and <= '9' or '_'))
+                    return false;
+            return true;
+        }
+
+        Token At(int index)
+        {
+            if (index < 0 || index >= tokens.Count)
+                return tokens[^1];
+            return tokens[index];
+        }
+
+        ActorStateSchemaMetadata? discovered = null;
+        for (int i = 0; i < tokens.Count; i++)
+        {
+            if (tokens[i].Text != "define")
+                continue;
+
+            int j = i + 1;
+            if (At(j).Text == "pub") j++;
+            bool isolated = At(j).Text == "isolated";
+            if (isolated) j++;
+            if (At(j).Text != "actor")
+                continue;
+
+            int actorOffset = At(j).Offset;
+            j++;
+            if (!isolated)
+                throw new FormatException(
+                    $"Source actor lowering requires sealed state/handle_state and " +
+                    $"scheduler-owned logical continuation frames at offset {actorOffset}");
+
+            if (!IsIdentifier(At(j)))
+                throw new FormatException(
+                    $"Isolated actor requires a nominal actor name at offset {At(j).Offset}");
+            string actorName = At(j).Text;
+            j++;
+            if (At(j).Text != "as")
+                throw new FormatException(
+                    $"Isolated actor requires 'as' before sealed state at offset {At(j).Offset}");
+            j++;
+
+            // Accept canonical as-state and legacy outer declaration braces
+            // only for metadata admission. Neither form reaches lowering.
+            if (At(j).Text == "{") j++;
+            if (At(j).Text != "state")
+                throw new FormatException(
+                    $"Isolated actor requires sealed state {{ ... }} before methods at offset {At(j).Offset}");
+            int stateOffset = At(j).Offset;
+            j++;
+            if (At(j).Text != "{")
+                throw new FormatException(
+                    $"Actor state requires '{{' at offset {At(j).Offset}");
+            j++;
+
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            var metadataFields = new List<ActorStateFieldMetadata>();
+            int fields = 0;
+            while (At(j).Text != "}")
+            {
+                if (At(j).Text.Length == 0)
+                    throw new FormatException(
+                        $"Unterminated actor state schema at offset {stateOffset}");
+                if (fields == 16)
+                    throw new FormatException(
+                        $"Actor state schema field limit exceeded (16) at offset {At(j).Offset}");
+                if (!IsIdentifier(At(j)))
+                    throw new FormatException(
+                        $"Actor state field requires an identifier at offset {At(j).Offset}");
+                string name = At(j).Text;
+                int fieldOffset = At(j).Offset;
+                if (!names.Add(name))
+                    throw new FormatException(
+                        $"Duplicate actor state field '{name}' at offset {At(j).Offset}");
+                j++;
+                if (At(j).Text != ":")
+                    throw new FormatException(
+                        $"Actor state field '{name}' requires ':' at offset {At(j).Offset}");
+                j++;
+                string type = At(j).Text;
+                if (type is not ("int" or "bool"))
+                    throw new FormatException(
+                        $"Actor state schema admits only int/bool fields in this metadata slice at offset {At(j).Offset}");
+                j++;
+                if (At(j).Text != "=")
+                    throw new FormatException(
+                        $"Actor state field '{name}' requires a literal default at offset {At(j).Offset}");
+                j++;
+
+                long intDefault = 0;
+                bool booleanDefault = false;
+                if (type == "int")
+                {
+                    bool negative = At(j).Text == "-";
+                    if (negative) j++;
+                    string raw = At(j).Text.Replace("_", "", StringComparison.Ordinal);
+                    if (raw.Length == 0 || raw.Any(c => c is < '0' or > '9'))
+                        throw new FormatException(
+                            $"Actor int state default must be a signed i64 literal at offset {At(j).Offset}");
+                    if (negative) raw = "-" + raw;
+                    if (!long.TryParse(raw, NumberStyles.AllowLeadingSign,
+                        CultureInfo.InvariantCulture, out intDefault))
+                        throw new FormatException(
+                            $"Actor int state default overflows signed i64 at offset {At(j).Offset}");
+                    j++;
+                }
+                else
+                {
+                    if (At(j).Text is not ("true" or "false"))
+                        throw new FormatException(
+                            $"Actor bool state default must be true or false at offset {At(j).Offset}");
+                    booleanDefault = At(j).Text == "true";
+                    j++;
+                }
+
+                if (At(j).Text != ";")
+                    throw new FormatException(
+                        $"Actor state field '{name}' requires ';' at offset {At(j).Offset}");
+                j++;
+                metadataFields.Add(new ActorStateFieldMetadata(
+                    fields, name,
+                    type == "int" ? ActorStateFieldKind.Int64 : ActorStateFieldKind.Boolean,
+                    intDefault, booleanDefault, fieldOffset));
+                fields++;
+            }
+            if (fields == 0)
+                throw new FormatException(
+                    $"Actor state schema requires at least one field at offset {stateOffset}");
+
+            if (discovered is not null)
+                throw new FormatException(
+                    $"Multiple actor declarations cannot share one isolated actor schema at offset {actorOffset}");
+            discovered = new ActorStateSchemaMetadata(actorName, actorOffset,
+                stateOffset, metadataFields);
+        }
+        return discovered;
+    }
     private readonly record struct Token(string Text, int Offset);
 
     private sealed class Lexer(string text)
@@ -166,27 +367,6 @@ public static class OresParser
                 break;
             }
             return i;
-        }
-
-        // After 'define' (ending at i): offset of an 'actor' word among the next
-        // four modifier words, ignoring trivia; -1 if none. Forms with their own
-        // gates keep them: 'virtual' (VIRTUAL_ACTOR_BACKEND_UNSUPPORTED) and
-        // 'supervisor' (typed CONTROL); class/enum/fnc/routine end the scan.
-        private static int SourceActorOffset(string text, int i)
-        {
-            for (int n = 0; n < 4; n++)
-            {
-                i = SkipTrivia(text, i);
-                int start = i;
-                while (i < text.Length && (char.IsLetterOrDigit(text[i]) || text[i] == '_')) i++;
-                if (i == start) return -1;
-                switch (text[start..i])
-                {
-                    case "actor": return start;
-                    case "virtual" or "supervisor" or "class" or "enum" or "fnc" or "routine": return -1;
-                }
-            }
-            return -1;
         }
 
         // True when `wrapper` (just read, ending at i) is followed by
@@ -262,14 +442,6 @@ public static class OresParser
                     (text[_i] is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_'))
                     _i++;
                 var word = text[start.._i];
-                // Source actors are a semantic boundary, not an alternate spelling
-                // of scalar functions. Until the .NET compiler owns sealed state,
-                // handle_state loans and generation-fenced continuation frames,
-                // reject an actor declaration before it can be misparsed as fnc.
-                if (word == "define" && SourceActorOffset(text, _i) is int actorAt and >= 0)
-                    throw new FormatException(
-                        $"Source actor lowering requires sealed state/handle_state and " +
-                        $"scheduler-owned logical continuation frames at offset {actorAt}");
                 // G0: unsupported unsafe source must not become a normal
                 // identifier, callable, member or intrinsic in scalar CIL.
                 if (word == "unsafe")
@@ -369,7 +541,7 @@ public static class OresParser
             // Lex assignment punctuation so unsupported declarations are rejected
             // at their declaration, rather than at a later initializer. The
             // arithmetic parser still has no assignment production.
-            if ("()+-*/{}:;.,=?".IndexOf(ch) >= 0)
+            if ("()+-*/{}:;.,=?|".IndexOf(ch) >= 0)
             {
                 _i++;
                 return new Token(text[start.._i], start);

@@ -356,3 +356,14 @@ arithmetic subset, and does not load CIL at runtime.
 - **First-stage migration proposal:** approved GitHub ownership transfer of this existing repo, preserving its name, numeric ID and history, to `atto-lang/oreslang-source.net`. No direct legacy-org → `atto-co` transfer is authorized; subsequent product carve-outs require new approval.
 
 **Migration instructions (maintainer preflight):** coordinate exact source head and ownership in [issue #26](https://github.com/ores-truffle-oreslang/.github/issues/26), then follow private [runbook draft #25](https://github.com/ores-truffle-oreslang/.github/pull/25). Confirm source/target admins and independent security reviewer, target access and branch/ruleset protection, exact SHA/tree, PRs/releases, Actions, secrets, GitHub Apps, deployments, dependencies and compatibility links before transfer. Do not clone/mirror private source as a shortcut. Verify unchanged numeric ID and code tree after real transfer, restore controls, rerun exact-head CI and capture **nonzero executed steps**. `steps=[]` / `steps=null` is `NOT_EXECUTED`, not test success; host/static checks cannot certify real AttoLang guest execution, AOT or zero-GC. Defer repository/CLI/extension renames to separately reviewed changes.
+
+## Experimental source actor/native arena integration
+
+The opt-in `emit-actor-csharp` lane now emits a `SpawnRuntime` entry for its
+bounded synchronous Counter profile. It uses the production ActorRuntime,
+private native scalar state, execution-owned frames and supervisor mailbox
+replies. The managed suite and a macOS arm64 NativeAOT probe execute ordinary
+and overflow source-generated actors; the older trusted-host Counter API is
+kept separate and its managed cells are not arena-isolation evidence.
+See [execution evidence and open parity gates](docs/ACTOR_NATIVE_STATE_FRAMES_INTEGRATION_20261110.md).
+This is not general actor CIL, concurrent-default actor execution or Spin support.
