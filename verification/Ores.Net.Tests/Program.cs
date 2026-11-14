@@ -491,6 +491,7 @@ NativeTraceContinuationV1SelfTest.Run(); // host-owned W3C scopes; not guest CIL
 UniversalHotLoadV1SelfTest.Run();
 ActorFrameStackSelfTest.Run(); // host-only actor logical frames; not guest/AOT evidence
 ActorScalarFrameAbiSelfTest.Run(); // verified CFG layout/native spill boundary, not guest execution
+BatchedCheckpointV1SelfTest.Run(); // host contract only; no compiled guest safepoints yet
 CfgActorScalarBoundaryPlanSelfTest.Run(); // compiler-only verified CFG liveness; NOT guest CIL
 ProjectRootSourceTests.Run(); // host-only resolver, not linked .NET source imports
 ActorNativeArenaSelfTest.Run();
