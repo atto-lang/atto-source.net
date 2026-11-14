@@ -86,6 +86,25 @@ static class CrossBackendCheckedI64ParityTests
             unrelated.Status.Code != overflow)
             throw new Exception("Wrong guest Error class swallowed overflow");
 
+        // Guest code zero is reserved for Return and must never be
+        // synthesized into a catchable Error by a malformed native slot.
+        var forgedZeroCodeThrow = new GuestI64EffectResult(
+            99, new GuestEffectStatus(GuestEffectKind.Throw, 0));
+        var zeroCodeForwarded = forgedZeroCodeThrow.Forward().Forward();
+        if (forgedZeroCodeThrow.IsReturn ||
+            forgedZeroCodeThrow.CatchMatches(0) ||
+            zeroCodeForwarded.IsReturn || zeroCodeForwarded.Value != 0 ||
+            zeroCodeForwarded.Status.Kind != GuestEffectKind.Fatal ||
+            zeroCodeForwarded.Status.Code != 0xFFFFFFFDu)
+            throw new Exception("Guest Throw with success code zero was admitted");
+
+        var forgedZeroCodeTransport = new GuestEffectTransportException(
+            new GuestEffectStatus(GuestEffectKind.Throw, 0),
+            "ArithmeticOverflowError", "forged zero-code throw");
+        if (forgedZeroCodeTransport.Status.Kind != GuestEffectKind.Fatal ||
+            forgedZeroCodeTransport.Status.Code != 0xFFFFFFFDu)
+            throw new Exception("CLR transport admitted guest Throw with code zero");
+
         var forgedReturn = new GuestI64EffectResult(
             42, new GuestEffectStatus(GuestEffectKind.Return, overflow));
         if (forgedReturn.IsReturn || forgedReturn.CatchMatches(overflow))
