@@ -814,11 +814,19 @@ public static partial class OresStructuredParser
                         throw Error("Comma body requires an item after ','");
                     continue;
                 }
-                if (Current.Text == "return")
+                if (Take("return"))
                 {
-                    var (returned, returns) = Statement(depth + 1);
-                    body.Add(returned);
-                    terminated = returns;
+                    // Compatibility with the Java :: callable parser:
+                    // the trailing semicolon is optional at 'end'. Checking
+                    // the terminal type still goes through the same rule
+                    // as a braced return, not an unchecked implicit value.
+                    int returnAt = tokens[index - 1].Offset;
+                    var returned = Expr(depth + 1);
+                    Require(returned, activeReturnType,
+                        "Comma body explicit return does not match callable result type");
+                    if (Current.Text != "end") Expect(";");
+                    body.Add(new StructuredReturn(returnAt, returned));
+                    terminated = true;
                     if (Current.Text != "end") throw Error("Return must terminate comma body");
                     continue;
                 }
