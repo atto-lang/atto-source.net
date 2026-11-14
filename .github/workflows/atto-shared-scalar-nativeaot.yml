@@ -1,0 +1,102 @@
+name: Shared AttoLang scalar full Native AOT guest (DEN-565)
+on:
+  pull_request:
+    paths:
+      - 'contracts/atto-parity-v1/**'
+      - '.github/workflows/atto-shared-scalar-nativeaot.yml'
+      - 'compiler/**'
+      - 'host/**'
+      - 'scripts/publish-linux.sh'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-scalar:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Checkout exact PR source head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify exact source and identical five-backend AttoLang blob
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git hash-object --no-filters contracts/atto-parity-v1/add.atto)" = "015f8b0f79aafa796a148d2adeff1574e8d6c491"
+          test "$(git hash-object --no-filters contracts/atto-parity-v1/reject-unknown.atto)" = "1c3ff45f58168c3f992c3666b7e216112b5fd64c"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+      - name: Install .NET 10 and Native AOT toolchain
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install Linux Native AOT build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y clang zlib1g-dev binutils jq
+      - name: Compile AttoLang to CIL, publish full Native AOT compiler and guest
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/publish-linux.sh contracts/atto-parity-v1/add.atto artifacts/atto-scalar
+          test -x artifacts/compiler/linux-x64/oresnet
+          test -x artifacts/atto-scalar/linux-x64/oreslang-app
+      - name: Execute actual Native AOT guest and reject undeclared .atto source
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          app=artifacts/atto-scalar/linux-x64/oreslang-app
+          compiler=artifacts/compiler/linux-x64/oresnet
+          observed="$("$app")"
+          test "$observed" = "42"
+          mkdir -p artifacts/atto-scalar/negative
+          negative=artifacts/atto-scalar/negative/OresGenerated.dll
+          diagnostics=artifacts/atto-scalar/negative/compiler-stderr.txt
+          rm -f "$negative" "$diagnostics"
+          if "$compiler" compile contracts/atto-parity-v1/reject-unknown.atto --out "$negative" \
+            > artifacts/atto-scalar/negative/compiler-stdout.txt 2> "$diagnostics"; then
+            echo "undeclared variable unexpectedly compiled" >&2
+            exit 1
+          fi
+          test ! -e "$negative"
+          test ! -s artifacts/atto-scalar/negative/compiler-stdout.txt
+          grep -Eiq 'undefined|unknown|undeclared|unbound|identifier' "$diagnostics"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          mkdir -p artifacts/atto-scalar/evidence
+          jq -n --arg head "$EXPECTED_HEAD" \
+            --arg tree "$(git rev-parse 'HEAD^{tree}')" \
+            --arg source "$(sha256sum contracts/atto-parity-v1/add.atto | cut -d' ' -f1)" \
+            --arg reject_source "$(sha256sum contracts/atto-parity-v1/reject-unknown.atto | cut -d' ' -f1)" \
+            --arg compiler "$(sha256sum "$compiler" | cut -d' ' -f1)" \
+            --arg native "$(sha256sum "$app" | cut -d' ' -f1)" \
+            --arg output "$observed" --arg run "$GITHUB_RUN_ID" \
+            --argjson attempt "$GITHUB_RUN_ATTEMPT" \
+            '{schema:"attolang.scalar.nativeaot.exact-guest.v1",backend:"net",
+              sourceHead:$head,sourceTree:$tree,sourceSha256:$source,
+              negativeSourceSha256:$reject_source,compilerSha256:$compiler,
+              nativeGuestSha256:$native,observedOutput:$output,
+              compiledGuestExecutions:1,negativeCompilerRejections:1,
+              runId:$run,runAttempt:$attempt,
+              scope:"scalar-i64-only",crossBackendParityCertified:false}' \
+            > artifacts/atto-scalar/evidence/receipt.json
+          jq -e '.observedOutput == "42" and .compiledGuestExecutions == 1 and
+            .negativeCompilerRejections == 1 and .crossBackendParityCertified == false' \
+            artifacts/atto-scalar/evidence/receipt.json
+      - name: Retain actual guest receipt and compiler diagnostic
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: atto-scalar-net-nativeaot-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_attempt }}
+          path: |
+            artifacts/atto-scalar/evidence/receipt.json
+            artifacts/atto-scalar/negative/compiler-stderr.txt
+          if-no-files-found: error
+          retention-days: 30

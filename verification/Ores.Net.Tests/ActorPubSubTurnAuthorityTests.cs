@@ -34,7 +34,7 @@ internal static class ActorPubSubTurnAuthorityTests
         Task? delayedOffload = null;
         using var releaseOffload = new ManualResetEventSlim();
 
-        ActorRef actor = runtime.Spawn(ActorKind.Shared, (context, _) =>
+        ActorRef actor = runtime.Spawn(ActorKind.Shared, (context, payload) =>
         {
             try
             {

@@ -1,0 +1,4 @@
+// Canonical AttoLang .atto guest scalar prerequisite (not a native UI app).
+define pub fnc main() : int {
+    return 800 + 500;
+}
