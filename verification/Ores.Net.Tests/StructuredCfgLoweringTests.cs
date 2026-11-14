@@ -169,12 +169,14 @@ internal static class StructuredCfgLoweringTests
         CheckOverflow(
             "fnc main():int{int unused=9223372036854775807+1;return 7;}",
             "unused readonly runtime initializer still traps");
-        // The input is unavailable at compile time inside the helper.
-        // Runtime-readonly must remain a nonconstant local while CIL retains
-        // the helper argument and checked arithmetic, not fold to 42.
-        Check("fnc plus_one(int p):int{int local=p+1;return local;}" +
+        // Statement-bodied helpers (a runtime-readonly local inside the callee)
+        // need the independent MethodDef ABI, which is not implemented yet.
+        // Until it is, lowering must fail closed with that exact diagnostic
+        // rather than fold the helper or fabricate a CIL result.
+        RejectWithDiagnostic("fnc plus_one(int p):int{int local=p+1;return local;}" +
                 "fnc main():int{return plus_one(41);}",
-            42, "runtime readonly helper argument survives CFG/CIL");
+            "Statement-bodied helper requires the independent MethodDef ABI",
+            "statement-bodied helper stays fail-closed until MethodDef ABI");
         Reject("fnc plus_one(int p):int{int local=p+1;local=0;return local;}" +
                 "fnc main():int{return plus_one(41);}",
             "runtime readonly helper local cannot be reassigned");
