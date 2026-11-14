@@ -224,15 +224,15 @@ internal static class StructuredCfgLoweringTests
             "invalid arrow comparison");
         Reject("fnc main():int{if 1 =< 0{return 42;}return 0;}",
             "invalid reverse comparison");
-        // Genuine type-first readonly bindings in the EXPERIMENTAL structured
+        // Compile-time type-first immutable bindings in the EXPERIMENTAL structured
         // source -> verified CFG -> deterministic CIL interpreter path.
         // This is not a released Windows/Linux Native AOT guest receipt.
         foreach (var (source, expected, label) in new[] {
-            ("fnc main():int{int x=7;return x;}", 7L, "readonly int literal"),
+            ("fnc main():int{int x=7;return x;}", 7L, "implicit const int literal"),
             ("fnc main():int{const x=7;return x;}", 7L, "existing constexpr"),
             ("fnc main():int{const int x=7;return x;}", 7L, "typed constexpr"),
             ("fnc main():int{const x:int=7;return x;}", 7L, "name-first constexpr"),
-            ("fnc main():int{int x=7;int y=x*3;return y;}", 21L, "readonly SSA dependencies"),
+            ("fnc main():int{int x=7;int y=x*3;return y;}", 21L, "constexpr dependency folded without runtime read"),
             ("fnc main():int{int x=7;return x+1;}", 8L, "readonly scalar read"),
             ("fnc main():int{bool yes=true;if yes{return 42;}else{return 0;}}",
                 42L, "readonly bool flow"),
@@ -247,18 +247,19 @@ internal static class StructuredCfgLoweringTests
             ("fnc main():int{bool yes=7;return 42;}", "typed bool/int mismatch"),
             ("fnc main():int{int x;return 42;}", "initializer mandatory")
         }) Reject(source, label);
-        CheckOverflow(
+        RejectWithDiagnostic(
             "fnc main():int{int unused=9223372036854775807+1;return 7;}",
-            "unused readonly runtime initializer still traps");
+            "E_CONST_OVERFLOW",
+            "unused implicit const overflow must reject before CIL");
         // Statement-bodied helpers (a runtime-readonly local inside the callee)
         // need the independent MethodDef ABI, which is not implemented yet.
         // Until it is, lowering must fail closed with that exact diagnostic
         // rather than fold the helper or fabricate a CIL result.
-        RejectWithDiagnostic("fnc plus_one(int p):int{int local=p+1;return local;}" +
+        RejectWithDiagnostic("fnc plus_one(int p):int{val int local=p+1;return local;}" +
                 "fnc main():int{return plus_one(41);}",
             "Statement-bodied helper requires the independent MethodDef ABI",
             "statement-bodied helper stays fail-closed until MethodDef ABI");
-        Reject("fnc plus_one(int p):int{int local=p+1;local=0;return local;}" +
+        Reject("fnc plus_one(int p):int{val int local=p+1;local=0;return local;}" +
                 "fnc main():int{return plus_one(41);}",
             "runtime readonly helper local cannot be reassigned");
 
@@ -306,7 +307,7 @@ internal static class StructuredCfgLoweringTests
             ("fnc main():int{const yes=true as bool;if yes{return 42;}else{return 0;}}", "bool inference never int"),
             ("fnc main():int{const yes=(6*7 eq 42) as bool;if yes{return 42;}else{return 0;}}", "bool comparison checked cast"),
             ("fnc main():int{let x=7 as int;x=42;return x;}", "explicit let permits rebinding"),
-            ("fnc main():int{let int x=40;val y=x;return y+2;}", "const runtime initializer is fixed binding"),
+            ("fnc main():int{let int x=40;val y=x;return y+2;}", "val runtime initializer is fixed binding"),
             ("fnc plus(int n):int{return n+1;}fnc main():int{val x=plus(41) as int;return x;}", "checked cast of function result"),
             ("fnc plus(int n):int{return n+1;}fnc main():int{val x=plus(41);return x;}", "inferred function result without cast"),
             ("fnc main():int{const x=7;if true{const z=x as int;return z+35;}else{return 0;}}", "scope-local inference"),
