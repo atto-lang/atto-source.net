@@ -5,6 +5,7 @@ internal static class ActorRuntimeSelfTest
 {
     public static void Run()
     {
+        DemandBackedActorRuntimeReusesQuotaAfterStop();
         ThreeKindsUseAssignedDomainsAndActorArenas();
         UnknownActorKindFailsBeforeNativeAllocation();
         RejectedMessagesDoNotStartCarriers();
@@ -123,6 +124,64 @@ internal static class ActorRuntimeSelfTest
             QueueCapacityPerDomain = 64
         }
     };
+
+    private static void DemandBackedActorRuntimeReusesQuotaAfterStop()
+    {
+        using var runtime = new ActorRuntime(new ActorRuntimeOptions
+        {
+            MaxActors = 2,
+            MessagesPerDispatch = 1,
+            MailboxMessages = 4,
+            MailboxBytes = 64,
+            ActorPersistentBytes = 8192,
+            ActorScratchBytes = 1024,
+            ActorMaxAllocations = 8,
+            ActorMaxLifetimePins = 4,
+            ActorMaxReadLoans = 4,
+            NativeBudgetBytes = 4096,
+            DemandBackedActorHeaps = true,
+            Dispatcher = new ActorDispatcherOptions
+            {
+                PrivateWorkers = 1,
+                SharedWorkers = 1,
+                UntrustedWorkers = 1,
+                QueueCapacityPerDomain = 2
+            }
+        });
+        using var done = new CountdownEvent(2);
+        ActorMessageHandler handler = (ctx, msg) =>
+        {
+            var value = ctx.AllocatePersistent(8);
+            ctx.Write(value, 0, msg.Span);
+            var bytes = new byte[1];
+            ctx.Read(value, 0, bytes);
+            Require(bytes[0] == msg.Span[0], "actual dispatch uses dynamic actor heap");
+            done.Signal();
+        };
+        var first = runtime.Spawn(ActorKind.Shared, handler);
+        var second = runtime.Spawn(ActorKind.Shared, handler);
+        Require(runtime.LiveActors == 2 && runtime.NativeReservedBytes == 0,
+            "actual runtime spawns two logical actor heaps with no physical backing");
+        runtime.Send(first, new byte[] { 41 });
+        Require(WaitUntil(() => runtime.CompletedMessages == 1),
+            "first demand-backed actor message completed");
+        Require(runtime.NativeReservedBytes == 4096,
+            "one actor only charged a 4-KiB native slab");
+        runtime.Stop(first);
+        Require(WaitUntil(() => runtime.NativeReservedBytes == 0 &&
+                runtime.LiveActors == 1),
+            "first actor physically frees slab and returns tenant quota");
+        runtime.Send(second, new byte[] { 42 });
+        Require(WaitUntil(() => runtime.CompletedMessages == 2),
+            "second actor executes after first actor reclaimed capacity");
+        Require(runtime.NativeReservedBytes == 4096,
+            "same logical heap size does not force eager reservations");
+        Require(done.Wait(TimeSpan.FromSeconds(5)), "both dynamic actor turns ran");
+        runtime.Stop(second);
+        Require(WaitUntil(() => runtime.NativeReservedBytes == 0 &&
+                runtime.LiveActors == 0),
+            "all dynamically allocated runtime actor heaps are freed");
+    }
 
     private static void ThreeKindsUseAssignedDomainsAndActorArenas()
     {

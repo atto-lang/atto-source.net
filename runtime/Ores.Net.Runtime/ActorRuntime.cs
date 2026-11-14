@@ -18,6 +18,10 @@ public sealed class ActorRuntimeOptions
     public int MailboxBytes { get; init; } = 4 * ActorMailbox.MaxMessageBytes;
     public int ActorPersistentBytes { get; init; } = 1024 * 1024;
     public int ActorScratchBytes { get; init; } = 64 * 1024;
+    // Opt-in non-realtime profile. Logical quotas remain fixed while physical
+    // native backing is charged and acquired on the first guest allocation.
+    // Eager/prefault deployment remains the default until native AOT gates run.
+    public bool DemandBackedActorHeaps { get; init; } = false;
     // 0 chooses a bounded default (one quarter of the actor persistent arena,
     // capped at 64 KiB). All frames share that actor's existing native budget.
     public int ActorStackBytes { get; init; } = 0;
@@ -307,7 +311,8 @@ public sealed class ActorRuntime : IDisposable
                     _options.ActorMaxAllocations,
                     _options.ActorMaxLifetimePins,
                     _options.ActorMaxReadLoans,
-                    _nativeBudget);
+                    _nativeBudget,
+                    _options.DemandBackedActorHeaps);
 
                 int stackBytes = _options.ActorStackBytes == 0
                     ? Math.Min(64 * 1024, Math.Max(1, _options.ActorPersistentBytes / 4))
