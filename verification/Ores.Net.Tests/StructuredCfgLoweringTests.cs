@@ -532,8 +532,12 @@ internal static class StructuredCfgLoweringTests
             42, "symbolic equality retains existing semantics");
         Reject("fnc main():int{if 1 ne 2{return 42;}return 0;}",
             "ne is not an Oreslang inequality operator");
-        Reject("fnc main():int{if true neq false{return 42;}return 0;}",
-            "i64 comparison must not accept bool operands");
+        // Spec ch. 16: eq/neq are the canonical comparisons. With bool equality
+        // admitted, matching bool operands compare; mixed int/bool still rejects.
+        Check("fnc main():int{if true neq false{return 42;}return 0;}",
+            42, "neq compares matching bool operands");
+        RejectWithDiagnostic("fnc main():int{if 1 neq true{return 42;}return 0;}",
+            "Equality requires matching int or bool operands", "neq rejects mixed int/bool operands");
         Reject("fnc main():int{if 1 ! 2{return 42;}return 0;}",
             "bare exclamation is not an admitted operator");
         Check("fnc main():int{return 2+3*4;}", 14, "arithmetic");
