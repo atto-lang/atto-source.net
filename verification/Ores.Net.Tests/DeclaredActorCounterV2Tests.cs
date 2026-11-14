@@ -64,6 +64,26 @@ internal static class DeclaredActorCounterV2Tests
                 !compiled.Contains("Call_receive(", StringComparison.Ordinal),
             "native source must use checked mailbox ingress, scalar loan and actor STOP");
 
+        // Native emitter MUST preserve the compiler-authored MIR order:
+        // the write intrinsic finishes before the detached reader starts,
+        // the reader finishes before any mailbox publication, and STOP
+        // cannot close the actor before the final reply is admitted.
+        int writeAt = compiled.IndexOf("state.AddInt64(context, 0, incoming);",
+            StringComparison.Ordinal);
+        int readAt = compiled.IndexOf("long snapshot = state.ReadInt64(context, 0);",
+            StringComparison.Ordinal);
+        int sendAt = compiled.IndexOf("runtime.Send(replyTo, reply);",
+            StringComparison.Ordinal);
+        int stopAt = compiled.IndexOf("runtime.Stop(context.Self);",
+            StringComparison.Ordinal);
+        Require(writeAt >= 0 && writeAt < readAt && readAt < sendAt &&
+                sendAt < stopAt &&
+                compiled.LastIndexOf("state.AddInt64(context, 0, incoming);",
+                    StringComparison.Ordinal) == writeAt &&
+                compiled.LastIndexOf("runtime.Send(replyTo, reply);",
+                    StringComparison.Ordinal) == sendAt,
+            "source MIR did not lower into one ordered write/read/send/STOP path");
+
         var omittedSelf = new Dictionary<string, string>(units, StringComparer.Ordinal);
         const string r = "src/counter/receive.atto";
         omittedSelf[r] = omittedSelf[r].Replace("self.handle_state(",
@@ -79,6 +99,20 @@ internal static class DeclaredActorCounterV2Tests
                 DeclaredActorCounterV2Emitter.EmitCSharp(checkedStop).Contains(
                     "if (incoming == 9L) runtime.Stop(context.Self)", StringComparison.Ordinal),
             "stop condition must come from source rather than a hardcoded 4");
+
+        // Initial actor state must also be a verified source operand,
+        // not a hardcoded runtime default inside native code generation.
+        var differentInitial = new Dictionary<string, string>(units, StringComparer.Ordinal);
+        differentInitial["src/counter/state.atto"] =
+            differentInitial["src/counter/state.atto"].Replace(
+                "let int total : 0;", "let int total : 5;", StringComparison.Ordinal);
+        var initialized = OresParser.InspectExternalCounterV2(differentInitial);
+        var initializedMir = ActorStateMirV3.Lower(initialized);
+        Require(initialized.InitialValue == 5L &&
+                initializedMir.InitialValue == 5L &&
+                DeclaredActorCounterV2Emitter.EmitCSharp(initialized).Contains(
+                    "new long[] { 5L }", StringComparison.Ordinal),
+            "actor native state initializer was hardcoded independently of source MIR");
 
         const string a = "src/counter/actor.atto";
         const string c = "src/counter/contract.atto";

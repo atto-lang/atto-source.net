@@ -341,15 +341,48 @@ public static class DeclaredActorCounterV2Emitter
         b.AppendLine("        {");
         b.AppendLine("            if (message.Length != 8) throw new System.InvalidOperationException(\"Expected 8-byte ActorMail<int> payload\");");
         b.AppendLine("            long incoming = System.Buffers.Binary.BinaryPrimitives.ReadInt64LittleEndian(message.Span);");
-        b.AppendLine("            state.AddInt64(context, 0, incoming);");
-        b.AppendLine("            long snapshot = state.ReadInt64(context, 0);");
-        b.AppendLine("            System.Span<byte> reply = stackalloc byte[16];");
-        b.AppendLine("            System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(reply, context.Self.Id);");
-        b.AppendLine("            System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(reply[8..], snapshot);");
-        b.AppendLine("            runtime.Send(replyTo, reply);");
-        b.Append("            if (incoming == ").Append(plan.StopValue == long.MinValue ?
-            "long.MinValue" : plan.StopValue.ToString(CultureInfo.InvariantCulture) + "L");
-        b.AppendLine(") runtime.Stop(context.Self);");
+        // Emit the authenticated instruction sequence, not a second,
+        // independently hardcoded receive body. ActorNativeScalarState
+        // fuses the write acquire/load/check/store/release into AddInt64
+        // and fuses read acquire/copy/release into ReadInt64. Both validate
+        // active-turn ownership and guarantee cleanup before Send.
+        foreach (ActorStateMirV3.Op operation in stateMir.Instructions)
+        {
+            switch (operation)
+            {
+                case ActorStateMirV3.Op.RequireActorTurn:
+                case ActorStateMirV3.Op.AcquireWrite:
+                case ActorStateMirV3.Op.LoadStateI64:
+                case ActorStateMirV3.Op.LoadMailI64:
+                case ActorStateMirV3.Op.CheckedAddI64:
+                case ActorStateMirV3.Op.ReleaseWrite:
+                case ActorStateMirV3.Op.AcquireRead:
+                case ActorStateMirV3.Op.ReleaseRead:
+                case ActorStateMirV3.Op.ReturnVoid:
+                    // Admitted by the fused native intrinsic or the
+                    // statically generated synchronous return boundary.
+                    break;
+                case ActorStateMirV3.Op.StoreStateI64:
+                    b.AppendLine("            state.AddInt64(context, 0, incoming);");
+                    break;
+                case ActorStateMirV3.Op.CopyStateI64:
+                    b.AppendLine("            long snapshot = state.ReadInt64(context, 0);");
+                    break;
+                case ActorStateMirV3.Op.MailboxSendCopyI64:
+                    b.AppendLine("            System.Span<byte> reply = stackalloc byte[16];");
+                    b.AppendLine("            System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(reply, context.Self.Id);");
+                    b.AppendLine("            System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(reply[8..], snapshot);");
+                    b.AppendLine("            runtime.Send(replyTo, reply);");
+                    break;
+                case ActorStateMirV3.Op.CheckStop:
+                    b.Append("            if (incoming == ").Append(stateMir.StopValue == long.MinValue ?
+                        "long.MinValue" : stateMir.StopValue.ToString(CultureInfo.InvariantCulture) + "L");
+                    b.AppendLine(") runtime.Stop(context.Self);");
+                    break;
+                default:
+                    throw new InvalidOperationException("ACTOR_MIR_V3: no native lowering for typed operation");
+            }
+        }
         b.AppendLine("        });");
         b.AppendLine("    }");
         b.AppendLine("}");

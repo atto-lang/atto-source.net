@@ -55,12 +55,12 @@ public static class CounterMainV2Emitter
         b.AppendLine("            if (!outputs.Writer.TryWrite(value))");
         b.AppendLine("                throw new InvalidOperationException(\"Bounded output overflow\");");
         b.AppendLine("        });");
-        b.Append("        worker = DeclaredActor_").Append(plan.ActorName)
+        b.Append("        worker = DeclaredActor_").Append(stateMir.ActorName)
             .AppendLine(".SpawnRuntime(runtime, observer);");
         b.AppendLine("        // get_ready is resolved by synchronous actor registration in this closed profile.");
         b.AppendLine("        Task done = runtime.ObserveTermination(worker);");
         b.AppendLine("        var mail = new byte[8];");
-        foreach (long value in plan.Messages)
+        foreach (long value in stateMir.Messages)
         {
             string sourceLiteral = value == long.MinValue
                 ? "long.MinValue" : value.ToString(CultureInfo.InvariantCulture) + "L";
@@ -68,12 +68,12 @@ public static class CounterMainV2Emitter
                 .Append(sourceLiteral).AppendLine(");");
             b.AppendLine("        runtime.Send(worker, mail);");
         }
-        for (int i = 0; i < plan.Messages.Count; i++)
+        for (int i = 0; i < stateMir.Messages.Count; i++)
             b.Append("        long v").Append(i.ToString(CultureInfo.InvariantCulture))
                 .AppendLine(" = await outputs.Reader.ReadAsync(timeout.Token);");
         b.AppendLine("        await done.WaitAsync(timeout.Token);");
         b.AppendLine("        var stdout = new StringBuilder();");
-        for (int i = 0; i < plan.Messages.Count; i++)
+        for (int i = 0; i < stateMir.Messages.Count; i++)
         {
             if (i > 0) b.AppendLine("        stdout.Append('|');");
             b.Append("        stdout.Append(v").Append(i.ToString(CultureInfo.InvariantCulture))
