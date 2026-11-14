@@ -1,5 +1,7 @@
 using System.Text.Json;
 using Ores.Net.Compiler;
+using Ores.Net.Runtime;
+using Oreslang.Generated;
 
 internal static class DeclaredActorCounterV2Tests
 {
@@ -21,6 +23,30 @@ internal static class DeclaredActorCounterV2Tests
         }
         catch (FormatException) { return; }
         throw new Exception("declared Counter v2 admitted: " + reason);
+    }
+
+    private static void AssertGeneratedFaultTerminates(
+        string label, Action<ActorRuntime, ActorRef> publish)
+    {
+        using var runtime = new ActorRuntime();
+        ActorRef observer = runtime.Spawn(ActorKind.Shared, (_, _) => { });
+        ActorRef worker = DeclaredActor_Counter.SpawnRuntime(runtime, observer);
+        Task done = runtime.ObserveTermination(worker);
+        publish(runtime, worker);
+        Require(SpinWait.SpinUntil(() => done.IsCompleted, TimeSpan.FromSeconds(5)) &&
+                done.IsFaulted &&
+                done.Exception?.InnerException is InvalidOperationException e &&
+                e.Message == "Actor terminated after an unhandled fault",
+            "generated actor " + label + " must report a sanitized terminal fault");
+        // A failed Counter may never terminate or poison its unrelated observer.
+        Task observerDone = runtime.ObserveTermination(observer);
+        runtime.Stop(observer);
+        Require(observerDone.Wait(TimeSpan.FromSeconds(5)) &&
+                observerDone.IsCompletedSuccessfully,
+            "generated actor " + label + " fault poisoned a healthy sibling");
+        runtime.Dispose();
+        Require(runtime.NativeReservedBytes == 0,
+            "generated actor " + label + " did not reclaim all native arena bytes");
     }
 
     public static void Run()
@@ -175,6 +201,22 @@ internal static class DeclaredActorCounterV2Tests
         try { _ = OresParser.InspectExternalCounterV2(incomplete); }
         catch (FormatException) { missingRejected = true; }
         Require(missingRejected, "source-unit omission passed package binder");
+
+        // Exercise the source-generated receive body through the real actor
+        // runtime, not a host-side simulated Counter. Malformed mailbox input
+        // must terminate with a fault; checked overflow must not publish a
+        // clean actor completion or retain actor-owned native state.
+        AssertGeneratedFaultTerminates("malformed-mail", (runtime, worker) =>
+            runtime.Send(worker, new byte[] { 0xAB }));
+        AssertGeneratedFaultTerminates("checked-overflow", (runtime, worker) =>
+        {
+            var mail = new byte[sizeof(long)];
+            System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(
+                mail, long.MaxValue);
+            runtime.Send(worker, mail);
+            System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(mail, 1);
+            runtime.Send(worker, mail);
+        });
 
         // These are authored compiler tests; they execute only when the .NET
         // verification binary actually runs. The suite never marks CI success.
