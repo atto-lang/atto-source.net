@@ -5,6 +5,7 @@ using Ores.Net.Runtime;
 
 DeclaredActorReceiveSyntaxTests.Run();
 MtdReceiverAdmissionTests.Run();
+ActorForwardNamespaceAdmissionTests.Run();
 
 static void Require(bool value, string why)
 {
