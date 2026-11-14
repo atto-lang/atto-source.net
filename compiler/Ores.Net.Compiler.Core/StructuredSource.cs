@@ -988,7 +988,7 @@ public static partial class OresStructuredParser
             var binding = Lookup(variable, variableAt);
             if (binding.Kind != StructuredBindingKind.Let)
                 throw new FormatException(
-                    $"Cannot reassign {binding.Kind.ToString().ToLowerInvariant()} binding '{variable}' at offset {variableAt}");
+                    $"E_IMMUTABLE_REBIND: cannot reassign {binding.Kind.ToString().ToLowerInvariant()} binding '{variable}' at offset {variableAt}");
             Expect("=");
             var assigned = Expr(depth + 1);
             Require(assigned, binding.Type, "Assignment has wrong type");
