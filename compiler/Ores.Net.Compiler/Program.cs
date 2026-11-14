@@ -14,6 +14,17 @@ var dotnetPolicy = mathI64Granted
 // Reject invalid shapes before indexing args[3]. Previously "compile file.ores"
 // passed validation then crashed with IndexOutOfRangeException instead of usage.
 bool validCheck = args.Length == 2 && args[0] == "check";
+// FULL_GUEST_AOT_TODO (platform-conformance #321): These commands emit
+// verified scalar/structured CIL or managed-source artifacts, not yet a
+// closed-world native guest executable for arbitrary AttoLang programs.
+// Keep them intact; a strict build must close module/method/generic/actor,
+// exception/cleanup and suspension edges before NativeAOT publish, and forbid
+// interpreter/Reflection.Emit/runtime codegen fallback in the sealed profile.
+// ZERO_TRACING_GC_TODO: CIL and .NET NativeAOT still use CLR-managed object
+// lifetimes by default. NativeAOT != no GC. Lower guest class/actor data into
+// actor-owned unmanaged regions with checked 32-bit offsets and generation
+// authority; prove deterministic disposal at return, cancellation, restart,
+// FFI pins and hot swap, plus transitive native/PInvoke allocation closure.
 bool validCompile = args.Length == 4 && args[0] == "compile" && args[2] == "--out";
 // Opt-in verification lane only: never silently broaden shipping scalar check/compile.
 bool validStructuredCheck = args.Length == 2 && args[0] == "check-structured";
