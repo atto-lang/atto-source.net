@@ -9,6 +9,7 @@ static class CrossBackendCheckedI64ParityTests
     {
         PercentOperatorIsRejectedAndInternalRemainderRemainsBounded();
         NativeI64EffectResultCannotForgeSuccess();
+        GuestNominalCatchesRespectErrorHierarchyAndTerminalEffects();
         foreach (var (name, expression, expected) in new (string, string, long)[]
         {
             ("precedence", "2 + 3 * 4", 14L),
@@ -69,6 +70,53 @@ static class CrossBackendCheckedI64ParityTests
             return;
         }
         throw new Exception("FAILED: int/int division was admitted without float lowering");
+    }
+
+    // An emitted catch must consult this language identity, never a CLR
+    // exception subclass or an arbitrary host-side type name.
+    private static void GuestNominalCatchesRespectErrorHierarchyAndTerminalEffects()
+    {
+        var overflow = GuestI64EffectResult.ArithmeticOverflow();
+        if (!overflow.CatchMatches(NominalGuestErrorType.ArithmeticOverflowError) ||
+            !overflow.CatchMatches(NominalGuestErrorType.Error) ||
+            overflow.CatchMatches(NominalGuestErrorType.DivisionByZeroError) ||
+            overflow.CatchMatches((NominalGuestErrorType)999999u))
+            throw new Exception("Guest ArithmeticOverflowError nominal hierarchy mismatch");
+
+        var recovered = overflow.Recover(NominalGuestErrorType.Error, 42);
+        if (!recovered.IsReturn || recovered.Value != 42 ||
+            recovered.NormalizedStatus.Code != 0)
+            throw new Exception("Guest Error root catch failed to consume Throw effect");
+
+        foreach (GuestEffectKind terminal in new[] {
+            GuestEffectKind.Raise, GuestEffectKind.Panic, GuestEffectKind.Cancel,
+            GuestEffectKind.Fatal, GuestEffectKind.ProcessExit })
+        {
+            var value = new GuestI64EffectResult(99,
+                new GuestEffectStatus(terminal,
+                    (uint)NumericGuestErrorCode.ArithmeticOverflowError));
+            if (value.CatchMatches(NominalGuestErrorType.Error) ||
+                value.CatchMatches(NominalGuestErrorType.ArithmeticOverflowError) ||
+                value.Recover(NominalGuestErrorType.Error, 42).IsReturn)
+                throw new Exception("Non-Throw terminal effect was consumed by guest catch");
+        }
+
+        var malformed = new GuestI64EffectResult(99,
+            new GuestEffectStatus(GuestEffectKind.Throw, 0));
+        if (malformed.CatchMatches(NominalGuestErrorType.Error) ||
+            malformed.CatchMatches(0) ||
+            malformed.Recover(NominalGuestErrorType.Error, 42).IsReturn)
+            throw new Exception("Malformed zero-code Throw bypassed guest nominal normalization");
+
+        foreach (NumericGuestErrorCode code in Enum.GetValues<NumericGuestErrorCode>())
+        {
+            var value = new GuestI64EffectResult(123,
+                new GuestEffectStatus(GuestEffectKind.Throw, (uint)code));
+            if (!value.CatchMatches(NominalGuestErrorType.Error) ||
+                !value.CatchMatches((NominalGuestErrorType)(uint)code) ||
+                !value.Recover((NominalGuestErrorType)(uint)code, 42).IsReturn)
+                throw new Exception("Registered numeric guest error lost nominal identity: " + code);
+        }
     }
 
     private static void NativeI64EffectResultCannotForgeSuccess()

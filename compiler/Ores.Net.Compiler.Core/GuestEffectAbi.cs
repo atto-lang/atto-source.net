@@ -83,6 +83,24 @@ public sealed class GuestEffectTransportException : Exception
             inner);
 }
 
+/// <summary>
+/// Compiler-validated nominal guest type identities. These constants are
+/// *not* CLR exception types; they are checked against a normalized guest
+/// Throw effect and the shared numeric error registry.
+/// </summary>
+public enum NominalGuestErrorType : uint
+{
+    Error = 0,
+    ArithmeticOverflowError = (uint)NumericGuestErrorCode.ArithmeticOverflowError,
+    DivisionByZeroError = (uint)NumericGuestErrorCode.DivisionByZeroError,
+    InexactConversionError = (uint)NumericGuestErrorCode.InexactConversionError,
+    NumericRangeError = (uint)NumericGuestErrorCode.NumericRangeError,
+    NumericParseError = (uint)NumericGuestErrorCode.NumericParseError,
+    NumericContextError = (uint)NumericGuestErrorCode.NumericContextError,
+    NumericResourceError = (uint)NumericGuestErrorCode.NumericResourceError,
+    NonterminatingDecimalError = (uint)NumericGuestErrorCode.NonterminatingDecimalError
+}
+
 public readonly record struct GuestI64EffectResult(
     long Value,
     GuestEffectStatus Status)
@@ -98,11 +116,41 @@ public readonly record struct GuestI64EffectResult(
             : new GuestI64EffectResult(0, effective);
     }
 
+    // The wire-level numeric matcher is intentionally exact. It does not
+    // authorize catching CLR exceptions or non-Throw terminal effects.
     public bool CatchMatches(uint code) =>
-        NormalizedStatus.Kind == GuestEffectKind.Throw && NormalizedStatus.Code == code;
+        code != 0 && NormalizedStatus.Kind == GuestEffectKind.Throw &&
+        NormalizedStatus.Code == code;
+
+    // The Error root nominally catches every properly normalized guest Throw.
+    // The numeric children have explicit identities; unknown enum casts
+    // cannot manufacture an otherwise valid catch type.
+    public bool CatchMatches(NominalGuestErrorType type)
+    {
+        var status = NormalizedStatus;
+        if (status.Kind != GuestEffectKind.Throw || status.Code == 0)
+            return false;
+        return type switch
+        {
+            NominalGuestErrorType.Error => true,
+            NominalGuestErrorType.ArithmeticOverflowError or
+            NominalGuestErrorType.DivisionByZeroError or
+            NominalGuestErrorType.InexactConversionError or
+            NominalGuestErrorType.NumericRangeError or
+            NominalGuestErrorType.NumericParseError or
+            NominalGuestErrorType.NumericContextError or
+            NominalGuestErrorType.NumericResourceError or
+            NominalGuestErrorType.NonterminatingDecimalError =>
+                status.Code == (uint)type,
+            _ => false
+        };
+    }
 
     public GuestI64EffectResult Recover(uint code, long value) =>
         CatchMatches(code) ? Return(value) : Forward();
+
+    public GuestI64EffectResult Recover(NominalGuestErrorType type, long value) =>
+        CatchMatches(type) ? Return(value) : Forward();
 
     public static GuestI64EffectResult Return(long value) =>
         new(value, GuestEffectStatus.Return);
