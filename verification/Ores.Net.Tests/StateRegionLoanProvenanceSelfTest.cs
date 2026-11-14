@@ -119,8 +119,10 @@ internal static class StateRegionLoanProvenanceSelfTest
             StringComparison.Ordinal);
         Require(unsafeJsonRaw != rawBorrow, "unsafe JSON fixture mutation applied");
         using var unsafeJson = JsonDocument.Parse(unsafeJsonRaw);
-        Expect<ArgumentOutOfRangeException>(() => _ = Read(unsafeJson.RootElement),
-            "unsafe exact integer rejected by JSON receipt constructor");
+        // ReadJsonSafeId rejects IDs above 2^53-1 before the receipt constructor runs;
+        // the constructor's own range check is exercised by the case above.
+        Expect<InvalidOperationException>(() => _ = Read(unsafeJson.RootElement),
+            "unsafe exact integer rejected by the JSON safe-integer reader");
 
         var defaultBorrow = default(StateRegionLoanProvenance);
         Require(!defaultBorrow.AuthorizesRelease(valid),
