@@ -183,6 +183,72 @@ Require(runtime.NativeReservedBytes == 0 &&
         runtime.LiveActors == 0,
     "actor retirement did not refund all native reservations");
 
+if (nativeQueuedStorage)
+{
+    // A full native queue must never leak its leases when STOP overtakes
+    // pending data. The active turn holds a *managed copy*, not an unsafe
+    // pointer into a slot that STOP may reclaim on a different thread.
+    using var started = new ManualResetEventSlim(false);
+    using var unblock = new ManualResetEventSlim(false);
+    using var stopped = new ActorRuntime(new ActorRuntimeOptions
+    {
+        MaxActors = 1,
+        MailboxMessages = 32,
+        MailboxBytes = 512,
+        NativeMailboxSlotBytes = 16,
+        ActorPersistentBytes = 256,
+        ActorScratchBytes = 64,
+        ActorStackBytes = 16,
+        NativeBudgetBytes = 4096
+    });
+    int turns = 0;
+    ActorRef pending = stopped.Spawn(ActorKind.Private, (_, _) =>
+    {
+        Interlocked.Increment(ref turns);
+        started.Set();
+        if (!unblock.Wait(TimeSpan.FromSeconds(15)))
+            throw new InvalidOperationException("blocked turn release timed out");
+    });
+    Span<byte> input = stackalloc byte[8];
+    stopped.Send(pending, input);
+    Require(started.Wait(TimeSpan.FromSeconds(15)), "first native turn never started");
+    for (int i = 0; i < 32; i++) stopped.Send(pending, input);
+    bool fullQueueDenied = false;
+    try { stopped.Send(pending, input); }
+    catch (InvalidOperationException) { fullQueueDenied = true; }
+    Require(fullQueueDenied, "saturated native mailbox admitted a 33rd message");
+    stopped.Stop(pending);
+    unblock.Set();
+    Require(SpinWait.SpinUntil(() =>
+            stopped.LiveActors == 0 && stopped.NativeReservedBytes == 0,
+        TimeSpan.FromSeconds(15)),
+        "STOP of saturated queue failed native lease/arena refund");
+    Require(turns == 1 && stopped.CompletedMessages == 1 &&
+            stopped.FaultedTurns == 0,
+        "STOP must discard queued native mail without extra actor turns");
+
+    // Native slab succeeds, then actor arena admission fails: the Spawn
+    // rollback must still refund the independently charged native pool.
+    using var exhausted = new ActorRuntime(new ActorRuntimeOptions
+    {
+        MaxActors = 1,
+        MailboxMessages = 32,
+        MailboxBytes = 512,
+        NativeMailboxSlotBytes = 16,
+        ActorPersistentBytes = 256,
+        ActorScratchBytes = 64,
+        ActorStackBytes = 16,
+        NativeBudgetBytes = 32L * 16
+    });
+    bool budgetDenied = false;
+    try { _ = exhausted.Spawn(ActorKind.Private, (_, _) => { }); }
+    catch (InvalidOperationException) { budgetDenied = true; }
+    Require(budgetDenied && exhausted.LiveActors == 0 &&
+            exhausted.NativeReservedBytes == 0,
+        "failed Spawn must refund native pool even when arena quota fails");
+}
+
+
 string mode = requireNativeAot ? "nativeaot" : "managed";
 Console.WriteLine("ATTO_ACTOR_MAILBOX_GC_METRICS_V1" +
     "|mode=" + mode +
