@@ -715,10 +715,25 @@ public sealed class ActorRuntime : IDisposable
 
                 lock (cell.Gate)
                 {
-                    if (cell.Stopping ||
-                        !cell.Mailbox.TryReceive(out byte[]? dequeued) ||
-                        dequeued is null)
+                    if (cell.Stopping)
                         break;
+                    byte[]? dequeued;
+                    try
+                    {
+                        if (!cell.Mailbox.TryReceive(out dequeued) ||
+                            dequeued is null)
+                            break;
+                    }
+                    catch (Exception)
+                    {
+                        // The opt-in native mailbox copies to an owned
+                        // managed array at delivery. If that allocation or
+                        // loan admission fails, do not reschedule a poisoned
+                        // mailbox or strand native leases on its queue.
+                        Interlocked.Increment(ref _faultedTurns);
+                        MarkStoppingLocked(cell);
+                        break;
+                    }
 
                     payload = dequeued;
                     try
