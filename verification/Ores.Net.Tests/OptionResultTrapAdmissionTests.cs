@@ -35,10 +35,11 @@ internal static class OptionResultTrapAdmissionTests
                 AppContext.BaseDirectory, "caller-trap-parity", names[i]));
             byte[] header = System.Text.Encoding.ASCII.GetBytes(
                 "blob " + raw.Length + "\0");
-            using var digest = System.Security.Cryptography.SHA1.Create();
-            digest.TransformBlock(header, 0, header.Length, null, 0);
-            digest.TransformFinalBlock(raw, 0, raw.Length);
-            string actual = Convert.ToHexString(digest.Hash!).ToLowerInvariant();
+            using var digest = System.Security.Cryptography.IncrementalHash.CreateHash(
+                System.Security.Cryptography.HashAlgorithmName.SHA1);
+            digest.AppendData(header);
+            digest.AppendData(raw);
+            string actual = Convert.ToHexString(digest.GetHashAndReset()).ToLowerInvariant();
             if (actual != blobs[i])
                 throw new Exception("Canonical Atto caller-trap guest was modified: " + names[i]);
 
