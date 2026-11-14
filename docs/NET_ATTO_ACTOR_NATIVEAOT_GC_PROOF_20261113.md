@@ -49,13 +49,47 @@ publishing a generated C# file.
 
 ## Next implementation reductions
 
-First eliminate the `ActorMailbox.Envelope` and `byte[].ToArray()` managed
-allocations via a bounded native lease/transfer protocol (PR #513), with an
-ownership, shutdown, failure-atomicity and budget-refund proof. Then remove
-per-turn managed context allocations, without letting untrusted actor code
-bypass sealed state, scheduler admission, supervisor CONTROL, or pinned await
-frames. Establish lower measured allocation targets from completed exact-SHA
-benchmarks; do not claim zero CLR GC for the .NET process.
+The same compiled `.atto` guest benchmark now tests **both** storage
+modes via `ATTO_NATIVE_MAILBOX=0|1`. The opt-in configuration
+`ActorRuntimeOptions.NativeMailboxSlotBytes=16` stores queued message bytes in
+a fixed actor-owned instance of `NativeFixedBufferPoolV1`, charged against
+the same native tenant/process budget as the actor's arena. Queue capacity
+remains fixed, oversized messages fail before queue admission, and STOP
+scrubs/reclaims undelivered leases. Failed actor Spawn refunds its separate
+mailbox slab. Restarting a native mailbox in place is explicitly forbidden.
+
+**Critical ownership boundary:** the existing user callback takes
+`ReadOnlyMemory<byte>`, which a handler can retain. It is unsafe to supply
+this callback with an array or native-backed memory view that will later be
+reused by another tenant, actor or turn. The native queue therefore deliberately
+**copies bytes into a fresh managed array at dequeue**. The existing actor
+turn-finally scrubs that managed array. A retained-message canary in the
+benchmark asserts that old message views remain all-zero after later turns.
+No raw native pointer escapes to user code. This staging mode is not zero-copy
+delivery and may use **more managed allocations** than the legacy queue
+because `Envelope`, `Lease` and `Loan` objects remain managed.
+
+The managed and Linux/Windows native workflows execute identical 4,096-message
+compiled guest runs in both `managed_copy_on_send` and
+`native_copy_on_dequeue` modes, recording allocation bytes/message, GC
+collection deltas and elapsed time. The comparison is an experiment, not a
+performance result until the exact-head workflow actually executes. A 50k
+zero-CLR-allocation assertion for `WriteBytes`/`ReadBytes` on a
+**pre-existing loan** in PR #513 proves only the native-copy primitive, not
+the allocation cost of lease acquisition, mailboxes, actors or scheduling.
+
+### Next safe near-zero-GC implementation
+
+Introduce a separate compiler/runtime **borrow-only**
+`ReadOnlySpan<byte>` handler, a bounded generation-fenced **value token**
+(rather than a newly allocated `Lease`), and a preallocated FIFO ring.
+The native loan must never outlive an admitted physical turn or suspension;
+pinned await frames require a separate verified continuation contract. Keep
+the retainable `ReadOnlyMemory<byte>` API on the legacy safe copy path, not
+as a borrowed zero-GC endpoint. Eliminate managed `ActorContext` and
+`ActorExecutionContext` per-turn allocations only after profile-based
+evidence and correctness tests across STOP, fault, restart and supervisor
+CONTROL paths. Do not claim zero CLR GC for the entire .NET process.
 
 Never mirror this private repository to another org without authorized source
 snapshot, independently reviewed destination, and protected policy approval.
