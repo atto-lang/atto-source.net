@@ -115,8 +115,11 @@ internal static class HeapContainerSourceBoundaryTests
                     "pub fnc main():int{return " + factory + ";}");
                 throw new Exception("Unverified structured collection admitted: " + factory);
             }
+            // Bracket forms are refused even earlier by main's fail-closed
+            // SafeCollectionSourceAdmission; either diagnostic proves rejection.
             catch (FormatException ex) when
-                (ex.Message.Contains("E_COLLECTION_FACTORY_UNSUPPORTED", StringComparison.Ordinal))
+                (ex.Message.Contains("E_COLLECTION_FACTORY_UNSUPPORTED", StringComparison.Ordinal) ||
+                 ex.Message.Contains("E_SAFE_COLLECTION_ACCESS_UNSUPPORTED", StringComparison.Ordinal))
             { }
         }
 
