@@ -84,4 +84,4 @@ using (var loan = pool.BorrowRead(retained, sender))
 }
 pool.Release(retained, sender);
 Require(pool.IsQuiescent && pool.InUse == 0, "retirement reclaims only after last release");
-Console.WriteLine("HOST_ONLY_NATIVE_FIXED_BUFFER_POOL_V1_PASS|ops=100000|compiled_atto=NOT_EXECUTED|native_aot=NOT_EXECUTED|zero_alloc=NOT_PROVEN");
+Console.WriteLine("HOST_ONLY_NATIVE_FIXED_BUFFER_POOL_V1_PASS|ops=100000|compiled_atto=NOT_EXECUTED|zero_alloc=NOT_PROVEN");
