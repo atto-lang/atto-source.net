@@ -3,6 +3,7 @@ using Mono.Cecil.Cil;
 using Ores.Net.Compiler;
 using Ores.Net.Runtime;
 
+NativeSourceIdentityV1SelfTest.Run();
 DeclaredActorReceiveSyntaxTests.Run();
 MtdReceiverAdmissionTests.Run();
 ActorForwardNamespaceAdmissionTests.Run();
