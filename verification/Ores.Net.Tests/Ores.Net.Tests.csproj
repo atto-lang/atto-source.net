@@ -20,6 +20,9 @@
     <None Include="../../contracts/mtd-receiver-v1/*.atto"
           Link="contracts/mtd-receiver-v1/%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/actor-forwards-v1/*.atto"
+          Link="contracts/actor-forwards-v1/%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/durable-m0/v1/manifest-v1.json"
           Link="contracts/durable-m0/v1/manifest-v1.json"
           CopyToOutputDirectory="PreserveNewest" />
