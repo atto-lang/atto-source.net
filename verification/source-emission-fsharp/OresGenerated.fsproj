@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Deterministic>true</Deterministic>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AssemblyName>OresGenerated</AssemblyName>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="$(GeneratedSource)" />
+  </ItemGroup>
+  <Target Name="ValidateGeneratedSource" BeforeTargets="CoreCompile">
+    <Error Condition="'$(GeneratedSource)' == '' or !Exists('$(GeneratedSource)')"
+           Text="Pass -p:GeneratedSource=&lt;path to emitted .fs&gt;" />
+  </Target>
+</Project>

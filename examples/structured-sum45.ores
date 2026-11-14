@@ -1,0 +1,9 @@
+define pub fnc main(): int {
+    let int total = 0;
+    let int i = 0;
+    while i < 10 {
+        total = total + i;
+        i = i + 1;
+    }
+    return total;
+}

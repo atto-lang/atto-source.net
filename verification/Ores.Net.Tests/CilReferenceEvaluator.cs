@@ -43,6 +43,8 @@ internal static class CilReferenceEvaluator
                 case Code.Sub_Ovf:
                 case Code.Mul_Ovf:
                 case Code.Div:
+                case Code.Rem:
+                case Code.Xor:
                 {
                     long right = stack.Pop();
                     long left = stack.Pop();
@@ -52,6 +54,8 @@ internal static class CilReferenceEvaluator
                         Code.Sub_Ovf => checked(left - right),
                         Code.Mul_Ovf => checked(left * right),
                         Code.Div => DivideChecked(left, right),
+                        Code.Rem => right == -1 ? 0 : left % right,
+                        Code.Xor => left ^ right,
                         _ => throw new FormatException("Unexpected CIL operator")
                     };
                     stack.Push(value);

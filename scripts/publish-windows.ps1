@@ -1,10 +1,20 @@
 param(
     [Parameter(Mandatory = $true)][string]$Source,
     [ValidateSet('win-x64', 'win-arm64')][string]$Rid = 'win-x64',
-    [string]$Output = 'artifacts/apps'
+    [string]$Output = 'artifacts/apps',
+    [switch]$TenantIsolateSmoke,
+    [switch]$DotnetMath,
+    # Opt-in: keep legacy scalar native publication unchanged.
+    [switch]$Structured
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
+# Match the Linux publisher's bounded artifacts root. Refuse arbitrary paths
+# before creating/removing any build outputs.
+if ($Output -cnotmatch '^artifacts(/[A-Za-z0-9_-]+)+$' -or
+    $Output -cmatch '^artifacts/(compiler|generated|evidence)(/|$)') {
+    throw 'NativeAOT output must be a separate artifacts/ directory'
+}
 $sourcePath = (Resolve-Path $Source).Path
 $generated = Join-Path $root 'artifacts/generated/OresGenerated.dll'
 $compilerOut = Join-Path $root "artifacts/compiler/$Rid"
@@ -25,10 +35,21 @@ if ($LASTEXITCODE -ne 0) { throw 'Native compiler publish failed' }
 
 if (-not (Test-Path -LiteralPath $exe)) { throw 'Native compiler executable was not published' }
 & $checkNative -Binary $exe -Rid $Rid
-& $exe compile $sourcePath --out $generated
+# Capability is not inferred from source names or environment variables.
+$capabilityArgs = @()
+if ($DotnetMath) { $capabilityArgs = @('--capability', 'interop.dotnet.math-i64') }
+# Opt-in structured frontend; the CLI refuses --capability with compile-structured.
+$compileMode = if ($Structured) { 'compile-structured' } else { 'compile' }
+& $exe $compileMode $sourcePath --out $generated @capabilityArgs
 if ($LASTEXITCODE -ne 0) { throw 'Oreslang-to-CIL compilation failed' }
 
-dotnet publish (Join-Path $root 'host/Ores.Net.NativeHost/Ores.Net.NativeHost.csproj') -c Release -r $Rid -o $publishOut "-p:GeneratedAssembly=$generated" -warnaserror
+# A previous publish of this same host project may have used another
+# generated assembly (for example hello.ores versus native.add). Clean its
+# intermediate artifacts so the AOT linker cannot reuse stale compiled IL.
+$hostProject = Join-Path $root 'host/Ores.Net.NativeHost/Ores.Net.NativeHost.csproj'
+dotnet clean $hostProject -c Release -r $Rid "-p:GeneratedAssembly=$generated"
+if ($LASTEXITCODE -ne 0) { throw 'Native AOT host clean failed' }
+dotnet publish $hostProject -c Release -r $Rid -o $publishOut "-p:GeneratedAssembly=$generated" -warnaserror
 if ($LASTEXITCODE -ne 0) { throw 'Native AOT publish failed' }
 
 if (-not (Test-Path -LiteralPath $binary)) { throw "Expected native executable is missing: $binary" }
@@ -38,5 +59,11 @@ if (Test-Path (Join-Path $publishOut 'OresGenerated.dll')) {
 }
 if (Test-Path (Join-Path $publishOut 'oreslang-app.runtimeconfig.json')) {
     throw 'Framework-dependent runtime configuration unexpectedly found'
+}
+if ($TenantIsolateSmoke) {
+    # Deliberately target the known examples/hello.ores => 14 fixture.
+    # Execute the distributed Native AOT executable, not dotnet run.
+    & $binary --isolate-smoke
+    if ($LASTEXITCODE -ne 0) { throw 'Native AOT generated CIL tenant-isolate smoke failed' }
 }
 Write-Host "Native AOT executable: $binary"

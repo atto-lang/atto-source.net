@@ -1,0 +1,108 @@
+# Source-generated state on the production actor runtime
+
+This draft reconciles the source/host stack through #274 with main and the
+execution-owned actor frame integration #459 (`9c0b65eb`). It preserves mailbox
+nonce/generation checks, current NIO policy, queued-byte quotas, and actor-owned
+native arena/frame tests. It does not establish full Java/LLVM/.NET parity.
+
+## Production path
+
+`emit-actor-csharp examples/actor-counter.atto` produces a statically compiled
+`Actor_Counter.SpawnRuntime(runtime, replyTo)` entry. It creates an isolated
+profile actor on the **actual ActorRuntime**, not only the older OresVmHost
+Counter scheduler. Each instance owns separate native scalar state. Incoming
+empty DATA messages invoke its one no-argument operation; replies contain
+data-only actor ID/result bytes and go through a real supervisor mailbox.
+There is no direct supervisor callback or wire reconstruction of an ActorRef.
+This fixed envelope is not a universal MessagePack contract.
+
+`ActorNativeScalarState` stores immutable defaults and opaque handles as host
+metadata; live mutable scalar values occupy the actor's native arena. Access
+requires a live physical ActorContext and its exact actor incarnation. A
+nonparking exclusive fence rejects accidental cross-actor metadata aliasing.
+The checked scalar operation stores its operands/result on the caller's existing
+execution-owned logical stack. It creates neither an execution identity nor a
+stack per critical callback. Finally pops/scrubs its activation, including after
+checked overflow. The native arena and stack remain under the existing actor
+budget and retirement protocol.
+
+The compiler accepts canonical contiguous `critical-write` in this opt-in
+increment profile and rejects `critical-read` mutation and split modifiers.
+Bare `critical` is retained only as legacy write syntax. `.atto` fixtures and
+generated static C# are verified together; no runtime emit/plugin/JIT is needed
+by the NativeAOT probe. Regular scalar/structured check/compile still rejects
+unlowered actors; the opt-in emitter is not general actor CIL lowering.
+
+## Reconciliation fixes and evidence
+
+The merged old scheduler's user dequeue bypassed main's newer tenant/host byte
+refunds. A regression failed with `scheduled dequeue did not refund tenant/host
+quotas`; the scheduler now uses the existing host-mediated dequeue, preserving
+FIFO control discrimination and exact quota reuse. Typed control envelopes also
+required updating the scrub test's observation of its privately owned DATA
+buffer; no production buffer is exposed. Current macro/critical/suspension,
+source-byte-budget, supervisor and NIO admission gates remain checked.
+
+The complete managed verification executable passes, including exact source
+emitter/golden comparisons for ordinary and overflow Counter actors. A genuine
+macOS arm64 NativeAOT Mach-O probe passes **three consecutive executions**:
+
+- two actual source-generated private actors return A=1,2,3 and B=1,2 through
+  the supervisor mailbox;
+- a separately source-generated overflow actor fails, its peer continues to
+  B=3, and a fresh actor starts at 1;
+- runtime negatives prove no partial overflow commit, reuse of the same logical
+  context after finally with an exact 16-byte stack budget, and foreign actor
+  denial without poisoning the rightful owner;
+- actor shutdown joins cleanup and native reserved bytes return to zero;
+- the older trusted-host Counter/control/nonce/shape/quota suites also execute,
+  but their managed cells are not native actor arena evidence.
+
+Native binary SHA-256:
+`3fe7570f3fc9babd8b60a3c81ea15dbad782763c42878da38bca65ca77b91b46`.
+The final probe asserts `RuntimeFeature.IsDynamicCodeSupported == false` and
+passes three runs with that native-only gate. Its workflow checks this receipt
+and uses a checked shell glob for DLL sidecars on both target platforms.
+Compiler and new Counter probe pin ILCompiler/runtime packs 10.0.14, following
+the existing memory probe, instead of bypassing the 10.0.0 NuGet security audit
+failure. Linux/Windows execution is independently recorded below; it is not
+inferred from the macOS result.
+
+## Exact-tree hosted follow-up
+
+The tested source commit is `70f0e4671137907370e28d71838688799386daab`, root
+tree `18dd661928cc5261a03162dc0cf230cc96ecfef9`. Source-org jobs could not start
+because of billing. Using the user's authorized fallback, all 478 source files
+were mirrored through the GitHub connector to verified-private
+`streempilot-test/browser-studio-e2e`; all blob identities and the final root tree
+match. Carrier `98bbf8d5a713748b1c3f98e1d923feabef1c6245`, temporary branch
+`ci/atto-net-state-frames-exact-tree-20261110`.
+
+[Run 42934451529](https://github.com/streempilot-test/browser-studio-e2e/actions/runs/42934451529)
+passed Windows job `130240932731` and Linux job `130240933205`. Both executed
+identity verification, exact regeneration of both source actor goldens, complete
+managed verification, NativeAOT publish and three native executions with required
+dynamic-code-disabled, native state/stack, peer survival and zero-reserved-byte
+receipts. The artifact check rejects DLL sidecars. No cross-org secrets/tokens
+were added; checkout uses the destination token without persisting credentials.
+Origin CI failures remain recorded and no required check was bypassed. Other
+historical mirror-triggered workflows were canceled to conserve budget.
+
+This section is a documentation-only follow-up to the tested code commit; it
+does not claim that a later documentation tree was separately rebuilt.
+
+## Still required
+
+The source emitter currently recognizes only the bounded synchronous +1 actor
+operation with explicit state effects. It is not Java's receive/ActorMail API,
+LLVM's on_message(int) API, general methods/classes, async actor CIL, full
+borrow-checking, or the Spin server. The source body must become typed Actor IR
+with complete ownership/effect inventory and a canonical Rust checker adapter.
+
+Production ActorRuntime remains serial. Concurrent-default guest execution,
+compatible guest read cohorts/exclusive write admission, suspended context/stack
+restoration, arbitrary object/string/closure arena lowering, shared application
+regions, singleton/symbol borrowing and untrusted tenant VM isolation remain
+open. Native private scalar state and compact arena handles do not by themselves
+certify every guest allocation or every execution boundary. Spin's .NET backend
+must remain unverified until its actual shared source compiles and runs.
