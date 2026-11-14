@@ -1,0 +1,4 @@
+pub fnc main():int {
+  val Option<Option<int>> nested = Some(None);
+  return 42;
+}

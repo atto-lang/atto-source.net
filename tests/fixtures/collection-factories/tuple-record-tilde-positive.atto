@@ -1,0 +1,4 @@
+// Native AttoLang tilde projections, not C# host tuples/dictionaries.
+pub fnc main():int {
+    return ~tuple(1, 2)[1] + ~record(left: 40, right: 5).left;
+}

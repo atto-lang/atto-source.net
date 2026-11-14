@@ -44,6 +44,21 @@ a previous turn cannot address newly reused scratch bytes.
 
 The runtime never exposes a raw native pointer to guest-facing callers.
 
+## Actor-owned logical frame stacks (candidate)
+
+The runtime now also provisions one bounded `ActorFrameStack` per serial
+actor cell. Its frame bytes are stored in a persistent native slab within
+that actor's existing `ActorArena`; individual actors do **not** share
+logical frames or capabilities. The slab is allocated on first push, reused
+for the actor incarnation to avoid fragmenting the non-compacting arena,
+scrubbed on every pop, and physically released by arena retirement.
+`ActorRuntimeOptions.ActorStackBytes` (0 = automatic) and
+`ActorMaxStackFrames` bound usage independently of the carrier thread.
+Exact-issued LIFO frame handles survive a turn but require a newly admitted
+owner turn to access. See `docs/ACTOR_LOGICAL_STACKS_NATIVE_AOT.md` for
+the Native AOT probe, remaining compiler requirements and strict distinction
+between logical guest frames and physical CLR machine stacks.
+
 ## Data-oriented storage
 
 `ActorShardColumns` stores one homogeneous dense double region in exactly one
