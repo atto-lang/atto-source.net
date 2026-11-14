@@ -877,6 +877,38 @@ class RunContract(unittest.TestCase):
                                     self.run_id, job_names, step_names)
 
 
+    def test_invisible_mark_private_use_and_compatibility_spoofs_denied(self):
+        # These labels were previously considered legible useful execution
+        # names, despite invisible grapheme joiners, marks or confusable glyphs.
+        # Replay each through observed runner/job/step and pinned required names.
+        labels = ("Set\u034f up job", "Set up jo\u034fb",
+                  "Execute\u0301 test suite", "Runner\ue000name",
+                  "\uff33et up job", "\u24c8et up job")
+        page = self.prefix + "/actions/runs/17/attempts/2/jobs?per_page=100&page=1"
+        baseline = copy.deepcopy(self.values[page])
+        try:
+            for label in labels:
+                with self.subTest(label=repr(label)):
+                    self.assertFalse(module._evidence_label(label))
+                    self.assertFalse(module.executable_step_name(label))
+                    self.values[page] = copy.deepcopy(baseline)
+                    job = self.values[page]["jobs"][0]
+                    job["runner_name"] = label
+                    self.rejected()
+                    job["runner_name"] = baseline["jobs"][0]["runner_name"]
+                    job["name"] = label
+                    with self.assertRaises(module.Denied):
+                        self.verify(self.fetch, self.backend, self.commit, self.tree,
+                                    self.run_id, [label], ["Execute test suite"])
+                    job["name"] = baseline["jobs"][0]["name"]
+                    job["steps"][1]["name"] = label
+                    with self.assertRaises(module.Denied):
+                        self.verify(self.fetch, self.backend, self.commit, self.tree,
+                                    self.run_id, ["unit"], [label])
+        finally:
+            self.values[page] = baseline
+
+
     def test_legible_unicode_display_names_are_not_disallowed(self):
         page = self.prefix + "/actions/runs/17/attempts/2/jobs?per_page=100&page=1"
         job = self.values[page]["jobs"][0]
@@ -991,6 +1023,53 @@ class StrictApiJSONContract(unittest.TestCase):
 
 
 
+    def test_padded_and_unicode_space_labels_fail_closed(self):
+        for label in (" unit", "unit ", " GitHub Actions 1 ",
+                      "Set\u00a0up job", "Set\u2009up job",
+                      "runner\u202fone", "\u3000unit"):
+            with self.subTest(label=repr(label)):
+                self.assertFalse(module._evidence_label(label))
+        self.assertTrue(module._evidence_label("GitHub Actions 1"))
+        self.assertTrue(module._evidence_label("Execute native guest suite"))
+        self.assertTrue(module._evidence_label("検証 native guest"))
+
+    def test_lookalike_housekeeping_does_not_count_as_a_test(self):
+        for label in ("Set  up job", "Complete  job",
+                      "Initialize  containers", "set UP job",
+                      "POST  Checkout", "pre  Setup",
+                      "Set\u00a0up job", "Set\u2009up job"):
+            with self.subTest(label=repr(label)):
+                self.assertFalse(module.executable_step_name(label))
+        self.assertTrue(module.executable_step_name("Execute native guest suite"))
+
+    def test_padded_runner_identity_is_rejected_as_evidence(self):
+        page = self.prefix + "/actions/runs/17/attempts/2/jobs?per_page=100&page=1"
+        baseline = copy.deepcopy(self.values[page])
+        for label in (" GitHub Actions 1", "GitHub Actions 1 ",
+                      "GitHub\u00a0Actions 1"):
+            with self.subTest(label=repr(label)):
+                self.values[page] = copy.deepcopy(baseline)
+                self.values[page]["jobs"][0]["runner_name"] = label
+                self.rejected()
+        self.values[page] = baseline
+
+    def test_padded_job_or_step_does_not_pass_exact_evidence(self):
+        page = self.prefix + "/actions/runs/17/attempts/2/jobs?per_page=100&page=1"
+        baseline = copy.deepcopy(self.values[page])
+        for key, label in (("job", "unit "), ("job", " unit"),
+                           ("step", "Execute  test suite"),
+                           ("step", "Execute\u00a0test suite")):
+            with self.subTest(key=key, label=repr(label)):
+                self.values[page] = copy.deepcopy(baseline)
+                job = self.values[page]["jobs"][0]
+                if key == "job":
+                    job["name"] = label
+                else:
+                    job["steps"][1]["name"] = label
+                self.rejected()
+        self.values[page] = baseline
+
+
 class WorkflowIsolationContract(unittest.TestCase):
     """Prevent candidate import-path shadowing in CI report generation."""
 
@@ -1071,6 +1150,44 @@ class WorkflowIsolationContract(unittest.TestCase):
         self.assertNotIn("pull_request_target:", workflow)
         self.assertNotIn("secrets.", workflow)
 
+
+    def test_exact_head_checkout_denies_untracked_and_ignored_payloads(self):
+        workflow = self.workflow_text()
+        block = workflow.split(
+            "      - name: Bind evidence to actual checked-out Git tree", 1
+        )[1].split("      - name: Run all eight-repository source-free security regressions", 1)[0]
+        self.assertIn('test -z "$(git ls-files --others --exclude-standard)"', block)
+        self.assertIn('test -z "$(git ls-files --others --ignored --exclude-standard)"', block)
+        self.assertIn("git diff --quiet", block)
+        self.assertIn("git diff --cached --quiet", block)
+
+    def test_git_oracle_detects_both_untracked_and_ignored_shadows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            def git(*args):
+                return subprocess.run(
+                    ["git", *args], cwd=root, check=True, text=True,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    timeout=10).stdout.strip()
+            git("init", "-q")
+            git("config", "user.name", "CI")
+            git("config", "user.email", "ci@example.test")
+            (root / ".gitignore").write_text("*.cache\n", encoding="utf-8")
+            (root / "tracked.txt").write_text("trusted", encoding="utf-8")
+            git("add", ".gitignore", "tracked.txt")
+            git("commit", "-qm", "pristine")
+            def clean():
+                return (not git("ls-files", "--others", "--exclude-standard")
+                        and not git("ls-files", "--others", "--ignored",
+                                    "--exclude-standard"))
+            self.assertTrue(clean())
+            (root / "foreign.py").write_text("pass", encoding="utf-8")
+            self.assertFalse(clean())
+            (root / "foreign.py").unlink()
+            (root / "shadow.cache").write_text("bad", encoding="utf-8")
+            self.assertFalse(clean())
+            (root / "shadow.cache").unlink()
+            self.assertTrue(clean())
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
