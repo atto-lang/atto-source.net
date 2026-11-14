@@ -13,18 +13,28 @@ public readonly record struct NativeTraceParentV1(string TraceId, string SpanId,
     public static bool TryParse(string? raw, out NativeTraceParentV1 value)
     {
         value = default;
-        if (raw is null || raw.Length != 55 || raw.AsSpan(0, 3).ToString() != "00-" ||
+        if (raw is null || raw.Length != 55 ||
+            raw[0] != '0' || raw[1] != '0' || raw[2] != '-' ||
             raw[35] != '-' || raw[52] != '-') return false;
-        if (!ValidHex(raw.AsSpan(3, 32)) || !ValidHex(raw.AsSpan(36, 16)) ||
-            !ValidHex(raw.AsSpan(53, 2))) return false;
-        string trace = raw.Substring(3, 32);
-        string span = raw.Substring(36, 16);
-        if (trace.AsSpan().IndexOfAnyExcept('0') < 0 ||
-            span.AsSpan().IndexOfAnyExcept('0') < 0) return false;
-        value = new NativeTraceParentV1(trace, span,
+        ReadOnlySpan<char> trace = raw.AsSpan(3, 32);
+        ReadOnlySpan<char> span = raw.AsSpan(36, 16);
+        if (!ValidHex(trace) || !ValidHex(span) ||
+            !ValidHex(raw.AsSpan(53, 2)) ||
+            trace.IndexOfAnyExcept('0') < 0 ||
+            span.IndexOfAnyExcept('0') < 0) return false;
+        // Reject invalid network input before allocating either identifier.
+        value = new NativeTraceParentV1(raw.Substring(3, 32), raw.Substring(36, 16),
             (byte)((Hex(raw[53]) << 4) | Hex(raw[54])));
         return true;
     }
+
+    // Direct validation of a pre-parsed/constructed parent must not format
+    // then parse a temporary W3C string on every admitted trace scope.
+    internal bool IsValid() =>
+        TraceId is { Length: 32 } && SpanId is { Length: 16 } &&
+        ValidHex(TraceId.AsSpan()) && ValidHex(SpanId.AsSpan()) &&
+        TraceId.AsSpan().IndexOfAnyExcept('0') >= 0 &&
+        SpanId.AsSpan().IndexOfAnyExcept('0') >= 0;
 
     private static bool ValidHex(ReadOnlySpan<char> value)
     {
@@ -162,8 +172,7 @@ public sealed class NativeTraceContinuationV1
             owner.Generation != generation || generation == 0 ||
             Volatile.Read(ref owner.Revoked) != 0)
             throw new InvalidOperationException("stale or foreign trace owner");
-        if (parent.HasValue &&
-            (!NativeTraceParentV1.TryParse(parent.Value.ToString(), out _)))
+        if (parent.HasValue && !parent.Value.IsValid())
             throw new FormatException("Invalid inherited trace context");
         if (!Reserve())
         {
