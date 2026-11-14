@@ -12,6 +12,17 @@ public sealed record NamedBitXor(Expression Left, Expression Right) : Expression
 public sealed record DotnetMathAbsI64(Expression Value) : Expression;
 public sealed record DotnetMathMaxI64(Expression Left, Expression Right) : Expression;
 
+// Shared by the scalar and structured frontends so unsupported mutable sharing
+// cannot be diagnosed differently before native CIL lowering exists.
+internal static class MutableShareAdmission
+{
+    internal const string DiagnosticPrefix =
+        "native rt mut share requires verified SharedMutex<T> capability, guarded lowering and allocation-domain proof in .NET Native AOT at offset ";
+
+    internal static FormatException Unsupported(int offset) =>
+        new(DiagnosticPrefix + offset);
+}
+
 public static partial class OresParser
 {
     private const int MaxDepth = 128;
@@ -141,6 +152,30 @@ public static partial class OresParser
 
     private static void RejectUnsupportedScalarTokens(List<Token> tokens)
     {
+        // The scalar i64 parser is an independent public compiler entrypoint.
+        // A Kestrel host HTTP provider does not authorize guest HTTP actors.
+        // Deny exact contextual declarations before expression/IR parsing.
+        for (int i = 0; i + 1 < tokens.Count; i++)
+        {
+            int j = i;
+            if (tokens[j].Text == "pub" && tokens[j + 1].Text == "define") j++;
+            if (tokens[j].Text != "define") continue;
+            j++;
+            bool hasHttpTransport = false;
+            while (j < tokens.Count &&
+                   tokens[j].Text is "pub" or "private" or "shared" or "untrusted"
+                       or "serial" or "http" or "tcp" or "websocket" or "ws"
+                       or "stream" or "unary" or "abstract")
+            {
+                if (tokens[j].Text == "http") hasHttpTransport = true;
+                j++;
+            }
+            if (hasHttpTransport && j < tokens.Count &&
+                (tokens[j].Text is "actor" or "isoactor"))
+                throw new FormatException(
+                    $"HTTP_ACTOR_BACKEND_UNSUPPORTED: .NET scalar compiler requires typed HTTP actor admission, ownership and physical shutdown lowering at offset {tokens[j].Offset}");
+        }
+
         // Source actors are a semantic boundary, not an alternate spelling of scalar
         // functions. Canonical isolated actors already got the schema-aware rejection
         // (RejectUnsupportedSourceActors); every other actor declaration fails here,
@@ -166,6 +201,9 @@ public static partial class OresParser
         // so a post-lex token scan could not observe them.
         for (int i = 0; i + 1 < tokens.Count; i++)
         {
+            if (i + 2 < tokens.Count && tokens[i].Text == "rt" &&
+                tokens[i + 1].Text == "mut" && tokens[i + 2].Text == "share")
+                throw MutableShareAdmission.Unsupported(tokens[i].Offset);
             // Native AOT has no isolate-scoped ETS, local pg actor membership
             // or mailbox delivery lowering. Reject before OresIR/CIL emission.
             // The lexer has already stripped comments, so trivia is harmless.
@@ -195,6 +233,7 @@ public static partial class OresParser
                 StaticSelectAdmission.IsStaticSelectFollower(tokens[i + 1].Text))
                 throw StaticSelectAdmission.Unsupported(tokens[i].Offset);
         }
+
         // The shipping i64 frontend has no coroutine frames, bounded FIFO
         // critical admission, or authenticated guard owner. Reject with an
         // explicit compiler-owned capability diagnostic, not a generic parser
