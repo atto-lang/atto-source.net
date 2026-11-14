@@ -55,6 +55,9 @@ jobs:
             'compiler/Ores.Net.Compiler.Core/ActorIncrementSource.cs',
             'compiler/Ores.Net.Compiler.Core/ActorIncrementSourceEmitter.cs',
             'verification/Ores.Net.Tests/GeneratedMessageCounterActor.g.cs',
+            'runtime/Ores.Net.Runtime/NativeFixedBufferPoolV1.cs',
+            'runtime/Ores.Net.Runtime/ActorMailbox.cs',
+            'runtime/Ores.Net.Runtime/ActorRuntime.cs',
             'verification/Ores.Net.AttoActorGcProbe/Program.cs',
             'verification/Ores.Net.AttoActorGcProbe/Ores.Net.AttoActorGcProbe.csproj',
             'tests/fixtures/actor-gc-forbidden-critical-read.atto'
@@ -83,14 +86,18 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $result = @(dotnet run --project verification/Ores.Net.AttoActorGcProbe/Ores.Net.AttoActorGcProbe.csproj -c Release -p:PublishAot=false)
-          if ($LASTEXITCODE -ne 0) { throw 'managed guest actor probe failed' }
-          $result | ForEach-Object { Write-Host $_ }
-          if ($result -notcontains 'PASS ATTO_ACTOR_NATIVEAOT_MAILBOX_GC_V1|source=actor-message-counter.atto|sampled=4096|fifo=TRUE|native_refund=TRUE|malformed_isolated=TRUE|guest_subset=checked_actor_increment') {
-            throw 'managed positive witness missing'
-          }
-          if (-not ($result | Where-Object { $_ -match '^ATTO_ACTOR_MAILBOX_GC_METRICS_V1\|mode=managed\|warmup=256\|sampled=4096\|managed_total_allocated_bytes=[0-9]+\|managed_bytes_per_message=[0-9]+\|' })) {
-            throw 'managed allocation metrics missing'
+          foreach ($nativeStorage in @('0', '1')) {
+            $env:ATTO_NATIVE_MAILBOX = $nativeStorage
+            $storage = if ($nativeStorage -eq '1') { 'native_copy_on_dequeue' } else { 'managed_copy_on_send' }
+            $result = @(dotnet run --project verification/Ores.Net.AttoActorGcProbe/Ores.Net.AttoActorGcProbe.csproj -c Release -p:PublishAot=false)
+            if ($LASTEXITCODE -ne 0) { throw "managed actor failed with storage=$storage" }
+            $result | ForEach-Object { Write-Host $_ }
+            if ($result -notcontains 'PASS ATTO_ACTOR_NATIVEAOT_MAILBOX_GC_V1|source=actor-message-counter.atto|sampled=4096|fifo=TRUE|native_refund=TRUE|malformed_isolated=TRUE|guest_subset=checked_actor_increment') {
+              throw "managed actor witness missing with storage=$storage"
+            }
+            $pattern = '^ATTO_ACTOR_MAILBOX_GC_METRICS_V1\|mode=managed\|mailbox_storage=' + $storage + '\|warmup=256\|sampled=4096\|managed_total_allocated_bytes=[0-9]+\|managed_bytes_per_message=[0-9]+\|'
+            if (-not ($result | Where-Object { $_ -match $pattern })) { throw "missing managed GC evidence for $storage" }
+            Write-Host "ATTO_MANAGED_ACTOR_STORAGE_MODE_PASS|storage=$storage|source=actor-message-counter.atto"
           }
       - name: Publish and execute real NativeAOT compiled .atto actor
         shell: pwsh
@@ -105,14 +112,18 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'native actor AOT compilation failed' }
           $binary = Join-Path $output ("Ores.Net.AttoActorGcProbe" + $env:EXE_SUFFIX)
           if (-not (Test-Path $binary)) { throw 'native binary missing' }
-          $result = @(& $binary)
-          if ($LASTEXITCODE -ne 0) { throw 'native actor AOT execution failed' }
-          $result | ForEach-Object { Write-Host $_ }
-          if ($result -notcontains 'PASS ATTO_ACTOR_NATIVEAOT_MAILBOX_GC_V1|source=actor-message-counter.atto|sampled=4096|fifo=TRUE|native_refund=TRUE|malformed_isolated=TRUE|guest_subset=checked_actor_increment') {
-            throw 'native actor AOT positive witness missing'
-          }
-          if (-not ($result | Where-Object { $_ -match '^ATTO_ACTOR_MAILBOX_GC_METRICS_V1\|mode=nativeaot\|warmup=256\|sampled=4096\|managed_total_allocated_bytes=[0-9]+\|managed_bytes_per_message=[0-9]+\|' })) {
-            throw 'native actor allocation metrics missing'
+          foreach ($nativeStorage in @('0', '1')) {
+            $env:ATTO_NATIVE_MAILBOX = $nativeStorage
+            $storage = if ($nativeStorage -eq '1') { 'native_copy_on_dequeue' } else { 'managed_copy_on_send' }
+            $result = @(& $binary)
+            if ($LASTEXITCODE -ne 0) { throw "native actor AOT failed with storage=$storage" }
+            $result | ForEach-Object { Write-Host $_ }
+            if ($result -notcontains 'PASS ATTO_ACTOR_NATIVEAOT_MAILBOX_GC_V1|source=actor-message-counter.atto|sampled=4096|fifo=TRUE|native_refund=TRUE|malformed_isolated=TRUE|guest_subset=checked_actor_increment') {
+              throw "native actor AOT witness missing with storage=$storage"
+            }
+            $pattern = '^ATTO_ACTOR_MAILBOX_GC_METRICS_V1\|mode=nativeaot\|mailbox_storage=' + $storage + '\|warmup=256\|sampled=4096\|managed_total_allocated_bytes=[0-9]+\|managed_bytes_per_message=[0-9]+\|'
+            if (-not ($result | Where-Object { $_ -match $pattern })) { throw "missing native GC evidence for $storage" }
+            Write-Host "ATTO_NATIVEAOT_ACTOR_STORAGE_MODE_PASS|storage=$storage|source=actor-message-counter.atto"
           }
           $hash = (Get-FileHash $binary -Algorithm SHA256).Hash.ToLowerInvariant()
           Write-Host "ATTO_NATIVEAOT_ACTOR_PROOF|source_head=$(git rev-parse HEAD)|tree=$(git rev-parse 'HEAD^{tree}')|rid=$env:RID|binary_sha256=$hash|guest_subset=checked_actor_increment|general_actor_cil=NOT_IMPLEMENTED"
