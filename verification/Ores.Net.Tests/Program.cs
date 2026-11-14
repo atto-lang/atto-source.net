@@ -1160,6 +1160,7 @@ Require(OresStructuredParser.Parse(
     "commented telemetry syntax cannot affect NativeAOT admission");
 StructuredSourceTests.Run();
 StructuredCfgLoweringTests.Run();
+StructuredCfgLoweringTests.Run();
 AttoEqualityNativeAotCandidateTests.Run();
 StructuredStaticAbiTests.Run();
 NominalEnumV1GuestTests.Run(); // verified .atto enum source -> real CFG/CIL; native execution separately

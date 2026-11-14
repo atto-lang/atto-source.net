@@ -251,6 +251,7 @@ jobs:
         shell: pwsh
         run: ./verification/assert-windows-structured-cfg-native.ps1
       - name: Prove experimental structured source in real Windows Native AOT
+        shell: pwsh
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
           $folder = Join-Path $env:RUNNER_TEMP 'ores-structured-source'
@@ -294,6 +295,7 @@ jobs:
           }
 
       - name: Execute canonical .atto signed relational source in Windows Native AOT
+        shell: pwsh
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
           $source = (Resolve-Path 'examples/structured-signed-comparisons.atto').Path
@@ -333,6 +335,7 @@ jobs:
           }
           Write-Host 'WINDOWS_NET_NATIVE_AOT_SIGNED_RELATIONAL_ATTO_EXECUTED_42'
       - name: Execute typed source helper calls in real Windows Native AOT
+        shell: pwsh
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
           $source = (Resolve-Path 'examples/structured-functions.ores').Path
@@ -362,6 +365,7 @@ jobs:
           }
 
       - name: Execute typed statement-bodied helpers in real Windows Native AOT
+        shell: pwsh
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
           $source = (Resolve-Path 'examples/structured-function-bodies.ores').Path
@@ -391,6 +395,7 @@ jobs:
           }
 
       - name: Verify typed bindings in executed Windows Native AOT
+        shell: pwsh
         run: |
           $PSNativeCommandUseErrorActionPreference = $false
           $source = (Resolve-Path 'examples/structured-bindings42.ores').Path
@@ -422,6 +427,7 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or ($actual | Out-String).Trim() -cne '42') { throw "Native bindings result: $actual" }
 
       - name: Execute shared five-backend native.add source in real Windows Native AOT
+        shell: pwsh
         run: |
           # Source bytes are identical to the shared Java/LLVM native.add fixture.
           # A compiler "check" or a managed CIL emit is NOT the executed proof.
@@ -447,6 +453,7 @@ jobs:
           }
           Write-Host 'Native AOT source isolation proven: hello=14 and native.add=42'
       - name: Execute shared native.precedence in Windows Native AOT
+        shell: pwsh
         run: |
           # Requires real compiled/linked/native execution, not a source check.
           $source = 'contracts/v1/semantics/fixtures/precedence.ores'
@@ -481,6 +488,7 @@ jobs:
       # GitHub's successful job conclusion and nonempty step records remain
       # necessary corroborating evidence; this receipt is not a signature.
       - name: Emit exact-head Windows Native AOT run receipt
+        shell: pwsh
         env:
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
@@ -614,6 +622,7 @@ jobs:
         run: bash ./verification/assert-linux-structured-cfg-native.sh
 
       - name: Prove experimental structured source in real Linux Native AOT
+        shell: bash
         run: |
           set -euo pipefail
           mkdir -p artifacts/structured-native/linux-x64 artifacts/structured-generated
@@ -660,6 +669,7 @@ jobs:
           test ! -f artifacts/structured-native/linux-x64/OresGenerated.dll
 
       - name: Execute typed source helper calls in real Linux Native AOT
+        shell: bash
         run: |
           set -euo pipefail
           source_file='examples/structured-functions.ores'
@@ -686,6 +696,7 @@ jobs:
           test ! -f artifacts/structured-functions/linux-x64/OresGenerated.dll
 
       - name: Execute typed statement-bodied helpers in real Linux Native AOT
+        shell: bash
         run: |
           set -euo pipefail
           source_file='examples/structured-function-bodies.ores'
@@ -712,6 +723,7 @@ jobs:
           test ! -f artifacts/structured-function-bodies/linux-x64/OresGenerated.dll
 
       - name: Verify typed bindings in executed Linux Native AOT
+        shell: bash
         run: |
           set -euo pipefail
           compiler='artifacts/structured-native/compiler-linux-x64/oresnet'
