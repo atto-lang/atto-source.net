@@ -394,6 +394,14 @@ internal static class StructuredCfgLoweringTests
             47, "comma-local tail result from emitted CIL");
         Check("fnc main():int{if true then 1; else 0; fi return 99;}",
             99, "non-tail keyword values do not return early");
+        Check("fnc main():int{if false then 9223372036854775807+1 else 42 fi}",
+            42, "unselected keyword value must not execute overflowing arithmetic");
+        Check("fnc main():int{if true then 42 else 9223372036854775807+1 fi}",
+            42, "unselected keyword else must not execute overflowing arithmetic");
+        CheckOverflow("fnc main():int{if true then 9223372036854775807+1 else 1 fi return 42;}",
+            "non-tail keyword expression preserves checked arithmetic effects");
+        CheckOverflow("fnc main():int{if true then let int x=9223372036854775807, x+1 else 1 fi}",
+            "comma sequence must preserve checked overflow on selected arm");
         // Same byte-identical portable .atto fixture as Java #2648 and LLVM
         // #1554; evaluate compiler-owned CFG AND actual emitted CIL.
         const string logicalFixture = "contracts/logical-word-operators-v1/scalar-parity.atto";
