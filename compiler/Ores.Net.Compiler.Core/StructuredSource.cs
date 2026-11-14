@@ -434,6 +434,16 @@ public static class OresStructuredParser
                 throw new FormatException(
                     $"Reserved AttoLang operator '{spelling}'; use {named} at offset {offset}");
             }
+            else if (ch == '!' && index + 2 < source.Length &&
+                     source[index + 1] == 'e' && source[index + 2] == 'q' &&
+                     (index + 3 == source.Length ||
+                      !(Alpha(source[index + 3]) || Digit(source[index + 3]) ||
+                        source[index + 3] == '_')))
+            {
+                // Contiguous AttoLang !eq alias; never split !equation.
+                // Lower into the existing static typed CIL NotEqualI64 path.
+                index += 3;
+            }
             else if (ch == '=' && index + 1 < source.Length &&
                      source[index + 1] == '=') index += 2;
             // AttoLang's !eq is one indivisible binary token. It must not be

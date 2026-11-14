@@ -73,6 +73,28 @@ internal static class StructuredCfgLoweringTests
         throw new Exception("Invalid structured source accepted: " + label);
     }
 
+    // A generic FormatException is insufficient: malformed source can fail for
+    // unrelated reasons before reaching the typed equality operator under test.
+    private static void RejectWithDiagnostic(string source, string expected, string label)
+    {
+        try { _ = OresStructuredCfgLowering.Lower(source); }
+        catch (FormatException e)
+        {
+            if (e.Message.Contains(expected, StringComparison.Ordinal)) return;
+            throw new Exception("Wrong structured rejection for " + label +
+                ": expected '" + expected + "', got '" + e.Message + "'", e);
+        }
+        throw new Exception("Invalid structured source accepted: " + label);
+    }
+
+    private static void RejectAliasBoundary(string source, string spelling, string label)
+    {
+        int offset = source.LastIndexOf(spelling, StringComparison.Ordinal);
+        if (offset < 0 || source[offset] != '!')
+            throw new Exception("Missing operator boundary in fixture: " + label);
+        RejectWithDiagnostic(source, "Invalid character at offset " + offset, label);
+    }
+
     public static void Run()
     {
         const string sum = """
@@ -180,6 +202,24 @@ internal static class StructuredCfgLoweringTests
             "duplicate helper declarations");
         CheckOverflow("fnc inc(int x):int{return x+1;}fnc main():int{return inc(9223372036854775807);}",
             "typed call overflow preserves checked CIL");
+
+        // These are .atto files. Check() passes them through the real
+        // structured source parser, verified CFG, deterministic CIL emission
+        // and an independent CIL evaluator, never runtime source generation.
+        string operatorDir = Path.Combine(AppContext.BaseDirectory, "contracts", "erl-otp-aot");
+        Check(File.ReadAllText(Path.Combine(operatorDir, "neq-alias-true.atto")),
+            42, "AttoLang !eq true CIL comparison");
+        Check(File.ReadAllText(Path.Combine(operatorDir, "neq-alias-false.atto")),
+            42, "AttoLang !eq false CIL comparison");
+        RejectAliasBoundary(
+            File.ReadAllText(Path.Combine(operatorDir, "neq-alias-split.atto")),
+            "! eq", "spaces must not turn ! eq into != or !eq");
+        RejectWithDiagnostic(
+            File.ReadAllText(Path.Combine(operatorDir, "neq-alias-mixed.atto")),
+            "Equality requires int operands", "no implicit bool-to-int equality");
+        RejectAliasBoundary(
+            File.ReadAllText(Path.Combine(operatorDir, "neq-alias-prefix.atto")),
+            "!equation", "!equation must not tokenize as !eq plus suffix");
 
         Check("fnc main():int{if 3 neq 4{return 42;}else{return 0;}}",
             42, "canonical neq true comparison");
