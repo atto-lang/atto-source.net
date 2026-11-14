@@ -9,12 +9,27 @@ namespace Ores.Net.Compiler;
 // Typed emit values must originate from an actual receive-body checker,
 // including nested if/loop paths; an input type is NEVER an output inference.
 // There is no JavaScript/CLR scalar-call substitute for mailbox forwarding.
-public sealed record ActorEmitStageV3(
-    string InstanceId,
-    string ActorType,
-    string ReceiveType,
-    IReadOnlyList<string> EmitTypes,
-    bool Supervisor = false);
+public sealed record ActorEmitStageV3
+{
+    public string InstanceId { get; }
+    public string ActorType { get; }
+    public string ReceiveType { get; }
+    public IReadOnlyList<string> EmitTypes { get; }
+    public bool Supervisor { get; }
+
+    public ActorEmitStageV3(string instanceId, string actorType, string receiveType,
+        IEnumerable<string> emitTypes, bool supervisor = false)
+    {
+        InstanceId = instanceId;
+        ActorType = actorType;
+        ReceiveType = receiveType;
+        // Freeze all compiler-provided typed observations before any routing
+        // validation. Never retain a mutable list from the parser/type checker.
+        EmitTypes = Array.AsReadOnly((emitTypes ??
+            throw new ArgumentNullException(nameof(emitTypes))).ToArray());
+        Supervisor = supervisor;
+    }
+}
 
 public sealed record ActorEmitLinkV3(string Source, string Target, string PayloadType);
 
