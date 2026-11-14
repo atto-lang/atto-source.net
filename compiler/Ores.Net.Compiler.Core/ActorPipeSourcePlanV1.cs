@@ -258,14 +258,19 @@ public static partial class OresStructuredParser
             // Typed scalar handler composition is a valuable independent
             // CIL oracle, but does NOT allocate actors or deliver mail.
             var scalarMethods = new System.Text.StringBuilder();
+            var emittedHandlerNames = new HashSet<string>(StringComparer.Ordinal);
             string scalarResult = message.ToString(CultureInfo.InvariantCulture);
             foreach (var stage in stages)
             {
                 ActorHandler handler = _actors[stage.ActorType];
-                scalarMethods.Append("fnc ").Append(handler.Method).Append('(')
-                    .Append(handler.Input).Append(' ').Append(handler.Parameter)
-                    .Append("):").Append(handler.Output).Append(' ')
-                    .Append(handler.Body).Append('\n');
+                // Multiple actor *instances* of the same nominal type share
+                // one typed helper definition in this scalar CIL oracle.
+                // The invocation still occurs once for EVERY owned stage.
+                if (emittedHandlerNames.Add(handler.Method))
+                    scalarMethods.Append("fnc ").Append(handler.Method).Append('(')
+                        .Append(handler.Input).Append(' ').Append(handler.Parameter)
+                        .Append("):").Append(handler.Output).Append(' ')
+                        .Append(handler.Body).Append('\n');
                 scalarResult = handler.Method + "(" + scalarResult + ")";
             }
             string scalar = scalarMethods.ToString() +
