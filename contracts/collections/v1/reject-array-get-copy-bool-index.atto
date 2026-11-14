@@ -1,0 +1,5 @@
+// A checked get_copy must accept an int index only.
+pub fnc main():int {
+  val Array<int> values = Array.of(42);
+  return values.get_copy(true).unwrap_or(0);
+}

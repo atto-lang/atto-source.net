@@ -65,6 +65,17 @@ internal static class FixedArrayOptionCompilerTests
         throw new Exception("Unverified mutable/unsafe array source admitted: " + label);
     }
 
+    private static void DenyDiagnostic(string source, string diagnostic)
+    {
+        try { _ = OresStructuredCfgLowering.LowerModule(source); }
+        catch (FormatException error) when
+            (error.Message.Contains(diagnostic, StringComparison.Ordinal))
+        { return; }
+        throw new Exception(
+            "Array<int> get_copy must reject with compiler-owned diagnostic: " +
+            diagnostic);
+    }
+
     private static CfgFunction Forge(CfgInstruction probe)
     {
         return new CfgFunction("main", IrValueType.I64, "entry",
@@ -90,6 +101,22 @@ internal static class FixedArrayOptionCompilerTests
         var positives = new (string Name, string Source, long Expected)[]
         {
             ("single", "fnc main():int{val Array<int> a=Array.of(42);return a.get(0).unwrap_or(0);}", 42),
+            ("copy-first", "fnc main():int{val Array<int> a=Array.of(42);return a.get_copy(0).unwrap_or(0);}", 42),
+            ("copy-zero-present", "fnc main():int{val Array<int> a=Array.of(0);if a.get_copy(0).is_some(){return 42;}return 0;}", 42),
+            ("copy-empty", "fnc main():int{val Array<int> a=Array.of();return a.get_copy(0).unwrap_or(42);}", 42),
+            ("copy-negative-index", "fnc main():int{val Array<int> a=Array.of(11);return a.get_copy(-1).unwrap_or(42);}", 42),
+            ("copy-huge-index", "fnc main():int{val Array<int> a=Array.of(11);return a.get_copy(9223372036854775807).unwrap_or(42);}", 42),
+            ("copy-min-index", "fnc main():int{val Array<int> a=Array.of(11);return a.get_copy(-9223372036854775808).unwrap_or(42);}", 42),
+            ("copy-negative-high-bit", "fnc main():int{val Array<int> a=Array.of(11);return a.get_copy(-2147483649).unwrap_or(42);}", 42),
+            ("copy-equal-to-length-eight", "fnc main():int{val Array<int> a=Array.of(0,1,2,3,4,5,6,7);return a.get_copy(8).unwrap_or(42);}", 42),
+            ("copy-last-element-eight", "fnc main():int{val Array<int> a=Array.of(0,1,2,3,4,5,6,42);return a.get_copy(7).unwrap_or(0);}", 42),
+            ("copy-min-payload", "fnc main():int{val Array<int> a=Array.of(-9223372036854775808);return a.get_copy(0).unwrap_or(0);}", long.MinValue),
+            ("copy-max-payload", "fnc main():int{val Array<int> a=Array.of(9223372036854775807);return a.get_copy(0).unwrap_or(0);}", long.MaxValue),
+            ("copy-computed-index", "fnc main():int{val Array<int> a=Array.of(11,21,42);return a.get_copy(1+1).unwrap_or(0);}", 42),
+            ("copy-option-local", "fnc main():int{val Array<int> a=Array.of(42);val Option<int> snapshot=a.get_copy(0);return snapshot.unwrap_or(0);}", 42),
+            ("copy-and-get-agree", "fnc main():int{val Array<int> a=Array.of(7);return a.get_copy(0).unwrap_or(0)-a.get(0).unwrap_or(0)+42;}", 42),
+            ("copy-inline", "fnc main():int{return Array.of(42).get_copy(0).unwrap_or(0);}", 42),
+            ("copy-empty-local", "fnc main():int{val Array<int> a=Array.of();val Option<int> r=a.get_copy(0);if r.is_some(){return 0;}return 42;}", 42),
             ("second", "fnc main():int{val Array<int> a=Array.of(0,42);return a.get(1).unwrap_or(0);}", 42),
             ("empty", "fnc main():int{val Array<int> a=Array.of();return a.get(0).unwrap_or(42);}", 42),
             ("negative-index", "fnc main():int{val Array<int> a=Array.of(5);return a.get(-1).unwrap_or(42);}", 42),
@@ -125,6 +152,14 @@ internal static class FixedArrayOptionCompilerTests
             ("const-array", "fnc main():int{const Array<int> a=Array.of(1);return 42;}"),
             ("array-direct-return", "fnc main():int{return Array.of(1);}"),
             ("index-not-int", "fnc main():int{val Array<int> a=Array.of(42);return a.get(true).unwrap_or(0);}"),
+            ("copy-index-not-int", "fnc main():int{val Array<int> a=Array.of(42);return a.get_copy(true).unwrap_or(0);}"),
+            ("copy-index-no-args", "fnc main():int{val Array<int> a=Array.of(42);return a.get_copy().unwrap_or(0);}"),
+            ("copy-index-extra-args", "fnc main():int{val Array<int> a=Array.of(42);return a.get_copy(0,1).unwrap_or(0);}"),
+            ("copy-implicit-option-to-int", "fnc main():int{val Array<int> a=Array.of(42);return a.get_copy(0);}"),
+            ("copy-no-mutation", "fnc main():int{val Array<int> a=Array.of(42);a.set(0,9);return a.get_copy(0).unwrap_or(0);}"),
+            ("copy-no-unsafe-brackets", "fnc main():int{val Array<int> a=Array.of(42);return a[0]+a.get_copy(0).unwrap_or(0);}"),
+            ("copy-no-unknown-method", "fnc main():int{val Array<int> a=Array.of(42);return a.get_copy_unchecked(0).unwrap_or(0);}"),
+            ("copy-no-map", "fnc main():int{val Map<int,int> m=Map.of();return m.get_copy(0).unwrap_or(0);}"),
             ("index-no-args", "fnc main():int{val Array<int> a=Array.of(42);return a.get().unwrap_or(0);}"),
             ("index-extra-args", "fnc main():int{val Array<int> a=Array.of(42);return a.get(0,1).unwrap_or(0);}"),
             ("unchecked-index", "fnc main():int{val Array<int> a=Array.of(42);return a[0];}"),
@@ -142,6 +177,9 @@ internal static class FixedArrayOptionCompilerTests
             ("bad-index-placeholder", "fnc main():int{val Array<int> a=Array.of(42);return a.get(None).unwrap_or(0);}")
         };
         foreach (var (name, text) in negatives) Deny(text, name);
+        DenyDiagnostic(
+            "fnc main():int{val Array<int> a=Array.of(42);return a.get_copy(true).unwrap_or(0);}",
+            "Array<int>.get_copy index must be int");
 
         var valid = OresCfgVerifier.Verify(Forge(new CfgInstruction(2,
             CfgOpcode.ArrayIndexValidI64, IrValueType.Bool, Left: 0, I64Constant: 8)));
