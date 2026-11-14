@@ -253,6 +253,9 @@ public sealed class ActorRuntime : IDisposable
         internal Action DispatchAction { get; }
         internal int Scheduled;
         internal bool Stopping;
+        // A faulted turn must never be reported as a clean actor STOP.
+        // Set under Gate before finalization; no guest exception is retained.
+        internal bool Faulted;
         internal int Finalized;
         internal TaskCompletionSource Terminated { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -505,6 +508,7 @@ public sealed class ActorRuntime : IDisposable
                         // exceptional path or allow repeated failed scheduling.
                         CryptographicOperations.ZeroMemory(payload);
                         Interlocked.Increment(ref _faultedTurns);
+                        cell.Faulted = true;
                         MarkStoppingLocked(cell);
                         break;
                     }
@@ -537,7 +541,10 @@ public sealed class ActorRuntime : IDisposable
                 {
                     Interlocked.Increment(ref _faultedTurns);
                     lock (cell.Gate)
+                    {
+                        cell.Faulted = true;
                         MarkStoppingLocked(cell);
+                    }
                 }
                 finally
                 {
@@ -568,12 +575,14 @@ public sealed class ActorRuntime : IDisposable
                         {
                             if (!TryScheduleLocked(cell))
                             {
+                                cell.Faulted = true;
                                 MarkStoppingLocked(cell);
                                 finalize = true;
                             }
                         }
                         catch
                         {
+                            cell.Faulted = true;
                             MarkStoppingLocked(cell);
                             finalize = true;
                         }
@@ -617,7 +626,14 @@ public sealed class ActorRuntime : IDisposable
                 ReferenceEquals(current, cell))
                 _actors.Remove(cell.Reference.Id);
         }
-        cell.Terminated.TrySetResult();
+        // The observer capability is a terminal *outcome*, not just a
+        // physical-retirement notification. Do not retain or expose a
+        // thrown guest exception (which could capture actor-private data).
+        if (cell.Faulted)
+            cell.Terminated.TrySetException(new InvalidOperationException(
+                "Actor terminated after an unhandled fault"));
+        else
+            cell.Terminated.TrySetResult();
     }
 
     private void EnsureOpenLocked()
