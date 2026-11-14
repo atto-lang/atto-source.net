@@ -1,0 +1,7 @@
+// Real native LLVM phase-one guest: trap of pure checked i64 is Some(int).
+// Compiler-generated LLVM IR must be linked and run at Clang -O0 and -O2.
+// This does NOT implement ordinary throw catching or nested Result.
+pub fnc main(): int {
+  val Option<int> wrapped = trap (40 + 2);
+  return wrapped.unwrap_or(0);
+}
