@@ -57,6 +57,10 @@ public static partial class OresParser
             {
                 if (braces != 0)
                     throw new FormatException($"EXPORT_SCOPE: exports must be file-level at offset {token.Offset}");
+                // Legacy source-only export syntax remains in the standalone
+                // grammar adapter; compiler admission requires canonical pub.
+                if (i + 1 >= tokens.Count || tokens[i + 1].Text != "pub")
+                    throw new FormatException($"EXPORT_PUB_REQUIRED: use 'export pub' at offset {token.Offset}");
                 int j = i + 1;
                 while (j < tokens.Count && tokens[j].Text is not ("" or ";")) j++;
                 if (j >= tokens.Count || tokens[j].Text != ";")
