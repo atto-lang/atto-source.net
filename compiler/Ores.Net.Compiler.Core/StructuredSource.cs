@@ -940,7 +940,7 @@ public static partial class OresStructuredParser
                     catch (OverflowException)
                     {
                         throw new FormatException(
-                            $"Compile-time const overflow at offset {initializer.Offset}");
+                            $"E_CONST_OVERFLOW: compile-time const overflow at offset {initializer.Offset}");
                     }
                     initializer = type == IrValueType.Bool
                         ? new StructuredBool(initializer.Offset, constantValue.Value != 0)
