@@ -1,0 +1,7 @@
+// Closed-world NativeAOT .NET host API import, not general CLR reflection.
+// Exact public signature pinned by compiler: System.Math.Abs(Int64) -> Int64.
+import dotnet "System.Math" as Math;
+
+pub fnc main() -> int {
+    return Math.Abs(-42);
+}
