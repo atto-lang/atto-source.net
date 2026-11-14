@@ -1,0 +1,38 @@
+// AttoLang trap semantic fixture: Java/Graal must really compile and execute.
+// Expected guest return: int 7. Native LLVM and .NET must not claim parity
+// until this identical source runs with equivalent observable behavior.
+fnc checked_id(int id): Result<int, String> {
+  if id < 0 then
+    return Err("id must be nonnegative");
+  fi
+  return Ok(id);
+}
+
+define class Animal as
+end
+define class Dog extends Animal as
+end
+define class Cat extends Animal as
+end
+
+fnc cast_dog(Animal animal): Dog {
+  return animal as Dog;
+}
+
+pub fnc main(): int {
+  val Option<Result<int, String>> success = trap checked_id(5);
+  val Option<Result<int, String>> invalid = trap checked_id(-1);
+  if success.is_none(); then return 101; fi
+  if invalid.is_none(); then return 102; fi
+
+  val Result<int, String> first = success.unwrap();
+  val Result<int, String> second = invalid.unwrap();
+  if first.is_err(); then return 103; fi
+  if second.is_ok(); then return 104; fi
+
+  // A failing checked cast raises an ordinary recoverable guest error.
+  val Option<Dog> ordinary_failure = trap cast_dog(new Cat());
+  if ordinary_failure.is_some(); then return 105; fi
+
+  return first.unwrap() + 2;
+}
