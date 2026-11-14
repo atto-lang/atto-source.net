@@ -12,6 +12,17 @@ public sealed record NamedBitXor(Expression Left, Expression Right) : Expression
 public sealed record DotnetMathAbsI64(Expression Value) : Expression;
 public sealed record DotnetMathMaxI64(Expression Left, Expression Right) : Expression;
 
+// Shared by the scalar and structured frontends so unsupported mutable sharing
+// cannot be diagnosed differently before native CIL lowering exists.
+internal static class MutableShareAdmission
+{
+    internal const string DiagnosticPrefix =
+        "native rt mut share requires verified SharedMutex<T> capability, guarded lowering and allocation-domain proof in .NET Native AOT at offset ";
+
+    internal static FormatException Unsupported(int offset) =>
+        new(DiagnosticPrefix + offset);
+}
+
 public static partial class OresParser
 {
     private const int MaxDepth = 128;
@@ -166,6 +177,9 @@ public static partial class OresParser
         // so a post-lex token scan could not observe them.
         for (int i = 0; i + 1 < tokens.Count; i++)
         {
+            if (i + 2 < tokens.Count && tokens[i].Text == "rt" &&
+                tokens[i + 1].Text == "mut" && tokens[i + 2].Text == "share")
+                throw MutableShareAdmission.Unsupported(tokens[i].Offset);
             // Native AOT has no isolate-scoped ETS, local pg actor membership
             // or mailbox delivery lowering. Reject before OresIR/CIL emission.
             // The lexer has already stripped comments, so trivia is harmless.

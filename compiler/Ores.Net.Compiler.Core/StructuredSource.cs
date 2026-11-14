@@ -13,6 +13,12 @@ public sealed record StructuredBool(int At, bool Value) : StructuredExpr(At, IrV
 public sealed record StructuredSome(int At, StructuredExpr Payload)
     : StructuredExpr(At, IrValueType.OptionI64);
 public sealed record StructuredNone(int At) : StructuredExpr(At, IrValueType.OptionI64);
+// A bounded fixed-size array is lowered as immutable scalar SSA components.
+// Neither a CLR array nor actor-heap allocation is exposed to guest source.
+public sealed record StructuredFixedArray(int At, IReadOnlyList<StructuredExpr> Elements)
+    : StructuredExpr(At, IrValueType.FixedArrayI64);
+public sealed record StructuredArrayGet(int At, StructuredExpr Array, StructuredExpr Index)
+    : StructuredExpr(At, IrValueType.OptionI64);
 public sealed record StructuredOptionPresent(int At, StructuredExpr Option)
     : StructuredExpr(At, IrValueType.Bool);
 public sealed record StructuredOptionAbsent(int At, StructuredExpr Option)
@@ -87,6 +93,16 @@ public static partial class OresStructuredParser
     private const int MaxParameters = 16;
     private const int MaxLocalTypeFields = 64;
 
+    private static void RejectUnsupportedMutableSharing(IReadOnlyList<Token> tokens)
+    {
+        for (int i = 0; i + 2 < tokens.Count; i++)
+        {
+            if (tokens[i].Text == "rt" && tokens[i + 1].Text == "mut" &&
+                tokens[i + 2].Text == "share")
+                throw MutableShareAdmission.Unsupported(tokens[i].Offset);
+        }
+    }
+
     public static StructuredProgram Parse(string source)
         => ParseCore(source, null).Program;
 
@@ -135,6 +151,7 @@ public static partial class OresStructuredParser
             if (tokens.Count > MaxTokens) throw new FormatException("Structured token budget exceeded");
         } while (tokens[^1].Text.Length != 0);
         RejectActorPipe(tokens); // before any module graph/import resolution
+        RejectUnsupportedMutableSharing(tokens);
         return tokens;
     }
 
@@ -348,6 +365,7 @@ public static partial class OresStructuredParser
         }
 
         RejectActorPipe(tokens); // deny source graphs before CFG/CIL admission
+        RejectUnsupportedMutableSharing(tokens);
         if (firstNominalOffset >= 0)
         {
             RejectDuplicateNominalMethodSlots(tokens);
@@ -411,9 +429,11 @@ public static partial class OresStructuredParser
             // IR yet. The separate scalar OresParser admits only immediate,
             // pure literal Tuple.of(...)[const] projections. Do not silently
             // reinterpret an owning aggregate as an i64 helper invocation.
+            // Exception: fixed Array<int> literals have verified value-typed CFG/CIL
+            // lowering (val-only, i64 elements, Option<int> checked get).
             if (i + 2 < tokens.Count && tokens[i + 1].Text == "." &&
                 tokens[i + 2].Text == "of" &&
-                tokens[i].Text is "Tuple" or "Map" or "Array" or "List" or
+                tokens[i].Text is "Tuple" or "Map" or "List" or
                     "Vector" or "Set" or "Entry" or "Pair" or "Record")
                 throw new FormatException(
                     $"E_COLLECTION_FACTORY_UNSUPPORTED: {tokens[i].Text}.of requires typed product/collection CFG and NativeAOT CIL lowering at offset {tokens[i].Offset}");
@@ -1045,6 +1065,8 @@ public static partial class OresStructuredParser
                         // calls until exact typed method signatures exist.
                         if (type == IrValueType.OptionI64)
                             throw Error("E_OPTION_ABI_UNSUPPORTED: Option<int> method parameters need verified two-word ABI");
+                        if (type == IrValueType.FixedArrayI64)
+                            throw Error("E_ARRAY_ABI_UNSUPPORTED: fixed array parameters need verified scalar layout ABI");
                         string parameter = Name();
                         if (Current.Text is "?" or "=")
                             throw Error("E_OPTIONAL_FORMAL_ABI_UNSUPPORTED: name-level '?' and parameter defaults require checked full-arity binding");
@@ -1066,6 +1088,8 @@ public static partial class OresStructuredParser
                 IrValueType resultType = Take("void") ? IrValueType.Void : Type();
                 if (resultType == IrValueType.OptionI64)
                     throw Error("E_OPTION_ABI_UNSUPPORTED: Option<int> method results need verified two-word ABI");
+                if (resultType == IrValueType.FixedArrayI64)
+                    throw Error("E_ARRAY_ABI_UNSUPPORTED: fixed array method results need verified scalar layout ABI");
                 if (name == "main" && entry)
                 {
                     if (visible.ContainsKey(name)) throw Error("Entry main conflicts with an imported callable");
@@ -1256,7 +1280,7 @@ public static partial class OresStructuredParser
                     index++;
                     // Prefix forms admit const int x=e, const x:int=e, const x=e.
                     // A declaration's type is a check; it is not a cast.
-                    annotated = Current.Text is "int" or "bool" or "Option"; // type-first incl. closed Option<int>
+                    annotated = Current.Text is "int" or "bool" or "Option" or "Array"; // type-first incl. closed Option<int> and fixed Array<int>
                     if (annotated)
                     {
                         type = Type();
@@ -1282,6 +1306,8 @@ public static partial class OresStructuredParser
                     Require(initializer, type, "Local initializer has wrong type");
                 else
                     type = initializer.Type; // No i64 fallback for bool or unsupported types.
+                if (type == IrValueType.FixedArrayI64 && kind != StructuredBindingKind.Val)
+                    throw Error("E_ARRAY_IMMUTABLE_ONLY: fixed Array<int> requires val; mutable borrow, resize and const folding are unsupported");
                 long? constantValue = null;
                 // Any const Option<int> fails closed, not only scalar-shaped initializers.
                 if (kind == StructuredBindingKind.Const && type == IrValueType.OptionI64)
@@ -1367,6 +1393,14 @@ public static partial class OresStructuredParser
                     throw Error("E_OPTION_I64_ONLY: bool? requires Option<bool> lowering");
                 return IrValueType.Bool;
             }
+            if (Take("Array"))
+            {
+                Expect("<");
+                if (!Take("int"))
+                    throw Error("E_ARRAY_I64_ONLY: fixed arrays support only Array<int>");
+                Expect(">");
+                return IrValueType.FixedArrayI64;
+            }
             if (Take("Option"))
             {
                 Expect("<");
@@ -1392,7 +1426,7 @@ public static partial class OresStructuredParser
                     or "struct" or "record" or "class" or "actor"
                     or "module" or "import" or "from" or "as" or "end"
                     or "routine" or "async" or "isoactor" or "guard"
-                    or "Some" or "None" or "Option")
+                    or "Some" or "None" or "Option" or "Array")
                 throw new FormatException($"Invalid identifier at offset {at}");
             index++;
             return name;
@@ -1553,6 +1587,26 @@ public static partial class OresStructuredParser
                     left, right, IrValueType.Bool);
             }
             return left;
+        }
+        // Both get(index) and get_copy(index) perform a checked, Copy<int>
+        // lookup over the SAME immutable, fixed-size scalar SSA values.
+        // The signed index is evaluated once, and no address/loan escapes.
+        // This does not enable mutable Array<T>, general copy traits, or
+        // LLVM's full actor-owned dynamic collection semantics.
+        private StructuredExpr ArrayPostfix(StructuredExpr array, int depth)
+        {
+            if (array.Type != IrValueType.FixedArrayI64 || !Take("."))
+                return array;
+            int at = Current.Offset;
+            string operation = Current.Text;
+            if (!Take("get") && !Take("get_copy"))
+                throw Error("E_ARRAY_METHOD_UNSUPPORTED: fixed Array<int> only supports get(int) or get_copy(int)");
+            Expect("(");
+            var atIndex = Expr(depth + 1);
+            Require(atIndex, IrValueType.I64,
+                $"Array<int>.{operation} index must be int");
+            Expect(")");
+            return OptionPostfix(new StructuredArrayGet(at, array, atIndex), depth);
         }
         private StructuredExpr Equal(int depth)
         {
@@ -1716,6 +1770,27 @@ public static partial class OresStructuredParser
                 return OptionPostfix(inner, depth);
             }
             int offset = Current.Offset;
+            if (Take("Array"))
+            {
+                Expect(".");
+                Expect("of");
+                Expect("(");
+                var elements = new List<StructuredExpr>();
+                if (Current.Text != ")")
+                {
+                    do
+                    {
+                        if (elements.Count >= OresCfgVerifier.MaxFixedArrayElements)
+                            throw Error("E_ARRAY_SIZE: fixed Array<int> exceeds admitted element budget");
+                        var item = Expr(depth + 1);
+                        Require(item, IrValueType.I64, "Array.of elements must be int");
+                        elements.Add(item);
+                    } while (Take(","));
+                }
+                Expect(")");
+                return ArrayPostfix(new StructuredFixedArray(
+                    offset, Array.AsReadOnly(elements.ToArray())), depth);
+            }
             if (Take("Some"))
             {
                 Expect("(");
@@ -1743,6 +1818,8 @@ public static partial class OresStructuredParser
             // linked module qualification or static method dispatch.
             if (localBinding && Lookup(name, offset).Type == IrValueType.OptionI64)
                 return OptionPostfix(new StructuredRead(offset, name, IrValueType.OptionI64), depth);
+            if (localBinding && Lookup(name, offset).Type == IrValueType.FixedArrayI64)
+                return ArrayPostfix(new StructuredRead(offset, name, IrValueType.FixedArrayI64), depth);
             if (linking is not null)
                 while (Take("."))
                 {

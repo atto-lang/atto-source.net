@@ -37,6 +37,19 @@ public static class CilEmitter
     // backend. Each SSA value has a typed i64 local slot, so shared subgraphs
     // and unused instructions have defined, non-exponential execution.
     public static void EmitLibrary(VerifiedIrFunction program, string outputFile)
+        => EmitVerifiedLibrary(program, outputFile, "Run");
+
+    // Distinct static ABI for the closed, experimental Task<int> root profile.
+    // The matching native host supplies the statically linked Task/Future entry
+    // shim; the compiled producer is ordinary verified i64 CIL, not interpreted.
+    public static void EmitTaskI64Library(VerifiedTaskI64Program program, string outputFile)
+    {
+        ArgumentNullException.ThrowIfNull(program);
+        EmitVerifiedLibrary(program.Producer, outputFile, "RunTaskI64Producer");
+    }
+
+    private static void EmitVerifiedLibrary(VerifiedIrFunction program, string outputFile,
+        string entryName)
     {
         ArgumentNullException.ThrowIfNull(program);
         ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
@@ -61,7 +74,7 @@ public static class CilEmitter
                 localVariablesSignature: localSignature,
                 attributes: MethodBodyAttributes.InitLocals);
             return (bodyOffset, methodCode, localsBlob);
-        }, hostCallIdentity: string.Join(";", program.Instructions
+        }, entryName, hostCallIdentity: string.Join(";", program.Instructions
             .Where(op => op.Opcode is IrOpcode.DotnetMathAbsI64 or IrOpcode.DotnetMathMaxI64)
             .Select(op => op.Opcode.ToString()).Distinct().Order(StringComparer.Ordinal)));
     }
@@ -163,6 +176,7 @@ public static class CilEmitter
     internal static void EmitLibraryCore(string outputFile,
         Func<MetadataBuilder, MethodBodyStreamEncoder,
             (int BodyOffset, BlobBuilder Code, BlobBuilder? Locals)> buildBody,
+        string entryName = "Run",
         string hostCallIdentity = "")
     {
         var ilStream = new BlobBuilder();
@@ -188,6 +202,11 @@ public static class CilEmitter
         contentHash.AppendData(ilStream.ToArray());
         if (localSignatureBlob is not null)
             contentHash.AppendData(localSignatureBlob.ToArray());
+        // Preserve established scalar IDs, but domain-separate the Task ABI:
+        // identical producer IL with a different entry symbol is not the same
+        // module and must not reuse a scalar module identity in build caches.
+        if (entryName != "Run")
+            contentHash.AppendData(System.Text.Encoding.UTF8.GetBytes("ores-task-abi-v1\0" + entryName));
         // MemberRef tokens are not sufficient to distinguish similarly shaped
         // CLR calls: e.g. changing Abs to another unary method can preserve
         // identical instruction bytes. MVID must cover imported method identity.
@@ -226,7 +245,7 @@ public static class CilEmitter
         var run = metadata.AddMethodDefinition(
             MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.HideBySig,
             MethodImplAttributes.IL,
-            metadata.GetOrAddString("Run"),
+            metadata.GetOrAddString(entryName),
             metadata.GetOrAddBlob(signature),
             bodyOffset,
             MetadataTokens.ParameterHandle(1));
