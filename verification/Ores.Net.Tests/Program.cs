@@ -482,6 +482,10 @@ BoundedDemandI64PortSelfTest.Run(); // host scalar adapter; NOT source Flow<T> o
 SelectableI64FutureSelfTest.Run();
 ActorDispatchDomainsSelfTest.Run();
 ActorRuntimeSelfTest.Run();
+ActorPubSubSelfTest.Run();
+ActorPubSubTurnAuthorityTests.Run();
+ActorPubSubByteQuotaTests.Run();
+ActorPubSubSourceAdmissionTests.Run();
 ActorPipeAdmissionTests.Run(); // compiler gate only; no executable actor guest yet
 NativeTraceContinuationV1SelfTest.Run(); // host-owned W3C scopes; not guest CIL instrumentation
 UniversalHotLoadV1SelfTest.Run();

@@ -213,6 +213,29 @@ public sealed class ActorRuntime : IDisposable
     [ThreadStatic]
     private static ActorRuntime? s_currentRuntime;
 
+    // ExecutionContext flows into Task.Run and other managed offloads,
+    // unlike ThreadStatic. Keep the actor-origin marker in captured tasks
+    // even after the physical turn returns. Such tasks must never acquire
+    // host/supervisor ActorRef pubsub authority by changing carrier threads.
+    // This is defense in depth, NOT an unforgeable guest capability: a trusted
+    // raw C# host handler can suppress ExecutionContext flow. Compiler guest
+    // lowering must use context-bound intrinsics, never these host overloads.
+    // A boolean sentinel cannot keep a retired ActorRuntime alive in a
+    // captured asynchronous ExecutionContext.
+    private static readonly AsyncLocal<bool> s_actorOrigin = new();
+
+    // The actor dispatcher is the physical guest authority boundary.
+    // A carrier must never call manager/host ActorRef pubsub APIs on behalf
+    // of an arbitrary actor; source lowering uses ActorContext-checked
+    // intrinsics that expire when the physical turn ends.
+    internal static void RequireHostPubSubAuthority(string operation)
+    {
+        if (s_currentRuntime is not null || s_actorOrigin.Value)
+            throw new System.Security.SecurityException(
+                "actor code cannot " + operation +
+                "; use a turn-scoped actor capability instead");
+    }
+
     private readonly object _gate = new();
     // A second Dispose caller must wait for worker joining and reclamation,
     // not merely observe the _closed admission flag and return prematurely.
@@ -221,6 +244,7 @@ public sealed class ActorRuntime : IDisposable
     private readonly ActorRuntimeOptions _options;
     private readonly ActorArenaBudget _nativeBudget;
     private readonly ActorDispatchDomains _domains;
+    private readonly ActorPubSub _pubSub;
 
     private ulong _nextActorId;
     private bool _closed;
@@ -270,7 +294,16 @@ public sealed class ActorRuntime : IDisposable
         _options = options;
         _nativeBudget = new ActorArenaBudget(options.NativeBudgetBytes);
         _domains = new ActorDispatchDomains(options.Dispatcher);
+        _pubSub = new ActorPubSub(
+            maxGroups: Math.Min(options.MaxActors, 4096),
+            maxGroupsPerActor: 64,
+            maxTopics: 4096,
+            // Shared ActorGroup admission quota is 64 per actor, matching
+            // the Java/Graal bounded cooperation contract.
+            maxSubscriptionsPerActor: 64);
     }
+
+    public ActorPubSub PubSub => _pubSub;
 
     public int LiveActors
     {
@@ -320,6 +353,15 @@ public sealed class ActorRuntime : IDisposable
                 var cell = new ActorCell(this, kind, mailbox, arena, handler,
                     stackBytes, _options.ActorMaxStackFrames);
                 _actors.Add(candidateId, cell);
+                try
+                {
+                    _pubSub.RegisterActor(cell.Reference, kind);
+                }
+                catch
+                {
+                    _actors.Remove(candidateId);
+                    throw;
+                }
                 _nextActorId = candidateId;
                 return cell.Reference;
             }
@@ -391,9 +433,9 @@ public sealed class ActorRuntime : IDisposable
 
     public void Dispose()
     {
-        if (ReferenceEquals(s_currentRuntime, this))
+        if (ReferenceEquals(s_currentRuntime, this) || s_actorOrigin.Value)
             throw new InvalidOperationException(
-                "ActorRuntime.Dispose cannot run from one of its actor carriers");
+                "ActorRuntime.Dispose cannot run from an actor carrier or actor-origin offload");
 
         // Hold across joins and final reclamation, not just the _closed check.
         lock (_disposeGate)
@@ -424,6 +466,8 @@ public sealed class ActorRuntime : IDisposable
             // All queued/running dispatch tokens have returned at this point.
             foreach (ActorCell cell in cells)
                 FinalizeCell(cell);
+
+            _pubSub.Close();
         }
     }
 
@@ -462,7 +506,9 @@ public sealed class ActorRuntime : IDisposable
     private void RunCell(ActorCell cell)
     {
         ActorRuntime? previous = s_currentRuntime;
+        bool previousOrigin = s_actorOrigin.Value;
         s_currentRuntime = this;
+        s_actorOrigin.Value = true;
         bool finalize = false;
 
         try
@@ -576,6 +622,7 @@ public sealed class ActorRuntime : IDisposable
                 // Even a failure during dispatch-token teardown must not
                 // poison a reusable carrier's thread-static runtime identity.
                 s_currentRuntime = previous;
+                s_actorOrigin.Value = previousOrigin;
             }
         }
     }
@@ -598,6 +645,7 @@ public sealed class ActorRuntime : IDisposable
         cell.Mailbox.Stop();
         cell.Arena.Retire();
         cell.Arena.TryReclaim();
+        _pubSub.RetireActor(cell.Reference);
 
         lock (_gate)
         {

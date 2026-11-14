@@ -135,6 +135,7 @@ public static class OresStructuredParser
     private static StructuredLinkedUnit ParseCore(string source, LinkedModuleContext? linking)
     {
         ValidateSourceInput(source);
+        ActorPubSubSourceAdmission.RejectUnsupported(source);
         // No structural match lowering or readonly shape metadata in scalar CIL yet.
         StructuralShapeAdmission.RejectUnsupportedPatterns(source);
         var lexer = new Lexer(source, linking is not null);
