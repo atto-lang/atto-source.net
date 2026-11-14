@@ -51,29 +51,9 @@ public static class OresParser
                 throw new FormatException("Token count exceeds bootstrap limit");
             if (token.Text.Length == 0) break;
         }
-        // Source actors are a semantic boundary, not an alternate spelling
-        // of scalar functions. Until the .NET compiler owns sealed state,
-        // handle_state loans and generation-fenced continuation frames, reject
-        // an actor declaration before scalar parsing can misdiagnose it as fnc.
-        // Forms with their own gates keep them: 'define virtual actor'
-        // (VIRTUAL_ACTOR_BACKEND_UNSUPPORTED) and 'define supervisor ...' (CONTROL).
-        for (int i = 0; i < tokens.Count; i++)
-        {
-            if (tokens[i].Text != "define")
-                continue;
-            int limit = Math.Min(tokens.Count, i + 5);
-            for (int j = i + 1; j < limit; j++)
-            {
-                if (tokens[j].Text is "virtual" or "supervisor")
-                    break;
-                if (tokens[j].Text == "actor")
-                    throw new FormatException(
-                        $"Source actor lowering requires sealed state/handle_state and " +
-                        $"scheduler-owned logical continuation frames at offset {tokens[j].Offset}");
-                if (tokens[j].Text is "class" or "enum" or "fnc" or "routine")
-                    break;
-            }
-        }
+        // Source actor declarations are rejected inside the lexer (see
+        // Lexer.SourceActorOffset), before later unlexable syntax such as
+        // `critical |s| -> ...` can surface as a generic character error.
         // Nested Future/Option wrappers are rejected inside the lexer (see
         // Lexer.NestedSameWrapper): this scalar lexer never emits '<' tokens,
         // so a post-lex token scan could not observe them.
@@ -188,6 +168,27 @@ public static class OresParser
             return i;
         }
 
+        // After 'define' (ending at i): offset of an 'actor' word among the next
+        // four modifier words, ignoring trivia; -1 if none. Forms with their own
+        // gates keep them: 'virtual' (VIRTUAL_ACTOR_BACKEND_UNSUPPORTED) and
+        // 'supervisor' (typed CONTROL); class/enum/fnc/routine end the scan.
+        private static int SourceActorOffset(string text, int i)
+        {
+            for (int n = 0; n < 4; n++)
+            {
+                i = SkipTrivia(text, i);
+                int start = i;
+                while (i < text.Length && (char.IsLetterOrDigit(text[i]) || text[i] == '_')) i++;
+                if (i == start) return -1;
+                switch (text[start..i])
+                {
+                    case "actor": return start;
+                    case "virtual" or "supervisor" or "class" or "enum" or "fnc" or "routine": return -1;
+                }
+            }
+            return -1;
+        }
+
         // True when `wrapper` (just read, ending at i) is followed by
         // '<' wrapper '<' -- e.g. Future<Future<...  -- ignoring trivia.
         private static bool NestedSameWrapper(string text, int i, string wrapper)
@@ -261,6 +262,14 @@ public static class OresParser
                     (text[_i] is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_'))
                     _i++;
                 var word = text[start.._i];
+                // Source actors are a semantic boundary, not an alternate spelling
+                // of scalar functions. Until the .NET compiler owns sealed state,
+                // handle_state loans and generation-fenced continuation frames,
+                // reject an actor declaration before it can be misparsed as fnc.
+                if (word == "define" && SourceActorOffset(text, _i) is int actorAt and >= 0)
+                    throw new FormatException(
+                        $"Source actor lowering requires sealed state/handle_state and " +
+                        $"scheduler-owned logical continuation frames at offset {actorAt}");
                 // G0: unsupported unsafe source must not become a normal
                 // identifier, callable, member or intrinsic in scalar CIL.
                 if (word == "unsafe")
