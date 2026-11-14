@@ -219,6 +219,32 @@ RejectDiagnostic(
 Require(OresParser.Parse("fnc main():int{return 1;} // any unknown ?") is Literal,
     "opaque-top and ternary tokens in comments remain lexically invisible");
 
+
+foreach (var wrapperCase in new[] {
+    (
+        "fnc main():int{ val nested: Future<Future<int>> = value; return 1; }",
+        "Nested Future remains nested; implicit Future flatten is forbidden"
+    ),
+    (
+        "fnc main():int{ val nested: Future<Future<Option<int>>> = value; return 1; }",
+        "Nested Future remains nested; implicit Future flatten is forbidden"
+    ),
+    (
+        "fnc main():int{ val nested: Option<Option<int>> = value; return 1; }",
+        "Nested Option remains nested; implicit Option flatten is forbidden"
+    ),
+    (
+        "fnc main():int{ val nested: Option<Option<Future<int>>> = value; return 1; }",
+        "Nested Option remains nested; implicit Option flatten is forbidden"
+    )
+})
+    RejectDiagnostic(
+        () => OresParser.Parse(wrapperCase.Item1),
+        wrapperCase.Item2,
+        "nested wrapper must fail closed without implicit canonicalization");
+Require(OresParser.Parse(
+    "fnc main():int{return 1;} // Future<Future<int>> Option<Option<int>>") is Literal,
+    "nested-wrapper tokens in comments remain lexically invisible");
 // Two-word runtime declaration kinds must never become scalar CIL or
 // unguarded native state. They are distinct from ordinary actor declarations.
 foreach (var (source, code) in new[] {
