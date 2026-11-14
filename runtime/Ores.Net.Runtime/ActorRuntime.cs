@@ -18,6 +18,14 @@ public sealed class ActorRuntimeOptions
     public int MailboxBytes { get; init; } = 4 * ActorMailbox.MaxMessageBytes;
     public int ActorPersistentBytes { get; init; } = 1024 * 1024;
     public int ActorScratchBytes { get; init; } = 64 * 1024;
+    // Opt-in non-realtime profile. Logical quotas remain fixed while physical
+    // native backing is charged and acquired on the first guest allocation.
+    // Eager/prefault deployment remains the default until native AOT gates run.
+    public bool DemandBackedActorHeaps { get; init; } = false;
+    // 0 chooses a bounded default (one quarter of the actor persistent arena,
+    // capped at 64 KiB). All frames share that actor's existing native budget.
+    public int ActorStackBytes { get; init; } = 0;
+    public int ActorMaxStackFrames { get; init; } = 256;
     public int ActorMaxAllocations { get; init; } = 4096;
     public int ActorMaxLifetimePins { get; init; } = 4096;
     public int ActorMaxReadLoans { get; init; } = 4096;
@@ -40,6 +48,10 @@ public sealed class ActorRuntimeOptions
             ActorScratchBytes > ActorArena.MaxArenaBytes ||
             ActorPersistentBytes > ActorArena.MaxArenaBytes - ActorScratchBytes)
             throw new ArgumentOutOfRangeException(nameof(ActorPersistentBytes));
+        if (ActorStackBytes < 0 || ActorStackBytes > ActorPersistentBytes)
+            throw new ArgumentOutOfRangeException(nameof(ActorStackBytes));
+        if (ActorMaxStackFrames <= 0 || ActorMaxStackFrames > 1024)
+            throw new ArgumentOutOfRangeException(nameof(ActorMaxStackFrames));
         if (ActorMaxAllocations <= 0 ||
             ActorMaxAllocations > ActorArena.MaxAllocationSlots)
             throw new ArgumentOutOfRangeException(nameof(ActorMaxAllocations));
@@ -69,18 +81,23 @@ public sealed class ActorContext
 {
     private readonly ActorArena _arena;
     private readonly ActorArenaTurn _turn;
+    private readonly ActorExecutionStack _stack;
 
     internal ActorContext(ActorRef self, ActorKind kind,
-        ActorArena arena, ActorArenaTurn turn)
+        ActorArena arena, ActorArenaTurn turn,
+        ActorExecutionContext execution)
     {
         Self = self;
         Kind = kind;
         _arena = arena;
         _turn = turn;
+        _stack = execution.Stack;
+        Execution = execution;
     }
 
     public ActorRef Self { get; }
     public ActorKind Kind { get; }
+    public ActorExecutionContext Execution { get; }
 
     // Host capability providers must enforce the same physical-turn authority
     // as actor memory access. A retained context is not a reusable credential.
@@ -116,6 +133,35 @@ public sealed class ActorContext
     public void ReadScratch(ActorScratchHandle handle, int offset,
         Span<byte> destination) =>
         _arena.ReadScratch(_turn, handle, offset, destination);
+
+    // Compiler-host logical activation frames: actor-owned native bytes, not
+    // CLR machine stacks. Frame capabilities are never serialized or exported.
+    public ActorStackFrameHandle PushStackFrame(int bytes, int alignment = 8) =>
+        _stack.Push(_turn, bytes, alignment);
+
+    public void ReadStackFrame(ActorStackFrameHandle frame, int offset,
+        Span<byte> destination) => _stack.Read(_turn, frame, offset, destination);
+
+    public void WriteStackFrame(ActorStackFrameHandle frame, int offset,
+        ReadOnlySpan<byte> source) => _stack.Write(_turn, frame, offset, source);
+
+    public void PopStackFrame(ActorStackFrameHandle frame) =>
+        _stack.Pop(_turn, frame);
+
+    // Internal compiler/runtime ABI authority: never expose sealed type
+    // descriptors as guest values or permit caller-provided raw tags to mint
+    // type authority on an already-issued activation.
+    internal void SealScalarFrame(ActorStackFrameHandle frame,
+        ReadOnlySpan<byte> declaredTypes, int blockCount) =>
+        _stack.SealScalarFrame(_turn, frame, declaredTypes, blockCount);
+
+    internal void ValidateScalarFrameHeader(
+        ActorStackFrameHandle frame, int slots, int blocks) =>
+        _stack.ValidateScalarHeader(_turn, frame, slots, blocks);
+
+    internal void ValidateScalarFrameSlot(
+        ActorStackFrameHandle frame, int slot, byte kind) =>
+        _stack.ValidateScalarSlot(_turn, frame, slot, kind);
 
     public ActorShardColumns CreateShard(int rows, int fields,
         ActorDataLayout layout, int lanes = 1) =>
@@ -210,12 +256,14 @@ public sealed class ActorRuntime : IDisposable
         private readonly ActorRuntime _owner;
 
         internal ActorCell(ActorRuntime owner, ActorKind kind,
-            ActorMailbox mailbox, ActorArena arena, ActorMessageHandler handler)
+            ActorMailbox mailbox, ActorArena arena, ActorMessageHandler handler,
+            int stackBytes, int maxStackFrames)
         {
             _owner = owner;
             Kind = kind;
             Mailbox = mailbox;
             Arena = arena;
+            FrameStorage = new ActorFrameStorage(arena, stackBytes, maxStackFrames);
             Handler = handler;
             Reference = mailbox.CurrentRef;
             DispatchAction = Dispatch;
@@ -225,6 +273,8 @@ public sealed class ActorRuntime : IDisposable
         internal ActorKind Kind { get; }
         internal ActorMailbox Mailbox { get; }
         internal ActorArena Arena { get; }
+        internal ActorFrameStorage FrameStorage { get; }
+        internal ulong NextExecutionSequence;
         internal ActorMessageHandler Handler { get; }
         internal ActorRef Reference { get; }
         internal Action DispatchAction { get; }
@@ -294,9 +344,14 @@ public sealed class ActorRuntime : IDisposable
                     _options.ActorMaxAllocations,
                     _options.ActorMaxLifetimePins,
                     _options.ActorMaxReadLoans,
-                    _nativeBudget);
+                    _nativeBudget,
+                    _options.DemandBackedActorHeaps);
 
-                var cell = new ActorCell(this, kind, mailbox, arena, handler);
+                int stackBytes = _options.ActorStackBytes == 0
+                    ? Math.Min(64 * 1024, Math.Max(1, _options.ActorPersistentBytes / 4))
+                    : _options.ActorStackBytes;
+                var cell = new ActorCell(this, kind, mailbox, arena, handler,
+                    stackBytes, _options.ActorMaxStackFrames);
                 _actors.Add(candidateId, cell);
                 try
                 {
@@ -360,7 +415,17 @@ public sealed class ActorRuntime : IDisposable
             FinalizeCell(cell);
     }
 
-    internal Task ObserveTermination(ActorRef actor) => Lookup(actor).Terminated.Task;
+    internal Task ObserveTermination(ActorRef actor)
+    {
+        ActorCell cell = Lookup(actor);
+        // Numeric IDs are lookup keys, not observation authority. The immutable
+        // generation + mailbox nonce must match the actual runtime-minted ref.
+        // Do not use Mailbox.Authorizes here: legitimate observers may wait
+        // after Stop has closed admission but before physical finalization.
+        if (actor != cell.Reference)
+            throw new InvalidOperationException("Actor reference is stale");
+        return cell.Terminated.Task;
+    }
 
     // Statically bound capability-provider dispatch. This is the existing
     // bounded mailbox admission, not a socket send or asynchronous offload.
@@ -484,9 +549,21 @@ public sealed class ActorRuntime : IDisposable
                 {
                     using (turn)
                     {
+                        if (cell.NextExecutionSequence == ulong.MaxValue)
+                            throw new InvalidOperationException("Actor invocation identity exhausted");
+                        var execution = new ActorExecutionContext(
+                            cell.Reference, ++cell.NextExecutionSequence, cell.FrameStorage);
+                        execution.Stack.Begin(turn);
                         var context = new ActorContext(
-                            cell.Reference, cell.Kind, cell.Arena, turn);
-                        cell.Handler(context, payload);
+                            cell.Reference, cell.Kind, cell.Arena, turn, execution);
+                        try
+                        {
+                            cell.Handler(context, payload);
+                            // Swallowing a quota fault cannot turn this receive
+                            // into successful completion of its actor generation.
+                            execution.Stack.ValidateSynchronousTurnExit(turn);
+                        }
+                        finally { execution.Stack.Complete(turn); }
                     }
                     succeeded = true;
                 }

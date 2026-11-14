@@ -1,0 +1,70 @@
+name: Rate-limit .NET Native AOT signed scalar guest
+on:
+  pull_request:
+    paths:
+      - 'contracts/rate-limit/**'
+      - '.github/workflows/rate-limit-native-aot.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'contracts/rate-limit/**'
+      - '.github/workflows/rate-limit-native-aot.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-rate-limit-scalar:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Check exact candidate and byte-identical Oreslang module
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git hash-object contracts/rate-limit/backpressure.ores)" = 33dd3b59153d9d0e354d20eb5dc381d64fab4269
+          test -z "$(git ls-files --others --exclude-standard)"
+          echo "RATE_LIMIT_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install Native AOT toolchain
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev binutils file
+      - name: Execute real source-to-Native-AOT application
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/publish-linux.sh contracts/rate-limit/weighted-scalar.ores artifacts/rate-limit-scalar
+          compiler=artifacts/compiler/linux-x64/oresnet
+          guest=artifacts/rate-limit-scalar/linux-x64/oreslang-app
+          bash verification/assert-linux-native-release.sh "$compiler"
+          bash verification/assert-linux-native-release.sh "$guest"
+          test "$("$guest")" = 25
+          echo RATE_LIMIT_NET_NATIVE_AOT_SIGNED_SCALAR_EXECUTED_25
+      - name: Fail closed on unsupported full module and arithmetic overflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          compiler=artifacts/compiler/linux-x64/oresnet
+          for source in contracts/rate-limit/backpressure.ores contracts/rate-limit/reject-overflow.ores; do
+            denied=artifacts/rejected-rate-limit/$(basename "$source").dll
+            mkdir -p "$(dirname "$denied")"
+            rm -f -- "$denied"
+            if "$compiler" check "$source"; then
+              echo "shipping scalar compiler improperly admitted $source" >&2
+              exit 1
+            fi
+            if "$compiler" compile "$source" --out "$denied"; then
+              echo "shipping scalar compiler emitted forbidden CIL from $source" >&2
+              exit 1
+            fi
+            test ! -e "$denied"
+          done
+          test "$(artifacts/rate-limit-scalar/linux-x64/oreslang-app)" = 25
+          echo RATE_LIMIT_NET_UNSUPPORTED_MODULE_AND_OVERFLOW_REJECTED

@@ -15,7 +15,13 @@ public enum CfgOpcode
     LessThanI64,
     Argument,
     Call,
-    NotEqualI64
+    NotEqualI64,
+    GreaterThanI64,
+    LessThanOrEqualI64,
+    GreaterThanOrEqualI64,
+    EqualBool,
+    NotEqualBool,
+    XorBool
 }
 
 public readonly record struct CfgParameter(int Id, IrValueType Type);
@@ -336,8 +342,13 @@ public static class OresCfgVerifier
                     case CfgOpcode.EqualI64:
                     case CfgOpcode.NotEqualI64:
                     case CfgOpcode.LessThanI64:
+                    case CfgOpcode.GreaterThanI64:
+                    case CfgOpcode.LessThanOrEqualI64:
+                    case CfgOpcode.GreaterThanOrEqualI64:
                         RequireType(op.Type,
-                            op.Opcode is CfgOpcode.EqualI64 or CfgOpcode.NotEqualI64 or CfgOpcode.LessThanI64
+                            op.Opcode is CfgOpcode.EqualI64 or CfgOpcode.NotEqualI64 or
+                                CfgOpcode.LessThanI64 or CfgOpcode.GreaterThanI64 or
+                                CfgOpcode.LessThanOrEqualI64 or CfgOpcode.GreaterThanOrEqualI64
                                 ? IrValueType.Bool : IrValueType.I64);
                         if (op.Left is null || op.Right is null ||
                             op.I64Constant is not null || op.BoolConstant is not null ||
@@ -345,6 +356,17 @@ public static class OresCfgVerifier
                             throw new FormatException("Malformed CFG binary operation");
                         Use(i, opIndex, op.Left.Value, IrValueType.I64);
                         Use(i, opIndex, op.Right.Value, IrValueType.I64);
+                        break;
+                    case CfgOpcode.EqualBool:
+                    case CfgOpcode.NotEqualBool:
+                    case CfgOpcode.XorBool:
+                        RequireType(op.Type, IrValueType.Bool);
+                        if (op.Left is null || op.Right is null ||
+                            op.I64Constant is not null || op.BoolConstant is not null ||
+                            op.Target is not null || op.Arguments is not null)
+                            throw new FormatException("Malformed CFG bool operation");
+                        Use(i, opIndex, op.Left.Value, IrValueType.Bool);
+                        Use(i, opIndex, op.Right.Value, IrValueType.Bool);
                         break;
                     default:
                         throw new FormatException("Unknown CFG opcode");

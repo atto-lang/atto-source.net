@@ -3,13 +3,44 @@
     <OutputType>Exe</OutputType>
   </PropertyGroup>
   <ItemGroup>
+    <None Include="../elm-composition-rejections.json" Link="elm-composition-rejections.json"
+          CopyToOutputDirectory="PreserveNewest" />
     <None Include="../value-boundary-rejections.json" Link="value-boundary-rejections.json"
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/v2/cpu-gpu-task-unsupported-v2.json" Link="cpu-gpu-task-unsupported-v2.json"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/durable-m0/v1/checkout.atto"
+          Link="contracts/durable-m0/v1/checkout.atto"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/durable-m0/v1/manifest-v1.json"
+          Link="contracts/durable-m0/v1/manifest-v1.json"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/durable-m0/v1/manifest-v1.sha256"
+          Link="contracts/durable-m0/v1/manifest-v1.sha256"
+          CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/v1/source-i64/portable-i64.v1.json" Link="portable-i64.v1.json"
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../examples/structured-bindings42.ores" Link="structured-bindings42.ores"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../tests/fixtures/actor-pipe-two-stage.atto"
+          Link="actor-pipe-two-stage.atto" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/logical-word-operators-v1/**/*"
+          Link="contracts/logical-word-operators-v1/%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../examples/structured-signed-comparisons.atto"
+          Link="structured-signed-comparisons.atto"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../tests/scalar-cast-inference-five-backend.ores" Link="scalar-cast-inference-five-backend.ores"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/v1/portable-checked-cast-positive-v2.ores"
+          Link="portable-checked-cast-positive-v2.ores" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/v1/portable-checked-cast-negative-v2.ores"
+          Link="portable-checked-cast-negative-v2.ores" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/attoxp-scalar-v1/**/*"
+          Link="contracts/attoxp-scalar-v1/%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/erl-otp-aot/*.atto"
+          Link="contracts/erl-otp-aot/%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/scalar/v1/**/*"
           Link="contracts/scalar/v1/%(RecursiveDir)%(Filename)%(Extension)"
@@ -19,6 +50,16 @@
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/v1/actor-pubsub-v1-cases.json"
           Link="contracts/v1/actor-pubsub-v1-cases.json"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../tests/parity/45-cast-int-literal.ores" Link="parity/45-cast-int-literal.ores"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../tests/parity/46-chained-cast-int.ores" Link="parity/46-chained-cast-int.ores"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../tests/parity/47-grouped-cast-multiply.ores" Link="parity/47-grouped-cast-multiply.ores"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../tests/parity/48-readonly-local-cast.ores" Link="parity/48-readonly-local-cast.ores"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../tests/parity/49-const-typed-identity.ores" Link="parity/49-const-typed-identity.ores"
           CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="../../compiler/Ores.Net.Compiler.Core/Ores.Net.Compiler.Core.csproj" />
     <ProjectReference Include="../../runtime/Ores.Net.Runtime/Ores.Net.Runtime.csproj" />
