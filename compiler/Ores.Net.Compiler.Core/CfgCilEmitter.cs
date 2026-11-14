@@ -13,9 +13,26 @@ internal static class CfgCilEmitter
     {
         ArgumentNullException.ThrowIfNull(graph);
         ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
-
+        if (graph.Parameters.Count != 0 || graph.ResultType != IrValueType.I64)
+            throw new FormatException("Standalone CFG CIL requires parameterless i64 Run entry");
         CilEmitter.EmitLibraryCore(outputFile, (metadata, bodies) =>
-        {
+            WriteMethod(graph, metadata, bodies, null));
+    }
+
+    public static void EmitLibrary(VerifiedCfgModule module, string outputFile)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+        ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
+        CilEmitter.EmitLibraryModuleCore(outputFile, module,
+            (graph, metadata, bodies, handles) =>
+                WriteMethod(graph, metadata, bodies, handles));
+    }
+
+    private static (int BodyOffset, BlobBuilder Code, BlobBuilder? Locals) WriteMethod(
+        VerifiedCfgFunction graph, MetadataBuilder metadata,
+        MethodBodyStreamEncoder bodies,
+        IReadOnlyDictionary<string, MethodDefinitionHandle>? handles)
+    {
             var blocks = graph.Blocks;
             int valueCount = blocks.Sum(b => b.Parameters.Count + b.Instructions.Count);
             int scratchCount = blocks.Sum(b => b.Parameters.Count);
@@ -104,18 +121,92 @@ internal static class CfgCilEmitter
                 {
                     switch (op.Opcode)
                     {
+                        case CfgOpcode.Argument:
+                            il.LoadArgument(checked((int)op.I64Constant!.Value));
+                            break;
+                        case CfgOpcode.Call:
+                            if (handles is null || op.Target is null ||
+                                !handles.TryGetValue(op.Target, out var callee) ||
+                                op.Arguments is null)
+                                throw new FormatException("Unlinked CFG native static method call");
+                            foreach (int argument in op.Arguments)
+                                il.LoadLocal(argument);
+                            il.Call(callee);
+                            break;
                         case CfgOpcode.ConstantI64:
                             il.LoadConstantI8(op.I64Constant!.Value);
                             break;
                         case CfgOpcode.ConstantBool:
                             il.LoadConstantI4(op.BoolConstant!.Value ? 1 : 0);
                             break;
+                        case CfgOpcode.OptionEqualI64:
+                        {
+                            // Short circuit on tags. Never inspect a None's
+                            // (inactive) payload, even if a hostile lowerer
+                            // has provided arbitrary data in that SSA slot.
+                            // No boxed values, reflection or runtime dispatch.
+                            var sameTag = il.DefineLabel();
+                            var bothSome = il.DefineLabel();
+                            var end = il.DefineLabel();
+                            il.LoadLocal(op.Left!.Value);
+                            il.LoadLocal(op.Arguments![0]);
+                            il.OpCode(ILOpCode.Ceq);
+                            il.Branch(ILOpCode.Brtrue, sameTag);
+                            il.LoadConstantI4(0);
+                            il.StoreLocal(op.ResultId);
+                            il.Branch(ILOpCode.Br, end);
+                            il.MarkLabel(sameTag);
+                            il.LoadLocal(op.Left.Value);
+                            il.Branch(ILOpCode.Brtrue, bothSome);
+                            il.LoadConstantI4(1);
+                            il.StoreLocal(op.ResultId);
+                            il.Branch(ILOpCode.Br, end);
+                            il.MarkLabel(bothSome);
+                            il.LoadLocal(op.Right!.Value);
+                            il.LoadLocal(op.Arguments[1]);
+                            il.OpCode(ILOpCode.Ceq);
+                            il.StoreLocal(op.ResultId);
+                            il.MarkLabel(end);
+                            continue;
+                        }
+                        case CfgOpcode.BoolNot:
+                            // The verifier proves Left is a bool SSA value.
+                            // Comparing to zero emits a normalized Boolean.
+                            il.LoadLocal(op.Left!.Value);
+                            il.LoadConstantI4(0);
+                            il.OpCode(ILOpCode.Ceq);
+                            break;
+                        case CfgOpcode.OptionOrI64:
+                        {
+                            // All three operands were type/SSA/dominance checked.
+                            // On both paths, store exactly one i64 result with
+                            // an empty evaluation stack at the join label.
+                            var some = il.DefineLabel();
+                            var end = il.DefineLabel();
+                            il.LoadLocal(op.Left!.Value);
+                            il.Branch(ILOpCode.Brtrue, some);
+                            il.LoadLocal(op.Arguments![0]);
+                            il.StoreLocal(op.ResultId);
+                            il.Branch(ILOpCode.Br, end);
+                            il.MarkLabel(some);
+                            il.LoadLocal(op.Right!.Value);
+                            il.StoreLocal(op.ResultId);
+                            il.MarkLabel(end);
+                            continue;
+                        }
                         case CfgOpcode.CheckedAdd:
                         case CfgOpcode.CheckedSubtract:
                         case CfgOpcode.CheckedMultiply:
                         case CfgOpcode.CheckedDivide:
                         case CfgOpcode.EqualI64:
+                        case CfgOpcode.NotEqualI64:
                         case CfgOpcode.LessThanI64:
+                        case CfgOpcode.GreaterThanI64:
+                        case CfgOpcode.LessThanOrEqualI64:
+                        case CfgOpcode.GreaterThanOrEqualI64:
+                        case CfgOpcode.EqualBool:
+                        case CfgOpcode.NotEqualBool:
+                        case CfgOpcode.XorBool:
                             il.LoadLocal(op.Left!.Value);
                             il.LoadLocal(op.Right!.Value);
                             il.OpCode(op.Opcode switch
@@ -125,9 +216,26 @@ internal static class CfgCilEmitter
                                 CfgOpcode.CheckedMultiply => ILOpCode.Mul_ovf,
                                 CfgOpcode.CheckedDivide => ILOpCode.Div,
                                 CfgOpcode.EqualI64 => ILOpCode.Ceq,
+                                CfgOpcode.NotEqualI64 => ILOpCode.Ceq,
                                 CfgOpcode.LessThanI64 => ILOpCode.Clt,
+                                CfgOpcode.GreaterThanI64 => ILOpCode.Cgt,
+                                CfgOpcode.LessThanOrEqualI64 => ILOpCode.Cgt,
+                                CfgOpcode.GreaterThanOrEqualI64 => ILOpCode.Clt,
+                                CfgOpcode.EqualBool => ILOpCode.Ceq,
+                                CfgOpcode.NotEqualBool => ILOpCode.Ceq,
+                                CfgOpcode.XorBool => ILOpCode.Xor,
                                 _ => throw new FormatException("Unverified CFG opcode")
                             });
+                            if (op.Opcode is CfgOpcode.NotEqualI64 or CfgOpcode.NotEqualBool or
+                                CfgOpcode.LessThanOrEqualI64 or
+                                CfgOpcode.GreaterThanOrEqualI64)
+                            {
+                                // ceq/clt/cgt return int32; compare with false to invert it.
+                                // This is deterministic, verifiable CIL without a
+                                // branch, dynamic dispatch or helper call.
+                                il.LoadConstantI4(0);
+                                il.OpCode(ILOpCode.Ceq);
+                            }
                             break;
                         default:
                             throw new FormatException("Unverified CFG instruction");
@@ -168,10 +276,12 @@ internal static class CfgCilEmitter
             // Every block is entered with an empty stack, each instruction
             // stores its result immediately, and the maximum temporary depth
             // is two (binary operation); control-flow edges never merge stacks.
-            int offset = bodies.AddMethodBody(il, maxStack: 2,
+            int maxStack = Math.Max(2, blocks.SelectMany(b => b.Instructions)
+                .Where(op => op.Opcode == CfgOpcode.Call)
+                .Select(op => op.Arguments!.Count).DefaultIfEmpty(0).Max());
+            int offset = bodies.AddMethodBody(il, maxStack: maxStack,
                 localVariablesSignature: signature,
                 attributes: MethodBodyAttributes.InitLocals);
             return (offset, code, signatureBlob);
-        });
     }
 }

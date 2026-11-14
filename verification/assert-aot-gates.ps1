@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('win-x64', 'linux-x64')][string]$Rid = 'win-x64'
+    [ValidateSet('win-x64', 'win-arm64', 'linux-x64', 'linux-arm64', 'osx-x64', 'osx-arm64')][string]$Rid = 'win-x64'
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -40,7 +40,8 @@ foreach ($project in $projects) {
     Assert-Gate -Project $project -Label 'valid Native AOT' -Success $true -Overrides @()
     Assert-Gate -Project $project -Label 'managed/JIT publish' -Success $false -Overrides @('PublishAot=false')
     Assert-Gate -Project $project -Label 'framework-dependent publish' -Success $false -Overrides @('SelfContained=false')
-    Assert-Gate -Project $project -Label 'unsupported target RID' -Success $false -Overrides @('RuntimeIdentifier=osx-arm64')
+    Assert-Gate -Project $project -Label 'unsupported target RID' -Success $false -Overrides @('RuntimeIdentifier=browser-wasm')
+    Assert-Gate -Project $project -Label 'generic RID not a strict native target' -Success $false -Overrides @('RuntimeIdentifier=any')
     Assert-Gate -Project $project -Label 'wrong framework' -Success $false -Overrides @('TargetFramework=net9.0')
 }
 # Expected negative MSBuild invocations leave LASTEXITCODE nonzero. Reset it
