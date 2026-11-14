@@ -58,10 +58,10 @@ static void InvalidSend(Action action, string why)
         {
             rejects++;
             RejectDiagnostic(() => OresParser.Parse(source),
-                "Source annotations require typed compiler validation",
+                "Annotations require verified compiler lowering",
                 "scalar annotation parity " + id);
             RejectDiagnostic(() => OresStructuredParser.Parse(source),
-                "Source annotations require typed compiler validation",
+                "Annotations require verified compiler lowering",
                 "structured annotation parity " + id);
         }
         else
@@ -123,10 +123,10 @@ static void InvalidSend(Action action, string why)
             // Annotation was the first active source token; a generic parse
             // failure is insufficient evidence for our typed-AOT rejection gate.
             RejectDiagnostic(() => OresParser.Parse(source),
-                "Source annotations require typed compiler validation",
+                "Annotations require verified compiler lowering",
                 "v2 scalar annotation case " + id);
             RejectDiagnostic(() => OresStructuredParser.Parse(source),
-                "Source annotations require typed compiler validation",
+                "Annotations require verified compiler lowering",
                 "v2 structured annotation case " + id);
         }
         else
@@ -160,10 +160,10 @@ foreach (var annotation in new[] {
 {
     var source = annotation + "\nfnc main(): int { return 42; }";
     RejectDiagnostic(() => OresParser.Parse(source),
-        "Source annotations require typed compiler validation",
+        "Annotations require verified compiler lowering",
         "scalar Native AOT annotation " + annotation);
     RejectDiagnostic(() => OresStructuredParser.Parse(source),
-        "Source annotations require typed compiler validation",
+        "Annotations require verified compiler lowering",
         "structured Native AOT annotation " + annotation);
 }
 Require(OresParser.Parse("fnc main():int{return 42;} // @Ret(int)") is Literal,
