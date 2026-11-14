@@ -1,0 +1,30 @@
+name: AI dispatch NativeAOT host contract (NOT Oreslang guest)
+on:
+  pull_request:
+  push:
+    branches: [feat/agent-dispatch-host-gate-parity-20261029]
+permissions:
+  contents: read
+jobs:
+  host-contract-nativeaot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Record exact tree and clean checkout
+        run: |
+          git rev-parse HEAD
+          git rev-parse HEAD^{tree}
+          test -z "$(git status --porcelain --untracked-files=no)"
+      - name: NativeAOT-only compilation and host test (no JIT fallback)
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet --version
+          dotnet publish contracts/v1/agent-dispatch/AgentHostDispatchContract.csproj -c Release -r linux-x64 --self-contained true -p:PublishAot=true -o "$RUNNER_TEMP/agent-host-aot"
+          test -x "$RUNNER_TEMP/agent-host-aot/AgentHostDispatchContract"
+          "$RUNNER_TEMP/agent-host-aot/AgentHostDispatchContract"
+          echo "AGENT_HOST_ONLY_PASS native_guest_executed=false"
