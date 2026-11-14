@@ -109,6 +109,29 @@ public static partial class OresParser
                     throw new FormatException(
                         $"MTD_RECEIVER_NATIVEAOT_UNSUPPORTED: typed receiver methods need nominal class slots, borrow checking and CIL lowering at offset {tokens[methodIndex].Offset}");
             }
+            // Fail closed on canonical type-first mtd (Foo self) and
+            // (Foo mut self) as soon as the header is complete. These are
+            // valid AttoLang declarations, but this NativeAOT frontend has
+            // no actor/class receiver slots or method borrowing ABI.
+            if (token.Text == ")" &&
+                ((receiverAt >= 4 &&
+                  tokens[receiverAt - 1].Text == "self" &&
+                  tokens[receiverAt - 3].Text == "(" &&
+                  tokens[receiverAt - 4].Text == "mtd") ||
+                 (receiverAt >= 5 &&
+                  tokens[receiverAt - 1].Text == "self" &&
+                  tokens[receiverAt - 2].Text == "mut" &&
+                  tokens[receiverAt - 4].Text == "(" &&
+                  tokens[receiverAt - 5].Text == "mtd")))
+            {
+                int methodIndex = tokens[receiverAt - 2].Text == "mut"
+                    ? receiverAt - 5 : receiverAt - 4;
+                if (methodIndex == 0 ||
+                    (tokens[methodIndex - 1].Text != "fnc" &&
+                     tokens[methodIndex - 1].Text != "routine"))
+                    throw new FormatException(
+                        $"MTD_RECEIVER_NATIVEAOT_UNSUPPORTED: typed receiver methods need nominal actor/class slots, ownership and CIL lowering at offset {tokens[methodIndex].Offset}");
+            }
             if (tokens.Count > MaxTokens)
                 throw new FormatException("Token count exceeds bootstrap limit");
             if (token.Text.Length == 0) break;
