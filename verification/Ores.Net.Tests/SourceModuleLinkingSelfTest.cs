@@ -55,6 +55,11 @@ internal static class SourceModuleLinkingSelfTest
             Reject(Compile, "local does not silently become an imported namespace");
             Write("main.ores", "import fnc twice from \"./base\"; fnc main():int { return twice(true); }");
             Reject(Compile, "cross-file argument types are checked");
+            // A source actor graph must be denied before even attempting to
+            // resolve a missing module dependency or emitting linked CIL.
+            Write("main.ores", "import fnc not_found from \"./missing\"; fnc main():int { return 1 pipe 2; }");
+            Reject(Compile, "actor pipe denied before module import discovery",
+                "E_ACTOR_PIPE_BACKEND_UNSUPPORTED");
             Write("main.ores", "import fnc twice from \"./base\"; import fnc twice from \"./base\"; fnc main():int { return twice(21); }");
             Reject(Compile, "duplicate import bindings");
             Write("base.ores", "import fnc first from \"./main\"; pub fnc twice(int n):int { return n; }");

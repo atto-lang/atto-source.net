@@ -5,7 +5,13 @@ namespace Ores.Net.Compiler;
 public enum IrValueType
 {
     I64,
-    Bool
+    Bool,
+    // Method result only. Void must not be an SSA value, local, or parameter.
+    Void,
+    // Source-only tagged (is_some:bool, value:i64) pair in the closed
+    // structured Option<int> slice. It NEVER occupies a single CFG SSA slot
+    // or CIL local: only its verified primitive components can be emitted.
+    OptionI64
 }
 
 public enum IrOpcode
@@ -15,7 +21,11 @@ public enum IrOpcode
     CheckedSubtract,
     CheckedMultiply,
     CheckedDivide,
-    SignedRemainderLiteral
+    BitXor,
+    SignedRemainderLiteral,
+    // Exact framework API signature: System.Math.Abs(System.Int64) -> System.Int64.
+    DotnetMathAbsI64,
+    DotnetMathMaxI64
 }
 
 /// <summary>
@@ -65,9 +75,11 @@ public static class OresIrVerifier
     // Match its hard bound so 'check' cannot accept a program 'compile' rejects.
     public const int MaxInstructions = 16_384;
 
-    public static VerifiedIrFunction Verify(IrFunction function)
+    public static VerifiedIrFunction Verify(IrFunction function,
+        DotnetHostImportPolicy? policy = null)
     {
         ArgumentNullException.ThrowIfNull(function);
+        policy ??= DotnetHostImportPolicy.DenyAll;
         if (string.IsNullOrWhiteSpace(function.Name) || function.Name.Length > 128 ||
             !IsIdentifier(function.Name))
             throw new FormatException("Invalid IR function name");
@@ -97,11 +109,37 @@ public static class OresIrVerifier
                     instruction.Left.HasValue || instruction.Right.HasValue)
                     throw new FormatException("Malformed IR constant");
             }
+            else if (instruction.Opcode == IrOpcode.DotnetMathAbsI64)
+            {
+                policy.RequireMathI64();
+                // A host call is not arbitrary reflection or an opaque value.
+                // Type, arity, exact method and SSA ownership are verified.
+                if (instruction.Constant.HasValue || instruction.Right.HasValue ||
+                    !instruction.Left.HasValue || instruction.Left.Value < 0 ||
+                    instruction.Left.Value >= i ||
+                    verified[instruction.Left.Value].Type != IrValueType.I64)
+                    throw new FormatException("Malformed typed CLR Abs(i64) instruction");
+            }
+            else if (instruction.Opcode == IrOpcode.DotnetMathMaxI64)
+            {
+                policy.RequireMathI64();
+                if (instruction.Constant.HasValue || !instruction.Left.HasValue ||
+                    !instruction.Right.HasValue ||
+                    instruction.Left.Value < 0 || instruction.Left.Value >= i ||
+                    instruction.Right.Value < 0 || instruction.Right.Value >= i ||
+                    verified[instruction.Left.Value].Type != IrValueType.I64 ||
+                    verified[instruction.Right.Value].Type != IrValueType.I64)
+                    throw new FormatException("Malformed typed CLR Max(i64,i64) instruction");
+            }
             else
             {
+                // Keep the retired opcode's numeric identity stable, but
+                // never accept it from externally constructed or stale IR.
+                if (instruction.Opcode == IrOpcode.SignedRemainderLiteral)
+                    throw new FormatException("Removed Oreslang operator '%' in verified IR");
                 if (instruction.Opcode is not (IrOpcode.CheckedAdd or
                     IrOpcode.CheckedSubtract or IrOpcode.CheckedMultiply or
-                    IrOpcode.CheckedDivide or IrOpcode.SignedRemainderLiteral))
+                    IrOpcode.CheckedDivide))
                     throw new FormatException("Unknown IR opcode");
 
                 if (instruction.Constant.HasValue ||
@@ -113,11 +151,6 @@ public static class OresIrVerifier
                 if (verified[instruction.Left.Value].Type != IrValueType.I64 ||
                     verified[instruction.Right.Value].Type != IrValueType.I64)
                     throw new FormatException("IR arithmetic requires i64 operands");
-                if (instruction.Opcode == IrOpcode.SignedRemainderLiteral &&
-                    (verified[instruction.Right.Value].Opcode != IrOpcode.ConstantI64 ||
-                     verified[instruction.Right.Value].Constant is not long divisor || divisor == 0))
-                    throw new FormatException(
-                        "Verified remainder requires a nonzero literal i64 divisor");
             }
             verified[i] = instruction;
         }
@@ -154,7 +187,8 @@ public static class OresIrLowering
     private const int MaxPendingValues = 256;
     private readonly record struct Pending(Expression Node, bool Finish);
 
-    public static VerifiedIrFunction Lower(Expression root, string name = "main")
+    public static VerifiedIrFunction Lower(Expression root, string name = "main",
+        DotnetHostImportPolicy? policy = null)
     {
         ArgumentNullException.ThrowIfNull(root);
         var pending = new Stack<Pending>();
@@ -183,6 +217,16 @@ public static class OresIrLowering
             return id;
         }
 
+        int EmitDotnetAbs(int value)
+        {
+            if (instructions.Count >= OresIrVerifier.MaxInstructions)
+                throw new FormatException("IR instruction budget exceeded");
+            int id = instructions.Count;
+            instructions.Add(new IrInstruction(id, IrOpcode.DotnetMathAbsI64,
+                IrValueType.I64, Left: value));
+            return id;
+        }
+
         while (pending.Count > 0)
         {
             var current = pending.Pop();
@@ -203,6 +247,31 @@ public static class OresIrLowering
                             Constant(0), operand));
                         break;
                     }
+                    case DotnetMathAbsI64:
+                    {
+                        if (results.Count < 1)
+                            throw new FormatException("CLR intrinsic operand underflow");
+                        results.Push(EmitDotnetAbs(results.Pop()));
+                        break;
+                    }
+                    case DotnetMathMaxI64:
+                    {
+                        if (results.Count < 2)
+                            throw new FormatException("CLR Max intrinsic operand underflow");
+                        int right = results.Pop();
+                        int left = results.Pop();
+                        results.Push(EmitBinary(IrOpcode.DotnetMathMaxI64, left, right));
+                        break;
+                    }
+                    case NamedBitXor:
+                    {
+                        if (results.Count < 2)
+                            throw new FormatException("IR lowering bitXor operand underflow");
+                        int right = results.Pop();
+                        int left = results.Pop();
+                        results.Push(EmitBinary(IrOpcode.BitXor, left, right));
+                        break;
+                    }
                     case Binary binary:
                     {
                         if (results.Count < 2)
@@ -215,8 +284,7 @@ public static class OresIrLowering
                             '-' => IrOpcode.CheckedSubtract,
                             '*' => IrOpcode.CheckedMultiply,
                             '/' => IrOpcode.CheckedDivide,
-                            '%' => IrOpcode.SignedRemainderLiteral,
-                            _ => throw new FormatException("Unsupported arithmetic operator")
+                            _ => throw new FormatException("Unsupported or removed arithmetic operator")
                         };
                         results.Push(EmitBinary(opcode, left, right));
                         break;
@@ -234,11 +302,20 @@ public static class OresIrLowering
                     case Literal literal:
                         results.Push(Constant(literal.Value));
                         break;
+                    case DotnetMathAbsI64 host:
+                        pending.Push(new Pending(node, true));
+                        pending.Push(new Pending(host.Value, false));
+                        break;
+                    case DotnetMathMaxI64 hostMax:
+                        pending.Push(new Pending(node, true));
+                        pending.Push(new Pending(hostMax.Right, false));
+                        pending.Push(new Pending(hostMax.Left, false));
+                        break;
                     case Unary { Operator: '+' or '-' } unary:
                         pending.Push(new Pending(node, true));
                         pending.Push(new Pending(unary.Value, false));
                         break;
-                    case Binary binary when binary.Operator is '+' or '-' or '*' or '/' or '%':
+                    case Binary binary when binary.Operator is '+' or '-' or '*' or '/':
                         pending.Push(new Pending(binary, true));
                         pending.Push(new Pending(binary.Right, false));
                         pending.Push(new Pending(binary.Left, false));
@@ -253,6 +330,6 @@ public static class OresIrLowering
         if (results.Count != 1)
             throw new FormatException("IR lowering must yield exactly one result");
         return OresIrVerifier.Verify(new IrFunction(name, IrValueType.I64,
-            instructions, results.Pop()));
+            instructions, results.Pop()), policy);
     }
 }
