@@ -150,12 +150,21 @@ internal static class NativeTraceInstrumentationV1SelfTest
         carrier.Start(); carrier.Join();
         Check(migrated && deepLease.Generation == 3,
             "logical lease survives carrier migration without AsyncLocal/TLS");
+        // A supervisor can revoke the active mask while a JIT version is
+        // published. Future entry must fall back to AOT, not race the policy.
+        adaptive.Configure(0, true);
+        using (var policyRevoked = slot.Pin())
+            Check(policyRevoked.Generation == 1 &&
+                policyRevoked.Executable(41) == 42,
+                "revocation fences newly pinned deep calls without rewriting old frames");
+        adaptive.Configure(NativeTraceInstrumentationV1.Boundary |
+            NativeTraceInstrumentationV1.Call, true);
         slot.Disable();
         using var disabled = slot.Pin();
         Check(disabled.Generation == 1 && disabled.Executable(41) == 42 &&
             deepLease.Executable(41) == 42,
             "new calls use baseline; in-flight JIT scope still completes");
-        Check(baselineHits == 3 && aotHits == 1 && jitHits == 3,
+        Check(baselineHits == 4 && aotHits == 1 && jitHits == 3,
             "exact number of real invocations on each version");
 
         var ahead = new NativeTraceVersionedDispatchV1<Func<long,long>>.Candidate(
