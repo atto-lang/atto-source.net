@@ -68,6 +68,7 @@ Require(runtime.NativeReservedBytes > 0 &&
 void SendAndVerifyBatch(int count)
 {
     long expected = Interlocked.Read(ref receipts) + count;
+    long expectedFaults = runtime.FaultedTurns;
     Span<byte> payload = stackalloc byte[8];
     BinaryPrimitives.WriteInt64LittleEndian(payload, 1L);
     for (int i = 0; i < count; i++)
@@ -75,10 +76,10 @@ void SendAndVerifyBatch(int count)
     Require(SpinWait.SpinUntil(() =>
             Interlocked.Read(ref receipts) == expected ||
             Volatile.Read(ref badReceipts) != 0 ||
-            runtime.FaultedTurns != 0,
+            runtime.FaultedTurns != expectedFaults,
         TimeSpan.FromSeconds(20)), "bounded mailbox batch timed out");
     Require(Volatile.Read(ref badReceipts) == 0 &&
-            runtime.FaultedTurns == 0 &&
+            runtime.FaultedTurns == expectedFaults &&
             Interlocked.Read(ref receipts) == expected,
         "source-generated actor mailbox/state sequence mismatch");
 }
@@ -113,8 +114,9 @@ Require(Interlocked.Read(ref receipts) == warmupMessages + sampledMessages &&
         Volatile.Read(ref badReceipts) == 0,
     "compiled guest result is not the exact accumulated 4352");
 
-long completed = runtime.CompletedMessages;
-Require(completed >= 2L * (warmupMessages + sampledMessages),
+Require(SpinWait.SpinUntil(() =>
+        runtime.CompletedMessages >= 2L * (warmupMessages + sampledMessages),
+        TimeSpan.FromSeconds(20)),
     "real mailbox DATA turns for actor and supervisor were not completed");
 Require(runtime.FaultedTurns == 0, "guest execution faulted on valid i64 input");
 
