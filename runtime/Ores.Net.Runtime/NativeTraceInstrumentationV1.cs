@@ -107,9 +107,12 @@ internal sealed class NativeTraceVersionedDispatchV1<T> where T : class
         internal readonly ulong Id;
         internal readonly T Target;
         internal readonly int ProbeMask;
+        // A prior publication cannot become executable merely because an
+        // administrator later re-enables the same mask after revocation.
+        internal readonly long PolicyVersion;
         internal int Pins;
-        internal Generation(ulong id, T target, int probeMask = 0)
-        { Id = id; Target = target; ProbeMask = probeMask; }
+        internal Generation(ulong id, T target, int probeMask = 0, long policyVersion = 0)
+        { Id = id; Target = target; ProbeMask = probeMask; PolicyVersion = policyVersion; }
     }
 
     internal sealed class Lease : IDisposable
@@ -187,7 +190,9 @@ internal sealed class NativeTraceVersionedDispatchV1<T> where T : class
             // Policy can be revoked while a trusted compiler publishes outside
             // this lock. Never enter a variant whose probe authority is gone.
             var selected = active;
-            if ((selected.ProbeMask & ~policy.ActiveMask) != 0)
+            if (selected.ProbeMask != 0 &&
+                (selected.PolicyVersion != policy.Version ||
+                 (selected.ProbeMask & ~policy.ActiveMask) != 0))
                 selected = baseline;
             ++selected.Pins;
             return new Lease(this, selected);
@@ -232,7 +237,7 @@ internal sealed class NativeTraceVersionedDispatchV1<T> where T : class
             // Only future invocations see the new target; old pinned scopes
             // retain the old generation until their logical completion.
             var next = new Generation(candidate.Generation, candidate.Executable,
-                candidate.ProbeMask);
+                candidate.ProbeMask, policy.Version);
             retained.Add(next);
             active = next;
             highestGeneration = next.Id;
