@@ -50,7 +50,10 @@ public sealed class ActorMailbox : IDisposable
     public const int MaxMailboxBytes = 16 * MaxMessageBytes;
 
     private readonly object _gate = new();
-    private readonly Queue<byte[]> _messages = new();
+    // Control ticks must never be confused with user-supplied zero-byte
+    // messages. The envelope kind is runtime-owned and not on the wire.
+    private sealed record Envelope(byte[] Payload, bool IsControl);
+    private readonly Queue<Envelope> _messages = new();
     private readonly ulong _id;
     private readonly int _maxMessages;
     private readonly int _maxQueuedBytes;
@@ -146,8 +149,22 @@ public sealed class ActorMailbox : IDisposable
         {
             ValidateSendLocked(destination, data.Length);
             var ownedCopy = data.ToArray();
-            _messages.Enqueue(ownedCopy);
+            _messages.Enqueue(new Envelope(ownedCopy, IsControl: false));
             _queuedBytes += ownedCopy.Length;
+        }
+    }
+
+    /// <summary>
+    /// Only the trusted in-assembly scheduler may enqueue dispatch control.
+    /// An empty user Send is always USER DATA, never scheduler authority.
+    /// Control tokens participate in the same bounded FIFO message quota.
+    /// </summary>
+    internal void EnqueueTrustedDispatch(ActorRef destination)
+    {
+        lock (_gate)
+        {
+            ValidateSendLocked(destination, 0);
+            _messages.Enqueue(new Envelope(Array.Empty<byte>(), IsControl: true));
         }
     }
 
@@ -176,7 +193,13 @@ public sealed class ActorMailbox : IDisposable
                 payload = null;
                 return false;
             }
-            payload = _messages.Dequeue();
+            if (_messages.Peek().IsControl)
+            {
+                // Generic receive cannot steal an internal scheduler receipt.
+                payload = null;
+                return false;
+            }
+            payload = _messages.Dequeue().Payload;
             _queuedBytes -= payload.Length;
             return true;
         }
@@ -204,6 +227,24 @@ public sealed class ActorMailbox : IDisposable
         return true; // Repeated stop of this incarnation is idempotent.
     }
 
+    /// <summary>
+    /// One FIFO-backed synchronous actor tick. Only an admitted empty
+    /// control envelope can schedule the narrow generated Counter method.
+    /// A nonempty user message is never removed, consumed or reclassified
+    /// as an actor tick. Called only under the owning host admission lock.
+    /// </summary>
+    internal bool TryReceiveEmptyDispatch()
+    {
+        lock (_gate)
+        {
+            if (_closed || _messages.Count == 0 ||
+                !_messages.Peek().IsControl)
+                return false;
+            _ = _messages.Dequeue(); // Empty envelope: no user bytes to leak.
+            return true;
+        }
+    }
+
     public void Stop()
     {
         Action[] callbacks;
@@ -223,7 +264,7 @@ public sealed class ActorMailbox : IDisposable
     private void DiscardPending()
     {
         foreach (var envelope in _messages)
-            CryptographicOperations.ZeroMemory(envelope);
+            CryptographicOperations.ZeroMemory(envelope.Payload);
         _messages.Clear();
     }
 
