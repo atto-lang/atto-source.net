@@ -130,9 +130,9 @@ internal static class VmIsolateHostTests
         var actorB = host.RegisterActor(b, 3);
         ExpectFailure(() => host.RegisterActor(a, 3), "duplicate actor incarnation");
         ExpectFailure(() => host.PinResource(a, actorB), "foreign actor pin");
-        var refA = actorA.Mailbox.CurrentRef;
+        var refA = actorA.CurrentRef;
         host.SendActor(a, actorA, refA, new byte[] { 1, 2, 3 });
-        if (actorA.Mailbox.QueuedMessages != 1)
+        if (actorA.QueuedMessages != 1)
             throw new Exception("actor mailbox must be real, not a fake ticket");
         var pin = host.PinResource(a, actorA);
         ExpectFailure(() => host.PinResource(a, actorA), "pin quota");
@@ -148,7 +148,7 @@ internal static class VmIsolateHostTests
         host.RetireResource(a, actorA, pin);
         ExpectFailure(() => host.RetireResource(a, actorA, pin), "replay ticket");
         host.RetireActor(a, actorA);
-        if (actorA.Mailbox.QueuedMessages != 0)
+        if (actorA.QueuedMessages != 0)
             throw new Exception("retire must drain pending mailbox-owned copies");
         ExpectFailure(() => host.SendActor(a, actorA, refA, new byte[] { 4 }), "stale actor ref");
         host.CompleteShutdown(a); host.Destroy(a);
