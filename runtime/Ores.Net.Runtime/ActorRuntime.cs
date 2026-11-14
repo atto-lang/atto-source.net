@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Security.Cryptography;
+using System.Runtime.CompilerServices;
 using System.Threading;
 
 namespace Ores.Net.Runtime;
@@ -397,6 +398,9 @@ public sealed class ActorRuntime : IDisposable
         internal Action DispatchAction { get; }
         internal int Scheduled;
         internal bool Stopping;
+        // Graceful close rejects new DATA while accepted queued turns drain.
+        // Stop() remains a distinct immediate abort that scrubs pending data.
+        internal bool Draining;
         internal int Finalized;
         internal TaskCompletionSource Terminated { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -435,6 +439,16 @@ public sealed class ActorRuntime : IDisposable
     public ActorRef Spawn(ActorKind kind, ActorMessageHandler handler)
     {
         ArgumentNullException.ThrowIfNull(handler);
+        // A C# async lambda can otherwise bind to this void-returning delegate
+        // as async-void. It returns to RunCell at the first suspension, which
+        // would end the physical actor turn and allow the next message to run
+        // while the continuation later resumes outside actor admission.
+        // Oreslang suspension requires a compiler/runtime-owned logical turn
+        // ledger; until that exists on this host surface, fail closed.
+        if (handler.Method.IsDefined(typeof(AsyncStateMachineAttribute), inherit: false))
+            throw new ArgumentException(
+                "async/async-void host actor handlers are forbidden; suspension requires scheduler-owned logical actor continuation lowering",
+                nameof(handler));
         if (kind is not (ActorKind.Private or ActorKind.Shared or ActorKind.Untrusted))
             throw new ArgumentOutOfRangeException(nameof(kind));
 
@@ -496,9 +510,9 @@ public sealed class ActorRuntime : IDisposable
 
         lock (cell.Gate)
         {
-            if (cell.Stopping || !cell.Mailbox.Authorizes(destination))
+            if (cell.Stopping || cell.Draining || !cell.Mailbox.Authorizes(destination))
                 throw new InvalidOperationException(
-                    "Actor reference is stale or actor is stopping");
+                    "Actor reference is stale or actor is stopping or draining");
             // Do not start a carrier for a message that cannot enter the
             // mailbox. Send revalidates after scheduling before publication.
             cell.Mailbox.ValidateAdmission(destination, payload.Length);
@@ -512,6 +526,55 @@ public sealed class ActorRuntime : IDisposable
 
             cell.Mailbox.Send(destination, payload);
         }
+    }
+
+    /// <summary>
+    /// Gracefully seal admission for this exact ActorRef incarnation, then
+    /// drain all already accepted DATA turns before retiring its arena. This
+    /// host primitive is NOT a source-level pipe or a supervisor-controlled
+    /// graph-completion guarantee. Pipeline callers must wait for upstream
+    /// retirement BEFORE sealing downstream admission. Stop() remains abortive.
+    /// </summary>
+    public Task DrainAndStop(ActorRef actor)
+    {
+        ActorCell cell = Lookup(actor);
+        Task completion = cell.Terminated.Task; // generation-bound terminal receipt
+        bool finalizeNow = false;
+        lock (cell.Gate)
+        {
+            if (cell.Stopping || !cell.Mailbox.Authorizes(actor))
+                throw new InvalidOperationException("Actor reference is stale or stopping");
+            if (cell.Draining)
+                return completion;
+            cell.Draining = true;
+            if (cell.Scheduled == 0)
+            {
+                if (cell.Mailbox.QueuedMessages == 0)
+                {
+                    MarkStoppingLocked(cell); // no pending DATA to discard
+                    finalizeNow = true;
+                }
+                else
+                {
+                    // Scheduling failure must NOT strand previously admitted
+                    // DATA behind a half-published terminal transition.
+                    try
+                    {
+                        if (!TryScheduleLocked(cell))
+                            throw new InvalidOperationException(
+                                "Actor dispatch queue cannot admit graceful drain");
+                    }
+                    catch
+                    {
+                        cell.Draining = false;
+                        throw;
+                    }
+                }
+            }
+        }
+        if (finalizeNow)
+            FinalizeCell(cell);
+        return completion;
     }
 
     public void Stop(ActorRef actor)
@@ -731,6 +794,13 @@ public sealed class ActorRuntime : IDisposable
                             MarkStoppingLocked(cell);
                             finalize = true;
                         }
+                    }
+                    else if (cell.Draining)
+                    {
+                        // The final turn has returned and no accepted DATA
+                        // remain. Only now may Stop scrub/retire the arena.
+                        MarkStoppingLocked(cell);
+                        finalize = true;
                     }
                 }
 

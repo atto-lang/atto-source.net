@@ -42,6 +42,7 @@ public sealed record CfgInstruction(
 
 public abstract record CfgTerminator;
 public sealed record CfgReturn(int ValueId) : CfgTerminator;
+public sealed record CfgReturnVoid : CfgTerminator;
 public sealed record CfgJump(string Target, IReadOnlyList<int> Arguments) : CfgTerminator;
 public sealed record CfgBranch(
     int Condition,
@@ -114,7 +115,7 @@ public static class OresCfgVerifier
     {
         ArgumentNullException.ThrowIfNull(function);
         if (!Identifier(function.Name) ||
-            function.ResultType is not (IrValueType.I64 or IrValueType.Bool) ||
+            function.ResultType is not (IrValueType.I64 or IrValueType.Bool or IrValueType.Void) ||
             !Identifier(function.Entry))
             throw new FormatException("Invalid CFG function signature");
 
@@ -181,6 +182,7 @@ public static class OresCfgVerifier
             CfgTerminator frozenTerminator = terminator switch
             {
                 CfgReturn r => new CfgReturn(r.ValueId),
+                CfgReturnVoid => new CfgReturnVoid(),
                 CfgJump j => new CfgJump(j.Target, FreezeArguments(j.Arguments)),
                 CfgBranch c => new CfgBranch(c.Condition, c.TrueTarget,
                     FreezeArguments(c.TrueArguments),
@@ -222,7 +224,10 @@ public static class OresCfgVerifier
                 AddDefinition(op.ResultId, op.Type, blockIndex, instructionIndex);
             }
         }
-        if (definitions.Count == 0 || definitions.Count > MaxValues)
+        // An empty void helper has no SSA values: its sole terminator is
+        // the independently verified CfgReturnVoid, not a fabricated 0.
+        if ((definitions.Count == 0 && function.ResultType != IrValueType.Void) ||
+            definitions.Count > MaxValues)
             throw new FormatException("CFG SSA value budget exceeded");
         // Dense IDs prevent accidental giant lookup allocations during later
         // local-register assignment, and reject gaps and negative definitions.
@@ -244,6 +249,7 @@ public static class OresCfgVerifier
             switch (block.Terminator)
             {
                 case CfgReturn: break;
+                case CfgReturnVoid: break;
                 case CfgJump jump:
                     RegisterEdge(i, jump.Target, jump.Arguments);
                     break;
@@ -318,6 +324,8 @@ public static class OresCfgVerifier
                         break;
                     case CfgOpcode.Call:
                     {
+                        if (op.Type == IrValueType.Void)
+                            throw new FormatException("Void CFG call requires effect-only lowering");
                         if (op.Target is null || op.Arguments is null ||
                             op.I64Constant is not null || op.BoolConstant is not null ||
                             op.Left is not null || op.Right is not null ||
@@ -422,7 +430,13 @@ public static class OresCfgVerifier
             switch (block.Terminator)
             {
                 case CfgReturn returned:
+                    if (function.ResultType == IrValueType.Void)
+                        throw new FormatException("Void CFG method cannot return a value");
                     Use(i, termIndex, returned.ValueId, function.ResultType);
+                    break;
+                case CfgReturnVoid:
+                    if (function.ResultType != IrValueType.Void)
+                        throw new FormatException("Non-void CFG method requires explicit return value");
                     break;
                 case CfgJump jump:
                     VerifyEdgeValues(i, termIndex, jump.Target, jump.Arguments);

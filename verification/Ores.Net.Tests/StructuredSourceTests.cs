@@ -72,6 +72,38 @@ internal static class StructuredSourceTests
         }, "let remains the only rebindable local");
         Reject("fnc main():int{int x=7;x=8;return x;}",
             "readonly type-first rebinding is forbidden");
+        // Keep the newer helper/capture test coverage while migrating runtime
+        // binding semantics to val. No runtime call may bypass constexpr checks.
+        var runtimeVals = OresStructuredParser.Parse(
+            "fnc inc(int p):int{return p+1;}" +
+            "fnc main():int{val int typed=inc(40);val inferred=inc(41);" +
+            "val int annotated=inc(42);val int snap=typed;" +
+            "let int mutable=7;mutable=8;return inferred;}");
+        Require(runtimeVals.Body[0] is StructuredLet {
+            Name: "typed", Kind: StructuredBindingKind.Val,
+            Initializer: StructuredCall { Name: "inc" }
+        }, "typed val must retain runtime helper call");
+        Require(runtimeVals.Body[1] is StructuredLet {
+            Name: "inferred", Kind: StructuredBindingKind.Val,
+            Initializer: StructuredCall { Name: "inc" }
+        }, "inferred val must retain runtime helper call");
+        Require(runtimeVals.Body[2] is StructuredLet {
+            Name: "annotated", Kind: StructuredBindingKind.Val,
+            Initializer: StructuredCall { Name: "inc" }
+        }, "annotated runtime val remains a call");
+        Require(runtimeVals.Body[3] is StructuredLet {
+            Name: "snap", Kind: StructuredBindingKind.Val,
+            Initializer: StructuredRead { Name: "typed" }
+        }, "val can capture a runtime value without rebinding");
+        Require(runtimeVals.Body[5] is StructuredSet { Name: "mutable" },
+            "explicit let remains the only rebindable local");
+        foreach (var source in new[] {
+            "fnc inc(int p):int{return p+1;}fnc main():int{int x=inc(41);return x;}",
+            "fnc inc(int p):int{return p+1;}fnc main():int{const x=inc(41);return x;}",
+            "fnc inc(int p):int{return p+1;}fnc main():int{const int x=inc(41);return x;}"
+        })
+            RejectFeature(source, "E_NON_CONST_INITIALIZER");
+
         // Both spellings must be rejected for the same targeted semantic reason.
         RejectFeature("fnc runtime_value():int{return 42;}fnc main():int{int x=runtime_value();return x;}",
             "E_NON_CONST_INITIALIZER");
@@ -357,7 +389,7 @@ internal static class StructuredSourceTests
             "const bool x=true as bool;if x{return 42;}else{return 0;}",
             "const x=(7 eq 7) as bool;if x{return 42;}else{return 0;}",
             "let x=7 as int;x=42;return x;",
-                                    "const x=7;if true{const nested=x as int;return nested+35;}else{return 0;}",
+            "const x=7;if true{const nested=x as int;return nested+35;}else{return 0;}",
             "const x=7;return (x+35) as int;"
         })
         {
@@ -684,23 +716,23 @@ internal static class StructuredSourceTests
             "Invalid UTF-16");
         BlockCommentReject("fnc main():int{return 1;} /* " + ((char)0) + " */",
             "Source contains NUL");
-        // Structural admission runs before lexing and owns the public
-        // 64-level limit. Preserve its canonical failure instead of expecting
-        // the private lexer's larger defensive bound to be reached.
+        // Structural admission runs before lexing and enforces the spec ch.16
+        // limit (128, "block comment nesting exceeds 128"), the same bound and
+        // wording as the other .NET lexers and Java/LLVM.
         const string commentPrefix = "fnc main():int{return 1;} ";
         Require(OresStructuredParser.Parse(commentPrefix +
-            string.Concat(Enumerable.Repeat("/*", 64)) +
-            string.Concat(Enumerable.Repeat("*/", 64))).Body.Count == 1,
-            "64 nested comments must remain valid at the admission boundary");
+            string.Concat(Enumerable.Repeat("/*", 128)) +
+            string.Concat(Enumerable.Repeat("*/", 128))).Body.Count == 1,
+            "128 nested comments must remain valid at the admission boundary");
         try
         {
             _ = OresStructuredParser.Parse(commentPrefix +
-                string.Concat(Enumerable.Repeat("/*", 65)) +
-                string.Concat(Enumerable.Repeat("*/", 65)));
-            throw new Exception("65 nested comments bypassed structural admission");
+                string.Concat(Enumerable.Repeat("/*", 129)) +
+                string.Concat(Enumerable.Repeat("*/", 129)));
+            throw new Exception("129 nested comments bypassed structural admission");
         }
         catch (FormatException ex) when (ex.Message ==
-            $"Structural admission comment nesting exceeded at offset {commentPrefix.Length + 128}") { }
+            $"block comment nesting exceeds 128 at offset {commentPrefix.Length + 256}") { }
 
 
         const string sum = """
@@ -991,6 +1023,14 @@ internal static class StructuredSourceTests
             "or rejects non-boolean RHS");
         Reject("fnc main():int{if true xor 1{return 1;}else{return 2;}}",
             "xor rejects non-boolean RHS");
+        Reject("fnc main():int{if 1 && true{return 1;}else{return 2;}}",
+            "&& rejects non-boolean LHS");
+        Reject("fnc main():int{if false || 1{return 1;}else{return 2;}}",
+            "|| rejects non-boolean RHS");
+        Reject("fnc main():int{if true ^^ 1{return 1;}else{return 2;}}",
+            "^^ rejects non-boolean RHS");
+        Reject("fnc main():int{if true ^ false{return 1;}else{return 2;}}",
+            "single ^ stays out of the grammar");
         Reject("fnc main():int{if true==1{return 1;}else{return 2;}}",
             "bool/int equality mixing rejected");
         Reject("fnc main():int{const bool b=false xor (9223372036854775807+1>0);" +

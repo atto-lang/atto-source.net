@@ -325,6 +325,7 @@ public static class CilEmitter
                 {
                     if (method.ResultType == IrValueType.I64) returnType.Type().Int64();
                     else if (method.ResultType == IrValueType.Bool) returnType.Type().Boolean();
+                    else if (method.ResultType == IrValueType.Void) returnType.Void();
                     else throw new FormatException("Unsupported CIL method result");
                 },
                 parameters =>
@@ -437,7 +438,9 @@ public static class CilEmitter
             var caller = methods[index];
             int count = caller.Blocks.Sum(b => b.Parameters.Count + b.Instructions.Count);
             definitions += count;
-            if (definitions > 100_000 || count is <= 0 or > OresCfgVerifier.MaxValues)
+            if (definitions > 100_000 ||
+                (count == 0 && caller.ResultType != IrValueType.Void) ||
+                count > OresCfgVerifier.MaxValues)
                 throw new FormatException("CFG module SSA budget exceeded");
 
             // SSA IDs have already been checked for uniqueness and density

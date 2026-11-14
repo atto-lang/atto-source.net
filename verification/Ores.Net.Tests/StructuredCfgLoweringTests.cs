@@ -174,6 +174,31 @@ internal static class StructuredCfgLoweringTests
             }
             """;
         Check(sum, 45, "two loop-carried SSA values sum 0..9");
+        // A type-first scalar is compile-time const. Runtime helper values
+        // remain legal as non-rebindable val, not as constant-folded calls.
+        foreach (var (source, label) in new[] {
+            ("fnc main():int{int x=7;return x;}", "type-first scalar literal"),
+            ("fnc main():int{const x=7;return x;}", "inferred const literal"),
+            ("fnc main():int{const int x=7;return x;}", "typed const literal"),
+            ("fnc inc(int p):int{return p+1;}fnc main():int{val int x=inc(6);return x;}",
+                "typed val runtime helper"),
+            ("fnc inc(int p):int{return p+1;}fnc main():int{val x=inc(6);return x;}",
+                "inferred val runtime helper")
+        })
+            Check(source, 7, "const-versus-val CIL binding: " + label);
+        Check("fnc main():int{let int x=7;x=8;return x;}",
+            8, "explicit let actually rebinds in emitted CIL");
+        foreach (var source in new[] {
+            "fnc inc(int p):int{return p+1;}fnc main():int{int x=inc(6);return x;}",
+            "fnc inc(int p):int{return p+1;}fnc main():int{const x=inc(6);return x;}",
+            "fnc inc(int p):int{return p+1;}fnc main():int{const int x=inc(6);return x;}"
+        })
+            RejectWithDiagnostic(source, "E_NON_CONST_INITIALIZER",
+                "runtime helper cannot initialize implicit/explicit const");
+        RejectWithDiagnostic("fnc main():int{int x=7;x=8;return x;}",
+            "E_IMMUTABLE_REBIND", "type-first constant cannot rebind");
+        RejectWithDiagnostic("fnc main():int{const int x=7;x=8;return x;}",
+            "E_IMMUTABLE_REBIND", "explicit constant cannot rebind");
         // Signed relational source must execute through verified CFG and
         // emitted CIL; parser-only acceptance is not parity evidence.
         Check(File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
@@ -328,7 +353,6 @@ internal static class StructuredCfgLoweringTests
             ("fnc main():int{return (7 as int as int)*6;}", "chained cast binds before multiplication"),
             ("fnc main():int{const x=7 as int;const y=x as int;return y*6;}", "checked cast through inferred constant reference"),
             ("fnc main():int{let x=7;x=x+1;x=x+34;return x;}", "SSA let multiwrite matches Cranelift LLVM"),
-            ("fnc main():int{let x=7;val snap=x;x=42;return snap+35;}", "const captures prior SSA version"),
             ("fnc main():int{let x=7;val snap=x;x=42;return snap+35;}", "val captures prior SSA version"),
             ("fnc main():int{let x=7;val snap=x as int;x=42;return snap+35;}", "checked cast snapshot cannot alias mutable local"),
             ("fnc main():int{let x=7 as int;x=(x+35) as int;return x;}", "cast applied to mutable SSA replacement"),
@@ -392,6 +416,28 @@ internal static class StructuredCfgLoweringTests
             "xor eagerly evaluates overflowing right operand");
         Check("fnc main():int{if true xor true{return 7;}else{return 42;}}",
             42, "xor boolean false result");
+        // Canonical symbolic spellings (spec ch.16) share the same typed CFG/CIL path.
+        Check("fnc main():int{if false && true{return 7;}else{return 42;}}",
+            42, "&& false branch");
+        Check("fnc main():int{if true || false{return 42;}else{return 7;}}",
+            42, "|| true branch");
+        Check("fnc main():int{let int x=9223372036854775807;" +
+            "if false && x+1>0{return 7;}else{return 42;}}",
+            42, "&& skips overflowing right operand");
+        Check("fnc main():int{let int x=9223372036854775807;" +
+            "if true || x+1>0{return 42;}else{return 7;}}",
+            42, "|| skips overflowing right operand");
+        CheckOverflow("fnc main():int{let int x=9223372036854775807;" +
+            "if false ^^ x+1>0{return 42;}else{return 7;}}",
+            "^^ eagerly evaluates overflowing right operand");
+        Check("fnc main():int{if true ^^ true{return 7;}else{return 42;}}",
+            42, "^^ boolean false result");
+        Check("fnc main():int{if true ^^ false{return 42;}else{return 7;}}",
+            42, "^^ boolean true result");
+        Check("fnc main():int{if true ^^ true && false{return 42;}else{return 7;}}",
+            42, "&& binds tighter than ^^");
+        Check("fnc main():int{if true || true ^^ true{return 42;}else{return 7;}}",
+            42, "^^ binds tighter than ||");
         Check("fnc main():int{if true != false{return 42;}else{return 7;}}",
             42, "typed bool inequality");
         Check("fnc main():int{let int n=0;while (n<3) and (n<10) {n=n+1;}return n+39;}",
