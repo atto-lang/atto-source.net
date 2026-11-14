@@ -106,8 +106,10 @@ internal sealed class NativeTraceVersionedDispatchV1<T> where T : class
     {
         internal readonly ulong Id;
         internal readonly T Target;
+        internal readonly int ProbeMask;
         internal int Pins;
-        internal Generation(ulong id, T target) { Id = id; Target = target; }
+        internal Generation(ulong id, T target, int probeMask = 0)
+        { Id = id; Target = target; ProbeMask = probeMask; }
     }
 
     internal sealed class Lease : IDisposable
@@ -182,8 +184,13 @@ internal sealed class NativeTraceVersionedDispatchV1<T> where T : class
         {
             if (retired) throw new InvalidOperationException("retired trace code slot");
             if (active.Pins == int.MaxValue) throw new InvalidOperationException("pin quota");
-            ++active.Pins;
-            return new Lease(this, active);
+            // Policy can be revoked while a trusted compiler publishes outside
+            // this lock. Never enter a variant whose probe authority is gone.
+            var selected = active;
+            if ((selected.ProbeMask & ~policy.ActiveMask) != 0)
+                selected = baseline;
+            ++selected.Pins;
+            return new Lease(this, selected);
         }
     }
 
@@ -224,7 +231,8 @@ internal sealed class NativeTraceVersionedDispatchV1<T> where T : class
                 return PublishResult.ResourceLimit;
             // Only future invocations see the new target; old pinned scopes
             // retain the old generation until their logical completion.
-            var next = new Generation(candidate.Generation, candidate.Executable);
+            var next = new Generation(candidate.Generation, candidate.Executable,
+                candidate.ProbeMask);
             retained.Add(next);
             active = next;
             highestGeneration = next.Id;
