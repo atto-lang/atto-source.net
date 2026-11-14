@@ -1,0 +1,4 @@
+pub fnc main():int {
+  val Option<int> result = None;
+  return result.unwrap_or(42);
+}

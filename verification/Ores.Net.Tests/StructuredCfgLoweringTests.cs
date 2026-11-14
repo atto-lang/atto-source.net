@@ -1,4 +1,5 @@
 using Mono.Cecil;
+using Mono.Cecil.Cil;
 using System.Security.Cryptography;
 using System.Text;
 using Ores.Net.Compiler;
@@ -68,6 +69,36 @@ internal static class StructuredCfgLoweringTests
         finally { Directory.Delete(folder, recursive: true); }
     }
 
+    // Inspect emitted PE opcodes: unsigned CIL comparisons can pass positive-only tests.
+    // This is an IL-shape gate, separate from reference and interpreted execution.
+    private static void CheckSignedOpcode(string comparison, Code expected, bool inverted)
+    {
+        var graph = OresStructuredCfgLowering.Lower(
+            "fnc main():int{if " + comparison + "{return 42;}else{return 0;}}");
+        string folder = Path.Combine(Path.GetTempPath(),
+            "ores-relational-il-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            string path = Path.Combine(folder, "OresGenerated.dll");
+            CilEmitter.EmitLibrary(graph, path);
+            using var assembly = AssemblyDefinition.ReadAssembly(path);
+            var run = assembly.MainModule.Types.Single(t =>
+                t.FullName == "Oreslang.Generated.OresProgram")
+                .Methods.Single(m => m.Name == "Run");
+            var codes = run.Body.Instructions.Select(i => i.OpCode.Code).ToArray();
+            int index = Array.IndexOf(codes, expected);
+            bool hasInversion = index >= 0 && index + 2 < codes.Length &&
+                codes[index + 1] == Code.Ldc_I4_0 && codes[index + 2] == Code.Ceq;
+            int relationalOps = codes.Count(c => c is Code.Clt or Code.Cgt or
+                Code.Clt_Un or Code.Cgt_Un);
+            if (index < 0 || relationalOps != 1 || hasInversion != inverted ||
+                codes.Contains(Code.Clt_Un) || codes.Contains(Code.Cgt_Un))
+                throw new Exception("Unsigned/malformed comparison CIL: " + comparison);
+        }
+        finally { Directory.Delete(folder, recursive: true); }
+    }
+
     private static void Reject(string source, string label)
     {
         try { _ = OresStructuredCfgLowering.Lower(source); }
@@ -104,6 +135,28 @@ internal static class StructuredCfgLoweringTests
             Check(Encoding.UTF8.GetString(sourceBytes), 42,
                 "shared native i64 cast fixture " + fixture.File);
         }
+    }
+
+    // A generic FormatException is insufficient: malformed source can fail for
+    // unrelated reasons before reaching the typed equality operator under test.
+    private static void RejectWithDiagnostic(string source, string expected, string label)
+    {
+        try { _ = OresStructuredCfgLowering.Lower(source); }
+        catch (FormatException e)
+        {
+            if (e.Message.Contains(expected, StringComparison.Ordinal)) return;
+            throw new Exception("Wrong structured rejection for " + label +
+                ": expected '" + expected + "', got '" + e.Message + "'", e);
+        }
+        throw new Exception("Invalid structured source accepted: " + label);
+    }
+
+    private static void RejectAliasBoundary(string source, string spelling, string label)
+    {
+        int offset = source.LastIndexOf(spelling, StringComparison.Ordinal);
+        if (offset < 0 || source[offset] != '!')
+            throw new Exception("Missing operator boundary in fixture: " + label);
+        RejectWithDiagnostic(source, "Invalid character at offset " + offset, label);
     }
 
     public static void Run()
@@ -145,6 +198,55 @@ internal static class StructuredCfgLoweringTests
                "fnc main():int{int x=inc(6);x=8;return x;}",
             "type-first readonly cannot rebind after successful call parse");
 
+        // Signed relational source must execute through verified CFG and
+        // emitted CIL; parser-only acceptance is not parity evidence.
+        Check(File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
+            "structured-signed-comparisons.atto")), 42,
+            "canonical .atto signed comparisons and typed helper");
+        foreach (var (comparison, result) in new (string, bool)[] {
+            ("-7 > -8", true), ("-8 > -7", false),
+            ("7 >= 7", true), ("7 >= 8", false),
+            ("7 <= 7", true), ("8 <= 7", false),
+            ("-9223372036854775808 > -9223372036854775808", false),
+            ("9223372036854775807 > -9223372036854775808", true),
+            ("-9223372036854775808 <= -9223372036854775808", true),
+            ("9223372036854775807 >= 9223372036854775807", true),
+            ("-9223372036854775808 >= 9223372036854775807", false),
+            ("9223372036854775807 <= -9223372036854775808", false)
+            Check("fnc main():int{if " + comparison +
+                "{return 42;}else{return 0;}}", result ? 42 : 0,
+                "signed relational CIL: " + comparison);
+        Check("fnc main():int{const bool within = -9223372036854775808 <= " +
+            "9223372036854775807;if within{return 42;}return 0;}", 42,
+            "compile-time bool relational evaluation");
+        CheckSignedOpcode("-9223372036854775808 < 0", Code.Clt, false);
+        CheckSignedOpcode("-9223372036854775808 > 0", Code.Cgt, false);
+        CheckSignedOpcode("-9223372036854775808 <= 0", Code.Cgt, true);
+        CheckSignedOpcode("-9223372036854775808 >= 0", Code.Clt, true);
+        Check("fnc main():int{let int lhs=-8;val int rhs=-7;if lhs<=rhs{return 42;}return 0;}",
+            42, "runtime local signed comparison");
+        Check("fnc main():int{let int x=0;while x<3{x=x+1;}if x>=3{return 42;}return 0;}",
+            42, "relational operator after loop SSA join");
+        Check("fnc main():int{const bool no=7>8;if no{return 0;}return 42;}",
+            42, "compile-time false signed relation");
+        Check("fnc main():int{if false{if (9223372036854775807+1)>=0{return 0;}}return 42;}",
+            42, "unselected signed comparison cannot overflow");
+        CheckOverflow("fnc main():int{if 0<=(9223372036854775807+1){return 1;}return 0;}",
+            "right signed-comparison operand overflow");
+
+        CheckOverflow(
+            "fnc main():int{if (9223372036854775807+1)>=0{return 1;}return 0;}",
+            "relational operand overflow must not wrap or be skipped");
+        Reject("fnc main():int{if true > 1{return 42;}return 0;}",
+            "bool/int greater-than type mismatch");
+        Reject("fnc main():int{if 1 <= false{return 42;}return 0;}",
+            "int/bool less-than-or-equal type mismatch");
+        Reject("fnc main():int{if 1 < 2 > 0{return 42;}return 0;}",
+            "relational chaining cannot coerce bool to int");
+        Reject("fnc main():int{if 1 => 0{return 42;}return 0;}",
+            "invalid arrow comparison");
+        Reject("fnc main():int{if 1 =< 0{return 42;}return 0;}",
+            "invalid reverse comparison");
         // Genuine type-first readonly bindings in the EXPERIMENTAL structured
         // source -> verified CFG -> deterministic CIL interpreter path.
         // This is not a released Windows/Linux Native AOT guest receipt.
@@ -171,12 +273,14 @@ internal static class StructuredCfgLoweringTests
         CheckOverflow(
             "fnc main():int{int unused=9223372036854775807+1;return 7;}",
             "unused readonly runtime initializer still traps");
-        // The input is unavailable at compile time inside the helper.
-        // Runtime-readonly must remain a nonconstant local while CIL retains
-        // the helper argument and checked arithmetic, not fold to 42.
-        Check("fnc plus_one(int p):int{int local=p+1;return local;}" +
+        // Statement-bodied helpers (a runtime-readonly local inside the callee)
+        // need the independent MethodDef ABI, which is not implemented yet.
+        // Until it is, lowering must fail closed with that exact diagnostic
+        // rather than fold the helper or fabricate a CIL result.
+        RejectWithDiagnostic("fnc plus_one(int p):int{int local=p+1;return local;}" +
                 "fnc main():int{return plus_one(41);}",
-            42, "runtime readonly helper argument survives CFG/CIL");
+            "Statement-bodied helper requires the independent MethodDef ABI",
+            "statement-bodied helper stays fail-closed until MethodDef ABI");
         Reject("fnc plus_one(int p):int{int local=p+1;local=0;return local;}" +
                 "fnc main():int{return plus_one(41);}",
             "runtime readonly helper local cannot be reassigned");
@@ -281,12 +385,106 @@ internal static class StructuredCfgLoweringTests
             6, "runtime val has independent SSA identity");
         Check("fnc main():int{const bool b=2<3;if b{return 42;}else{return 0;}}",
             42, "compile-time boolean branch in emitted CIL");
+        // Same byte-identical portable .atto fixture as Java #2648 and LLVM
+        // #1554; evaluate compiler-owned CFG AND actual emitted CIL.
+        const string logicalFixture = "contracts/logical-word-operators-v1/scalar-parity.atto";
+        var logicalBytes = File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, logicalFixture));
+        var blobHeader = System.Text.Encoding.ASCII.GetBytes("blob " + logicalBytes.Length + "\0");
+        var blobBytes = new byte[blobHeader.Length + logicalBytes.Length];
+        blobHeader.CopyTo(blobBytes, 0);
+        logicalBytes.CopyTo(blobBytes, blobHeader.Length);
+        var logicalBlobSha = Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(blobBytes))
+            .ToLowerInvariant();
+        if (logicalBlobSha != "9e3d2d230faaba5e1ccfeaf1c4449c0c2a120c34")
+            throw new Exception("Cross-backend logical .atto fixture blob drift");
+        Check(new System.Text.UTF8Encoding(false, true).GetString(logicalBytes),
+            42, "exact Java/LLVM logical truth-table fixture through typed CFG/CIL");
+        Check("fnc main():int{if false and true{return 7;}else{return 42;}}",
+            42, "logical and false branch");
+        Check("fnc main():int{if true or false{return 42;}else{return 7;}}",
+            42, "logical or true branch");
+        Check("fnc main():int{let int x=9223372036854775807;" +
+            "if false and x+1>0{return 7;}else{return 42;}}",
+            42, "and skips overflowing right operand");
+        Check("fnc main():int{let int x=9223372036854775807;" +
+            "if true or x+1>0{return 42;}else{return 7;}}",
+            42, "or skips overflowing right operand");
+        CheckOverflow("fnc main():int{let int x=9223372036854775807;" +
+            "if false xor x+1>0{return 42;}else{return 7;}}",
+            "xor eagerly evaluates overflowing right operand");
+        Check("fnc main():int{if true xor true{return 7;}else{return 42;}}",
+            42, "xor boolean false result");
+        Check("fnc main():int{if true != false{return 42;}else{return 7;}}",
+            42, "typed bool inequality");
+        Check("fnc main():int{let int n=0;while (n<3) and (n<10) {n=n+1;}return n+39;}",
+            42, "loop condition short-circuits through SSA backedges");
+        Check("fnc inc(int x):int{return x+1;}" +
+            "fnc main():int{return inc((false xor true) ? 41 : 0);}",
+            42, "ternary and eager xor inside typed call argument");
+        Check("fnc main():int{if true or (false and true){return 42;}else{return 7;}}",
+            42, "nested logical short-circuit branches");
+        Check("fnc main():int{const bool b=false and (9223372036854775807+1>0);" +
+            "return b ? 7 : 42;}",
+            42, "compile-time false and skips unchecked RHS");
+        Check("fnc main():int{const bool b=true or (9223372036854775807+1>0);" +
+            "return b ? 42 : 7;}",
+            42, "compile-time true or skips unchecked RHS");
+        Check("fnc main():int{let bool b=true; b=false;" +
+            "if (b or true) and (true xor false) {return 42;}else{return 7;}}",
+            42, "logical word expressions and assignments");
+        // Lower() intentionally inlines simple helper bodies. Exercise the
+        // *shipping* --structured linked-MethodDef path independently so a
+        // passing reference interpreter cannot masquerade as NativeAOT ABI
+        // evidence. The platform CI additionally executes the native binary.
+        StructuredCfgModuleParityTests.Run();
+
         // Actual typed source-call semantics are checked in the independent
         // reference evaluator, emitted CIL interpreter and deterministic PE.
         // This is an acyclic, expression-only helper milestone, not a
         // general function ABI or runtime call instruction.
         Check("fnc plus_one(int x):int{return x+1;}fnc main():int{return plus_one(41);}",
             42, "one typed i64 helper");
+        // A conservative *candidate audit*, not a CIL tail. or NativeAOT
+        // guarantee. It cannot authorize recursive calls or ABI transfer.
+        var simpleTail = OresStructuredCfgLowering.LowerModule(
+            "fnc inc(int x):int{return x+1;}fnc main():int{return inc(41);}");
+        var tailCandidates = CfgTailCallCandidates.Inspect(simpleTail.Main);
+        if (tailCandidates.Count != 1 || tailCandidates[0].Target != "inc")
+            throw new Exception("CFG direct return/call candidate not identified");
+        var intervening = OresStructuredCfgLowering.LowerModule(
+            "fnc inc(int x):int{return x+1;}fnc main():int{return inc(40)+1;}");
+        if (CfgTailCallCandidates.Inspect(intervening.Main).Count != 0)
+            throw new Exception("CFG falsely claimed non-tail arithmetic as tail");
+        var nested = OresStructuredCfgLowering.LowerModule(
+            "fnc inc(int x):int{return x+1;}fnc main():int{return inc(inc(40));}");
+        if (CfgTailCallCandidates.Inspect(nested.Main).Count != 1)
+            throw new Exception("CFG must identify only the outer returned call");
+
+        // The structural call candidate is NOT automatically ABI compatible:
+        // a zero-parameter main cannot musttail a one-parameter helper.
+        if (CfgSameSignatureTailCandidates.Inspect(simpleTail).Count != 0 ||
+            CfgSameSignatureTailCandidates.Inspect(nested).Count != 0)
+            throw new Exception("CFG ABI probe admitted mismatched caller parameters");
+        var sameSignature = OresStructuredCfgLowering.LowerModule(
+            "fnc inc(int x):int{return x+1;}" +
+            "fnc bridge(int n):int{return inc(n);}" +
+            "fnc main():int{return bridge(41);}");
+        var compatible = CfgSameSignatureTailCandidates.Inspect(sameSignature);
+        if (compatible.Count != 1 ||
+            compatible[0].Caller != "bridge" ||
+            compatible[0].Target != "inc")
+            throw new Exception("CFG failed to identify exact same-signature helper return");
+        var sameSignatureZero = OresStructuredCfgLowering.LowerModule(
+            "fnc answer():int{return 42;}fnc main():int{return answer();}");
+        if (CfgSameSignatureTailCandidates.Inspect(sameSignatureZero).Count != 1)
+            throw new Exception("CFG zero-parameter scalar return ABI missing");
+        var mismatchedScalarType = OresStructuredCfgLowering.LowerModule(
+            "fnc pred(int x):bool{return x==0;}" +
+            "fnc bridge(bool b):bool{return pred(0);}" +
+            "fnc main():int{return 0;}");
+        if (CfgSameSignatureTailCandidates.Inspect(mismatchedScalarType).Count != 0)
+            throw new Exception("CFG ABI gate admitted mismatched boolean/int parameter types");
+
         Check("fnc twice(int x):int{return x*2;}fnc answer():int{return twice(21);}fnc main():int{return answer();}",
             42, "chained helper functions");
         Check("fnc sum(int x,int y):int{return x+y;}fnc main():int{return sum(19,23);}",
@@ -325,6 +523,24 @@ internal static class StructuredCfgLoweringTests
         CheckOverflow("fnc inc(int x):int{return x+1;}fnc main():int{return inc(9223372036854775807);}",
             "typed call overflow preserves checked CIL");
 
+        // These are .atto files. Check() passes them through the real
+        // structured source parser, verified CFG, deterministic CIL emission
+        // and an independent CIL evaluator, never runtime source generation.
+        string operatorDir = Path.Combine(AppContext.BaseDirectory, "contracts", "erl-otp-aot");
+        Check(File.ReadAllText(Path.Combine(operatorDir, "neq-alias-true.atto")),
+            42, "AttoLang !eq true CIL comparison");
+        Check(File.ReadAllText(Path.Combine(operatorDir, "neq-alias-false.atto")),
+            42, "AttoLang !eq false CIL comparison");
+        RejectAliasBoundary(
+            File.ReadAllText(Path.Combine(operatorDir, "neq-alias-split.atto")),
+            "! eq", "spaces must not turn ! eq into != or !eq");
+        RejectWithDiagnostic(
+            File.ReadAllText(Path.Combine(operatorDir, "neq-alias-mixed.atto")),
+            "Equality requires matching int or bool operands", "no implicit bool-to-int equality");
+        RejectAliasBoundary(
+            File.ReadAllText(Path.Combine(operatorDir, "neq-alias-prefix.atto")),
+            "!equation", "!equation must not tokenize as !eq plus suffix");
+
         Check("fnc main():int{if 3 neq 4{return 42;}else{return 0;}}",
             42, "canonical neq true comparison");
         Check("fnc main():int{if 4 neq 4{return 0;}else{return 42;}}",
@@ -339,8 +555,12 @@ internal static class StructuredCfgLoweringTests
             42, "symbolic equality retains existing semantics");
         Reject("fnc main():int{if 1 ne 2{return 42;}return 0;}",
             "ne is not an Oreslang inequality operator");
-        Reject("fnc main():int{if true neq false{return 42;}return 0;}",
-            "i64 comparison must not accept bool operands");
+        // Spec ch. 16: eq/neq are the canonical comparisons. With bool equality
+        // admitted, matching bool operands compare; mixed int/bool still rejects.
+        Check("fnc main():int{if true neq false{return 42;}return 0;}",
+            42, "neq compares matching bool operands");
+        RejectWithDiagnostic("fnc main():int{if 1 neq true{return 42;}return 0;}",
+            "Equality requires matching int or bool operands", "neq rejects mixed int/bool operands");
         Reject("fnc main():int{if 1 ! 2{return 42;}return 0;}",
             "bare exclamation is not an admitted operator");
         Check("fnc main():int{return 2+3*4;}", 14, "arithmetic");
