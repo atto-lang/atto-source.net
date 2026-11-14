@@ -1,0 +1,4 @@
+// Compiled structured i64 comparisons; true branch.
+fnc main(): int {
+  if 3 !eq 4 { return 42; } else { return 0; }
+}

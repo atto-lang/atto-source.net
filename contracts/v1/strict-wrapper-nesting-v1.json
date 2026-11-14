@@ -1,0 +1,45 @@
+{
+  "schema": "oreslang.strict-wrapper-nesting.v1",
+  "decision_date": "2026-10-27",
+  "status": "semantic contract; .NET nested source wrappers remain fail-closed until typed lowering exists",
+  "rules": {
+    "future_nesting": "Future<Future<T>> is distinct from Future<T>",
+    "option_nesting": "Option<Option<T>> is distinct from Option<T>",
+    "await": "removes exactly one Future layer",
+    "unwrap": "removes exactly one Option layer",
+    "flatten": "explicit operation removing exactly one statically proven same-wrapper layer",
+    "implicit_flatten": "forbidden"
+  },
+  "cases": [
+    {
+      "source_type": "Future<Future<int>>",
+      "preserved_type": "Future<Future<int>>",
+      "implicit_canonical_type": null
+    },
+    {
+      "source_type": "Option<Option<int>>",
+      "preserved_type": "Option<Option<int>>",
+      "implicit_canonical_type": null
+    },
+    {
+      "source_type": "Option<Option<int>>",
+      "operation": "unwrap",
+      "result_type": "Option<int>"
+    },
+    {
+      "source_type": "Future<Future<int>>",
+      "operation": "await",
+      "result_type": "Future<int>"
+    },
+    {
+      "source_type": "Option<Option<int>>",
+      "operation": "flatten",
+      "result_type": "Option<int>"
+    },
+    {
+      "source_type": "Future<Future<int>>",
+      "operation": "flatten",
+      "result_type": "Future<int>"
+    }
+  ]
+}
