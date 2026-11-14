@@ -29,6 +29,12 @@ internal static class MtdReceiverAdmissionTests
 
     public static void Run()
     {
+        foreach (var fixture in new[] { "typed-read.atto", "typed-mutable.atto" })
+        {
+            string path = Path.Combine(AppContext.BaseDirectory,
+                "contracts", "mtd-receiver-v1", fixture);
+            Reject(File.ReadAllText(path));
+        }
         Reject("mtd (self: Point) read_x(): int { return self.x; }");
         Reject("mtd (mut self: Point) move_by(int dx): void { self.x += dx; }");
         Reject("pub mtd (mut self: Point) move_by(int dx): void { return; }");
