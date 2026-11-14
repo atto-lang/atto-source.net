@@ -44,6 +44,9 @@ internal static class NativeSourceIdentityV1SelfTest
             "rid_D5f8e146ba97430dac6bf17430477e2a",
             NativeSourceIdentityV1.Kind.Routine), "mixed uppercase");
         Reject<FormatException>(() => NativeSourceIdentityV1.Parse(
+            "sid_652e1632e7464fdb936fc40fe24f1c7b",
+            (NativeSourceIdentityV1.Kind)99), "unknown enum source kind");
+        Reject<FormatException>(() => NativeSourceIdentityV1.Parse(
             "rid_00000000000000000000000000000000",
             NativeSourceIdentityV1.Kind.Routine), "all zero");
         Reject<FormatException>(() => NativeSourceIdentityV1.Parse(
