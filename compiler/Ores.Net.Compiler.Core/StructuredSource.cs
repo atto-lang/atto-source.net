@@ -42,7 +42,12 @@ public sealed record StructuredReturn(int At, StructuredExpr Value) : Structured
 public sealed record StructuredValueStatement(int At, StructuredExpr Value) : StructuredStmt(At);
 public sealed record StructuredIf(int At, StructuredExpr Condition,
     IReadOnlyList<StructuredStmt> Then, IReadOnlyList<StructuredStmt>? Else)
-    : StructuredStmt(At);
+    : StructuredStmt(At)
+{
+    // Only then/fi conditionals may yield a callable tail value.
+    // Braced conditionals are imperative.
+    public bool KeywordDelimited { get; init; }
+}
 public sealed record StructuredWhile(int At, StructuredExpr Condition,
     IReadOnlyList<StructuredStmt> Body) : StructuredStmt(At);
 public sealed record StructuredProgram(string Name, IReadOnlyList<StructuredStmt> Body,
@@ -533,15 +538,15 @@ public static class OresStructuredParser
             if (statement is StructuredReturn) return (statement, true);
             if (statement is StructuredValueStatement value)
                 return (new StructuredReturn(value.At, value.Value), true);
-            if (statement is StructuredIf conditional)
+            if (statement is StructuredIf conditional && conditional.KeywordDelimited)
             {
                 var (yes, yesReturns) = LowerTail(conditional.Then);
                 IReadOnlyList<StructuredStmt>? no = null;
                 bool noReturns = false;
                 if (conditional.Else is not null)
                     (no, noReturns) = LowerTail(conditional.Else);
-                return (new StructuredIf(conditional.At, conditional.Condition, yes, no),
-                    yesReturns && noReturns);
+                return (new StructuredIf(conditional.At, conditional.Condition, yes, no)
+                    { KeywordDelimited = true }, yesReturns && noReturns);
             }
             return (statement, false);
         }
@@ -729,8 +734,8 @@ public static class OresStructuredParser
                         ? KeywordArm(depth + 1, false) : Block(depth + 1);
                 }
                 if (keywordForm) Expect("fi");
-                return (new StructuredIf(at, condition, yes, no),
-                    yesReturns && noReturns);
+                return (new StructuredIf(at, condition, yes, no)
+                    { KeywordDelimited = keywordForm }, yesReturns && noReturns);
             }
             if (Take("while"))
             {

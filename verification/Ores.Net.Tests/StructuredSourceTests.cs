@@ -168,6 +168,8 @@ internal static class StructuredSourceTests
         }, "keyword comma sequence and final value must parse");
         Reject("fnc main():int{if true then 42 else 1 fi fi}",
             "extra keyword terminator must be rejected");
+        Reject("fnc main():int{if true {42;} else {1;}}",
+            "imperative braced if must not yield its last expressions");
         var runtimeBool = OresStructuredParser.Parse("""
             fnc main():int {
                 val bool enabled = true;
