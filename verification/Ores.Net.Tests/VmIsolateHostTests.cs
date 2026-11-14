@@ -12,6 +12,30 @@ internal static class VmIsolateHostTests
     public static void Run()
     {
         var host = new OresVmHost(maxTenants: 2);
+        // Fail closed: the native TenantVm isolate is not wired in yet, and a
+        // host dictionary is not an isolate, so untrusted admission must reject.
+        ExpectFailure(() => host.CreateIsolate("hostile",
+            isolation: OresVmHost.IsolationMode.NativeVmIsolate),
+            "unwired native VM isolate must reject before admission");
+        // Same exact ID grammar as the native Wasmtime tenant host:
+        // no dot components, slashes, path escapes or Unicode lookalikes.
+        // Reject before allocating a tenant or consuming its capacity.
+        foreach (var invalidId in new[] {
+            ".", "..", "../escape", "a/b", @"a\b", "a b", "é",
+            "", " ", new string('x', 129)
+        })
+        {
+            try {
+                host.CreateIsolate(invalidId);
+                throw new Exception("invalid tenant ID was admitted: " + invalidId);
+            }
+            catch (ArgumentException) { }
+        }
+        var validTenantLabel = host.CreateIsolate("tenant.a-b_1");
+        host.Start(validTenantLabel);
+        host.BeginShutdown(validTenantLabel);
+        host.CompleteShutdown(validTenantLabel);
+        host.Destroy(validTenantLabel);
         var a = host.CreateIsolate("tenant-a", maxActors: 1, maxResourcePins: 1);
         var b = host.CreateIsolate("tenant-b", maxActors: 1);
         ExpectFailure(() => host.CreateIsolate("tenant-c"), "host limit");
@@ -26,19 +50,89 @@ internal static class VmIsolateHostTests
             host.GuestSnapshot(a).Scalar != -3 ||
             host.GuestSnapshot(b).Scalar != 100)
             throw new Exception("tenant state isolation failed");
-        ExpectFailure(() => host.InvokeGeneratedScalar(a, () =>
-            host.InvokeGeneratedScalar(a, () => 1)), "nested guest entry");
-        if (host.GuestSnapshot(a).GuestCalls != 0)
-            throw new Exception("guest execution pin leaked after error");
-        try { host.InvokeGeneratedScalar(a, () => throw new OverflowException()); }
+        // An exception from a guest delegate is distinct from a typed
+        // numeric overflow in the trusted host commit. Quarantine on guest
+        // exceptions and require a new incarnation before subsequent calls.
+        var faultHost = new OresVmHost(maxTenants: 1);
+        var fault = faultHost.CreateIsolate("fault");
+        faultHost.Start(fault);
+        if (faultHost.InvokeGeneratedScalar(fault, () => 7) != 7)
+            throw new Exception("fault fixture setup");
+        ExpectFailure(() => faultHost.InvokeGeneratedScalar(fault, () =>
+            faultHost.InvokeGeneratedScalar(fault, () => 1)), "nested guest entry");
+        if (faultHost.Snapshot(fault).Phase != OresVmHost.Phase.Quiescing ||
+            faultHost.GuestSnapshot(fault).GuestCalls != 0)
+            throw new Exception("throwing tenant was not quarantined/drained");
+        ExpectFailure(() => faultHost.InvokeGeneratedScalar(fault, () => 1),
+            "quarantined tenant must refuse new entry");
+        faultHost.CompleteShutdown(fault);
+        faultHost.Destroy(fault);
+        var recovered = faultHost.CreateIsolate("fault");
+        faultHost.Start(recovered);
+        if (faultHost.InvokeGeneratedScalar(recovered, () => 1) != 1)
+            throw new Exception("fault restart reused tenant scalar state");
+        ExpectFailure(() => faultHost.Snapshot(fault), "stale fault handle");
+        try { faultHost.InvokeGeneratedScalar(recovered, () => throw new OverflowException()); }
         catch (OverflowException) { }
+        // The failed call never commits, and the faulted incarnation's state
+        // is discarded (tenant isolation v2), so it reads back as 0.
+        if (faultHost.Snapshot(recovered).Phase != OresVmHost.Phase.Quiescing ||
+            faultHost.GuestSnapshot(recovered).Scalar != 0 ||
+            faultHost.GuestSnapshot(recovered).GuestCalls != 0)
+            throw new Exception("guest fault leaked a pin or mutated state");
+        faultHost.CompleteShutdown(recovered);
+        faultHost.Destroy(recovered);
         if (host.GuestSnapshot(a).Scalar != -3)
-            throw new Exception("failed guest mutated tenant state");
+            throw new Exception("foreign tenant fault changed tenant-a");
+
+        // Two OresVM hosts may mint the same tenant label and numeric
+        // generation. Handle object identity, not these public fields, is
+        // the trusted native authority. A foreign host cannot turn, inspect,
+        // retire, or influence a tenant belonging to this host.
+        var foreignHost = new OresVmHost(maxTenants: 1);
+        // Reuse generation 2 in a DIFFERENT host to prove object identity
+        // still denies the collision, not merely a numeric epoch mismatch.
+        var primer = foreignHost.CreateIsolate("primer");
+        foreignHost.Start(primer);
+        foreignHost.BeginShutdown(primer);
+        foreignHost.CompleteShutdown(primer);
+        foreignHost.Destroy(primer);
+        var foreignA = foreignHost.CreateIsolate("tenant-a");
+        foreignHost.Start(foreignA);
+        if (foreignA.Generation != a.Generation)
+            throw new Exception("foreign host identity collision fixture unavailable");
+        ExpectFailure(() => host.Snapshot(foreignA), "foreign host snapshot");
+        ExpectFailure(() => host.GuestSnapshot(foreignA), "foreign host guest state");
+        ExpectFailure(() => host.InvokeGeneratedScalar(foreignA, () => 77),
+            "foreign host native guest");
+        if (host.GuestSnapshot(a).Scalar != -3 ||
+            foreignHost.GuestSnapshot(foreignA).Scalar != 0)
+            throw new Exception("foreign authority mutated another isolate");
+        foreignHost.BeginShutdown(foreignA);
+        foreignHost.CompleteShutdown(foreignA);
+        foreignHost.Destroy(foreignA);
+
+        // Quota/phase failures must be non-consuming. No valid actor or pin
+        // can be minted by a foreign, stale or quiescing incarnation.
+        foreach (int invalid in new[] { 0, -1, 65537 })
+        {
+            try {
+                host.CreateIsolate("never-admitted", maxActors: invalid);
+                throw new Exception("invalid actor quota admitted: " + invalid);
+            } catch (ArgumentOutOfRangeException) { }
+            try {
+                host.CreateIsolate("never-admitted", maxResourcePins: invalid);
+                throw new Exception("invalid pin quota admitted: " + invalid);
+            } catch (ArgumentOutOfRangeException) { }
+        }
+        ExpectFailure(() => host.CreateIsolate("never-admitted"), "full host after quota negatives");
         var actorA = host.RegisterActor(a, 3);
         var actorB = host.RegisterActor(b, 3);
-        var refA = actorA.Mailbox.CurrentRef;
-        actorA.Mailbox.Send(refA, new byte[] { 1, 2, 3 });
-        if (actorA.Mailbox.QueuedMessages != 1)
+        ExpectFailure(() => host.RegisterActor(a, 3), "duplicate actor incarnation");
+        ExpectFailure(() => host.PinResource(a, actorB), "foreign actor pin");
+        var refA = actorA.CurrentRef;
+        host.SendActor(a, actorA, refA, new byte[] { 1, 2, 3 });
+        if (actorA.QueuedMessages != 1)
             throw new Exception("actor mailbox must be real, not a fake ticket");
         var pin = host.PinResource(a, actorA);
         ExpectFailure(() => host.PinResource(a, actorA), "pin quota");
@@ -48,13 +142,15 @@ internal static class VmIsolateHostTests
         ExpectFailure(() => host.InvokeGeneratedScalar(a, () => 1),
             "guest admission must close at quiescence");
         ExpectFailure(() => host.PinResource(a, actorA), "quiescent admission");
+        ExpectFailure(() => host.SendActor(a, actorA, refA, new byte[] { 9 }),
+            "quiescent mailbox admission");
         ExpectFailure(() => host.CompleteShutdown(a), "drain outstanding actor");
         host.RetireResource(a, actorA, pin);
         ExpectFailure(() => host.RetireResource(a, actorA, pin), "replay ticket");
         host.RetireActor(a, actorA);
-        if (actorA.Mailbox.QueuedMessages != 0)
+        if (actorA.QueuedMessages != 0)
             throw new Exception("retire must drain pending mailbox-owned copies");
-        ExpectFailure(() => actorA.Mailbox.Send(refA, new byte[] { 4 }), "stale actor ref");
+        ExpectFailure(() => host.SendActor(a, actorA, refA, new byte[] { 4 }), "stale actor ref");
         host.CompleteShutdown(a); host.Destroy(a);
         ExpectFailure(() => host.Snapshot(a), "stale tenant handle");
         var a2 = host.CreateIsolate("tenant-a", maxActors: 1);
@@ -149,5 +245,6 @@ internal static class VmIsolateHostTests
 
         host.RetireActor(b, actorB);
         host.BeginShutdown(b); host.CompleteShutdown(b); host.Destroy(b);
+        Console.WriteLine("PASS .NET tenant IsolateVM host admission, generation fencing, quiescence and drain");
     }
 }

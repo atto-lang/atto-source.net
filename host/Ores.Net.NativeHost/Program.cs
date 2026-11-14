@@ -32,12 +32,12 @@ if (args.Length == 1 && args[0] == "--isolate-smoke")
         throw new InvalidOperationException("recreated tenant inherited stale scalar state");
     vm.BeginShutdown(next);vm.CompleteShutdown(next);vm.Destroy(next);
     vm.BeginShutdown(b);vm.CompleteShutdown(b);vm.Destroy(b);
-    Console.WriteLine("native-aot-isolate-smoke: 5 statically linked CIL guest calls passed");
+    await Console.Out.WriteLineAsync("native-aot-isolate-smoke: 5 statically linked CIL guest calls passed");
     return 0;
 }
 if (args.Length != 0)
 {
-    Console.Error.WriteLine("unknown native host argument");
+    await Console.Error.WriteLineAsync("unknown native host argument");
     return 2;
 }
 // Existing default application behavior is unchanged.

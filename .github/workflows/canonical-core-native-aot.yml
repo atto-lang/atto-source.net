@@ -1,0 +1,182 @@
+name: Canonical Oreslang core Native AOT execution
+on:
+  push:
+    branches: ['feat/native-numeric-*']
+  pull_request:
+    paths:
+      - 'compiler/**'
+      - 'library/ores.core/numeric.ores'
+      - 'verification/contracts/core-math-i64.json'
+      - 'verification/Ores.Net.Tests/**'
+      - 'examples/canonical-numeric/**'
+      - '.github/workflows/canonical-core-native-aot.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  canonical-core:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            rid: linux-x64
+            suffix: ''
+          - os: windows-2022
+            rid: win-x64
+            suffix: '.exe'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install Linux Native AOT dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
+      - name: Verify exact source head and canonical .ores bytes
+        shell: pwsh
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if ((git rev-parse HEAD) -ne $env:EXPECTED_HEAD) { throw 'Source head mismatch' }
+          foreach ($path in @('library/ores.core/numeric.ores', 'verification/contracts/core-math-i64.json', 'examples/canonical-numeric/main.ores', 'examples/canonical-numeric/all-vectors.ores', 'examples/canonical-numeric/all-vectors-negative.ores')) {
+            if ((git hash-object --no-filters -- $path) -ne (git rev-parse "HEAD:$path")) {
+              throw "Checkout changed committed file bytes: $path"
+            }
+          }
+          $coreHash = (Get-FileHash library/ores.core/numeric.ores -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($coreHash -ne '3d1d7b77068dd02b3d60b30b72f29a4537a933134ca79e1e81df096dc56f5f33') { throw 'Canonical core source digest mismatch' }
+      - name: Run typed module, CIL, and 24 guest numeric cases
+        shell: pwsh
+        run: |
+          dotnet run -c Release --project verification/Ores.Net.Tests
+          if ($LASTEXITCODE -ne 0) { throw 'Executable native Oreslang numeric conformance failed' }
+      - name: Native AOT compile unchanged canonical core
+        shell: pwsh
+        run: |
+          dotnet publish compiler/Ores.Net.Compiler -c Release -r '${{ matrix.rid }}' -p:PublishAot=true -o artifacts/canonical-core-compiler -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'Native AOT compiler publish failed' }
+          $compiler = Join-Path 'artifacts/canonical-core-compiler' 'oresnet${{ matrix.suffix }}'
+          $raw = & $compiler compile-modules examples/canonical-numeric/main.ores --root . --out artifacts/canonical-core-generated/OresGenerated.dll
+          if ($LASTEXITCODE -ne 0) { throw 'Canonical Oreslang module compile failed' }
+          $witness = $raw | ConvertFrom-Json
+          $units = @($witness.sources | Where-Object {
+            $_.path -eq '0/library/ores.core/numeric.ores' -and
+            $_.sha256 -eq '3d1d7b77068dd02b3d60b30b72f29a4537a933134ca79e1e81df096dc56f5f33'
+          })
+          if ($units.Count -ne 1) { throw 'Generated CIL lacks the pinned Oreslang core source' }
+          New-Item artifacts/canonical-core-app -ItemType Directory -Force | Out-Null
+          $raw | Set-Content artifacts/canonical-core-app/source-graph.json
+      - name: Publish and execute native guest core
+        shell: pwsh
+        run: |
+          $generated = (Resolve-Path artifacts/canonical-core-generated/OresGenerated.dll).Path
+          dotnet publish host/Ores.Net.NativeHost -c Release -r '${{ matrix.rid }}' -p:PublishAot=true "-p:GeneratedAssembly=$generated" -o artifacts/canonical-core-app -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'Native AOT guest host publish failed' }
+          $binary = Join-Path 'artifacts/canonical-core-app' 'oreslang-app${{ matrix.suffix }}'
+          $output = & $binary
+          if ($LASTEXITCODE -ne 0 -or "$output".Trim() -ne '10') {
+            throw 'Canonical .ores clamp_int did not execute correctly under Native AOT'
+          }
+          @{
+            scope='canonical-ores-core-numeric-guest-native-aot'
+            source_commit=(git rev-parse HEAD)
+            source_tree=(git rev-parse 'HEAD^{tree}')
+            rid='${{ matrix.rid }}'
+            source_sha256='3d1d7b77068dd02b3d60b30b72f29a4537a933134ca79e1e81df096dc56f5f33'
+            executable_sha256=(Get-FileHash $binary -Algorithm SHA256).Hash.ToLowerInvariant()
+            output="$output"
+          } | ConvertTo-Json | Set-Content artifacts/canonical-core-app/receipt.json
+      - name: Compile and execute all 24 guest numeric vectors in Native AOT
+        shell: pwsh
+        run: |
+          $compiler = Join-Path 'artifacts/canonical-core-compiler' 'oresnet${{ matrix.suffix }}'
+          $raw = & $compiler compile-modules examples/canonical-numeric/all-vectors.ores --root . --out artifacts/canonical-core-vectors-generated/OresGenerated.dll
+          if ($LASTEXITCODE -ne 0) { throw '24-vector source batch compilation failed' }
+          $witness = $raw | ConvertFrom-Json
+          $canonical = @($witness.sources | Where-Object {
+            $_.path -eq '0/library/ores.core/numeric.ores' -and
+            $_.sha256 -eq '3d1d7b77068dd02b3d60b30b72f29a4537a933134ca79e1e81df096dc56f5f33'
+          })
+          $batchHash = (Get-FileHash examples/canonical-numeric/all-vectors.ores -Algorithm SHA256).Hash.ToLowerInvariant()
+          $guest = @($witness.sources | Where-Object {
+            $_.path -eq '0/examples/canonical-numeric/all-vectors.ores' -and $_.sha256 -eq $batchHash
+          })
+          if ($canonical.Count -ne 1 -or $guest.Count -ne 1 -or $witness.sources.Count -ne 2) {
+            throw 'Batch AOT provenance does not bind exact guest and core source bytes'
+          }
+          $generated = (Resolve-Path artifacts/canonical-core-vectors-generated/OresGenerated.dll).Path
+          dotnet clean host/Ores.Net.NativeHost -c Release -r '${{ matrix.rid }}' "-p:GeneratedAssembly=$generated"
+          if ($LASTEXITCODE -ne 0) { throw 'Native vector host clean failed' }
+          dotnet publish host/Ores.Net.NativeHost -c Release -r '${{ matrix.rid }}' -p:PublishAot=true "-p:GeneratedAssembly=$generated" -o artifacts/canonical-core-vectors-app -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'Native 24-vector AOT host publish failed' }
+          $binary = Join-Path 'artifacts/canonical-core-vectors-app' 'oreslang-app${{ matrix.suffix }}'
+          $output = & $binary
+          if ($LASTEXITCODE -ne 0 -or "$output".Trim() -ne '24') {
+            throw "24-vector native guest execution failed (negative outputs are indexed case IDs): $output"
+          }
+          New-Item artifacts/canonical-core-app -ItemType Directory -Force | Out-Null
+          $raw | Set-Content artifacts/canonical-core-app/vector24-source-graph.json
+          Copy-Item $binary (Join-Path 'artifacts/canonical-core-app' 'oreslang-all-24${{ matrix.suffix }}')
+          @{
+            scope='all-24-canonical-ores-core-i64-vectors-native-aot'
+            source_commit=(git rev-parse HEAD)
+            source_tree=(git rev-parse 'HEAD^{tree}')
+            rid='${{ matrix.rid }}'
+            canonical_source_sha256='3d1d7b77068dd02b3d60b30b72f29a4537a933134ca79e1e81df096dc56f5f33'
+            guest_source_sha256=$batchHash
+            executable_sha256=(Get-FileHash $binary -Algorithm SHA256).Hash.ToLowerInvariant()
+            passed_vectors=24
+            output="$output"
+          } | ConvertTo-Json | Set-Content artifacts/canonical-core-app/vector24-receipt.json
+      - name: Execute deliberately failing first-vector guest in Native AOT
+        shell: pwsh
+        run: |
+          $compiler = Join-Path 'artifacts/canonical-core-compiler' 'oresnet${{ matrix.suffix }}'
+          $raw = & $compiler compile-modules examples/canonical-numeric/all-vectors-negative.ores --root . --out artifacts/canonical-core-negative-generated/OresGenerated.dll
+          if ($LASTEXITCODE -ne 0) { throw 'Negative guest compile failed' }
+          $witness = $raw | ConvertFrom-Json
+          $negativeHash = (Get-FileHash examples/canonical-numeric/all-vectors-negative.ores -Algorithm SHA256).Hash.ToLowerInvariant()
+          $core = @($witness.sources | Where-Object {
+            $_.path -eq '0/library/ores.core/numeric.ores' -and
+            $_.sha256 -eq '3d1d7b77068dd02b3d60b30b72f29a4537a933134ca79e1e81df096dc56f5f33'
+          })
+          $negative = @($witness.sources | Where-Object {
+            $_.path -eq '0/examples/canonical-numeric/all-vectors-negative.ores' -and
+            $_.sha256 -eq $negativeHash
+          })
+          if ($core.Count -ne 1 -or $negative.Count -ne 1 -or $witness.sources.Count -ne 2) {
+            throw 'Negative guest provenance does not bind the exact canonical and mutant source'
+          }
+          $generated = (Resolve-Path artifacts/canonical-core-negative-generated/OresGenerated.dll).Path
+          dotnet clean host/Ores.Net.NativeHost -c Release -r '${{ matrix.rid }}' "-p:GeneratedAssembly=$generated"
+          if ($LASTEXITCODE -ne 0) { throw 'Negative host clean failed' }
+          dotnet publish host/Ores.Net.NativeHost -c Release -r '${{ matrix.rid }}' -p:PublishAot=true "-p:GeneratedAssembly=$generated" -o artifacts/canonical-core-negative-app -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'Negative Native AOT guest link failed' }
+          $binary = Join-Path 'artifacts/canonical-core-negative-app' 'oreslang-app${{ matrix.suffix }}'
+          $output = & $binary
+          if ($LASTEXITCODE -ne 0 -or "$output".Trim() -ne '-1') {
+            throw "Negative Native AOT guest failed to detect case 1 mutation: $output"
+          }
+          $raw | Set-Content artifacts/canonical-core-app/negative-source-graph.json
+          Copy-Item $binary (Join-Path 'artifacts/canonical-core-app' 'oreslang-negative-case-1${{ matrix.suffix }}')
+          @{
+            scope='first-vector-deliberate-failure-canonical-ores-core-i64-native-aot'
+            source_commit=(git rev-parse HEAD)
+            source_tree=(git rev-parse 'HEAD^{tree}')
+            rid='${{ matrix.rid }}'
+            canonical_source_sha256='3d1d7b77068dd02b3d60b30b72f29a4537a933134ca79e1e81df096dc56f5f33'
+            mutant_source_sha256=$negativeHash
+            executable_sha256=(Get-FileHash $binary -Algorithm SHA256).Hash.ToLowerInvariant()
+            expected_failure_case=1
+            output="$output"
+          } | ConvertTo-Json | Set-Content artifacts/canonical-core-app/negative-receipt.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: canonical-core-aot-${{ matrix.rid }}
+          path: artifacts/canonical-core-app/
