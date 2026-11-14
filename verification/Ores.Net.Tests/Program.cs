@@ -34,6 +34,75 @@ static void InvalidSend(Action action, string why)
     throw new Exception("Expected mailbox rejection: " + why);
 }
 
+// Guarded mutable sharing is not implemented in either .NET bootstrap parser.
+// Enforce the dedicated lexer-owned error and the original source offset.
+// A generic parse failure, comment false positive, or future partial lowering
+// must never be reported as successful fail-closed capability enforcement.
+const string mutableShareError =
+    "native rt mut share requires verified SharedMutex<T> capability, guarded lowering and allocation-domain proof in .NET Native AOT at offset ";
+foreach (var source in new[] {
+    // Six shared negative expressions used by the Wasm and Cranelift gates.
+    "fnc main():int{return rt mut share 42;}",
+    "fnc main():int{return (rt mut share 42);}",
+    "fnc main():int{return 1+(rt mut share 2);}",
+    "fnc main():int{return rt mut share (rt borrow 3);}",
+    "fnc main():int{return rt mut share (rt mut borrow 4);}",
+    "fnc main():int{return rt mut share (rt mut share 5);}",
+    "fnc main():int{return rt mut share 1;}",
+    // Heap owners and borrowed aliases must never be silently treated as
+    // CIL i64 scalars merely because the unsupported share is nested.
+    // This asserts the compiler-owned capability diagnostic, not positive
+    // heap/Array/Arc support in either .NET frontend.
+    "fnc main():int{return rt mut share (SharedMutex.new(42));}",
+    "fnc main():int{return rt mut share (Arc.new(42));}",
+    "fnc main():int{return rt mut share (Box.new(42));}",
+    "fnc main():int{return rt mut share (Rc.new(42));}",
+    "fnc main():int{return rt mut share (rt borrow owner);}",
+    "fnc main():int{return rt mut share (rt take owner);}",
+    "fnc main():int{return rt mut share (rt mut borrow owner);}",
+    "fnc main():int{return rt mut share (40+2);}",
+
+    "fnc main():int{return 1+(rt mut share 2);}",
+    "fnc main():int{return rt mut share (rt mut borrow 1);}",
+    "fnc main():int{return rt mut share (rt mut share 5);}",
+    "fnc main():int{return rt /* gap */ mut /* second */ share 3;}",
+    "fnc main():int{return rt /* outer /* nested */ gap */ mut share 6;}",
+    "fnc main():int{return rt" + Environment.NewLine +
+        "mut" + Environment.NewLine + "share 4;}",
+    "fnc main():int{return rt // line boundary" + Environment.NewLine +
+        "mut // second boundary" + Environment.NewLine + "share 8;}"
+})
+{
+    int expectedOffset = source.IndexOf("rt", StringComparison.Ordinal);
+    Require(expectedOffset >= 0, "negative test must contain ownership keyword");
+    foreach (var parser in new Action[] {
+        () => { _ = OresParser.Parse(source); },
+        () => { _ = OresStructuredParser.Parse(source); }
+    })
+    {
+        try
+        {
+            parser();
+            throw new Exception("Unsupported mutable sharing was admitted: " + source);
+        }
+        catch (FormatException ex)
+        {
+            Require(ex.Message == mutableShareError + expectedOffset,
+                "mutable-share denial must identify the capability and exact lexical offset: " + ex.Message);
+        }
+    }
+}
+foreach (var source in new[] {
+    "fnc main():int{return 42;} // rt mut share",
+    "fnc main():int{/* rt mut share */ return 42;}",
+    "fnc main():int{/* rt /* mut */ share */ return 42;}"
+})
+{
+    Require(OresParser.Parse(source) is Literal,
+        "comment-only ownership words must not trigger scalar rejection");
+    _ = OresStructuredParser.Parse(source);
+}
+
 // Portable annotation admission parity: parse the same immutable corpus used
 // by Java/LLVM/WASM/Forge, but assert BOTH independent .NET source frontends.
 {

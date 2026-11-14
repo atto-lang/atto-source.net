@@ -87,6 +87,16 @@ public static partial class OresStructuredParser
     private const int MaxParameters = 16;
     private const int MaxLocalTypeFields = 64;
 
+    private static void RejectUnsupportedMutableSharing(IReadOnlyList<Token> tokens)
+    {
+        for (int i = 0; i + 2 < tokens.Count; i++)
+        {
+            if (tokens[i].Text == "rt" && tokens[i + 1].Text == "mut" &&
+                tokens[i + 2].Text == "share")
+                throw MutableShareAdmission.Unsupported(tokens[i].Offset);
+        }
+    }
+
     public static StructuredProgram Parse(string source)
         => ParseCore(source, null).Program;
 
@@ -135,6 +145,7 @@ public static partial class OresStructuredParser
             if (tokens.Count > MaxTokens) throw new FormatException("Structured token budget exceeded");
         } while (tokens[^1].Text.Length != 0);
         RejectActorPipe(tokens); // before any module graph/import resolution
+        RejectUnsupportedMutableSharing(tokens);
         return tokens;
     }
 
@@ -323,6 +334,7 @@ public static partial class OresStructuredParser
             if (token.Text.Length == 0) break;
         }
         RejectActorPipe(tokens); // deny source graphs before CFG/CIL admission
+        RejectUnsupportedMutableSharing(tokens);
         if (firstNominalOffset >= 0)
         {
             RejectDuplicateNominalMethodSlots(tokens);
