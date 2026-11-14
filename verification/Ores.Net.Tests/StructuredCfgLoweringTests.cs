@@ -174,6 +174,30 @@ internal static class StructuredCfgLoweringTests
             }
             """;
         Check(sum, 45, "two loop-carried SSA values sum 0..9");
+        // Three literal spellings are equivalent, but const is NOT a
+        // compile-time initializer requirement. All four observations travel
+        // through real generated CIL and its checked reference evaluator.
+        foreach (var (source, label) in new[] {
+            ("fnc main():int{int x=7;return x;}", "type-first literal"),
+            ("fnc main():int{const x=7;return x;}", "inferred const literal"),
+            ("fnc main():int{const int x=7;return x;}", "typed const literal"),
+            ("fnc inc(int p):int{return p+1;}fnc main():int{int x=inc(6);return x;}",
+                "type-first runtime helper"),
+            ("fnc inc(int p):int{return p+1;}fnc main():int{const x=inc(6);return x;}",
+                "const runtime helper must remain legal"),
+            ("fnc inc(int p):int{return p+1;}fnc main():int{const int x=inc(6);return x;}",
+                "typed const runtime helper must remain legal")
+        })
+            Check(source, 7, "binding equivalence with CIL: " + label);
+        Check("fnc main():int{let int x=7;x=8;return x;}",
+            8, "explicit let actually rebinds in emitted CIL");
+        Reject("fnc inc(int p):int{return p+1;}" +
+               "fnc main():int{const int x=inc(6);x=8;return x;}",
+            "readonly runtime const cannot rebind after successful call parse");
+        Reject("fnc inc(int p):int{return p+1;}" +
+               "fnc main():int{int x=inc(6);x=8;return x;}",
+            "type-first readonly cannot rebind after successful call parse");
+
         // Signed relational source must execute through verified CFG and
         // emitted CIL; parser-only acceptance is not parity evidence.
         Check(File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
