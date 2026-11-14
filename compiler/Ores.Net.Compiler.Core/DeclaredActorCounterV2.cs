@@ -319,6 +319,11 @@ public static class DeclaredActorCounterV2Emitter
     public static string EmitCSharp(VerifiedExternalCounterV2 plan)
     {
         ArgumentNullException.ThrowIfNull(plan);
+        // The verified state MIR pairs exclusive writes and detached reads.
+        // No generated send may occur while a state loan is held.
+        var stateMir = ActorStateMirV3.Lower(plan);
+        if (!stateMir.ReadLoanReleasedBeforeMailboxSend())
+            throw new InvalidOperationException("ACTOR_MIR_V3: mailbox publication during read loan");
         var b = new StringBuilder();
         b.AppendLine("// Verified external mtd receive: bounded source subset, no dynamic emit.");
         b.AppendLine("using Ores.Net.Runtime;");

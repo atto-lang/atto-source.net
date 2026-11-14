@@ -14,6 +14,9 @@ public static class CounterMainV2Emitter
     public static string EmitCSharp(VerifiedCounterMainV2 plan)
     {
         ArgumentNullException.ThrowIfNull(plan);
+        var stateMir = ActorStateMirV3.Lower(plan);
+        if (!stateMir.ReadLoanReleasedBeforeMailboxSend())
+            throw new InvalidOperationException("ACTOR_MIR_V3: mailbox publication during state loan");
         if (plan.Messages.Count != 4 ||
             plan.ActorName.Length is < 1 or > 128 ||
             plan.ActorName[0] is not (>= 'a' and <= 'z' or >= 'A' and <= 'Z' or '_') ||

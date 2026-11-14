@@ -6,12 +6,21 @@ namespace Ores.Net.Compiler;
 /// <summary>Closed six-file Counter main IR, not general async lowering.</summary>
 public sealed class VerifiedCounterMainV2
 {
-    internal VerifiedCounterMainV2(string actorName, long[] messages)
+    internal VerifiedCounterMainV2(VerifiedExternalCounterV2 actor, long[] messages)
     {
-        ActorName = actorName;
+        ArgumentNullException.ThrowIfNull(actor);
+        Namespace = actor.Namespace;
+        ActorName = actor.ActorName;
+        StateField = actor.StateField;
+        InitialValue = actor.InitialValue;
+        StopValue = actor.StopValue;
         Messages = Array.AsReadOnly((long[])messages.Clone());
     }
+    public string Namespace { get; }
     public string ActorName { get; }
+    public string StateField { get; }
+    public long InitialValue { get; }
+    public long StopValue { get; }
     public IReadOnlyList<long> Messages { get; }
 }
 
@@ -96,7 +105,7 @@ public static partial class OresParser
         r.Expect("get_done"); r.Expect("("); r.Expect(")"); r.Expect(";");
         r.Expect("return"); r.Expect(";"); r.Expect("}");
         r.Done();
-        return new VerifiedCounterMainV2(actor.ActorName, values);
+        return new VerifiedCounterMainV2(actor, values);
     }
 
     private readonly record struct MainToken(string Text, int Offset);

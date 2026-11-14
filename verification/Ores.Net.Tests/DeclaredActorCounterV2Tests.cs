@@ -42,6 +42,14 @@ internal static class DeclaredActorCounterV2Tests
                 plan.StateField == "total" && plan.InitialValue == 0L &&
                 plan.StopValue == 4L,
             "canonical five-file source was not bound to typed receive plan");
+        var stateMir = ActorStateMirV3.Lower(plan);
+        Require(stateMir.Namespace == plan.Namespace &&
+                stateMir.StateField == "total" &&
+                stateMir.ReadLoanReleasedBeforeMailboxSend() &&
+                stateMir.Instructions.IndexOf(ActorStateMirV3.Op.CheckedAddI64) <
+                stateMir.Instructions.IndexOf(ActorStateMirV3.Op.ReleaseWrite) &&
+                stateMir.Loans.Count == 4,
+            "typed receive MIR lacks checked detached Copy or balanced loans");
         string compiled = DeclaredActorCounterV2Emitter.EmitCSharp(plan);
         string golden = File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
             "GeneratedExternalCounterActor.g.cs"));

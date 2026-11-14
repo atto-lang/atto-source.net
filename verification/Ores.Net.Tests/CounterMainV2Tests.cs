@@ -41,6 +41,30 @@ internal static class CounterMainV2Tests
                 verified.Messages.SequenceEqual(new long[] { 1, 2, 3, 4 }),
             "canonical actor identity/send operands not preserved as typed IR");
 
+        var stateMir = ActorStateMirV3.Lower(verified);
+        Require(stateMir.ActorName == verified.ActorName &&
+                stateMir.StateField == "total" && stateMir.InitialValue == 0 &&
+                stateMir.StopValue == 4 &&
+                stateMir.Messages.SequenceEqual(verified.Messages),
+            "typed main MIR does not retain linked actor state and source mail");
+        Require(stateMir.ReadLoanReleasedBeforeMailboxSend() &&
+                stateMir.Instructions.IndexOf(ActorStateMirV3.Op.ReleaseRead) <
+                stateMir.Instructions.IndexOf(ActorStateMirV3.Op.MailboxSendCopyI64) &&
+                stateMir.Instructions.IndexOf(ActorStateMirV3.Op.CheckedAddI64) <
+                stateMir.Instructions.IndexOf(ActorStateMirV3.Op.ReleaseWrite) &&
+                stateMir.Loans.Count == 4 &&
+                stateMir.Loans[0].Mode == ActorStateMirV3.LoanMode.Write &&
+                stateMir.Loans[1].Action == ActorStateMirV3.LoanAction.Release &&
+                stateMir.Loans[2].Mode == ActorStateMirV3.LoanMode.Read &&
+                stateMir.Loans[3].Action == ActorStateMirV3.LoanAction.Release &&
+                stateMir.Loans.All(l => l.GenerationFenced && l.CurrentTurn),
+            "typed main MIR omitted checked arithmetic or balanced state loans");
+        bool immutableMir = false;
+        try { ((IList<ActorStateMirV3.Op>)stateMir.Instructions)[0] =
+            ActorStateMirV3.Op.MailboxSendCopyI64; }
+        catch (NotSupportedException) { immutableMir = true; }
+        Require(immutableMir, "state MIR instructions are mutable by caller");
+
         string compiled = CounterMainV2Emitter.EmitCSharp(verified);
         string golden = File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
             "GeneratedCounterMainV2.g.cs"));
