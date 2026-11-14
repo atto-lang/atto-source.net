@@ -1,0 +1,12 @@
+define isolated actor OverflowCounter as
+    state {
+        count: int = 9223372036854775807;
+    }
+
+    pub increment(): int using state.read, state.write {
+        return self.handle_state(critical-write |s| -> {
+            s.count = s.count + 1;
+            return s.count;
+        });
+    }
+end

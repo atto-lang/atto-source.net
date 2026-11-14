@@ -20,3 +20,9 @@ These instructions apply to this repository's code changes, examples, fixtures, 
 - Use C#/.NET for CIL emission, compiler integration, low-level runtime interop and Native AOT bootstrap; prefer `.atto` for guest-visible library behavior and reusable algorithms.
 - Require full Native AOT compatibility. Do not rely on runtime reflection, dynamic code generation or unbounded metadata discovery; use compiler-generated static descriptors when needed.
 - Test actual compiled `.atto` guest behavior on both supported native targets where possible, and report hosted CLR execution separately from Native AOT evidence.
+
+## AOT / zero-GC controlled-dynamism review gate
+
+Follow [organization policy PR #38](https://github.com/ores-truffle-oreslang/.github/pull/38), [language-spec amendment PR #18](https://github.com/ores-truffle-oreslang/attolang-language-spec.md/pull/18), and [local checklist](docs/AOT_ZERO_GC_DYNAMISM.md). These are proposed design requirements, not evidence of implementation. Every compiler/runtime PR must declare the AOT mode and GC scope; reject uncontrolled runtime dynamism in sealed guest AOT before IR; generate proxy/virtual dispatch metadata ahead of time; prove allocation/closure/actor/task ownership, cycle management, bounded queues, cancellation and exactly-once cleanup.
+
+Require positive and negative compiler-backed `.atto` cases plus actual exact-head guest execution and target-artifact/GC proof. Tests that run only the host, simulate a guest, or show zero executed steps are **NOT_EXECUTED** for guest semantics. Preserve current source-first, security, Rust-only tooling and review rules.
