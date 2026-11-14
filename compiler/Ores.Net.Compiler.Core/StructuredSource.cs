@@ -721,6 +721,8 @@ public static partial class OresStructuredParser
                         if (type == IrValueType.OptionI64)
                             throw Error("E_OPTION_ABI_UNSUPPORTED: Option<int> method parameters need verified two-word ABI");
                         string parameter = Name();
+                        if (Current.Text is "?" or "=")
+                            throw Error("E_OPTIONAL_FORMAL_ABI_UNSUPPORTED: name-level '?' and parameter defaults require checked full-arity binding");
                         if (!parameterTypes.TryAdd(parameter,
                             new LocalBinding(type, StructuredBindingKind.Val, null)))
                             throw Error("Duplicate typed helper parameter");
@@ -1007,14 +1009,30 @@ public static partial class OresStructuredParser
         }
         private IrValueType Type()
         {
-            if (Take("int")) return IrValueType.I64;
-            if (Take("bool")) return IrValueType.Bool;
+            // Type-position '?' is solely Option<T> sugar, not a default
+            // or omittable parameter. This closed NativeAOT slice currently
+            // represents only Option<int> (tag + full-width i64 payload).
+            if (Take("int"))
+            {
+                if (!Take("?")) return IrValueType.I64;
+                if (Current.Text == "?")
+                    throw Error("E_OPTION_NESTED_UNSUPPORTED: int?? requires verified nested Option ABI");
+                return IrValueType.OptionI64;
+            }
+            if (Take("bool"))
+            {
+                if (Take("?"))
+                    throw Error("E_OPTION_I64_ONLY: bool? requires Option<bool> lowering");
+                return IrValueType.Bool;
+            }
             if (Take("Option"))
             {
                 Expect("<");
                 if (!Take("int"))
                     throw Error("E_OPTION_I64_ONLY: this NativeAOT slice admits only Option<int>; no nested or erased generic Option");
                 Expect(">");
+                if (Take("?"))
+                    throw Error("E_OPTION_NESTED_UNSUPPORTED: Option<int>? requires nested Option ABI");
                 return IrValueType.OptionI64;
             }
             throw Error("Expected int, bool or closed Option<int> type");
