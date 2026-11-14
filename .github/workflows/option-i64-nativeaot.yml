@@ -26,6 +26,8 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           test "$(git hash-object contracts/option-i64/v1/option-some42.atto)" = 64c36f7221da489033a5c64d15588226c7f073cf
           test "$(git hash-object contracts/option-i64/v1/option-none42.atto)" = e49561e86f96ae60478f52a21c99160a20f339a0
+          test "$(git hash-object contracts/option-i64/v1/option-is-none42.atto)" = c9ba0fa0bcd14863e098e77ff090ac9c4e46a893
+          test "$(git hash-object contracts/option-i64/v1/option-equality42.atto)" = 771643415dfe2a8e7948fb5b9822a14835d20922
           test "$(git hash-object contracts/option-i64/v1/reject-nested-option.atto)" = ed0f192cfd3b6db259b24ae44ecb28fff57461dc
           test "$(git hash-object contracts/option-i64/v1/reject-unsafe-unwrap.atto)" = 2ffc57354271b6b8f679ee1776f5e1e3b04829d7
           test -z "$(git status --porcelain)"
@@ -40,7 +42,7 @@ jobs:
           dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release | tee option-tests.log
           grep -F 'NET_OPTION_I64_CFG_CIL_TESTS_EXECUTED' option-tests.log
           compiler=compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj
-          for source in contracts/option-i64/v1/option-{some42,none42}.atto; do
+          for source in contracts/option-i64/v1/option-{some42,none42,is-none42,equality42}.atto; do
             dotnet run --no-build --project "$compiler" -c Release -- check-structured "$source"
             if dotnet run --no-build --project "$compiler" -c Release -- check "$source"; then
               echo 'Shipping scalar compiler accepted experimental Option<int>' >&2
@@ -67,6 +69,14 @@ jobs:
           binary=artifacts/option-i64-none/linux-x64/oreslang-app
           bash verification/assert-linux-native-release.sh "$binary"
           test "$("$binary")" = 42
+          bash scripts/publish-linux.sh contracts/option-i64/v1/option-is-none42.atto artifacts/option-i64-is-none --structured
+          binary=artifacts/option-i64-is-none/linux-x64/oreslang-app
+          bash verification/assert-linux-native-release.sh "$binary"
+          test "$("$binary")" = 42
+          bash scripts/publish-linux.sh contracts/option-i64/v1/option-equality42.atto artifacts/option-i64-equality --structured
+          binary=artifacts/option-i64-equality/linux-x64/oreslang-app
+          bash verification/assert-linux-native-release.sh "$binary"
+          test "$("$binary")" = 42
           compiler=artifacts/compiler/linux-x64/oresnet
           for source in contracts/option-i64/v1/reject-{nested-option,unsafe-unwrap}.atto; do
             rejected=artifacts/option-i64-negative/OresGenerated.dll
@@ -78,8 +88,8 @@ jobs:
             fi
             test ! -e "$rejected"
           done
-          sha256sum artifacts/compiler/linux-x64/oresnet artifacts/option-i64-{some,none}/linux-x64/oreslang-app
-          echo "NET_OPTION_I64_LINUX_NATIVE_AOT_GUEST_42|head=$(git rev-parse HEAD)|Some=42|None=42"
+          sha256sum artifacts/compiler/linux-x64/oresnet artifacts/option-i64-{some,none,is-none,equality}/linux-x64/oreslang-app
+          echo "NET_OPTION_I64_LINUX_NATIVE_AOT_GUEST_42|head=$(git rev-parse HEAD)|Some=42|None=42|IsNone=42|Equality=42"
   windows-option-i64:
     runs-on: windows-2022
     timeout-minutes: 90
@@ -101,6 +111,8 @@ jobs:
           $expected = @{
             'contracts/option-i64/v1/option-some42.atto' = '64c36f7221da489033a5c64d15588226c7f073cf'
             'contracts/option-i64/v1/option-none42.atto' = 'e49561e86f96ae60478f52a21c99160a20f339a0'
+            'contracts/option-i64/v1/option-is-none42.atto' = 'c9ba0fa0bcd14863e098e77ff090ac9c4e46a893'
+            'contracts/option-i64/v1/option-equality42.atto' = '771643415dfe2a8e7948fb5b9822a14835d20922'
             'contracts/option-i64/v1/reject-nested-option.atto' = 'ed0f192cfd3b6db259b24ae44ecb28fff57461dc'
             'contracts/option-i64/v1/reject-unsafe-unwrap.atto' = '2ffc57354271b6b8f679ee1776f5e1e3b04829d7'
           }
@@ -124,7 +136,7 @@ jobs:
       - name: Run actual Windows NativeAOT compiler and guests
         shell: pwsh
         run: |
-          foreach ($variant in @('some42','none42')) {
+          foreach ($variant in @('some42','none42','is-none42','equality42')) {
             $source = "contracts/option-i64/v1/option-$variant.atto"
             $destination = "artifacts/option-i64-$variant"
             ./scripts/publish-windows.ps1 -Source $source -Rid win-x64 -Output $destination -Structured
@@ -147,4 +159,4 @@ jobs:
               throw "Native AOT compiler admitted forbidden Option source: $negative"
             }
           }
-          Write-Host "NET_OPTION_I64_WINDOWS_NATIVE_AOT_GUEST_42|head=$((& git rev-parse HEAD).Trim())|Some=42|None=42"
+          Write-Host "NET_OPTION_I64_WINDOWS_NATIVE_AOT_GUEST_42|head=$((& git rev-parse HEAD).Trim())|Some=42|None=42|IsNone=42|Equality=42"

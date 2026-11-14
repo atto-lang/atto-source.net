@@ -176,14 +176,14 @@ public static class OresStructuredCfgLowering
 
         // Explicit tagged Option<int> representation: no all-bits-value
         // sentinel, nullable managed heap object or implicit flattening.
-        private (int Tag, int Payload) OptionParts(StructuredExpr option, Block block,
+        private (int Tag, int Payload) OptionParts(StructuredExpr option, ref Block block,
             Dictionary<string, Binding> variables)
         {
             switch (option)
             {
                 case StructuredSome some:
                 {
-                    int payload = Expression(some.Payload, block, variables);
+                    int payload = Expression(some.Payload, ref block, variables);
                     int tag = Emit(block, CfgOpcode.ConstantBool, IrValueType.Bool,
                         boolean: true);
                     return (tag, payload);
@@ -232,8 +232,7 @@ public static class OresStructuredCfgLowering
                         "E_OPTION_I64_ONLY: unverified Option<int> expression");
             }
         }
-
-        private int Expression(StructuredExpr expression, Block block,
+        private int Expression(StructuredExpr expression, ref Block block,
             Dictionary<string, Binding> variables)
         {
             switch (expression)
@@ -249,14 +248,33 @@ public static class OresStructuredCfgLowering
                         variable.Type != read.Type || variable.Type == IrValueType.OptionI64)
                         throw new FormatException("Unbound or unverified scalar CFG local");
                     return variable.ValueId;
+                // Operands may short-circuit into new CFG blocks (ref block), so
+                // evaluate them fully before emitting into the current block.
                 case StructuredOptionPresent present:
-                    return OptionParts(present.Option, block, variables).Tag;
+                    return OptionParts(present.Option, ref block, variables).Tag;
+                case StructuredOptionAbsent absent:
+                {
+                    int tag = OptionParts(absent.Option, ref block, variables).Tag;
+                    return Emit(block, CfgOpcode.BoolNot, IrValueType.Bool, left: tag);
+                }
+                case StructuredOptionEqual comparison:
+                {
+                    // Preserve left-to-right source evaluation exactly once.
+                    var lhs = OptionParts(comparison.LeftOption, ref block, variables);
+                    var rhs = OptionParts(comparison.RightOption, ref block, variables);
+                    int equal = Emit(block, CfgOpcode.OptionEqualI64, IrValueType.Bool,
+                        left: lhs.Tag, right: lhs.Payload,
+                        arguments: new[] { rhs.Tag, rhs.Payload });
+                    return comparison.Negated
+                        ? Emit(block, CfgOpcode.BoolNot, IrValueType.Bool, left: equal)
+                        : equal;
+                }
                 case StructuredOptionOr selected:
                 {
-                    var option = OptionParts(selected.Option, block, variables);
+                    var option = OptionParts(selected.Option, ref block, variables);
                     // Eager source evaluation: evaluate the fallback once even
                     // when the option is Some; only selection is conditional.
-                    int fallback = Expression(selected.Fallback, block, variables);
+                    int fallback = Expression(selected.Fallback, ref block, variables);
                     return Emit(block, CfgOpcode.OptionOrI64, IrValueType.I64,
                         left: option.Tag, right: option.Payload,
                         arguments: new[] { fallback });
@@ -275,7 +293,7 @@ public static class OresStructuredCfgLowering
                         {
                             if (call.Arguments[i].Type != signature.ParameterTypes[i])
                                 throw new FormatException("Unverified structured ABI argument");
-                            args[i] = Expression(call.Arguments[i], block, variables);
+                            args[i] = Expression(call.Arguments[i], ref block, variables);
                         }
                         return Emit(block, CfgOpcode.Call, call.Type,
                             target: call.Name, arguments: args);
@@ -294,32 +312,64 @@ public static class OresStructuredCfgLowering
                         var parameter = function.Parameters[i];
                         if (parameter.Type != call.Arguments[i].Type)
                             throw new FormatException("Unverified structured call argument type");
-                        int value = Expression(call.Arguments[i], block, variables);
+                        int value = Expression(call.Arguments[i], ref block, variables);
                         parameters.Add(parameter.Name, new Binding(parameter.Type, value));
                     }
                     if (function.ReturnValue is null)
                         throw new FormatException(
                             "Statement-bodied helper requires the independent MethodDef ABI");
-                    return Expression(function.ReturnValue, block, parameters);
+                    return Expression(function.ReturnValue, ref block, parameters);
                 }
                 case StructuredNegate negate:
                 {
                     int zero = Emit(block, CfgOpcode.ConstantI64, IrValueType.I64, value: 0);
-                    int operand = Expression(negate.Value, block, variables);
+                    int operand = Expression(negate.Value, ref block, variables);
                     return Emit(block, CfgOpcode.CheckedSubtract, IrValueType.I64,
                         left: zero, right: operand);
                 }
+                case StructuredConditional conditional:
+                {
+                    int condition = Expression(conditional.Test, ref block, variables);
+                    var yes = NewBlock();
+                    var no = NewBlock();
+                    var join = NewBlock();
+                    int joined = NextValue();
+                    join.Parameters.Add(new CfgParameter(joined, conditional.Type));
+                    block.Terminator = new CfgBranch(condition, yes.Name,
+                        Array.Empty<int>(), no.Name, Array.Empty<int>());
+                    int trueValue = Expression(conditional.WhenTrue, ref yes, variables);
+                    yes.Terminator = new CfgJump(join.Name, new[] { trueValue });
+                    int falseValue = Expression(conditional.WhenFalse, ref no, variables);
+                    no.Terminator = new CfgJump(join.Name, new[] { falseValue });
+                    block = join;
+                    return joined;
+                }
                 case StructuredBinary binary:
                 {
-                    int left = Expression(binary.Left, block, variables);
-                    int right = Expression(binary.Right, block, variables);
-                    // Evaluate the left expression first (including all calls),
-                    // then right; only reverse the already-evaluated SSA IDs.
-                    // This preserves Oreslang eager left-to-right evaluation
-                    // without adding a backend-specific greater-than operator.
-                    if (binary.Operator == StructuredOperator.GreaterThanI64)
-                        return Emit(block, CfgOpcode.LessThanI64, IrValueType.Bool,
-                            left: right, right: left);
+                    if (binary.Operator is StructuredOperator.LogicalAnd or StructuredOperator.LogicalOr)
+                    {
+                        int condition = Expression(binary.Left, ref block, variables);
+                        var rhs = NewBlock();
+                        var join = NewBlock();
+                        int joined = NextValue();
+                        join.Parameters.Add(new CfgParameter(joined, IrValueType.Bool));
+                        // The short-circuit edge carries the tested bool itself.
+                        // RHS is compiled into a separate CFG block and can never
+                        // be evaluated on that edge, including for nested calls.
+                        block.Terminator = binary.Operator == StructuredOperator.LogicalAnd
+                            ? new CfgBranch(condition, rhs.Name, Array.Empty<int>(),
+                                join.Name, new[] { condition })
+                            : new CfgBranch(condition, join.Name, new[] { condition },
+                                rhs.Name, Array.Empty<int>());
+                        int value = Expression(binary.Right, ref rhs, variables);
+                        rhs.Terminator = new CfgJump(join.Name, new[] { value });
+                        block = join;
+                        return joined;
+                    }
+                    int left = Expression(binary.Left, ref block, variables);
+                    int right = Expression(binary.Right, ref block, variables);
+                    // Left then right are fully evaluated above (eager left-to-right);
+                    // each relation maps to its own verified CFG opcode.
                     var opcode = binary.Operator switch
                     {
                         StructuredOperator.Add => CfgOpcode.CheckedAdd,
@@ -328,6 +378,12 @@ public static class OresStructuredCfgLowering
                         StructuredOperator.EqualI64 => CfgOpcode.EqualI64,
                         StructuredOperator.NotEqualI64 => CfgOpcode.NotEqualI64,
                         StructuredOperator.LessThanI64 => CfgOpcode.LessThanI64,
+                        StructuredOperator.GreaterThanI64 => CfgOpcode.GreaterThanI64,
+                        StructuredOperator.LessThanOrEqualI64 => CfgOpcode.LessThanOrEqualI64,
+                        StructuredOperator.GreaterThanOrEqualI64 => CfgOpcode.GreaterThanOrEqualI64,
+                        StructuredOperator.EqualBool => CfgOpcode.EqualBool,
+                        StructuredOperator.NotEqualBool => CfgOpcode.NotEqualBool,
+                        StructuredOperator.LogicalXor => CfgOpcode.XorBool,
                         _ => throw new FormatException("Unsupported structured operation")
                     };
                     return Emit(block, opcode, binary.Type, left: left, right: right);
@@ -411,9 +467,11 @@ public static class OresStructuredCfgLowering
                     {
                         if (variables.ContainsKey(declaration.Name))
                             throw new FormatException("Shadowed structured CFG local");
+                        Block evalBlock = current;
                         if (declaration.ValueType == IrValueType.OptionI64)
                         {
-                            var option = OptionParts(declaration.Initializer, current, variables);
+                            var option = OptionParts(declaration.Initializer, ref evalBlock, variables);
+                            current = evalBlock;
                             variables.Add(declaration.Name, new Binding(
                                 IrValueType.OptionI64, option.Tag, option.Payload));
                         }
@@ -427,7 +485,8 @@ public static class OresStructuredCfgLowering
                         }
                         else
                         {
-                            int value = Expression(declaration.Initializer, current, variables);
+                            int value = Expression(declaration.Initializer, ref evalBlock, variables);
+                            current = evalBlock;
                             variables.Add(declaration.Name, new Binding(declaration.ValueType, value));
                         }
                         break;
@@ -438,22 +497,32 @@ public static class OresStructuredCfgLowering
                             throw new FormatException("Unknown structured CFG assignment");
                         if (original.Type == IrValueType.FixedArrayI64)
                             throw new FormatException("E_ARRAY_IMMUTABLE_ONLY: fixed arrays cannot be reassigned");
+                        Block evalBlock = current;
                         if (original.Type == IrValueType.OptionI64)
                         {
-                            var option = OptionParts(assignment.Value, current, variables);
+                            var option = OptionParts(assignment.Value, ref evalBlock, variables);
+                            current = evalBlock;
                             variables[assignment.Name] = new Binding(
                                 IrValueType.OptionI64, option.Tag, option.Payload);
                         }
                         else
                         {
-                            int value = Expression(assignment.Value, current, variables);
+                            int value = Expression(assignment.Value, ref evalBlock, variables);
+                            current = evalBlock;
                             variables[assignment.Name] = new Binding(original.Type, value);
                         }
                         break;
                     }
                     case StructuredReturn returned:
-                        current.Terminator = new CfgReturn(
-                            Expression(returned.Value, current, variables));
+                    {
+                        Block evalBlock = current;
+                        int result = Expression(returned.Value, ref evalBlock, variables);
+                        evalBlock.Terminator = new CfgReturn(result);
+                        current = null;
+                        break;
+                    }
+                    case StructuredReturnVoid:
+                        current.Terminator = new CfgReturnVoid();
                         current = null;
                         break;
                     case StructuredIf conditional:
@@ -472,7 +541,8 @@ public static class OresStructuredCfgLowering
         private Block? If(StructuredIf statement, Block origin,
             Dictionary<string, Binding> variables)
         {
-            int condition = Expression(statement.Condition, origin, variables);
+            Block conditionBlock = origin;
+            int condition = Expression(statement.Condition, ref conditionBlock, variables);
             var names = Names(variables);
             var thenBlock = NewBlock();
             var thenEnvironment = new Dictionary<string, Binding>(
@@ -491,7 +561,7 @@ public static class OresStructuredCfgLowering
 
             if (thenEnd is null && statement.Else is not null && elseEnd is null)
             {
-                origin.Terminator = new CfgBranch(condition, thenBlock.Name,
+                conditionBlock.Terminator = new CfgBranch(condition, thenBlock.Name,
                     Array.Empty<int>(), elseBlock!.Name, Array.Empty<int>());
                 return null;
             }
@@ -501,13 +571,13 @@ public static class OresStructuredCfgLowering
             if (thenEnd is not null)
                 thenEnd.Terminator = new CfgJump(join.Name, Values(names, thenEnvironment));
             if (statement.Else is null)
-                origin.Terminator = new CfgBranch(condition, thenBlock.Name,
+                conditionBlock.Terminator = new CfgBranch(condition, thenBlock.Name,
                     Array.Empty<int>(), join.Name, Values(names, variables));
             else
             {
                 if (elseEnd is not null)
                     elseEnd.Terminator = new CfgJump(join.Name, Values(names, elseEnvironment));
-                origin.Terminator = new CfgBranch(condition, thenBlock.Name,
+                conditionBlock.Terminator = new CfgBranch(condition, thenBlock.Name,
                     Array.Empty<int>(), elseBlock!.Name, Array.Empty<int>());
             }
             foreach (string name in names)
@@ -523,7 +593,8 @@ public static class OresStructuredCfgLowering
             Block header = Join(names, variables, headerVariables);
             origin.Terminator = new CfgJump(header.Name, Values(names, variables));
 
-            int condition = Expression(statement.Condition, header, headerVariables);
+            Block conditionBlock = header;
+            int condition = Expression(statement.Condition, ref conditionBlock, headerVariables);
             Block body = NewBlock();
             var bodyVariables = new Dictionary<string, Binding>(
                 headerVariables, StringComparer.Ordinal);
@@ -533,7 +604,7 @@ public static class OresStructuredCfgLowering
 
             var exitVariables = new Dictionary<string, Binding>(StringComparer.Ordinal);
             Block exit = Join(names, headerVariables, exitVariables);
-            header.Terminator = new CfgBranch(condition, body.Name,
+            conditionBlock.Terminator = new CfgBranch(condition, body.Name,
                 Array.Empty<int>(), exit.Name, Values(names, headerVariables));
             foreach (string name in names)
                 variables[name] = exitVariables[name];

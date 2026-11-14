@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType></PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../compiler/Ores.Net.Compiler.Core/QuotedSourceSyntax.cs" Link="QuotedSourceSyntax.cs" />
+  </ItemGroup>
+</Project>
