@@ -526,6 +526,14 @@ internal static class ActorRuntimeSelfTest
     }
 
 
+    // This test intentionally inspects a private auto-property backing field.
+    // NativeAOT reflection trimming may otherwise erase its metadata even
+    // though the production actor-cell field still exists. Root only that
+    // exact test-required member; do not bypass the error-path assertion.
+    [System.Diagnostics.CodeAnalysis.DynamicDependency(
+        "<Mailbox>k__BackingField",
+        "Ores.Net.Runtime.ActorRuntime+ActorCell",
+        "Ores.Net.Runtime")]
     private static void FailedTurnAdmissionScrubsDequeuedMessage()
     {
         using var runtime = new ActorRuntime(Options());
