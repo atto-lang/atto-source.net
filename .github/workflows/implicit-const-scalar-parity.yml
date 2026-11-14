@@ -32,9 +32,10 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
           test -z "$(git status --porcelain)"
-          test "$(find contracts/implicit-const-scalar-v1 -maxdepth 1 -type f -name '*.atto' | wc -l)" -eq 8
+          test "$(find contracts/implicit-const-scalar-v1 -maxdepth 1 -type f -name '*.atto' | wc -l)" -eq 9
           for row in \
             'literal-equivalence a8e49769215a78946009f2cd2ac685b7c34c7804' \
+            'const-reference a1ebef245f6357ca712b30d9e02d379da3e65abc' \
             'const-arithmetic 44daf131a7793f3b341c41a7e934cf8afe51f9db' \
             'bool-local 52c7909c0d2ba760c000fef2cc4434aefbd91f97' \
             'runtime-val-let fb47b57cb715ff9162de6a757ae515c1a9c19a30' \
