@@ -86,6 +86,29 @@ internal static class NativeTraceInstrumentationV1SelfTest
         // Restore the independent denial fixture's initial OFF configuration.
         boundaries.Configure(0, true);
 
+        // Concurrent administrative reconfiguration cannot create an epoch
+        // observation whose mask belongs to a different policy generation.
+        var toggled = new NativeTraceInstrumentationV1(
+            NativeTraceInstrumentationV1.BuildMode.Boundaries);
+        var writer = new Thread(() =>
+        {
+            for (int i = 0; i < 2000; ++i)
+                toggled.Configure((i & 1) == 0 ?
+                    NativeTraceInstrumentationV1.Boundary : 0, true);
+        });
+        writer.Start();
+        for (int i = 0; i < 4000; ++i)
+        {
+            var snap = toggled.Snapshot();
+            Check(snap.Mask == ((snap.Version & 1) == 1 ?
+                    NativeTraceInstrumentationV1.Boundary : 0),
+                "coherent policy epoch/mask under concurrent reconfiguration");
+        }
+        writer.Join();
+        Check(toggled.Snapshot().Version == 2000 &&
+            toggled.Snapshot().Mask == 0,
+            "last OFF configuration is retained after concurrent updates");
+
         var adaptive = new NativeTraceInstrumentationV1(
             NativeTraceInstrumentationV1.BuildMode.Adaptive);
         Check(adaptive.CanRecompile &&
