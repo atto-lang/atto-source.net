@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../runtime/Ores.Net.Runtime/Ores.Net.Runtime.csproj" />
+    <Compile Include="../Ores.Net.Tests/BoundedDemandI64PortSelfTest.cs"
+             Link="BoundedDemandI64PortSelfTest.cs" />
+  </ItemGroup>
+</Project>

@@ -5,8 +5,10 @@ internal static class ActorRuntimeSelfTest
 {
     public static void Run()
     {
+        DemandBackedActorRuntimeReusesQuotaAfterStop();
         ThreeKindsUseAssignedDomainsAndActorArenas();
         UnknownActorKindFailsBeforeNativeAllocation();
+        AsyncVoidHostHandlerFailsBeforeNativeAllocation();
         RejectedMessagesDoNotStartCarriers();
         ForgedSameIdCannotObserveTermination();
         OneActorNeverRunsTwoHandlersConcurrently();
@@ -15,6 +17,7 @@ internal static class ActorRuntimeSelfTest
         RetainedContextCannotUseExpiredTurn();
         LifetimePinCanOutliveActorTurnAndStop();
         HandlerFaultRetiresOnlyThatActor();
+        StopDuringActiveTurnFencesBacklogAcrossDomains();
         ConcurrentDisposersAwaitCarrierQuiescence();
         FailedTurnAdmissionScrubsDequeuedMessage();
         Console.WriteLine(
@@ -75,6 +78,33 @@ internal static class ActorRuntimeSelfTest
             "invalid kind must not consume actor, native-memory or carrier capacity");
     }
 
+    private static void AsyncVoidHostHandlerFailsBeforeNativeAllocation()
+    {
+        using var runtime = new ActorRuntime(Options());
+        ActorMessageHandler asyncVoid = async (_, _) =>
+        {
+            await Task.Yield();
+        };
+
+        bool rejected = false;
+        try
+        {
+            _ = runtime.Spawn(ActorKind.Private, asyncVoid);
+        }
+        catch (ArgumentException ex) when (ex.ParamName == "handler")
+        {
+            rejected = ex.Message.Contains(
+                "suspension requires scheduler-owned logical actor continuation lowering",
+                StringComparison.Ordinal);
+        }
+
+        Require(rejected,
+            "async-void handler must fail before it can escape the actor turn");
+        Require(runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0 &&
+                runtime.StartedCarrierThreads == 0,
+            "rejected async handler consumes no actor, arena or carrier capacity");
+    }
+
     private static void RejectedMessagesDoNotStartCarriers()
     {
         using var runtime = new ActorRuntime(Options());
@@ -122,6 +152,64 @@ internal static class ActorRuntimeSelfTest
             QueueCapacityPerDomain = 64
         }
     };
+
+    private static void DemandBackedActorRuntimeReusesQuotaAfterStop()
+    {
+        using var runtime = new ActorRuntime(new ActorRuntimeOptions
+        {
+            MaxActors = 2,
+            MessagesPerDispatch = 1,
+            MailboxMessages = 4,
+            MailboxBytes = 64,
+            ActorPersistentBytes = 8192,
+            ActorScratchBytes = 1024,
+            ActorMaxAllocations = 8,
+            ActorMaxLifetimePins = 4,
+            ActorMaxReadLoans = 4,
+            NativeBudgetBytes = 4096,
+            DemandBackedActorHeaps = true,
+            Dispatcher = new ActorDispatcherOptions
+            {
+                PrivateWorkers = 1,
+                SharedWorkers = 1,
+                UntrustedWorkers = 1,
+                QueueCapacityPerDomain = 2
+            }
+        });
+        using var done = new CountdownEvent(2);
+        ActorMessageHandler handler = (ctx, msg) =>
+        {
+            var value = ctx.AllocatePersistent(8);
+            ctx.Write(value, 0, msg.Span);
+            var bytes = new byte[1];
+            ctx.Read(value, 0, bytes);
+            Require(bytes[0] == msg.Span[0], "actual dispatch uses dynamic actor heap");
+            done.Signal();
+        };
+        var first = runtime.Spawn(ActorKind.Shared, handler);
+        var second = runtime.Spawn(ActorKind.Shared, handler);
+        Require(runtime.LiveActors == 2 && runtime.NativeReservedBytes == 0,
+            "actual runtime spawns two logical actor heaps with no physical backing");
+        runtime.Send(first, new byte[] { 41 });
+        Require(WaitUntil(() => runtime.CompletedMessages == 1),
+            "first demand-backed actor message completed");
+        Require(runtime.NativeReservedBytes == 4096,
+            "one actor only charged a 4-KiB native slab");
+        runtime.Stop(first);
+        Require(WaitUntil(() => runtime.NativeReservedBytes == 0 &&
+                runtime.LiveActors == 1),
+            "first actor physically frees slab and returns tenant quota");
+        runtime.Send(second, new byte[] { 42 });
+        Require(WaitUntil(() => runtime.CompletedMessages == 2),
+            "second actor executes after first actor reclaimed capacity");
+        Require(runtime.NativeReservedBytes == 4096,
+            "same logical heap size does not force eager reservations");
+        Require(done.Wait(TimeSpan.FromSeconds(5)), "both dynamic actor turns ran");
+        runtime.Stop(second);
+        Require(WaitUntil(() => runtime.NativeReservedBytes == 0 &&
+                runtime.LiveActors == 0),
+            "all dynamically allocated runtime actor heaps are freed");
+    }
 
     private static void ThreeKindsUseAssignedDomainsAndActorArenas()
     {
@@ -442,10 +530,24 @@ internal static class ActorRuntimeSelfTest
 
             var messagesField = typeof(ActorMailbox).GetField(
                 "_messages", BindingFlags.Instance | BindingFlags.NonPublic);
-            if (messagesField?.GetValue(mailbox) is not Queue<byte[]> messages ||
-                messages.Count != 1)
+            if (messagesField?.GetValue(mailbox) is not System.Collections.IEnumerable messages ||
+                mailbox.QueuedMessages != 1)
                 throw new Exception("Could not capture pending envelope");
-            byte[] ownedEnvelope = messages.Peek();
+            // The mailbox stores typed USER/CONTROL envelopes, not raw byte[]
+            // entries. Capture the actual queued USER payload so the existing
+            // failed-turn zeroization oracle still observes the owned buffer.
+            var iterator = messages.GetEnumerator();
+            if (!iterator.MoveNext() || iterator.Current is not object envelope ||
+                iterator.MoveNext())
+                throw new Exception("Expected exactly one pending envelope");
+            var envelopeType = envelope.GetType();
+            var payloadProperty = envelopeType.GetProperty(
+                "Payload", BindingFlags.Instance | BindingFlags.Public);
+            var controlProperty = envelopeType.GetProperty(
+                "IsControl", BindingFlags.Instance | BindingFlags.Public);
+            if (payloadProperty?.GetValue(envelope) is not byte[] ownedEnvelope ||
+                controlProperty?.GetValue(envelope) is not bool isControl || isControl)
+                throw new Exception("Expected one pending user-data envelope");
             release.Set();
             Require(WaitUntil(() => runtime.LiveActors == 0),
                 "turn-admission failure must retire its actor");
@@ -513,6 +615,80 @@ internal static class ActorRuntimeSelfTest
 
         Require(runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0,
             "both disposal callers observed complete native reclamation");
+    }
+
+
+    // Host-level parity regression: stopping one actor while its physical turn
+    // is executing must revoke mailbox admission, discard its queued DATA, and
+    // preserve both its arena and an unrelated actor until safe quiescence.
+    // This is not evidence of compiler-generated .atto actor guest execution.
+    private static void StopDuringActiveTurnFencesBacklogAcrossDomains()
+    {
+        foreach (ActorKind kind in new[] {
+            ActorKind.Private, ActorKind.Shared, ActorKind.Untrusted
+        })
+        {
+            using var runtime = new ActorRuntime(Options());
+            using var entered = new ManualResetEventSlim();
+            using var release = new ManualResetEventSlim();
+            using var siblingDone = new ManualResetEventSlim();
+            int received = 0;
+
+            var target = runtime.Spawn(kind, (_, _) =>
+            {
+                Interlocked.Increment(ref received);
+                entered.Set();
+                if (!release.Wait(TimeSpan.FromSeconds(10)))
+                    throw new InvalidOperationException("STOP test carrier timed out");
+            });
+
+            // Use a different execution domain so an unrelated actor can
+            // prove progress even while the target's physical turn is blocked.
+            var siblingKind = kind == ActorKind.Private
+                ? ActorKind.Shared : ActorKind.Private;
+            var sibling = runtime.Spawn(siblingKind, (_, _) => siblingDone.Set());
+            Task? stop = null;
+            try
+            {
+                runtime.Send(target, new byte[] { 1 });
+                Require(entered.Wait(TimeSpan.FromSeconds(5)),
+                    "target enters a physical turn before STOP: " + kind);
+                runtime.Send(target, new byte[] { 2, 3, 4 });
+                stop = Task.Run(() => runtime.Stop(target));
+                Require(stop.Wait(TimeSpan.FromSeconds(5)),
+                    "STOP must not wait for a blocked handler: " + kind);
+
+                bool lateSendDenied = false;
+                try { runtime.Send(target, new byte[] { 5 }); }
+                catch (InvalidOperationException) { lateSendDenied = true; }
+                Require(lateSendDenied,
+                    "STOP must revoke future mailbox admission: " + kind);
+                Require(Volatile.Read(ref received) == 1,
+                    "queued DATA must not overtake the blocked turn: " + kind);
+                Require(runtime.LiveActors == 2 && runtime.NativeReservedBytes > 0,
+                    "STOP must retain active actor resources until turn exit: " + kind);
+
+                runtime.Send(sibling, new byte[] { 9 });
+                Require(siblingDone.Wait(TimeSpan.FromSeconds(5)),
+                    "an unaffected actor continues running during STOP: " + kind);
+            }
+            finally
+            {
+                // A failing assertion must never strand the stopped carrier.
+                release.Set();
+            }
+
+            Require(WaitUntil(() => runtime.LiveActors == 1),
+                "STOP finalizes exactly the target after turn exit: " + kind);
+            Require(Volatile.Read(ref received) == 1 &&
+                    WaitUntil(() => runtime.CompletedMessages == 2) &&
+                    runtime.FaultedTurns == 0,
+                "STOP drops queued DATA without counting it as executed: " + kind);
+            runtime.Stop(sibling);
+            Require(WaitUntil(() => runtime.LiveActors == 0 &&
+                     runtime.NativeReservedBytes == 0),
+                "STOP refunds both actors' native arenas: " + kind);
+        }
     }
 
     private static bool WaitUntil(Func<bool> condition) =>
