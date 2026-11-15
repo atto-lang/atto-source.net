@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'contracts/atto-core-v1/**'
+      - 'tools/atto-core-snapshot/**'
       - 'tests/check_atto_core_snapshot.py'
       - 'tests/test_atto_core_snapshot.py'
       - '.github/workflows/atto-core-source-snapshot.yml'
@@ -32,11 +33,14 @@ jobs:
           test -z "$(git ls-files --others --exclude-standard)"
           echo "ATTO_CORE_SNAPSHOT_HEAD=$EXPECTED_HEAD"
           echo "ATTO_CORE_SNAPSHOT_TREE=$(git rev-parse 'HEAD^{tree}')"
-      - name: Verify canonical source bytes and 12 mutation denials
+      - name: Verify canonical source bytes with Rust and mutation denials
         shell: bash
         run: |
           set -euo pipefail
-          python3 -I tests/check_atto_core_snapshot.py
-          python3 -I -m unittest discover -s tests -p 'test_atto_core_snapshot.py' -v
+          test -n "$(command -v cargo)"
+          cargo fmt --manifest-path tools/atto-core-snapshot/Cargo.toml -- --check
+          cargo clippy --manifest-path tools/atto-core-snapshot/Cargo.toml --all-targets -- -D warnings
+          cargo test --manifest-path tools/atto-core-snapshot/Cargo.toml
+          cargo run --quiet --manifest-path tools/atto-core-snapshot/Cargo.toml -- --repository-root .
           echo 'ATTO_CORE_SNAPSHOT_SOURCE_ONLY=YES'
           echo 'ATTO_CORE_NATIVE_GUEST_EXECUTION=NOT_EXECUTED'
