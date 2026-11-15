@@ -1,0 +1,30 @@
+// SAFE_COLLECTION_COPY_OPTION_V1: identical Java/GraalVM + LLVM guest source.
+// Note: this is owned Copy<int>, NOT an aliasing ReadLoan<T> conformance proof.
+pub routine main(): int {
+  val Array<int> numbers = new Array<int>();
+  val Option<int> empty = numbers.get_copy(0);
+  numbers.add(7);
+  val Option<int> snapshot = numbers.get_copy(0);
+  numbers.set(0, 9);
+  numbers.add(42);
+  val Option<int> hit = numbers.get_copy(1);
+  val Option<int> missing = numbers.get_copy(2);
+  val Option<int> negative = numbers.get_copy(-1);
+  val Option<int> huge = numbers.get_copy(9223372036854775807);
+  stdio.stdout.write(snapshot.unwrap_or(0));
+  stdio.stdout.write(":");
+  stdio.stdout.write(hit.unwrap_or(0));
+  stdio.stdout.write(":");
+  stdio.stdout.write(empty.is_none());
+  stdio.stdout.write(":");
+  stdio.stdout.write(missing.is_none());
+  stdio.stdout.write(":");
+  stdio.stdout.write(negative.is_none());
+  stdio.stdout.write(":");
+  stdio.stdout.write(huge.is_none());
+  stdio.stdout.write(":");
+  stdio.stdout.write(numbers.get_copy(0).unwrap_or(0));
+  return snapshot.unwrap_or(0) == 7 && hit.unwrap_or(0) == 42 &&
+    empty.is_none() && missing.is_none() && negative.is_none() &&
+    huge.is_none() && numbers.get_copy(0).unwrap_or(0) == 9 ? 0 : 1;
+}

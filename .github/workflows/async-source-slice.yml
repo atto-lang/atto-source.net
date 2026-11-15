@@ -1,0 +1,135 @@
+name: Async Task/Future source slice (exploratory NativeAOT)
+
+on:
+  push:
+    branches: ['interop/async-source-slice-20261027']
+  pull_request:
+    paths:
+      - 'runtime/Ores.Net.Runtime/OresTaskScope.cs'
+      - 'compiler/Ores.Net.Compiler/**'
+      - 'compiler/Ores.Net.Compiler.Core/OresAsyncSourceSlice.cs'
+      - 'verification/Ores.Net.Tests/**'
+      - 'verification/assert-async-source-slice.ps1'
+      - 'docs/ASYNC_TASK_SOURCE_SLICE_*.md'
+      - 'runtime/Ores.Net.Runtime/SelectContinuationFence.cs'
+      - '.github/workflows/async-source-slice.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: async-source-slice-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bounded-source-runner:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            rid: linux-x64
+            exe: oresnet
+          - os: windows-2022
+            rid: win-x64
+            exe: oresnet.exe
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Exact source identity
+        shell: pwsh
+        run: |
+          $expected = '${{ github.event.pull_request.head.sha || github.sha }}'
+          if ($expected -cnotmatch '^[0-9a-f]{40}$') { throw 'Invalid source SHA' }
+          $sha = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $sha -cne $expected) { throw 'Source SHA mismatch' }
+          if (git status --porcelain) { throw 'Source checkout is dirty' }
+          $tree = (git rev-parse 'HEAD^{tree}').Trim()
+          if ($LASTEXITCODE -ne 0 -or $tree -cnotmatch '^[0-9a-f]{40}$') {
+            throw 'Invalid source tree identity'
+          }
+          Write-Output "NET_ASYNC_SOURCE_HEAD=$sha; SOURCE_TREE=$tree"
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.x'
+      - name: Execute full managed verification
+        shell: pwsh
+        run: |
+          dotnet run --project verification/Ores.Net.Tests -c Release
+          if ($LASTEXITCODE -ne 0) { throw 'Managed runtime/compiler tests failed' }
+      - name: Publish the real compiler NativeAOT
+        shell: pwsh
+        run: |
+          dotnet publish compiler/Ores.Net.Compiler -c Release -r '${{ matrix.rid }}' -p:PublishAot=true --self-contained true -o artifacts/async-native-compiler
+          if ($LASTEXITCODE -ne 0) { throw 'NativeAOT compiler publish failed' }
+      - name: Execute positive source runner and negative CIL gates
+        shell: pwsh
+        run: |
+          ./verification/assert-async-source-slice.ps1 -Compiler './artifacts/async-native-compiler/${{ matrix.exe }}' |
+            Tee-Object artifacts/async-native-compiler/async-source-trace.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Async source runner assertion failed' }
+          ./verification/assert-async-interop-admission.ps1 -Compiler './artifacts/async-native-compiler/${{ matrix.exe }}' |
+            Tee-Object artifacts/async-native-compiler/legacy-rejection-trace.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Existing I-01 fail-closed gate failed' }
+          $positive = Get-Content artifacts/async-native-compiler/async-source-trace.txt -Raw
+          if ($positive -cnotmatch 'NET_ASYNC_SOURCE_SLICE_EXECUTED; value=42;' -or
+              $positive -cnotmatch 'NET_ASYNC_CIL_REJECTED; exit=1; assembly_exists=false' -or
+              $positive -cnotmatch 'NET_ASYNC_SLICE_NEGATIVE_DIAGNOSTICS; cases=5;' -or
+              $positive -cnotmatch 'NET_ASYNC_ADDITIONAL_COMMANDS_POSITIVE_CONTROLS; cases=5; artifacts=3' -or
+              $positive -cnotmatch 'NET_ASYNC_ADDITIONAL_COMMANDS_REJECTED; cases=5; artifacts=false') {
+            throw 'Positive/negative source trace markers missing'
+          }
+          $legacy = Get-Content artifacts/async-native-compiler/legacy-rejection-trace.txt -Raw
+          if ($legacy -cnotmatch 'NET_INTEROP_NATIVE_COMPILER_CONTAINMENT_EXECUTED; cases=8;') {
+            throw 'Eight native compiler rejection cases not evidenced'
+          }
+      - name: Record binary/source proof (not generated guest CIL)
+        shell: pwsh
+        run: |
+          $sha = (git rev-parse HEAD).Trim()
+          $tree = (git rev-parse 'HEAD^{tree}').Trim()
+          $expected = '${{ github.event.pull_request.head.sha || github.sha }}'
+          if ($sha -cne $expected -or $tree -cnotmatch '^[0-9a-f]{40}$') {
+            throw 'Post-run source HEAD/tree mismatch'
+          }
+          git diff --exit-code | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'Tracked source changed' }
+          git diff --cached --exit-code | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'Tracked source index changed' }
+          [ordered]@{
+            schema = 'net-async-source-interpreter-v1'
+            source_commit = $sha
+            source_tree = $tree
+            compiler_sha256 = (Get-FileHash './artifacts/async-native-compiler/${{ matrix.exe }}' -Algorithm SHA256).Hash.ToLowerInvariant()
+            backend = 'net'
+            rid = '${{ matrix.rid }}'
+            source_value = 42
+            negative_source_cases = 5
+            additional_compiler_command_rejections = 5
+            additional_compiler_command_positive_controls = 5
+            positive_control_artifacts = 3
+            legacy_cil_rejection_cases = 8
+            guest_source_runner_executed = $true
+            interpreter_only = $true
+            native_compiler_executed = $true
+            trust_scope = 'single-literal-host-interpreter-not-generated-guest-cil'
+            guest_cil_emitted = $false
+            full_I01_to_I08_verified = $false
+            actor_scheduler_affinity_verified = $false
+            producer_retirement_tested_in_managed_runtime = $true
+            run_id = '${{ github.run_id }}'
+            run_attempt = '${{ github.run_attempt }}'
+          } | ConvertTo-Json | Set-Content artifacts/async-native-compiler/receipt.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: net-async-source-slice-${{ matrix.rid }}-${{ github.run_attempt }}
+          path: |
+            artifacts/async-native-compiler/async-source-trace.txt
+            artifacts/async-native-compiler/legacy-rejection-trace.txt
+            artifacts/async-native-compiler/receipt.json
+            artifacts/async-native-compiler/${{ matrix.exe }}
+          if-no-files-found: error

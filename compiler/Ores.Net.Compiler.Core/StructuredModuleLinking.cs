@@ -143,13 +143,32 @@ public static class OresSourceModuleCompiler
                 specifier.Any(c => char.IsControl(c) || c is '\\' or ':'))
                 throw new FormatException("Module imports require explicit local ./ or ../ source paths");
             string path = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(importer)!, specifier));
-            if (Path.GetExtension(path).Length == 0) path += ".ores";
+            if (Path.GetExtension(path).Length == 0)
+            {
+                // .atto is canonical, .ores is legacy-compatible. Do not let
+                // directory contents silently choose between two existing
+                // files of the same logical import name.
+                if (RootIndex(path) < 0)
+                    throw new FormatException("Source import escapes explicit source roots");
+                string canonical = path + ".atto";
+                string legacy = path + ".ores";
+                // A dangling symlink is still a source identity candidate;
+                // File.Exists alone can silently ignore one and choose the
+                // other suffix. Probe without following the candidate.
+                bool hasCanonical = ProjectRootSourceResolver.MarkerExistsNoFollow(canonical);
+                bool hasLegacy = ProjectRootSourceResolver.MarkerExistsNoFollow(legacy);
+                if (hasCanonical && hasLegacy)
+                    throw new FormatException("Ambiguous AttoLang source import: use an explicit .atto or .ores suffix");
+                path = hasCanonical ? canonical : legacy;
+            }
             return AdmitPath(path);
         }
 
         string AdmitPath(string path)
         {
-            if (Path.GetExtension(path) != ".ores" || !File.Exists(path)) throw new FormatException("Source import is missing or not .ores");
+            string extension = Path.GetExtension(path);
+            if ((extension != ".atto" && extension != ".ores") || !File.Exists(path))
+                throw new FormatException("Source import is missing or not .atto/.ores");
             int owner = RootIndex(path);
             if (owner < 0) throw new FormatException("Source import escapes explicit source roots");
             string cursor = roots[owner];
