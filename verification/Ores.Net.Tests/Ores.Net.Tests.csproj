@@ -65,6 +65,9 @@
     <None Include="../../examples/structured-signed-comparisons.atto"
           Link="structured-signed-comparisons.atto"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../examples/modules/atto-relational-*.atto"
+          Link="module-fixtures/%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../tests/scalar-cast-inference-five-backend.ores" Link="scalar-cast-inference-five-backend.ores"
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/v1/portable-checked-cast-positive-v2.ores"

@@ -11,6 +11,7 @@ on:
       - '.gitattributes'
       - 'stdlib/math.ores'
       - 'verification/Ores.Net.Tests/**'
+      - 'verification/assert-linked-relational-native.ps1'
       - 'verification/Ores.Net.ModuleProbe/**'
       - '.github/workflows/source-modules-native-aot.yml'
   workflow_dispatch:
@@ -18,7 +19,7 @@ permissions:
   contents: read
 jobs:
   native-source-modules:
-    timeout-minutes: 30
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -40,7 +41,67 @@ jobs:
           dotnet-version: '10.0.x'
       - name: Install Linux native toolchain
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev binutils file
+      - name: Parse and adversarially check linked relational native evidence gate
+        shell: pwsh
+        run: |
+          $script = 'verification/assert-linked-relational-native.ps1'
+          $scriptPath = (Resolve-Path -LiteralPath $script).Path
+          $tokens = $null
+          $errors = $null
+          $null = [Management.Automation.Language.Parser]::ParseFile(
+            $scriptPath, [ref]$tokens, [ref]$errors)
+          if ($errors.Count -ne 0) {
+            throw ("Native evidence gate PowerShell syntax is invalid: " + ($errors | Out-String))
+          }
+          # Wrong job identity must fail BEFORE attempting native compilation.
+          $job = $env:GITHUB_JOB
+          $denied = $false
+          try {
+            $env:GITHUB_JOB = 'spoofed-native-job'
+            try {
+              & $scriptPath -Compiler './nonexistent-compiler' -Rid '${{ matrix.rid }}' -ExpectedHead '${{ github.event.pull_request.head.sha || github.sha }}'
+            } catch {
+              $denied = $_.Exception.Message -match 'source-owned module workflow'
+            }
+          } finally {
+            $env:GITHUB_JOB = $job
+          }
+          if (-not $denied) {
+            throw 'Linked relational source-run admission did not fail closed for wrong job identity'
+          }
+          # Nonpositive run attempts must not produce a receipt.
+          $savedAttempt = $env:GITHUB_RUN_ATTEMPT
+          $deniedAttempt = $false
+          try {
+            $env:GITHUB_RUN_ATTEMPT = '0'
+            try {
+              & $scriptPath -Compiler './nonexistent-compiler' -Rid '${{ matrix.rid }}' -ExpectedHead '${{ github.event.pull_request.head.sha || github.sha }}'
+            } catch {
+              $deniedAttempt = $_.Exception.Message -match 'valid GitHub run and attempt IDs'
+            }
+          } finally {
+            $env:GITHUB_RUN_ATTEMPT = $savedAttempt
+          }
+          if (-not $deniedAttempt) {
+            throw 'Linked relational evidence accepted invalid run attempt'
+          }
+          # Cross-target evidence cannot masquerade as execution on this host.
+          $savedOs = $env:RUNNER_OS
+          $deniedOs = $false
+          try {
+            $env:RUNNER_OS = if ($savedOs -ceq 'Windows') { 'Linux' } else { 'Windows' }
+            try {
+              & $scriptPath -Compiler './nonexistent-compiler' -Rid '${{ matrix.rid }}' -ExpectedHead '${{ github.event.pull_request.head.sha || github.sha }}'
+            } catch {
+              $deniedOs = $_.Exception.Message -match 'RID does not match'
+            }
+          } finally {
+            $env:RUNNER_OS = $savedOs
+          }
+          if (-not $deniedOs) {
+            throw 'Linked relational evidence accepted wrong target OS'
+          }
       - name: Existing compiler and module-linking regressions
         shell: pwsh
         env:
@@ -374,6 +435,22 @@ jobs:
             artifacts/atto-numeric-base/app/oreslang-app${{ matrix.suffix }}
             artifacts/atto-numeric-mutated/app/oreslang-app${{ matrix.suffix }}
           if-no-files-found: error
+      - name: Execute local .atto imported signed comparisons in real Native AOT
+        shell: pwsh
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          $nativeCompiler = Join-Path 'artifacts/module-compiler' 'oresnet${{ matrix.suffix }}'
+          ./verification/assert-linked-relational-native.ps1 -Compiler $nativeCompiler -Rid '${{ matrix.rid }}' -ExpectedHead $env:EXPECTED_HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Linked relational native gate failed' }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: atto-linked-relational-${{ matrix.rid }}
+          path: |
+            artifacts/atto-linked-relational-base/
+            artifacts/atto-linked-relational-mutated/
+          if-no-files-found: error
+          retention-days: 14
       - name: NativeAOT compiler must reject unsafe stdlib imports with no output
         shell: pwsh
         run: |
