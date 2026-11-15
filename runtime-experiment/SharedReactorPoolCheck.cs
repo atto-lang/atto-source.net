@@ -16,13 +16,23 @@ static class Check
         while (!predicate()) { Require(time.ElapsedMilliseconds < 5000); Thread.Yield(); }
     }
     // A real UDP readiness source; readiness observation never runs work inline.
+    sealed class FailingIo : SharedReactorPool.IReactor
+    {
+        public int Fail;
+        public void Poll(bool mayWait)
+        {
+            if (Volatile.Read(ref Fail) != 0) throw new InvalidOperationException("poll failure");
+            if (mayWait) Thread.Sleep(1);
+        }
+        public void Wake() { }
+    }
     sealed class Io : SharedReactorPool.IReactor, IDisposable
     {
         readonly Socket _input = new(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
         readonly Socket _sender = new(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
         readonly AutoResetEvent _wake = new(false);
         public SharedReactorPool? Pool;
-        public int Active, Delivered;
+        public int Active, Delivered, Wakes;
         public readonly ConcurrentDictionary<int, bool> Polls = new(), Executions = new();
         int _pending;
         public Io()
@@ -31,7 +41,7 @@ static class Check
             _sender.Connect(_input.LocalEndPoint!);
         }
         public void Emit() { Require(_sender.Send(new byte[] { 1 }) == 1); }
-        public void Wake() => _wake.Set();
+        public void Wake() { Interlocked.Increment(ref Wakes); _wake.Set(); }
         public void Poll(bool mayWait)
         {
             Require(Interlocked.Increment(ref Active) == 1); s_polling = true;
@@ -102,7 +112,9 @@ static class Check
             Require(pool.TrySubmit(() => { entered.Set(); Require(release.Wait(5000)); }));
             Require(entered.Wait(5000));
             int done = 0;
+            int wakesBeforeHotQueue = Volatile.Read(ref io.Wakes);
             for (int i = 0; i < 1024; ++i) Require(pool.TrySubmit(() => Interlocked.Increment(ref done)));
+            Require(Volatile.Read(ref io.Wakes) == wakesBeforeHotQueue); // no polling worker
             Require(!pool.TrySubmit(() => {})); release.Set(); pool.Dispose(); Require(done == 1024);
         }
         using (var io = new Io())
@@ -156,6 +168,24 @@ static class Check
             Require(Volatile.Read(ref accepted) == Volatile.Read(ref finished));
             Require(!pool.TrySubmit(() => {}));
             Require(Volatile.Read(ref io.Active) == 0);
+        }
+        // A failed poll seals admission and drains accepted work without repoll.
+        var failingIo = new FailingIo();
+        using (var pool = new SharedReactorPool(failingIo, 1, 1))
+        {
+            using var entered = new ManualResetEventSlim();
+            using var release = new ManualResetEventSlim();
+            Require(pool.TrySubmit(() => { entered.Set(); Require(release.Wait(5000)); }));
+            Require(entered.Wait(5000));
+            int done = 0;
+            for (int i = 0; i < 128; ++i)
+                Require(pool.TrySubmit(() => Interlocked.Increment(ref done)));
+            Volatile.Write(ref failingIo.Fail, 1);
+            release.Set();
+            Until(() => pool.Failures == 1);
+            pool.Dispose();
+            Require(pool.Failures == 1 && Volatile.Read(ref done) == 128
+                && pool.Completed == 129 && !pool.TrySubmit(() => {}));
         }
         Console.WriteLine("shared-reactor host: default-two, single-poller, UDP readiness, shared execution, " +
             "bounded queue, 8000 concurrent submissions, growth cap, self-join denial, drain PASS");
