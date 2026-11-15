@@ -22,6 +22,7 @@ internal static class ActorPipeAdmission
             bool staticNamespace = threeBack == "Actor" ||
                                    (threeBack == "ActorUtils" && current == "pipe");
             bool actorFactory = (left == "." && actorNamespace) ||
+                                (left == "::" && actorNamespace) || // "::" lexed as one token
                                 (left == ":" && twoBack == ":" && staticNamespace);
             if (actorFactory && (right is "(" or "<"))
                 return true;
