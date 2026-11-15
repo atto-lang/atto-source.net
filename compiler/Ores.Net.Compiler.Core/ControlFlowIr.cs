@@ -25,6 +25,9 @@ public enum CfgOpcode
     // Two-word source Option<int>, selected from verified bool tag/i64
     // payload and an eagerly evaluated i64 fallback. Not an opaque pointer.
     OptionOrI64,
+    // Bounds proof for a fixed-size inline i64 array. Signed comparison
+    // only, no guest/native pointer operations. Returns exact Bool.
+    ArrayIndexValidI64,
     // Verified Boolean negation, used by the closed Option<int>.is_none() query.
     BoolNot,
     // Closed Option<int> equality: tags (Bool) and active payloads (I64).
@@ -51,7 +54,11 @@ public sealed record CfgBranch(
 
 public sealed record CfgBlock(
     string Name, IReadOnlyList<CfgParameter> Parameters,
-    IReadOnlyList<CfgInstruction> Instructions, CfgTerminator Terminator);
+    IReadOnlyList<CfgInstruction> Instructions, CfgTerminator Terminator,
+    // Optional guest arithmetic-overflow edge. This is verifier-visible and
+    // lowers only to a CLR OverflowException handler; host exception identity
+    // is never exposed to source.
+    string? OverflowTarget = null);
 
 public sealed record CfgFunction(
     string Name, IrValueType ResultType, string Entry,
@@ -107,6 +114,8 @@ public static class OresCfgVerifier
     // Edge payloads are not SSA definitions, so they need a separate global
     // bound before copying any untrusted list into the immutable proof.
     public const int MaxEdgeArguments = 2 * MaxValues;
+    // Bounds the inline immutable Array<int> SSA expansion and code size.
+    public const int MaxFixedArrayElements = 8;
 
     private readonly record struct Definition(int Block, int Instruction, IrValueType Type);
 
@@ -199,7 +208,7 @@ public static class OresCfgVerifier
                         Arguments = op.Arguments is null ? null : FreezeArguments(op.Arguments)
                     };
                 }).ToArray()),
-                frozenTerminator);
+                frozenTerminator, original.OverflowTarget);
         }
 
         var indexes = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -243,6 +252,7 @@ public static class OresCfgVerifier
             predecessors[i] = new List<int>();
         }
 
+        int overflowRegionCount = 0;
         for (int i = 0; i < blocks.Length; i++)
         {
             var block = blocks[i];
@@ -258,6 +268,42 @@ public static class OresCfgVerifier
                     RegisterEdge(i, branch.FalseTarget, branch.FalseArguments);
                     break;
                 default: throw new FormatException("Unsupported CFG terminator");
+            }
+
+            if (block.OverflowTarget is not null)
+            {
+                if (++overflowRegionCount > 1 ||
+                    block.Terminator is not CfgJump protectedExit ||
+                    !indexes.TryGetValue(block.OverflowTarget, out int handlerIndex) ||
+                    handlerIndex != i + 1 ||
+                    block.OverflowTarget == protectedExit.Target)
+                    throw new FormatException("Invalid CFG arithmetic-overflow region");
+
+                var handler = blocks[handlerIndex];
+                if (handler.Parameters.Count != 0 ||
+                    handler.OverflowTarget is not null ||
+                    handler.Instructions.Count != 1 ||
+                    handler.Instructions[0].Opcode != CfgOpcode.ConstantI64 ||
+                    handler.Terminator is not CfgJump handlerExit ||
+                    handlerExit.Target != protectedExit.Target ||
+                    handlerExit.Arguments.Count != 1 ||
+                    handlerExit.Arguments[0] != handler.Instructions[0].ResultId ||
+                    !indexes.TryGetValue(protectedExit.Target, out int joinIndex) ||
+                    blocks[joinIndex].Parameters.Count != 1 ||
+                    blocks[joinIndex].Parameters[0].Type != IrValueType.I64)
+                    throw new FormatException("Malformed CFG arithmetic-overflow handler");
+
+                if (!block.Instructions.Any(op =>
+                    op.Opcode is CfgOpcode.CheckedAdd or
+                        CfgOpcode.CheckedSubtract or
+                        CfgOpcode.CheckedMultiply or
+                        CfgOpcode.Call))
+                    throw new FormatException(
+                        "Arithmetic-overflow region has no fallible numeric operation");
+
+                // The CLR exception object is an internal transport detail and
+                // carries no SSA value into the guest handler.
+                RegisterEdge(i, block.OverflowTarget, Array.Empty<int>());
             }
         }
 
@@ -335,6 +381,18 @@ public static class OresCfgVerifier
                             throw new FormatException("Unverified CFG static call");
                         for (int arg = 0; arg < op.Arguments.Count; arg++)
                             Use(i, opIndex, op.Arguments[arg], callee.ParameterTypes[arg]);
+                        break;
+                    }
+                    case CfgOpcode.ArrayIndexValidI64:
+                    {
+                        RequireType(op.Type, IrValueType.Bool);
+                        if (op.Left is null || op.I64Constant is null ||
+                            op.I64Constant < 0 ||
+                            op.I64Constant > MaxFixedArrayElements ||
+                            op.Right is not null || op.BoolConstant is not null ||
+                            op.Target is not null || op.Arguments is not null)
+                            throw new FormatException("E_ARRAY_BOUNDS_IR: forged inline array length or index");
+                        Use(i, opIndex, op.Left.Value, IrValueType.I64);
                         break;
                     }
                     case CfgOpcode.OptionEqualI64:

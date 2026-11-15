@@ -34,6 +34,75 @@ static void InvalidSend(Action action, string why)
     throw new Exception("Expected mailbox rejection: " + why);
 }
 
+// Guarded mutable sharing is not implemented in either .NET bootstrap parser.
+// Enforce the dedicated lexer-owned error and the original source offset.
+// A generic parse failure, comment false positive, or future partial lowering
+// must never be reported as successful fail-closed capability enforcement.
+const string mutableShareError =
+    "native rt mut share requires verified SharedMutex<T> capability, guarded lowering and allocation-domain proof in .NET Native AOT at offset ";
+foreach (var source in new[] {
+    // Six shared negative expressions used by the Wasm and Cranelift gates.
+    "fnc main():int{return rt mut share 42;}",
+    "fnc main():int{return (rt mut share 42);}",
+    "fnc main():int{return 1+(rt mut share 2);}",
+    "fnc main():int{return rt mut share (rt borrow 3);}",
+    "fnc main():int{return rt mut share (rt mut borrow 4);}",
+    "fnc main():int{return rt mut share (rt mut share 5);}",
+    "fnc main():int{return rt mut share 1;}",
+    // Heap owners and borrowed aliases must never be silently treated as
+    // CIL i64 scalars merely because the unsupported share is nested.
+    // This asserts the compiler-owned capability diagnostic, not positive
+    // heap/Array/Arc support in either .NET frontend.
+    "fnc main():int{return rt mut share (SharedMutex.new(42));}",
+    "fnc main():int{return rt mut share (Arc.new(42));}",
+    "fnc main():int{return rt mut share (Box.new(42));}",
+    "fnc main():int{return rt mut share (Rc.new(42));}",
+    "fnc main():int{return rt mut share (rt borrow owner);}",
+    "fnc main():int{return rt mut share (rt take owner);}",
+    "fnc main():int{return rt mut share (rt mut borrow owner);}",
+    "fnc main():int{return rt mut share (40+2);}",
+
+    "fnc main():int{return 1+(rt mut share 2);}",
+    "fnc main():int{return rt mut share (rt mut borrow 1);}",
+    "fnc main():int{return rt mut share (rt mut share 5);}",
+    "fnc main():int{return rt /* gap */ mut /* second */ share 3;}",
+    "fnc main():int{return rt /* outer /* nested */ gap */ mut share 6;}",
+    "fnc main():int{return rt" + Environment.NewLine +
+        "mut" + Environment.NewLine + "share 4;}",
+    "fnc main():int{return rt // line boundary" + Environment.NewLine +
+        "mut // second boundary" + Environment.NewLine + "share 8;}"
+})
+{
+    int expectedOffset = source.IndexOf("rt", StringComparison.Ordinal);
+    Require(expectedOffset >= 0, "negative test must contain ownership keyword");
+    foreach (var parser in new Action[] {
+        () => { _ = OresParser.Parse(source); },
+        () => { _ = OresStructuredParser.Parse(source); }
+    })
+    {
+        try
+        {
+            parser();
+            throw new Exception("Unsupported mutable sharing was admitted: " + source);
+        }
+        catch (FormatException ex)
+        {
+            Require(ex.Message == mutableShareError + expectedOffset,
+                "mutable-share denial must identify the capability and exact lexical offset: " + ex.Message);
+        }
+    }
+}
+foreach (var source in new[] {
+    "fnc main():int{return 42;} // rt mut share",
+    "fnc main():int{/* rt mut share */ return 42;}",
+    "fnc main():int{/* rt /* mut */ share */ return 42;}"
+})
+{
+    Require(OresParser.Parse(source) is Literal,
+        "comment-only ownership words must not trigger scalar rejection");
+    _ = OresStructuredParser.Parse(source);
+}
+
 // Portable annotation admission parity: parse the same immutable corpus used
 // by Java/LLVM/WASM/Forge, but assert BOTH independent .NET source frontends.
 {
@@ -440,7 +509,14 @@ foreach (var source in new[] {
     "define class X1 as foo():void {} end",
     "define class X2 as foo(self):void {} end",
     "define class X as foo():void {} foo(self):void {} end",
-    "define class X as foo(int x):int {return x;} foo(self,int x):int {return x;} end"
+    "define class X as foo(int x):int {return x;} foo(self,int x):int {return x;} end",
+    "define class X as x():void {} x(mut self)():void {} end",
+    "define class X as x(mut self)():void {} x():void {} end",
+    "define class X as x(int n):void {} x(mut self,int n):void {} end",
+    "define class X as x(self)(int n):void {} end",
+    "define class X as x(string a):void {} y(mut self,int x):void {} end",
+    "define actor X as x():void {} x(mut self)():void {} end",
+    "define actor X as x(int n):void {} x(mut self,int n):void {} end"
 })
     Reject(() => OresParser.Parse(source), "unimplemented class method receiver parity");
 // Source supervisors are not scalar functions. The shipping parser must
@@ -487,11 +563,16 @@ Require(OresParser.Parse(
     "fnc main():int{return 1;} /* enum Color /* enum Mode */ end */") is Literal,
     "nested block-comment enum words must not trigger overload admission");
 
+ClosedAggregateSpreadPlanTests.Run(); // closed inferred struct/record spread plans
+PortableScalarV1Tests.Run();
+NativeScalarZeroTests.Run(); // 5 pinned .ores zero assertions: typed IR + emitted CIL, not NativeAOT
+ScalarMacroParityTests.Run(); // stage-0 define macro parity (Java #2049 / LLVM #1026)
 DotnetHostImportTests.Run(); // compiled System.Math.Abs(i64) CIL metadata and fail-closed imports
 VmIsolateHostTests.Run();
 VmIsolateHostHardeningTests.Run();
 OptionResultTrapAdmissionTests.Run();
 OptionI64CompilerTests.Run(); // opt-in typed Option<int> source -> verified CFG -> CIL
+FixedArrayOptionCompilerTests.Run(); // immutable Array<int>.get -> tagged Option<int> verified CIL
 SafeCollectionSourceAdmissionTests.Run(); // indexed collection access remains fail-closed
 // Shared TCP-pool capabilities are not guest-lowered by either .NET frontend.
 // Deny in both the shipping scalar CLI path and the structured CFG path;
@@ -542,7 +623,32 @@ ActorStateSchemaAdmissionTests.Run();
 ActorStateLayoutIntegrationTests.Run();
 ActorGeneratedCounterTests.Run();
 DeclaredActorCounterV2Tests.Run();
+CounterMainV2Tests.Run();
 SourceByteBudgetTests.Run();
+ExecutionGraphV1Tests.Run();
+OwnedF32RegionV1Tests.Run();
+OwnedF32GraphV1Tests.Run();
+
+// The scalar bootstrap must reserve each execution-domain/nb form and
+// reject it before emitting a misleading CIL host fallback.
+foreach (var forbidden in new[] {
+    "gpu {}", "cpu {}", "nb gpu {}", "nb cpu {}",
+    "gpu { cpu { gpu {} } }", "nb gpu { nb cpu {} }",
+    "gpu", "cpu", "nb"
+})
+{
+    try { _ = OresParser.Parse("fnc main():int{return " + forbidden + ";}"); }
+    catch (FormatException ex) when (ex.Message.Contains(
+        // Main's execution-region admission (newer) owns the wording; the
+        // contract is the explicit refusal of any implicit CPU fallback.
+        "no implicit CPU fallback",
+        StringComparison.Ordinal)) { continue; }
+    throw new Exception("Unsupported execution domain was not specifically rejected: " + forbidden);
+}
+Require(OresParser.Parse("fnc main():int{return 42;} // nb gpu { cpu {} }") is Literal,
+    "commented execution keywords must not be admitted as code");
+
+ActorPipelineSelectorTests.Run(); // v1 selector-only contract
 ElmCompositionAdmissionTests.Run();
 HeapContainerSourceBoundaryTests.Run(); // actual scalar compiler fail-closed heap/container checks
 StructuralPatternAdmissionTests.Run();
@@ -551,10 +657,15 @@ AdtSourceAdmissionTests.Run();
 NumericSeparatorParityTests.Run();
 ExplicitExportSyntaxTests.Run();
 CrossBackendCheckedI64ParityTests.Run();
+StrictSigned64ArithmeticSelfTest.Run(); // host reference semantics vs shared Java contract vectors
+StrictSigned64GuestRemTests.Run(); // Integer.rem/mod/pow verified IR + runtime MemberRef CIL, not NativeAOT
 ActorHierarchyMlAdmissionTests.Run();
 AsyncInteropFailClosedTests.Run();
 EtsPgFailClosedTests.Run();
 await HostTaskObservationTests.Run();
+await AsyncSourceSliceTests.Run();
+TaskI64SourceTests.Run();
+await RootTaskI64Tests.Run();
 
 // Source actor syntax must fail at a semantic actor boundary, never as an
 // accidental scalar-fnc parse error. Legacy actors remain rejected outright;
@@ -693,6 +804,7 @@ ActorPubSubByteQuotaTests.Run();
 ActorPubSubSourceAdmissionTests.Run();
 ActorPipeAdmissionTests.Run(); // compiler gate only; no executable actor guest yet
 ActorPipeSourcePlanV1SelfTest.Run(); // checked scalar CIL oracle, not actor delivery
+ActorEmitPipeContractV3SelfTest.Run(); // compiled-type contract ONLY, no source-emitted actor guest
 NativeTraceContinuationV1SelfTest.Run(); // host-owned W3C scopes; not guest CIL instrumentation
 NativeTraceInstrumentationV1SelfTest.Run(); // NativeAOT host AOT/JIT dispatch; no compiler or OTLP claim
 UniversalHotLoadV1SelfTest.Run();
@@ -701,8 +813,11 @@ ActorGuestFrameGateSelfTest.Run(); // terminal compiled-guest frame seam, host-o
 ActorScalarFrameAbiSelfTest.Run(); // verified CFG layout/native spill boundary, not guest execution
 BatchedCheckpointV1SelfTest.Run(); // host contract only; no compiled guest safepoints yet
 CfgActorScalarBoundaryPlanSelfTest.Run(); // compiler-only verified CFG liveness; NOT guest CIL
+ActorCompiledCfgFrameSelfTest.Run(); // real .atto CFG on actor-native guest frames, interpreter only
 ProjectRootSourceTests.Run(); // host-only resolver, not linked .NET source imports
 ActorNativeArenaSelfTest.Run();
+ActorNativeAggregateStoreTests.Run(); // unmanaged per-actor aggregate values, not compiler guest parity
+NativeAggregateLayoutVerifierTests.Run(); // immutable checked HIR layout and native ABI tag matching
 
 // Import parity is deliberately not claimed for the .NET scalar compiler.
 // Each form must fail at lexical admission with a specific import diagnostic,
@@ -1288,6 +1403,7 @@ SharedScalarParityConformance.Run();
 AttoXpScalarParityTests.Run(); // pinned .atto scalar IR + CIL evaluator only
 CfgVerifierTests.Run();
 CfgCilStressTests.Run();
+NominalReceiverMethodSlotTests.Run();
 SupervisorStopLedgerSelfTest.Run();
 // The canonical Atto telemetry syntax is not an ordinary CIL call.
 // Both public frontends must reject it *specifically* until exception-safe
@@ -1306,6 +1422,7 @@ Require(OresStructuredParser.Parse(
     "fnc main():int{/* using telemetry.span() as span {} */return 42;}").Body.Count == 1,
     "commented telemetry syntax cannot affect NativeAOT admission");
 StructuredSourceTests.Run();
+ActorDeclarationAstSelfTest.Run(); // parsed-only typed actor declarations; not executable actor lowering
 StructuredCfgLoweringTests.Run();
 AttoEqualityNativeAotCandidateTests.Run();
 StructuredStaticAbiTests.Run();

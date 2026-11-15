@@ -2,6 +2,14 @@
   <PropertyGroup>
     <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- Embedded from the canonical source tree; never resolved via project
+         paths or a runtime directory, and available to NativeAOT builds. -->
+    <EmbeddedResource Include="../../library/atto.core/identity.atto"
+                      LogicalName="Atto.Core.Identity" />
+    <EmbeddedResource Include="../../contracts/atto-core-v1/numeric.atto"
+                      LogicalName="Atto.Core.Numeric" />
+  </ItemGroup>
   <!-- The production Native AOT compiler uses System.Reflection.Metadata only.
        Mono.Cecil remains a verification-only dependency, not a published runtime. -->
   <!-- Compiler-side host bootstrap binds typed actor layouts to the runtime,

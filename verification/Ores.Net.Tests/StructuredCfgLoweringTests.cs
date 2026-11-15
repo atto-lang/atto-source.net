@@ -37,6 +37,30 @@ internal static class StructuredCfgLoweringTests
         }
     }
 
+    // Statement-bodied helpers (e.g. comma bodies with locals) are not inlined by the
+    // legacy Lower() path; they use LowerModule()'s independent MethodDef ABI.
+    private static void CheckModule(string source, long expected, string label)
+    {
+        string folder = Path.Combine(Path.GetTempPath(),
+            "ores-structured-cfg-module-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            string output = Path.Combine(folder, "OresGenerated.dll");
+            CilEmitter.EmitLibrary(OresStructuredCfgLowering.LowerModule(source), output);
+            using var assembly = AssemblyDefinition.ReadAssembly(output);
+            var entry = assembly.MainModule.Types.Single(t =>
+                t.FullName == "Oreslang.Generated.OresProgram")
+                .Methods.Single(m => m.Name == "Run");
+            if (CfgCilTestInterpreter.Evaluate(entry) != expected)
+                throw new Exception("Structured module CIL mismatch: " + label);
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
     // Both the independently verified CFG evaluator and emitted CIL must
     // actually trap on a reachable checked-i64 overflow. Reference-only
     // testing cannot prove the native-code input retains checked opcodes.
@@ -161,6 +185,96 @@ internal static class StructuredCfgLoweringTests
 
     public static void Run()
     {
+        // These cases pass the real structured typed CFG + generated CIL
+        // reference interpreter. They do not claim native host execution.
+        CheckModule("""
+            fnc plus(int a, int b): int { return a + b; }
+            fnc add(int n) -> int ::
+                int x = plus(2, 3),
+                x + n
+            end
+            fnc main() -> int ::
+                add(37)
+            end
+            """, 42, "comma fnc body with immutable runtime local and final result");
+        CheckModule("""
+            routine twice(int n) -> int ::
+                int factor = 2,
+                factor * n
+            end
+            routine main() -> int ::
+                twice(21)
+            end
+            """, 42, "comma routine body and terminal expression");
+        Check("""
+            fnc main() -> int ::
+                int x = 1,
+                int y = 40,
+                x + y + 1
+            end
+            """, 42, "multiple sequenced immutable scalar locals");
+        Check("""
+            fnc main() -> int ::
+                int x = 41,
+                x + 1
+            end
+            """, 42, "comma body exactly-once final expression");
+        foreach (string bad in new[] {
+            "fnc main() -> int :: int x = 5,, x end",
+            "fnc main() -> int :: int x = 5, end",
+            "fnc main() -> int :: , 42 end",
+            "fnc main() -> int :: int x = true, x end",
+            "fnc main() -> int :: int x = 5, x = 7, x end",
+            "fnc main() -> int :: bool x = true, x end"
+        })
+            Reject(bad, "comma-body syntax, binding or return type must fail closed");
+        Check("""
+            fnc main() -> int ::
+                int x = 5,
+                return x + 37
+            end
+            """, 42, "comma body explicit return without semicolon");
+        Check("""
+            fnc main() -> int ::
+                int x = 5,
+                return x + 37;
+            end
+            """, 42, "comma body explicit return with semicolon");
+        Check("""
+            fnc plus(int a, int b): int { return a + b; }
+            fnc main() -> int ::
+                int x = plus(5, 7),
+                int y = plus(x, 29),
+                y + 1
+            end
+            """, 42, "nested call commas and sequential local visibility");
+        foreach (string badBody in new[] {
+            "fnc main() -> int :: int x = 5, return true end",
+            "fnc main() -> int :: int x = 5, return x + 1, end",
+            "fnc main() -> int :: int x = 5, return x + 1; x end",
+            "fnc main() -> int :: int x = 5 x + 1 end"
+        })
+            Reject(badBody, "comma body typed return and separator fail closed");
+        // Pipeline and lambda syntax must never masquerade as an
+        // already-lowered native callable. The structured CIL backend has
+        // scalar :: bodies but no closure frames or tuple lambda dispatch.
+        foreach (string notYetLowered in new[] {
+            "fnc main():int{val callback=|| => int -> 42;return callback();}",
+            "fnc main() -> int :: 5 |> |n| => int -> n + 1 end",
+            "fnc main() -> int :: 5 |> |n| -> val int x = n + 1, x end",
+            "fnc main():int{val callback=|| -> int :: int x=5,x+3 end;return callback();}"
+        })
+            Reject(notYetLowered,
+                "unlowered expression lambda or |> must fail native CIL admission");
+        RejectWithDiagnostic("""
+            define class Counter as
+                mtd add(mut self, int n) -> int ::
+                    n + 1
+                end
+            end
+            fnc main(): int { return 42; }
+            """, "Nominal class/actor methods require",
+            "dotnet nominal method remains unsupported, not falsely certified");
         PinnedFiveBackendCastGuests();
         const string sum = """
             define pub fnc main():int {
@@ -291,6 +405,50 @@ internal static class StructuredCfgLoweringTests
         Check(File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
             "structured-bindings42.ores")),
             42, "real const/val/let source through verified CFG and CIL");
+        // Real Oreslang source -> static closed-row typecheck -> verified CFG
+        // -> deterministic emitted CIL. No managed aggregate object is emitted.
+        Check("fnc main():int{const base=infer struct{x:20};const next=infer struct{...base,y:23};return next.x+next.y;}",
+            43, "inferred struct spread to emitted CIL");
+        Check("fnc main():int{const base=infer record{x:20};const next=infer record{...base,y:24};return next.x+next.y;}",
+            44, "inferred readonly record spread to emitted CIL");
+        Check("fnc main():int{const a=record{x:20};const b=record{...a,x:45};return b.x-a.x+20;}",
+            45, "record override does not mutate original");
+        Check("fnc main():int{const a=infer struct{active:true,score:44};const b=infer struct{...a,active:2};return b.active+b.score;}",
+            46, "overridden field's inferred type changes bool to int");
+        Check("fnc main():int{const a=infer struct{active:true,value:47};if a.active{return a.value;}else{return 0;}}",
+            47, "typed bool field projects into scalar CFG");
+        Reject("fnc main():int{const a=infer struct{...missing,x:1};return a.x;}",
+            "dynamic or missing spread source rejected");
+        Reject("fnc main():int{const a=infer struct{x:1,x:2};return a.x;}",
+            "duplicate explicit aggregate fields rejected");
+        Reject("fnc main():int{const a=infer record{x:1};return a;}",
+            "compile-time aggregate cannot escape as scalar");
+        Reject("fnc main():int{const a=record{foo:2};const b=record{...a,foo:true};return b.foo;}",
+            "record bool cannot return as int");
+        // Runtime-valued immutable rows snapshot scalars into private verified
+        // SSA places: later mutation of the original local cannot change them.
+        Check("fnc main():int{let int source=20;val row=infer struct{x:source,y:28};source=99;return row.x+row.y;}",
+            48, "runtime val aggregate snapshot survives source reassignment");
+        Check("fnc main():int{val int seed=20;val a=record{x:seed};val b=record{...a,y:29};return b.x+b.y;}",
+            49, "runtime readonly record spread into immutable result");
+        Check("fnc main():int{const a=record{x:20};val b=record{...a,x:40+10};return b.x;}",
+            50, "runtime val spread from compile-time const row");
+        Check("fnc main():int{val row=infer struct{x:true,y:49};val update=infer struct{...row,x:2};return update.x+update.y;}",
+            51, "runtime val type-changing scalar override");
+        Check("fnc twice(int n):int{return n*2;}fnc main():int{val row=infer record{x:twice(26)};return row.x;}",
+            52, "typed helper call evaluated by emitted CIL in row construction");
+        Check("fnc main():int{let int source=20;val original=record{x:source};val changed=record{...original,x:53};source=99;return changed.x-original.x+20;}",
+            53, "runtime spread never aliases or mutates original owner");
+        Reject("fnc main():int{let int seed=20;val runtime=record{x:seed};const illegal=record{...runtime,y:22};return illegal.x+illegal.y;}",
+            "compile-time const row cannot spread a runtime val row");
+        Reject("fnc main():int{let int value=41;const row=infer struct{x:value};return row.x;}",
+            "const aggregate cannot capture runtime let");
+        Reject("fnc main():int{val row=infer record{...missing,x:42};return row.x;}",
+            "runtime spread from unknown source fails before CIL");
+        Reject("fnc main():int{val row=infer struct{x:1,x:2};return row.x;}",
+            "runtime row duplicate explicit key fails");
+        Reject("fnc main():int{val row=infer record{x:42};return row;}",
+            "runtime aggregate value cannot escape as scalar");
         Check("fnc main():int{const int c=40+2;return c;}",
             42, "compile-time const typed SSA");
         Check(File.ReadAllText(Path.Combine(AppContext.BaseDirectory,

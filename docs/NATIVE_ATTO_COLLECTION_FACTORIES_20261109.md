@@ -81,3 +81,69 @@ reference model is substituted to claim native AttoLang guest support.
 
 Related language contracts: attolang-language-spec.md #27,
 oreslang-common-source #257 and oreslang-platform-conformance #641.
+
+
+## 2026-11-10 native actor aggregate ABI milestone
+
+Native backing now lives in `runtime/Ores.Net.Runtime/ActorNativeAggregateStore.cs`:
+
+- `Tuple`, `Record`, `Entry`, `Pair`, and fixed `Array` have separate
+  native tags and fixed 24-byte headers plus 8-byte packed signed-i64 elements.
+- Every aggregate is a generational `ActorNativeArena` allocation, requiring a
+  distinct *store instance per actor*. A handle from a neighboring actor or
+  a dropped/reused generation cannot read or mutate this store's bytes.
+- Products are immutable; `Array` permits checked indexed writes.
+  All allocation failures return the invalid handle, and failed initialization
+  scrubs/releases the native allocation before returning control.
+- `Record` needs a positive schema ID and static ordered field layout.
+  This backing API **does not itself authenticate a compiler-minted schema ID
+  or tenant**, and must not be exposed directly to untrusted guest/FFI callers.
+
+A separate `compiler/Ores.Net.Compiler.Core/NativeAggregateLayoutVerifier.cs`
+provides immutable compiler-side i64-only layouts, bounded product/array
+sizes, explicit empty-array element witnesses, duplicate/static record field
+checks, and fail-closed List/Vector/Map/Set admission. Its numeric kind tags
+are tested against the runtime's unmanaged ABI. No Bool/pointer graph is
+silently lowered into native signed-i64 storage.
+
+**Crucial evidence boundary:** the native store and verified layout are not
+yet wired into the shipping scalar OresIR/CFG/CIL emitter. There is no
+source-level escaping `Tuple<T...>` or `Array<T>` guest value yet. The
+existing `Tuple.of(...)[constant]` and `Record.of(...).field` are still
+closed scalarizations. Native runtime/HIR tests do not establish source guest
+implementation parity.
+
+Authored verification:
+- `ActorNativeAggregateStoreTests`: type/nominal disjointness, actor isolation,
+  generation fencing, immutable product guard, mutable Array bounds, 48-byte
+  quota rollback and exact reclamation.
+- `NativeAggregateLayoutVerifierTests`: type/layout/budget/record-field
+  diagnostics, frozen immutable descriptor snapshots, compiler-runtime tag
+  equivalence, unsupported kinds.
+- `verification/Ores.Net.ActorMemoryProbe/Program.cs` runs a separate
+  **NativeAOT host-runtime** actor aggregate security probe. The source-owned
+  `actor-memory-native-aot.yml` requires all three success markers.
+  The probe is explicitly labeled `NOT compiled AttoLang guest`.
+- The positive/negative `.atto` guests under
+  `tests/fixtures/collection-factories/` still use the shipping scalar
+  compiler path and are separately checked by
+  `atto-collection-factory-nativeaot.yml`.
+
+CI admission on source org still fails before step allocation. The
+`.github/private-ci-approved-repositories.txt` and
+`.github/private-ci-approved-source-snapshots.txt` policies have no active
+approved destination/snapshot for this head. No private source was exported.
+
+## Smallest compiler follow-up
+
+Add verified product/array typed HIR facts to source AST, then explicit CFG
+aggregate-allocate/read/write/drop instructions and an independent verifier.
+The System.Reflection.Metadata emitter must statically reference the
+actor-native storage ABI, enforce checked nominal shape and per-actor
+capability, and deterministically clean up on normal/throw/panic paths.
+Do not silently return a scalarized constant for an escaping aggregate.
+
+After this is compiled and executed at an exact head, wire Entry/Pair product
+factories and then List/Vector growth, Map/Set stable-key and rollback
+semantics. Preserve separate nominal types and the legacy tuple/array/vector
+type/shape syntax.

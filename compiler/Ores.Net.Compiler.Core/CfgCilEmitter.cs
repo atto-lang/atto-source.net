@@ -140,6 +140,28 @@ internal static class CfgCilEmitter
                         case CfgOpcode.ConstantBool:
                             il.LoadConstantI4(op.BoolConstant!.Value ? 1 : 0);
                             break;
+                        case CfgOpcode.ArrayIndexValidI64:
+                        {
+                            // Exactly 0 <= signed index < fixed length, with
+                            // no unchecked address calculation or arithmetic
+                            // overflow. Both branches have empty IL stacks.
+                            var invalid = il.DefineLabel();
+                            var finish = il.DefineLabel();
+                            il.LoadLocal(op.Left!.Value);
+                            il.LoadConstantI8(0);
+                            il.OpCode(ILOpCode.Clt);
+                            il.Branch(ILOpCode.Brtrue, invalid);
+                            il.LoadLocal(op.Left.Value);
+                            il.LoadConstantI8(op.I64Constant!.Value);
+                            il.OpCode(ILOpCode.Clt);
+                            il.StoreLocal(op.ResultId);
+                            il.Branch(ILOpCode.Br, finish);
+                            il.MarkLabel(invalid);
+                            il.LoadConstantI4(0);
+                            il.StoreLocal(op.ResultId);
+                            il.MarkLabel(finish);
+                            continue;
+                        }
                         case CfgOpcode.OptionEqualI64:
                         {
                             // Short circuit on tags. Never inspect a None's

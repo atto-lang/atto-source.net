@@ -1,0 +1,4 @@
+export pub[pkg] class Bar;
+define class Bar as
+end
+fnc main(): int { return 42; }
