@@ -1,11 +1,14 @@
 name: Source module Native AOT execution
 on:
   push:
-    branches: ['feat/spin-source-*', 'ci/spin-source-*']
+    branches: ['feat/spin-source-*', 'ci/spin-source-*', 'feat/atto-net-real-local-modules-nativeaot-*']
   pull_request:
     paths:
       - 'compiler/**'
       - 'examples/modules/**'
+      - 'contracts/atto-core-v1/**'
+      - 'library/atto.core/**'
+      - '.gitattributes'
       - 'stdlib/math.ores'
       - 'verification/Ores.Net.Tests/**'
       - 'verification/Ores.Net.ModuleProbe/**'
@@ -46,7 +49,7 @@ jobs:
           if ((git rev-parse HEAD) -ne $env:EXPECTED_HEAD) { throw 'Checkout identity mismatch' }
           dotnet run -c Release --project verification/Ores.Net.Tests
           if ($LASTEXITCODE -ne 0) { throw 'Compiler/module regressions failed' }
-          foreach ($source in (Get-ChildItem examples/modules -Filter '*.ores')) {
+          foreach ($source in (Get-ChildItem examples/modules -File | Where-Object { $_.Extension -in '.ores', '.atto' })) {
             $path = "examples/modules/$($source.Name)"
             if ((git hash-object --no-filters -- $path) -ne (git rev-parse "HEAD:$path")) { throw "Checkout changed source bytes: $path" }
           }
@@ -64,6 +67,10 @@ jobs:
           $witness = & $compiler compile-modules examples/modules/main.ores --root examples/modules --out artifacts/module-generated/OresGenerated.dll
           if ($LASTEXITCODE -ne 0) { throw 'Native source graph compilation failed' }
           New-Item artifacts/module-app -ItemType Directory -Force | Out-Null
+          # Pin the executable compiler bytes used for both graphs; the
+          # source SHA and generated CIL digest are different identities.
+          $compilerSha256 = (Get-FileHash $compiler -Algorithm SHA256).Hash.ToLowerInvariant()
+          $compilerSha256 | Set-Content artifacts/module-app/compiler.sha256
           $witness | Set-Content artifacts/module-app/source-graph.json
           $witness
           $PSNativeCommandUseErrorActionPreference = $false
@@ -71,6 +78,302 @@ jobs:
           if ($LASTEXITCODE -ne 1 -or $rejection -notmatch 'Nominal class/actor methods require' -or (Test-Path artifacts/module-rejected/OresGenerated.dll)) { throw 'Class rejection was not correctly classified' }
           $rejection
           $global:LASTEXITCODE = 0
+      - name: Compile canonical .atto source graph and execute NativeAOT guest
+        shell: pwsh
+        run: |
+          $compiler = Join-Path 'artifacts/module-compiler' 'oresnet${{ matrix.suffix }}'
+          $compilerSha256 = (Get-FileHash $compiler -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($compilerSha256 -cne (Get-Content artifacts/module-app/compiler.sha256 -Raw).Trim()) {
+            throw 'Native compiler executable changed before canonical graph compilation'
+          }
+          $witness = & $compiler compile-modules examples/modules/atto-main.atto --root examples/modules --out artifacts/atto-module-generated/OresGenerated.dll
+          if ($LASTEXITCODE -ne 0) { throw 'Canonical AttoLang .atto module graph did not compile' }
+          $witness | Set-Content artifacts/atto-module-source-graph.json
+          $graph = $witness | ConvertFrom-Json -ErrorAction Stop
+          if ($graph.graph_sha256 -notmatch '^[0-9a-f]{64}$' -or @($graph.sources).Count -ne 4) {
+            throw 'Invalid canonical four-module .atto source graph witness'
+          }
+          foreach ($unit in @($graph.sources)) {
+            $identity = [regex]::Match($unit.path, '^0/([A-Za-z0-9_-]+\.atto)$')
+            if (-not $identity.Success) { throw "Noncanonical .atto graph source identity: $($unit.path)" }
+            $file = Join-Path 'examples/modules' $identity.Groups[1].Value
+            $digest = (Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant()
+            $count = (Get-Item $file).Length
+            if ($digest -ne $unit.sha256 -or $count -ne $unit.utf8_bytes) {
+              throw "Canonical source bytes differ from compiler witness: $file"
+            }
+          }
+          # The compiler's JSON graph digest is not independently trusted.
+          # Reconstruct its documented NUL/path/hash/LF preimage from exact
+          # source witnesses, verify deterministic ordinal order and enforce
+          # the complete expected canonical four-file source inventory.
+          $paths = [string[]]@($graph.sources | ForEach-Object { [string]$_.path })
+          $sortedPaths = [string[]]$paths.Clone()
+          [System.Array]::Sort($sortedPaths, [System.StringComparer]::Ordinal)
+          $expectedPaths = [string[]]@(
+            '0/atto-base.atto', '0/atto-left.atto',
+            '0/atto-main.atto', '0/atto-right.atto'
+          )
+          if ([string]::Join('|', $paths) -cne [string]::Join('|', $sortedPaths) -or
+              [string]::Join('|', $paths) -cne [string]::Join('|', $expectedPaths)) {
+            throw 'Noncanonical ordered source graph inventory or duplicated source identity'
+          }
+          $preimage = [System.Text.StringBuilder]::new()
+          foreach ($unit in @($graph.sources)) {
+            [void]$preimage.Append([string]$unit.path)
+            [void]$preimage.Append([char]0)
+            [void]$preimage.Append([string]$unit.sha256)
+            [void]$preimage.Append([char]10)
+          }
+          $actualGraphHash = [System.Convert]::ToHexString(
+            [System.Security.Cryptography.SHA256]::HashData(
+              [System.Text.Encoding]::UTF8.GetBytes($preimage.ToString())
+            )
+          ).ToLowerInvariant()
+          if ($actualGraphHash -cne $graph.graph_sha256) {
+            throw 'Canonical .atto graph SHA-256 does not match independently reconstructed witness'
+          }
+          $generated = (Resolve-Path artifacts/atto-module-generated/OresGenerated.dll).Path
+          $canonicalCilHash = (Get-FileHash $generated -Algorithm SHA256).Hash.ToLowerInvariant()
+          $canonicalCilHash | Set-Content artifacts/atto-module-generated/cil.sha256
+          if ((Get-FileHash $compiler -Algorithm SHA256).Hash.ToLowerInvariant() -cne $compilerSha256) {
+            throw 'Native compiler executable changed during canonical source graph compilation'
+          }
+          dotnet clean host/Ores.Net.NativeHost -c Release -r '${{ matrix.rid }}' "-p:GeneratedAssembly=$generated"
+          if ($LASTEXITCODE -ne 0) { throw 'NativeAOT canonical host clean failed' }
+          dotnet publish host/Ores.Net.NativeHost -c Release -r '${{ matrix.rid }}' -p:PublishAot=true "-p:GeneratedAssembly=$generated" -o artifacts/atto-module-app -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'Canonical .atto Native AOT host publish failed' }
+          $binary = Join-Path 'artifacts/atto-module-app' 'oreslang-app${{ matrix.suffix }}'
+          $output = & $binary
+          if ($LASTEXITCODE -ne 0 -or "$output".Trim() -ne '42') { throw 'Canonical .atto NativeAOT linked guest did not return 42' }
+          @{scope='real-canonical-atto-local-module-graph-not-atto.core-namespace'; source_commit=(git rev-parse HEAD); source_tree=(git rev-parse 'HEAD^{tree}'); rid='${{ matrix.rid }}'; graph_sha256=$graph.graph_sha256; compiler_binary_sha256=$compilerSha256; generated_cil_sha256=$canonicalCilHash; binary_sha256=(Get-FileHash $binary -Algorithm SHA256).Hash.ToLowerInvariant(); output=$output} | ConvertTo-Json | Set-Content artifacts/atto-module-app/receipt.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: atto-local-modules-${{ matrix.rid }}
+          path: |
+            artifacts/atto-module-app/
+            artifacts/atto-module-source-graph.json
+          if-no-files-found: warn
+      - name: Compile and execute compiler-owned atto.core/identity NativeAOT graph
+        shell: pwsh
+        run: |
+          $compiler = Join-Path 'artifacts/module-compiler' 'oresnet${{ matrix.suffix }}'
+          $compilerHash = (Get-FileHash $compiler -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($compilerHash -cne (Get-Content artifacts/module-app/compiler.sha256 -Raw).Trim()) {
+            throw 'Core identity compiled with a different native compiler executable'
+          }
+          # Attest actual checked-out bytes against immutable HEAD objects,
+          # not merely compiler-reported source digests or recorded Git names.
+          function Assert-CommittedCoreSource([string]$inputPath) {
+            $expectedBlob = (& git rev-parse "HEAD:$inputPath").Trim()
+            if ($LASTEXITCODE -ne 0 -or $expectedBlob -cnotmatch '^[0-9a-f]{40}$') {
+              throw "Missing exact-head Core source Git blob: $inputPath"
+            }
+            $actualBlob = (& git hash-object --no-filters -- "$inputPath").Trim()
+            if ($LASTEXITCODE -ne 0 -or $actualBlob -cne $expectedBlob) {
+              throw "Working tree Core source differs from exact HEAD blob: $inputPath"
+            }
+          }
+          $source = 'examples/modules/atto-core-identity-main.atto'
+          $coreFiles = @($source, 'library/atto.core/identity.atto')
+          foreach ($file in $coreFiles) { Assert-CommittedCoreSource $file }
+          $generatedPath = 'artifacts/atto-core-identity-generated/OresGenerated.dll'
+          $witness = & $compiler compile-modules $source --root examples/modules --out $generatedPath
+          if ($LASTEXITCODE -ne 0) { throw 'Compiler-owned atto.core/identity graph did not compile' }
+          $graph = $witness | ConvertFrom-Json -ErrorAction Stop
+          $units = @($graph.sources)
+          if ($graph.graph_sha256 -notmatch '^[0-9a-f]{64}$' -or $units.Count -ne 2 -or
+              $units[0].path -cne '0/atto-core-identity-main.atto' -or
+              $units[1].path -cne '@atto.core/identity.atto') {
+            throw 'Canonical Core identity witness is missing or noncanonical'
+          }
+          foreach ($unit in $units) {
+            $file = if ($unit.path -ceq '@atto.core/identity.atto') {
+              'library/atto.core/identity.atto'
+            } else { $source }
+            $sha = (Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($unit.sha256 -cne $sha -or $unit.utf8_bytes -ne (Get-Item $file).Length) {
+              throw "Compiler-owned Core identity differs from canonical source bytes: $file"
+            }
+          }
+          $preimage = [System.Text.StringBuilder]::new()
+          foreach ($unit in $units) {
+            [void]$preimage.Append([string]$unit.path)
+            [void]$preimage.Append([char]0)
+            [void]$preimage.Append([string]$unit.sha256)
+            [void]$preimage.Append([char]10)
+          }
+          $graphSha = [System.Convert]::ToHexString(
+            [System.Security.Cryptography.SHA256]::HashData(
+              [System.Text.Encoding]::UTF8.GetBytes($preimage.ToString())
+            )
+          ).ToLowerInvariant()
+          if ($graphSha -cne $graph.graph_sha256) {
+            throw 'Compiler-owned Core graph digest did not reproduce independently'
+          }
+          if ((Get-FileHash $compiler -Algorithm SHA256).Hash.ToLowerInvariant() -cne $compilerHash) {
+            throw 'Native compiler changed during Core identity guest compilation'
+          }
+          $generated = (Resolve-Path $generatedPath).Path
+          $cilHash = (Get-FileHash $generated -Algorithm SHA256).Hash.ToLowerInvariant()
+          dotnet clean host/Ores.Net.NativeHost -c Release -r '${{ matrix.rid }}' "-p:GeneratedAssembly=$generated"
+          if ($LASTEXITCODE -ne 0) { throw 'Core NativeAOT clean failed' }
+          dotnet publish host/Ores.Net.NativeHost -c Release -r '${{ matrix.rid }}' -p:PublishAot=true "-p:GeneratedAssembly=$generated" -o artifacts/atto-core-identity-native -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'Compiler-owned Core NativeAOT publish failed' }
+          $binary = Join-Path 'artifacts/atto-core-identity-native' 'oreslang-app${{ matrix.suffix }}'
+          $output = & $binary
+          if ($LASTEXITCODE -ne 0 -or "$output".Trim() -cne '42') {
+            throw 'Compiler-owned atto.core/identity NativeAOT guest did not return 42'
+          }
+          foreach ($file in $coreFiles) { Assert-CommittedCoreSource $file }
+          @{
+            scope='atto.core/identity-stage1-only-not-full-numeric';
+            source_commit=(git rev-parse HEAD);
+            source_tree=(git rev-parse 'HEAD^{tree}');
+            rid='${{ matrix.rid }}';
+            compiler_binary_sha256=$compilerHash;
+            graph_sha256=$graphSha;
+            generated_cil_sha256=$cilHash;
+            native_binary_sha256=(Get-FileHash $binary -Algorithm SHA256).Hash.ToLowerInvariant();
+            output=$output
+          } | ConvertTo-Json | Set-Content artifacts/atto-core-identity-native/receipt.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: atto-core-identity-native-${{ matrix.rid }}
+          path: |
+            artifacts/atto-core-identity-native/
+          if-no-files-found: warn
+      - name: Build and execute canonical numeric.atto NativeAOT 42-to-43 mutation
+        shell: pwsh
+        run: |
+          $compiler = Join-Path 'artifacts/module-compiler' 'oresnet${{ matrix.suffix }}'
+          $compilerHash = (Get-FileHash $compiler -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($compilerHash -cne (Get-Content artifacts/module-app/compiler.sha256 -Raw).Trim()) {
+            throw 'Numeric guest compiler binary differs from pinned compiler'
+          }
+          New-Item artifacts/atto-core-numeric-receipts -ItemType Directory -Force | Out-Null
+          $cases = @(
+            @{ label='base'; source='examples/modules/atto-core-numeric-main.atto'; expected='42' },
+            @{ label='mutated'; source='examples/modules/atto-core-numeric-mutated.atto'; expected='43' }
+          )
+          # Attest actual checked-out bytes against immutable HEAD objects,
+          # not merely compiler-reported source digests or recorded Git names.
+          function Assert-CommittedCoreSource([string]$inputPath) {
+            $expectedBlob = (& git rev-parse "HEAD:$inputPath").Trim()
+            if ($LASTEXITCODE -ne 0 -or $expectedBlob -cnotmatch '^[0-9a-f]{40}$') {
+              throw "Missing exact-head Core source Git blob: $inputPath"
+            }
+            $actualBlob = (& git hash-object --no-filters -- "$inputPath").Trim()
+            if ($LASTEXITCODE -ne 0 -or $actualBlob -cne $expectedBlob) {
+              throw "Working tree Core source differs from exact HEAD blob: $inputPath"
+            }
+          }
+          $receipts = @()
+          foreach ($case in $cases) {
+            $caseFiles = @($case.source, 'contracts/atto-core-v1/numeric.atto')
+            foreach ($file in $caseFiles) { Assert-CommittedCoreSource $file }
+            $out = 'artifacts/atto-numeric-' + $case.label
+            $generated = Join-Path $out 'OresGenerated.dll'
+            $witness = & $compiler compile-modules $case.source --root examples/modules --out $generated
+            if ($LASTEXITCODE -ne 0) { throw "Canonical numeric.atto compilation failed for $($case.label)" }
+            $graph = $witness | ConvertFrom-Json -ErrorAction Stop
+            $units = @($graph.sources)
+            $expectedPaths = @('0/' + [System.IO.Path]::GetFileName($case.source), '@atto.core/numeric.atto')
+            $paths = @($units | ForEach-Object { [string]$_.path })
+            if ($units.Count -ne 2 -or
+                [string]::Join('|', $paths) -cne [string]::Join('|', $expectedPaths) -or
+                $graph.graph_sha256 -cnotmatch '^[0-9a-f]{64}$') {
+              throw "Noncanonical numeric source graph for $($case.label)"
+            }
+            $preimage = [System.Text.StringBuilder]::new()
+            foreach ($unit in $units) {
+              $path = if ($unit.path -ceq '@atto.core/numeric.atto') {
+                'contracts/atto-core-v1/numeric.atto'
+              } else { $case.source }
+              $sourceHash = (Get-FileHash $path -Algorithm SHA256).Hash.ToLowerInvariant()
+              if ($unit.sha256 -cne $sourceHash -or $unit.utf8_bytes -ne (Get-Item $path).Length) {
+                throw "Numeric source compiler witness does not match canonical source bytes: $path"
+              }
+              [void]$preimage.Append([string]$unit.path)
+              [void]$preimage.Append([char]0)
+              [void]$preimage.Append([string]$unit.sha256)
+              [void]$preimage.Append([char]10)
+            }
+            $digest = [System.Convert]::ToHexString(
+              [System.Security.Cryptography.SHA256]::HashData(
+                [System.Text.Encoding]::UTF8.GetBytes($preimage.ToString())
+              )
+            ).ToLowerInvariant()
+            if ($digest -cne $graph.graph_sha256) {
+              throw "Numeric source graph hash failed independent reconstruction"
+            }
+            $generated = (Resolve-Path $generated).Path
+            $cilHash = (Get-FileHash $generated -Algorithm SHA256).Hash.ToLowerInvariant()
+            dotnet clean host/Ores.Net.NativeHost -c Release -r '${{ matrix.rid }}' "-p:GeneratedAssembly=$generated"
+            if ($LASTEXITCODE -ne 0) { throw 'Numeric NativeAOT clean failed' }
+            $app = Join-Path $out 'app'
+            dotnet publish host/Ores.Net.NativeHost -c Release -r '${{ matrix.rid }}' -p:PublishAot=true "-p:GeneratedAssembly=$generated" -o $app -warnaserror
+            if ($LASTEXITCODE -ne 0) { throw 'Numeric NativeAOT publish failed' }
+            $binary = Join-Path $app 'oreslang-app${{ matrix.suffix }}'
+            $value = & $binary
+            if ($LASTEXITCODE -ne 0 -or "$value".Trim() -cne $case.expected) {
+              throw "Canonical numeric NativeAOT guest returned unexpected result for $($case.label)"
+            }
+            if ((Get-FileHash $compiler -Algorithm SHA256).Hash.ToLowerInvariant() -cne $compilerHash) {
+              throw 'Compiler executable changed while building native numeric guests'
+            }
+            foreach ($file in $caseFiles) { Assert-CommittedCoreSource $file }
+            $runId = [long]$env:GITHUB_RUN_ID
+            $runAttempt = [int]$env:GITHUB_RUN_ATTEMPT
+            if ($runId -le 0 -or $runAttempt -le 0) {
+              throw 'Numeric NativeAOT receipt requires an allocated GitHub run and attempt identity'
+            }
+            $receipt = @{
+              scope='atto.core/numeric-stage2-not-five-backend-parity';
+              run_id=$runId;
+              run_attempt=$runAttempt;
+              workflow_path='.github/workflows/source-modules-native-aot.yml';
+              workflow_job='native-source-modules';
+              runner_os='${{ matrix.os }}';
+              label=$case.label;
+              source_head=(git rev-parse HEAD);
+              source_tree=(git rev-parse 'HEAD^{tree}');
+              canonical_library_git_blob=(git rev-parse 'HEAD:contracts/atto-core-v1/numeric.atto');
+              entry_git_blob=(git rev-parse "HEAD:$($case.source)");
+              rid='${{ matrix.rid }}';
+              compiler_binary_sha256=$compilerHash;
+              graph_sha256=$digest;
+              cil_sha256=$cilHash;
+              native_binary_sha256=(Get-FileHash $binary -Algorithm SHA256).Hash.ToLowerInvariant();
+              result="$value".Trim()
+            }
+            $receipt | ConvertTo-Json | Set-Content (Join-Path 'artifacts/atto-core-numeric-receipts' ($case.label+'.json'))
+            $receipts += $receipt
+          }
+          if ($receipts[0].cil_sha256 -ceq $receipts[1].cil_sha256 -or
+              $receipts[0].native_binary_sha256 -ceq $receipts[1].native_binary_sha256 -or
+              $receipts[0].graph_sha256 -ceq $receipts[1].graph_sha256) {
+            throw 'Canonical 42-to-43 mutation failed to change graph, CIL or native bytes'
+          }
+          if ($receipts[0].run_id -ne $receipts[1].run_id -or
+              $receipts[0].run_attempt -ne $receipts[1].run_attempt -or
+              $receipts[0].source_head -cne $receipts[1].source_head -or
+              $receipts[0].compiler_binary_sha256 -cne $receipts[1].compiler_binary_sha256) {
+            throw 'Numeric mutation pair was not produced by the same run, attempt, head and compiler'
+          }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: atto-core-numeric-native-${{ matrix.rid }}
+          path: |
+            artifacts/atto-core-numeric-receipts/
+            artifacts/atto-numeric-base/OresGenerated.dll
+            artifacts/atto-numeric-mutated/OresGenerated.dll
+            artifacts/atto-numeric-base/app/oreslang-app${{ matrix.suffix }}
+            artifacts/atto-numeric-mutated/app/oreslang-app${{ matrix.suffix }}
+          if-no-files-found: error
       - name: NativeAOT compiler must reject unsafe stdlib imports with no output
         shell: pwsh
         run: |
@@ -107,13 +410,28 @@ jobs:
         shell: pwsh
         run: |
           $generated = (Resolve-Path artifacts/module-generated/OresGenerated.dll).Path
+          $legacyCilHash = (Get-FileHash $generated -Algorithm SHA256).Hash.ToLowerInvariant()
+          $canonicalCilHash = (Get-Content artifacts/atto-module-generated/cil.sha256 -Raw).Trim()
+          if ($canonicalCilHash -cne (Get-FileHash artifacts/atto-module-generated/OresGenerated.dll -Algorithm SHA256).Hash.ToLowerInvariant()) {
+            throw 'Canonical CIL digest witness changed between native compiler steps'
+          }
+          $compiler = Join-Path 'artifacts/module-compiler' 'oresnet${{ matrix.suffix }}'
+          $compilerSha256 = (Get-FileHash $compiler -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($compilerSha256 -cne (Get-Content artifacts/module-app/compiler.sha256 -Raw).Trim()) {
+            throw 'Native compiler executable changed before legacy NativeAOT source receipt'
+          }
+          if ($legacyCilHash -eq $canonicalCilHash) {
+            throw 'Canonical and legacy source graphs unexpectedly emitted identical CIL'
+          }
+          dotnet clean host/Ores.Net.NativeHost -c Release -r '${{ matrix.rid }}' "-p:GeneratedAssembly=$generated"
+          if ($LASTEXITCODE -ne 0) { throw 'NativeAOT legacy host clean failed' }
           dotnet publish host/Ores.Net.NativeHost -c Release -r '${{ matrix.rid }}' -p:PublishAot=true "-p:GeneratedAssembly=$generated" -o artifacts/module-app -warnaserror
           if ($LASTEXITCODE -ne 0) { throw 'Native module host publish failed' }
           $binary = Join-Path 'artifacts/module-app' 'oreslang-app${{ matrix.suffix }}'
           $output = & $binary
           if ($LASTEXITCODE -ne 0 -or "$output".Trim() -ne '42') { throw 'Imported native methods did not produce 42' }
           $output
-          @{scope='checked-int-bool-module-native-execution-not-full-Spin'; source_commit=(git rev-parse HEAD); source_tree=(git rev-parse 'HEAD^{tree}'); rid='${{ matrix.rid }}'; binary_sha256=(Get-FileHash $binary -Algorithm SHA256).Hash.ToLowerInvariant(); output=$output} | ConvertTo-Json | Set-Content artifacts/module-app/receipt.json
+          @{scope='checked-int-bool-module-native-execution-not-full-Spin'; source_commit=(git rev-parse HEAD); source_tree=(git rev-parse 'HEAD^{tree}'); rid='${{ matrix.rid }}'; compiler_binary_sha256=$compilerSha256; generated_cil_sha256=$legacyCilHash; binary_sha256=(Get-FileHash $binary -Algorithm SHA256).Hash.ToLowerInvariant(); output=$output} | ConvertTo-Json | Set-Content artifacts/module-app/receipt.json
       - name: Compile and execute exact canonical stdlib Math
         shell: pwsh
         run: |
