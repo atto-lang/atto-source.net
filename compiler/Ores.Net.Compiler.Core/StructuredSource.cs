@@ -906,7 +906,10 @@ public static partial class OresStructuredParser
             else if (ch == '|' && !moduleMode)
                 throw new FormatException(
                     $"Lexical captures require checked closure lowering at offset {offset}");
-            else if ("()+-*{}:;=<>.,?~!".IndexOf(ch) >= 0 ||
+            // Only `name!(` is lexed (for the fail-closed macro gate); a lone or
+            // spaced `!` keeps main's invalid-character diagnostic.
+            else if (ch == '!' && index + 1 < source.Length && source[index + 1] == '(') index++;
+            else if ("()+-*{}:;=<>.,?~".IndexOf(ch) >= 0 ||
                 (moduleMode && "[]/>!|&".IndexOf(ch) >= 0)) index++;
             else throw new FormatException($"Invalid character at offset {offset}");
             var tokenText = source[offset..index];
