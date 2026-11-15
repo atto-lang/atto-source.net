@@ -267,26 +267,50 @@ public sealed class ActorMailbox : IDisposable
             // Pre-size all storage and snapshot borrowed sender memory
             // before the first queue mutation. Copy failures leave the
             // mailbox, generation and counters exactly as they were.
-            var owned = new byte[messages.Count][];
+            // Envelopes use the same runtime-owned storage as Send: managed
+            // copies, or fixed native leases when this mailbox has a pool.
+            var staged = new Envelope[messages.Count];
             try
             {
                 for (var i = 0; i < messages.Count; ++i)
-                    owned[i] = messages[i].ToArray();
-                _messages.EnsureCapacity(checked(_messages.Count + owned.Length));
-                // Queue.Enqueue cannot grow after EnsureCapacity. Under our
-                // exclusive lock, Stop and readers cannot observe a prefix.
-                foreach (var payload in owned)
-                    _messages.Enqueue(payload);
-                _queuedBytes += total;
+                {
+                    if (_nativePool is null)
+                    {
+                        byte[] ownedCopy = messages[i].ToArray();
+                        staged[i] = new Envelope(ownedCopy, null,
+                            ownedCopy.Length, IsControl: false);
+                    }
+                    else
+                    {
+                        var lease = _nativePool.TryAcquire(_nativeIdentity) ??
+                            throw new InvalidOperationException("Native mailbox capacity exhausted");
+                        staged[i] = new Envelope(null, lease, messages[i].Length, IsControl: false);
+                        using (var write = _nativePool.BorrowWrite(lease, _nativeIdentity))
+                            _nativePool.WriteBytes(write, 0, messages[i].Span);
+                    }
+                }
+                _messages.EnsureCapacity(checked(_messages.Count + staged.Length));
             }
             catch
             {
-                // Some arrays may already be copied when allocation fails.
-                // Never leave copies of rejected actor DATA in managed heap.
-                foreach (var payload in owned)
-                    if (payload is not null) CryptographicOperations.ZeroMemory(payload);
+                // Some payloads may already be staged when allocation fails.
+                // Never leave copies of rejected actor DATA in managed heap,
+                // and return every acquired native lease to the pool.
+                foreach (var envelope in staged)
+                {
+                    if (envelope is null) continue;
+                    if (envelope.Payload is not null)
+                        CryptographicOperations.ZeroMemory(envelope.Payload);
+                    if (envelope.NativeLease is not null)
+                        _nativePool!.Release(envelope.NativeLease, _nativeIdentity);
+                }
                 throw;
             }
+            // Queue.Enqueue cannot grow after EnsureCapacity. Under our
+            // exclusive lock, Stop and readers cannot observe a prefix.
+            foreach (var envelope in staged)
+                _messages.Enqueue(envelope);
+            _queuedBytes += total;
         }
     }
 
