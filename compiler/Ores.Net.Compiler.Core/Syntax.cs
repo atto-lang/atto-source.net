@@ -552,7 +552,13 @@ public static partial class OresParser
                     $"WITH_BACKEND_UNSUPPORTED: immutable with requires checked rt copy/take, "
                     + $"owned field layout/drop and Native AOT reconstruction at offset {_i}");
             // No unchecked array access can enter the shipping scalar CIL path.
-            SafeCollectionSourceAdmission.RejectUnverifiedBracket(ch, start);
+            // Exception: the package-scope brackets of a file-level `export pub[pkg]`
+            // are export syntax, not collection access (validated by StripFileExports).
+            bool exportScopeBracket =
+                (ch == '[' && System.Text.RegularExpressions.Regex.IsMatch(text[..start], @"(^|[^A-Za-z0-9_])export\s+pub\s*$")) ||
+                (ch == ']' && System.Text.RegularExpressions.Regex.IsMatch(text[..start], @"(^|[^A-Za-z0-9_])export\s+pub\s*\[\s*[A-Za-z_][A-Za-z0-9_]*\s*$"));
+            if (!exportScopeBracket)
+                SafeCollectionSourceAdmission.RejectUnverifiedBracket(ch, start);
             // Scalar and structured CIL frontends must agree: state-changing
             // annotations are compiler effects, never inert metadata. Check
             // only lexed tokens, after comments have been skipped.
