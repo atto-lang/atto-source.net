@@ -476,7 +476,9 @@ public static class OresStructuredCfgLowering
                                 write.Value.Type != write.Type)
                                 throw new FormatException(
                                     "Invalid aggregate scalar SSA place or type");
-                            int value = Expression(write.Value, current, variables);
+                            Block writeBlock = current;
+                            int value = Expression(write.Value, ref writeBlock, variables);
+                            current = writeBlock;
                             variables.Add(write.Place, new Binding(write.Type, value));
                         }
                         break;
