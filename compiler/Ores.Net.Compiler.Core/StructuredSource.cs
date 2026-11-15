@@ -99,6 +99,24 @@ public static partial class OresStructuredParser
     private const int MaxParameters = 16;
     private const int MaxLocalTypeFields = 64;
 
+    // Structured CFG/CIL has no typed macro splice semantics yet. Its source
+    // and import discovery must fail closed rather than dropping definitions
+    // or mistaking name!(...) for a normal function call.
+    private static void RejectUnsupportedMacros(IReadOnlyList<Token> tokens)
+    {
+        for (int i = 0; i < tokens.Count; i++)
+        {
+            if (tokens[i].Text == "macro" && i > 0 &&
+                (tokens[i - 1].Text is "define" or "pub"))
+                throw new FormatException(
+                    $"NET_STRUCTURED_MACRO_EXPANDER_REQUIRED: macro declarations require typed AST expansion before OresIR/CIL at offset {tokens[i].Offset}; runtime fallback is forbidden");
+            if (tokens[i].Text == "!" && i > 0 && i + 1 < tokens.Count &&
+                tokens[i + 1].Text == "(")
+                throw new FormatException(
+                    $"NET_STRUCTURED_MACRO_EXPANDER_REQUIRED: macro invocation requires typed AST expansion before OresIR/CIL at offset {tokens[i].Offset}; runtime fallback is forbidden");
+        }
+    }
+
     private static void RejectUnsupportedMutableSharing(IReadOnlyList<Token> tokens)
     {
         for (int i = 0; i + 2 < tokens.Count; i++)
@@ -158,6 +176,7 @@ public static partial class OresStructuredParser
         } while (tokens[^1].Text.Length != 0);
         RejectActorPipe(tokens); // before any module graph/import resolution
         RejectUnsupportedMutableSharing(tokens);
+        RejectUnsupportedMacros(tokens);
         return tokens;
     }
 
@@ -472,6 +491,7 @@ public static partial class OresStructuredParser
                 throw new FormatException(
                     $"Tuple-v2 explicit spread requires single-evaluation checked lowering at offset {tokens[i].Offset}");
         }
+        RejectUnsupportedMacros(tokens);
         var reader = new Reader(tokens, linking);
         return linking is null
             ? new StructuredLinkedUnit(reader.ReadProgram(), null, new Dictionary<string, StructuredFunction>())
@@ -886,6 +906,9 @@ public static partial class OresStructuredParser
             else if (ch == '|' && !moduleMode)
                 throw new FormatException(
                     $"Lexical captures require checked closure lowering at offset {offset}");
+            // Only `name!(` is lexed (for the fail-closed macro gate); a lone or
+            // spaced `!` keeps main's invalid-character diagnostic.
+            else if (ch == '!' && index + 1 < source.Length && source[index + 1] == '(') index++;
             else if ("()+-*{}:;=<>.,?~".IndexOf(ch) >= 0 ||
                 (moduleMode && "[]/>!|&".IndexOf(ch) >= 0)) index++;
             else throw new FormatException($"Invalid character at offset {offset}");
