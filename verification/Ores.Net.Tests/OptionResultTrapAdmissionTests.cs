@@ -196,7 +196,7 @@ internal static class OptionResultTrapAdmissionTests
                 "fnc main():int { return Result(7); }",
                 "fnc main():int { return Ok(7); }",
                 "fnc main():int { return Err(7); }",
-                "fnc main():int { return trap(7); }",
+                "fnc main():int { return trap true; }",
                 "trap fnc main():int { return 7; }"
             })
             {
