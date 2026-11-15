@@ -122,12 +122,122 @@ internal static class OptionI64CompilerTests
                 ops, new CfgReturn(3)) });
     }
 
+    private static CfgFunction ForgedBoolean(CfgInstruction operation)
+    {
+        var ops = new CfgInstruction[]
+        {
+            new(0, CfgOpcode.ConstantBool, IrValueType.Bool, BoolConstant: true),
+            new(1, CfgOpcode.ConstantI64, IrValueType.I64, I64Constant: 42),
+            operation
+        };
+        return new CfgFunction("main", IrValueType.Bool, "entry",
+            new[] { new CfgBlock("entry", Array.Empty<CfgParameter>(),
+                ops, new CfgReturn(2)) });
+    }
+
+    private static CfgFunction ForgedOptionEquality(CfgInstruction operation,
+        bool leftTag = true, long leftPayload = 42,
+        bool rightTag = true, long rightPayload = 42)
+    {
+        var ops = new CfgInstruction[]
+        {
+            new(0, CfgOpcode.ConstantBool, IrValueType.Bool, BoolConstant: leftTag),
+            new(1, CfgOpcode.ConstantI64, IrValueType.I64, I64Constant: leftPayload),
+            new(2, CfgOpcode.ConstantBool, IrValueType.Bool, BoolConstant: rightTag),
+            new(3, CfgOpcode.ConstantI64, IrValueType.I64, I64Constant: rightPayload),
+            operation
+        };
+        // Standalone generated Run must return i64. Branch on the verified
+        // Bool selector rather than trying to emit a Bool-returning entry.
+        // This keeps malformed mutations on the same verifier path and
+        // permits checking the *actual* emitted CIL, not just the oracle.
+        return new CfgFunction("main", IrValueType.I64, "entry",
+            new[]
+            {
+                new CfgBlock("entry", Array.Empty<CfgParameter>(),
+                    ops, new CfgBranch(4, "equal", Array.Empty<int>(),
+                        "unequal", Array.Empty<int>())),
+                new CfgBlock("equal", Array.Empty<CfgParameter>(),
+                    new[] { new CfgInstruction(5, CfgOpcode.ConstantI64,
+                        IrValueType.I64, I64Constant: 42) },
+                    new CfgReturn(5)),
+                new CfgBlock("unequal", Array.Empty<CfgParameter>(),
+                    new[] { new CfgInstruction(6, CfgOpcode.ConstantI64,
+                        IrValueType.I64, I64Constant: 0) },
+                    new CfgReturn(6))
+            });
+    }
+
+    private static void CheckOptionEqualityBoundary(bool leftTag, long leftPayload,
+        bool rightTag, long rightPayload, bool expected, string label)
+    {
+        // These deliberately allow nonzero inactive None slots. This is
+        // verifier-admitted host-side IR, never guest construction. The
+        // generated CIL must ignore inactive payloads at runtime.
+        var graph = OresCfgVerifier.Verify(ForgedOptionEquality(
+            new CfgInstruction(4, CfgOpcode.OptionEqualI64, IrValueType.Bool,
+                Left: 0, Right: 1, Arguments: new[] { 2, 3 }),
+            leftTag, leftPayload, rightTag, rightPayload));
+        long expectedValue = expected ? 42L : 0L;
+        if (CfgReferenceEvaluator.Evaluate(graph) != expectedValue)
+            throw new Exception("Option inactive-payload reference mismatch: " + label);
+        var temp = Path.Combine(Path.GetTempPath(),
+            "atto-option-equality-boundary-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(temp);
+        try
+        {
+            var output = Path.Combine(temp, "OresGenerated.dll");
+            CilEmitter.EmitLibrary(graph, output);
+            using var assembly = AssemblyDefinition.ReadAssembly(output);
+            var method = assembly.MainModule.Types.Single(type =>
+                type.FullName == "Oreslang.Generated.OresProgram")
+                .Methods.Single(candidate => candidate.Name == "Run");
+            if (CfgCilTestInterpreter.Evaluate(method) != expectedValue)
+                throw new Exception("Option inactive-payload emitted CIL mismatch: " + label);
+        }
+        finally { Directory.Delete(temp, recursive: true); }
+    }
+
     public static void Run()
     {
         const string some = "pub fnc main():int{val Option<int> value=Some(42);return value.unwrap_or(0);}";
         const string none = "pub fnc main():int{val Option<int> value=None;return value.unwrap_or(42);}";
         Check(some, 42, "Some(42) tagged payload");
         Check(none, 42, "None fallback");
+        // Canonical AttoLang type sugar uses exactly the same verified
+        // two-word Option<int> local representation and CIL lowering.
+        Check("fnc main():int{val int? value=Some(42);return value.unwrap_or(0);}",
+            42, "int? readonly Option local (Some)");
+        Check("fnc main():int{val int? value=None;return value.unwrap_or(42);}",
+            42, "int? readonly Option local (None)");
+        Check("fnc main():int{let int? value=None;value=Some(42);return value.unwrap_or(0);}",
+            42, "int? mutable Option local pair assignment");
+        Check("fnc main():int{int? value=Some(42);return value.unwrap_or(0);}",
+            42, "int? type-first immutable Option local");
+        Check("fnc main():int{if None eq None{return 42;}return 0;}",
+            42, "None equals None");
+        Check("fnc main():int{if Some(0) eq None{return 0;}return 42;}",
+            42, "Some(0) does not equal None");
+        Check("fnc main():int{if None neq Some(0){return 42;}return 0;}",
+            42, "None neq Some(0)");
+        Check("fnc main():int{if Some(0) eq Some(0){return 42;}return 0;}",
+            42, "Some(0) equals Some(0)");
+        Check("fnc main():int{if Some(0) eq Some(1){return 0;}return 42;}",
+            42, "Some payload inequality");
+        Check("fnc main():int{if Some(-9223372036854775808) eq Some(-9223372036854775808){return 42;}return 0;}",
+            42, "minimum signed i64 equality");
+        Check("fnc main():int{if Some(9223372036854775807) neq Some(-9223372036854775808){return 42;}return 0;}",
+            42, "full i64 comparison without floating conversion");
+        Check("fnc main():int{let Option<int> a=None;a=Some(0);if a eq None{return 0;}if a eq Some(0){return 42;}return 0;}",
+            42, "mutable Option full-tag equality after reassignment");
+        Check("fnc main():int{if None.is_none(){return 42;}return 0;}",
+            42, "None.is_none true");
+        Check("fnc main():int{if Some(0).is_none(){return 0;}return 42;}",
+            42, "Some(0).is_none false independent of zero payload");
+        Check("fnc main():int{val Option<int> x=None;if x.is_none(){return 42;}return 0;}",
+            42, "named Option local .is_none()");
+        Check("fnc main():int{let Option<int> x=None;x=Some(0);if x.is_none(){return 0;}return 42;}",
+            42, "mutable Option full tag replacement .is_none()");
 
         Check("fnc main():int{if Some(0).is_some(){return 42;}return 0;}",
             42, "Some(0) tag is present, independent of payload");
@@ -150,6 +260,16 @@ internal static class OptionI64CompilerTests
         CheckModuleHelper("fnc answer():int{val Option<int> x=Some(42);return x.unwrap_or(0);}fnc main():int{return answer();}",
             42, "Option local inside statically linked helper");
         CheckEagerFallbackOverflow();
+        CheckOptionEqualityBoundary(false, 42, false, 7, true,
+            "None equals None even with different inactive payloads");
+        CheckOptionEqualityBoundary(false, long.MinValue, false, long.MaxValue, true,
+            "None equality never compares inactive full-i64 payloads");
+        CheckOptionEqualityBoundary(false, 0, true, 0, false,
+            "Some(0) differs from None even with matching payload bits");
+        CheckOptionEqualityBoundary(true, long.MinValue, true, long.MinValue, true,
+            "Some exact signed minimum equality");
+        CheckOptionEqualityBoundary(true, long.MinValue, true, long.MaxValue, false,
+            "Some full-width i64 values differ");
 
         // No unexpected re-entry into production scalar compiler.
         bool scalarRejected = false;
@@ -168,10 +288,24 @@ internal static class OptionI64CompilerTests
             ("no implicit Option->int", "fnc main():int{return Some(42);}"),
             ("None cannot become int", "fnc main():int{return None;}"),
             ("no implicit int->Option", "fnc main():int{val Option<int> x=42;return 0;}"),
+            ("no implicit int->int?", "fnc main():int{val int? x=42;return 0;}"),
+            ("no bool? layout alias", "fnc main():int{val bool? x=None;return 0;}"),
+            ("no int?? unproved nesting", "fnc main():int{val int?? x=None;return 0;}"),
+            ("no Option<int>? implicit flatten", "fnc main():int{val Option<int>? x=None;return 0;}"),
+            ("no int? helper parameter ABI", "fnc get(int? x):int{return 42;}fnc main():int{return 42;}"),
+            ("no int? helper result ABI", "fnc get():int?{return Some(42);}fnc main():int{return 42;}"),
+            ("no bare scalar omission", "fnc get(int x?):int{return x;}fnc main():int{return 42;}"),
+            ("no unlowered parameter default", "fnc get(int x?=42):int{return x;}fnc main():int{return 42;}"),
             ("no tagged/untagged assignment", "fnc main():int{let Option<int> x=None;x=42;return 0;}"),
             ("no wrong fallback", "fnc main():int{return Some(42).unwrap_or(false);}"),
             ("no unsafe unwrap", "fnc main():int{return Some(42).unwrap();}"),
             ("no unknown Option method", "fnc main():int{return None.flatten();}"),
+            ("is_none rejects arguments", "fnc main():int{if None.is_none(42){return 1;}return 0;}"),
+            ("is_none is bool, not i64", "fnc main():int{return None.is_none();}"),
+            ("Option cannot compare to i64", "fnc main():int{if Some(42) eq 42{return 1;}return 0;}"),
+            ("i64 cannot compare to Option", "fnc main():int{if 42 eq Some(42){return 1;}return 0;}"),
+            ("Option cannot compare to bool", "fnc main():int{if None eq true{return 1;}return 0;}"),
+            ("Option cannot order by payload", "fnc main():int{if Some(1)<Some(2){return 1;}return 0;}"),
             ("no nested Option flatten", "fnc main():int{val Option<Option<int>> x=Some(None);return 0;}"),
             ("no nested Some coercion", "fnc main():int{return Some(None).unwrap_or(0);}"),
             ("no Option<bool> erasure", "fnc main():int{val Option<bool> x=None;return 0;}"),
@@ -207,6 +341,60 @@ internal static class OptionI64CompilerTests
         RejectForged(Forged(new CfgInstruction(3, CfgOpcode.OptionOrI64,
             IrValueType.I64, Left: 0, Right: 1, Arguments: new[] { 4 })),
             "future SSA fallback");
+        RejectForged(ForgedBoolean(new CfgInstruction(2,
+            CfgOpcode.BoolNot, IrValueType.Bool, Left: 1)),
+            "BoolNot rejected i64 operand");
+        RejectForged(ForgedBoolean(new CfgInstruction(2,
+            CfgOpcode.BoolNot, IrValueType.Bool)),
+            "BoolNot requires one operand");
+        RejectForged(ForgedBoolean(new CfgInstruction(2,
+            CfgOpcode.BoolNot, IrValueType.Bool, Left: 0, Right: 0)),
+            "BoolNot cannot read unverified second operand");
+        RejectForged(ForgedBoolean(new CfgInstruction(2,
+            CfgOpcode.BoolNot, IrValueType.Bool, Left: 0, Arguments: Array.Empty<int>())),
+            "BoolNot cannot smuggle extra operands");
+        RejectForged(ForgedBoolean(new CfgInstruction(2,
+            CfgOpcode.BoolNot, IrValueType.I64, Left: 0)),
+            "BoolNot must result in Bool");
+        _ = OresCfgVerifier.Verify(ForgedBoolean(new CfgInstruction(2,
+            CfgOpcode.BoolNot, IrValueType.Bool, Left: 0)));
+        RejectForged(ForgedOptionEquality(new CfgInstruction(4,
+            CfgOpcode.OptionEqualI64, IrValueType.Bool,
+            Left: 1, Right: 0, Arguments: new[] { 2, 3 })),
+            "Option equality rejects scalar left tag");
+        RejectForged(ForgedOptionEquality(new CfgInstruction(4,
+            CfgOpcode.OptionEqualI64, IrValueType.Bool,
+            Left: 0, Right: 2, Arguments: new[] { 2, 3 })),
+            "Option equality rejects bool payload");
+        RejectForged(ForgedOptionEquality(new CfgInstruction(4,
+            CfgOpcode.OptionEqualI64, IrValueType.Bool,
+            Left: 0, Right: 1, Arguments: new[] { 3, 2 })),
+            "Option equality rejects swapped right tag and payload");
+        RejectForged(ForgedOptionEquality(new CfgInstruction(4,
+            CfgOpcode.OptionEqualI64, IrValueType.Bool,
+            Left: 0, Right: 1, Arguments: Array.Empty<int>())),
+            "Option equality requires four typed operands");
+        RejectForged(ForgedOptionEquality(new CfgInstruction(4,
+            CfgOpcode.OptionEqualI64, IrValueType.Bool,
+            Left: 0, Right: 1, Arguments: new[] { 2, 3, 3 })),
+            "Option equality rejects extra payload");
+        RejectForged(ForgedOptionEquality(new CfgInstruction(4,
+            CfgOpcode.OptionEqualI64, IrValueType.I64,
+            Left: 0, Right: 1, Arguments: new[] { 2, 3 })),
+            "Option equality result must be bool");
+        RejectForged(ForgedOptionEquality(new CfgInstruction(4,
+            CfgOpcode.OptionEqualI64, IrValueType.Bool,
+            Left: 0, Right: 1, Arguments: new[] { 2, 3 }, Target: "forge")),
+            "Option equality cannot contain call target metadata");
+        RejectForged(ForgedOptionEquality(new CfgInstruction(4,
+            CfgOpcode.OptionEqualI64, IrValueType.Bool,
+            Left: 0, Right: 1, Arguments: new[] { 2, 5 })),
+            "Option equality rejects future SSA payload");
+        var eqValid = OresCfgVerifier.Verify(ForgedOptionEquality(
+            new CfgInstruction(4, CfgOpcode.OptionEqualI64, IrValueType.Bool,
+                Left: 0, Right: 1, Arguments: new[] { 2, 3 })));
+        if (CfgReferenceEvaluator.Evaluate(eqValid) != 42)
+            throw new Exception("Verified Option equality did not match two Some(42) values");
         var valid = OresCfgVerifier.Verify(Forged(new CfgInstruction(
             3, CfgOpcode.OptionOrI64, IrValueType.I64,
             Left: 0, Right: 1, Arguments: new[] { 2 })));

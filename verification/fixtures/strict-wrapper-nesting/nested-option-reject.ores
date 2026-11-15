@@ -1,0 +1,1 @@
+fnc main():int{ val nested: Option<Option<Future<int>>> = value; return 1; }
