@@ -5,6 +5,28 @@ import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const requiredByWorkflow = {
+  "Strict .NET Linux x64 Native AOT": {
+    "linux-x64-compiler-and-app": [
+      "Verify exact source checkout",
+      "Install Native AOT toolchain",
+      "Check source scripts and managed compiler regressions",
+      "Compile native compiler and first native application",
+      "Fail closed on unimplemented dispatch source before Native AOT CIL emission",
+      "Prove second generated source gets its own Native AOT executable",
+      "Execute flags2env client ABI scalar through Linux Native AOT",
+      "Execute shared native.precedence and prove three-source isolation",
+      "Execute opt-in structured CFG as linked Linux Native AOT",
+      "Execute Linux Native AOT checked-arithmetic negatives",
+      "Execute exact Java/LLVM logical .atto fixture in real Linux Native AOT",
+      "Execute canonical .atto signed relational source in Linux Native AOT",
+      "Execute explicitly authorized CLR Abs and Max guests in Native AOT",
+      "Negative test for managed sidecar rejection",
+      "Execute compiled guest Integer.rem in Linux Native AOT",
+      "Execute compiled guest Integer.pow and bitXor in Linux Native AOT",
+      "Record exact-head Native AOT execution receipt",
+      "Upload Linux native executables and evidence"
+    ]
+  },
   "Windows Native AOT": {
     "windows-x64": [
       "Assert exact originating-source checkout (Windows)",
@@ -13,6 +35,8 @@ const requiredByWorkflow = {
       "Show Windows .NET toolchain",
       "Refuse managed or framework-dependent release settings",
       "Verify compiler and runtime source",
+      "Compile and execute generated Counter as Windows NativeAOT",
+      "Compile verified scalar OresIR through C# and F# to managed CIL",
       "Verify shared advisory static facts from .NET compiler and typed structured parser",
       "Reject oversized and invalid UTF-8 compiler input",
       "Publish native compiler and native application",
@@ -75,12 +99,14 @@ const requiredByWorkflow = {
 };
 
 const requiredPathByWorkflow = {
+  "Strict .NET Linux x64 Native AOT": ".github/workflows/strict-linux-native-aot.yml",
   "Windows Native AOT": ".github/workflows/windows-native-aot.yml",
   "Integration declaration integrity": ".github/workflows/integration-declarations.yml"
 };
 // Stable IDs verified against the source repository's actual Actions runs.
 // A same-name or same-path spoof cannot replace the originating workflow.
 const requiredWorkflowIdByWorkflow = {
+  "Strict .NET Linux x64 Native AOT": 398765873,
   "Windows Native AOT": 384715065,
   "Integration declaration integrity": 388530125
 };
@@ -90,6 +116,11 @@ export function verifyEvidence(run, response, expected) {
   const hex = /^[a-f0-9]{40}$/i;
   fail(hex.test(expected.head), "expected head must be a full 40-digit SHA");
   fail(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(expected.repo), "invalid expected repository");
+  // All supported workflows are originating-source .NET checks. Matching
+  // caller-provided expected.repo and run.repository is insufficient to
+  // authorize a private-code transfer or qualify an alternate-org canary.
+  fail(expected.repo === "ores-truffle-oreslang/oreslang-source.net",
+    "native parity evidence requires the originating source repository");
   fail(Number.isSafeInteger(expected.runId) && expected.runId > 0, "expected run ID required");
   fail(Number.isSafeInteger(expected.attempt) && expected.attempt > 0, "expected attempt required");
   fail(Object.hasOwn(requiredByWorkflow,expected.workflow),"unrecognized workflow");
@@ -141,6 +172,8 @@ export function verifyEvidence(run, response, expected) {
     if (matches.length!==1) continue;
     const job=matches[0];
     if (disabledOptional(job)) continue;
+    if (expected.workflow === "Strict .NET Linux x64 Native AOT")
+      fail(Number.isSafeInteger(job.runner_id) && job.runner_id > 0, "strict Linux runner was not allocated");
     fail(job.status==="completed" && job.conclusion==="success", `job ${name} not successful`);
     const steps=job.steps;
     if (!Array.isArray(steps) || steps.length===0) {

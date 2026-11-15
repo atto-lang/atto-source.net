@@ -5,7 +5,9 @@ using Ores.Net.Compiler;
 // Fail-closed admission is NOT positive virtual dispatch or NativeAOT parity.
 internal static class PrivateAbstractActorAdmissionSelfTest
 {
-    private static void Denies(string source, string code)
+    // Any listed stable diagnostic family is an acceptable fail-closed
+    // rejection; main's earlier actor-source gates may classify first.
+    private static void Denies(string source, params string[] codes)
     {
         Action<string>[] parsers =
         {
@@ -18,12 +20,12 @@ internal static class PrivateAbstractActorAdmissionSelfTest
             {
                 parser(source);
             }
-            catch (FormatException error) when (error.Message.Contains(code, StringComparison.Ordinal))
+            catch (FormatException error) when (codes.Any(code => error.Message.Contains(code, StringComparison.Ordinal)))
             {
                 continue;
             }
             throw new InvalidOperationException(
-                $"Private abstract actor boundary did not reject '{code}' in source: {source}");
+                $"Private abstract actor boundary did not reject '{string.Join("|", codes)}' in source: {source}");
         }
     }
 
@@ -59,7 +61,9 @@ internal static class PrivateAbstractActorAdmissionSelfTest
             "define actor Mailer as mtd run(): void { let ref = self.receive; } end",
             "define class Derived as mtd run(): int { return super.hook(); } end"
         })
-            Denies(source, "NET_NOMINAL_METHODS_UNSUPPORTED");
+            // Main's scalar parser rejects actor sources earlier with its
+            // "Source actor ..." lowering gate; that is the same fail-closed boundary.
+            Denies(source, "NET_NOMINAL_METHODS_UNSUPPORTED", "Source actor ");
 
         // A gate that rejects everything is not evidence. Also ensure that
         // comment content cannot forge unsupported declaration tokens.
