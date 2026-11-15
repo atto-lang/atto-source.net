@@ -12,6 +12,8 @@ internal static class OwnershipBangAdmissionTests
             "take!42", "take! 42",
             "borrow!value", "borrow! value",
             "borrow! mut value", "borrow!mut value",
+            "borrow!\nmut value", "borrow!/* checked loan */mut value",
+            "mut borrow!\nvalue",
             "share!value", "share! value",
             "mut borrow!value", "mut borrow! value"
         })
