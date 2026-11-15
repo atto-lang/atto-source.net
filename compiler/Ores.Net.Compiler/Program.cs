@@ -352,7 +352,17 @@ static string ReadBoundedSource(string path, bool rejectBom = false)
     // Never sign source *after* silently discarding bytes from an input.
     if (rejectBom && start != 0)
         throw new FormatException("Static-facts export rejects BOM to preserve exact byte identity");
-    return new UTF8Encoding(false, true).GetString(buffer, start, read - start);
+    // All CLI modes share this authenticated UTF-8 source boundary.
+    // Reject text-reordering characters before any parser or codegen sees them.
+    string decoded = new UTF8Encoding(false, true).GetString(buffer, start, read - start);
+    foreach (char c in decoded)
+    {
+        if (c == 0x061c || c == 0x200e || c == 0x200f ||
+            (c >= 0x202a && c <= 0x202e) ||
+            (c >= 0x2066 && c <= 0x2069))
+            throw new FormatException("Source contains bidirectional Unicode control");
+    }
+    return decoded;
 }
 
 
