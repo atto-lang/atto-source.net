@@ -1,0 +1,1 @@
+pub fnc main():int{return Entry.of(11,23);}

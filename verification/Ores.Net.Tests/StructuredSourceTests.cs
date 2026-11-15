@@ -35,6 +35,19 @@ internal static class StructuredSourceTests
         throw new Exception("Unsupported receiver/capture syntax was admitted");
     }
 
+    private static void RejectScalarHttpActor(string source)
+    {
+        try { _ = OresParser.Parse(source); }
+        catch (FormatException ex)
+        {
+            Require(ex.Message.Contains("HTTP_ACTOR_BACKEND_UNSUPPORTED", StringComparison.Ordinal) &&
+                    ex.Message.Contains("offset", StringComparison.Ordinal),
+                "scalar source gate did not emit an HTTP actor diagnostic: " + ex.Message);
+            return;
+        }
+        throw new Exception("Scalar parser incorrectly admitted an HTTP actor declaration");
+    }
+
     private static void RejectScalarStateInjection(string source, string expectedDiagnostic)
     {
         try { _ = OresParser.Parse(source); }
@@ -51,6 +64,212 @@ internal static class StructuredSourceTests
 
     public static void Run()
     {
+        // Native AOT has no actor hierarchy, trait/interface witness ABI,
+        // runtime-owned receive slot or actor state loan lowering yet. Every
+        // source spelling must fail at the dedicated capability boundary.
+        foreach (var actorSource in new[] {
+            "define actor A1 as end",
+            "actor A1 as end",
+            "actor fnc invoke():int{return 1;}",
+            "fnc actor invoke():int{return 1;}",
+            "actor worker as end",
+            "actor A1 implements Traced as end",
+            "define pub actor A1 as end",
+            "define shared actor A1 as end",
+            "define untrusted actor A1 as end",
+            "define isoactor A1 as end",
+            "define pub isoactor A1 as end",
+            "shared actor A1 { }",
+            "untrusted actor A1 { }",
+            "isoactor A1 { }",
+            // HTTP actor spellings are gated earlier with HTTP_ACTOR_BACKEND_UNSUPPORTED (#481).
+            "define transform actor A1 as end",
+            "define pipe actor A1 as end",
+            "define actor A1 extends Base as end",
+            "define pub actor A1 implements Contract as end",
+            "define actor A1 impl Traced as end"
+        })
+            RejectFeature(actorSource, "receiver-erased method slots");
+        // `define abstract` is refused earlier by main's abstract-hook gate.
+        RejectFeature("define abstract actor A1 as end",
+            "Private abstract class hooks require typed virtual dispatch");
+        // Same canonical lifecycle source as the platform-conformance v1
+        // fixture; .NET must refuse it until ActorRef and CIL state/receive
+        // lowering are actually implemented and executed.
+        RejectFeature(@"// Lifecycle baseline only. No sealed state, inheritance, or actor-group parity claim.
+define actor A1 as
+  receive(ActorMail<int> mail): void {
+    self.send(mail.value + 1);
+    self.end();
+    return;
+  }
+end
+
+pub async routine main(): void {
+  val worker = spawn A1();
+  await worker.get_ready();
+  worker.send(41);
+  val reply = (await worker.outputs.next()).value.unwrap();
+  stdio.stdout.write(reply.value);
+  await worker.get_done();
+  return;
+}
+", "receiver-erased method slots");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{/* define pub actor A1 as end */return 42;}"
+        ).Body.Count == 1, "actor declarations in comments must remain inert");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{return 42;} // define isoactor A1 as end"
+        ).Body.Count == 1, "line comment actor decoys must remain inert");
+
+        // The optional Kestrel host provider is not a source HTTP actor compiler.
+        // Neither the serial alias nor explicit or 3x4 concurrency may silently
+        // become a scalar function or a generic mailbox actor in Native AOT.
+        foreach (var source in new[] {
+            "define serial http actor Endpoint as end",
+            "define http actor Endpoint as int requestConcurrency = 1; int messageConcurrency = 1; end",
+            "define http actor Endpoint as int requestConcurrency = 3; int messageConcurrency = 4; end",
+            "define pub serial http actor Endpoint as end",
+            "pub define http actor Endpoint as end",
+            "define pub shared http actor Endpoint as end",
+            "pub define untrusted http actor Endpoint as end",
+            "pub define http isoactor Endpoint as end",
+            "define private tcp http stream actor Endpoint as end",
+            "define " + string.Concat(Enumerable.Repeat("pub ", 16)) +
+                "serial http actor Endpoint as end"
+        })
+        {
+            RejectFeature(source, "HTTP_ACTOR_BACKEND_UNSUPPORTED");
+            RejectScalarHttpActor(source);
+        }
+        // The same 94-byte .atto fixture is byte-identical in the JS and Rust
+        // source compiler tests. Load from the test output, never from a mutable
+        // repository-relative path or a hardcoded host-only surrogate.
+        string httpActorFixture = File.ReadAllText(Path.Combine(
+            AppContext.BaseDirectory, "contracts", "http-actor-admission", "3x4.atto"));
+        Require(httpActorFixture ==
+                "define http actor Endpoint as\n  int requestConcurrency = 3;\n" +
+                "  int messageConcurrency = 4;\nend\n",
+            "shared HTTP actor fixture bytes unexpectedly changed");
+        RejectFeature(httpActorFixture, "HTTP_ACTOR_BACKEND_UNSUPPORTED");
+        RejectScalarHttpActor(httpActorFixture);
+        // These three .atto blobs must remain byte-identical to the Java,
+        // LLVM, Wasm and shared conformance inputs. This gate executes both
+        // independent CIL parser entrypoints; it does NOT claim HTTP guest
+        // sockets or Native AOT HTTP actor runtime support.
+        foreach (var (file, expectedBlob) in new (string File, string Sha)[] {
+            ("serial-1x1.atto", "7564a770934d2374ec5166a353c2c9bb3c383bdf"),
+            ("explicit-1x1.atto", "d2e5ebaffaaa26bfe6e117aaa8b36a6eb33937e1"),
+            ("unsupported-3x4.atto", "6987e72d70ae509522f7e050a494c0aef721a653")
+        })
+        {
+            byte[] data = File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory,
+                "contracts", "http-actor-v1", file));
+            byte[] header = System.Text.Encoding.ASCII.GetBytes("blob " + data.Length + "\0");
+            byte[] gitBlobBytes = new byte[header.Length + data.Length];
+            Buffer.BlockCopy(header, 0, gitBlobBytes, 0, header.Length);
+            Buffer.BlockCopy(data, 0, gitBlobBytes, header.Length, data.Length);
+            string blob = Convert.ToHexString(
+                System.Security.Cryptography.SHA1.HashData(gitBlobBytes)).ToLowerInvariant();
+            Require(blob == expectedBlob,
+                "canonical HTTP actor Git blob changed for " + file);
+            string atto = System.Text.Encoding.UTF8.GetString(data);
+            RejectFeature(atto, "HTTP_ACTOR_BACKEND_UNSUPPORTED");
+            RejectScalarHttpActor(atto);
+        }
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{return 42;} // define serial http actor NotADeclaration").Body.Count == 1,
+            "HTTP actor text in comments must not become a declaration");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{return 42;} /* define http actor NotADeclaration as end */").Body.Count == 1,
+            "HTTP actor text in block comments must not become a declaration");
+
+        // Java/LLVM receiver spellings must never be mistaken for scalar
+        // helpers or emitted as CIL while nominal method lowering is absent.
+        // These are fail-closed capability checks, NOT overload execution.
+        foreach (var source in new[] {
+            "define class Foo as x():void {} end",
+            "define class Foo as x(mut self)():void {} end",
+            "define class Foo as x(string a):void {} y(mut self, int x):void {} end",
+            "define class Foo as x(self)(int n):void {} end",
+            "define class Foo as x(self, int n):void {} end",
+        })
+            RejectFeature(source, "Nominal class/actor methods require receiver-erased method slots");
+
+        // Unlike a generic unsupported-target rejection, duplicate instance
+        // methods now fail in compiler-owned source admission before CIL.
+        // This remains only signature checking; accepted classes cannot
+        // execute until the typed owner/borrow/virtual-call pipeline exists.
+        foreach (var (source, slot) in new (string, string)[] {
+            ("define class Foo as x():void {} x(mut self)():void {} end", "x/0"),
+            // Arrow return notation reaches the same declaration identity
+            // gate; a generic scalar lexer rejection is insufficient.
+            ("define class Foo as x()->void {} x(mut self)()->void {} end", "x/0"),
+            ("define class Foo as x(int n)->int {} x(mut self, int n):int {} end", "x/1"),
+            ("define class Foo as x(mut self)(int n)->int {} x(int n)->int {} end", "x/1"),
+            ("define actor Foo as x()->void {} x(mut self)()->void {} end", "x/0"),
+            ("define class Foo as x(mut self)():void {} x():void {} end", "x/0"),
+            ("define class Foo as x(int n):void {} x(mut self, int n):void {} end", "x/1"),
+            ("define class Foo as x(mut self, int n):void {} x(int n):void {} end", "x/1"),
+            ("define class Foo as x(self):int {} x(mut self):int {} end", "x/0"),
+            ("define class Foo as x(self, int n):int {} x(mut self)(int n):int {} end", "x/1"),
+            // Typed legacy receivers are the same caller-visible selector.
+            ("define class Foo as x():void {} x(self Foo)():void {} end", "x/0"),
+            ("define class Foo as x(self Foo)():void {} x():void {} end", "x/0"),
+            ("define class Foo as x(int n):int {} x(self Foo)(int n):int {} end", "x/1"),
+            ("define class Foo as x(self Foo)(int n):int {} x(int n):int {} end", "x/1"),
+            ("define class Foo as x(int n):int {} x(mut self Foo, int n):int {} end", "x/1"),
+            ("define class Foo as x(mut self Foo)(int n):int {} x(int n):int {} end", "x/1"),
+            ("define class Foo as x(self Foo, int n):int {} x(mut self Foo)(int n):int {} end", "x/1"),
+            // Legacy class fnc is an instance declaration, unlike static fnc.
+            ("define class Foo as fnc x():void {} x(mut self)():void {} end", "x/0"),
+            ("define class Foo as x(mut self)():void {} fnc x():void {} end", "x/0"),
+            ("define class Foo as fnc x(int n):int {} method x(mut self, int n):int {} end", "x/1"),
+            ("define class Foo as method x(mut self, int n):int {} fnc x(int n):int {} end", "x/1"),
+            ("define pub class Foo as pub fnc x():void {} x(mut self)():void {} end", "x/0"),
+            ("pub define class Foo as x(int n):int {} pub fnc x(mut self, int n):int {} end", "x/1"),
+            ("define actor Foo as fnc x():void {} x(mut self)():void {} end", "x/0"),
+            ("define actor Foo as x(int n):int {} fnc x(mut self, int n):int {} end", "x/1"),
+            ("define actor Foo as x():void {} x(mut self)():void {} end", "x/0"),
+            ("define actor Foo as x(mut self)():void {} x():void {} end", "x/0"),
+            ("define actor Foo as x(int n):void {} x(mut self, int n):void {} end", "x/1"),
+            ("define actor Foo as x(mut self, int n):void {} x(int n):void {} end", "x/1")
+        })
+            RejectFeature(source, "Duplicate nominal method slot 'Foo::Instance::" + slot + "'");
+
+        // Static callables have their own owner/name/value-arity identity:
+        // static-static duplicates reject, but static-instance pairs coexist.
+        foreach (var (source, slot) in new (string, string)[] {
+            ("define class Foo as static fnc x():void {} static fnc x()->void {} end", "x/0"),
+            ("define class Foo as static fnc x()->void {} static fnc x():void {} end", "x/0"),
+            ("define class Foo as static fnc x(int n):int {} pub static fnc x(int n)->int {} end", "x/1"),
+            ("define class Foo as pub static fnc x(int n)->int {} static fnc x(int n):int {} end", "x/1")
+        })
+            RejectFeature(source, "Duplicate nominal method slot 'Foo::Static::" + slot + "'");
+
+        // Same arity under different method names is not a collision,
+        // comments are not lexical declarations, and constructor body calls
+        // must not create phantom method slots.
+        foreach (var validButNotExecutable in new[] {
+            "define class Foo as x(int n):int {} y(mut self, int n):int {} end",
+            "define class Foo as x()->void {} y(mut self)()->void {} end",
+            "define class Foo as x():void {} /* x(mut self)():void {} */ y():void {} end",
+            "define class Foo as x():void {} constructor(){x();x();} end",
+            "define class Foo as static fnc x():void {} x(mut self)():void {} end",
+            "define class Foo as x():void {} static fnc x():void {} end",
+            "define class Foo as static fnc x(int n)->int {} x(mut self, int n)->int {} end",
+            "define class Foo as static fnc x():void {} static fnc y():void {} end",
+            // Unsupported malformed typed receivers must not be mistaken for
+            // valid duplicate declarations in the preliminary signature scan.
+            "define class Foo as x(int n):int {} x(self Other)(int n):int {} end",
+            "define class Foo as x(int n):int {} x(mut self Other)(int n):int {} end",
+            "define class Foo as x(int n):int {} x(self)(self):int {} end",
+            "define class Foo as x(self Foo)(int n):int {} y(mut self Foo)(int n):int {} end",
+            "define actor Foo as x():void {} y(mut self)():void {} end"
+        })
+            RejectFeature(validButNotExecutable,
+                "Nominal class/actor methods require receiver-erased method slots");
+
         // AST identity and constant provenance must stay independent: a
         // default readonly typed binding has distinct source provenance.
         var immutableDefaults = OresStructuredParser.Parse(
@@ -696,23 +915,23 @@ internal static class StructuredSourceTests
             "Invalid UTF-16");
         BlockCommentReject("fnc main():int{return 1;} /* " + ((char)0) + " */",
             "Source contains NUL");
-        // Structural admission runs before lexing and owns the public
-        // 64-level limit. Preserve its canonical failure instead of expecting
-        // the private lexer's larger defensive bound to be reached.
+        // Structural admission runs before lexing and enforces the spec ch.16
+        // limit (128, "block comment nesting exceeds 128"), the same bound and
+        // wording as the other .NET lexers and Java/LLVM.
         const string commentPrefix = "fnc main():int{return 1;} ";
         Require(OresStructuredParser.Parse(commentPrefix +
-            string.Concat(Enumerable.Repeat("/*", 64)) +
-            string.Concat(Enumerable.Repeat("*/", 64))).Body.Count == 1,
-            "64 nested comments must remain valid at the admission boundary");
+            string.Concat(Enumerable.Repeat("/*", 128)) +
+            string.Concat(Enumerable.Repeat("*/", 128))).Body.Count == 1,
+            "128 nested comments must remain valid at the admission boundary");
         try
         {
             _ = OresStructuredParser.Parse(commentPrefix +
-                string.Concat(Enumerable.Repeat("/*", 65)) +
-                string.Concat(Enumerable.Repeat("*/", 65)));
-            throw new Exception("65 nested comments bypassed structural admission");
+                string.Concat(Enumerable.Repeat("/*", 129)) +
+                string.Concat(Enumerable.Repeat("*/", 129)));
+            throw new Exception("129 nested comments bypassed structural admission");
         }
         catch (FormatException ex) when (ex.Message ==
-            $"Structural admission comment nesting exceeded at offset {commentPrefix.Length + 128}") { }
+            $"block comment nesting exceeds 128 at offset {commentPrefix.Length + 256}") { }
 
 
         const string sum = """
@@ -1003,6 +1222,14 @@ internal static class StructuredSourceTests
             "or rejects non-boolean RHS");
         Reject("fnc main():int{if true xor 1{return 1;}else{return 2;}}",
             "xor rejects non-boolean RHS");
+        Reject("fnc main():int{if 1 && true{return 1;}else{return 2;}}",
+            "&& rejects non-boolean LHS");
+        Reject("fnc main():int{if false || 1{return 1;}else{return 2;}}",
+            "|| rejects non-boolean RHS");
+        Reject("fnc main():int{if true ^^ 1{return 1;}else{return 2;}}",
+            "^^ rejects non-boolean RHS");
+        Reject("fnc main():int{if true ^ false{return 1;}else{return 2;}}",
+            "single ^ stays out of the grammar");
         Reject("fnc main():int{if true==1{return 1;}else{return 2;}}",
             "bool/int equality mixing rejected");
         Reject("fnc main():int{const bool b=false xor (9223372036854775807+1>0);" +

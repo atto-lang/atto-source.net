@@ -1,0 +1,46 @@
+// Same source: two sealed actor identities, separate receiver methods,
+// one file namespace. No external receiver extension can read actor state.
+declare actor Foo1;
+declare actor Foo2;
+
+define actor Foo1 as
+  mtd increment(int x): int { return x + 1; }
+
+  receive(ActorMail<String> mail): void {
+    self.send(self.increment(40));
+    self.end();
+    return;
+  }
+end
+
+define actor Foo2 as
+  mtd double_value(int x): int { return x + x; }
+
+  receive(ActorMail<String> mail): void {
+    self.send(self.double_value(21));
+    self.end();
+    return;
+  }
+end
+
+pub async routine main(): void {
+  val first = spawn Foo1();
+  val second = spawn Foo2();
+
+  await first.get_ready();
+  await second.get_ready();
+
+  first.send("go");
+  second.send("go");
+
+  val first_out = (await first.outputs.next()).value.unwrap();
+  val second_out = (await second.outputs.next()).value.unwrap();
+
+  stdio.stdout.write(first_out.value);
+  stdio.stdout.write("|");
+  stdio.stdout.write(second_out.value);
+
+  await first.get_done();
+  await second.get_done();
+  return;
+}

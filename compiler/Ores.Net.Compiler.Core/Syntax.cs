@@ -6,11 +6,22 @@ public abstract record Expression;
 public sealed record Literal(long Value) : Expression;
 public sealed record Unary(char Operator, Expression Value) : Expression;
 public sealed record Binary(char Operator, Expression Left, Expression Right) : Expression;
-// Named intrinsic only. The '^' operator remains forbidden in Oreslang.
+// Named intrinsic only. Single '^' is not AttoLang syntax ('^^' is boolean XOR).
 public sealed record NamedBitXor(Expression Left, Expression Right) : Expression;
 // Closed-world CLR intrinsic: exact System.Math.Abs(Int64), no dynamic binding.
 public sealed record DotnetMathAbsI64(Expression Value) : Expression;
 public sealed record DotnetMathMaxI64(Expression Left, Expression Right) : Expression;
+
+// Shared by the scalar and structured frontends so unsupported mutable sharing
+// cannot be diagnosed differently before native CIL lowering exists.
+internal static class MutableShareAdmission
+{
+    internal const string DiagnosticPrefix =
+        "native rt mut share requires verified SharedMutex<T> capability, guarded lowering and allocation-domain proof in .NET Native AOT at offset ";
+
+    internal static FormatException Unsupported(int offset) =>
+        new(DiagnosticPrefix + offset);
+}
 
 public static partial class OresParser
 {
@@ -72,6 +83,66 @@ public static partial class OresParser
         {
             var token = lexer.Read();
             tokens.Add(token);
+            // Multiple actor forward signatures and file namespace headers
+            // require an actual nominal actor linker and NativeAOT CIL actor
+            // lowering. Detect at the token boundary, before later syntax is
+            // mistaken for an executable scalar helper.
+            int i = tokens.Count - 1;
+            if ((token.Text is "actor" or "isoactor") &&
+                i > 0 &&
+                (tokens[i - 1].Text == "declare" ||
+                 (i > 1 && tokens[i - 1].Text == "pub" &&
+                  tokens[i - 2].Text == "declare")))
+                throw new FormatException(
+                    $"ACTOR_FORWARD_NATIVEAOT_UNSUPPORTED: actor forward requires nominal actor identity, ownership and executable CIL lowering at offset {token.Offset}");
+            if (token.Text == "namespace" && i > 0 && tokens[i - 1].Text == "use")
+                throw new FormatException(
+                    $"NAMESPACE_RUNTIME_NATIVEAOT_UNSUPPORTED: file namespace requires verified nominal actor/linker identity at offset {token.Offset}");
+            // Fail at the completed typed receiver header, before tokenizing
+            // body operations or field syntax not in the scalar grammar.
+            int receiverAt = tokens.Count - 1;
+            if (token.Text == ":" &&
+                ((receiverAt >= 3 &&
+                  tokens[receiverAt - 1].Text == "self" &&
+                  tokens[receiverAt - 2].Text == "(" &&
+                  tokens[receiverAt - 3].Text == "mtd") ||
+                 (receiverAt >= 4 &&
+                  tokens[receiverAt - 1].Text == "self" &&
+                  tokens[receiverAt - 2].Text == "mut" &&
+                  tokens[receiverAt - 3].Text == "(" &&
+                  tokens[receiverAt - 4].Text == "mtd")))
+            {
+                int methodIndex = tokens[receiverAt - 2].Text == "("
+                    ? receiverAt - 3 : receiverAt - 4;
+                if (methodIndex == 0 ||
+                    (tokens[methodIndex - 1].Text != "fnc" &&
+                     tokens[methodIndex - 1].Text != "routine"))
+                    throw new FormatException(
+                        $"MTD_RECEIVER_NATIVEAOT_UNSUPPORTED: typed receiver methods need nominal class slots, borrow checking and CIL lowering at offset {tokens[methodIndex].Offset}");
+            }
+            // Fail closed on canonical type-first mtd (Foo self) and
+            // (Foo mut self) as soon as the header is complete. These are
+            // valid AttoLang declarations, but this NativeAOT frontend has
+            // no actor/class receiver slots or method borrowing ABI.
+            if (token.Text == ")" &&
+                ((receiverAt >= 4 &&
+                  tokens[receiverAt - 1].Text == "self" &&
+                  tokens[receiverAt - 3].Text == "(" &&
+                  tokens[receiverAt - 4].Text == "mtd") ||
+                 (receiverAt >= 5 &&
+                  tokens[receiverAt - 1].Text == "self" &&
+                  tokens[receiverAt - 2].Text == "mut" &&
+                  tokens[receiverAt - 4].Text == "(" &&
+                  tokens[receiverAt - 5].Text == "mtd")))
+            {
+                int methodIndex = tokens[receiverAt - 2].Text == "mut"
+                    ? receiverAt - 5 : receiverAt - 4;
+                if (methodIndex == 0 ||
+                    (tokens[methodIndex - 1].Text != "fnc" &&
+                     tokens[methodIndex - 1].Text != "routine"))
+                    throw new FormatException(
+                        $"MTD_RECEIVER_NATIVEAOT_UNSUPPORTED: typed receiver methods need nominal actor/class slots, ownership and CIL lowering at offset {tokens[methodIndex].Offset}");
+            }
             if (tokens.Count > MaxTokens)
                 throw new FormatException("Token count exceeds bootstrap limit");
             if (token.Text.Length == 0) break;
@@ -81,6 +152,30 @@ public static partial class OresParser
 
     private static void RejectUnsupportedScalarTokens(List<Token> tokens)
     {
+        // The scalar i64 parser is an independent public compiler entrypoint.
+        // A Kestrel host HTTP provider does not authorize guest HTTP actors.
+        // Deny exact contextual declarations before expression/IR parsing.
+        for (int i = 0; i + 1 < tokens.Count; i++)
+        {
+            int j = i;
+            if (tokens[j].Text == "pub" && tokens[j + 1].Text == "define") j++;
+            if (tokens[j].Text != "define") continue;
+            j++;
+            bool hasHttpTransport = false;
+            while (j < tokens.Count &&
+                   tokens[j].Text is "pub" or "private" or "shared" or "untrusted"
+                       or "serial" or "http" or "tcp" or "websocket" or "ws"
+                       or "stream" or "unary" or "abstract")
+            {
+                if (tokens[j].Text == "http") hasHttpTransport = true;
+                j++;
+            }
+            if (hasHttpTransport && j < tokens.Count &&
+                (tokens[j].Text is "actor" or "isoactor"))
+                throw new FormatException(
+                    $"HTTP_ACTOR_BACKEND_UNSUPPORTED: .NET scalar compiler requires typed HTTP actor admission, ownership and physical shutdown lowering at offset {tokens[j].Offset}");
+        }
+
         // Source actors are a semantic boundary, not an alternate spelling of scalar
         // functions. Canonical isolated actors already got the schema-aware rejection
         // (RejectUnsupportedSourceActors); every other actor declaration fails here,
@@ -106,6 +201,9 @@ public static partial class OresParser
         // so a post-lex token scan could not observe them.
         for (int i = 0; i + 1 < tokens.Count; i++)
         {
+            if (i + 2 < tokens.Count && tokens[i].Text == "rt" &&
+                tokens[i + 1].Text == "mut" && tokens[i + 2].Text == "share")
+                throw MutableShareAdmission.Unsupported(tokens[i].Offset);
             // Native AOT has no isolate-scoped ETS, local pg actor membership
             // or mailbox delivery lowering. Reject before OresIR/CIL emission.
             // The lexer has already stripped comments, so trivia is harmless.
@@ -135,6 +233,7 @@ public static partial class OresParser
                 StaticSelectAdmission.IsStaticSelectFollower(tokens[i + 1].Text))
                 throw StaticSelectAdmission.Unsupported(tokens[i].Offset);
         }
+
         // The shipping i64 frontend has no coroutine frames, bounded FIFO
         // critical admission, or authenticated guard owner. Reject with an
         // explicit compiler-owned capability diagnostic, not a generic parser
@@ -396,6 +495,11 @@ public static partial class OresParser
             var start = _i;
             if (_i == text.Length) return new Token("", start);
             var ch = text[_i];
+            if (ch is '\'' or '"' or '\u0060')
+            {
+                _i = QuotedSourceSyntax.Scan(text, start);
+                return new Token(text[start.._i], start);
+            }
             // Lexical-context guard: comments/whitespace were skipped above.
             // Preserve ordinary identifiers 'with(x)' and inert comments.
             bool precededByWith = previousWasWith;
@@ -457,6 +561,11 @@ public static partial class OresParser
                     (text[_i] is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_'))
                     _i++;
                 var word = text[start.._i];
+                // G0: do not allow unlowered native authority to be spelled as
+                // an ordinary identifier, parameter, member or callable.
+                if (word == "unsafe")
+                    throw new FormatException(
+                        $"unsafe boundary requires checked effects, native grants and Native AOT lowering at offset {start}");
                 previousWasWith = word == "with";
                 // G0: unsupported unsafe source must not become a normal
                 // identifier, callable, member or intrinsic in scalar CIL.
@@ -557,7 +666,7 @@ public static partial class OresParser
             // Lex assignment punctuation so unsupported declarations are rejected
             // at their declaration, rather than at a later initializer. The
             // arithmetic parser still has no assignment production.
-            if ("()+-*/{}:;.,=?|<>".IndexOf(ch) >= 0)
+            if ("()+-*/{}:;,.=?[]<>~|".IndexOf(ch) >= 0)
             {
                 _i++;
                 return new Token(text[start.._i], start);
@@ -566,13 +675,16 @@ public static partial class OresParser
                 throw new FormatException($"noncanonical '%' source operator; use named Integer.rem/mod at offset {start}");
             if (ch == '^')
             {
-                // Reserved AttoLang syntax is rejected after lexical trivia and
-                // before any scalar instruction reaches typed IR or CIL.
-                bool doubleCaret = _i + 1 < text.Length && text[_i + 1] == '^';
-                string spelling = doubleCaret ? "^^" : "^";
-                string named = doubleCaret ? "Xor(a, b)" : "Integer.bitXor(a, b)";
+                // Rejected after lexical trivia and before any scalar instruction
+                // reaches typed IR or CIL. `^^` is the canonical boolean XOR
+                // (spec ch.16), but this frontend only types int scalars, so any
+                // `^^` here has non-bool operands; the structured frontend lowers
+                // it. Single `^` is not AttoLang syntax (use Integer.bitXor).
+                if (_i + 1 < text.Length && text[_i + 1] == '^')
+                    throw new FormatException(
+                        $"Logical operator requires bool operands: '^^' in scalar int source at offset {start}");
                 throw new FormatException(
-                    $"Reserved AttoLang operator '{spelling}'; use {named} at offset {start}");
+                    $"Reserved AttoLang operator '^'; use Integer.bitXor(a, b) at offset {start}");
             }
             throw new FormatException($"Invalid character at offset {start}");
         }
@@ -703,6 +815,9 @@ public static partial class OresParser
         private Expression ParseUnary(int depth)
         {
             CheckDepth(depth);
+            if (Current.Text.Length > 0 && Current.Text[0] is '\'' or '"' or '\u0060')
+                throw new FormatException(
+                    $"STRING_BACKEND_UNSUPPORTED: quoted strings and template interpolation require typed String CIL/NativeAOT lowering at offset {Current.Offset}");
             if (Current.Text == "rt")
             {
                 int at = Current.Offset;
@@ -751,6 +866,44 @@ public static partial class OresParser
             }
             // The scalar subset admits only this one typed Integer intrinsic.
             // Parser-owned name resolution rejects arbitrary Integer.* calls.
+            // A first native, escaping-free product construction slice:
+            // Tuple.of(<i64 literals...>)[constant_slot] / ~tuple(...)[slot].
+            // All operands are pure checked constants, so projecting the
+            // selected SSA scalar preserves the exact source evaluation
+            // behavior without allocating a host tuple or losing an effect.
+            if (Current.Text is "Tuple" or "Record" or "Entry" or "Pair" or "~")
+            {
+                int at = Current.Offset;
+                if (Take("~"))
+                {
+                    if (Take("tuple")) return ParseScalarizedTupleFactory(depth + 1, at);
+                    if (Take("record")) return ParseScalarizedRecordFactory(depth + 1, at);
+                    if (Take("entry")) return ParseScalarizedBinaryProductFactory(depth + 1, at, isEntry: true);
+                    if (Take("pair")) return ParseScalarizedBinaryProductFactory(depth + 1, at, isEntry: false);
+                    throw new FormatException(
+                        $"E_COLLECTION_FACTORY_UNSUPPORTED: ~kind requires verified owned collection lowering at offset {at}");
+                }
+                if (Take("Tuple"))
+                {
+                    Expect(".");
+                    Expect("of");
+                    return ParseScalarizedTupleFactory(depth + 1, at);
+                }
+                if (Take("Record"))
+                {
+                    Expect(".");
+                    Expect("of");
+                    return ParseScalarizedRecordFactory(depth + 1, at);
+                }
+                bool isEntry = Take("Entry");
+                if (!isEntry) Expect("Pair");
+                Expect(".");
+                Expect("of");
+                return ParseScalarizedBinaryProductFactory(depth + 1, at, isEntry);
+            }
+            if (Current.Text is "Map" or "Array" or "List" or "Vector" or "Set")
+                throw new FormatException(
+                    $"E_COLLECTION_FACTORY_UNSUPPORTED: {Current.Text}.of requires owned typed aggregate and NativeAOT CIL lowering at offset {Current.Offset}");
             if (Take("Integer"))
             {
                 Expect(".");
@@ -789,6 +942,177 @@ public static partial class OresParser
                 NumberStyles.None, CultureInfo.InvariantCulture, out long result))
                 throw new FormatException($"Invalid i64 at offset {tokens[_index - 1].Offset}");
             return new Literal(result);
+        }
+
+        // A nominal Entry<K,V> and a Pair<A,B> remain different source
+        // families: an Entry exposes only .key/.value; a Pair exposes only
+        // .first/.second. The scalar bootstrap can represent neither as an
+        // escaping object. A checked pure literal immediate projection is
+        // valid without silently allocating a host tuple/dictionary or
+        // introducing unproven ownership/actor-heap transport.
+        private Expression ParseScalarizedBinaryProductFactory(int depth, int at, bool isEntry)
+        {
+            CheckDepth(depth);
+            if (Take("<"))
+            {
+                Expect("int");
+                Expect(",");
+                Expect("int");
+                Expect(">");
+            }
+            Expect("(");
+            long first = ReadPureI64Literal();
+            Expect(",");
+            long second = ReadPureI64Literal();
+            Expect(")");
+            if (!Take("."))
+                throw new FormatException(
+                    $"E_BINARY_PRODUCT_ESCAPE_UNSUPPORTED: Entry/Pair requires an owned nominal aggregate at offset {at}");
+            string field = Current.Text;
+            int fieldAt = Current.Offset;
+            _index++;
+            if (isEntry)
+            {
+                if (field == "key") return new Literal(first);
+                if (field == "value") return new Literal(second);
+                throw new FormatException($"E_ENTRY_FIELD: only key/value projections are supported at offset {fieldAt}");
+            }
+            if (field == "first") return new Literal(first);
+            if (field == "second") return new Literal(second);
+            throw new FormatException($"E_PAIR_FIELD: only first/second projections are supported at offset {fieldAt}");
+        }
+
+        // This is not an escaped Tuple<T...> value: the scalar bootstrap
+        // emits an i64 result, not an owning container. Require an immediate
+        // constant-index projection, bounded arity, and pure literal operands.
+        // If any operand may execute guest code or overflow, refuse the
+        // scalarization instead of silently dropping its evaluation.
+        private Expression ParseScalarizedTupleFactory(int depth, int at)
+        {
+            CheckDepth(depth);
+            int? explicitArity = null;
+            if (Take("<"))
+            {
+                int count = 0;
+                do
+                {
+                    Expect("int");
+                    if (++count > 32)
+                        throw new FormatException($"E_TUPLE_BUDGET: over 32 tuple type slots at offset {at}");
+                }
+                while (Take(","));
+                Expect(">");
+                explicitArity = count;
+            }
+
+            Expect("(");
+            var values = new List<long>();
+            if (Current.Text != ")")
+            {
+                do
+                {
+                    if (values.Count >= 32)
+                        throw new FormatException($"E_TUPLE_BUDGET: over 32 elements at offset {at}");
+                    int operandAt = Current.Offset;
+                    string sign = "";
+                    if (Current.Text is "+" or "-")
+                    {
+                        sign = Current.Text;
+                        _index++;
+                    }
+                    string raw = Current.Text;
+                    if (raw.Length == 0 || raw[0] is < '0' or > '9')
+                        throw new FormatException(
+                            $"E_TUPLE_LITERAL_ONLY: scalarized tuple requires side-effect-free i64 literal operands at offset {operandAt}");
+                    _index++;
+                    if (!long.TryParse(sign + raw.Replace("_", "", StringComparison.Ordinal),
+                            NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out long n))
+                        throw new FormatException($"E_TUPLE_RANGE: invalid signed i64 at offset {operandAt}");
+                    values.Add(n);
+                }
+                while (Take(",") && Current.Text != ")");
+            }
+            Expect(")");
+            if (explicitArity.HasValue && explicitArity.Value != values.Count)
+                throw new FormatException($"E_TUPLE_ARITY: tuple witness/operand count mismatch at offset {at}");
+
+            if (!Take("["))
+                throw new FormatException(
+                    $"E_TUPLE_ESCAPE_UNSUPPORTED: tuple value requires native product storage; only immediate constant-index projection is admitted at offset {at}");
+            string indexText = Current.Text;
+            int indexAt = Current.Offset;
+            if (indexText.Length == 0 || indexText[0] is < '0' or > '9' ||
+                !int.TryParse(indexText.Replace("_", "", StringComparison.Ordinal),
+                    NumberStyles.None, CultureInfo.InvariantCulture, out int index))
+                throw new FormatException($"E_TUPLE_INDEX: tuple projection needs nonnegative constant index at offset {indexAt}");
+            _index++;
+            Expect("]");
+            if (index >= values.Count)
+                throw new FormatException($"E_TUPLE_BOUNDS: tuple index out of range at offset {indexAt}");
+            return new Literal(values[index]);
+        }
+
+        // Readonly record scalarization is legal only for an immediate static
+        // field projection of a closed, all-literal shape. No record reference
+        // enters the scalar SSA, so the projection cannot escape or alias a
+        // host object. All field values are pure checked i64 literals.
+        private Expression ParseScalarizedRecordFactory(int depth, int at)
+        {
+            CheckDepth(depth);
+            Expect("(");
+            var fields = new Dictionary<string, long>(StringComparer.Ordinal);
+            if (Current.Text != ")")
+            {
+                do
+                {
+                    if (fields.Count >= 32)
+                        throw new FormatException($"E_RECORD_BUDGET: over 32 fields at offset {at}");
+                    string field = Current.Text;
+                    int fieldAt = Current.Offset;
+                    if (field.Length == 0 ||
+                        !(field[0] is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or '_') ||
+                        field.Any(c => !(c is >= 'a' and <= 'z' or >= 'A' and <= 'Z'
+                            or >= '0' and <= '9' or '_')))
+                        throw new FormatException(
+                            $"E_RECORD_STATIC_FIELD: record field must be static ASCII identifier at offset {fieldAt}");
+                    _index++;
+                    Expect(":");
+                    long value = ReadPureI64Literal();
+                    if (!fields.TryAdd(field, value))
+                        throw new FormatException($"E_RECORD_DUPLICATE: duplicate field at offset {fieldAt}");
+                }
+                while (Take(",") && Current.Text != ")");
+            }
+            Expect(")");
+            if (!Take("."))
+                throw new FormatException(
+                    $"E_RECORD_ESCAPE_UNSUPPORTED: record requires typed storage; only immediate field projection is admitted at offset {at}");
+            int nameAt = Current.Offset;
+            string member = Current.Text;
+            _index++;
+            if (!fields.TryGetValue(member, out long projected))
+                throw new FormatException($"E_RECORD_FIELD: unknown or inaccessible record field at offset {nameAt}");
+            return new Literal(projected);
+        }
+
+        private long ReadPureI64Literal()
+        {
+            int at = Current.Offset;
+            string sign = "";
+            if (Current.Text is "+" or "-")
+            {
+                sign = Current.Text;
+                _index++;
+            }
+            string raw = Current.Text;
+            if (raw.Length == 0 || raw[0] is < '0' or > '9')
+                throw new FormatException(
+                    $"E_AGGREGATE_LITERAL_ONLY: scalarized fields require pure i64 literals at offset {at}");
+            _index++;
+            if (!long.TryParse(sign + raw.Replace("_", "", StringComparison.Ordinal),
+                    NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out long value))
+                throw new FormatException($"E_AGGREGATE_I64_RANGE: invalid signed i64 at offset {at}");
+            return value;
         }
 
         private static void CheckDepth(int depth)
