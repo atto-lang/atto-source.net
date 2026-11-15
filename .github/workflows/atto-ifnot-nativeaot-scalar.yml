@@ -1,0 +1,45 @@
+name: Atto ifnot/unless scalar NativeAOT exact source
+on:
+  push:
+    paths:
+      - 'compiler/Ores.Net.Compiler.Core/**'
+      - 'verification/IfnotNativeAot/**'
+      - 'tests/fixtures/conditional/**'
+      - '.github/workflows/atto-ifnot-nativeaot-scalar.yml'
+  pull_request:
+    paths:
+      - 'compiler/Ores.Net.Compiler.Core/**'
+      - 'verification/IfnotNativeAot/**'
+      - 'tests/fixtures/conditional/**'
+      - '.github/workflows/atto-ifnot-nativeaot-scalar.yml'
+permissions:
+  contents: read
+jobs:
+  compiler-generated-cil-nativeaot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install NativeAOT linker requirements
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq clang zlib1g-dev
+      - name: Compile exact .atto through real CFG/CIL, then Linux NativeAOT
+        shell: bash
+        run: |
+          set -euo pipefail
+          source="$PWD/tests/fixtures/conditional/do-unless-nativeaot.atto"
+          generated="$PWD/verification/IfnotNativeAot/generated/OresGenerated.dll"
+          test "$(git hash-object "$source")" = "$(git rev-parse HEAD:tests/fixtures/conditional/do-unless-nativeaot.atto)"
+          dotnet run -c Release --project verification/IfnotNativeAot/Emitter/Emitter.csproj -- "$source" "$generated"
+          test -s "$generated"
+          dotnet publish verification/IfnotNativeAot/Host/Host.csproj -c Release -r linux-x64 -p:PublishAot=true -o "$RUNNER_TEMP/atto-ifnot-nativeaot"
+          set +e
+          "$RUNNER_TEMP/atto-ifnot-nativeaot/Host"
+          result=$?
+          set -e
+          test "$result" -eq 4 || { echo "INCORRECT_NATIVE_AOT_GUEST_RESULT=$result" >&2; exit 1; }
+          echo "ATTO_IFNOT_UNLESS_NATIVE_AOT_PASS exit=4"
