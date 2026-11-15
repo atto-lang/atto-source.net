@@ -3,7 +3,6 @@ on:
   pull_request:
     paths:
       - 'runtime/Ores.Net.Runtime/DurableCommandInboxV1.cs'
-      - 'verification/Ores.Net.Tests/DurableCommandInboxV1SelfTest.cs'
       - 'verification/Ores.Net.DurableCommandProbe/**'
       - 'docs/EVENT_SOURCING_DURABLE_COMMAND_HOST_V1.md'
       - '.github/workflows/event-sourced-sqlite-nativeaot-host.yml'

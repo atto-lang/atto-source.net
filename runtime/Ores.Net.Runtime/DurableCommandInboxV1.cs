@@ -4,15 +4,6 @@ using System.Text;
 
 namespace Ores.Net.Runtime;
 
-/// <summary>Owned immutable event bytes; the host owns these, not the Atto guest.</summary>
-public sealed class DurableCommandEventV1(int schemaVersion, byte[] payload)
-{
-    private readonly byte[] _payload = (byte[])(payload ?? throw new ArgumentNullException(nameof(payload))).Clone();
-    public int SchemaVersion { get; } = schemaVersion > 0 ? schemaVersion : throw new ArgumentOutOfRangeException(nameof(schemaVersion));
-    public byte[] Payload => (byte[])_payload.Clone();
-    internal byte[] OwnedPayload => _payload;
-}
-
 public sealed class DurableCommandReceiptV1(long firstVersion, long lastVersion, byte[] reply, bool duplicate)
 {
     private readonly byte[] _reply = (byte[])(reply ?? throw new ArgumentNullException(nameof(reply))).Clone();
@@ -29,7 +20,7 @@ public sealed class DurableCommandReceiptV1(long firstVersion, long lastVersion,
 /// No guest may select DB paths, tenant identity, epochs, or stored replies.
 /// sqlite3 native library availability is a deployment prerequisite.
 /// </summary>
-public sealed class DurableCommandInboxV1 : IDisposable
+public sealed partial class DurableCommandInboxV1 : IDisposable
 {
     private const int Row = 100, Done = 101, BlobType = 4, NullType = 5;
     private const int OpenReadWrite = 0x2, OpenCreate = 0x4, OpenFullMutex = 0x10000;
@@ -222,43 +213,14 @@ public sealed class DurableCommandInboxV1 : IDisposable
         }
         catch {Dispose();throw;}
     }
-    private static byte[] Encode(IReadOnlyList<DurableCommandEventV1> events)
+    // Stored batches use main's canonical Java/LLVM/Wasm/Forge event wire
+    // (DurableCommandWireV1, #476); no second encoder is maintained here.
+    private static byte[] Encode(IReadOnlyList<DurableCommandEventV1> events) =>
+        DurableCommandWireV1.EncodeEventBatch(events);
+    private static IReadOnlyList<DurableCommandEventV1> Decode(byte[] bytes)
     {
-        if(events.Count is < 1 or > 256)throw new ArgumentOutOfRangeException(nameof(events));
-        int size=4;
-        foreach(var e in events)
-        {
-            if(e.SchemaVersion<=0||e.OwnedPayload.Length>65536||size>1048576-8-e.OwnedPayload.Length)
-                throw new ArgumentException("INVALID_EVENT_BATCH");
-            size+=8+e.OwnedPayload.Length;
-        }
-        byte[] data=new byte[size];BinaryPrimitives.WriteInt32BigEndian(data,events.Count);
-        int offset=4;
-        foreach(var e in events)
-        {
-            BinaryPrimitives.WriteInt32BigEndian(data.AsSpan(offset),e.SchemaVersion);
-            BinaryPrimitives.WriteInt32BigEndian(data.AsSpan(offset+4),e.OwnedPayload.Length);
-            e.OwnedPayload.AsSpan().CopyTo(data.AsSpan(offset+8));offset+=8+e.OwnedPayload.Length;
-        }
-        return data;
-    }
-    private static List<DurableCommandEventV1> Decode(byte[] bytes)
-    {
-        if(bytes.Length is < 12 or > 1048576)throw new InvalidOperationException("CORRUPT_COMMAND_BATCH");
-        int count=BinaryPrimitives.ReadInt32BigEndian(bytes);
-        if(count is < 1 or > 256)throw new InvalidOperationException("CORRUPT_COMMAND_BATCH");
-        int offset=4;var events=new List<DurableCommandEventV1>(count);
-        for(int i=0;i<count;i++)
-        {
-            if(offset>bytes.Length-8)throw new InvalidOperationException("CORRUPT_COMMAND_BATCH");
-            int schema=BinaryPrimitives.ReadInt32BigEndian(bytes.AsSpan(offset));
-            int n=BinaryPrimitives.ReadInt32BigEndian(bytes.AsSpan(offset+4));offset+=8;
-            if(schema<=0||n<0||n>65536||n>bytes.Length-offset)
-                throw new InvalidOperationException("CORRUPT_COMMAND_BATCH");
-            events.Add(new DurableCommandEventV1(schema,bytes.AsSpan(offset,n).ToArray()));offset+=n;
-        }
-        if(offset!=bytes.Length)throw new InvalidOperationException("CORRUPT_COMMAND_BATCH");
-        return events;
+        try { return DurableCommandWireV1.DecodeEventBatch(bytes); }
+        catch (FormatException) { throw new InvalidOperationException("CORRUPT_COMMAND_BATCH"); }
     }
     private DurableCommandReceiptV1? Lookup(string tenant,string actor,string slot,long epoch,string op,byte[] request)
     {
@@ -339,7 +301,7 @@ public sealed class DurableCommandInboxV1 : IDisposable
                 foreach(var (value,index) in ownedEvents.Select((x,i)=>(x,i)))
                 {
                     using var q=Key(new Query(this,"INSERT INTO durable_events VALUES(?,?,?,?,?,?)"),tenant,actor,slot);
-                    q.Integer(4,first+index).Integer(5,value.SchemaVersion).Blob(6,value.OwnedPayload).Step();
+                    q.Integer(4,first+index).Integer(5,value.SchemaVersion).Blob(6,value.OwnedPayload.ToArray()).Step();
                 }
                 using(var q=Key(new Query(this,"INSERT INTO durable_command_inbox VALUES(?,?,?,?,?,?,?,?,?,?,?)"),tenant,actor,slot))
                     q.Text(4,op).Integer(5,epoch).Integer(6,expected).Blob(7,ownedRequest)
