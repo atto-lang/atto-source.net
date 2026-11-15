@@ -8,6 +8,10 @@ on:
       - 'docs/CI_EVIDENCE_EXACT_HEAD.md'
       - '.github/workflows/windows-native-aot.yml'
       - '.github/workflows/native-aot-evidence-contract.yml'
+      - '.github/workflows/trusted-source-local-linux-aot.yml'
+      - '.github/workflows/trusted-source-local-windows-aot.yml'
+      - '.github/workflows/trusted-source-local-fence-windows.yml'
+      - 'verification/trusted-bootstrap-admission.test.mjs'
   workflow_dispatch:
 
 permissions:
@@ -34,3 +38,5 @@ jobs:
           test -z "$(git ls-files --others --exclude-standard)"
       - name: Verify strict evidence parser negative fixtures
         run: node --test verification/ci-evidence-gate.test.mjs
+      - name: Verify manual trusted bootstrap admission
+        run: node --test verification/trusted-bootstrap-admission.test.mjs

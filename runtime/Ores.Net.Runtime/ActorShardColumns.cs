@@ -86,6 +86,28 @@ public sealed class ActorShardColumns
         return BitConverter.Int64BitsToDouble(bits);
     }
 
+    /// <summary>
+    /// Non-throwing *bounds* probe returning an owned Copy double, equivalent
+    /// to a host-level Option&lt;double&gt;. It is NOT an AttoLang borrow, nor
+    /// compiler lowering of Option. Invalid actor turns, stale arena tokens,
+    /// and disposed shards still fail closed even when indices are missing.
+    /// A miss assigns default to <paramref name="value"/> and reads no cell.
+    /// </summary>
+    public bool TryRead(ActorArenaTurn turn, long row, long field, out double value)
+    {
+        EnsureLive();
+        // Validate the exact physical actor turn and allocation even when the
+        // requested index is out of range. A miss grants no authority bypass.
+        _arena.Read(turn, _storage, 0, Span<byte>.Empty);
+        if (row < 0 || row >= Rows || field < 0 || field >= Fields)
+        {
+            value = default;
+            return false;
+        }
+        value = Read(turn, checked((int)row), checked((int)field));
+        return true;
+    }
+
     public void Write(ActorArenaTurn turn, int row, int field, double value)
     {
         EnsureLive();

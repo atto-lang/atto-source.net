@@ -1,0 +1,4 @@
+// Expected signed64 checked overflow.
+define pub fnc main(): int {
+    return Integer.pow(2, 63);
+}

@@ -41,6 +41,52 @@ internal static class ProjectRootSourceTests
             File.WriteAllText(manifest, "schema_version = \"1\"\n");
             Check(ProjectRootSourceResolver.Resolve(app, "+/src/answer") == Path.GetFullPath(source),
                   "inferred extension");
+            string attoSource = Path.Combine(app, "src", "answer.atto");
+            File.WriteAllText(attoSource, "pub fnc answer():int{return 43;}\n");
+            Check(ProjectRootSourceResolver.Resolve(app, "+/src/answer") ==
+                  Path.GetFullPath(attoSource), "canonical .atto did not win");
+            Check(ProjectRootSourceResolver.Resolve(app, "+/src/answer.ores") ==
+                  Path.GetFullPath(source), "explicit legacy .ores rejected");
+            Check(ProjectRootSourceResolver.Resolve(app, "+/src/answer.atto") ==
+                  Path.GetFullPath(attoSource), "explicit .atto rejected");
+            string upperAttoSource = Path.Combine(app, "src", "upper.ATTO");
+            File.WriteAllText(upperAttoSource, "pub fnc answer():int{return 44;}\n");
+            Check(ProjectRootSourceResolver.Resolve(app, "+/src/upper.ATTO") ==
+                  Path.GetFullPath(upperAttoSource), "case-insensitive explicit .ATTO rejected");
+            Reject(() => ProjectRootSourceResolver.Resolve(app, "+/src/answer.py"),
+                   "foreign source admitted");
+            File.Delete(attoSource);
+            Check(ProjectRootSourceResolver.Resolve(app, "+/src/answer") ==
+                  Path.GetFullPath(source), "legacy fallback lost");
+
+            // A dangling canonical .atto entry must not be treated as absent
+            // and silently replaced by a valid legacy .ores sibling.
+            string danglingAtto = Path.Combine(app, "src", "dangling.atto");
+            string danglingLegacy = Path.Combine(app, "src", "dangling.ores");
+            File.WriteAllText(danglingLegacy, "pub fnc answer():int{return 41;}\n");
+            bool danglingAttoCreated = false;
+            try
+            {
+                File.CreateSymbolicLink(danglingAtto, Path.Combine(app, "src", "missing-target.atto"));
+                danglingAttoCreated = true;
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or
+                     PlatformNotSupportedException or IOException)
+            {
+                // Some Windows runners deny symlink creation.
+            }
+            try
+            {
+                if (danglingAttoCreated)
+                    Reject(() => ProjectRootSourceResolver.Resolve(app, "+/src/dangling"),
+                           "dangling canonical .atto fell back to legacy .ores");
+            }
+            finally
+            {
+                if (danglingAttoCreated) File.Delete(danglingAtto);
+                File.Delete(danglingLegacy);
+            }
+
             // TOML line endings are LF or CRLF. A bare CR can otherwise
             // conceal [project] or a second root after a # comment.
             File.WriteAllText(manifest,
@@ -88,6 +134,28 @@ internal static class ProjectRootSourceTests
                   Path.GetFullPath(local), "./ did not resolve relative to importer");
             Check(ProjectRootSourceResolver.ResolveRelative(importer, "../answer", app) ==
                   Path.GetFullPath(source), "../ did not resolve relative to importer");
+            string localAtto = Path.Combine(routes, "local.atto");
+            File.WriteAllText(localAtto, "fnc local():int{return 43;}\n");
+            Check(ProjectRootSourceResolver.ResolveRelative(importer, "./local", app) ==
+                  Path.GetFullPath(localAtto), "canonical relative .atto did not win");
+            Check(ProjectRootSourceResolver.ResolveRelative(importer, "./local.ores", app) ==
+                  Path.GetFullPath(local), "explicit relative .ores was rejected");
+            string attoImporter = Path.Combine(routes, "main.atto");
+            File.WriteAllText(attoImporter, "fnc main():int{return 43;}\n");
+            Check(ProjectRootSourceResolver.ResolveRelative(attoImporter, "./local.atto", app) ==
+                  Path.GetFullPath(localAtto), ".atto importer did not resolve .atto dependency");
+            string upperAttoImporter = Path.Combine(routes, "upper-main.ATTO");
+            File.WriteAllText(upperAttoImporter, "fnc main():int{return 44;}\n");
+            Check(ProjectRootSourceResolver.ResolveRelative(upperAttoImporter, "./local.atto", app) ==
+                  Path.GetFullPath(localAtto), "case-insensitive .ATTO importer was rejected");
+            // Remove the .atto importers so "./main" below still means the
+            // importer itself rather than a canonical main.atto sibling.
+            File.Delete(attoImporter);
+            File.Delete(upperAttoImporter);
+            File.Delete(localAtto);
+            Check(ProjectRootSourceResolver.ResolveRelative(importer, "./local", app) ==
+                  Path.GetFullPath(local), "relative legacy fallback lost");
+
             foreach (var bad in new[] { "local", ".hidden/local", "./", "../",
                                         "./missing", "./local.java", "./main",
                                         "../../../../outside", "./local//alias",
