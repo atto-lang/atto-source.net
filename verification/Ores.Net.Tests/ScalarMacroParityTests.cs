@@ -19,7 +19,7 @@ public static class ScalarMacroParityTests
         }
         """;
 
-    private static string Main(string expression) =>
+    private static string MainSource(string expression) =>
         $"pub fnc main(): int {{ return {expression}; }}";
 
     private static void Require(bool ok, string why)
@@ -58,11 +58,11 @@ public static class ScalarMacroParityTests
 
     public static void Run()
     {
-        string constSource = LiteralMacro + Main("literal!(const 40 + 2)");
-        string identitySource = IdentityMacro + Main("identity!(syntax expr 42)");
-        string twiceSource = TwiceMacro + Main("twice!(syntax expr 21)");
+        string constSource = LiteralMacro + MainSource("literal!(const 40 + 2)");
+        string identitySource = IdentityMacro + MainSource("identity!(syntax expr 42)");
+        string twiceSource = TwiceMacro + MainSource("twice!(syntax expr 21)");
         string twiceNestedSource = LiteralMacro + TwiceMacro +
-            Main("twice!(syntax expr literal!(const 20 + 1))");
+            MainSource("twice!(syntax expr literal!(const 20 + 1))");
         Require(OresParser.Parse(constSource) is Literal { Value: 42 },
             "Const<int> quote must lower to a literal AST node");
         Require(OresParser.Parse(identitySource) is Literal { Value: 42 },
@@ -79,16 +79,16 @@ public static class ScalarMacroParityTests
             "typed quote/unquote emits distinct AST identities");
         Expect42(twiceSource, "twice! literal template re-enters checked OresIR");
         Expect42(twiceNestedSource, "nested literal! inside twice! expands before OresIR");
-        Expect42(LiteralMacro + Main("literal!(const (3 * 4) + (7 * 6) - 12)"),
+        Expect42(LiteralMacro + MainSource("literal!(const (3 * 4) + (7 * 6) - 12)"),
             "mixed checked multiply/add/subtract constant must evaluate to 42");
-        Expect42(IdentityMacro + Main("identity!(syntax expr (6 * 7))"),
+        Expect42(IdentityMacro + MainSource("identity!(syntax expr (6 * 7))"),
             "non-literal identity syntax retains expression semantics");
         Expect42(LiteralMacro + IdentityMacro +
-            Main("identity!(syntax expr literal!(const 6 * 7))"),
+            MainSource("identity!(syntax expr literal!(const 6 * 7))"),
             "nested macros must expand completely before OresIR");
-        Expect42(IdentityMacro + Main("identity!(syntax expr 21 + 21)"),
+        Expect42(IdentityMacro + MainSource("identity!(syntax expr 21 + 21)"),
             "identity must splice an arithmetic AST without textual rewriting");
-        Expect42(LiteralMacro + Main("literal!(const -9223372036854775808 + 9223372036854775807 + 43)"),
+        Expect42(LiteralMacro + MainSource("literal!(const -9223372036854775808 + 9223372036854775807 + 43)"),
             "checked intermediate constants must admit valid signed-i64 arithmetic");
 
         // Verify the real source -> checked OresIR -> deterministic CIL path,
@@ -134,66 +134,66 @@ public static class ScalarMacroParityTests
 
         // Compiler-only declarations: unsupported/uninvoked ones are not discarded.
         Reject("define pub macro literal(Const<int> x) -> Syntax<Expr> { return quote(x); }" +
-            Main("42"), "NET_MACRO_EXPANDER_REQUIRED", "public macro ABI requires export metadata");
+            MainSource("42"), "NET_MACRO_EXPANDER_REQUIRED", "public macro ABI requires export metadata");
         Reject("pub define macro literal(Const<int> x) -> Syntax<Expr> { return quote(x); }" +
-            Main("42"), "NET_MACRO_EXPANDER_REQUIRED", "alternate public macro spelling");
+            MainSource("42"), "NET_MACRO_EXPANDER_REQUIRED", "alternate public macro spelling");
         Reject("define macro make(Type x) -> Syntax<Expr> { return x; }" +
-            Main("42"), "NET_MACRO_EXPANDER_REQUIRED", "unsupported type input even when unused");
+            MainSource("42"), "NET_MACRO_EXPANDER_REQUIRED", "unsupported type input even when unused");
         Reject("define macro literal(Const<int> quote) -> Syntax<Expr> { return quote(quote); }" +
-            Main("42"), "NET_MACRO_EXPANDER_REQUIRED", "quote must not be rebound in macro scope");
+            MainSource("42"), "NET_MACRO_EXPANDER_REQUIRED", "quote must not be rebound in macro scope");
         Reject("define macro identity(Syntax<Expr> unquote) -> Syntax<Expr> { return unquote; }" +
-            Main("42"), "NET_MACRO_EXPANDER_REQUIRED", "unquote must not be rebound in macro scope");
+            MainSource("42"), "NET_MACRO_EXPANDER_REQUIRED", "unquote must not be rebound in macro scope");
         Reject("define macro identity(Syntax<Expr> x) -> Syntax<Expr> { return quote(x+x); }" +
-            Main("42"), "NET_MACRO_EXPANDER_REQUIRED", "generated expression/call-site duplication");
+            MainSource("42"), "NET_MACRO_EXPANDER_REQUIRED", "generated expression/call-site duplication");
         Reject("define macro invalid(Const<int> x) -> Syntax<Decl> { return quote(x); }" +
-            Main("42"), "NET_MACRO_EXPANDER_REQUIRED", "result-kind mismatch rejected at declaration");
+            MainSource("42"), "NET_MACRO_EXPANDER_REQUIRED", "result-kind mismatch rejected at declaration");
         Reject("define macro bad(Syntax<Expr> x) -> Syntax<Expr> { return dynamic_call(x); }" +
-            Main("42"), "NET_MACRO_EXPANDER_REQUIRED", "unsupported macro helper body");
+            MainSource("42"), "NET_MACRO_EXPANDER_REQUIRED", "unsupported macro helper body");
         Reject("define macro bad(Syntax<Expr> x, Syntax<Expr> y) -> Syntax<Expr> { return x; }" +
-            Main("42"), "NET_MACRO_EXPANDER_REQUIRED", "multi-parameter expander unavailable");
+            MainSource("42"), "NET_MACRO_EXPANDER_REQUIRED", "multi-parameter expander unavailable");
         Reject("define macro syntax(Syntax<Expr> x) -> Syntax<Expr> { return x; }" +
-            Main("42"), "NET_MACRO_EXPANDER_REQUIRED", "syntax tag is reserved, even for unused macros");
+            MainSource("42"), "NET_MACRO_EXPANDER_REQUIRED", "syntax tag is reserved, even for unused macros");
         Reject("define macro identity(Syntax<Expr> const) -> Syntax<Expr> { return const; }" +
-            Main("42"), "NET_MACRO_EXPANDER_REQUIRED", "const tag must not be rebound as a macro parameter");
+            MainSource("42"), "NET_MACRO_EXPANDER_REQUIRED", "const tag must not be rebound as a macro parameter");
         Reject("define macro rt(Syntax<Expr> x) -> Syntax<Expr> { return x; }" +
-            Main("42"), "NET_MACRO_EXPANDER_REQUIRED", "runtime ownership prefix must not name a macro");
+            MainSource("42"), "NET_MACRO_EXPANDER_REQUIRED", "runtime ownership prefix must not name a macro");
         Reject("define macro identity(Syntax<Expr> Expr) -> Syntax<Expr> { return Expr; }" +
-            Main("42"), "NET_MACRO_EXPANDER_REQUIRED", "typed syntax names must not be macro parameters");
+            MainSource("42"), "NET_MACRO_EXPANDER_REQUIRED", "typed syntax names must not be macro parameters");
         Reject("define macro eval(Syntax<Expr> x) -> Syntax<Expr> { return x; }" +
-            Main("42"), "NET_MACRO_EXPANDER_REQUIRED", "eval intrinsic must not be rebound");
+            MainSource("42"), "NET_MACRO_EXPANDER_REQUIRED", "eval intrinsic must not be rebound");
         Reject("define macro unsafe(Syntax<Expr> value) -> Syntax<Expr> {" +
-            "return quote(unquote(value) + unquote(other)); }" + Main("42"),
+            "return quote(unquote(value) + unquote(other)); }" + MainSource("42"),
             "NET_MACRO_EXPANDER_REQUIRED", "unused invalid template declaration must fail before CIL");
-        Reject(LiteralMacro + Main("literal!(const -(-9223372036854775808))"),
+        Reject(LiteralMacro + MainSource("literal!(const -(-9223372036854775808))"),
             "NET_MACRO_CONST_OVERFLOW", "shared unary minimum signed overflow");
-        Reject(TwiceMacro + Main("twice!(syntax expr 20 + 1)"),
+        Reject(TwiceMacro + MainSource("twice!(syntax expr 20 + 1)"),
             "NET_MACRO_EXPANDER_REQUIRED", "template must not duplicate a composite expression");
-        Reject(TwiceMacro + Main("twice!(syntax expr runtime_value)"),
+        Reject(TwiceMacro + MainSource("twice!(syntax expr runtime_value)"),
             "NET_MACRO_EXPANDER_REQUIRED", "template must not duplicate a runtime identifier");
-        Reject(TwiceMacro + Main("twice!(syntax expr 9223372036854775807)"),
+        Reject(TwiceMacro + MainSource("twice!(syntax expr 9223372036854775807)"),
             "NET_MACRO_CONST_OVERFLOW", "repeated positive literal overflow");
-        Reject(TwiceMacro + Main("twice!(syntax expr -9223372036854775808)"),
+        Reject(TwiceMacro + MainSource("twice!(syntax expr -9223372036854775808)"),
             "NET_MACRO_CONST_OVERFLOW", "repeated negative minimum literal overflow");
         Reject("define macro twice(Syntax<Expr> x) -> Syntax<Expr> {" +
-            "return quote(unquote(x) + unquote(y)); }" + Main("42"),
+            "return quote(unquote(x) + unquote(y)); }" + MainSource("42"),
             "NET_MACRO_EXPANDER_REQUIRED", "template cannot splice undeclared parameter");
         Reject("define macro twice(Syntax<Expr> x) -> Syntax<Expr> {" +
-            "return quote(unquote(x) + x); }" + Main("42"),
+            "return quote(unquote(x) + x); }" + MainSource("42"),
             "NET_MACRO_EXPANDER_REQUIRED", "template requires two direct unquotes");
         Reject("define macro twice(Syntax<Expr> x) -> Syntax<Expr> {" +
-            "return quote(unquote(x) + unquote(x) + unquote(x)); }" + Main("42"),
+            "return quote(unquote(x) + unquote(x) + unquote(x)); }" + MainSource("42"),
             "NET_MACRO_EXPANDER_REQUIRED", "template cannot amplify syntax three times");
-        Reject(TwiceMacro + Main("twice!(const 21)"),
+        Reject(TwiceMacro + MainSource("twice!(const 21)"),
             "NET_MACRO_EXPANDER_REQUIRED", "template requires Syntax<Expr>, not Const<int>");
-        RejectStructured(TwiceMacro + Main("twice!(syntax expr 21)"),
+        RejectStructured(TwiceMacro + MainSource("twice!(syntax expr 21)"),
             "structured typed template must fail closed");
-        Reject(LiteralMacro + LiteralMacro + Main("42"),
+        Reject(LiteralMacro + LiteralMacro + MainSource("42"),
             "NET_MACRO_EXPANDER_REQUIRED", "duplicate macro must fail even if unused");
-        Reject(IdentityMacro + Main("identity!(const 42)"),
+        Reject(IdentityMacro + MainSource("identity!(const 42)"),
             "NET_MACRO_EXPANDER_REQUIRED", "argument category must be Syntax<Expr>");
-        Reject(LiteralMacro + Main("literal!(syntax expr 42)"),
+        Reject(LiteralMacro + MainSource("literal!(syntax expr 42)"),
             "NET_MACRO_EXPANDER_REQUIRED", "argument category must be Const<int>");
-        Reject(Main("missing!(syntax expr 42)"),
+        Reject(MainSource("missing!(syntax expr 42)"),
             "NET_MACRO_EXPANDER_REQUIRED", "undefined macros do not become runtime calls");
         // Reserved intrinsic spellings are *not* valid macro declarations,
         // but an attempted bang call must still take the fail-closed compiler
@@ -201,58 +201,58 @@ public static class ScalarMacroParityTests
         foreach (string spelling in new[] { "quote", "unquote", "eval", "syntax", "const",
                                              "rt", "main", "Expr", "Syntax", "Const" })
         {
-            Reject(Main(spelling + "!(syntax expr 42)"),
+            Reject(MainSource(spelling + "!(syntax expr 42)"),
                 "NET_MACRO_EXPANDER_REQUIRED",
                 "reserved macro-like bang invocation " + spelling);
         }
-        Reject(Main("42!(syntax expr 42)"),
+        Reject(MainSource("42!(syntax expr 42)"),
             "NET_MACRO_EXPANDER_REQUIRED",
             "non-identifier bang invocation cannot bypass compile-time admission");
-        Reject(LiteralMacro + Main("literal!(const dynamic_name)"),
+        Reject(LiteralMacro + MainSource("literal!(const dynamic_name)"),
             "Expected integer", "dynamic Const<int> must fail before CIL");
-        Reject(LiteralMacro + Main("literal!(const 9223372036854775807 + 1)"),
+        Reject(LiteralMacro + MainSource("literal!(const 9223372036854775807 + 1)"),
             "NET_MACRO_CONST_OVERFLOW", "checked constant overflow");
-        Reject(LiteralMacro + Main("literal!(const -(-9223372036854775808))"),
+        Reject(LiteralMacro + MainSource("literal!(const -(-9223372036854775808))"),
             "NET_MACRO_CONST_OVERFLOW", "unary signed overflow");
-        Reject(LiteralMacro + Main("literal!(const 1 / 2)"),
+        Reject(LiteralMacro + MainSource("literal!(const 1 / 2)"),
             "Division requires float result lowering", "integer division cannot change language typing");
 
         // Inclusive 64-level const evaluator bound, distinct from parser's
         // independent 128 nesting bound. No runtime bypass on depth 65.
         string negations64 = string.Concat(Enumerable.Repeat("-", 64)) + "1";
         string negations65 = "-" + negations64;
-        Require(OresParser.Parse(LiteralMacro + Main($"literal!(const {negations64})")) is
+        Require(OresParser.Parse(LiteralMacro + MainSource($"literal!(const {negations64})")) is
             Literal { Value: 1 }, "64 nested unary const nodes are admitted");
-        Reject(LiteralMacro + Main($"literal!(const {negations65})"),
+        Reject(LiteralMacro + MainSource($"literal!(const {negations65})"),
             "NET_MACRO_CONST_BUDGET", "65 nested const nodes must fail closed");
 
         // Macro-expansion count boundary, independent of AST evaluator budget.
         string invocations128 = string.Join("+",
             Enumerable.Repeat("identity!(syntax expr 1)", 128));
         string invocations129 = invocations128 + "+identity!(syntax expr 1)";
-        Require(OresParser.Parse(IdentityMacro + Main(invocations128)) is Binary,
+        Require(OresParser.Parse(IdentityMacro + MainSource(invocations128)) is Binary,
             "128 macro expansions are admitted in closed scalar frontend");
-        Reject(IdentityMacro + Main(invocations129),
+        Reject(IdentityMacro + MainSource(invocations129),
             "NET_MACRO_EXPANDER_REQUIRED", "129th expansion must be rejected");
 
         string broad = "1";
         for (int i = 0; i < 8; ++i) broad = "(" + broad + "+" + broad + ")";
-        Require(OresParser.Parse(LiteralMacro + Main($"literal!(const {broad})")) is
+        Require(OresParser.Parse(LiteralMacro + MainSource($"literal!(const {broad})")) is
             Literal { Value: 256 }, "511-node Const<int> AST stays within 512 visits");
         broad = "(" + broad + "+" + broad + ")";
-        Reject(LiteralMacro + Main($"literal!(const {broad})"),
+        Reject(LiteralMacro + MainSource($"literal!(const {broad})"),
             "NET_MACRO_CONST_BUDGET", "1023-node shallow AST exceeds 512 evaluator visits");
 
         string many = string.Concat(Enumerable.Range(0, 9).Select(i =>
             $"define macro ident_{i}(Syntax<Expr> x) -> Syntax<Expr> {{ return x; }}\n"));
-        Reject(many + Main("42"), "NET_MACRO_EXPANDER_REQUIRED",
+        Reject(many + MainSource("42"), "NET_MACRO_EXPANDER_REQUIRED",
             "more than eight macro declarations must fail closed");
 
         // No comment-delimiter, quoted source or textual preprocessing trick can
         // introduce an executable macro without a real compiler AST declaration.
-        Require(OresParser.Parse(Main("42") + " // define macro fake") is Literal { Value: 42 },
+        Require(OresParser.Parse(MainSource("42") + " // define macro fake") is Literal { Value: 42 },
             "line-comment decoy must be ignored");
-        Require(OresParser.Parse(Main("42") +
+        Require(OresParser.Parse(MainSource("42") +
             " /* define macro fake /* identity!(syntax expr 99) */ end */") is Literal { Value: 42 },
             "nested block-comment decoy must be ignored");
 
@@ -260,8 +260,8 @@ public static class ScalarMacroParityTests
         // reject its syntax itself (not pass it through to CFG/CIL or module import).
         RejectStructured(constSource, "structured macro declaration");
         RejectStructured(identitySource, "structured macro identity");
-        RejectStructured(Main("identity!(syntax expr 42)"), "structured macro invocation");
-        Require(OresStructuredParser.Parse(Main("42") +
+        RejectStructured(MainSource("identity!(syntax expr 42)"), "structured macro invocation");
+        Require(OresStructuredParser.Parse(MainSource("42") +
             " // identity!(syntax expr 99)") is not null,
             "structured comment decoy must remain invisible");
     }
