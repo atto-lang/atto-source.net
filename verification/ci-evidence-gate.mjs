@@ -11,10 +11,15 @@ const requiredByWorkflow = {
       "Install Native AOT toolchain",
       "Check source scripts and managed compiler regressions",
       "Compile native compiler and first native application",
+      "Fail closed on unimplemented dispatch source before Native AOT CIL emission",
       "Prove second generated source gets its own Native AOT executable",
+      "Execute flags2env client ABI scalar through Linux Native AOT",
       "Execute shared native.precedence and prove three-source isolation",
       "Execute opt-in structured CFG as linked Linux Native AOT",
       "Execute Linux Native AOT checked-arithmetic negatives",
+      "Execute exact Java/LLVM logical .atto fixture in real Linux Native AOT",
+      "Execute canonical .atto signed relational source in Linux Native AOT",
+      "Execute explicitly authorized CLR Abs and Max guests in Native AOT",
       "Negative test for managed sidecar rejection",
       "Record exact-head Native AOT execution receipt",
       "Upload Linux native executables and evidence"
@@ -28,6 +33,8 @@ const requiredByWorkflow = {
       "Show Windows .NET toolchain",
       "Refuse managed or framework-dependent release settings",
       "Verify compiler and runtime source",
+      "Compile and execute generated Counter as Windows NativeAOT",
+      "Compile verified scalar OresIR through C# and F# to managed CIL",
       "Verify shared advisory static facts from .NET compiler and typed structured parser",
       "Reject oversized and invalid UTF-8 compiler input",
       "Publish native compiler and native application",
@@ -44,6 +51,7 @@ const requiredByWorkflow = {
       "Prove experimental structured source in real Windows Native AOT",
       "Execute typed source helper calls in real Windows Native AOT",
       "Execute typed statement-bodied helpers in real Windows Native AOT",
+      "Verify typed bindings in executed Windows Native AOT",
       "Execute shared five-backend native.add source in real Windows Native AOT",
       "Execute shared native.precedence in Windows Native AOT",
       "Emit exact-head Windows Native AOT run receipt",
@@ -65,7 +73,8 @@ const requiredByWorkflow = {
       "Execute Linux Native AOT CFG branch and simultaneous-assignment fixture",
       "Prove experimental structured source in real Linux Native AOT",
       "Execute typed source helper calls in real Linux Native AOT",
-      "Execute typed statement-bodied helpers in real Linux Native AOT"
+      "Execute typed statement-bodied helpers in real Linux Native AOT",
+      "Verify typed bindings in executed Linux Native AOT"
     ],
     "self-hosted-windows-static-facts": [
       "Checkout trusted same-repository pull request",
@@ -85,6 +94,19 @@ const requiredByWorkflow = {
       "Verify declaration-only manifest (not a runtime parity claim)"
     ]
   }
+};
+
+const requiredPathByWorkflow = {
+  "Strict .NET Linux x64 Native AOT": ".github/workflows/strict-linux-native-aot.yml",
+  "Windows Native AOT": ".github/workflows/windows-native-aot.yml",
+  "Integration declaration integrity": ".github/workflows/integration-declarations.yml"
+};
+// Stable IDs verified against the source repository's actual Actions runs.
+// A same-name or same-path spoof cannot replace the originating workflow.
+const requiredWorkflowIdByWorkflow = {
+  "Strict .NET Linux x64 Native AOT": 398765873,
+  "Windows Native AOT": 384715065,
+  "Integration declaration integrity": 388530125
 };
 export function verifyEvidence(run, response, expected) {
   const errors = [];
@@ -109,8 +131,8 @@ export function verifyEvidence(run, response, expected) {
   fail(run.repository?.full_name === expected.repo, "wrong run repository");
   fail(run.head_sha === expected.head, "run head is not the reviewed commit");
   fail(run.name === expected.workflow, "wrong workflow");
-  if (expected.workflow === "Strict .NET Linux x64 Native AOT")
-    fail(run.path === ".github/workflows/strict-linux-native-aot.yml", "wrong strict Linux workflow path");
+  fail(run.path === requiredPathByWorkflow[expected.workflow], "wrong workflow path");
+  fail(run.workflow_id === requiredWorkflowIdByWorkflow[expected.workflow], "wrong workflow ID");
   fail(run.status === "completed" && run.conclusion === "success", "workflow has not passed");
   fail(["pull_request","workflow_dispatch","push"].includes(run.event), "unsupported workflow event");
   if (response === null || typeof response !== "object" || Array.isArray(response)) {

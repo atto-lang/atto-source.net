@@ -23,6 +23,16 @@ internal static class ActorShardColumnsSelfTest
                 ActorDataLayout.Soa, lanes: 4);
         }, "SoA cannot pretend to carry AoSoA lane metadata");
 
+        using (var arena = NewArena(6102))
+        using (var turn = arena.EnterTurn(6102, 1))
+        {
+            Reject(() => _ = new ActorShardColumns(arena, turn, 8, 3,
+                (ActorDataLayout)int.MaxValue),
+                "undefined layout must fail before native allocation");
+            Require(arena.PersistentLiveBytes == 0 && arena.LiveAllocations == 0,
+                "invalid layout admission must not consume actor arena capacity");
+        }
+
         Console.WriteLine("PASS .NET actor-owned AoS/SoA/AoSoA shard layouts and dense kernel");
     }
 
@@ -70,6 +80,24 @@ internal static class ActorShardColumnsSelfTest
                 layout + " dense integrate/copy parity row " + row);
         }
 
+        // Owned Copy<double> / None: native host API, not an AttoLang loan.
+        Require(shard.TryRead(turn, 0, 0, out double first) &&
+            first == 0.125, layout + " Some(first) after integrate");
+        Require(shard.TryRead(turn, 6, 2, out double last) &&
+            last == 1006.0, layout + " Some(last)");
+        foreach (long missing in new long[] {-1, 7, long.MinValue,
+            long.MaxValue, 0xFFFF_FFFFL})
+        {
+            Require(!shard.TryRead(turn, missing, 0, out double absent) &&
+                absent == default, layout + " None(row) " + missing);
+        }
+        Require(!shard.TryRead(turn, 0, -1, out _) &&
+            !shard.TryRead(turn, 0, 3, out _) &&
+            !shard.TryRead(turn, 0, long.MaxValue, out _),
+            layout + " None(field)");
+        Require(shard.Read(turn, 6, 2) == 1006.0,
+            layout + " failed TryRead did not mutate cell");
+
         Reject(() => shard.Read(turn, -1, 0),
             layout + " negative row bounds");
         Reject(() => shard.Read(turn, 0, 3),
@@ -80,6 +108,8 @@ internal static class ActorShardColumnsSelfTest
             layout + " release refunds actor arena bytes");
         Reject(() => shard.Read(turn, 0, 0),
             layout + " released shard cannot be reused");
+        Reject(() => { _ = shard.TryRead(turn, -1, 0, out _); },
+            layout + " released shard rejects missing-index probe");
     }
 
     private static ActorArena NewArena(ulong actorId) => new(
@@ -114,3 +144,4 @@ internal static class ActorShardColumnsSelfTest
             throw new Exception("Actor shard regression: " + scenario);
     }
 }
+

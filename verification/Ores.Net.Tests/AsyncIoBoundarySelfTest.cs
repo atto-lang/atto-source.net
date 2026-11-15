@@ -27,8 +27,31 @@ internal static class AsyncIoBoundarySelfTest
     [ModuleInitializer]
     public static void Run()
     {
+        // Socket syntax and actor-mailbox admission share the name Send.
+        // Permit only the reviewed, statically typed ActorRuntime mailbox site;
+        // keep every other synchronous transport spelling under the same rule.
+        const string actor = "internal ActorMailbox Mailbox { get; } void Dispatch() { cell.Mailbox.Send(destination, data); }";
+        const string socket = "Socket socket; socket.Send(data);";
+        if (Forbidden.Any(r => r.Pattern.IsMatch(ReviewedMailboxCode(actor, "ActorRuntime.cs"))))
+            throw new Exception("FAILED: bounded actor mailbox mistaken for socket I/O");
+        if (!Forbidden.Any(r => r.Pattern.IsMatch(ReviewedMailboxCode(socket, "ActorRuntime.cs"))) ||
+            !Forbidden.Any(r => r.Pattern.IsMatch(ReviewedMailboxCode(actor + socket, "ActorRuntime.cs"))) ||
+            !Forbidden.Any(r => r.Pattern.IsMatch(ReviewedMailboxCode(
+                actor.Replace("ActorMailbox", "Socket"), "ActorRuntime.cs"))) ||
+            !Forbidden.Any(r => r.Pattern.IsMatch(ReviewedMailboxCode(actor, "OtherRuntime.cs"))))
+            throw new Exception("FAILED: socket boundary exception became broader than reviewed mailbox site");
+        // The tenant host's single SendActor site is reviewed the same way, and
+        // neither file's receiver spelling is accepted in the other file.
+        const string tenant = "internal ActorMailbox Mailbox { get; } void SendActor() { actor.Mailbox.Send(destination, payload); }";
+        if (Forbidden.Any(r => r.Pattern.IsMatch(ReviewedMailboxCode(tenant, "OresVmHost.cs"))))
+            throw new Exception("FAILED: tenant host mailbox mistaken for socket I/O");
+        if (!Forbidden.Any(r => r.Pattern.IsMatch(ReviewedMailboxCode(tenant + socket, "OresVmHost.cs"))) ||
+            !Forbidden.Any(r => r.Pattern.IsMatch(ReviewedMailboxCode(tenant, "ActorRuntime.cs"))) ||
+            !Forbidden.Any(r => r.Pattern.IsMatch(ReviewedMailboxCode(actor, "OresVmHost.cs"))) ||
+            !Forbidden.Any(r => r.Pattern.IsMatch(ReviewedMailboxCode(tenant, "OtherRuntime.cs"))))
+            throw new Exception("FAILED: tenant host mailbox exception became broader than its reviewed site");
         string root = FindRepositoryRoot();
-        string runtime = Path.Combine(root, "runtime", "Ores.Net.Runtime");
+        string runtime = Path.Combine(root, "runtime");
         int scanned = 0;
         foreach (string path in Directory.EnumerateFiles(runtime, "*.cs", SearchOption.AllDirectories))
         {
@@ -40,6 +63,7 @@ internal static class AsyncIoBoundarySelfTest
 
             scanned++;
             string code = StripCommentsAndLiterals(File.ReadAllText(path, Encoding.UTF8));
+            code = ReviewedMailboxCode(code, Path.GetFileName(path));
             foreach (var rule in Forbidden)
             {
                 if (rule.Pattern.IsMatch(code))
@@ -49,6 +73,30 @@ internal static class AsyncIoBoundarySelfTest
 
         if (scanned == 0)
             throw new Exception("FAILED: async-I/O boundary audit scanned no .NET runtime sources");
+    }
+
+    // Each reviewed file may exempt exactly one receiver spelling of the
+    // bounded in-memory ActorMailbox.Send call.
+    private static readonly (string File, string Receiver)[] ReviewedMailboxSites =
+    {
+        ("ActorRuntime.cs", "cell"),
+        ("OresVmHost.cs", "actor"),
+    };
+
+    private static string ReviewedMailboxCode(string code, string fileName)
+    {
+        string? receiver = null;
+        foreach (var site in ReviewedMailboxSites)
+            if (site.File == fileName) receiver = site.Receiver;
+        if (receiver is null ||
+            !Regex.IsMatch(code, @"\binternal\s+ActorMailbox\s+Mailbox\s*\{\s*get\s*;\s*\}",
+                RegexOptions.CultureInvariant) ||
+            Regex.IsMatch(code, @"\bSocket\b|\bSystem\s*\.\s*Net\b", RegexOptions.CultureInvariant))
+            return code;
+        // No file-wide exemption: only this concrete bounded-memory call is
+        // removed from this lexical socket audit. All other calls still scan.
+        return Regex.Replace(code, @"\b" + receiver + @"\s*\.\s*Mailbox\s*\.\s*Send\s*\(",
+            "VerifiedActorMailboxAdmission(", RegexOptions.CultureInvariant);
     }
 
     private static string FindRepositoryRoot()

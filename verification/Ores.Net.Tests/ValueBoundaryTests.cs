@@ -45,6 +45,22 @@ internal static class ValueBoundaryTests
             RejectTaskBorrow(() => { _ = OresParser.Parse(source); }, name + "/shipping");
             RejectTaskBorrow(() => { _ = OresStructuredParser.Parse(source); }, name + "/structured");
         }
+        // quantum is reserved with cpu/gpu in every source position and must
+        // fail at execution-domain admission, not as an unbound name.
+        var domainCases = new Dictionary<string, string>
+        {
+            ["quantum-block"] = "define pub fnc main() : int { return quantum { 40 + 2 }; }",
+            ["quantum-function"] = "define pub fnc quantum() : int { return 42; }",
+            ["quantum-local"] = "define pub fnc main() : int { let int quantum = 2; return quantum; }",
+            ["quantum-modifier"] = "define pub quantum fnc main() : int { return 1; }",
+            ["quantum-task"] = "define pub fnc main() : int { return quantum task { 1 }; }"
+        };
+        foreach (var (name, source) in domainCases)
+        {
+            RejectDomain(() => { _ = OresParser.Parse(source); }, name + "/shipping");
+            RejectDomain(() => { _ = OresStructuredParser.Parse(source); }, name + "/structured");
+        }
+        _ = OresStructuredParser.Parse("define pub fnc main() : int { let int quantum_bits = 2; return quantum_bits; }");
         Console.WriteLine($"{cases.Count} value boundary + {taskCases.Count} CPU/GPU task v2 + {borrowCases.Count} borrowed Task cases rejected by both frontends");
     }
 
@@ -58,6 +74,18 @@ internal static class ValueBoundaryTests
             return;
         }
         throw new Exception(name + ": borrowed Task was admitted without ownership proof");
+    }
+
+    private static void RejectDomain(Action parse, string name)
+    {
+        try { parse(); }
+        catch (FormatException error)
+        {
+            if (!error.Message.Contains("execution region 'quantum'", StringComparison.Ordinal))
+                throw new Exception(name + ": rejection must occur at execution-domain admission, got " + error.Message);
+            return;
+        }
+        throw new Exception(name + ": quantum execution domain was admitted");
     }
 
     private static void Reject(Action parse, string name)

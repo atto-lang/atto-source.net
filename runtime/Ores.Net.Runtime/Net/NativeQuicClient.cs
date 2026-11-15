@@ -3,6 +3,7 @@ using System.Net.Quic;
 using System.Net.Security;
 using System.Security.Authentication;
 using System.Security;
+using System.Runtime.Versioning;
 
 namespace Ores.Net.Runtime.Net;
 
@@ -18,9 +19,23 @@ internal static class NativeQuicClient
     private const int MaxInboundUniStreams = 8;
     private static readonly SslApplicationProtocol Http3Alpn = new("h3");
 
-    internal static bool IsSupported => QuicConnection.IsSupported;
+    internal static bool IsSupported
+    {
+        get
+        {
+            // Query the native provider only inside an OS recognized by the
+            // platform analyzer. Other platforms fail closed.
+            if (OperatingSystem.IsLinux()) return QuicConnection.IsSupported;
+            if (OperatingSystem.IsWindows()) return QuicConnection.IsSupported;
+            if (OperatingSystem.IsMacOS()) return QuicConnection.IsSupported;
+            return false;
+        }
+    }
 
     /// <summary>HTTP/3 ALPN over QUIC/UDP; no HTTP/2 or TCP fallback.</summary>
+    [SupportedOSPlatform("linux")]
+    [SupportedOSPlatform("windows")]
+    [SupportedOSPlatform("osx")]
     internal static ValueTask<QuicConnection> ConnectHttp3Async(
         IPEndPoint pinnedAuthorizedAddress,
         string canonicalDnsName,
@@ -41,6 +56,9 @@ internal static class NativeQuicClient
     /// Cancellation does not prove physical retirement: caller must await
     /// DisposeAsync on the returned connection and all owned streams.
     /// </summary>
+    [SupportedOSPlatform("linux")]
+    [SupportedOSPlatform("windows")]
+    [SupportedOSPlatform("osx")]
     private static async ValueTask<QuicConnection> ConnectUncheckedAfterPolicyAsync(
         IPEndPoint pinnedAuthorizedAddress,
         string canonicalDnsName,

@@ -2,6 +2,12 @@
 
 Status: **fail closed / implementation pending**.
 
+An optional host HTTP/1.1 provider now exists in `runtime/Ores.Net.Runtime.Http`.
+Its real-socket probe runs under Native AOT, with async-only transport and
+actor-bound exchange ownership. Source-level HTTP/await admission remains
+unsupported; see [Spin HTTP implementation track](SPIN_HTTP_NATIVE.md) for the
+implemented prerequisite, evidence scope and remaining compiler work.
+
 The .NET backend does not yet lower Oreslang async/await or expose guest
 filesystem, console, socket, DNS, HTTP, timer, or process I/O. That limitation is
 part of the safety contract: unsupported guest I/O must reject before CIL

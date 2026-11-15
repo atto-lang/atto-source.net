@@ -21,7 +21,7 @@ internal static class BlockingWaitBoundarySelfTest
     public static void Run()
     {
         string root = FindRepositoryRoot();
-        string runtime = Path.Combine(root, "runtime", "Ores.Net.Runtime");
+        string runtime = Path.Combine(root, "runtime");
         int scanned = 0;
         foreach (string path in Directory.EnumerateFiles(runtime, "*.cs", SearchOption.AllDirectories))
         {
