@@ -833,7 +833,13 @@ public static partial class OresStructuredParser
                 // before generic '!' or macro syntax can swallow the effect.
                 // 'copy !foo' is not an ownership prefix: the verb must touch '!'.
                 if (word is "copy" or "take" or "borrow" or "share" &&
-                    index < source.Length && source[index] == '!')
+                    index < source.Length && source[index] == '!' &&
+                    !(index + 1 < source.Length && source[index + 1] == '=') &&
+                    !(index + 2 < source.Length && source[index + 1] == 'e' &&
+                      source[index + 2] == 'q' &&
+                      (index + 3 == source.Length ||
+                       !(char.IsLetterOrDigit(source[index + 3]) ||
+                         source[index + 3] == '_'))))
                     throw new FormatException(
                         $"OWNERSHIP_BANG_BACKEND_UNSUPPORTED: '{word}!' requires typed ownership and actor-arena Native AOT lowering at offset {offset}");
                 // The linked-module lexer also enforces the unsafe keyword
