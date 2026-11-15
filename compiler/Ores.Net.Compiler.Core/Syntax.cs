@@ -1072,7 +1072,7 @@ public static partial class OresParser
             if (verbIndex + 1 < tokens.Count &&
                 (Current.Text != "mut" ||
                     (tokens[verbIndex].Text == "borrow")) &&
-                tokens[verbIndex].Text is "copy" or "take" or "borrow" or "share" &&
+                (tokens[verbIndex].Text is "copy" or "take" or "borrow" or "share") &&
                 tokens[verbIndex + 1].Text == "!" &&
                 (verbIndex + 2 >= tokens.Count ||
                     tokens[verbIndex + 2].Text is not ("=" or "eq")) &&
