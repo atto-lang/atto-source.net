@@ -810,6 +810,8 @@ CfgActorScalarBoundaryPlanSelfTest.Run(); // compiler-only verified CFG liveness
 ActorCompiledCfgFrameSelfTest.Run(); // real .atto CFG on actor-native guest frames, interpreter only
 ProjectRootSourceTests.Run(); // host-only resolver, not linked .NET source imports
 ActorNativeArenaSelfTest.Run();
+ActorNativeAggregateStoreTests.Run(); // unmanaged per-actor aggregate values, not compiler guest parity
+NativeAggregateLayoutVerifierTests.Run(); // immutable checked HIR layout and native ABI tag matching
 
 // Import parity is deliberately not claimed for the .NET scalar compiler.
 // Each form must fail at lexical admission with a specific import diagnostic,
