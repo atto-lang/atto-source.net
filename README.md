@@ -380,3 +380,15 @@ and overflow source-generated actors; the older trusted-host Counter API is
 kept separate and its managed cells are not arena-isolation evidence.
 See [execution evidence and open parity gates](docs/ACTOR_NATIVE_STATE_FRAMES_INTEGRATION_20261110.md).
 This is not general actor CIL, concurrent-default actor execution or Spin support.
+
+### Alternate main-function body layout (scalar-only)
+
+The i64 bootstrap parser accepts `fnc main() -> int` with a
+newline-delimited `return expression;` and `end`, or
+`fnc main() -> int :: return expression; end` in compact source.
+The explicit `::` is required before removing the signature/body newline.
+These forms use the existing typed checked-i64 IR and CIL emitter; they
+**do not** enable general free/module functions, Option/Result, multiple
+statements, structured match, or actor function bodies. Tests independently
+compare interpreted typed IR against emitted CIL. General compiler parity
+remains an open requirement.

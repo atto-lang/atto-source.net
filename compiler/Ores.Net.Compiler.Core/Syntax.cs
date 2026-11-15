@@ -54,7 +54,7 @@ public static partial class OresParser
                 StaticSelectAdmission.IsStaticSelectFollower(tokens[i + 1].Text))
                 throw StaticSelectAdmission.Unsupported(tokens[i].Offset);
         }
-        return new Reader(tokens, policy ?? DotnetHostImportPolicy.DenyAll).ParseProgram();
+        return new Reader(tokens, policy ?? DotnetHostImportPolicy.DenyAll, source).ParseProgram();
     }
 
     /// Parse file-root exports using the shared explicit-export grammar.
@@ -716,6 +716,12 @@ public static partial class OresParser
                 _i += 2;
                 return new Token("->", start);
             }
+            // Preserve the explicit free-function header/body separator.
+            if (ch == ':' && _i + 1 < text.Length && text[_i + 1] == ':')
+            {
+                _i += 2;
+                return new Token("::", start);
+            }
             // Lex assignment punctuation so unsupported declarations are rejected
             // at their declaration, rather than at a later initializer. The
             // arithmetic parser still has no assignment production.
@@ -743,7 +749,7 @@ public static partial class OresParser
         }
     }
 
-    private sealed class Reader(List<Token> tokens, DotnetHostImportPolicy policy)
+    private sealed class Reader(List<Token> tokens, DotnetHostImportPolicy policy, string source)
     {
         // Macro definitions are compiler-only. Neither these declarations nor
         // their arguments appear in OresIR/CIL, and no runtime expansion exists.
@@ -982,16 +988,39 @@ public static partial class OresParser
             Expect("main");
             Expect("(");
             Expect(")");
-            if (!Take(":")) Expect("->");
+            bool arrowReturn = !Take(":");
+            if (arrowReturn) Expect("->");
             Expect("int");
-            Expect("{");
+            bool braced = Take("{");
+            if (!braced)
+            {
+                if (!arrowReturn)
+                    throw new FormatException($"End-delimited main requires '-> int' at offset {Current.Offset}");
+                bool explicitSeparator = Take("::");
+                if (!explicitSeparator)
+                {
+                    var previous = tokens[_index - 1];
+                    int boundaryStart = previous.Offset + previous.Text.Length;
+                    bool hasLineBreak = false;
+                    for (int i = boundaryStart; i < Current.Offset; i++)
+                    {
+                        if (source[i] is '\n' or '\r' or '\u0085' or '\u2028' or '\u2029')
+                        {
+                            hasLineBreak = true;
+                            break;
+                        }
+                    }
+                    if (!hasLineBreak)
+                        throw new FormatException($"Compact end-delimited main requires '::' at offset {Current.Offset}");
+                }
+            }
             if (Current.Text == "guard")
                 throw new FormatException(
                     $"GUARD_BACKEND_UNSUPPORTED: early-exit CFG and ownership lowering required at offset {Current.Offset}");
             Expect("return");
             var expression = ParseAdd(0);
             Expect(";");
-            Expect("}");
+            Expect(braced ? "}" : "end");
             if (Current.Text.Length != 0)
                 throw new FormatException($"Unexpected token at offset {Current.Offset}");
             return expression;
