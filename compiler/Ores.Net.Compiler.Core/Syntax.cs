@@ -109,6 +109,11 @@ public static partial class OresParser
         {
             char c = source[i];
             if (c == '\0') throw new FormatException("Source contains NUL byte");
+            // Trojan Source: comments and literals can hide text-reordering controls.
+            if (c == 0x061c || c == 0x200e || c == 0x200f ||
+                (c >= 0x202a && c <= 0x202e) ||
+                (c >= 0x2066 && c <= 0x2069))
+                throw new FormatException("Source contains bidirectional Unicode control");
             if (char.IsHighSurrogate(c))
             {
                 if (++i >= source.Length || !char.IsLowSurrogate(source[i]))
