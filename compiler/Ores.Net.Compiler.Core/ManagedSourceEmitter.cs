@@ -67,8 +67,7 @@ public static class ManagedSourceEmitter
                     : number.ToString(CultureInfo.InvariantCulture) + "L";
             }
             else if (op.Opcode is IrOpcode.CheckedAdd or IrOpcode.CheckedSubtract or
-                     IrOpcode.CheckedMultiply or IrOpcode.CheckedDivide or
-                     IrOpcode.SignedRemainderLiteral &&
+                     IrOpcode.CheckedMultiply or IrOpcode.CheckedDivide &&
                      op.Constant is null &&
                      op.Left is int left && op.Right is int right &&
                      left >= 0 && left < i && right >= 0 && right < i)
@@ -79,32 +78,10 @@ public static class ManagedSourceEmitter
                     IrOpcode.CheckedSubtract => "-",
                     IrOpcode.CheckedMultiply => "*",
                     IrOpcode.CheckedDivide => "/",
-                    IrOpcode.SignedRemainderLiteral => "%",
                     _ => throw new FormatException("Unsupported verified IR opcode")
                 };
-                // The verified rhs is a nonzero literal. Special-case -1
-                // to avoid the CLR's long.MinValue remainder overflow.
-                bool zeroRemainder = op.Opcode == IrOpcode.SignedRemainderLiteral &&
-                    program.Instructions[right].Constant == -1;
-                if (zeroRemainder)
-                {
-                    // Preserve eager SSA evaluation and mark both inputs as
-                    // consumed even though MIN % -1 must avoid CLR rem.
-                    // Otherwise constant operands cause CS0219 under the
-                    // generated project's warnings-as-errors policy.
-                    if (cs)
-                    {
-                        output.Append("        _ = v").Append(left).AppendLine(";");
-                        output.Append("        _ = v").Append(right).AppendLine(";");
-                    }
-                    else
-                    {
-                        output.Append("        ignore v").Append(left).AppendLine();
-                        output.Append("        ignore v").Append(right).AppendLine();
-                    }
-                }
-                expr = zeroRemainder ? "0L" : $"v{left} {sign} v{right}";
-                if (cs && op.Opcode != IrOpcode.SignedRemainderLiteral)
+                expr = $"v{left} {sign} v{right}";
+                if (cs)
                     expr = $"checked({expr})";
             }
             else
