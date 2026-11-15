@@ -11,6 +11,7 @@ internal static class OwnershipBangAdmissionTests
             "copy!42", "copy! 42", "copy!(40 + 2)", "copy!eqfoo",
             "take!42", "take! 42",
             "borrow!value", "borrow! value",
+            "borrow! mut value", "borrow!mut value",
             "share!value", "share! value",
             "mut borrow!value", "mut borrow! value"
         })
