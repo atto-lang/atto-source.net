@@ -37,6 +37,30 @@ internal static class StructuredCfgLoweringTests
         }
     }
 
+    // Statement-bodied helpers (e.g. comma bodies with locals) are not inlined by the
+    // legacy Lower() path; they use LowerModule()'s independent MethodDef ABI.
+    private static void CheckModule(string source, long expected, string label)
+    {
+        string folder = Path.Combine(Path.GetTempPath(),
+            "ores-structured-cfg-module-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            string output = Path.Combine(folder, "OresGenerated.dll");
+            CilEmitter.EmitLibrary(OresStructuredCfgLowering.LowerModule(source), output);
+            using var assembly = AssemblyDefinition.ReadAssembly(output);
+            var entry = assembly.MainModule.Types.Single(t =>
+                t.FullName == "Oreslang.Generated.OresProgram")
+                .Methods.Single(m => m.Name == "Run");
+            if (CfgCilTestInterpreter.Evaluate(entry) != expected)
+                throw new Exception("Structured module CIL mismatch: " + label);
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
     // Both the independently verified CFG evaluator and emitted CIL must
     // actually trap on a reachable checked-i64 overflow. Reference-only
     // testing cannot prove the native-code input retains checked opcodes.
@@ -161,6 +185,96 @@ internal static class StructuredCfgLoweringTests
 
     public static void Run()
     {
+        // These cases pass the real structured typed CFG + generated CIL
+        // reference interpreter. They do not claim native host execution.
+        CheckModule("""
+            fnc plus(int a, int b): int { return a + b; }
+            fnc add(int n) -> int ::
+                int x = plus(2, 3),
+                x + n
+            end
+            fnc main() -> int ::
+                add(37)
+            end
+            """, 42, "comma fnc body with immutable runtime local and final result");
+        CheckModule("""
+            routine twice(int n) -> int ::
+                int factor = 2,
+                factor * n
+            end
+            routine main() -> int ::
+                twice(21)
+            end
+            """, 42, "comma routine body and terminal expression");
+        Check("""
+            fnc main() -> int ::
+                int x = 1,
+                int y = 40,
+                x + y + 1
+            end
+            """, 42, "multiple sequenced immutable scalar locals");
+        Check("""
+            fnc main() -> int ::
+                int x = 41,
+                x + 1
+            end
+            """, 42, "comma body exactly-once final expression");
+        foreach (string bad in new[] {
+            "fnc main() -> int :: int x = 5,, x end",
+            "fnc main() -> int :: int x = 5, end",
+            "fnc main() -> int :: , 42 end",
+            "fnc main() -> int :: int x = true, x end",
+            "fnc main() -> int :: int x = 5, x = 7, x end",
+            "fnc main() -> int :: bool x = true, x end"
+        })
+            Reject(bad, "comma-body syntax, binding or return type must fail closed");
+        Check("""
+            fnc main() -> int ::
+                int x = 5,
+                return x + 37
+            end
+            """, 42, "comma body explicit return without semicolon");
+        Check("""
+            fnc main() -> int ::
+                int x = 5,
+                return x + 37;
+            end
+            """, 42, "comma body explicit return with semicolon");
+        Check("""
+            fnc plus(int a, int b): int { return a + b; }
+            fnc main() -> int ::
+                int x = plus(5, 7),
+                int y = plus(x, 29),
+                y + 1
+            end
+            """, 42, "nested call commas and sequential local visibility");
+        foreach (string badBody in new[] {
+            "fnc main() -> int :: int x = 5, return true end",
+            "fnc main() -> int :: int x = 5, return x + 1, end",
+            "fnc main() -> int :: int x = 5, return x + 1; x end",
+            "fnc main() -> int :: int x = 5 x + 1 end"
+        })
+            Reject(badBody, "comma body typed return and separator fail closed");
+        // Pipeline and lambda syntax must never masquerade as an
+        // already-lowered native callable. The structured CIL backend has
+        // scalar :: bodies but no closure frames or tuple lambda dispatch.
+        foreach (string notYetLowered in new[] {
+            "fnc main():int{val callback=|| => int -> 42;return callback();}",
+            "fnc main() -> int :: 5 |> |n| => int -> n + 1 end",
+            "fnc main() -> int :: 5 |> |n| -> val int x = n + 1, x end",
+            "fnc main():int{val callback=|| -> int :: int x=5,x+3 end;return callback();}"
+        })
+            Reject(notYetLowered,
+                "unlowered expression lambda or |> must fail native CIL admission");
+        RejectWithDiagnostic("""
+            define class Counter as
+                mtd add(mut self, int n) -> int ::
+                    n + 1
+                end
+            end
+            fnc main(): int { return 42; }
+            """, "Nominal class/actor methods require",
+            "dotnet nominal method remains unsupported, not falsely certified");
         PinnedFiveBackendCastGuests();
         const string sum = """
             define pub fnc main():int {
