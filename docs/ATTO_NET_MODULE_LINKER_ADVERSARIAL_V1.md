@@ -23,5 +23,7 @@ re-emitted as CIL and evaluated as **52** rather than the old **42**.
 The CIL bytes and source graph hash must both differ, preventing source
 comment/hash-only mutation evidence from being misrepresented as
 executable re-linking. Two additional CIL checks execute an explicitly
-mixed `.atto` → `.ores` import and the intentionally legacy unsuffixed
-`.ores` fallback. These are authored tests, not hosted CI results.
+mixed `.atto` → `.ores` import and an unsuffixed import that resolves the
+only existing `.ores` candidate (main's resolver denies an unsuffixed import
+as ambiguous when both `.atto` and `.ores` exist). These are authored tests,
+not hosted CI results.

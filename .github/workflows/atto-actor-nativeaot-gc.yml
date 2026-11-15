@@ -1,0 +1,129 @@
+name: .NET verified .atto actor NativeAOT GC witness
+on:
+  pull_request:
+    paths:
+      - 'examples/actor-message-counter.atto'
+      - 'compiler/Ores.Net.Compiler.Core/ActorIncrementSource*'
+      - 'compiler/Ores.Net.Compiler/Program.cs'
+      - 'runtime/Ores.Net.Runtime/**'
+      - 'verification/Ores.Net.Tests/GeneratedMessageCounterActor.g.cs'
+      - 'verification/Ores.Net.AttoActorGcProbe/**'
+      - 'tests/fixtures/actor-gc-forbidden-critical-read.atto'
+      - '.github/workflows/atto-actor-nativeaot-gc.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-generated-actor:
+    name: source-generated-actor (${{ matrix.os }}, ${{ matrix.rid }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            rid: linux-x64
+            suffix: ''
+          - os: windows-2022
+            rid: win-x64
+            suffix: '.exe'
+    steps:
+      - name: Checkout exact PR commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install Linux Native AOT toolchain
+        if: runner.os == 'Linux'
+        shell: bash
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
+      - name: Exact SHA, regenerate reviewed actor IR and reject forbidden source
+        shell: pwsh
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ((git rev-parse HEAD) -ne $env:EXPECTED_HEAD) { throw 'source HEAD mismatch' }
+          if ((git status --porcelain)) { throw 'checkout not clean' }
+          $sources = @(
+            'examples/actor-message-counter.atto',
+            'compiler/Ores.Net.Compiler.Core/ActorIncrementSource.cs',
+            'compiler/Ores.Net.Compiler.Core/ActorIncrementSourceEmitter.cs',
+            'verification/Ores.Net.Tests/GeneratedMessageCounterActor.g.cs',
+            'runtime/Ores.Net.Runtime/NativeFixedBufferPoolV1.cs',
+            'runtime/Ores.Net.Runtime/ActorMailbox.cs',
+            'runtime/Ores.Net.Runtime/ActorRuntime.cs',
+            'verification/Ores.Net.AttoActorGcProbe/Program.cs',
+            'verification/Ores.Net.AttoActorGcProbe/Ores.Net.AttoActorGcProbe.csproj',
+            'tests/fixtures/actor-gc-forbidden-critical-read.atto'
+          )
+          foreach ($source in $sources) {
+            $actual = git hash-object -- $source
+            $expected = git rev-parse "HEAD:$source"
+            if ($actual -ne $expected) { throw "source blob mismatch: $source" }
+            Write-Host "SOURCE_BLOB|$source|$actual"
+          }
+          $out = Join-Path $env:RUNNER_TEMP 'Actor_MessageCounter.g.cs'
+          dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -- emit-actor-csharp examples/actor-message-counter.atto --out $out
+          if ($LASTEXITCODE -ne 0) { throw 'verified .atto actor emitter failed' }
+          $expectedGenerated = (Get-FileHash verification/Ores.Net.Tests/GeneratedMessageCounterActor.g.cs -Algorithm SHA256).Hash
+          $actualGenerated = (Get-FileHash $out -Algorithm SHA256).Hash
+          if ($expectedGenerated -ne $actualGenerated) { throw 'emitted C# differs from reviewed generated actor golden' }
+          Write-Host "ACTOR_GENERATED_SOURCE_SHA256=$actualGenerated"
+          $negativeOutput = Join-Path $env:RUNNER_TEMP 'DeniedActor.g.cs'
+          $PSNativeCommandUseErrorActionPreference = $false
+          dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -- emit-actor-csharp tests/fixtures/actor-gc-forbidden-critical-read.atto --out $negativeOutput *> (Join-Path $env:RUNNER_TEMP 'invalid-actor-stderr.txt')
+          $status = $LASTEXITCODE
+          if ($status -ne 1 -or (Test-Path $negativeOutput)) { throw 'forbidden guest mutation was admitted or emitted source' }
+          $global:LASTEXITCODE = 0
+          Write-Host 'PASS ATTO_ACTOR_SOURCE_IR_GUARD_V1|positive=verified|critical_read_write=DENIED|no_generated_output=TRUE'
+      - name: Run managed compiled .atto actor with GC metrics
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($nativeStorage in @('0', '1')) {
+            $env:ATTO_NATIVE_MAILBOX = $nativeStorage
+            $storage = if ($nativeStorage -eq '1') { 'native_copy_on_dequeue' } else { 'managed_copy_on_send' }
+            $result = @(dotnet run --project verification/Ores.Net.AttoActorGcProbe/Ores.Net.AttoActorGcProbe.csproj -c Release -p:PublishAot=false)
+            if ($LASTEXITCODE -ne 0) { throw "managed actor failed with storage=$storage" }
+            $result | ForEach-Object { Write-Host $_ }
+            if ($result -notcontains 'PASS ATTO_ACTOR_NATIVEAOT_MAILBOX_GC_V1|source=actor-message-counter.atto|sampled=4096|fifo=TRUE|native_refund=TRUE|malformed_isolated=TRUE|guest_subset=checked_actor_increment') {
+              throw "managed actor witness missing with storage=$storage"
+            }
+            $pattern = '^ATTO_ACTOR_MAILBOX_GC_METRICS_V1\|mode=managed\|mailbox_storage=' + $storage + '\|warmup=256\|sampled=4096\|managed_total_allocated_bytes=[0-9]+\|managed_bytes_per_message=[0-9]+\|'
+            if (-not ($result | Where-Object { $_ -match $pattern })) { throw "missing managed GC evidence for $storage" }
+            Write-Host "ATTO_MANAGED_ACTOR_STORAGE_MODE_PASS|storage=$storage|source=actor-message-counter.atto"
+          }
+      - name: Publish and execute real NativeAOT compiled .atto actor
+        shell: pwsh
+        env:
+          RID: ${{ matrix.rid }}
+          EXE_SUFFIX: ${{ matrix.suffix }}
+          ATTO_REQUIRE_NATIVE_AOT: '1'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $output = Join-Path $env:RUNNER_TEMP 'atto-actor-nativeaot'
+          dotnet publish verification/Ores.Net.AttoActorGcProbe/Ores.Net.AttoActorGcProbe.csproj -c Release -r $env:RID -p:PublishAot=true -p:SelfContained=true -o $output -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'native actor AOT compilation failed' }
+          $binary = Join-Path $output ("Ores.Net.AttoActorGcProbe" + $env:EXE_SUFFIX)
+          if (-not (Test-Path $binary)) { throw 'native binary missing' }
+          foreach ($nativeStorage in @('0', '1')) {
+            $env:ATTO_NATIVE_MAILBOX = $nativeStorage
+            $storage = if ($nativeStorage -eq '1') { 'native_copy_on_dequeue' } else { 'managed_copy_on_send' }
+            $result = @(& $binary)
+            if ($LASTEXITCODE -ne 0) { throw "native actor AOT failed with storage=$storage" }
+            $result | ForEach-Object { Write-Host $_ }
+            if ($result -notcontains 'PASS ATTO_ACTOR_NATIVEAOT_MAILBOX_GC_V1|source=actor-message-counter.atto|sampled=4096|fifo=TRUE|native_refund=TRUE|malformed_isolated=TRUE|guest_subset=checked_actor_increment') {
+              throw "native actor AOT witness missing with storage=$storage"
+            }
+            $pattern = '^ATTO_ACTOR_MAILBOX_GC_METRICS_V1\|mode=nativeaot\|mailbox_storage=' + $storage + '\|warmup=256\|sampled=4096\|managed_total_allocated_bytes=[0-9]+\|managed_bytes_per_message=[0-9]+\|'
+            if (-not ($result | Where-Object { $_ -match $pattern })) { throw "missing native GC evidence for $storage" }
+            Write-Host "ATTO_NATIVEAOT_ACTOR_STORAGE_MODE_PASS|storage=$storage|source=actor-message-counter.atto"
+          }
+          $hash = (Get-FileHash $binary -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "ATTO_NATIVEAOT_ACTOR_PROOF|source_head=$(git rev-parse HEAD)|tree=$(git rev-parse 'HEAD^{tree}')|rid=$env:RID|binary_sha256=$hash|guest_subset=checked_actor_increment|general_actor_cil=NOT_IMPLEMENTED"

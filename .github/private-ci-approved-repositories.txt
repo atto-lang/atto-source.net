@@ -2,3 +2,4 @@
 # No repositories are approved by default.
 # Changes must be independently reviewed under protected-main CODEOWNERS.
 # Format: exact owner/repo numeric_repository_id
+# CANDIDATE (inactive until #260 + protected main): honeypot-r-us-test/hnpt-e2e 1346492776
