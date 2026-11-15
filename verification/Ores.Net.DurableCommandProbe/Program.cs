@@ -81,3 +81,7 @@ ExpectRange(() => DurableCommandWireV1.SnapshotCommand(
 ExpectRange(() => DurableCommandWireV1.SnapshotCommand(
     B("cmd"), new byte[65537], events));
 Console.WriteLine("NET_NATIVEAOT_HOST_DURABLE_COMMAND_WIRE_V1_PASS|guest=0|durable=0");
+
+// #490: opt-in privileged SQLite durable command inbox. This is HOST native
+// AOT execution, not compiler-generated .atto guest.
+DurableCommandInboxV1SelfTest.Run();

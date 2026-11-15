@@ -35,7 +35,8 @@ public static class StaticFactsV0Exporter
         // CLR method reference is still a foreign call and cannot be erased
         // from those facts, even for a currently pure allowlisted Math method.
         if (function.Instructions.Any(instruction =>
-                instruction.Opcode is IrOpcode.DotnetMathAbsI64 or IrOpcode.DotnetMathMaxI64))
+                instruction.Opcode is IrOpcode.DotnetMathAbsI64 or IrOpcode.DotnetMathMaxI64 or
+                    IrOpcode.StrictRem or IrOpcode.StrictMod or IrOpcode.StrictPow))
             throw Unsupported("CLR host imports and external method-call edges");
         return WriteFacts(source, Array.Empty<string>());
     }
