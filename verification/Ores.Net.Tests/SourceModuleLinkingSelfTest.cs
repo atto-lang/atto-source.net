@@ -37,6 +37,24 @@ internal static class SourceModuleLinkingSelfTest
                 Require(CfgCilTestInterpreter.Evaluate(program.Methods.Single(m => m.Name == "Run")) == 42, "linked CIL executes imported helpers");
                 Require(program.Methods.Count == 5, "CIL has main and independent imported methods");
             }
+            Write("math.ores",
+                "define pub module Math as " +
+                "pub fnc abs(int value):int { if value < 0; do return -value; else return value; fi } " +
+                "pub fnc neg(int value):int { return -value; } end");
+            Write("main.ores",
+                "import module Math from \"./math\"; pub fnc main():int { return Math.abs(Math.neg(-42)); }");
+            var canonicalMath = Compile();
+            string canonicalAssembly = Path.Combine(root, "CanonicalMath.dll");
+            CilEmitter.EmitLibrary(canonicalMath.Module, canonicalAssembly);
+            using (var image = AssemblyDefinition.ReadAssembly(canonicalAssembly))
+                Require(CfgCilTestInterpreter.Evaluate(
+                    image.MainModule.Types.Single(t => t.Name == "OresProgram")
+                        .Methods.Single(m => m.Name == "Run")) == 42,
+                    "canonical define pub module and do/fi Math syntax executes");
+            Write("main.ores",
+                "import module left from \"./left\"; import module right from \"./right\"; " +
+                "pub fnc main():int { return left.value(10) + right.value(11); }");
+
             string hash = compiled.GraphSha256;
             Write("base.ores", "pub fnc twice(int n):int { return n * 2; } // changed source bytes");
             Require(Compile().GraphSha256 != hash, "transitive source bytes affect graph identity");
@@ -55,6 +73,11 @@ internal static class SourceModuleLinkingSelfTest
             Reject(Compile, "local does not silently become an imported namespace");
             Write("main.ores", "import fnc twice from \"./base\"; fnc main():int { return twice(true); }");
             Reject(Compile, "cross-file argument types are checked");
+            // A source actor graph must be denied before even attempting to
+            // resolve a missing module dependency or emitting linked CIL.
+            Write("main.ores", "import fnc not_found from \"./missing\"; fnc main():int { return 1 pipe 2; }");
+            Reject(Compile, "actor pipe denied before module import discovery",
+                "E_ACTOR_PIPE_BACKEND_UNSUPPORTED");
             Write("main.ores", "import fnc twice from \"./base\"; import fnc twice from \"./base\"; fnc main():int { return twice(21); }");
             Reject(Compile, "duplicate import bindings");
             Write("base.ores", "import fnc first from \"./main\"; pub fnc twice(int n):int { return n; }");

@@ -281,8 +281,8 @@ class ScalarHarnessTest(unittest.TestCase):
             "net": {
                 "reject.unknown": "oresnet: Expected integer at offset 29",
                 "reject.division": "oresnet: Division requires float result lowering; unsupported in the i64 source subset",
-                "reject.actor": "oresnet: Expected 'fnc' at offset 7",
-                "reject.async": "oresnet: E_CALLABLE_MODIFIERS: async fnc is removed; use suspends at offset 4",
+                "reject.actor": "oresnet: Source actor lowering requires sealed state/handle_state and scheduler-owned logical continuation frames at offset 7",
+                "reject.async": "oresnet: Expected 'fnc' at offset 4",
                 "reject.structural": "oresnet: Expected integer at offset 29",
             },
         }
@@ -297,13 +297,8 @@ class ScalarHarnessTest(unittest.TestCase):
                         self.assertTrue(good, message)
                 # An error for the wrong feature or unrelated infrastructure
                 # must never satisfy negative source conformance.
-                # The old async diagnostic is valid for other rejected
-                # programs, so reject it only for the async-specific case.
-                for bad in (
-                    "file not found", "unknown compiler option",
-                    "usage error", "unexpected token in tool setup"
-                ) + (("Expected 'fnc' at offset 4",)
-                     if backend == "net" and case_id == "reject.async" else ()):
+                for bad in ("file not found", "unknown compiler option",
+                            "usage error", "unexpected token in tool setup"):
                     code = "import sys;sys.stderr.write(" + repr(
                         backend.replace("forge", "oresforge").replace("net", "oresnet") +
                         ": " + bad + "\n") + ");sys.exit(1)"
