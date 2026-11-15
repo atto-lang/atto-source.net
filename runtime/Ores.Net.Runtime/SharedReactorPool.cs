@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Threading;
 
 namespace Ores.Net.Runtime;
@@ -13,16 +14,20 @@ public sealed class SharedReactorPool : IDisposable
         // Nonblocking, thread-safe, sticky across poll entry, must not throw.
         void Wake();
     }
-    private const int MaxWorkers = 256, Capacity = 1024;
+    private const int MaxWorkers = 256, Capacity = 1024, IdleParkMilliseconds = 10;
     // SoA. Separate cold handles from state and padded per-worker counters.
     private readonly Thread?[] _threads = new Thread?[MaxWorkers];
     private readonly int[] _states = new int[MaxWorkers * 16];
     private readonly long[] _completed = new long[MaxWorkers * 8];
-    private readonly Action?[] _queue = new Action?[Capacity];
+    // Bounded ready queue. Idle carriers park in the collection's bounded
+    // TryTake, like main's ActorDispatchDomains carriers; the runtime never
+    // uses condition-variable or sync-over-async waits.
+    private readonly BlockingCollection<Action> _ready =
+        new(new ConcurrentQueue<Action>(), Capacity);
     private readonly object _gate = new(), _joinGate = new();
     private readonly IReactor _reactor;
     private readonly int _maximum;
-    private int _pollOwner = -1, _head, _size, _started;
+    private int _pollOwner = -1, _started;
     private long _failures;
     private bool _closing;
     [ThreadStatic] private static SharedReactorPool? s_current;
@@ -55,9 +60,9 @@ public sealed class SharedReactorPool : IDisposable
         if (work is null) return false;
         lock (_gate)
         {
-            if (_closing || _size == Capacity) return false;
-            _queue[(_head + _size) % Capacity] = work; ++_size;
-            Monitor.Pulse(_gate);
+            // Closing and admission are serialized by _gate, so accepted
+            // work is always queued before a carrier can observe closing.
+            if (_closing || !_ready.TryAdd(work)) return false;
         }
         // Lease acquisition precedes the poller's ready-queue check, so an
         // absent owner means a future poller will observe this submission.
@@ -65,23 +70,35 @@ public sealed class SharedReactorPool : IDisposable
         if (Volatile.Read(ref _pollOwner) != -1) WakeReactor();
         return true;
     }
+    // Call only while _gate is held. Completing the collection releases
+    // every parked carrier so accepted work drains and workers exit.
+    private void CloseLocked()
+    {
+        _closing = true;
+        if (!_ready.IsAddingCompleted) _ready.CompleteAdding();
+    }
     private void Run(int slot)
     {
         s_current = this;
         int slices = 0;
+        Action? parked = null;
         try
         {
             while (true)
             {
-                Action? work = null;
-                lock (_gate)
+                Action? work = parked;
+                parked = null;
+                if (work is null)
                 {
-                    if (_size != 0)
+                    bool closing;
+                    lock (_gate) closing = _closing;
+                    // Observe closing before the take: every submission
+                    // accepted before closing is already in the queue.
+                    if (!_ready.TryTake(out work))
                     {
-                        work = _queue[_head]; _queue[_head] = null;
-                        _head = (_head + 1) % Capacity; --_size;
+                        work = null;
+                        if (closing) return;
                     }
-                    else if (_closing) return;
                 }
                 if (work is not null)
                 {
@@ -99,22 +116,22 @@ public sealed class SharedReactorPool : IDisposable
                     try
                     {
                         bool mayWait;
-                        lock (_gate) mayWait = !_closing && _size == 0;
+                        lock (_gate) mayWait = !_closing && _ready.Count == 0;
                         Volatile.Write(ref _states[slot * 16], 3);
                         _reactor.Poll(mayWait);
                     }
                     catch (Exception)
                     {
                         Interlocked.Increment(ref _failures);
-                        lock (_gate) { _closing = true; Monitor.PulseAll(_gate); }
+                        lock (_gate) CloseLocked();
                     }
                     finally { Volatile.Write(ref _pollOwner, -1); }
                 }
                 else if (work is null)
                 {
                     Volatile.Write(ref _states[slot * 16], 1);
-                    lock (_gate)
-                        if (!_closing && _size == 0) Monitor.Wait(_gate, 10);
+                    // Bounded park; returns at once after CompleteAdding.
+                    if (_ready.TryTake(out var next, IdleParkMilliseconds)) parked = next;
                 }
             }
         }
@@ -143,7 +160,7 @@ public sealed class SharedReactorPool : IDisposable
         lock (_joinGate)
         {
             int count;
-            lock (_gate) { _closing = true; count = _started; Monitor.PulseAll(_gate); }
+            lock (_gate) { CloseLocked(); count = _started; }
             WakeReactor();
             for (int i = 0; i < count; ++i) _threads[i]!.Join();
         }
