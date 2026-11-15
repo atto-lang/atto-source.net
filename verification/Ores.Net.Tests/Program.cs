@@ -1414,6 +1414,7 @@ Require(OresStructuredParser.Parse(
     "fnc main():int{/* using telemetry.span() as span {} */return 42;}").Body.Count == 1,
     "commented telemetry syntax cannot affect NativeAOT admission");
 StructuredSourceTests.Run();
+ActorDeclarationAstSelfTest.Run(); // parsed-only typed actor declarations; not executable actor lowering
 StructuredCfgLoweringTests.Run();
 AttoEqualityNativeAotCandidateTests.Run();
 StructuredStaticAbiTests.Run();
