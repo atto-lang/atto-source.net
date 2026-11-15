@@ -110,17 +110,22 @@ public static partial class OresParser
         ArgumentNullException.ThrowIfNull(source);
         if (source.Length > 1_048_576)
             throw new FormatException("Source is larger than the 1 MiB bootstrap limit");
+        // Validate original UTF-16 before lexing or comment removal.
+        // Report the first offending code-unit offset, matching the structured
+        // frontend while retaining the scalar admission diagnostic categories.
         for (int i = 0; i < source.Length; i++)
         {
             char c = source[i];
-            if (c == '\0') throw new FormatException("Source contains NUL byte");
+            if (c == '\0')
+                throw new FormatException($"Source contains NUL byte at offset {i}");
             if (char.IsHighSurrogate(c))
             {
-                if (++i >= source.Length || !char.IsLowSurrogate(source[i]))
-                    throw new FormatException("Source contains invalid UTF-16");
+                if (i + 1 >= source.Length || !char.IsLowSurrogate(source[i + 1]))
+                    throw new FormatException($"Source contains invalid UTF-16 at offset {i}");
+                i++; // Valid supplementary scalar consumes two UTF-16 units.
             }
             else if (char.IsLowSurrogate(c))
-                throw new FormatException("Source contains invalid UTF-16");
+                throw new FormatException($"Source contains invalid UTF-16 at offset {i}");
         }
         // Public parser callers supply UTF-16 strings; the source budget is
         // UTF-8 bytes, matching the disk/CLI boundary, not code-unit count.
