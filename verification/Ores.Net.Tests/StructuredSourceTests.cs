@@ -82,7 +82,7 @@ internal static class StructuredSourceTests
             "shared actor A1 { }",
             "untrusted actor A1 { }",
             "isoactor A1 { }",
-            "define serial http actor A1 as end",
+            // HTTP actor spellings are gated earlier with HTTP_ACTOR_BACKEND_UNSUPPORTED (#481).
             "define transform actor A1 as end",
             "define pipe actor A1 as end",
             "define actor A1 extends Base as end",
