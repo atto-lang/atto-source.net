@@ -564,6 +564,8 @@ Require(OresParser.Parse(
     "nested block-comment enum words must not trigger overload admission");
 
 ClosedAggregateSpreadPlanTests.Run(); // closed inferred struct/record spread plans
+PortableScalarV1Tests.Run();
+NativeScalarZeroTests.Run(); // 5 pinned .ores zero assertions: typed IR + emitted CIL, not NativeAOT
 ScalarMacroParityTests.Run(); // stage-0 define macro parity (Java #2049 / LLVM #1026)
 DotnetHostImportTests.Run(); // compiled System.Math.Abs(i64) CIL metadata and fail-closed imports
 VmIsolateHostTests.Run();
