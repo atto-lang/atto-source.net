@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Linq;
 using Ores.Net.Runtime;
 
 static void Require(bool ok, string why)
@@ -12,6 +13,19 @@ static void Deny(Action operation)
     throw new InvalidOperationException("foreign actor memory authority admitted");
 }
 
+static void VerifyReceiveFrame(ActorContext context, ActorStackFrameHandle previous, byte value)
+{
+    Deny(() => context.ReadStackFrame(previous, 0, new byte[1]));
+    var frame = context.PushStackFrame(8);
+    var bytes = new byte[1];
+    context.ReadStackFrame(frame, 0, bytes);
+    Require(bytes[0] == 0, "new receive stack contains prior invocation bytes");
+    context.WriteStackFrame(frame, 0, new byte[] { value });
+    context.ReadStackFrame(frame, 0, bytes);
+    Require(bytes[0] == value, "fresh receive frame is not writable");
+    context.PopStackFrame(frame);
+}
+
 // Keep all probe actor cardinalities and dispatcher admission capacity in lockstep.
 const int actorCount = 4;
 var options = new ActorRuntimeOptions
@@ -19,6 +33,7 @@ var options = new ActorRuntimeOptions
     MaxActors = actorCount, MessagesPerDispatch = 1,
     MailboxMessages = 4, MailboxBytes = 64,
     ActorPersistentBytes = 128, ActorScratchBytes = 64,
+    ActorStackBytes = 32, ActorMaxStackFrames = 4,
     ActorMaxAllocations = 8, ActorMaxReadLoans = 8,
     ActorMaxLifetimePins = 8, NativeBudgetBytes = 4096,
     Dispatcher = new ActorDispatcherOptions
@@ -33,6 +48,8 @@ using var verified = new CountdownEvent(actorCount);
 using var survivorVerified = new AutoResetEvent(false);
 var errors = new ConcurrentQueue<Exception>();
 var handles = new ActorArenaHandle?[actorCount];
+var frames = new ActorStackFrameHandle?[actorCount];
+var executions = new ActorExecutionContext?[actorCount];
 var references = new ActorRef[actorCount];
 ActorArenaLifetimePin? pin = null;
 ActorContext? retained = null;
@@ -49,11 +66,21 @@ for (int i = 0; i < actorCount; ++i)
         bool first = phase == 0;
         try
         {
+            Require(context.Execution.Actor == context.Self,
+                "receive execution identity disagrees with actor incarnation");
+            if (!first)
+                Require(!ReferenceEquals(executions[index], context.Execution) &&
+                    context.Execution.ExecutionSequence > executions[index]!.ExecutionSequence,
+                    "new DATA reused an earlier receive execution identity");
+            executions[index] = context.Execution;
             if (first)
             {
                 handles[index] = context.AllocatePersistent(8);
                 context.Write(handles[index]!, 0,
                     new byte[] { (byte)(11 + index), 0, 0, 0, 0, 0, 0, 0 });
+                frames[index] = context.PushStackFrame(8);
+                context.WriteStackFrame(frames[index]!, 0,
+                    new byte[] { (byte)(31 + index) });
             }
             else if (phase >= 2)
             {
@@ -63,6 +90,8 @@ for (int i = 0; i < actorCount; ++i)
                 context.Read(handles[index]!, 0, output);
                 Require(output[0] == (phase == 2 ? 13 : 14),
                     "survivor state changed during peer retirement");
+                var frameValue = new byte[1];
+                VerifyReceiveFrame(context, frames[index]!, (byte)(31 + index));
                 Deny(() => context.Read(handles[1]!, 0, output));
                 Deny(() => context.Write(handles[1]!, 0, output));
                 output[0]++;
@@ -76,12 +105,16 @@ for (int i = 0; i < actorCount; ++i)
                 var output = new byte[8];
                 context.Read(handles[index]!, 0, output);
                 Require(output[0] == 11 + index, "persistent actor value changed");
+                var frameValue = new byte[1];
+                VerifyReceiveFrame(context, frames[index]!, (byte)(31 + index));
                 for (int j = 0; j < actorCount; ++j)
                 {
                     if (j == index) continue;
                     int foreign = j;
                     Deny(() => context.Read(handles[foreign]!, 0, output));
                     Deny(() => context.Write(handles[foreign]!, 0, output));
+                    Deny(() => context.ReadStackFrame(frames[foreign]!, 0, frameValue));
+                    Deny(() => context.WriteStackFrame(frames[foreign]!, 0, frameValue));
                 }
                 context.Read(handles[index]!, 0, output);
                 Require(output[0] == 11 + index, "foreign access changed live bytes");
@@ -144,4 +177,186 @@ Require(SpinWait.SpinUntil(() => runtime.LiveActors == 0 &&
     runtime.NativeReservedBytes == 0, TimeSpan.FromSeconds(10)),
     "remaining actors did not independently retire and refund");
 Console.WriteLine("PASS actor-memory-survivor: same-pool peer reads and writes during pinned STOP and after physical reclaim");
-Console.WriteLine("PASS actor-memory-native-probe: four private heaps (two shared-pool actors), foreign handles denied, pooled carriers, stale context denied, pinned STOP and physical reclaim");
+Console.WriteLine("PASS actor-memory-native-probe: async-void denied, four private heaps (two shared-pool actors), foreign handles denied, pooled carriers, stale context denied, pinned STOP and physical reclaim");
+Console.WriteLine("PASS actor-logical-stack-native-probe: four actor-private heaps, per-receive stack cleanup and foreign-handle denial");
+
+// The first production typed-frame backend uses this same native actor-owned
+// stack slab. Check the immutable *trusted compiler schema* in a published
+// NativeAOT binary across two independently admitted physical turns; never
+// confuse this host ABI probe with compiled .atto actor/await execution.
+using var typedRuntime = new ActorRuntime(new ActorRuntimeOptions
+{
+    MaxActors = 1, MessagesPerDispatch = 1,
+    MailboxMessages = 2, MailboxBytes = 64,
+    ActorPersistentBytes = 256, ActorScratchBytes = 64,
+    ActorStackBytes = 96, ActorMaxStackFrames = 4,
+    ActorMaxAllocations = 8, ActorMaxReadLoans = 8,
+    ActorMaxLifetimePins = 8, NativeBudgetBytes = 4096,
+    Dispatcher = new ActorDispatcherOptions
+    {
+        PrivateWorkers = 1, SharedWorkers = 1, UntrustedWorkers = 1,
+        QueueCapacityPerDomain = 1
+    }
+});
+ActorStackFrameHandle? typedActivation = null;
+var guardedActor = typedRuntime.Spawn(ActorKind.Private, (ctx, message) =>
+{
+    if (message.Span[0] == 1)
+    {
+        byte[] mutableTypes = { 1, 2 };
+        typedActivation = ActorScalarFrameAbiV1.Push(ctx, mutableTypes, blockCount: 1);
+        mutableTypes[0] = 2; // an external caller must never retype the frame
+        ActorScalarFrameAbiV1.WriteI64(ctx, typedActivation, 0, long.MinValue);
+        ActorScalarFrameAbiV1.WriteBool(ctx, typedActivation, 1, true);
+        return;
+    }
+
+    Require(message.Span[0] == 2, "unexpected scalar ABI probe phase");
+    Deny(() => { _ = ActorScalarFrameAbiV1.ReadI64(ctx, typedActivation!, 0); });
+    typedActivation = ActorScalarFrameAbiV1.Push(ctx, new byte[] { 1, 2 }, blockCount: 1);
+    ActorScalarFrameAbiV1.WriteI64(ctx, typedActivation, 0, long.MinValue);
+    ActorScalarFrameAbiV1.WriteBool(ctx, typedActivation, 1, true);
+    Require(ActorScalarFrameAbiV1.ReadI64(ctx, typedActivation!, 0) ==
+            long.MinValue && ActorScalarFrameAbiV1.ReadBool(ctx, typedActivation!, 1),
+        "fresh invocation typed scalar frame disagrees with sealed source kinds");
+    byte[] original = new byte[ActorScalarFrameAbiV1.SlotBytes];
+    ctx.ReadStackFrame(typedActivation!, ActorScalarFrameAbiV1.HeaderBytes, original);
+    byte[] forged = new byte[ActorScalarFrameAbiV1.SlotBytes];
+    forged[0] = 2;
+    forged[1] = 2;
+    forged[8] = 1;
+    ctx.WriteStackFrame(typedActivation!, ActorScalarFrameAbiV1.HeaderBytes, forged);
+    Deny(() => { _ = ActorScalarFrameAbiV1.ReadBool(ctx, typedActivation!, 0); });
+    Deny(() => ActorScalarFrameAbiV1.WriteBool(ctx, typedActivation!, 0, true));
+    ctx.WriteStackFrame(typedActivation!, ActorScalarFrameAbiV1.HeaderBytes, original);
+
+    ctx.WriteStackFrame(typedActivation!, 8, new byte[] { 2, 0, 0, 0 });
+    Deny(() => { _ = ActorScalarFrameAbiV1.ReadProgramCounter(ctx, typedActivation!); });
+    ctx.WriteStackFrame(typedActivation!, 8, new byte[] { 1, 0, 0, 0 });
+    Require(ActorScalarFrameAbiV1.ReadI64(ctx, typedActivation!, 0) ==
+            long.MinValue,
+        "restored typed bytes did not preserve canonical immutable type authority");
+    ActorScalarFrameAbiV1.Pop(ctx, typedActivation!);
+
+    // Runtime primitive consumed by future generated CFG edge CIL: swap
+    // two values without sequentially clobbering the source. A forged
+    // second destination must deny the whole transfer before any write.
+    var edgeFrame = ActorScalarFrameAbiV1.Push(ctx,
+        new byte[] { 1, 1 }, blockCount: 1);
+    ActorScalarFrameAbiV1.WriteI64(ctx, edgeFrame, 0, 41);
+    ActorScalarFrameAbiV1.WriteI64(ctx, edgeFrame, 1, 42);
+    ActorScalarFrameAbiV1.TransferParallel(ctx, edgeFrame,
+        new[] { 1, 0 }, new[] { 0, 1 }, new byte[] { 1, 1 });
+    Require(ActorScalarFrameAbiV1.ReadI64(ctx, edgeFrame, 0) == 42 &&
+            ActorScalarFrameAbiV1.ReadI64(ctx, edgeFrame, 1) == 41,
+        "published native actor ABI lost simultaneous edge swap semantics");
+    Deny(() => ActorScalarFrameAbiV1.TransferParallel(ctx, edgeFrame,
+        new[] { 0, 1 }, new[] { 0, 1 }, new byte[] { 1, 2 }));
+    Require(ActorScalarFrameAbiV1.ReadI64(ctx, edgeFrame, 0) == 42 &&
+            ActorScalarFrameAbiV1.ReadI64(ctx, edgeFrame, 1) == 41,
+        "malformed native edge caused partial scalar frame mutation");
+    ActorScalarFrameAbiV1.Pop(ctx, edgeFrame);
+});
+typedRuntime.Send(guardedActor, new byte[] { 1 });
+Require(SpinWait.SpinUntil(() => typedRuntime.CompletedMessages == 1,
+    TimeSpan.FromSeconds(10)), "native immutable scalar layout first turn failed");
+typedRuntime.Send(guardedActor, new byte[] { 2 });
+Require(SpinWait.SpinUntil(() => typedRuntime.CompletedMessages == 2,
+    TimeSpan.FromSeconds(10)), "native immutable scalar layout replay/check turn failed");
+Require(typedRuntime.FaultedTurns == 0,
+    "native immutable scalar layout unexpectedly faulted its host actor");
+typedRuntime.Stop(guardedActor);
+Require(SpinWait.SpinUntil(() =>
+    typedRuntime.LiveActors == 0 && typedRuntime.NativeReservedBytes == 0,
+    TimeSpan.FromSeconds(10)), "native typed scalar frame was not reclaimed");
+Console.WriteLine("PASS actor-scalar-sealed-schema-native-probe: immutable i64/bool layout, forged tags, block counts and stale receive frames denied; NOT compiled .atto");
+Console.WriteLine("PASS actor-scalar-nativeaot-parallel-transfer: i64 swap is simultaneous, malformed second destination is failure-atomic; NOT compiled .atto");
+
+// Separate published-native regression for terminal logical actor quotas.
+// The same carrier must continue processing a healthy actor after three
+// hostile actors swallow frame-count/byte exceptions. The native host must
+// never confuse this logical-stack behavior with CLR machine-stack isolation.
+using var quotaRuntime = new ActorRuntime(new ActorRuntimeOptions
+{
+    MaxActors = 4, MessagesPerDispatch = 1,
+    MailboxMessages = 4, MailboxBytes = 128,
+    ActorPersistentBytes = 256, ActorScratchBytes = 64,
+    ActorStackBytes = 64, ActorMaxStackFrames = 2,
+    NativeBudgetBytes = 8192,
+    Dispatcher = new ActorDispatcherOptions
+    {
+        PrivateWorkers = 1, SharedWorkers = 1, UntrustedWorkers = 1,
+        QueueCapacityPerDomain = 4
+    }
+});
+using var survivingQuotaTurn = new ManualResetEventSlim();
+var validatedQuotaCases = new ConcurrentQueue<string>();
+var tooDeep = quotaRuntime.Spawn(ActorKind.Shared, (ctx, _) =>
+{
+    var root = ctx.PushStackFrame(16);
+    ctx.PushStackFrame(8);
+    bool caught = false;
+    try { ctx.PushStackFrame(8); }
+    catch (ActorStackQuotaExceededException) { caught = true; }
+    Require(caught, "native frame-count fault did not raise quota exception");
+    Deny(() => ctx.ReadStackFrame(root, 0, new byte[1]));
+    validatedQuotaCases.Enqueue("depth");
+});
+var aggregateBytes = quotaRuntime.Spawn(ActorKind.Shared, (ctx, _) =>
+{
+    var typed = ActorScalarFrameAbiV1.Push(ctx, new byte[] { 1, 2 }, blockCount: 1);
+    ActorScalarFrameAbiV1.WriteI64(ctx, typed, 0, 42);
+    bool caught = false;
+    try { ctx.PushStackFrame(24); }
+    catch (ActorStackQuotaExceededException) { caught = true; }
+    Require(caught, "native aggregate byte quota did not raise exception");
+    Deny(() => ctx.PushStackFrame(1));
+    Deny(() => { ActorScalarFrameAbiV1.ReadI64(ctx, typed, 0); });
+    Deny(() => ctx.PopStackFrame(typed));
+    validatedQuotaCases.Enqueue("aggregate");
+});
+var oversizedFrame = quotaRuntime.Spawn(ActorKind.Shared, (ctx, _) =>
+{
+    bool caught = false;
+    try { ctx.PushStackFrame(65); }
+    catch (ActorStackQuotaExceededException) { caught = true; }
+    Require(caught, "native oversized single-frame quota did not raise exception");
+    Deny(() => ctx.PushStackFrame(1));
+    validatedQuotaCases.Enqueue("oversized");
+});
+var quotaSibling = quotaRuntime.Spawn(ActorKind.Shared, (ctx, _) =>
+{
+    var handle = ctx.PushStackFrame(8);
+    ctx.WriteStackFrame(handle, 0, new byte[] { 0x5A });
+    byte[] seen = new byte[1];
+    ctx.ReadStackFrame(handle, 0, seen);
+    Require(seen[0] == 0x5A, "quota sibling frame storage was corrupted");
+    ctx.PopStackFrame(handle);
+    survivingQuotaTurn.Set();
+});
+quotaRuntime.Send(tooDeep, new byte[] { 1 });
+quotaRuntime.Send(aggregateBytes, new byte[] { 2 });
+quotaRuntime.Send(oversizedFrame, new byte[] { 3 });
+quotaRuntime.Send(quotaSibling, new byte[] { 4 });
+Require(survivingQuotaTurn.Wait(TimeSpan.FromSeconds(10)),
+    "native sibling failed to run after terminal actor quotas");
+Require(SpinWait.SpinUntil(() =>
+        quotaRuntime.FaultedTurns == 3 &&
+        quotaRuntime.CompletedMessages == 1 &&
+        quotaRuntime.LiveActors == 1,
+    TimeSpan.FromSeconds(10)),
+    "caught native stack quota faults counted as successful actor turns");
+Require(validatedQuotaCases.Count == 3 &&
+        validatedQuotaCases.Contains("depth") &&
+        validatedQuotaCases.Contains("aggregate") &&
+        validatedQuotaCases.Contains("oversized"),
+    "native quota negatives did not exercise all terminal fault branches");
+Require(quotaRuntime.StartedCarrierThreads == 1 &&
+        quotaRuntime.NativeReservedBytes > 0,
+    "single native shared carrier or surviving actor reserve lost");
+quotaRuntime.Stop(quotaSibling);
+Require(SpinWait.SpinUntil(() =>
+        quotaRuntime.LiveActors == 0 &&
+        quotaRuntime.NativeReservedBytes == 0, TimeSpan.FromSeconds(10)),
+    "native actor quota and frame region were not reclaimed");
+Console.WriteLine("PASS actor-stack-nativeaot-terminal-quota: depth, aggregate bytes, oversized frame all terminal after catch; sibling survives; no native budget leak; NOT compiled .atto");

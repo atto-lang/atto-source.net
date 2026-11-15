@@ -15,7 +15,24 @@ public enum CfgOpcode
     LessThanI64,
     Argument,
     Call,
-    NotEqualI64
+    NotEqualI64,
+    GreaterThanI64,
+    LessThanOrEqualI64,
+    GreaterThanOrEqualI64,
+    EqualBool,
+    NotEqualBool,
+    XorBool,
+    // Two-word source Option<int>, selected from verified bool tag/i64
+    // payload and an eagerly evaluated i64 fallback. Not an opaque pointer.
+    OptionOrI64,
+    // Bounds proof for a fixed-size inline i64 array. Signed comparison
+    // only, no guest/native pointer operations. Returns exact Bool.
+    ArrayIndexValidI64,
+    // Verified Boolean negation, used by the closed Option<int>.is_none() query.
+    BoolNot,
+    // Closed Option<int> equality: tags (Bool) and active payloads (I64).
+    // All four operands must be verified SSA values in evaluation order.
+    OptionEqualI64
 }
 
 public readonly record struct CfgParameter(int Id, IrValueType Type);
@@ -28,6 +45,7 @@ public sealed record CfgInstruction(
 
 public abstract record CfgTerminator;
 public sealed record CfgReturn(int ValueId) : CfgTerminator;
+public sealed record CfgReturnVoid : CfgTerminator;
 public sealed record CfgJump(string Target, IReadOnlyList<int> Arguments) : CfgTerminator;
 public sealed record CfgBranch(
     int Condition,
@@ -96,6 +114,8 @@ public static class OresCfgVerifier
     // Edge payloads are not SSA definitions, so they need a separate global
     // bound before copying any untrusted list into the immutable proof.
     public const int MaxEdgeArguments = 2 * MaxValues;
+    // Bounds the inline immutable Array<int> SSA expansion and code size.
+    public const int MaxFixedArrayElements = 8;
 
     private readonly record struct Definition(int Block, int Instruction, IrValueType Type);
 
@@ -104,7 +124,7 @@ public static class OresCfgVerifier
     {
         ArgumentNullException.ThrowIfNull(function);
         if (!Identifier(function.Name) ||
-            function.ResultType is not (IrValueType.I64 or IrValueType.Bool) ||
+            function.ResultType is not (IrValueType.I64 or IrValueType.Bool or IrValueType.Void) ||
             !Identifier(function.Entry))
             throw new FormatException("Invalid CFG function signature");
 
@@ -171,6 +191,7 @@ public static class OresCfgVerifier
             CfgTerminator frozenTerminator = terminator switch
             {
                 CfgReturn r => new CfgReturn(r.ValueId),
+                CfgReturnVoid => new CfgReturnVoid(),
                 CfgJump j => new CfgJump(j.Target, FreezeArguments(j.Arguments)),
                 CfgBranch c => new CfgBranch(c.Condition, c.TrueTarget,
                     FreezeArguments(c.TrueArguments),
@@ -212,7 +233,10 @@ public static class OresCfgVerifier
                 AddDefinition(op.ResultId, op.Type, blockIndex, instructionIndex);
             }
         }
-        if (definitions.Count == 0 || definitions.Count > MaxValues)
+        // An empty void helper has no SSA values: its sole terminator is
+        // the independently verified CfgReturnVoid, not a fabricated 0.
+        if ((definitions.Count == 0 && function.ResultType != IrValueType.Void) ||
+            definitions.Count > MaxValues)
             throw new FormatException("CFG SSA value budget exceeded");
         // Dense IDs prevent accidental giant lookup allocations during later
         // local-register assignment, and reject gaps and negative definitions.
@@ -235,6 +259,7 @@ public static class OresCfgVerifier
             switch (block.Terminator)
             {
                 case CfgReturn: break;
+                case CfgReturnVoid: break;
                 case CfgJump jump:
                     RegisterEdge(i, jump.Target, jump.Arguments);
                     break;
@@ -345,6 +370,8 @@ public static class OresCfgVerifier
                         break;
                     case CfgOpcode.Call:
                     {
+                        if (op.Type == IrValueType.Void)
+                            throw new FormatException("Void CFG call requires effect-only lowering");
                         if (op.Target is null || op.Arguments is null ||
                             op.I64Constant is not null || op.BoolConstant is not null ||
                             op.Left is not null || op.Right is not null ||
@@ -354,6 +381,55 @@ public static class OresCfgVerifier
                             throw new FormatException("Unverified CFG static call");
                         for (int arg = 0; arg < op.Arguments.Count; arg++)
                             Use(i, opIndex, op.Arguments[arg], callee.ParameterTypes[arg]);
+                        break;
+                    }
+                    case CfgOpcode.ArrayIndexValidI64:
+                    {
+                        RequireType(op.Type, IrValueType.Bool);
+                        if (op.Left is null || op.I64Constant is null ||
+                            op.I64Constant < 0 ||
+                            op.I64Constant > MaxFixedArrayElements ||
+                            op.Right is not null || op.BoolConstant is not null ||
+                            op.Target is not null || op.Arguments is not null)
+                            throw new FormatException("E_ARRAY_BOUNDS_IR: forged inline array length or index");
+                        Use(i, opIndex, op.Left.Value, IrValueType.I64);
+                        break;
+                    }
+                    case CfgOpcode.OptionEqualI64:
+                    {
+                        RequireType(op.Type, IrValueType.Bool);
+                        if (op.Left is null || op.Right is null ||
+                            op.Arguments is null || op.Arguments.Count != 2 ||
+                            op.I64Constant is not null || op.BoolConstant is not null ||
+                            op.Target is not null)
+                            throw new FormatException("Malformed CFG Option<int> equality");
+                        Use(i, opIndex, op.Left.Value, IrValueType.Bool);
+                        Use(i, opIndex, op.Right.Value, IrValueType.I64);
+                        Use(i, opIndex, op.Arguments[0], IrValueType.Bool);
+                        Use(i, opIndex, op.Arguments[1], IrValueType.I64);
+                        break;
+                    }
+                    case CfgOpcode.BoolNot:
+                    {
+                        RequireType(op.Type, IrValueType.Bool);
+                        if (op.Left is null || op.Right is not null ||
+                            op.Arguments is not null || op.Target is not null ||
+                            op.I64Constant is not null || op.BoolConstant is not null)
+                            throw new FormatException("Malformed CFG Boolean negation");
+                        Use(i, opIndex, op.Left.Value, IrValueType.Bool);
+                        break;
+                    }
+                    case CfgOpcode.OptionOrI64:
+                    {
+                        RequireType(op.Type, IrValueType.I64);
+                        if (op.Left is null || op.Right is null ||
+                            op.Arguments is null || op.Arguments.Count != 1 ||
+                            op.I64Constant is not null || op.BoolConstant is not null ||
+                            op.Target is not null)
+                            throw new FormatException("Malformed CFG Option<int> selection");
+                        Use(i, opIndex, op.Left.Value, IrValueType.Bool);
+                        Use(i, opIndex, op.Right.Value, IrValueType.I64);
+                        Use(i, opIndex, op.Arguments[0], IrValueType.I64);
                         break;
                     }
                     case CfgOpcode.ConstantI64:
@@ -377,8 +453,13 @@ public static class OresCfgVerifier
                     case CfgOpcode.EqualI64:
                     case CfgOpcode.NotEqualI64:
                     case CfgOpcode.LessThanI64:
+                    case CfgOpcode.GreaterThanI64:
+                    case CfgOpcode.LessThanOrEqualI64:
+                    case CfgOpcode.GreaterThanOrEqualI64:
                         RequireType(op.Type,
-                            op.Opcode is CfgOpcode.EqualI64 or CfgOpcode.NotEqualI64 or CfgOpcode.LessThanI64
+                            op.Opcode is CfgOpcode.EqualI64 or CfgOpcode.NotEqualI64 or
+                                CfgOpcode.LessThanI64 or CfgOpcode.GreaterThanI64 or
+                                CfgOpcode.LessThanOrEqualI64 or CfgOpcode.GreaterThanOrEqualI64
                                 ? IrValueType.Bool : IrValueType.I64);
                         if (op.Left is null || op.Right is null ||
                             op.I64Constant is not null || op.BoolConstant is not null ||
@@ -386,6 +467,17 @@ public static class OresCfgVerifier
                             throw new FormatException("Malformed CFG binary operation");
                         Use(i, opIndex, op.Left.Value, IrValueType.I64);
                         Use(i, opIndex, op.Right.Value, IrValueType.I64);
+                        break;
+                    case CfgOpcode.EqualBool:
+                    case CfgOpcode.NotEqualBool:
+                    case CfgOpcode.XorBool:
+                        RequireType(op.Type, IrValueType.Bool);
+                        if (op.Left is null || op.Right is null ||
+                            op.I64Constant is not null || op.BoolConstant is not null ||
+                            op.Target is not null || op.Arguments is not null)
+                            throw new FormatException("Malformed CFG bool operation");
+                        Use(i, opIndex, op.Left.Value, IrValueType.Bool);
+                        Use(i, opIndex, op.Right.Value, IrValueType.Bool);
                         break;
                     default:
                         throw new FormatException("Unknown CFG opcode");
@@ -396,7 +488,13 @@ public static class OresCfgVerifier
             switch (block.Terminator)
             {
                 case CfgReturn returned:
+                    if (function.ResultType == IrValueType.Void)
+                        throw new FormatException("Void CFG method cannot return a value");
                     Use(i, termIndex, returned.ValueId, function.ResultType);
+                    break;
+                case CfgReturnVoid:
+                    if (function.ResultType != IrValueType.Void)
+                        throw new FormatException("Non-void CFG method requires explicit return value");
                     break;
                 case CfgJump jump:
                     VerifyEdgeValues(i, termIndex, jump.Target, jump.Arguments);

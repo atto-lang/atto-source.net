@@ -1,0 +1,4 @@
+// Compiler-owned, immediate scalarized Tuple and Record projections.
+pub fnc main():int {
+    return Tuple.of<int,int>(11, 23)[1] + Record.of(left: 9, right: 10).left + 10;
+}

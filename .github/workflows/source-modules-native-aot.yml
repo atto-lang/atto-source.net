@@ -71,6 +71,38 @@ jobs:
           if ($LASTEXITCODE -ne 1 -or $rejection -notmatch 'Nominal class/actor methods require' -or (Test-Path artifacts/module-rejected/OresGenerated.dll)) { throw 'Class rejection was not correctly classified' }
           $rejection
           $global:LASTEXITCODE = 0
+      - name: NativeAOT compiler must reject unsafe stdlib imports with no output
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $compiler = Join-Path 'artifacts/module-compiler' 'oresnet${{ matrix.suffix }}'
+          $root = Join-Path $env:RUNNER_TEMP 'ores-unsafe-nativeaot-negative'
+          New-Item -ItemType Directory -Path $root -Force | Out-Null
+          $cases = @(
+            @{name='canonical'; path='ores.std/unsafe/ffi'},
+            @{name='legacy'; path='std/unsafe/native'},
+            @{name='dot-segment'; path='std/./unsafe/memory'},
+            @{name='relative'; path='./std/unsafe/ffi'},
+            @{name='parent'; path='pkg/../std/unsafe/native'},
+            @{name='dotted'; path='std.unsafe.ffi'}
+          )
+          foreach ($case in $cases) {
+            $source = Join-Path $root ($case.name + '.ores')
+            $outputDir = Join-Path $root ('out-' + $case.name)
+            New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
+            $output = Join-Path $outputDir 'OresGenerated.dll'
+            $program = 'import module ffi from "' + $case.path + '";' + [Environment]::NewLine + 'pub fnc main():int{return 42;}'
+            [System.IO.File]::WriteAllText($source, $program)
+            $PSNativeCommandUseErrorActionPreference = $false
+            $diagnostic = & $compiler compile-modules $source --root $root --out $output 2>&1 | Out-String
+            $exitCode = $LASTEXITCODE
+            if ($exitCode -ne 1 -or $diagnostic -notmatch 'unsafe standard-library import unavailable' -or (Test-Path $output)) {
+              throw "NativeAOT unsafe admission failed for $($case.name): exit=$exitCode emitted=$(Test-Path $output) diagnostic=$diagnostic"
+            }
+          }
+          $global:LASTEXITCODE = 0
+          Write-Host 'PASS NativeAOT compiler G0 unsafe import denial: 6 sources, no emitted DLL'
+
       - name: Publish and execute statically linked module application
         shell: pwsh
         run: |

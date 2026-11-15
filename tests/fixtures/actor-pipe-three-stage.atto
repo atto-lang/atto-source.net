@@ -1,0 +1,26 @@
+// Three-stage source graph admission and checked CIL scalar oracle only.
+// NOT evidence of native .NET actor scheduling or NativeAOT guest execution.
+// Expected eventual actor mail: Parse(20)->21, Validate(21)->42, Sink->42.
+define actor Parse as
+    on_message(int n): int { return n + 1; }
+end
+
+define actor Validate as
+    on_message(int n): int { return n * 2; }
+end
+
+define actor Sink as
+    on_message(int n): int { return n; }
+end
+
+pub fnc main(): int {
+    let source = spawn Parse();
+    let middle = spawn Validate();
+    let sink = spawn Sink();
+    source pipe middle pipe sink;
+    source.send(20);
+    stop source;
+    stop middle;
+    stop sink;
+    return 0;
+}

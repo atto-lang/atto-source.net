@@ -1,4 +1,15 @@
-# Oreslang .NET — Windows Native AOT backend
+# AttoLang .NET Native AOT backend
+
+AttoLang is the current public language name (formerly Oreslang). This repository remains an independent CIL compiler plus .NET Native AOT prototype. Its implemented subset remains limited to checked signed-i64 scalar arithmetic; this branding update does not imply full-language parity. Keep existing `Ores.Net.*` project identities, `oresnet` command, generated artifact names and `.ores` fixtures stable.
+
+Use [AttoLang Brand Compatibility v1](https://github.com/ores-truffle-oreslang/oreslang-common-source/blob/main/contracts/v1/attolang-brand-compat-v1.json) as the migration policy. Do not rename repository paths, package coordinates, command names, ABI or wire-format identifiers as part of a branding-only change.
+
+## VM isolate execution architecture
+
+A Native AOT-compatible `OresVmHost` now provides generation-fenced tenant handles, real actor mailbox ownership, host resource pins and shutdown admission; this is **not** CLR or OS process isolation, nor general compiled Oreslang guest execution.
+
+See [the shared tenant IsolateVM contract](docs/VM_ISOLATE_CONTRACT.md) for lifecycle, V8 lessons, resource retirement, restrictions and remaining acceptance gates.
+
 
 Independent **CIL compiler + .NET Native AOT runtime** for Oreslang. No LLVM, GraalVM, JIT, runtime CIL generation, or dynamic assembly loading is used by released binaries.
 
@@ -234,6 +245,8 @@ See [architecture](docs/architecture.md), [roadmap](docs/roadmap.md), [CI recove
 See [value-boundary audit and admission tests](docs/VALUE_BOUNDARIES.md) for
 aggregate, call, string, conditional and async feature limits.
 
+CPU/GPU execution expressions, nested placement and `nb`/stream parity: see [proposed v1 contract](docs/CPU_GPU_NB_GRAPH_V1.md). This is **not** a claim that the backend executes GPU or streamed source blocks.
+
 ## Engineering policy: no Python
 
 Python is prohibited in this repository and throughout the `ores-truffle-oreslang` organization for scripts, tests, CI helpers, code generators, analyzers, automation, and host tooling. Existing Python functionality must be migrated to **Rust** without weakening behavior, security checks, fixtures, or test coverage. Do not add `.py`, `.pyi`, `.ipynb`, Python dependency manifests, `python`/`python3` commands, `pip`, `pytest`, `poetry`, `uv`, or `actions/setup-python`. The .NET compiler/backend remains .NET/C#; the Python-to-Rust mandate applies to Python tooling rather than rewriting language-specific implementation code.
@@ -307,3 +320,52 @@ This integration branch is unverified until exact-head .NET 10 managed
 tests and actual Linux/Windows Native AOT publish/execution run with
 nonempty CI job steps. Its parents are the independent #185 structured
 compiler and #200 Native AOT release branches.
+
+## Untrusted actors and tenants (decided; not yet wired into this host)
+
+**Decision (2026-11-03):** tenants, including hostile tenants and untrusted
+guest code, share one OS process. Each tenant gets its own VM-isolate inside
+it, as GraalVM isolates work. A per-tenant OS process or sandbox is not
+required. It may be added as defense in depth, but never as a precondition.
+Contract: [tenant isolation v2](https://github.com/ores-truffle-oreslang/oreslang-platform-conformance/pull/352).
+
+On .NET this means:
+
+- **Untrusted tenants run as validated Wasm on the shared native TenantVm
+  core**, called through its C API (`spikes/tenant-vm-dotnet`). Guest code runs
+  on native carrier threads, not CLR threads, so a spinning guest can be
+  stopped, a guest fault ends only its VM, and tenants add no CLR GC load.
+- **Untrusted CIL is refused.** CoreCLR has one process-wide GC heap, no
+  runtime IL verification and no AppDomains, cannot kill a spinning managed
+  thread (`Thread.Abort` is unsupported), and ends the process on stack
+  overflow. An `AssemblyLoadContext` is not an isolate.
+- **Direct CIL stays a first-class backend for trusted code**, JIT or
+  NativeAOT. Trusted tenants may run as CIL; compiler-inserted fuel and depth
+  checks can bound their loops and recursion.
+
+Trust level and compilation mode stay independent: untrusted Wasm may be
+JIT-compiled, AOT-lowered or interpreted. The **current shipping .NET
+compiler/host remains NativeAOT only**, supports only its documented
+arithmetic subset, and does not load CIL at runtime.
+
+## Repository ownership and migration (2026-11-08)
+
+**Current home:** `ores-truffle-oreslang/oreslang-source.net`. **Public language:** AttoLang (formerly Oreslang); retain legacy `oreslang-*` commands, packages, dependencies and existing `.ores` fixtures until each replacement is proven.
+
+- **This repository owns:** .NET/CIL plus NativeAOT compiler, host ABI, actor isolation primitives and native target validation.
+- **Out of scope:** JVM imports, JS transpilation or business cloud provisioning. Place shared language semantics and portable core/std in canonical `.atto` modules; keep only indispensable compiler, ABI and runtime-host primitives in this backend.
+- **Organization boundary:** [`atto-lang`](https://github.com/atto-lang) is for language semantics, compilers, tooling, conformance and ecosystem libraries. [`atto-co`](https://github.com/atto-co) is for independently governed hosted products, deployment control, tenant infrastructure, identity and billing. Existing similarly named `atto-*` projects do not automatically share this repository's Git identity, code or test status.
+- **First-stage migration proposal:** approved GitHub ownership transfer of this existing repo, preserving its name, numeric ID and history, to `atto-lang/oreslang-source.net`. No direct legacy-org → `atto-co` transfer is authorized; subsequent product carve-outs require new approval.
+
+**Migration instructions (maintainer preflight):** coordinate exact source head and ownership in [issue #26](https://github.com/ores-truffle-oreslang/.github/issues/26), then follow private [runbook draft #25](https://github.com/ores-truffle-oreslang/.github/pull/25). Confirm source/target admins and independent security reviewer, target access and branch/ruleset protection, exact SHA/tree, PRs/releases, Actions, secrets, GitHub Apps, deployments, dependencies and compatibility links before transfer. Do not clone/mirror private source as a shortcut. Verify unchanged numeric ID and code tree after real transfer, restore controls, rerun exact-head CI and capture **nonzero executed steps**. `steps=[]` / `steps=null` is `NOT_EXECUTED`, not test success; host/static checks cannot certify real AttoLang guest execution, AOT or zero-GC. Defer repository/CLI/extension renames to separately reviewed changes.
+
+## Experimental source actor/native arena integration
+
+The opt-in `emit-actor-csharp` lane now emits a `SpawnRuntime` entry for its
+bounded synchronous Counter profile. It uses the production ActorRuntime,
+private native scalar state, execution-owned frames and supervisor mailbox
+replies. The managed suite and a macOS arm64 NativeAOT probe execute ordinary
+and overflow source-generated actors; the older trusted-host Counter API is
+kept separate and its managed cells are not arena-isolation evidence.
+See [execution evidence and open parity gates](docs/ACTOR_NATIVE_STATE_FRAMES_INTEGRATION_20261110.md).
+This is not general actor CIL, concurrent-default actor execution or Spin support.
