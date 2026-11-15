@@ -37,6 +37,19 @@ public static class CilEmitter
     // backend. Each SSA value has a typed i64 local slot, so shared subgraphs
     // and unused instructions have defined, non-exponential execution.
     public static void EmitLibrary(VerifiedIrFunction program, string outputFile)
+        => EmitVerifiedLibrary(program, outputFile, "Run");
+
+    // Distinct static ABI for the closed, experimental Task<int> root profile.
+    // The matching native host supplies the statically linked Task/Future entry
+    // shim; the compiled producer is ordinary verified i64 CIL, not interpreted.
+    public static void EmitTaskI64Library(VerifiedTaskI64Program program, string outputFile)
+    {
+        ArgumentNullException.ThrowIfNull(program);
+        EmitVerifiedLibrary(program.Producer, outputFile, "RunTaskI64Producer");
+    }
+
+    private static void EmitVerifiedLibrary(VerifiedIrFunction program, string outputFile,
+        string entryName)
     {
         ArgumentNullException.ThrowIfNull(program);
         ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
@@ -56,12 +69,14 @@ public static class CilEmitter
 
             var methodCode = new BlobBuilder();
             var il = new InstructionEncoder(methodCode);
-            int maxStack = WriteVerifiedIr(program, il);
+            int maxStack = WriteVerifiedIr(program, il, metadata);
             int bodyOffset = bodies.AddMethodBody(il, maxStack: maxStack,
                 localVariablesSignature: localSignature,
                 attributes: MethodBodyAttributes.InitLocals);
             return (bodyOffset, methodCode, localsBlob);
-        });
+        }, entryName, hostCallIdentity: string.Join(";", program.Instructions
+            .Where(op => op.Opcode is IrOpcode.DotnetMathAbsI64 or IrOpcode.DotnetMathMaxI64)
+            .Select(op => op.Opcode.ToString()).Distinct().Order(StringComparer.Ordinal)));
     }
 
     // Experimental CFG entry point. Only a verified function is accepted;
@@ -74,8 +89,44 @@ public static class CilEmitter
     public static void EmitLibrary(VerifiedCfgModule module, string outputFile) =>
         CfgCilEmitter.EmitLibrary(module, outputFile);
 
-    private static int WriteVerifiedIr(VerifiedIrFunction program, InstructionEncoder il)
+    private static int WriteVerifiedIr(VerifiedIrFunction program, InstructionEncoder il,
+        MetadataBuilder metadata)
     {
+        // Only two exact, pure scalar framework signatures are available.
+        // Reference assembly lookup is pinned to the existing System.Runtime
+        // identity, never dynamic reflection or host object construction.
+        MemberReferenceHandle mathAbs = default;
+        MemberReferenceHandle mathMax = default;
+        bool hasAbs = program.Instructions.Any(op => op.Opcode == IrOpcode.DotnetMathAbsI64);
+        bool hasMax = program.Instructions.Any(op => op.Opcode == IrOpcode.DotnetMathMaxI64);
+        if (hasAbs || hasMax)
+        {
+            var math = metadata.AddTypeReference(
+                MetadataTokens.AssemblyReferenceHandle(1),
+                metadata.GetOrAddString("System"), metadata.GetOrAddString("Math"));
+            if (hasAbs)
+            {
+                var signature = new BlobBuilder();
+                new BlobEncoder(signature).MethodSignature().Parameters(
+                    1, result => result.Type().Int64(),
+                    parameters => parameters.AddParameter().Type().Int64());
+                mathAbs = metadata.AddMemberReference(math,
+                    metadata.GetOrAddString("Abs"), metadata.GetOrAddBlob(signature));
+            }
+            if (hasMax)
+            {
+                var signature = new BlobBuilder();
+                new BlobEncoder(signature).MethodSignature().Parameters(
+                    2, result => result.Type().Int64(), parameters =>
+                    {
+                        parameters.AddParameter().Type().Int64();
+                        parameters.AddParameter().Type().Int64();
+                    });
+                mathMax = metadata.AddMemberReference(math,
+                    metadata.GetOrAddString("Max"), metadata.GetOrAddBlob(signature));
+            }
+        }
+
         int maxStack = 1;
         foreach (var operation in program.Instructions)
         {
@@ -85,18 +136,16 @@ public static class CilEmitter
                     il.LoadConstantI8(operation.Constant!.Value);
                     break;
                 case IrOpcode.SignedRemainderLiteral:
-                    // Prior SSA instructions (including numerator overflow
-                    // checks) have already executed. Never emit CLR rem for
-                    // long.MinValue % -1: CLR may throw OverflowException.
-                    if (program.Instructions[operation.Right!.Value].Constant == -1)
-                        il.LoadConstantI8(0);
-                    else
-                    {
-                        il.LoadLocal(operation.Left!.Value);
-                        il.LoadLocal(operation.Right.Value);
-                        il.OpCode(ILOpCode.Rem);
-                        maxStack = 2;
-                    }
+                    throw new FormatException("Removed Oreslang operator '%' cannot reach CIL emission");
+                case IrOpcode.DotnetMathAbsI64:
+                    il.LoadLocal(operation.Left!.Value);
+                    il.Call(mathAbs);
+                    break;
+                case IrOpcode.DotnetMathMaxI64:
+                    il.LoadLocal(operation.Left!.Value);
+                    il.LoadLocal(operation.Right!.Value);
+                    il.Call(mathMax);
+                    maxStack = 2;
                     break;
                 case IrOpcode.CheckedAdd:
                 case IrOpcode.CheckedSubtract:
@@ -126,11 +175,24 @@ public static class CilEmitter
 
     internal static void EmitLibraryCore(string outputFile,
         Func<MetadataBuilder, MethodBodyStreamEncoder,
-            (int BodyOffset, BlobBuilder Code, BlobBuilder? Locals)> buildBody)
+            (int BodyOffset, BlobBuilder Code, BlobBuilder? Locals)> buildBody,
+        string entryName = "Run",
+        string hostCallIdentity = "")
     {
         var ilStream = new BlobBuilder();
         var bodyStream = new MethodBodyStreamEncoder(ilStream);
         var metadata = new MetadataBuilder();
+        // Reserve the exact framework AssemblyRef before verified method bodies
+        // are emitted, so host MemberRefs can use the same pinned reference
+        // that OresProgram uses for System.Object.
+        var runtime = metadata.AddAssemblyReference(
+            metadata.GetOrAddString("System.Runtime"),
+            new Version(10, 0, 0, 0),
+            culture: default,
+            publicKeyOrToken: metadata.GetOrAddBlob(
+                new byte[] { 0xB0, 0x3F, 0x5F, 0x7F, 0x11, 0xD5, 0x0A, 0x3A }),
+            flags: default,
+            hashValue: default);
         var (bodyOffset, _, localSignatureBlob) = buildBody(metadata, bodyStream);
         // The finalized method body includes branch fixups and the signature
         // *token*, but the token number is not a fingerprint of its blob.
@@ -140,6 +202,17 @@ public static class CilEmitter
         contentHash.AppendData(ilStream.ToArray());
         if (localSignatureBlob is not null)
             contentHash.AppendData(localSignatureBlob.ToArray());
+        // Preserve established scalar IDs, but domain-separate the Task ABI:
+        // identical producer IL with a different entry symbol is not the same
+        // module and must not reuse a scalar module identity in build caches.
+        if (entryName != "Run")
+            contentHash.AppendData(System.Text.Encoding.UTF8.GetBytes("ores-task-abi-v1\0" + entryName));
+        // MemberRef tokens are not sufficient to distinguish similarly shaped
+        // CLR calls: e.g. changing Abs to another unary method can preserve
+        // identical instruction bytes. MVID must cover imported method identity.
+        if (hostCallIdentity.Length > 0)
+            contentHash.AppendData(System.Text.Encoding.UTF8.GetBytes(
+                "attolang-dotnet-host-v0:" + hostCallIdentity));
         byte[] hash = contentHash.GetHashAndReset();
         var moduleId = new Guid(hash.AsSpan(0, 16));
         metadata.AddModule(
@@ -156,15 +229,6 @@ public static class CilEmitter
             flags: default,
             hashAlgorithm: System.Reflection.AssemblyHashAlgorithm.None);
 
-        var runtime = metadata.AddAssemblyReference(
-            metadata.GetOrAddString("System.Runtime"),
-            new Version(10, 0, 0, 0),
-            culture: default,
-            // System.Runtime carries the Microsoft strong-name token; emitting a
-            // token-less reference prevents downstream C# and Native AOT binding.
-            publicKeyOrToken: metadata.GetOrAddBlob(new byte[] { 0xB0, 0x3F, 0x5F, 0x7F, 0x11, 0xD5, 0x0A, 0x3A }),
-            flags: default,
-            hashValue: default);
         var systemObject = metadata.AddTypeReference(
             runtime,
             metadata.GetOrAddString("System"),
@@ -181,7 +245,7 @@ public static class CilEmitter
         var run = metadata.AddMethodDefinition(
             MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.HideBySig,
             MethodImplAttributes.IL,
-            metadata.GetOrAddString("Run"),
+            metadata.GetOrAddString(entryName),
             metadata.GetOrAddBlob(signature),
             bodyOffset,
             MetadataTokens.ParameterHandle(1));
@@ -280,6 +344,7 @@ public static class CilEmitter
                 {
                     if (method.ResultType == IrValueType.I64) returnType.Type().Int64();
                     else if (method.ResultType == IrValueType.Bool) returnType.Type().Boolean();
+                    else if (method.ResultType == IrValueType.Void) returnType.Void();
                     else throw new FormatException("Unsupported CIL method result");
                 },
                 parameters =>
@@ -392,7 +457,9 @@ public static class CilEmitter
             var caller = methods[index];
             int count = caller.Blocks.Sum(b => b.Parameters.Count + b.Instructions.Count);
             definitions += count;
-            if (definitions > 100_000 || count is <= 0 or > OresCfgVerifier.MaxValues)
+            if (definitions > 100_000 ||
+                (count == 0 && caller.ResultType != IrValueType.Void) ||
+                count > OresCfgVerifier.MaxValues)
                 throw new FormatException("CFG module SSA budget exceeded");
 
             // SSA IDs have already been checked for uniqueness and density
@@ -469,6 +536,7 @@ public static class CilEmitter
                     Binary { Operator: '-' } => ILOpCode.Sub_ovf,
                     Binary { Operator: '*' } => ILOpCode.Mul_ovf,
                     Binary { Operator: '/' } => ILOpCode.Div,
+                    NamedBitXor => ILOpCode.Xor,
                     _ => throw new FormatException("Invalid CIL operator")
                 };
                 il.OpCode(opcode);
@@ -493,6 +561,11 @@ public static class CilEmitter
                         evaluationDepth++;
                         pending.Push(new Pending(unary, true));
                         pending.Push(new Pending(unary.Value, false));
+                        break;
+                    case NamedBitXor bitXor:
+                        pending.Push(new Pending(bitXor, true));
+                        pending.Push(new Pending(bitXor.Right, false));
+                        pending.Push(new Pending(bitXor.Left, false));
                         break;
                     case Binary binary when binary.Operator is '+' or '-' or '*' or '/':
                         pending.Push(new Pending(binary, true));
