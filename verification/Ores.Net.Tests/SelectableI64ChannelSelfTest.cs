@@ -453,8 +453,56 @@ internal static class SelectableI64ChannelSelfTest
         Require(foreign.Close(), "foreign source subscription closes");
     }
 
+    private static void DirectTryWriteReportsTypedNonParkingOutcomes()
+    {
+        var channel = new SelectableI64Channel(1);
+        Require(channel.TryWriteResult(11) ==
+                SelectableI64Channel.WriteStatus.Written,
+            "direct typed write commits on an empty channel");
+        Require(channel.TryWriteResult(12) ==
+                SelectableI64Channel.WriteStatus.WouldBlock,
+            "full open channel reports WouldBlock, not Closed");
+        Require(channel.Count == 1 &&
+                channel.PendingWriters == 0 &&
+                channel.PendingReaders == 0,
+            "nonparking write neither overwrites data nor registers waiters");
+        Require(channel.TryRead(out var original) && original == 11,
+            "full-channel denial preserves the original value");
+        Require(channel.TryWriteResult(13) ==
+                SelectableI64Channel.WriteStatus.Written,
+            "write succeeds after capacity becomes available");
+
+        Require(channel.Close(), "close buffered typed-write channel");
+        Require(channel.TryWriteResult(14) ==
+                SelectableI64Channel.WriteStatus.Closed,
+            "closed and full reports Closed before WouldBlock");
+        Require(channel.TryRead(out var final) && final == 13,
+            "closed write did not overwrite buffered data");
+        Require(channel.TryWriteResult(15) ==
+                SelectableI64Channel.WriteStatus.Closed,
+            "closed and empty continues reporting Closed");
+        Require(channel.Count == 0 && channel.PendingWriters == 0,
+            "closed write never publishes or registers a waiter");
+        Require(!channel.TryWrite(16),
+            "legacy boolean API preserves false on closed channel");
+
+        var readable = new SelectableI64Channel(1);
+        var notifications = 0;
+        var subscription = readable.SubscribeReadable(_ => notifications++);
+        Require(readable.TryWriteResult(42) ==
+                SelectableI64Channel.WriteStatus.Written,
+            "typed write commits when a reader is subscribed");
+        Require(notifications == 1 &&
+                readable.TryRead(out var delivered) && delivered == 42,
+            "typed write dispatches reader readiness after publication");
+        Require(subscription.Close(), "reader can still revoke subscription");
+        Require(readable.PendingWriters == 0,
+            "typed write did not install a hidden writer waiter");
+    }
+
     public static void Run()
     {
+        DirectTryWriteReportsTypedNonParkingOutcomes();
         FirstReadyReadWinsWithoutConsumingLoser();
         LosingWriteNeverPublishes();
         DelayedReadinessWakesPendingRead();
