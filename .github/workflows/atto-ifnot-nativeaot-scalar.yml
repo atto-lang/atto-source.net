@@ -18,6 +18,16 @@ jobs:
   compiler-generated-cil-nativeaot:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: unless-break
+            fixture: do-unless-nativeaot.atto
+            expected: 4
+          - id: ifnot-nested-continue
+            fixture: do-ifnot-nativeaot.atto
+            expected: 2
     steps:
       - uses: actions/checkout@v4
         with:
@@ -31,15 +41,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          source="$PWD/tests/fixtures/conditional/do-unless-nativeaot.atto"
+          source="$PWD/tests/fixtures/conditional/${{ matrix.fixture }}"
           generated="$PWD/verification/IfnotNativeAot/generated/OresGenerated.dll"
-          test "$(git hash-object "$source")" = "$(git rev-parse HEAD:tests/fixtures/conditional/do-unless-nativeaot.atto)"
+          test "$(git hash-object "$source")" = "$(git rev-parse HEAD:tests/fixtures/conditional/${{ matrix.fixture }})"
           dotnet run -c Release --project verification/IfnotNativeAot/Emitter/Emitter.csproj -- "$source" "$generated"
           test -s "$generated"
           dotnet publish verification/IfnotNativeAot/Host/Host.csproj -c Release -r linux-x64 -p:PublishAot=true -o "$RUNNER_TEMP/atto-ifnot-nativeaot"
           set +e
-          "$RUNNER_TEMP/atto-ifnot-nativeaot/Host"
+          timeout --signal=TERM --kill-after=1s 5s "$RUNNER_TEMP/atto-ifnot-nativeaot/Host"
           result=$?
           set -e
-          test "$result" -eq 4 || { echo "INCORRECT_NATIVE_AOT_GUEST_RESULT=$result" >&2; exit 1; }
-          echo "ATTO_IFNOT_UNLESS_NATIVE_AOT_PASS exit=4"
+          test "$result" -eq ${{ matrix.expected }} || { echo "INCORRECT_NATIVE_AOT_GUEST_RESULT=${result} fixture=${{ matrix.fixture }}" >&2; exit 1; }
+          echo "ATTO_IFNOT_UNLESS_NATIVE_AOT_PASS fixture=${{ matrix.fixture }} exit=${{ matrix.expected }}"
