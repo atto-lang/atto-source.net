@@ -827,6 +827,15 @@ public static partial class OresStructuredParser
                 do { index++; } while (index < source.Length &&
                     (Alpha(source[index]) || Digit(source[index]) || source[index] == '_'));
                 string word = source[offset..index];
+                // Ownership spelling is recognized from lexical tokens, not
+                // raw regexes over comments/strings. The structured scalar
+                // backend has no typed borrow/move/share HIR, so refuse it
+                // before generic '!' or macro syntax can swallow the effect.
+                // 'copy !foo' is not an ownership prefix: the verb must touch '!'.
+                if (word is "copy" or "take" or "borrow" or "share" &&
+                    index < source.Length && source[index] == '!')
+                    throw new FormatException(
+                        $"OWNERSHIP_BANG_BACKEND_UNSUPPORTED: '{word}!' requires typed ownership and actor-arena Native AOT lowering at offset {offset}");
                 // The linked-module lexer also enforces the unsafe keyword
                 // reservation before typed module binding and CIL emission.
                 if (word == "unsafe")
@@ -1951,8 +1960,7 @@ public static partial class OresStructuredParser
                     ownership = "mut borrow";
                 if (operation == "borrow" && index + 1 < tokens.Count &&
                     tokens[index + 1].Text == "mut")
-                    throw new FormatException(
-                        $"Legacy ownership spelling 'rt borrow mut' is rejected; use 'rt mut borrow' at offset {at}");
+                    ownership = "mut borrow"; // compatibility, same fail-closed gate
                 if (ownership is "copy" or "share" or "take" or "borrow" or "mut borrow")
                     throw new FormatException(
                         $"Ownership operation 'rt {ownership}' requires typed actor-arena lowering; unsupported in the .NET structured backend at offset {at}");
