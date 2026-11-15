@@ -64,6 +64,64 @@ internal static class StructuredSourceTests
 
     public static void Run()
     {
+        // Native AOT has no actor hierarchy, trait/interface witness ABI,
+        // runtime-owned receive slot or actor state loan lowering yet. Every
+        // source spelling must fail at the dedicated capability boundary.
+        foreach (var actorSource in new[] {
+            "define actor A1 as end",
+            "actor A1 as end",
+            "actor fnc invoke():int{return 1;}",
+            "fnc actor invoke():int{return 1;}",
+            "actor worker as end",
+            "actor A1 implements Traced as end",
+            "define pub actor A1 as end",
+            "define shared actor A1 as end",
+            "define untrusted actor A1 as end",
+            "define isoactor A1 as end",
+            "define pub isoactor A1 as end",
+            "shared actor A1 { }",
+            "untrusted actor A1 { }",
+            "isoactor A1 { }",
+            // HTTP actor spellings are gated earlier with HTTP_ACTOR_BACKEND_UNSUPPORTED (#481).
+            "define transform actor A1 as end",
+            "define pipe actor A1 as end",
+            "define actor A1 extends Base as end",
+            "define pub actor A1 implements Contract as end",
+            "define actor A1 impl Traced as end"
+        })
+            RejectFeature(actorSource, "receiver-erased method slots");
+        // `define abstract` is refused earlier by main's abstract-hook gate.
+        RejectFeature("define abstract actor A1 as end",
+            "Private abstract class hooks require typed virtual dispatch");
+        // Same canonical lifecycle source as the platform-conformance v1
+        // fixture; .NET must refuse it until ActorRef and CIL state/receive
+        // lowering are actually implemented and executed.
+        RejectFeature(@"// Lifecycle baseline only. No sealed state, inheritance, or actor-group parity claim.
+define actor A1 as
+  receive(ActorMail<int> mail): void {
+    self.send(mail.value + 1);
+    self.end();
+    return;
+  }
+end
+
+pub async routine main(): void {
+  val worker = spawn A1();
+  await worker.get_ready();
+  worker.send(41);
+  val reply = (await worker.outputs.next()).value.unwrap();
+  stdio.stdout.write(reply.value);
+  await worker.get_done();
+  return;
+}
+", "receiver-erased method slots");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{/* define pub actor A1 as end */return 42;}"
+        ).Body.Count == 1, "actor declarations in comments must remain inert");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{return 42;} // define isoactor A1 as end"
+        ).Body.Count == 1, "line comment actor decoys must remain inert");
+
         // The optional Kestrel host provider is not a source HTTP actor compiler.
         // Neither the serial alias nor explicit or 3x4 concurrency may silently
         // become a scalar function or a generic mailbox actor in Native AOT.
