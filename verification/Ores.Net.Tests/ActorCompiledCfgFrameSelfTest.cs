@@ -254,11 +254,9 @@ internal static class ActorCompiledCfgFrameSelfTest
                 case CfgReturn ret:
                 {
                     long result = ReadI64(ret.ValueId);
-                    // Independent runtime typed ABI agrees with the source
-                    // compiler's SSA types and native little-endian slots.
-                    Require(ActorScalarFrameAbiV1.ReadI64(
-                        context, frame, ret.ValueId) == result,
-                        "runtime ABI disagrees with compiler CFG return bytes");
+                    // Main seals ActorScalarFrameAbiV1 frames only through its own Push
+                    // (ed2b9198); a raw guest frame is deliberately not readable through
+                    // that ABI, so no cross-ABI read is attempted here.
                     context.GuestPopStackFrame(frame);
                     return result;
                 }
