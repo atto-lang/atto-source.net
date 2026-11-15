@@ -161,7 +161,7 @@ public static class ScalarMacroParityTests
             MainSource("42"), "NET_MACRO_EXPANDER_REQUIRED", "typed syntax names must not be macro parameters");
         Reject("define macro eval(Syntax<Expr> x) -> Syntax<Expr> { return x; }" +
             MainSource("42"), "NET_MACRO_EXPANDER_REQUIRED", "eval intrinsic must not be rebound");
-        Reject("define macro unsafe(Syntax<Expr> value) -> Syntax<Expr> {" +
+        Reject("define macro badtemplate(Syntax<Expr> value) -> Syntax<Expr> {" +
             "return quote(unquote(value) + unquote(other)); }" + MainSource("42"),
             "NET_MACRO_EXPANDER_REQUIRED", "unused invalid template declaration must fail before CIL");
         Reject(LiteralMacro + MainSource("literal!(const -(-9223372036854775808))"),
