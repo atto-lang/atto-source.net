@@ -34,6 +34,19 @@ static void InvalidSend(Action action, string why)
     throw new Exception("Expected mailbox rejection: " + why);
 }
 
+// Raw terminal controls are invalid even inside discarded comments or strings.
+foreach (char terminalControl in new[] { '\u001b', '\u007f' })
+{
+    RejectDiagnostic(
+        () => OresStructuredParser.Parse("fnc main():int{/*" + terminalControl + "*/return 42;}"),
+        "terminal control", "embedded terminal control in source comment");
+    RejectDiagnostic(
+        () => OresStructuredParser.Parse("fnc main():int{/* ordinary */return 42;}//" + terminalControl),
+        "terminal control", "trailing terminal control in source comment");
+}
+Require(OresStructuredParser.Parse("fnc main():int{\r\n\treturn 42;\r\n}").Body.Count == 1,
+    "ordinary source whitespace must remain accepted");
+
 // Typed static select must fail with the select-specific diagnostic in
 // both compiler entry points, even when trivia separates the tokens. It is
 // never silently downgraded to scalar arithmetic or a CPU execution region.
