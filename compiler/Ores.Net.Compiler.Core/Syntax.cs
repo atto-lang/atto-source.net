@@ -1074,6 +1074,8 @@ public static partial class OresParser
                     (tokens[verbIndex].Text == "borrow")) &&
                 tokens[verbIndex].Text is "copy" or "take" or "borrow" or "share" &&
                 tokens[verbIndex + 1].Text == "!" &&
+                (verbIndex + 2 >= tokens.Count ||
+                    tokens[verbIndex + 2].Text is not ("=" or "eq")) &&
                 tokens[verbIndex + 1].Offset ==
                     tokens[verbIndex].Offset + tokens[verbIndex].Text.Length)
                 throw new FormatException(
