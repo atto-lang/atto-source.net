@@ -258,10 +258,12 @@ internal static class StrictSigned64GuestRemTests
             string operation = item.GetProperty("operation").GetString()!;
             if (operation is not ("pow" or "bit_xor")) continue;
             admitted++;
-            string guestName = operation == "pow" ? "pow" : "bitXor";
-            string cilName = operation == "pow" ? "Pow" : "BitXor";
-            IrOpcode opcode = operation == "pow"
-                ? IrOpcode.StrictPow : IrOpcode.StrictBitXor;
+            // Integer.pow is a closed runtime MemberRef call; Integer.bitXor is
+            // main's verified IrOpcode.BitXor lowered to inline CIL xor.
+            bool isPow = operation == "pow";
+            string guestName = isPow ? "pow" : "bitXor";
+            string cilName = "Pow";
+            IrOpcode opcode = isPow ? IrOpcode.StrictPow : IrOpcode.BitXor;
             string id = item.GetProperty("id").GetString()!;
             string left = item.GetProperty("left").GetString()!;
             string right = item.GetProperty("right").GetString()!;
@@ -274,7 +276,11 @@ internal static class StrictSigned64GuestRemTests
             var entry = assembly.MainModule.Types.Single(t =>
                 t.FullName == "Oreslang.Generated.OresProgram")
                 .Methods.Single(m => m.Name == "Run");
-            Require(entry.Body.Instructions.Any(ins => ins.OpCode.Code == Code.Call &&
+            if (!isPow)
+                Require(entry.Body.Instructions.Any(ins => ins.OpCode.Code == Code.Xor) &&
+                    !entry.Body.Instructions.Any(ins => ins.OpCode.Code == Code.Call),
+                    "named XOR is inline CIL xor with no host call: " + id);
+            else Require(entry.Body.Instructions.Any(ins => ins.OpCode.Code == Code.Call &&
                 ins.Operand is MethodReference method && !method.HasThis &&
                 !method.ExplicitThis && method.GenericParameters.Count == 0 &&
                 method.CallingConvention == MethodCallingConvention.Default &&
@@ -320,10 +326,13 @@ internal static class StrictSigned64GuestRemTests
                 Require(CilReferenceEvaluator.Evaluate(entry) == value,
                     "decoded CIL power/XOR result: " + id);
             }
-            RejectForgedRemCall(entry, m => m.Name = "UnsupportedCall",
-                "forged pow/XOR intrinsic name: " + id);
-            RejectForgedRemCall(entry, m => m.HasThis = true,
-                "forged pow/XOR instance call: " + id);
+            if (isPow)
+            {
+                RejectForgedRemCall(entry, m => m.Name = "UnsupportedCall",
+                    "forged pow intrinsic name: " + id);
+                RejectForgedRemCall(entry, m => m.HasThis = true,
+                    "forged pow instance call: " + id);
+            }
         }
         Require(admitted == 11, "all 11 shared signed64 power/XOR vectors admitted");
 
@@ -364,18 +373,12 @@ internal static class StrictSigned64GuestRemTests
                 ("Integer.rem(-9223372036854775808, -1)", 0L),
                 ("Integer.rem(-9223372036854775808, 9223372036854775807)", -1L),
                 ("Integer.rem(Integer.rem(9, 4), 2)", 1L),
-                ("Integer.rem(-9, 4) + 43", 42L),
-                ("Integer.rem(-9, 4) + (9 % -4)", 0L),
-                ("Integer.rem(9 % 4, Integer.rem(10, 3))", 0L),
-                ("Integer.rem(-9223372036854775808, -1) + (11 % 6)", 5L)
+                ("Integer.rem(-9, 4) + 43", 42L)
             })
             {
                 var ir = CompileSource(expression);
                 Require(ir.Instructions.Any(op => op.Opcode == IrOpcode.StrictRem),
                     "source must reach verified intrinsic opcode: " + expression);
-                if (expression.Contains('%'))
-                    Require(ir.Instructions.Any(op => op.Opcode == IrOpcode.SignedRemainderLiteral),
-                        "merged literal % and named remainder must remain distinct SSA operations");
                 Require(OresIrReferenceEvaluator.Evaluate(ir) == expected,
                     "SSA reference value: " + expression);
                 string emitted = Path.Combine(folder, "OresGenerated.dll");
@@ -387,9 +390,6 @@ internal static class StrictSigned64GuestRemTests
                 var calls = entry.Body.Instructions.Where(ins =>
                     ins.OpCode.Code == Code.Call).ToArray();
                 Require(calls.Length > 0, "emitted CIL must contain static call");
-                if (expression.Contains('%'))
-                    Require(entry.Body.Instructions.Any(ins => ins.OpCode.Code == Code.Rem),
-                        "literal % must survive alongside named rem static CIL call");
                 Require(calls.All(ins => ins.Operand is MethodReference method &&
                     method.Name == "Rem" &&
                     !method.HasThis && !method.ExplicitThis &&

@@ -2,8 +2,9 @@ namespace Ores.Net.Runtime;
 
 /// <summary>
 /// Independent signed-64 Oreslang arithmetic semantics for the .NET backend.
-/// The scalar compiler admits Integer.rem/mod/pow/bitXor through verified
-/// SSA and closed static CIL calls. ToFloatExact remains a host reference
+/// The scalar compiler admits Integer.rem/mod/pow through verified SSA and
+/// closed static CIL calls (Integer.bitXor lowers to inline CIL xor; BitXor
+/// here is the host reference only). ToFloatExact remains a host reference
 /// helper until typed guest source and Native AOT execution are verified.
 /// CLR exceptions are not yet guest Error values; do not claim error parity.
 /// </summary>

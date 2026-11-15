@@ -243,6 +243,41 @@ static class StrictSigned64ArithmeticSelfTest
         }
     }
 
+    // Pin the shared Decimal contract bytes and shape only. .NET System.Decimal
+    // is a 96-bit scaled type with different context/rounding rules, so it is
+    // deliberately NOT used as a semantic oracle for these vectors.
+    private static void CheckDecimalPrecisionContractIdentity()
+    {
+        string path = Path.Combine(AppContext.BaseDirectory, "decimal-precision-v1.json");
+        byte[] bytes = File.ReadAllBytes(path);
+        byte[] header = Encoding.ASCII.GetBytes("blob " + bytes.Length + "\0");
+        byte[] gitObject = new byte[header.Length + bytes.Length];
+        Buffer.BlockCopy(header, 0, gitObject, 0, header.Length);
+        Buffer.BlockCopy(bytes, 0, gitObject, header.Length, bytes.Length);
+        string blob = Convert.ToHexString(SHA1.HashData(gitObject)).ToLowerInvariant();
+        Require(blob == "3bbb44277f3816add53da40a1e161e466ab162b1",
+            "exact Decimal contract blob identity");
+
+        using var document = JsonDocument.Parse(bytes);
+        JsonElement root = document.RootElement;
+        Require(root.GetProperty("contract").GetString() == "oreslang.decimal-precision.v1",
+            "exact Decimal contract identity");
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        foreach (string group in new[] { "exact_cases", "context_cases", "conversion_cases" })
+        {
+            foreach (JsonElement item in root.GetProperty(group).EnumerateArray())
+            {
+                string id = item.GetProperty("id").GetString()!;
+                Require(ids.Add(id), "unique Decimal contract case id " + id);
+                bool expects = item.TryGetProperty("expect", out _) ||
+                    item.TryGetProperty("expect_bits", out _);
+                Require(expects ^ item.TryGetProperty("error", out _),
+                    "Decimal case has exactly one of expect/error: " + id);
+            }
+        }
+        Require(ids.Count > 0, "Decimal contract carries reference cases");
+    }
+
     private static void CheckExactFloatFixture()
     {
         string path = Path.Combine(AppContext.BaseDirectory,

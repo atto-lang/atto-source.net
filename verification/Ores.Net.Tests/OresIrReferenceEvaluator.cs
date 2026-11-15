@@ -21,12 +21,12 @@ internal static class OresIrReferenceEvaluator
                 IrOpcode.CheckedAdd => checked(left + right),
                 IrOpcode.CheckedSubtract => checked(left - right),
                 IrOpcode.CheckedMultiply => checked(left * right),
+                IrOpcode.BitXor => left ^ right,
                 IrOpcode.CheckedDivide => DivideChecked(left, right),
-                IrOpcode.SignedRemainderLiteral => right == -1 ? 0 : left % right,
+                IrOpcode.SignedRemainderLiteral => throw new FormatException("Removed Oreslang operator '%' in reference evaluator"),
                 IrOpcode.StrictRem => StrictSigned64Arithmetic.Rem(left, right),
                 IrOpcode.StrictMod => StrictSigned64Arithmetic.Mod(left, right),
                 IrOpcode.StrictPow => StrictSigned64Arithmetic.Pow(left, right),
-                IrOpcode.StrictBitXor => StrictSigned64Arithmetic.BitXor(left, right),
                 _ => throw new FormatException("Unverified IR opcode")
             };
         }
