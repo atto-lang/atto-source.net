@@ -38,7 +38,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bash -n scripts/publish-linux.sh verification/assert-linux-native-release.sh verification/assert-linux-native-release-selftest.sh
+          bash -n scripts/publish-linux.sh verification/assert-linux-native-release.sh verification/assert-linux-native-release-selftest.sh verification/assert-linux-native-arithmetic.sh
+          node --test verification/ci-evidence-gate.test.mjs verification/linux-native-receipt.test.mjs
           bash verification/assert-linux-native-release-selftest.sh
           dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
       - name: Compile native compiler and first native application
@@ -152,6 +153,11 @@ jobs:
           test "$(artifacts/parity/linux-x64/oreslang-app)" = 42
           test "$(artifacts/apps/linux-x64/oreslang-app)" = 14
           echo 'LINUX_NET_NATIVE_AOT_STRUCTURED_SSA_CIL_EXECUTED_45'
+      - name: Execute Linux Native AOT checked-arithmetic negatives
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash verification/assert-linux-native-arithmetic.sh
       - name: Execute exact Java/LLVM logical .atto fixture in real Linux Native AOT
         shell: bash
         run: |
@@ -312,15 +318,17 @@ jobs:
           stdout="$("$guest")"
           test "$stdout" = 42
           mkdir -p artifacts/evidence
-          printf '{"schema":"oreslang.net.exact_head_native_aot_v1","repository":"%s","source_head_sha":"%s","tree_sha":"%s","run_id":%s,"run_attempt":%s,"runner_os":"Linux","target_rid":"linux-x64","checks":["managed-tests","native-compiler","native-app","negative-source-no-cil","source-isolation-4","flags2env-client-abi-status42","canonical-precedence","structured-ssa-cil-native45","signed-relational-atto-native42","logical-word-native42","logical-word-methoddef-native42","sidecar-negative","dotnet-host-import-capability-abs-max42-and-denied-file"],"relational_fixture_blob_sha":"%s","relational_compiler_sha256":"%s","relational_generated_cil_sha256":"%s","relational_guest_sha256":"%s","relational_guest_stdout":"%s","source_only":false,"independently_verified":false}\n' \
+          printf '{"schema":"oreslang.net.exact_head_native_aot_v1","repository":"%s","source_head_sha":"%s","tree_sha":"%s","run_id":%s,"run_attempt":%s,"runner_os":"Linux","target_rid":"linux-x64","checks":["managed-tests","native-compiler","native-app","negative-source-no-cil","source-isolation-4","flags2env-client-abi-status42","canonical-precedence","structured-ssa-cil-native45","signed-relational-atto-native42","logical-word-native42","logical-word-methoddef-native42","checked-arithmetic-negatives","sidecar-negative","dotnet-host-import-capability-abs-max42-and-denied-file"],"relational_fixture_blob_sha":"%s","relational_compiler_sha256":"%s","relational_generated_cil_sha256":"%s","relational_guest_sha256":"%s","relational_guest_stdout":"%s","source_only":false,"independently_verified":false}\n' \
             "$GITHUB_REPOSITORY" "$EXPECTED_HEAD" "$tree" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
             "$fixture_blob" "$compiler_sha256" "$generated_sha256" "$guest_sha256" "$stdout" > artifacts/evidence/linux-native-aot.json
       - name: Upload Linux native executables and evidence
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: oreslang-net-linux-x64-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             artifacts/evidence/linux-native-aot.json
+            artifacts/evidence/linux-native-arithmetic.json
             artifacts/evidence/portable-six-native.txt
             artifacts/apps/linux-x64/oreslang-app
             artifacts/parity/linux-x64/oreslang-app
@@ -333,6 +341,7 @@ jobs:
             artifacts/generated/linux-x64/OresGenerated.dll
             artifacts/dotnet-host-interop/linux-x64/oreslang-app
             artifacts/dotnet-host-max/linux-x64/oreslang-app
+            artifacts/negative-overflow/linux-x64/oreslang-app
             artifacts/compiler/linux-x64/oresnet
           if-no-files-found: error
           retention-days: 14
