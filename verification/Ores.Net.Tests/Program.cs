@@ -619,6 +619,7 @@ ActorStateSchemaAdmissionTests.Run();
 ActorStateLayoutIntegrationTests.Run();
 ActorGeneratedCounterTests.Run();
 DeclaredActorCounterV2Tests.Run();
+CounterMainV2Tests.Run();
 SourceByteBudgetTests.Run();
 ExecutionGraphV1Tests.Run();
 OwnedF32RegionV1Tests.Run();
