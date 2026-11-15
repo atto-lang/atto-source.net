@@ -43,6 +43,8 @@ public static class OresSourceModuleCompiler
     private const string CoreNumeric = "@atto.core/numeric.atto";
     private const string CoreResourceName = "Atto.Core.Identity";
     private const string NumericResourceName = "Atto.Core.Numeric";
+    private const string IdentitySha256 = "d381ecd95c7df1b4efc1a2fb7bb7cd87e050f0a88f72690070feb465930a915a";
+    private const string NumericSha256 = "3d1d7b77068dd02b3d60b30b72f29a4537a933134ca79e1e81df096dc56f5f33";
 
     private sealed record Unit(string PhysicalPath, string Identity, string Source,
         SourceUnitIdentity Witness, IReadOnlyList<SourceImport> Imports);
@@ -173,19 +175,32 @@ public static class OresSourceModuleCompiler
                 specifier.Any(c => char.IsControl(c) || c is '\\' or ':'))
                 throw new FormatException("Module imports require explicit local ./ or ../ source paths");
             string path = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(importer)!, specifier));
-            // Unsuffixed legacy imports keep .ores for compatibility.
-            // Canonical .atto imports must explicitly name their extension
-            // until the package-level registry can bind one logical unit ID
-            // to both spellings (never silently create duplicate modules).
-            if (Path.GetExtension(path).Length == 0) path += ".ores";
+            if (Path.GetExtension(path).Length == 0)
+            {
+                // .atto is canonical, .ores is legacy-compatible. Do not let
+                // directory contents silently choose between two existing
+                // files of the same logical import name.
+                if (RootIndex(path) < 0)
+                    throw new FormatException("Source import escapes explicit source roots");
+                string canonical = path + ".atto";
+                string legacy = path + ".ores";
+                // A dangling symlink is still a source identity candidate;
+                // File.Exists alone can silently ignore one and choose the
+                // other suffix. Probe without following the candidate.
+                bool hasCanonical = ProjectRootSourceResolver.MarkerExistsNoFollow(canonical);
+                bool hasLegacy = ProjectRootSourceResolver.MarkerExistsNoFollow(legacy);
+                if (hasCanonical && hasLegacy)
+                    throw new FormatException("Ambiguous AttoLang source import: use an explicit .atto or .ores suffix");
+                path = hasCanonical ? canonical : legacy;
+            }
             return AdmitPath(path);
         }
 
         string AdmitPath(string path)
         {
-            string suffix = Path.GetExtension(path);
-            if ((suffix != ".atto" && suffix != ".ores") || !File.Exists(path))
-                throw new FormatException("Source import is missing or not canonical .atto / legacy .ores");
+            string extension = Path.GetExtension(path);
+            if ((extension != ".atto" && extension != ".ores") || !File.Exists(path))
+                throw new FormatException("Source import is missing or not .atto/.ores");
             int owner = RootIndex(path);
             if (owner < 0) throw new FormatException("Source import escapes explicit source roots");
             string cursor = roots[owner];
@@ -246,7 +261,19 @@ public static class OresSourceModuleCompiler
         }
         if (count > MaxFileBytes)
             throw new FormatException("compiler-owned Core resource exceeds 1 MiB");
-        return data.AsSpan(0, count).ToArray();
+        byte[] bytes = data.AsSpan(0, count).ToArray();
+        // Pin the embedded bytes before parsing: a drifted source tree must
+        // fail the build-time import, never silently change the Core module.
+        // numeric.atto is the same blob as main's library/ores.core/numeric.ores.
+        string expected = unit switch
+        {
+            CoreIdentity => IdentitySha256,
+            CoreNumeric => NumericSha256,
+            _ => throw new FormatException("unknown compiler-owned Core resource")
+        };
+        if (!string.Equals(Convert.ToHexStringLower(SHA256.HashData(bytes)), expected, StringComparison.Ordinal))
+            throw new FormatException("compiler-owned atto.core module source digest mismatch");
+        return bytes;
     }
 
     private static void RejectReparse(string path)

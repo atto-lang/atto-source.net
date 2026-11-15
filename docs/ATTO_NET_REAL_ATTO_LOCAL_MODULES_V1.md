@@ -16,8 +16,9 @@ module files, and invalid UTF-8.
 namespace resolution. Importing `"atto.core/numeric"` must continue
 to fail closed rather than be resolved through ambient filesystem
 paths. Local `.atto` modules have independent physical graph identities;
-unsuffixed legacy local imports still select `.ores` for compatibility
-rather than silently creating a second alias to the same logical unit.
+unsuffixed local imports resolve `.atto` (canonical) or `.ores` (legacy) and
+fail closed as ambiguous when both exist, never silently creating a second
+alias to the same logical unit.
 Canonical snapshot at `contracts/atto-core-v1/numeric.atto`
 is still not this source graph's executed module.
 

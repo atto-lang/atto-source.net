@@ -1,0 +1,7 @@
+pub fnc main():int {
+  val Option<int> present = Some(0);
+  val Option<int> missing = None;
+  if present.is_none() { return 0; }
+  if missing.is_none() { return 42; }
+  return 0;
+}
