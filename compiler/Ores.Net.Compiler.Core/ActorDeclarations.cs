@@ -32,6 +32,10 @@ public sealed record ActorDeclaration(
     IReadOnlyList<ActorHandlerDeclaration> Handlers,
     int SourceOffset);
 
+public sealed record ActorDeclarationUnit(
+    IReadOnlyList<ActorDeclaration> Actors,
+    int SourceLength);
+
 public sealed record ActorHandlerSignature(
     string Name, IReadOnlyList<ActorMessageType> ParameterTypes);
 
