@@ -34,6 +34,33 @@ static void InvalidSend(Action action, string why)
     throw new Exception("Expected mailbox rejection: " + why);
 }
 
+// Typed static select must fail with the select-specific diagnostic in
+// both compiler entry points, even when trivia separates the tokens. It is
+// never silently downgraded to scalar arithmetic or a CPU execution region.
+foreach (string source in new[] {
+    "select<int> over default: -> { return 42; } end",
+    "select /* trivia */ <int> over default: -> { return 42; } end",
+    "nb select<int> over default: -> { return 42; } end",
+    "try select<int> over default: -> { return 42; } end",
+    "do select<int> over default: -> { return 42; } end",
+    "do select over default: -> { return 42; } end",
+    "nb select over default: -> { return 42; } end",
+    "select { default: -> { return 42; } }"
+})
+{
+    RejectDiagnostic(() => OresParser.Parse(source),
+        "Static select requires checked Channel/Future arbitration",
+        "scalar frontend must fail closed on typed select syntax");
+    RejectDiagnostic(() => OresStructuredParser.Parse(source),
+        "Static select requires checked Channel/Future arbitration",
+        "structured frontend must fail closed on typed select syntax");
+}
+Require(OresParser.Parse("fnc main():int{return 42;} /* select<int> over ignored */") is not null,
+    "comment-only typed select must not trigger scalar admission");
+Require(OresStructuredParser.Parse(
+    "fnc main()->int { /* select<int> over ignored */ return 42; }").Body.Count == 1,
+    "comment-only typed select must not trigger structured admission");
+
 // Guarded mutable sharing is not implemented in either .NET bootstrap parser.
 // Enforce the dedicated lexer-owned error and the original source offset.
 // A generic parse failure, comment false positive, or future partial lowering

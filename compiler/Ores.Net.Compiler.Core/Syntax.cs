@@ -619,6 +619,9 @@ public static partial class OresParser
                     (text[_i] is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_'))
                     _i++;
                 var word = text[start.._i];
+                if (word == "select" &&
+                    StaticSelectAdmission.FollowedByStaticSelect(text, start))
+                    throw StaticSelectAdmission.Unsupported(start);
                 // G0: do not allow unlowered native authority to be spelled as
                 // an ordinary identifier, parameter, member or callable.
                 if (word == "unsafe")
