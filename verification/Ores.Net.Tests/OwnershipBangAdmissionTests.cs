@@ -8,7 +8,7 @@ internal static class OwnershipBangAdmissionTests
     internal static void Run()
     {
         foreach (var operand in new[] {
-            "copy!42", "copy! 42", "copy!(40 + 2)",
+            "copy!42", "copy! 42", "copy!(40 + 2)", "copy!eqfoo",
             "take!42", "take! 42",
             "borrow!value", "borrow! value",
             "share!value", "share! value",
@@ -32,7 +32,7 @@ internal static class OwnershipBangAdmissionTests
         }
 
         foreach (string text in new[] { "copy !42", "borrow !42", "mut borrow !42",
-                                          "copy!=42", "copy!eq 42" })
+                                          "copy!=42", "copy!eq 42", "borrow!eq 42" })
         {
             string source = "pub fnc main(): int { return " + text + "; }";
             MustNotBeOwnershipAlias(() => OresParser.Parse(source), "scalar", text);
