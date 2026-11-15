@@ -125,6 +125,27 @@ public static partial class OresStructuredParser
         }
     }
 
+    // `...source` directly inside `infer struct|record { }` or `= record { }` is the
+    // closed aggregate spread, lowered as single-evaluation scalar row writes.
+    // Every other spread keeps the tuple-v2 fail-closed diagnostic.
+    private static bool InClosedAggregateInitializer(IReadOnlyList<Token> tokens, int at)
+    {
+        int depth = 0;
+        for (int j = at - 1; j >= 0; j--)
+        {
+            string t = tokens[j].Text;
+            if (t == "}") depth++;
+            else if (t == ";" && depth == 0) return false;
+            else if (t == "{")
+            {
+                if (depth > 0) { depth--; continue; }
+                return j >= 2 && tokens[j - 1].Text is "struct" or "record" &&
+                       tokens[j - 2].Text is "infer" or "=";
+            }
+        }
+        return false;
+    }
+
     private static void RejectUnsupportedMutableSharing(IReadOnlyList<Token> tokens)
     {
         for (int i = 0; i + 2 < tokens.Count; i++)
@@ -495,7 +516,8 @@ public static partial class OresStructuredParser
                 throw new FormatException(
                     $"Tuple-v2 source requires typed tuple ownership/ABI lowering at offset {tokens[i].Offset}");
             if (i + 2 < tokens.Count && tokens[i].Text == "." &&
-                tokens[i + 1].Text == "." && tokens[i + 2].Text == ".")
+                tokens[i + 1].Text == "." && tokens[i + 2].Text == "." &&
+                !InClosedAggregateInitializer(tokens, i))
                 throw new FormatException(
                     $"Tuple-v2 explicit spread requires single-evaluation checked lowering at offset {tokens[i].Offset}");
         }
