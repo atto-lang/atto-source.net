@@ -72,7 +72,7 @@ jobs:
             # as the intended compiler rejection.
             case "$fixture" in
               *reject-array-mutable.atto) expected=E_ARRAY_IMMUTABLE_ONLY ;;
-              *reject-array-unsafe-index.atto) expected=E_UNCHECKED_COLLECTION_ACCESS ;;
+              *reject-array-unsafe-index.atto) expected=E_SAFE_COLLECTION_ACCESS_UNSUPPORTED ;;
               *reject-array-oversize.atto) expected=E_ARRAY_SIZE ;;
               *reject-array-get-copy-bool-index.atto) expected="Array<int>.get_copy index must be int" ;;
             esac
@@ -126,7 +126,7 @@ jobs:
             grep -F "oresnet: " array-native-negative.stderr
             case "$source" in
               *reject-array-mutable.atto) expected=E_ARRAY_IMMUTABLE_ONLY ;;
-              *reject-array-unsafe-index.atto) expected=E_UNCHECKED_COLLECTION_ACCESS ;;
+              *reject-array-unsafe-index.atto) expected=E_SAFE_COLLECTION_ACCESS_UNSUPPORTED ;;
               *reject-array-oversize.atto) expected=E_ARRAY_SIZE ;;
               *reject-array-get-copy-bool-index.atto) expected="Array<int>.get_copy index must be int" ;;
             esac
@@ -222,7 +222,7 @@ jobs:
             $unexpectedStdout = Get-Content -LiteralPath $stdoutPath -Raw
             $expectedError = switch -Wildcard ($source) {
               '*reject-array-mutable.atto' { 'E_ARRAY_IMMUTABLE_ONLY' }
-              '*reject-array-unsafe-index.atto' { 'E_UNCHECKED_COLLECTION_ACCESS' }
+              '*reject-array-unsafe-index.atto' { 'E_SAFE_COLLECTION_ACCESS_UNSUPPORTED' }
               '*reject-array-oversize.atto' { 'E_ARRAY_SIZE' }
               '*reject-array-get-copy-bool-index.atto' { 'Array<int>.get_copy index must be int' }
               default { throw "Unexpected negative fixture: $source" }

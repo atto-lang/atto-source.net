@@ -81,7 +81,7 @@ internal static class FixedArrayOptionCompilerTests
     // parsing lanes must reject the precise unsafe operation before any CFG.
     private static void DenyBracketInBothModes(string source, string label)
     {
-        const string diagnostic = "E_UNCHECKED_COLLECTION_ACCESS";
+        const string diagnostic = "E_SAFE_COLLECTION_ACCESS_UNSUPPORTED";
         bool scalarDenied = false, linkedDenied = false;
         try { _ = OresStructuredCfgLowering.Lower(source); }
         catch (FormatException error) when

@@ -54,7 +54,7 @@ pub fnc main():int {
   A bool-index fixture must be rejected with a compiler-owned type error.
 - Unsafe `array[index]` remains disabled, aligned with hardening PR #418.
   The scalar lexer and linked-array postfix now deliberately emit
-  `E_UNCHECKED_COLLECTION_ACCESS` for `Array<int>` bracket lookups,
+  `E_SAFE_COLLECTION_ACCESS_UNSUPPORTED` for `Array<int>` bracket lookups,
   including missing, negative, huge and attempted writable cases. This is
   a **fail-closed unsupported diagnostic**, **not** `E_LOAN_CONFLICT` or
   evidence of a general collection borrow checker. A future semantic merge
