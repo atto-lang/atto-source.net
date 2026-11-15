@@ -48,7 +48,8 @@ public static class OresStructuredCfgLowering
 
     // A closed Option<int> is represented by two separately verified SSA IDs.
     // Its tag occupies ValueId (Bool), payload occupies PayloadId (I64).
-    private readonly record struct Binding(IrValueType Type, int ValueId, int? PayloadId = null);
+    private readonly record struct Binding(IrValueType Type, int ValueId,
+        int? PayloadId = null, IReadOnlyList<int>? Elements = null);
 
     private sealed class Block(string name)
     {
@@ -56,10 +57,12 @@ public static class OresStructuredCfgLowering
         public List<CfgParameter> Parameters { get; } = new();
         public List<CfgInstruction> Instructions { get; } = new();
         public CfgTerminator? Terminator { get; set; }
+        public string? OverflowTarget { get; set; }
 
         public CfgBlock Freeze() => new(Name, Parameters.ToArray(),
             Instructions.ToArray(), Terminator ??
-            throw new FormatException("Unterminated structured CFG block"));
+            throw new FormatException("Unterminated structured CFG block"),
+            OverflowTarget);
     }
 
     private sealed class Builder(bool emitCalls = false)
@@ -138,6 +141,41 @@ public static class OresStructuredCfgLowering
             return id;
         }
 
+        // Each fixed-array element is its own previously verified SSA i64.
+        // This prevents guest pointers, unchecked native loads, aliases,
+        // resize or managed CLR arrays in the first immutable value slice.
+        private IReadOnlyList<int> ArrayElements(StructuredExpr array, ref Block block,
+            Dictionary<string, Binding> variables)
+        {
+            switch (array)
+            {
+                case StructuredFixedArray literal:
+                {
+                    if (literal.Elements.Count > OresCfgVerifier.MaxFixedArrayElements)
+                        throw new FormatException("E_ARRAY_SIZE: fixed array exceeds compiler limit");
+                    var values = new int[literal.Elements.Count];
+                    for (int i = 0; i < values.Length; i++)
+                    {
+                        if (literal.Elements[i].Type != IrValueType.I64)
+                            throw new FormatException("E_ARRAY_TYPE: expected int value");
+                        values[i] = Expression(literal.Elements[i], ref block, variables);
+                    }
+                    return Array.AsReadOnly(values);
+                }
+                case StructuredRead read when read.Type == IrValueType.FixedArrayI64:
+                {
+                    if (!variables.TryGetValue(read.Name, out var binding) ||
+                        binding.Type != IrValueType.FixedArrayI64 ||
+                        binding.Elements is null ||
+                        binding.Elements.Count > OresCfgVerifier.MaxFixedArrayElements)
+                        throw new FormatException("E_ARRAY_OWNER: missing immutable fixed array SSA snapshot");
+                    return binding.Elements;
+                }
+                default:
+                    throw new FormatException("E_ARRAY_I64_ONLY: unsupported array expression");
+            }
+        }
+
         // Explicit tagged Option<int> representation: no all-bits-value
         // sentinel, nullable managed heap object or implicit flattening.
         private (int Tag, int Payload) OptionParts(StructuredExpr option, ref Block block,
@@ -159,6 +197,30 @@ public static class OresStructuredCfgLowering
                     int payload = Emit(block, CfgOpcode.ConstantI64, IrValueType.I64,
                         value: 0);
                     return (tag, payload);
+                }
+                case StructuredArrayGet get:
+                {
+                    // Evaluate the array elements first, then index once.
+                    // Every element is a value, never an address/loan.
+                    var elements = ArrayElements(get.Array, ref block, variables);
+                    if (get.Index.Type != IrValueType.I64)
+                        throw new FormatException("E_ARRAY_INDEX_TYPE: expected int index");
+                    int index = Expression(get.Index, ref block, variables);
+                    int tag = Emit(block, CfgOpcode.ArrayIndexValidI64,
+                        IrValueType.Bool, left: index, value: elements.Count);
+                    int selected = Emit(block, CfgOpcode.ConstantI64,
+                        IrValueType.I64, value: 0);
+                    for (int i = 0; i < elements.Count; i++)
+                    {
+                        int candidate = Emit(block, CfgOpcode.ConstantI64,
+                            IrValueType.I64, value: i);
+                        int equal = Emit(block, CfgOpcode.EqualI64,
+                            IrValueType.Bool, left: index, right: candidate);
+                        selected = Emit(block, CfgOpcode.OptionOrI64,
+                            IrValueType.I64, left: equal, right: elements[i],
+                            arguments: new[] { selected });
+                    }
+                    return (tag, selected);
                 }
                 case StructuredRead read when read.Type == IrValueType.OptionI64:
                 {
@@ -343,6 +405,16 @@ public static class OresStructuredCfgLowering
             foreach (string name in names)
             {
                 var type = source[name].Type;
+                if (type == IrValueType.FixedArrayI64)
+                {
+                    // val-only immutable arrays cannot change on either
+                    // control-flow edge. Their scalar SSA elements dominate
+                    // the branch/loop and require no phis or aliases.
+                    if (source[name].Elements is null)
+                        throw new FormatException("E_ARRAY_OWNER: unbound immutable array at join");
+                    result[name] = source[name];
+                    continue;
+                }
                 int id = NextValue();
                 if (type == IrValueType.OptionI64)
                 {
@@ -367,6 +439,8 @@ public static class OresStructuredCfgLowering
             foreach (string name in names)
             {
                 var value = variables[name];
+                if (value.Type == IrValueType.FixedArrayI64)
+                    continue; // immutable scalar SSA values dominate the edge
                 ids.Add(value.ValueId);
                 if (value.Type == IrValueType.OptionI64)
                 {
@@ -403,6 +477,15 @@ public static class OresStructuredCfgLowering
                             variables.Add(declaration.Name, new Binding(
                                 IrValueType.OptionI64, option.Tag, option.Payload));
                         }
+                        else if (declaration.ValueType == IrValueType.FixedArrayI64)
+                        {
+                            if (declaration.Kind != StructuredBindingKind.Val)
+                                throw new FormatException("E_ARRAY_IMMUTABLE_ONLY: fixed array must be val");
+                            var elements = ArrayElements(declaration.Initializer, ref evalBlock, variables);
+                            current = evalBlock;
+                            variables.Add(declaration.Name, new Binding(
+                                IrValueType.FixedArrayI64, -1, Elements: elements));
+                        }
                         else
                         {
                             int value = Expression(declaration.Initializer, ref evalBlock, variables);
@@ -415,6 +498,8 @@ public static class OresStructuredCfgLowering
                     {
                         if (!variables.TryGetValue(assignment.Name, out var original))
                             throw new FormatException("Unknown structured CFG assignment");
+                        if (original.Type == IrValueType.FixedArrayI64)
+                            throw new FormatException("E_ARRAY_IMMUTABLE_ONLY: fixed arrays cannot be reassigned");
                         Block evalBlock = current;
                         if (original.Type == IrValueType.OptionI64)
                         {
@@ -439,6 +524,13 @@ public static class OresStructuredCfgLowering
                         current = null;
                         break;
                     }
+                    case StructuredReturnVoid:
+                        current.Terminator = new CfgReturnVoid();
+                        current = null;
+                        break;
+                    case StructuredOverflowCatchReturn caught:
+                        current = OverflowCatch(caught, current, variables);
+                        break;
                     case StructuredIf conditional:
                         current = If(conditional, current, variables);
                         break;
@@ -450,6 +542,45 @@ public static class OresStructuredCfgLowering
                 }
             }
             return current;
+        }
+
+        private Block? OverflowCatch(StructuredOverflowCatchReturn statement,
+            Block origin, Dictionary<string, Binding> variables)
+        {
+            if (statement.TypeTest is not null &&
+                statement.TypeTest is not ("ArithmeticOverflowError" or "Error"))
+                throw new FormatException("Unsupported structured guest Error type");
+
+            // V1 is intentionally terminal and result-only. The CLR
+            // OverflowException is an internal transport detail: only
+            // checked arithmetic overflow may enter this handler, therefore
+            // both ArithmeticOverflowError and its Error root select the
+            // source match arm. The source mismatch literal is retained in
+            // the AST for future multi-error regions but is unreachable here.
+            var protectedBlock = NewBlock();
+            var handlerBlock = NewBlock();
+            var joinBlock = NewBlock();
+            int joinValue = NextValue();
+            joinBlock.Parameters.Add(new CfgParameter(joinValue, IrValueType.I64));
+
+            origin.Terminator = new CfgJump(
+                protectedBlock.Name, Array.Empty<int>());
+            protectedBlock.OverflowTarget = handlerBlock.Name;
+
+            Block protectedEnd = protectedBlock;
+            int protectedValue = Expression(
+                statement.Protected, ref protectedEnd, variables);
+            protectedEnd.Terminator = new CfgJump(
+                joinBlock.Name, new[] { protectedValue });
+
+            int handlerValue = Emit(
+                handlerBlock, CfgOpcode.ConstantI64, IrValueType.I64,
+                value: statement.MatchValue);
+            handlerBlock.Terminator = new CfgJump(
+                joinBlock.Name, new[] { handlerValue });
+
+            joinBlock.Terminator = new CfgReturn(joinValue);
+            return null;
         }
 
         private Block? If(StructuredIf statement, Block origin,

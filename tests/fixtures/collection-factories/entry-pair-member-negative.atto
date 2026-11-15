@@ -1,0 +1,1 @@
+pub fnc main():int{return Pair.of(11,23).value;}

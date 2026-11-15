@@ -1,0 +1,151 @@
+name: Atto collection factories native scalar AOT (exact source)
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/atto-collection-factory-nativeaot.yml'
+      - 'tests/fixtures/collection-factories/**'
+      - 'compiler/**'
+      - 'verification/Ores.Net.Tests/HeapContainerSourceBoundaryTests.cs'
+  push:
+    paths:
+      - '.github/workflows/atto-collection-factory-nativeaot.yml'
+      - 'tests/fixtures/collection-factories/**'
+      - 'compiler/**'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-atto-guest:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            rid: linux-x64
+            compiler: oresnet
+            app: oreslang-app
+          - os: windows-2022
+            rid: win-x64
+            compiler: oresnet.exe
+            app: oreslang-app.exe
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 55
+    steps:
+      - name: Exact source checkout without persistent credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact source and all twelve guest fixture Git blobs
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $head = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $head -cne $env:EXPECTED_SHA) { throw 'Wrong source checkout' }
+          $paths = @(Get-ChildItem 'tests/fixtures/collection-factories' -Filter '*.atto' -File)
+          if ($paths.Count -ne 12) { throw 'Expected exactly twelve checked AttoLang guests' }
+          foreach ($file in $paths) {
+            $path = 'tests/fixtures/collection-factories/' + $file.Name
+            $actual = (git hash-object --no-filters $path).Trim()
+            $expected = (git rev-parse "HEAD:$path").Trim()
+            if ($LASTEXITCODE -ne 0 -or $actual -cne $expected) { throw "Fixture provenance mismatch: $path" }
+          }
+          git rev-parse 'HEAD^{tree}'
+          if ($LASTEXITCODE -ne 0) { throw 'Missing source tree provenance' }
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v4.3.1
+        with:
+          dotnet-version: '10.0.x'
+      - name: Publish actual AttoLang compiler NativeAOT
+        shell: pwsh
+        env:
+          TARGET_RID: ${{ matrix.rid }}
+          COMPILER_NAME: ${{ matrix.compiler }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $output = 'artifacts/collection-factory/compiler'
+          dotnet publish compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -r $env:TARGET_RID -o $output -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'Native AttoLang compiler failed to publish' }
+          $compiler = Join-Path (Resolve-Path $output).Path $env:COMPILER_NAME
+          if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) { throw 'Compiler executable missing' }
+      - name: Compile and run four real AttoLang factory guests as NativeAOT binaries
+        shell: pwsh
+        env:
+          TARGET_RID: ${{ matrix.rid }}
+          COMPILER_NAME: ${{ matrix.compiler }}
+          APP_NAME: ${{ matrix.app }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = (Get-Location).Path
+          $compiler = Join-Path $root ('artifacts/collection-factory/compiler/' + $env:COMPILER_NAME)
+          $fixtures = @('tuple-record-of-positive','tuple-record-tilde-positive','entry-pair-of-positive','entry-pair-tilde-positive')
+          foreach ($name in $fixtures) {
+            $source = Join-Path $root ('tests/fixtures/collection-factories/' + $name + '.atto')
+            $generatedDir = Join-Path $root ('artifacts/collection-factory/generated/' + $name)
+            $native = Join-Path $root ('artifacts/collection-factory/native/' + $name)
+            New-Item -ItemType Directory -Force $generatedDir | Out-Null
+            $generated = Join-Path $generatedDir 'OresGenerated.dll'
+            & $compiler check $source
+            if ($LASTEXITCODE -ne 0) { throw "AttoLang guest failed source check: $name" }
+            & $compiler compile $source --out $generated
+            if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $generated)) { throw "Guest CIL missing: $name" }
+            dotnet clean host/Ores.Net.NativeHost/Ores.Net.NativeHost.csproj -c Release -r $env:TARGET_RID "-p:GeneratedAssembly=$generated"
+            if ($LASTEXITCODE -ne 0) { throw 'Could not clear stale native host output' }
+            dotnet publish host/Ores.Net.NativeHost/Ores.Net.NativeHost.csproj -c Release -r $env:TARGET_RID -o $native "-p:GeneratedAssembly=$generated" -warnaserror
+            if ($LASTEXITCODE -ne 0) { throw "NativeAOT guest build failed: $name" }
+            $exe = Join-Path $native $env:APP_NAME
+            if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'Native executable missing' }
+            $sidecars = @(Get-ChildItem $native -File | Where-Object {
+              $_.Extension -ieq '.dll' -or $_.Name -ilike '*.runtimeconfig.json' -or $_.Name -ilike '*.deps.json'
+            })
+            if ($sidecars.Count -ne 0) { throw 'Managed sidecar not allowed in NativeAOT output' }
+            if ($env:TARGET_RID -eq 'win-x64') {
+              & ./verification/assert-native-release.ps1 -Binary $exe -Rid $env:TARGET_RID
+            } else {
+              $magic = [System.IO.File]::ReadAllBytes($exe)
+              if ($magic.Length -lt 64 -or $magic[0] -ne 127 -or $magic[1] -ne 69 -or
+                  $magic[2] -ne 76 -or $magic[3] -ne 70) { throw 'Not a Linux ELF executable' }
+            }
+            $stdout = @(& $exe)
+            if ($LASTEXITCODE -ne 0 -or $stdout.Count -ne 1 -or $stdout[0].Trim() -cne '42') {
+              throw "Wrong native AttoLang guest output for $name"
+            }
+            $sha = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+            $guestBlob = (git rev-parse ('HEAD:tests/fixtures/collection-factories/' + $name + '.atto')).Trim()
+            Write-Host "ATTO_NATIVE_FACTORY_GUEST_EXECUTED backend=net rid=$env:TARGET_RID fixture=$name expected=42 actual=42 source_head=$(git rev-parse HEAD) guest_blob=$guestBlob binary_sha256=$sha"
+          }
+      - name: Verify eight explicit compiler denials without CIL publication
+        shell: pwsh
+        env:
+          COMPILER_NAME: ${{ matrix.compiler }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = (Get-Location).Path
+          $compiler = Join-Path $root ('artifacts/collection-factory/compiler/' + $env:COMPILER_NAME)
+          $cases = @(
+            @('tuple-bounds-negative','E_TUPLE_BOUNDS'),
+            @('tuple-escape-negative','E_TUPLE_ESCAPE_UNSUPPORTED'),
+            @('record-duplicate-negative','E_RECORD_DUPLICATE'),
+            @('record-field-negative','E_RECORD_FIELD'),
+            @('map-unsupported-negative','E_COLLECTION_FACTORY_UNSUPPORTED'),
+            @('array-unsupported-negative','E_COLLECTION_FACTORY_UNSUPPORTED'),
+            @('entry-pair-member-negative','E_PAIR_FIELD'),
+            @('entry-pair-escape-negative','E_BINARY_PRODUCT_ESCAPE_UNSUPPORTED')
+          )
+          foreach ($case in $cases) {
+            $name = $case[0]; $expected = $case[1]
+            $source = Join-Path $root ('tests/fixtures/collection-factories/' + $name + '.atto')
+            $dir = Join-Path $root ('artifacts/collection-factory/negative/' + $name)
+            New-Item -ItemType Directory -Force $dir | Out-Null
+            $output = Join-Path $dir 'must-not-exist.dll'
+            $stdout = Join-Path $dir 'stdout.txt'
+            $stderr = Join-Path $dir 'stderr.txt'
+            $proc = Start-Process -FilePath $compiler -ArgumentList @('compile', $source, '--out', $output) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+            $diagnostic = (Get-Content -LiteralPath $stdout -Raw) + (Get-Content -LiteralPath $stderr -Raw)
+            if ($proc.ExitCode -ne 1 -or (Test-Path -LiteralPath $output) -or
+                -not $diagnostic.Contains($expected, [StringComparison]::Ordinal)) {
+              throw "Factory rejection was bypassed or wrong diagnostic: $name code=$($proc.ExitCode)"
+            }
+            Write-Host "ATTO_FACTORY_COMPILER_REJECTED backend=net case=$name diagnostic=$expected source_head=$(git rev-parse HEAD)"
+          }

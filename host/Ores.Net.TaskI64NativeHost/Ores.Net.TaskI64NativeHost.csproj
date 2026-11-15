@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>oreslang-task-i64</AssemblyName>
+    <PublishAot>true</PublishAot>
+    <SelfContained>true</SelfContained>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../runtime/Ores.Net.Runtime/Ores.Net.Runtime.csproj" />
+    <Reference Include="OresGenerated">
+      <HintPath>$(GeneratedAssembly)</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+  <Target Name="ValidateGeneratedAssembly" BeforeTargets="ResolveReferences">
+    <Error Condition="'$(GeneratedAssembly)' == '' or !Exists('$(GeneratedAssembly)')" Text="Pass an existing GeneratedAssembly absolute path." />
+  </Target>
+  <Import Project="../../build/StrictNativeAot.targets" />
+</Project>

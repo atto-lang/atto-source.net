@@ -1,5 +1,7 @@
 using Ores.Net.Compiler;
 using System.Text;
+using System.Globalization;
+using Ores.Net.Runtime;
 
 // The bootstrap CLR capability is a deliberate compiler invocation grant,
 // not an authority inferred from host type names or environment variables.
@@ -14,6 +16,7 @@ var dotnetPolicy = mathI64Granted
 // Reject invalid shapes before indexing args[3]. Previously "compile file.ores"
 // passed validation then crashed with IndexOutOfRangeException instead of usage.
 bool validCheck = args.Length == 2 && args[0] == "check";
+bool validAsyncRun = args.Length == 2 && args[0] == "run-async";
 bool validDeclaredReceiveSyntax = args.Length == 2 &&
     args[0] == "check-declared-receive-syntax";
 // FULL_GUEST_AOT_TODO (platform-conformance #321): These commands emit
@@ -28,6 +31,8 @@ bool validDeclaredReceiveSyntax = args.Length == 2 &&
 // authority; prove deterministic disposal at return, cancellation, restart,
 // FFI pins and hot swap, plus transitive native/PInvoke allocation closure.
 bool validCompile = args.Length == 4 && args[0] == "compile" && args[2] == "--out";
+bool validTaskCheck = args.Length == 2 && args[0] == "check-task-i64";
+bool validTaskCompile = args.Length == 4 && args[0] == "compile-task-i64" && args[2] == "--out";
 // Opt-in verification lane only: never silently broaden shipping scalar check/compile.
 // Separate opt-in nominal enum guest/compiler slice; shipping scalar and
 // structured entrypoints retain their fail-closed ADT admission boundaries.
@@ -49,10 +54,10 @@ bool validStaticFacts = args.Length == 2 &&
 bool validActorPipePlan = args.Length == 2 && args[0] == "plan-actor-pipe";
 bool moduleCommand = args.Length >= 1 && args[0] is "check-modules" or "compile-modules";
 if ((mathI64Granted && !validCheck && !validCompile) ||
-    (!validCheck && !validEnumCheck && !validEnumCompile && !validDeclaredReceiveSyntax && !validCompile && !validStructuredCheck && !validStructuredCompile &&
-     !validStaticFacts && !validActorPipePlan && !validEmitActorSource && !validExternalReceive && !validEmitSource && !moduleCommand))
+    (!validCheck && !validAsyncRun && !validEnumCheck && !validEnumCompile && !validDeclaredReceiveSyntax && !validCompile && !validStructuredCheck && !validStructuredCompile &&
+     !validStaticFacts && !validTaskCheck && !validTaskCompile && !validActorPipePlan && !validEmitActorSource && !validExternalReceive && !validEmitSource && !moduleCommand))
 {
-    Console.Error.WriteLine("usage: oresnet check-enum-v1 FILE.atto | oresnet compile-enum-v1 FILE.atto --out path/OresGenerated.dll | oresnet check input.atto|input.ores | oresnet compile input.atto|input.ores --out path/OresGenerated.dll | oresnet check-structured input.atto|input.ores | oresnet compile-structured input.atto|input.ores --out path/OresGenerated.dll | oresnet emit-csharp input.atto|input.ores --out path/OresProgram.cs | oresnet emit-fsharp input.atto|input.ores --out path/OresProgram.fs | oresnet static-facts input.atto|input.ores | oresnet static-facts-structured input.atto|input.ores | oresnet plan-actor-pipe input.atto (typed plan only, not executable actors) | oresnet emit-actor-csharp Counter.atto --out path/Actor_Counter.g.cs | oresnet emit-external-counter-csharp ROOT --out path/DeclaredActor_Counter.g.cs | oresnet check-declared-receive-syntax receive.atto (syntax only, NOT guest execution)");
+    Console.Error.WriteLine("usage: oresnet check-enum-v1 FILE.atto | oresnet compile-enum-v1 FILE.atto --out path/OresGenerated.dll | oresnet check input.atto|input.ores | oresnet run-async input.ores | oresnet compile input.atto|input.ores --out path/OresGenerated.dll | oresnet check-task-i64 input.ores | oresnet compile-task-i64 input.ores --out path/OresGenerated.dll | oresnet check-structured input.atto|input.ores | oresnet compile-structured input.atto|input.ores --out path/OresGenerated.dll | oresnet emit-csharp input.atto|input.ores --out path/OresProgram.cs | oresnet emit-fsharp input.atto|input.ores --out path/OresProgram.fs | oresnet static-facts input.atto|input.ores | oresnet static-facts-structured input.atto|input.ores | oresnet plan-actor-pipe input.atto (typed plan only, not executable actors) | oresnet emit-actor-csharp Counter.atto --out path/Actor_Counter.g.cs | oresnet emit-external-counter-csharp ROOT --out path/DeclaredActor_Counter.g.cs | oresnet check-declared-receive-syntax receive.atto (syntax only, NOT guest execution)");
     return 2;
 }
 
@@ -137,6 +142,19 @@ try
         !string.Equals(Path.GetExtension(args[1]), ".ores", StringComparison.OrdinalIgnoreCase))
         throw new FormatException("Static-facts export requires a .atto or .ores source file");
     var source = ReadBoundedSource(args[1], rejectBom: validStaticFacts);
+    if (validTaskCheck || validTaskCompile)
+    {
+        var taskProgram = TaskI64Source.Check(source);
+        if (validTaskCompile)
+        {
+            if (!string.Equals(Path.GetFileName(args[3]), "OresGenerated.dll", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Generated assembly must be named OresGenerated.dll");
+            CilEmitter.EmitTaskI64Library(taskProgram, args[3]);
+            Console.WriteLine("Emitted closed Task-i64 producer CIL; requires TaskI64 native host");
+        }
+        else Console.WriteLine("Closed root Task-i64 profile and verified producer IR: OK");
+        return 0;
+    }
     if (validDeclaredReceiveSyntax)
     {
         if (!string.Equals(Path.GetExtension(args[1]), ".atto",
@@ -184,6 +202,23 @@ try
         Console.WriteLine(args[0] == "static-facts"
             ? StaticFactsV0Exporter.FromCompiledScalarSource(source)
             : StaticFactsV0Exporter.FromStructuredSource(source));
+        return 0;
+    }
+    if (validAsyncRun)
+    {
+        // Explicit interpreter-only NativeAOT source slice. No generated CIL or
+        // arbitrary guest callbacks; never route this through scalar Run().
+        var guest = OresAsyncSourceSlice.Parse(source);
+        await using var scope = new OresTaskScope(maxProducers: 1, maxObservers: 2);
+        var producer = scope.Start(_ => ValueTask.FromResult(guest.LiteralValue));
+        var future = scope.FromTask(producer);
+        var observed = await future.ObserveAsync();
+        var retired = await producer.Retirement;
+        if (observed != guest.LiteralValue || retired.ProducerId != producer.ProducerId ||
+            retired.TerminalState != "succeeded" || scope.ProducerInvocations != 1 ||
+            scope.ActiveProducers != 0 || scope.ActiveObservers != 0)
+            throw new FormatException("Async source producer/observer retirement invariant failed");
+        Console.WriteLine(observed.ToString(CultureInfo.InvariantCulture));
         return 0;
     }
     if (validEnumCheck || validEnumCompile)
