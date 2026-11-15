@@ -1,0 +1,220 @@
+{
+  "schema_version": "attolang.annotation-compiler-corpus/v2",
+  "status": "CANDIDATE_EXPECTATIONS_NOT_EXECUTED",
+  "source_extensions": [
+    ".atto",
+    ".ores"
+  ],
+  "backend_order": [
+    "java",
+    "llvm",
+    "net",
+    "wasm",
+    "forge"
+  ],
+  "phase": "parser_and_aot_admission",
+  "cases": [
+    {
+      "id": "doc_class",
+      "target": "class",
+      "intent": "metadata",
+      "source": "@Doc(\"person\") define class Person as end\n",
+      "expected": {
+        "java": "pass",
+        "llvm": "reject",
+        "net": "reject",
+        "wasm": "reject",
+        "forge": "reject"
+      }
+    },
+    {
+      "id": "doc_actor",
+      "target": "actor",
+      "intent": "metadata",
+      "source": "@Doc(\"worker\") define actor Worker as end\n",
+      "expected": {
+        "java": "pass",
+        "llvm": "reject",
+        "net": "reject",
+        "wasm": "reject",
+        "forge": "reject"
+      }
+    },
+    {
+      "id": "doc_isoactor",
+      "target": "isoactor",
+      "intent": "metadata",
+      "source": "@Doc(\"worker\") define isoactor Worker as end\n",
+      "expected": {
+        "java": "pass",
+        "llvm": "reject",
+        "net": "reject",
+        "wasm": "reject",
+        "forge": "reject"
+      }
+    },
+    {
+      "id": "doc_module",
+      "target": "module",
+      "intent": "metadata",
+      "source": "@Doc(\"module\") define module mod as end\n",
+      "expected": {
+        "java": "pass",
+        "llvm": "reject",
+        "net": "reject",
+        "wasm": "reject",
+        "forge": "reject"
+      }
+    },
+    {
+      "id": "doc_function",
+      "target": "fnc",
+      "intent": "metadata",
+      "source": "@Doc(\"result\") fnc main(): int { return 42; }\n",
+      "expected": {
+        "java": "pass",
+        "llvm": "reject",
+        "net": "reject",
+        "wasm": "reject",
+        "forge": "reject"
+      }
+    },
+    {
+      "id": "doc_field",
+      "target": "field",
+      "intent": "metadata",
+      "source": "define class Person as @Doc(\"id\") id: int; end\n",
+      "expected": {
+        "java": "pass",
+        "llvm": "reject",
+        "net": "reject",
+        "wasm": "reject",
+        "forge": "reject"
+      }
+    },
+    {
+      "id": "doc_wrong_scalar",
+      "target": "class",
+      "intent": "invalid_argument",
+      "source": "@Doc(42) define class Person as end\n",
+      "expected": {
+        "java": "reject",
+        "llvm": "reject",
+        "net": "reject",
+        "wasm": "reject",
+        "forge": "reject"
+      }
+    },
+    {
+      "id": "doc_missing_arg",
+      "target": "class",
+      "intent": "invalid_argument",
+      "source": "@Doc define class Person as end\n",
+      "expected": {
+        "java": "reject",
+        "llvm": "reject",
+        "net": "reject",
+        "wasm": "reject",
+        "forge": "reject"
+      }
+    },
+    {
+      "id": "doc_named_arg",
+      "target": "actor",
+      "intent": "invalid_argument",
+      "source": "@Doc(value=\"worker\") define actor Worker as end\n",
+      "expected": {
+        "java": "reject",
+        "llvm": "reject",
+        "net": "reject",
+        "wasm": "reject",
+        "forge": "reject"
+      }
+    },
+    {
+      "id": "doc_duplicate",
+      "target": "class",
+      "intent": "duplicate",
+      "source": "@Doc(\"a\") @Doc(\"b\") define class Person as end\n",
+      "expected": {
+        "java": "reject",
+        "llvm": "reject",
+        "net": "reject",
+        "wasm": "reject",
+        "forge": "reject"
+      }
+    },
+    {
+      "id": "doc_unregistered",
+      "target": "class",
+      "intent": "unknown",
+      "source": "@Unknown define class Person as end\n",
+      "expected": {
+        "java": "reject",
+        "llvm": "reject",
+        "net": "reject",
+        "wasm": "reject",
+        "forge": "reject"
+      }
+    },
+    {
+      "id": "doc_interface_not_retained",
+      "target": "interface",
+      "intent": "unsupported_target",
+      "source": "@Doc(\"contract\") define interface Interface as end\n",
+      "expected": {
+        "java": "reject",
+        "llvm": "reject",
+        "net": "reject",
+        "wasm": "reject",
+        "forge": "reject"
+      }
+    },
+    {
+      "id": "actor_unauthorized",
+      "target": "actor",
+      "intent": "authority",
+      "source": "@GrantPermission(\"root\") define actor Worker as end\n",
+      "expected": {
+        "java": "reject",
+        "llvm": "reject",
+        "net": "reject",
+        "wasm": "reject",
+        "forge": "reject"
+      }
+    },
+    {
+      "id": "actor_policy_unlowered",
+      "target": "actor",
+      "intent": "unsupported_effect",
+      "source": "@ActorMaxThreads(8) define actor Worker as end\n",
+      "expected": {
+        "java": "reject",
+        "llvm": "reject",
+        "net": "reject",
+        "wasm": "reject",
+        "forge": "reject"
+      }
+    },
+    {
+      "id": "layout_unlowered",
+      "target": "class",
+      "intent": "unsupported_effect",
+      "source": "@repr(c) define class Person as end\n",
+      "expected": {
+        "java": "reject",
+        "llvm": "reject",
+        "net": "reject",
+        "wasm": "reject",
+        "forge": "reject"
+      }
+    }
+  ],
+  "evidence": {
+    "java": "NOT_EXECUTED",
+    "llvm": "NOT_EXECUTED",
+    "net": "NOT_EXECUTED",
+    "wasm": "NOT_EXECUTED",
+    "forge": "NOT_EXECUTED"
+  }
+}

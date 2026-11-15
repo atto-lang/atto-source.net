@@ -1,0 +1,7 @@
+// Exact CLR overload call: System.Math.Max(Int64, Int64).
+// Nested host calls prove SSA ordering, no reflection or host object escape.
+import dotnet "System.Math" as Math;
+
+pub fnc main() -> int {
+    return Math.Max(Math.Abs(-42), 10);
+}
