@@ -160,7 +160,7 @@ internal static class ActorDeclarationAstSelfTest
             "handler source nesting bound");
         ExpectFormat(() => OresActorDeclarationParser.Parse(new string('x', 1_048_577)),
             "UTF-8 source byte bound");
-        ExpectFormat(() => OresActorDeclarationParser.Parse("define actor A as receive(int x):void{/* never closed")),
+        ExpectFormat(() => OresActorDeclarationParser.Parse("define actor A as receive(int x):void{/* never closed"),
             "unterminated comment");
         ExpectFormat(() => OresActorDeclarationParser.Parse(""),
             "empty actor unit");

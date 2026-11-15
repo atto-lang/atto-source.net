@@ -43,10 +43,11 @@ cannot poison a healthy actor via a foreign thread.
 
 ## Regression coverage
 
-`ActorGuestFrameGateSelfTest` exercises five independent terminal guest
-failures: swallowed frame bounds error, live frame on synchronous handler
-return, a host-issued handle smuggled into guest API, incorrect guest pop
-order, and swallowed compiled guest frame-count exhaustion. A healthy sibling
+`ActorGuestFrameGateSelfTest` exercises seven independent terminal guest
+failures: swallowed frame write bounds error, swallowed frame read bounds
+error, malformed frame alignment, live frame on synchronous handler return,
+a host-issued handle smuggled into guest API, incorrect guest pop order,
+and swallowed compiled guest frame-count exhaustion. A healthy sibling
 on the SHARED worker continues: it catches a
 recoverable host bounds error, correctly pushes/writes/reads/pops a guest
 frame, and returns 42. The test also verifies off-carrier denial before

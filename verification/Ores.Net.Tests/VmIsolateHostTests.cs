@@ -130,9 +130,9 @@ internal static class VmIsolateHostTests
         var actorB = host.RegisterActor(b, 3);
         ExpectFailure(() => host.RegisterActor(a, 3), "duplicate actor incarnation");
         ExpectFailure(() => host.PinResource(a, actorB), "foreign actor pin");
-        var refA = actorA.Mailbox.CurrentRef;
+        var refA = actorA.CurrentRef;
         host.SendActor(a, actorA, refA, new byte[] { 1, 2, 3 });
-        if (actorA.Mailbox.QueuedMessages != 1)
+        if (actorA.QueuedMessages != 1)
             throw new Exception("actor mailbox must be real, not a fake ticket");
         var pin = host.PinResource(a, actorA);
         ExpectFailure(() => host.PinResource(a, actorA), "pin quota");
@@ -148,7 +148,7 @@ internal static class VmIsolateHostTests
         host.RetireResource(a, actorA, pin);
         ExpectFailure(() => host.RetireResource(a, actorA, pin), "replay ticket");
         host.RetireActor(a, actorA);
-        if (actorA.Mailbox.QueuedMessages != 0)
+        if (actorA.QueuedMessages != 0)
             throw new Exception("retire must drain pending mailbox-owned copies");
         ExpectFailure(() => host.SendActor(a, actorA, refA, new byte[] { 4 }), "stale actor ref");
         host.CompleteShutdown(a); host.Destroy(a);
@@ -201,6 +201,48 @@ internal static class VmIsolateHostTests
             overflowVm.GuestSnapshot(over).GuestCalls != 0)
             throw new Exception("overflow corrupted tenant state or left guest pinned");
         overflowVm.BeginShutdown(over);overflowVm.CompleteShutdown(over);overflowVm.Destroy(over);
+        // Durable lock queue host parity: actors serialize across different locks,
+        // while two tenant isolates may use identical lock IDs independently.
+        var durableVm = new OresVmHost(maxTenants: 2);
+        var da = durableVm.CreateIsolate("durable-a", maxActors: 2);
+        var db = durableVm.CreateIsolate("durable-b", maxActors: 1);
+        durableVm.Start(da); durableVm.Start(db);
+        var actor1 = durableVm.RegisterActor(da, 1);
+        var actor2 = durableVm.RegisterActor(da, 2);
+        var actorOtherTenant = durableVm.RegisterActor(db, 1);
+        var head = durableVm.EnqueueDurable(da, actor1, 7, 1, 4);
+        var waiter = durableVm.EnqueueDurable(da, actor1, 7, 2, 4);
+        var anotherLock = durableVm.EnqueueDurable(da, actor1, 9, 3, 4);
+        var foreign = durableVm.EnqueueDurable(db, actorOtherTenant, 7, 1, 4);
+        if (!head.Head || waiter.Head || !anotherLock.Head || !foreign.Head)
+            throw new Exception("durable FIFO admission");
+        ExpectFailure(() => durableVm.ClaimDurable(da, foreign.Ticket), "foreign ticket");
+        ExpectFailure(() => durableVm.FinishDurable(da, head.Ticket), "unclaimed finish");
+        ExpectFailure(() => durableVm.RetireActor(da, actor1), "actor with durable work");
+        if (!durableVm.ClaimDurable(da, head.Ticket) ||
+            durableVm.ClaimDurable(da, anotherLock.Ticket))
+            throw new Exception("actor must be non-reentrant");
+        if (!ReferenceEquals(durableVm.FinishDurable(da, head.Ticket), waiter.Ticket) ||
+            !durableVm.ClaimDurable(da, anotherLock.Ticket) ||
+            durableVm.ClaimDurable(da, waiter.Ticket))
+            throw new Exception("FIFO transition");
+        durableVm.FinishDurable(da, anotherLock.Ticket);
+        if (!durableVm.ClaimDurable(da, waiter.Ticket))
+            throw new Exception("next FIFO owner never claimable");
+        durableVm.FinishDurable(da, waiter.Ticket);
+        var unstarted = durableVm.EnqueueDurable(da, actor2, 7, 4, 4);
+        durableVm.BeginShutdown(da);
+        ExpectFailure(() => durableVm.ClaimDurable(da, unstarted.Ticket), "shutdown claim");
+        ExpectFailure(() => durableVm.CompleteShutdown(da), "outstanding queued head");
+        durableVm.CancelDurableHead(da, unstarted.Ticket);
+        durableVm.RetireActor(da, actor1); durableVm.RetireActor(da, actor2);
+        durableVm.CompleteShutdown(da); durableVm.Destroy(da);
+        if (!durableVm.ClaimDurable(db, foreign.Ticket))
+            throw new Exception("foreign tenant lost queue admission");
+        durableVm.FinishDurable(db, foreign.Ticket);
+        durableVm.RetireActor(db, actorOtherTenant);
+        durableVm.BeginShutdown(db); durableVm.CompleteShutdown(db); durableVm.Destroy(db);
+
         host.RetireActor(b, actorB);
         host.BeginShutdown(b); host.CompleteShutdown(b); host.Destroy(b);
         Console.WriteLine("PASS .NET tenant IsolateVM host admission, generation fencing, quiescence and drain");
