@@ -179,6 +179,8 @@ public static partial class OresStructuredParser
         {
             if (source[i] == '\0')
                 throw new FormatException($"Source contains NUL at offset {i}");
+            if (source[i] == '\u001b' || source[i] == '\u007f')
+                throw new FormatException($"Source contains terminal control at offset {i}");
             if (char.IsHighSurrogate(source[i]))
             {
                 if (++i >= source.Length || !char.IsLowSurrogate(source[i]))
