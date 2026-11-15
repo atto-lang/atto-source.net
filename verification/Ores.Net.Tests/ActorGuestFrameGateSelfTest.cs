@@ -7,12 +7,14 @@ internal static class ActorGuestFrameGateSelfTest
     {
         GuestFrameFaultsAreTerminalButHostValidationRemainsRecoverable();
         Console.WriteLine(
+            "PASS net-actor-guest-frame-eight-fault-matrix|faults=8|peer=42|admission=9|guest_atto=0");
+        Console.WriteLine(
             "PASS .NET terminal compiled guest-frame boundary host tests (NOT guest .atto or physical stack proof)");
     }
 
     private static ActorRuntimeOptions Options() => new()
     {
-        MaxActors = 8,
+        MaxActors = 10,
         MessagesPerDispatch = 4,
         ActorPersistentBytes = 4096,
         ActorScratchBytes = 256,
@@ -27,7 +29,7 @@ internal static class ActorGuestFrameGateSelfTest
             PrivateWorkers = 1,
             SharedWorkers = 1,
             UntrustedWorkers = 1,
-            QueueCapacityPerDomain = 8
+            QueueCapacityPerDomain = 16
         }
     };
 
@@ -91,6 +93,17 @@ internal static class ActorGuestFrameGateSelfTest
             // The caught overflow must still stop this incarnation at exit.
         });
 
+        var staleGuestHandle = runtime.Spawn(ActorKind.Shared, (context, payload) =>
+        {
+            var popped = context.GuestPushStackFrame(8);
+            context.GuestPopStackFrame(popped);
+            // A correct pop retires the exact guest capability. Catching
+            // a subsequent stale-use error must still fault this handler.
+            ExpectInvalid(() => context.GuestReadStackFrame(
+                popped, 0, new byte[1]),
+                "popped guest frame handle must never be reissued");
+        });
+
         var badRead = runtime.Spawn(ActorKind.Shared, (context, payload) =>
         {
             var frame = context.GuestPushStackFrame(8);
@@ -134,15 +147,24 @@ internal static class ActorGuestFrameGateSelfTest
 
             // An off-carrier stolen context must be rejected BEFORE it can
             // poison its legitimate owner, which is still in its live turn.
-            bool crossCarrierDenied = false;
+            int crossCarrierDenials = 0;
             var outsider = new Thread(() =>
             {
+                // A stolen physical turn must reject all guest operations,
+                // not merely reads. Rejections must not fault the owner.
                 try { context.GuestReadStackFrame(guest, 0, new byte[1]); }
-                catch (InvalidOperationException) { crossCarrierDenied = true; }
+                catch (InvalidOperationException) { crossCarrierDenials++; }
+                try { context.GuestWriteStackFrame(guest, 0, new byte[] { 99 }); }
+                catch (InvalidOperationException) { crossCarrierDenials++; }
+                try { context.GuestPopStackFrame(guest); }
+                catch (InvalidOperationException) { crossCarrierDenials++; }
             }) { IsBackground = true };
             outsider.Start();
-            Require(outsider.Join(TimeSpan.FromSeconds(5)) && crossCarrierDenied,
-                "off-carrier stolen guest context must fail without poisoning owner");
+            Require(outsider.Join(TimeSpan.FromSeconds(5)) && crossCarrierDenials == 3,
+                "off-carrier guest read/write/pop must all fail without poisoning owner");
+            context.GuestReadStackFrame(guest, 0, output);
+            Require(output[0] == 42,
+                "off-carrier denied write must preserve the owner's live guest frame");
 
             context.GuestPopStackFrame(guest);
             context.PopStackFrame(hostFrame);
@@ -154,17 +176,18 @@ internal static class ActorGuestFrameGateSelfTest
         runtime.Send(foreign, new byte[] { 3 });
         runtime.Send(wrongLifo, new byte[] { 4 });
         runtime.Send(quota, new byte[] { 5 });
-        runtime.Send(badRead, new byte[] { 7 });
-        runtime.Send(badAlignment, new byte[] { 8 });
+        runtime.Send(staleGuestHandle, new byte[] { 7 });
+        runtime.Send(badRead, new byte[] { 8 });
+        runtime.Send(badAlignment, new byte[] { 9 });
         runtime.Send(healthy, new byte[] { 6 });
         Require(healthyDone.Wait(TimeSpan.FromSeconds(8)) &&
                 Volatile.Read(ref healthyResult) == 42,
-            "actor B could not return 42 after seven guest-frame faults");
+            "actor B could not return 42 after eight guest-frame faults");
         Require(SpinWait.SpinUntil(
-            () => runtime.FaultedTurns >= 7 && runtime.LiveActors == 1 &&
+            () => runtime.FaultedTurns >= 8 && runtime.LiveActors == 1 &&
                   runtime.CompletedMessages == 1,
             TimeSpan.FromSeconds(8)),
-            "seven terminal guest faults stop only offenders; only B completes");
+            "eight terminal guest faults stop only offenders; only B completes");
         Require(runtime.CompletedMessages == 1,
             "caught guest frame faults must not count as completed messages");
 
