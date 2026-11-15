@@ -122,9 +122,11 @@ internal static class ActorNativeAggregateStoreTests
         // arena wrapper after JIT warmup; fail on managed payload allocation.
         using (var arena = new ActorNativeAggregateStore(64, 1))
         {
+            Span<long> warmElements = stackalloc long[2];
             for (int i = 0; i < 100; i++)
             {
-                ulong warm = arena.CreateTuple(stackalloc long[] { i, i + 1 });
+                warmElements[0] = i; warmElements[1] = i + 1;
+                ulong warm = arena.CreateTuple(warmElements);
                 Require(warm != 0 && arena.Read(warm, NativeAggregateKind.Tuple, 1) == i + 1,
                     "warm scalar native aggregate operations");
                 Require(arena.Drop(warm), "warm native cleanup");
