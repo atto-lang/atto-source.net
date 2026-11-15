@@ -220,6 +220,13 @@ public static class OresActorDeclarationParser
                     throw new FormatException($"E_ACTOR_SOURCE: identifier exceeds {MaxIdentifierLength} at {tokenStart}");
                 tokens.Add(new Token(word, tokenStart, i));
             }
+            else if (char.IsAsciiDigit(c))
+            {
+                // Numeric literals only occur inside opaque handler bodies.
+                i++;
+                while (i < source.Length && (char.IsAsciiLetterOrDigit(source[i]) || source[i] == '_')) i++;
+                tokens.Add(new Token(source[tokenStart..i], tokenStart, i));
+            }
             else if (c == '"')
             {
                 i++;
