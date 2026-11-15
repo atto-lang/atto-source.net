@@ -31,12 +31,18 @@ internal static class OwnershipBangAdmissionTests
                 throw new Exception("Comment changed structured source admission");
         }
 
-        foreach (string text in new[] { "copy !42", "borrow !42", "mut borrow !42", "copy!=42" })
+        foreach (string text in new[] { "copy !42", "borrow !42", "mut borrow !42",
+                                          "copy!=42", "copy!eq 42" })
         {
             string source = "pub fnc main(): int { return " + text + "; }";
             MustNotBeOwnershipAlias(() => OresParser.Parse(source), "scalar", text);
             MustNotBeOwnershipAlias(() => OresStructuredParser.Parse(source), "structured", text);
         }
+        // Historical argument-order compatibility must reach the same
+        // unsupported-ownership diagnostic, never an obsolete syntax error.
+        const string legacy = "pub fnc main(): int { return rt borrow mut value; }";
+        RequireLegacyTypedDenial(() => OresParser.Parse(legacy), "scalar");
+        RequireLegacyTypedDenial(() => OresStructuredParser.Parse(legacy), "structured");
         Console.WriteLine("NET_OWNERSHIP_BANG_FAIL_CLOSED_PASS frontend checks; NATIVE_AOT_NOT_EXECUTED");
     }
 
@@ -46,6 +52,14 @@ internal static class OwnershipBangAdmissionTests
         catch (FormatException ex) when (ex.Message.Contains(
             "OWNERSHIP_BANG_BACKEND_UNSUPPORTED", StringComparison.Ordinal)) { return; }
         throw new Exception("Missing typed ownership rejection: " + frontend + " " + input);
+    }
+
+    private static void RequireLegacyTypedDenial(Action action, string frontend)
+    {
+        try { action(); }
+        catch (FormatException ex) when (ex.Message.Contains(
+            "requires typed actor-arena lowering", StringComparison.Ordinal)) { return; }
+        throw new Exception("Legacy mutable borrow unexpectedly bypassed typed gate: " + frontend);
     }
 
     private static void MustNotBeOwnershipAlias(Action action, string frontend, string input)
