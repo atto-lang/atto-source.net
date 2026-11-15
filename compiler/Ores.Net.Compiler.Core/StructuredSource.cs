@@ -1786,14 +1786,14 @@ public static partial class OresStructuredParser
             Budget(depth);
             if (Current.Text is "if" or "ifnot" or "unless")
             {
-                int at = Current.Offset;
+                int valueIfAt = Current.Offset;
                 bool inverted = Current.Text is "ifnot" or "unless";
                 index++;
                 var predicate = Expr(depth + 1);
                 Require(predicate, IrValueType.Bool, "Value if condition requires bool");
                 if (inverted)
-                    predicate = CheckedBinary(at, StructuredOperator.EqualBool,
-                        predicate, new StructuredBool(at, false), IrValueType.Bool);
+                    predicate = CheckedBinary(valueIfAt, StructuredOperator.EqualBool,
+                        predicate, new StructuredBool(valueIfAt, false), IrValueType.Bool);
                 Expect("then");
                 if (Current.Text is "break" or "continue" or "return")
                     throw Error("Value if branch must produce a value; control transfers require 'do if'");
@@ -1805,7 +1805,7 @@ public static partial class OresStructuredParser
                 Expect("fi");
                 if (whenTrue.Type != whenFalse.Type)
                     throw Error("Value if result types differ");
-                return CheckedConditional(at, predicate, whenTrue, whenFalse);
+                return CheckedConditional(valueIfAt, predicate, whenTrue, whenFalse);
             }
             var test = LogicalOr(depth + 1);
             if (Current.Text != "?") return test;
