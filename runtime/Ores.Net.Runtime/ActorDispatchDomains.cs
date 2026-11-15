@@ -75,8 +75,9 @@ public sealed class ActorDispatchDomains : IDisposable
     private readonly ActorDispatchPool _shared;
     private readonly ActorDispatchPool _untrusted;
     // A second Dispose must not return while another caller still joins live
-    // carrier threads. Keep the event alive for concurrent waiters.
-    private readonly ManualResetEventSlim _disposeComplete = new(false);
+    // carrier threads. Disposers serialize on this plain join gate rather
+    // than blocking on an event, which the async-only runtime audit forbids.
+    private readonly object _disposeGate = new();
     private ExceptionDispatchInfo? _disposeFailure;
     private int _closed;
 
@@ -131,28 +132,28 @@ public sealed class ActorDispatchDomains : IDisposable
             throw new InvalidOperationException(
                 "ActorDispatchDomains.Dispose cannot join its current carrier");
 
-        if (Interlocked.CompareExchange(ref _closed, 1, 0) != 0)
+        // The first disposer holds the gate until every carrier join has
+        // finished; later callers enter only afterwards and then replay the
+        // original shutdown failure, if any, instead of reporting success.
+        lock (_disposeGate)
         {
-            _disposeComplete.Wait();
-            _disposeFailure?.Throw();
-            return;
-        }
+            if (Interlocked.CompareExchange(ref _closed, 1, 0) != 0)
+            {
+                _disposeFailure?.Throw();
+                return;
+            }
 
-        try
-        {
-            _private.Dispose();
-            _shared.Dispose();
-            _untrusted.Dispose();
-        }
-        catch (Exception error)
-        {
-            _disposeFailure = ExceptionDispatchInfo.Capture(error);
-            throw;
-        }
-        finally
-        {
-            // Publish the completion/failure before waking every waiter.
-            _disposeComplete.Set();
+            try
+            {
+                _private.Dispose();
+                _shared.Dispose();
+                _untrusted.Dispose();
+            }
+            catch (Exception error)
+            {
+                _disposeFailure = ExceptionDispatchInfo.Capture(error);
+                throw;
+            }
         }
     }
 
