@@ -32,6 +32,33 @@ internal static class SourceByteBudgetTests
                 $"{structuredMessage} at offset {offset}");
         }
 
+
+        // Both public parser entry points must reject controls before trivia or
+        // quoted source content can conceal them. Report UTF-16 code-unit index.
+        foreach (char control in new[] { (char)0x001b, (char)0x007f })
+        {
+            foreach (string source in new[] {
+                "/* hidden" + control + " */" + valid,
+                valid + " // hidden" + control,
+                "\"inside" + control + "\"",
+                "/* café 😀 */" + control + valid
+            })
+            {
+                int at = source.IndexOf(control);
+                ExpectSourceRejection(() => OresParser.Parse(source),
+                    $"Source contains terminal control at offset {at}");
+                ExpectSourceRejection(() => OresStructuredParser.Parse(source),
+                    $"Source contains terminal control at offset {at}");
+            }
+        }
+        foreach (string source in new[] { "\0" + (char)0x001b, "\0" + (char)0x007f })
+        {
+            ExpectSourceRejection(() => OresParser.Parse(source),
+                "Source contains NUL byte at offset 0");
+            ExpectSourceRejection(() => OresStructuredParser.Parse(source),
+                "Source contains NUL at offset 0");
+        }
+
         // Valid UTF-8 comments remain admissible; no guest execution claim.
         _ = OresParser.Parse(valid + " // café " + emoji);
         _ = OresStructuredParser.Parse(valid + " // café " + emoji);
