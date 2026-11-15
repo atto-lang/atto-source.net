@@ -245,6 +245,8 @@ See [architecture](docs/architecture.md), [roadmap](docs/roadmap.md), [CI recove
 See [value-boundary audit and admission tests](docs/VALUE_BOUNDARIES.md) for
 aggregate, call, string, conditional and async feature limits.
 
+CPU/GPU execution expressions, nested placement and `nb`/stream parity: see [proposed v1 contract](docs/CPU_GPU_NB_GRAPH_V1.md). This is **not** a claim that the backend executes GPU or streamed source blocks.
+
 ## Engineering policy: no Python
 
 Python is prohibited in this repository and throughout the `ores-truffle-oreslang` organization for scripts, tests, CI helpers, code generators, analyzers, automation, and host tooling. Existing Python functionality must be migrated to **Rust** without weakening behavior, security checks, fixtures, or test coverage. Do not add `.py`, `.pyi`, `.ipynb`, Python dependency manifests, `python`/`python3` commands, `pip`, `pytest`, `poetry`, `uv`, or `actions/setup-python`. The .NET compiler/backend remains .NET/C#; the Python-to-Rust mandate applies to Python tooling rather than rewriting language-specific implementation code.
@@ -345,3 +347,25 @@ Trust level and compilation mode stay independent: untrusted Wasm may be
 JIT-compiled, AOT-lowered or interpreted. The **current shipping .NET
 compiler/host remains NativeAOT only**, supports only its documented
 arithmetic subset, and does not load CIL at runtime.
+
+## Repository ownership and migration (2026-11-08)
+
+**Current home:** `ores-truffle-oreslang/oreslang-source.net`. **Public language:** AttoLang (formerly Oreslang); retain legacy `oreslang-*` commands, packages, dependencies and existing `.ores` fixtures until each replacement is proven.
+
+- **This repository owns:** .NET/CIL plus NativeAOT compiler, host ABI, actor isolation primitives and native target validation.
+- **Out of scope:** JVM imports, JS transpilation or business cloud provisioning. Place shared language semantics and portable core/std in canonical `.atto` modules; keep only indispensable compiler, ABI and runtime-host primitives in this backend.
+- **Organization boundary:** [`atto-lang`](https://github.com/atto-lang) is for language semantics, compilers, tooling, conformance and ecosystem libraries. [`atto-co`](https://github.com/atto-co) is for independently governed hosted products, deployment control, tenant infrastructure, identity and billing. Existing similarly named `atto-*` projects do not automatically share this repository's Git identity, code or test status.
+- **First-stage migration proposal:** approved GitHub ownership transfer of this existing repo, preserving its name, numeric ID and history, to `atto-lang/oreslang-source.net`. No direct legacy-org → `atto-co` transfer is authorized; subsequent product carve-outs require new approval.
+
+**Migration instructions (maintainer preflight):** coordinate exact source head and ownership in [issue #26](https://github.com/ores-truffle-oreslang/.github/issues/26), then follow private [runbook draft #25](https://github.com/ores-truffle-oreslang/.github/pull/25). Confirm source/target admins and independent security reviewer, target access and branch/ruleset protection, exact SHA/tree, PRs/releases, Actions, secrets, GitHub Apps, deployments, dependencies and compatibility links before transfer. Do not clone/mirror private source as a shortcut. Verify unchanged numeric ID and code tree after real transfer, restore controls, rerun exact-head CI and capture **nonzero executed steps**. `steps=[]` / `steps=null` is `NOT_EXECUTED`, not test success; host/static checks cannot certify real AttoLang guest execution, AOT or zero-GC. Defer repository/CLI/extension renames to separately reviewed changes.
+
+## Experimental source actor/native arena integration
+
+The opt-in `emit-actor-csharp` lane now emits a `SpawnRuntime` entry for its
+bounded synchronous Counter profile. It uses the production ActorRuntime,
+private native scalar state, execution-owned frames and supervisor mailbox
+replies. The managed suite and a macOS arm64 NativeAOT probe execute ordinary
+and overflow source-generated actors; the older trusted-host Counter API is
+kept separate and its managed cells are not arena-isolation evidence.
+See [execution evidence and open parity gates](docs/ACTOR_NATIVE_STATE_FRAMES_INTEGRATION_20261110.md).
+This is not general actor CIL, concurrent-default actor execution or Spin support.
