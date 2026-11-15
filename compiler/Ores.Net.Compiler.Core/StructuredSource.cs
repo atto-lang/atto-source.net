@@ -2028,7 +2028,15 @@ public static partial class OresStructuredParser
         // LLVM's full actor-owned dynamic collection semantics.
         private StructuredExpr ArrayPostfix(StructuredExpr array, int depth)
         {
-            if (array.Type != IrValueType.FixedArrayI64 || !Take("."))
+            if (array.Type != IrValueType.FixedArrayI64)
+                return array;
+            // Linked/module parsing tokenizes brackets for unrelated syntax.
+            // A fixed array must never slip past the typed Option access
+            // verifier through an indexed postfix, even on an out-of-bounds
+            // miss. Keep this negative compiler-owned, not a parse accident.
+            if (Current.Text == "[")
+                throw Error("E_SAFE_COLLECTION_ACCESS_UNSUPPORTED: use typed checked get/get_copy; [] lowering is unsupported");
+            if (!Take("."))
                 return array;
             int at = Current.Offset;
             string operation = Current.Text;
