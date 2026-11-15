@@ -17,8 +17,8 @@ permissions:
   contents: read
 jobs:
   golden-reference:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
     steps:
       - name: Checkout exact source-owned candidate (no persisted token)
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -28,10 +28,38 @@ jobs:
       - name: Assert checkout matches source candidate commit
         env:
           EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
         run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
-          test -z "$(git status --porcelain)"
+          test -z "$(git status --porcelain=v1 --untracked-files=all --ignored=matching)"
+          echo "NOMINAL_METHOD_ABI_SOURCE_HEAD=$EXPECTED_SHA"
+          echo "NOMINAL_METHOD_ABI_SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
       - name: Verify nominal ABI reference and fail-closed vectors
+        shell: bash
         run: |
+          set -euo pipefail
           python3 -B -m unittest discover -s contracts/v1 -p 'test_nominal_method_slot_abi_v1.py' -v
           python3 -B -O -m unittest discover -s contracts/v1 -p 'test_nominal_method_slot_abi_v1.py' -v
+      - name: Require .NET 10 SDK and build real compiler regression suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v dotnet >/dev/null || {
+            echo "DOTNET10_NOT_EXECUTED: dotnet missing" >&2
+            exit 1
+          }
+          dotnet --list-sdks
+          dotnet --list-sdks | grep -Eq '^10[.]' || {
+            echo "DOTNET10_NOT_EXECUTED: net10 SDK missing" >&2
+            exit 1
+          }
+          dotnet build verification/Ores.Net.Tests/Ores.Net.Tests.csproj --configuration Release --warnaserror --verbosity minimal
+          echo "DOTNET10_COMPILER_TESTS_BUILT=true"
+      - name: Execute .NET receiver and structured-source tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj --configuration Release --no-build --no-restore
+          echo "DOTNET10_COMPILER_TESTS_EXECUTED=true"

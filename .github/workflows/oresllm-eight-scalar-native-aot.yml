@@ -1,0 +1,38 @@
+# Explicit opt-in: eight real source -> native compiler -> CIL -> NativeAOT
+# application builds -> executable guest checks. Never source-only certification.
+name: OresLLM eight scalar actual NativeAOT guests
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-aot-eight-guests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Verify exact checkout tree
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          echo "SOURCE_COMMIT_SHA=$(git rev-parse HEAD)"
+          echo "SOURCE_TREE_SHA=$(git rev-parse 'HEAD^{tree}')"
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install NativeAOT clang and ELF verification dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev binutils file
+      - name: Verify script syntax and execute eight full native guest builds
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n verification/oresllm-eight-scalar-native-aot.sh
+          bash verification/oresllm-eight-scalar-native-aot.sh
+          echo 'NATIVE AOT GUESTS EXECUTED, NOT FIVE-BACKEND PARITY'

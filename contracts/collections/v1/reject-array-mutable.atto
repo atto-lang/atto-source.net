@@ -1,0 +1,4 @@
+pub fnc main():int {
+  let Array<int> numbers = Array.of(42);
+  return numbers.get(0).unwrap_or(0);
+}
