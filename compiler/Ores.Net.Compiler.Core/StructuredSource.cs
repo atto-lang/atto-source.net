@@ -80,6 +80,10 @@ public sealed record StructuredIf(int At, StructuredExpr Condition,
     : StructuredStmt(At);
 public sealed record StructuredWhile(int At, StructuredExpr Condition,
     IReadOnlyList<StructuredStmt> Body) : StructuredStmt(At);
+// A break/continue transfers control to the nearest lexical loop. These are
+// statements, never values of an if/ifnot/unless expression.
+public sealed record StructuredBreak(int At) : StructuredStmt(At);
+public sealed record StructuredContinue(int At) : StructuredStmt(At);
 public sealed record StructuredProgram(string Name, IReadOnlyList<StructuredStmt> Body,
     IReadOnlyDictionary<string, StructuredFunction>? Functions = null,
     IReadOnlyList<string>? FunctionOrder = null);
@@ -945,7 +949,7 @@ public static partial class OresStructuredParser
         private readonly Dictionary<string, StructuredFunction> exports = new(StringComparer.Ordinal);
         private readonly List<string> functionOrder = linking is null ? new() : new(linking.MethodOrder);
         private string? declaredModule;
-        private int index, statements;
+        private int index, statements, loopDepth;
         private IrValueType activeReturnType = IrValueType.I64;
         // Only the scalar binding clause of an explicit -> Type :: body
         // admits comma as a statement boundary. Nested ordinary blocks do not.
@@ -1545,35 +1549,71 @@ public static partial class OresStructuredParser
                 scopes[^1].Add(name, new LocalBinding(type, kind, constantValue));
                 return (new StructuredLet(at, name, type, initializer, kind), false);
             }
-            if (Take("if"))
+            // Imperative keyword branches use 'do if/ifnot/unless ... then ... fi'.
+            // Bare keyword 'if ... then' is value-producing and must never be
+            // silently interpreted as an imperative block. Legacy '; do' is
+            // still accepted for migrations.
+            bool explicitDo = Take("do");
+            if (Current.Text is "if" or "ifnot" or "unless")
             {
+                bool invert = Current.Text is "ifnot" or "unless";
+                index++;
                 var condition = Expr(depth + 1);
                 Require(condition, IrValueType.Bool, "If condition must be bool");
-                bool oresDoForm = Take(";");
+                if (invert)
+                    condition = CheckedBinary(at, StructuredOperator.EqualBool,
+                        condition, new StructuredBool(at, false), IrValueType.Bool);
+                bool legacyDelimited = Take(";");
+                bool keywordDelimited = Take("then");
+                if (explicitDo && !keywordDelimited)
+                    throw Error("do if/ifnot/unless requires 'then'");
+                if (!explicitDo && keywordDelimited)
+                    throw Error("Value if/ifnot/unless is an expression; use 'do if' for statements");
+                if (legacyDelimited) Expect("do");
+                bool delimited = keywordDelimited || legacyDelimited;
                 IReadOnlyList<StructuredStmt> yes;
                 bool yesReturns;
-                if (oresDoForm)
-                {
-                    Expect("do");
-                    (yes, yesReturns) = DelimitedArm(depth + 1);
-                }
+                if (delimited) (yes, yesReturns) = DelimitedArm(depth + 1);
                 else (yes, yesReturns) = Block(depth + 1);
                 IReadOnlyList<StructuredStmt>? no = null;
                 bool noReturns = false;
                 if (Take("else"))
                 {
-                    if (oresDoForm) (no, noReturns) = DelimitedArm(depth + 1);
+                    if (delimited) (no, noReturns) = DelimitedArm(depth + 1);
                     else (no, noReturns) = Block(depth + 1);
                 }
-                if (oresDoForm) Expect("fi");
+                if (delimited) Expect("fi");
                 return (new StructuredIf(at, condition, yes, no),
                     yesReturns && noReturns);
             }
-            if (Take("while"))
+            if (explicitDo)
+                throw Error("Expected if, ifnot or unless after 'do'");
+            if (Take("break"))
             {
-                var condition = Expr(depth + 1);
-                Require(condition, IrValueType.Bool, "While condition must be bool");
-                var (body, _) = Block(depth + 1);
+                if (loopDepth == 0) throw Error("break requires an enclosing loop");
+                Expect(";");
+                return (new StructuredBreak(at), true);
+            }
+            if (Take("continue"))
+            {
+                if (loopDepth == 0) throw Error("continue requires an enclosing loop");
+                Expect(";");
+                return (new StructuredContinue(at), true);
+            }
+            if (Take("while") || Take("loop"))
+            {
+                bool unconditional = tokens[index - 1].Text == "loop";
+                StructuredExpr condition = new StructuredBool(at, true);
+                if (!unconditional)
+                {
+                    condition = Expr(depth + 1);
+                    Require(condition, IrValueType.Bool, "While condition must be bool");
+                }
+                if (loopDepth >= MaxDepth) throw Error("Loop nesting limit exceeded");
+                loopDepth++;
+                IReadOnlyList<StructuredStmt> body;
+                try { (body, _) = Block(depth + 1); }
+                finally { loopDepth--; }
                 // Even a constant-true loop is not accepted as a return proof.
                 return (new StructuredWhile(at, condition, body), false);
             }
@@ -1744,6 +1784,29 @@ public static partial class OresStructuredParser
         private StructuredExpr Conditional(int depth)
         {
             Budget(depth);
+            if (Current.Text is "if" or "ifnot" or "unless")
+            {
+                int at = Current.Offset;
+                bool inverted = Current.Text is "ifnot" or "unless";
+                index++;
+                var predicate = Expr(depth + 1);
+                Require(predicate, IrValueType.Bool, "Value if condition requires bool");
+                if (inverted)
+                    predicate = CheckedBinary(at, StructuredOperator.EqualBool,
+                        predicate, new StructuredBool(at, false), IrValueType.Bool);
+                Expect("then");
+                if (Current.Text is "break" or "continue" or "return")
+                    throw Error("Value if branch must produce a value; control transfers require 'do if'");
+                var whenTrue = Expr(depth + 1);
+                Expect("else");
+                if (Current.Text is "break" or "continue" or "return")
+                    throw Error("Value if branch must produce a value; control transfers require 'do if'");
+                var whenFalse = Expr(depth + 1);
+                Expect("fi");
+                if (whenTrue.Type != whenFalse.Type)
+                    throw Error("Value if result types differ");
+                return CheckedConditional(at, predicate, whenTrue, whenFalse);
+            }
             var test = LogicalOr(depth + 1);
             if (Current.Text != "?") return test;
             int at = Current.Offset;
