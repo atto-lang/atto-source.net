@@ -204,6 +204,16 @@ internal static class OptionI64CompilerTests
         const string none = "pub fnc main():int{val Option<int> value=None;return value.unwrap_or(42);}";
         Check(some, 42, "Some(42) tagged payload");
         Check(none, 42, "None fallback");
+        // Canonical AttoLang type sugar uses exactly the same verified
+        // two-word Option<int> local representation and CIL lowering.
+        Check("fnc main():int{val int? value=Some(42);return value.unwrap_or(0);}",
+            42, "int? readonly Option local (Some)");
+        Check("fnc main():int{val int? value=None;return value.unwrap_or(42);}",
+            42, "int? readonly Option local (None)");
+        Check("fnc main():int{let int? value=None;value=Some(42);return value.unwrap_or(0);}",
+            42, "int? mutable Option local pair assignment");
+        Check("fnc main():int{int? value=Some(42);return value.unwrap_or(0);}",
+            42, "int? type-first immutable Option local");
         Check("fnc main():int{if None eq None{return 42;}return 0;}",
             42, "None equals None");
         Check("fnc main():int{if Some(0) eq None{return 0;}return 42;}",
@@ -278,6 +288,14 @@ internal static class OptionI64CompilerTests
             ("no implicit Option->int", "fnc main():int{return Some(42);}"),
             ("None cannot become int", "fnc main():int{return None;}"),
             ("no implicit int->Option", "fnc main():int{val Option<int> x=42;return 0;}"),
+            ("no implicit int->int?", "fnc main():int{val int? x=42;return 0;}"),
+            ("no bool? layout alias", "fnc main():int{val bool? x=None;return 0;}"),
+            ("no int?? unproved nesting", "fnc main():int{val int?? x=None;return 0;}"),
+            ("no Option<int>? implicit flatten", "fnc main():int{val Option<int>? x=None;return 0;}"),
+            ("no int? helper parameter ABI", "fnc get(int? x):int{return 42;}fnc main():int{return 42;}"),
+            ("no int? helper result ABI", "fnc get():int?{return Some(42);}fnc main():int{return 42;}"),
+            ("no bare scalar omission", "fnc get(int x?):int{return x;}fnc main():int{return 42;}"),
+            ("no unlowered parameter default", "fnc get(int x?=42):int{return x;}fnc main():int{return 42;}"),
             ("no tagged/untagged assignment", "fnc main():int{let Option<int> x=None;x=42;return 0;}"),
             ("no wrong fallback", "fnc main():int{return Some(42).unwrap_or(false);}"),
             ("no unsafe unwrap", "fnc main():int{return Some(42).unwrap();}"),

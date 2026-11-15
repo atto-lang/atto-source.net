@@ -86,6 +86,98 @@ internal static class OptionResultTrapAdmissionTests
             // Correct: a longer identifier is not a reserved ADT token.
         }
 
+        // Import discovery lexes all source before resolving any file path.
+        // Unsupported tagged tokens must be rejected in this entrypoint too;
+        // the experimental closed Option<int> still must be accepted.
+        string linkedRoot = Path.Combine(Path.GetTempPath(),
+            "atto-linked-adt-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(linkedRoot);
+        string linkedEntrypoint = Path.Combine(linkedRoot, "main.atto");
+        try
+        {
+            foreach (string unsupported in new[]
+            {
+                "fnc main():int { return Result(7); }",
+                "fnc main():int { return Ok(7); }",
+                "fnc main():int { return Err(7); }",
+                "fnc main():int { return trap(7); }",
+                "trap fnc main():int { return 7; }"
+            })
+            {
+                File.WriteAllText(linkedEntrypoint, unsupported);
+                try
+                {
+                    _ = OresSourceModuleCompiler.Compile(
+                        linkedEntrypoint, new[] { linkedRoot });
+                }
+                catch (FormatException error) when (
+                    error.Message.Contains(Diagnostic, StringComparison.Ordinal)
+                    && error.Message.Contains("offset ", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+                throw new Exception("Linked CIL admitted unsupported ADT syntax: "
+                    + unsupported);
+            }
+            File.WriteAllText(linkedEntrypoint,
+                "pub fnc main():int { val Option<int> x = Some(42); return x.unwrap_or(0); }");
+            _ = OresSourceModuleCompiler.Compile(linkedEntrypoint, new[] { linkedRoot });
+            File.WriteAllText(linkedEntrypoint,
+                "pub fnc main():int { return 42; } /* Result /* trap */ Ok Err */");
+            _ = OresSourceModuleCompiler.Compile(linkedEntrypoint, new[] { linkedRoot });
+
+            // Canonical .atto import discovery, explicit legacy fallback, and
+            // fail-closed ambiguity when both suffixes exist.
+            File.WriteAllText(linkedEntrypoint,
+                "import fnc answer from \"./answer\"; pub fnc main():int { return answer(); }");
+            string canonicalAnswer = Path.Combine(linkedRoot, "answer.atto");
+            string legacyAnswer = Path.Combine(linkedRoot, "answer.ores");
+            const string answerSource = "pub fnc answer():int { return 42; }";
+            File.WriteAllText(canonicalAnswer, answerSource);
+            if (OresSourceModuleCompiler.Compile(linkedEntrypoint,
+                new[] { linkedRoot }).Sources.Count != 2)
+                throw new Exception("Canonical .atto import did not resolve two exact source units");
+            File.WriteAllText(legacyAnswer, answerSource);
+            try
+            {
+                _ = OresSourceModuleCompiler.Compile(linkedEntrypoint,
+                    new[] { linkedRoot });
+                throw new Exception("Ambiguous .atto/.ores import was silently resolved");
+            }
+            catch (FormatException error) when (
+                error.Message.Contains("Ambiguous AttoLang source import", StringComparison.Ordinal))
+            {
+                // Correct: require an explicit extension, no implicit selection.
+            }
+            File.Delete(canonicalAnswer);
+            if (!OperatingSystem.IsWindows())
+            {
+                // Dangling canonical aliases must not silently redirect to a
+                // different legacy source identity.
+                File.CreateSymbolicLink(canonicalAnswer,
+                    Path.Combine(linkedRoot, "nonexistent-answer.atto"));
+                try
+                {
+                    _ = OresSourceModuleCompiler.Compile(
+                        linkedEntrypoint, new[] { linkedRoot });
+                    throw new Exception("Dangling canonical alias bypassed import ambiguity gate");
+                }
+                catch (FormatException error) when (
+                    error.Message.Contains("Ambiguous AttoLang source import", StringComparison.Ordinal))
+                {
+                    // Correct: presence is checked without following symlinks.
+                }
+                File.Delete(canonicalAnswer);
+            }
+            if (OresSourceModuleCompiler.Compile(linkedEntrypoint,
+                new[] { linkedRoot }).Sources.Count != 2)
+                throw new Exception("Legacy .ores import compatibility was lost");
+        }
+        finally
+        {
+            Directory.Delete(linkedRoot, recursive: true);
+        }
+
         // The lexer must not treat words in source trivia as code.
         foreach (var source in new[]
         {

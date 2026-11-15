@@ -8,6 +8,7 @@ internal static class ActorRuntimeSelfTest
         DemandBackedActorRuntimeReusesQuotaAfterStop();
         ThreeKindsUseAssignedDomainsAndActorArenas();
         UnknownActorKindFailsBeforeNativeAllocation();
+        AsyncVoidHostHandlerFailsBeforeNativeAllocation();
         RejectedMessagesDoNotStartCarriers();
         ForgedSameIdCannotObserveTermination();
         OneActorNeverRunsTwoHandlersConcurrently();
@@ -32,30 +33,24 @@ internal static class ActorRuntimeSelfTest
                 forged != real,
             "test must forge the same numeric actor identity with a different nonce");
 
-        // Internal observation is reached reflectively in this host-only test;
-        // production need not expose an unauthenticated public observation API.
-        MethodInfo? observer = typeof(ActorRuntime).GetMethod(
-            "ObserveTermination", BindingFlags.Instance | BindingFlags.NonPublic);
-        Require(observer is not null, "termination observer entrypoint must exist");
+        // The generated Counter guest uses the public capability-bound API.
+        // A same-ID, same-generation forged ref must not yield a Task.
         bool denied = false;
-        try
-        {
-            _ = observer!.Invoke(runtime, new object[] { forged });
-        }
-        catch (TargetInvocationException exception)
-            when (exception.InnerException is InvalidOperationException)
-        {
-            denied = true;
-        }
+        try { _ = runtime.ObserveTermination(forged); }
+        catch (InvalidOperationException) { denied = true; }
         Require(denied, "a forged ActorRef must not observe another actor's termination");
         Require(runtime.LiveActors == 1,
             "denied observation must not affect the original actor's lifecycle");
 
-        Task legitimate = (Task)(observer!.Invoke(runtime, new object[] { real })
-            ?? throw new InvalidOperationException("missing legitimate termination task"));
+        Task legitimate = runtime.ObserveTermination(real);
         runtime.Stop(real);
-        Require(legitimate.Wait(TimeSpan.FromSeconds(5)),
-            "runtime-minted ActorRef must continue to observe termination");
+        Require(legitimate.Wait(TimeSpan.FromSeconds(5)) &&
+                legitimate.IsCompletedSuccessfully,
+            "runtime-minted ActorRef must observe successful explicit STOP");
+        bool staleDenied = false;
+        try { _ = runtime.ObserveTermination(real); }
+        catch (InvalidOperationException) { staleDenied = true; }
+        Require(staleDenied, "retired actor must not reissue termination authority");
     }
 
     private static void UnknownActorKindFailsBeforeNativeAllocation()
@@ -75,6 +70,33 @@ internal static class ActorRuntimeSelfTest
         Require(runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0 &&
                 runtime.StartedCarrierThreads == 0,
             "invalid kind must not consume actor, native-memory or carrier capacity");
+    }
+
+    private static void AsyncVoidHostHandlerFailsBeforeNativeAllocation()
+    {
+        using var runtime = new ActorRuntime(Options());
+        ActorMessageHandler asyncVoid = async (_, _) =>
+        {
+            await Task.Yield();
+        };
+
+        bool rejected = false;
+        try
+        {
+            _ = runtime.Spawn(ActorKind.Private, asyncVoid);
+        }
+        catch (ArgumentException ex) when (ex.ParamName == "handler")
+        {
+            rejected = ex.Message.Contains(
+                "suspension requires scheduler-owned logical actor continuation lowering",
+                StringComparison.Ordinal);
+        }
+
+        Require(rejected,
+            "async-void handler must fail before it can escape the actor turn");
+        Require(runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0 &&
+                runtime.StartedCarrierThreads == 0,
+            "rejected async handler consumes no actor, arena or carrier capacity");
     }
 
     private static void RejectedMessagesDoNotStartCarriers()
@@ -440,6 +462,8 @@ internal static class ActorRuntimeSelfTest
         var failed = runtime.Spawn(ActorKind.Shared, static (_, _) =>
             throw new InvalidOperationException("synthetic actor failure"));
         var healthy = runtime.Spawn(ActorKind.Shared, (_, _) => healthyDone.Set());
+        Task failedTerminal = runtime.ObserveTermination(failed);
+        Task healthyTerminal = runtime.ObserveTermination(healthy);
 
         runtime.Send(failed, new byte[] { 1 });
         runtime.Send(healthy, new byte[] { 2 });
@@ -450,10 +474,17 @@ internal static class ActorRuntimeSelfTest
             "faulted actor turn recorded");
         Require(WaitUntil(() => runtime.LiveActors == 1),
             "faulted actor is retired without killing sibling");
+        Require(WaitUntil(() => failedTerminal.IsCompleted) &&
+                failedTerminal.IsFaulted &&
+                failedTerminal.Exception?.InnerException is InvalidOperationException e &&
+                e.Message == "Actor terminated after an unhandled fault",
+            "unhandled actor failure was reported as clean STOP or leaked guest error");
 
         runtime.Stop(healthy);
-        Require(WaitUntil(() => runtime.LiveActors == 0),
-            "healthy sibling remains independently stoppable");
+        Require(WaitUntil(() => runtime.LiveActors == 0) &&
+                healthyTerminal.Wait(TimeSpan.FromSeconds(5)) &&
+                healthyTerminal.IsCompletedSuccessfully,
+            "healthy sibling must terminate successfully despite peer fault");
     }
 
 
@@ -479,6 +510,7 @@ internal static class ActorRuntimeSelfTest
             if (!release.Wait(TimeSpan.FromSeconds(10)))
                 throw new Exception("Failed-turn test timed out");
         });
+        Task admissionTerminal = runtime.ObserveTermination(actor);
 
         runtime.Send(actor, new byte[] { 1 });
         try
@@ -502,15 +534,32 @@ internal static class ActorRuntimeSelfTest
 
             var messagesField = typeof(ActorMailbox).GetField(
                 "_messages", BindingFlags.Instance | BindingFlags.NonPublic);
-            if (messagesField?.GetValue(mailbox) is not Queue<byte[]> messages ||
-                messages.Count != 1)
+            if (messagesField?.GetValue(mailbox) is not System.Collections.IEnumerable messages ||
+                mailbox.QueuedMessages != 1)
                 throw new Exception("Could not capture pending envelope");
-            byte[] ownedEnvelope = messages.Peek();
+            // The mailbox stores typed USER/CONTROL envelopes, not raw byte[]
+            // entries. Capture the actual queued USER payload so the existing
+            // failed-turn zeroization oracle still observes the owned buffer.
+            var iterator = messages.GetEnumerator();
+            if (!iterator.MoveNext() || iterator.Current is not object envelope ||
+                iterator.MoveNext())
+                throw new Exception("Expected exactly one pending envelope");
+            var envelopeType = envelope.GetType();
+            var payloadProperty = envelopeType.GetProperty(
+                "Payload", BindingFlags.Instance | BindingFlags.Public);
+            var controlProperty = envelopeType.GetProperty(
+                "IsControl", BindingFlags.Instance | BindingFlags.Public);
+            if (payloadProperty?.GetValue(envelope) is not byte[] ownedEnvelope ||
+                controlProperty?.GetValue(envelope) is not bool isControl || isControl)
+                throw new Exception("Expected one pending user-data envelope");
             release.Set();
             Require(WaitUntil(() => runtime.LiveActors == 0),
                 "turn-admission failure must retire its actor");
             Require(runtime.CompletedMessages == 1 && runtime.FaultedTurns == 1,
                 "failed turn admission accounts for one successful and one failed message");
+            Require(WaitUntil(() => admissionTerminal.IsCompleted) &&
+                    admissionTerminal.IsFaulted,
+                "failed turn admission incorrectly produced clean actor termination");
             Require(ownedEnvelope.AsSpan().IndexOfAnyExcept((byte)0) < 0,
                 "dequeued message must be erased after failed turn admission");
             Require(runtime.NativeReservedBytes == 0,

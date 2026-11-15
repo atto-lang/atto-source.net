@@ -38,3 +38,35 @@ never reaches verified CFG/CIL, even in the presence of comments or longer
 identifiers. This is an implementation-layer boundary, **not** a claim of
 NativeAOT executed guest conformance; exact-head stepful tests and reviewer
 approval remain mandatory.
+
+## Linked-unit compiler admission (stacked follow-up)
+
+The public linked-unit compiler route tokenizes source before resolving imports
+and lowering verified CFG. Tests cover unsupported Result, Ok, Err, and trap
+forms in this route; only the bounded closed Option<int> subset is admitted,
+and nested source comments remain inert. This preserves Option tag/payload SSA
+work from #428 while ensuring alternate module entrypoints fail closed.
+
+This follow-up intentionally does not reintroduce #468's former blanket lexer
+rejection of Option, Some, or None. The shipping scalar compiler still rejects
+those constructs. Tests are definitions until run against this exact branch head;
+no NativeAOT guest result is inferred from earlier host-only carrier receipts.
+
+## Canonical .atto source-linking compatibility
+
+The linked source compiler now admits canonical .atto entrypoints and imports,
+while keeping .ores files compatible for existing graphs. For extensionless
+local imports, it selects the only existing candidate; if both foo.atto and
+foo.ores exist it rejects the path as ambiguous, requiring an explicit suffix.
+The established source-root ownership, strict UTF-8, no-reparse/symlink,
+per-file byte budget and bounded graph checks still apply after resolution.
+The linked ADT regression covers a .atto entry, canonical .atto helper import,
+ambiguous dual-suffix import rejection, and .ores fallback. These tests are
+not executed evidence until a trusted runner executes the exact new branch.
+
+Extensionless dual-candidate existence uses the existing no-follow project
+marker probe rather than File.Exists alone, so a dangling .atto symlink is
+not silently skipped in favor of a .ores file. The POSIX test creates such a
+dangling candidate and requires the same ambiguity rejection; Windows tests
+avoid creating symlinks that may require privileges. Authorized imports still
+pass the existing explicit reparse-point rejection.

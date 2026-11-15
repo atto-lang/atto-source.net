@@ -1,5 +1,6 @@
 using Mono.Cecil;
 using Mono.Cecil.Cil;
+using Ores.Net.Runtime;
 
 // Verification-only reader/interpreter for the exact CIL bootstrap subset.
 // Does not Assembly.Load guest code or use Reflection.Emit.
@@ -59,6 +60,34 @@ internal static class CilReferenceEvaluator
                         _ => throw new FormatException("Unexpected CIL operator")
                     };
                     stack.Push(value);
+                    break;
+                }
+                case Code.Call:
+                {
+                    // Verification-only interpreter: only the exact statically
+                    // linked intrinsic signature is recognized. Not a native run.
+                    if (ins.Operand is not MethodReference calledMethod ||
+                        calledMethod.Name is not ("Rem" or "Mod" or "Pow") ||
+                        calledMethod.DeclaringType.FullName !=
+                            "Ores.Net.Runtime.StrictSigned64Arithmetic" ||
+                        calledMethod.DeclaringType.Scope is not AssemblyNameReference
+                            { Name: "Ores.Net.Runtime", Version: { Major: 1, Minor: 0, Build: 0, Revision: 0 } } ||
+                        calledMethod.HasThis || calledMethod.ExplicitThis ||
+                        calledMethod.GenericParameters.Count != 0 ||
+                        calledMethod.CallingConvention != MethodCallingConvention.Default ||
+                        calledMethod.ReturnType.MetadataType != MetadataType.Int64 ||
+                        calledMethod.Parameters.Count != 2 ||
+                        calledMethod.Parameters.Any(p => p.ParameterType.MetadataType != MetadataType.Int64))
+                        throw new FormatException("Unverified CIL method call");
+                    long right = stack.Pop();
+                    long left = stack.Pop();
+                    stack.Push(calledMethod.Name switch
+                    {
+                        "Rem" => StrictSigned64Arithmetic.Rem(left, right),
+                        "Mod" => StrictSigned64Arithmetic.Mod(left, right),
+                        "Pow" => StrictSigned64Arithmetic.Pow(left, right),
+                        _ => throw new FormatException("Unverified CIL integer operation")
+                    });
                     break;
                 }
                 case Code.Ret:
