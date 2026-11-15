@@ -1,0 +1,107 @@
+name: attolang-desktop-scalar-nativeaot
+on:
+  pull_request:
+    paths:
+      - 'tests/fixtures/desktop-scalar-nativeaot.atto'
+      - '.github/workflows/desktop-atto-nativeaot.yml'
+      - 'compiler/**'
+      - 'host/**'
+      - 'runtime/**'
+  push:
+    paths:
+      - 'tests/fixtures/desktop-scalar-nativeaot.atto'
+      - '.github/workflows/desktop-atto-nativeaot.yml'
+      - 'compiler/**'
+      - 'host/**'
+      - 'runtime/**'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-scalar:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            rid: linux-x64
+            compiler: oresnet
+            app: oreslang-app
+          - os: windows-2022
+            rid: win-x64
+            compiler: oresnet.exe
+            app: oreslang-app.exe
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact source commit and guest bytes
+        shell: pwsh
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $head = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $head -cne $env:EXPECTED) { throw 'Wrong source commit' }
+          $p = 'tests/fixtures/desktop-scalar-nativeaot.atto'
+          if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { throw 'Missing AttoLang source fixture' }
+          $actual = (git hash-object --no-filters $p).Trim()
+          $expected = (git rev-parse "HEAD:$p").Trim()
+          if ($actual -cne $expected) { throw 'Source fixture bytes mismatch' }
+          git rev-parse 'HEAD^{tree}'
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot verify source tree' }
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build and run real AttoLang scalar guest through NativeAOT
+        shell: pwsh
+        env:
+          TARGET_RID: ${{ matrix.rid }}
+          COMPILER_NAME: ${{ matrix.compiler }}
+          APP_NAME: ${{ matrix.app }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = (Get-Location).Path
+          $compilerOut = Join-Path $root 'artifacts/desktop/compiler'
+          $generatedDir = Join-Path $root 'artifacts/desktop/generated'
+          $nativeOut = Join-Path $root 'artifacts/desktop/native-app'
+          New-Item -ItemType Directory -Force $generatedDir | Out-Null
+          dotnet publish compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -r $env:TARGET_RID -o $compilerOut -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'NativeAOT compiler publish failed' }
+          $compiler = Join-Path $compilerOut $env:COMPILER_NAME
+          if (-not (Test-Path -LiteralPath $compiler)) { throw 'Native compiler binary missing' }
+          & $compiler check tests/fixtures/desktop-scalar-nativeaot.atto
+          if ($LASTEXITCODE -ne 0) { throw 'Canonical .atto source rejected' }
+          $generated = Join-Path $generatedDir 'OresGenerated.dll'
+          & $compiler compile tests/fixtures/desktop-scalar-nativeaot.atto --out $generated
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $generated)) {
+            throw 'AttoLang compiler failed to produce verified CIL'
+          }
+          dotnet clean host/Ores.Net.NativeHost/Ores.Net.NativeHost.csproj -c Release -r $env:TARGET_RID "-p:GeneratedAssembly=$generated"
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot remove stale host output' }
+          dotnet publish host/Ores.Net.NativeHost/Ores.Net.NativeHost.csproj -c Release -r $env:TARGET_RID -o $nativeOut "-p:GeneratedAssembly=$generated" -warnaserror
+          if ($LASTEXITCODE -ne 0) { throw 'NativeAOT application publish failed' }
+          $binary = Join-Path $nativeOut $env:APP_NAME
+          if (-not (Test-Path -LiteralPath $binary)) { throw 'Native application binary missing' }
+          $sidecars = @(Get-ChildItem $nativeOut -File | Where-Object {
+            $_.Extension -ieq '.dll' -or $_.Name -ilike '*.runtimeconfig.json' -or $_.Name -ilike '*.deps.json'
+          })
+          if ($sidecars.Count -ne 0) { throw 'Managed sidecar found in native output' }
+          if ($env:TARGET_RID -eq 'win-x64') {
+            & ./verification/assert-native-release.ps1 -Binary $binary -Rid $env:TARGET_RID
+          } else {
+            $magic = [System.IO.File]::ReadAllBytes($binary)
+            if ($magic.Length -lt 64 -or $magic[0] -ne 127 -or $magic[1] -ne 69 -or $magic[2] -ne 76 -or $magic[3] -ne 70) {
+              throw 'Published Linux executable is not ELF'
+            }
+          }
+          $out = @(& $binary)
+          if ($LASTEXITCODE -ne 0 -or $out.Count -ne 1 -or $out[0].Trim() -cne '1300') {
+            throw "Guest execution mismatch: $($out -join ',')"
+          }
+          $hash = (Get-FileHash $binary -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "ATTO_SCALAR_GUEST_EXECUTED_NATIVEAOT backend=net rid=$env:TARGET_RID output=1300 guest_ui=false native_gui=false"
+          Write-Host "source_head=$(git rev-parse HEAD) source_tree=$(git rev-parse 'HEAD^{tree}') binary_sha256=$hash"

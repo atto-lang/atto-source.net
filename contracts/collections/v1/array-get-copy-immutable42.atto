@@ -1,0 +1,11 @@
+// Closed immutable Array<int> checked Copy<int> subset. Return 42 on success.
+pub fnc main():int {
+  val Array<int> values = Array.of(0, 42);
+  val Option<int> zero = values.get_copy(0);
+  val Option<int> hit = values.get_copy(1);
+  val Option<int> missing = values.get_copy(-1);
+  if zero.is_some() {
+    return hit.unwrap_or(0) + missing.unwrap_or(0);
+  }
+  return 0;
+}
