@@ -53,7 +53,7 @@ internal static class ActorCompiledCfgFrameSelfTest
 
         // A's fourth nested guest frame must fail. Even if the handler
         // catches the exception, its terminal guest fault latch stops A.
-        var actorA = runtime.Spawn(ActorKind.Shared, (ctx, _) =>
+        var actorA = runtime.Spawn(ActorKind.Shared, (ctx, payload) =>
         {
             expired = ctx;
             stale = ctx.GuestPushStackFrame(8);
@@ -68,7 +68,7 @@ internal static class ActorCompiledCfgFrameSelfTest
                 quotaDenied = true;
             }
         });
-        var actorB = runtime.Spawn(ActorKind.Shared, (ctx, _) =>
+        var actorB = runtime.Spawn(ActorKind.Shared, (ctx, payload) =>
         {
             simpleAnswer = ExecuteVerified(ctx, scalar.Graph, scalar.Plan);
             simpleDone.Set();
@@ -94,7 +94,7 @@ internal static class ActorCompiledCfgFrameSelfTest
         // A compiler-verified nonterminating source loop must exhaust the
         // interpreter's finite block budget and fault only its own actor.
         // This is not preemptive interruption of arbitrary NativeAOT code.
-        var fuelActor = runtime.Spawn(ActorKind.Shared, (ctx, _) =>
+        var fuelActor = runtime.Spawn(ActorKind.Shared, (ctx, payload) =>
         {
             try
             {
@@ -114,7 +114,7 @@ internal static class ActorCompiledCfgFrameSelfTest
 
         // A foreign actor cannot import the former actor's frame handle.
         // The terminal stale-handle fault must stop only this probe actor.
-        var staleProbe = runtime.Spawn(ActorKind.Shared, (ctx, _) =>
+        var staleProbe = runtime.Spawn(ActorKind.Shared, (ctx, payload) =>
         {
             Reject(() => ctx.GuestReadStackFrame(stale!, 0, new byte[1]),
                 "old-incarnation guest frame handle entered new actor");
@@ -127,7 +127,7 @@ internal static class ActorCompiledCfgFrameSelfTest
 
         // Replacement actor is an independently minted ActorRef. This is
         // NOT stable-ID supervisor restart; that needs a new runtime ABI.
-        var replacement = runtime.Spawn(ActorKind.Shared, (ctx, _) =>
+        var replacement = runtime.Spawn(ActorKind.Shared, (ctx, payload) =>
         {
             loopAnswer = ExecuteVerified(ctx, loop.Graph, loop.Plan);
             loopDone.Set();
