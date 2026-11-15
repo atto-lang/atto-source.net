@@ -272,7 +272,7 @@ public static partial class OresStructuredParser
                  (tokens[^1].Text == "pub" && tokens.Count > 1 &&
                   tokens[^2].Text == "define")))
                 throw new FormatException(
-                    $"Private abstract class hooks require typed virtual dispatch and superclass-only invocation at offset {token.Offset}");
+                    $"NET_PRIVATE_ABSTRACT_UNSUPPORTED: Private abstract class hooks require typed virtual dispatch and superclass-only invocation; inherited override authority and trusted actor-hook dispatch require typed lowering at offset {token.Offset}");
             if (token.Text == "inverted" && tokens.Count > 0 &&
                 (tokens[^1].Text == "define" ||
                  (tokens[^1].Text == "pub" && tokens.Count > 1 &&
@@ -441,7 +441,7 @@ public static partial class OresStructuredParser
             // Duplicate declarations are diagnosed above, but valid source
             // remains unsupported until typed owner/borrow and CIL lowering.
             throw new FormatException(
-                $"Nominal class/actor methods require receiver-erased method slots, type/borrow checking and Native AOT CIL lowering; unsupported in .NET structured frontend at offset {firstNominalOffset}");
+                $"NET_NOMINAL_METHODS_UNSUPPORTED: Nominal class/actor methods require receiver-erased method slots, type/borrow checking and Native AOT CIL lowering; unsupported in .NET structured frontend at offset {firstNominalOffset}");
         }
         for (int i = 0; i + 1 < tokens.Count; i++)
         {
