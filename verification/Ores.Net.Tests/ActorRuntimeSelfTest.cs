@@ -164,6 +164,8 @@ internal static class ActorRuntimeSelfTest
         Require(hostIo.TryFeedInput(inputSource), "host feed input");
         hostIo.CloseInput();
         hostIo.CloseInput();
+        Require(!hostIo.InputAtEof,
+            "host sees pending input before actor consumes the last record");
         Require(!hostIo.TryFeedInput(new byte[] { 66 }),
             "host cannot write io.in after host-owned EOF");
         inputSource[0] = 255;
@@ -174,6 +176,8 @@ internal static class ActorRuntimeSelfTest
         Require(WaitUntil(() => runtime.CompletedMessages == 1),
             "I/O actor turn completed");
 
+        Require(hostIo.InputAtEof,
+            "host sees input EOF only after actor drains the queued record");
         Require(!hostIo.OutputAtEof, "output EOF must wait for pending record");
         Require(hostIo.TryReadOutput(out var output) && output is not null &&
             output.SequenceEqual(new byte[] { 13, 21, 34 }),
@@ -191,6 +195,11 @@ internal static class ActorRuntimeSelfTest
         try { hostIo.TryFeedInput(new byte[] { 1 }); }
         catch (ObjectDisposedException) { retired = true; }
         Require(retired, "terminal actor STOP must retire host I/O port");
+        bool retiredInputEof = false;
+        try { _ = hostIo.InputAtEof; }
+        catch (ObjectDisposedException) { retiredInputEof = true; }
+        Require(retiredInputEof,
+            "retired host I/O port cannot probe stale input EOF");
     }
 
     // Inspect transport-owned arrays: clearing queues without scrubbing
