@@ -1,0 +1,22 @@
+// Experimental immutable fixed Array<int>/Copy<int> subset.
+// Must return exactly 42 with process exit 0 in Linux AND Windows NativeAOT.
+// Distinguishes Some(0) from None, preserves signed i64 min payload, and
+// rejects negative/min/max out-of-range indices without reading storage.
+pub fnc main():int {
+  val Array<int> values = Array.of(-9223372036854775808, 0, 42);
+  val Option<int> zero = values.get_copy(1);
+  val Option<int> minimum = values.get_copy(0);
+  val Option<int> hit = values.get_copy(2);
+  val Option<int> below = values.get_copy(-9223372036854775808);
+  val Option<int> above = values.get_copy(9223372036854775807);
+  if zero.is_some() {
+    if minimum.is_some() {
+      if minimum.unwrap_or(0) == -9223372036854775808 {
+        if below.is_some() { return 0; }
+        if above.is_some() { return 0; }
+        return hit.unwrap_or(0) + zero.unwrap_or(99);
+      }
+    }
+  }
+  return 0;
+}
