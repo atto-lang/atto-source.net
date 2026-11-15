@@ -40,6 +40,21 @@
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/v1/source-i64/portable-i64.v1.json" Link="portable-i64.v1.json"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/v1/strict-named-integer-arithmetic-v1.json"
+          Link="strict-named-integer-arithmetic-v1.json"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/v1/strict-integer-to-float-exact-v1.json"
+          Link="strict-integer-to-float-exact-v1.json"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/v1/native-math-unary-precision-v1.json"
+          Link="native-math-unary-precision-v1.json"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/v1/bigint-exact-v1.json"
+          Link="bigint-exact-v1.json"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/v1/decimal-precision-v1.json"
+          Link="decimal-precision-v1.json"
+          CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/v1/state-region-provenance-v1.json" Link="state-region-provenance-v1.json"
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../examples/structured-bindings42.ores" Link="structured-bindings42.ores"

@@ -657,6 +657,8 @@ AdtSourceAdmissionTests.Run();
 NumericSeparatorParityTests.Run();
 ExplicitExportSyntaxTests.Run();
 CrossBackendCheckedI64ParityTests.Run();
+StrictSigned64ArithmeticSelfTest.Run(); // host reference semantics vs shared Java contract vectors
+StrictSigned64GuestRemTests.Run(); // Integer.rem/mod/pow verified IR + runtime MemberRef CIL, not NativeAOT
 ActorHierarchyMlAdmissionTests.Run();
 AsyncInteropFailClosedTests.Run();
 EtsPgFailClosedTests.Run();

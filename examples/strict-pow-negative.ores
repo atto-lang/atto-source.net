@@ -1,0 +1,4 @@
+// Negative exponent must produce a controlled guest diagnostic.
+define pub fnc main(): int {
+    return Integer.pow(2, -1);
+}

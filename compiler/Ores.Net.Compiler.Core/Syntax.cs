@@ -8,6 +8,11 @@ public sealed record Unary(char Operator, Expression Value) : Expression;
 public sealed record Binary(char Operator, Expression Left, Expression Right) : Expression;
 // Named intrinsic only. Single '^' is not AttoLang syntax ('^^' is boolean XOR).
 public sealed record NamedBitXor(Expression Left, Expression Right) : Expression;
+// Named signed-64 Integer.rem/mod/pow (Java StrictIntegerArithmetic parity):
+// truncating remainder, Euclidean modulus, checked nonnegative power.
+public sealed record NamedIntegerRem(Expression Left, Expression Right) : Expression;
+public sealed record NamedIntegerMod(Expression Left, Expression Right) : Expression;
+public sealed record NamedIntegerPow(Expression Left, Expression Right) : Expression;
 // Closed-world CLR intrinsic: exact System.Math.Abs(Int64), no dynamic binding.
 public sealed record DotnetMathAbsI64(Expression Value) : Expression;
 public sealed record DotnetMathMaxI64(Expression Left, Expression Right) : Expression;
@@ -1215,18 +1220,28 @@ public static partial class OresParser
             if (Current.Text is "Map" or "Array" or "List" or "Vector" or "Set")
                 throw new FormatException(
                     $"E_COLLECTION_FACTORY_UNSUPPORTED: {Current.Text}.of requires owned typed aggregate and NativeAOT CIL lowering at offset {Current.Offset}");
+            // Closed named Integer intrinsics with two eager signed-i64 operands.
+            // No generic method invocation or host interoperability is admitted.
             if (Take("Integer"))
             {
                 Expect(".");
-                if (!Take("bitXor"))
+                string operation = Current.Text;
+                if (operation is not ("bitXor" or "rem" or "mod" or "pow"))
                     throw new FormatException(
                         $"Unsupported Integer intrinsic at offset {Current.Offset}");
+                _index++;
                 Expect("(");
                 var left = ParseAdd(depth + 1);
                 Expect(",");
                 var right = ParseAdd(depth + 1);
                 Expect(")");
-                return new NamedBitXor(left, right);
+                return operation switch
+                {
+                    "bitXor" => new NamedBitXor(left, right),
+                    "rem" => new NamedIntegerRem(left, right),
+                    "mod" => new NamedIntegerMod(left, right),
+                    _ => new NamedIntegerPow(left, right)
+                };
             }
             if (Take("+")) return new Unary('+', ParseUnary(depth + 1));
             if (Take("-"))

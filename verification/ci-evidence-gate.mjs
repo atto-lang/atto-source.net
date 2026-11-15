@@ -21,6 +21,8 @@ const requiredByWorkflow = {
       "Execute canonical .atto signed relational source in Linux Native AOT",
       "Execute explicitly authorized CLR Abs and Max guests in Native AOT",
       "Negative test for managed sidecar rejection",
+      "Execute compiled guest Integer.rem in Linux Native AOT",
+      "Execute compiled guest Integer.pow and bitXor in Linux Native AOT",
       "Record exact-head Native AOT execution receipt",
       "Upload Linux native executables and evidence"
     ]
