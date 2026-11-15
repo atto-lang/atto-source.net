@@ -1,0 +1,2 @@
+export pub[pkg] fnc main;
+fnc main(): int { return 42; }

@@ -10,6 +10,7 @@ import sys
 SNAPSHOT = "contracts/atto-core-v1"
 MODULES = {
     "numeric.atto": "5ced991f1d49b3c2a60fdd72b9003c0a4d18cd72",
+    "collections.atto": "c5d6659dda078736cb170d5c1d59fc04e700d023",
     "core.atto": "d2cd9b8e0cd3e3bb3ee6a5f9cebf9ab3312c44f4",
 }
 MAX_BYTES = 1024 * 1024

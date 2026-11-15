@@ -5,8 +5,10 @@ internal static class ActorRuntimeSelfTest
 {
     public static void Run()
     {
+        DemandBackedActorRuntimeReusesQuotaAfterStop();
         ThreeKindsUseAssignedDomainsAndActorArenas();
         UnknownActorKindFailsBeforeNativeAllocation();
+        AsyncVoidHostHandlerFailsBeforeNativeAllocation();
         RejectedMessagesDoNotStartCarriers();
         ForgedSameIdCannotObserveTermination();
         OneActorNeverRunsTwoHandlersConcurrently();
@@ -15,12 +17,13 @@ internal static class ActorRuntimeSelfTest
         RetainedContextCannotUseExpiredTurn();
         LifetimePinCanOutliveActorTurnAndStop();
         HandlerFaultRetiresOnlyThatActor();
+        StopDuringActiveTurnFencesBacklogAcrossDomains();
         ConcurrentDisposersAwaitCarrierQuiescence();
         FailedTurnAdmissionScrubsDequeuedMessage();
         ActorToActorRelayIsFifoAndCopyIsolated();
         TerminalStopDoesNotRequireMailboxDataCredit();
         HostIoTurnsAreDirectionalAndCopyIsolated();
-        HostIoPendingDataScrubbedOnlyAfterPhysicalQuiescence();
+        HostIoPendingDataScrubbedAtStopBeforeQuiescence();
         HostIoActorFaultRetiresOutput();
         HostIoGlobalBudgetSurvivesPressureAndStop();
         SupervisorStopReceiptRequiresPhysicalTermination();
@@ -136,10 +139,10 @@ internal static class ActorRuntimeSelfTest
                 "live turn must read host-fed input");
             Require(input.SequenceEqual(new byte[] { 13, 21, 34 }),
                 "host-to-actor channel must isolate sender mutations");
-            Require(context.InputEof, "io.in EOF follows final queued record");
+            Require(context.InputAtEof, "io.in EOF follows final queued record");
             Require(context.TryWriteOutput(input),
                 "live turn must publish bounded output");
-            context.CompleteOutput();
+            context.CloseOutput();
             Require(!context.TryWriteOutput(new byte[] { 9 }),
                 "actor cannot write io.out after actor-owned EOF");
             handled.Set();
@@ -159,8 +162,8 @@ internal static class ActorRuntimeSelfTest
 
         var inputSource = new byte[] { 13, 21, 34 };
         Require(hostIo.TryFeedInput(inputSource), "host feed input");
-        hostIo.CompleteInput();
-        hostIo.CompleteInput();
+        hostIo.CloseInput();
+        hostIo.CloseInput();
         Require(!hostIo.TryFeedInput(new byte[] { 66 }),
             "host cannot write io.in after host-owned EOF");
         inputSource[0] = 255;
@@ -171,11 +174,11 @@ internal static class ActorRuntimeSelfTest
         Require(WaitUntil(() => runtime.CompletedMessages == 1),
             "I/O actor turn completed");
 
-        Require(!hostIo.OutputEof, "output EOF must wait for pending record");
+        Require(!hostIo.OutputAtEof, "output EOF must wait for pending record");
         Require(hostIo.TryReadOutput(out var output) && output is not null &&
             output.SequenceEqual(new byte[] { 13, 21, 34 }),
             "host drain io.out returns exact owned payload");
-        Require(hostIo.OutputEof, "host observes EOF after final output drain");
+        Require(hostIo.OutputAtEof, "host observes EOF after final output drain");
         bool expired = false;
         try { retained!.TryWriteOutput(new byte[] { 99 }); }
         catch (InvalidOperationException) { expired = true; }
@@ -205,7 +208,7 @@ internal static class ActorRuntimeSelfTest
         return ((Queue<byte[]>)queue.GetValue(io)!).Peek();
     }
 
-    private static void HostIoPendingDataScrubbedOnlyAfterPhysicalQuiescence()
+    private static void HostIoPendingDataScrubbedAtStopBeforeQuiescence()
     {
         using var runtime = new ActorRuntime(Options());
         using var entered = new ManualResetEventSlim();
@@ -233,9 +236,15 @@ internal static class ActorRuntimeSelfTest
                 "host posted independently bounded input");
             byte[] ownedInput = PeekHostIoOwnedBytes(hostIo, "_input");
             byte[] ownedOutput = PeekHostIoOwnedBytes(hostIo, "_output");
-            runtime.Stop(actor);
             Require(ownedInput[0] == 41 && ownedOutput[0] == 77,
-                "pending owned buffers cannot be reclaimed until physical turn exit");
+                "pending owned buffers are intact before STOP");
+            runtime.Stop(actor);
+            // Main (#446): mailbox STOP retires this generation's I/O envelope
+            // and scrubs queued records at once; physical retirement of the
+            // actor (arena, cell) still waits for the in-flight turn to exit.
+            Require(ownedInput.All(value => value == 0) &&
+                ownedOutput.All(value => value == 0),
+                "mailbox STOP scrubs queued input and output immediately");
             Require(runtime.LiveActors == 1,
                 "stop cannot claim completed physical retirement before quiescence");
             bool stale = false;
@@ -416,9 +425,9 @@ internal static class ActorRuntimeSelfTest
             {
                 while (ctx.TryReadInput(out var frame) && frame is not null)
                     Require(ctx.TryWriteOutput(frame), "I/O turn writes output");
-                if (ctx.InputEof)
+                if (ctx.InputAtEof)
                 {
-                    ctx.CompleteOutput();
+                    ctx.CloseOutput();
                     gotEof.Set();
                 }
             });
@@ -428,8 +437,8 @@ internal static class ActorRuntimeSelfTest
         first[0] = 99;
         Require(hostIo.TryFeedInput(new byte[] { 30, 40 }),
             "second I/O frame admitted");
-        hostIo.CompleteInput();
-        hostIo.CompleteInput(); // repeated EOF cannot generate more wakeups
+        hostIo.CloseInput();
+        hostIo.CloseInput(); // repeated EOF cannot generate more wakeups
         Require(!hostIo.TryFeedInput(new byte[] { 50 }),
             "completed input must deny further records");
         Require(gotEof.Wait(TimeSpan.FromSeconds(5)),
@@ -439,11 +448,11 @@ internal static class ActorRuntimeSelfTest
         while (hostIo.TryReadOutput(out var frame))
         {
             Require(frame is not null, "drained I/O frame is nonnull");
-            bytes.AddRange(frame);
+            bytes.AddRange(frame!);
         }
         Require(bytes.SequenceEqual(new byte[] { 10, 20, 30, 40 }),
             "automatic I/O output preserves order and owned snapshots");
-        Require(hostIo.OutputEof, "output EOF after all admitted frames");
+        Require(hostIo.OutputAtEof, "output EOF after all admitted frames");
         Require(WaitUntil(() => runtime.CompletedIoTurns >= 1) &&
             runtime.CompletedMessages == 0,
             "I/O wake does not manufacture a user mailbox message");
@@ -563,8 +572,10 @@ internal static class ActorRuntimeSelfTest
             var stopping = Task.Run(() => runtime.Stop(actor));
             Require(stopping.Wait(TimeSpan.FromSeconds(5)),
                 "trusted STOP cannot wait for DATA or I/O scheduler credit");
-            Require(runtime.IoQueuedRecords == 1,
-                "STOP defers I/O scrub until physical actor exit");
+            // Main (#446): mailbox STOP retires the I/O generation and refunds
+            // its queued credit immediately, even while a DATA turn is live.
+            Require(runtime.IoQueuedRecords == 0,
+                "STOP retires queued I/O records without waiting for actor exit");
         }
         finally { release.Set(); }
         Require(WaitUntil(() => runtime.LiveActors == 0 &&
@@ -750,30 +761,24 @@ internal static class ActorRuntimeSelfTest
                 forged != real,
             "test must forge the same numeric actor identity with a different nonce");
 
-        // Internal observation is reached reflectively in this host-only test;
-        // production need not expose an unauthenticated public observation API.
-        MethodInfo? observer = typeof(ActorRuntime).GetMethod(
-            "ObserveTermination", BindingFlags.Instance | BindingFlags.NonPublic);
-        Require(observer is not null, "termination observer entrypoint must exist");
+        // The generated Counter guest uses the public capability-bound API.
+        // A same-ID, same-generation forged ref must not yield a Task.
         bool denied = false;
-        try
-        {
-            _ = observer!.Invoke(runtime, new object[] { forged });
-        }
-        catch (TargetInvocationException exception)
-            when (exception.InnerException is InvalidOperationException)
-        {
-            denied = true;
-        }
+        try { _ = runtime.ObserveTermination(forged); }
+        catch (InvalidOperationException) { denied = true; }
         Require(denied, "a forged ActorRef must not observe another actor's termination");
         Require(runtime.LiveActors == 1,
             "denied observation must not affect the original actor's lifecycle");
 
-        Task legitimate = (Task)(observer!.Invoke(runtime, new object[] { real })
-            ?? throw new InvalidOperationException("missing legitimate termination task"));
+        Task legitimate = runtime.ObserveTermination(real);
         runtime.Stop(real);
-        Require(legitimate.Wait(TimeSpan.FromSeconds(5)),
-            "runtime-minted ActorRef must continue to observe termination");
+        Require(legitimate.Wait(TimeSpan.FromSeconds(5)) &&
+                legitimate.IsCompletedSuccessfully,
+            "runtime-minted ActorRef must observe successful explicit STOP");
+        bool staleDenied = false;
+        try { _ = runtime.ObserveTermination(real); }
+        catch (InvalidOperationException) { staleDenied = true; }
+        Require(staleDenied, "retired actor must not reissue termination authority");
     }
 
     private static void UnknownActorKindFailsBeforeNativeAllocation()
@@ -793,6 +798,33 @@ internal static class ActorRuntimeSelfTest
         Require(runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0 &&
                 runtime.StartedCarrierThreads == 0,
             "invalid kind must not consume actor, native-memory or carrier capacity");
+    }
+
+    private static void AsyncVoidHostHandlerFailsBeforeNativeAllocation()
+    {
+        using var runtime = new ActorRuntime(Options());
+        ActorMessageHandler asyncVoid = async (_, _) =>
+        {
+            await Task.Yield();
+        };
+
+        bool rejected = false;
+        try
+        {
+            _ = runtime.Spawn(ActorKind.Private, asyncVoid);
+        }
+        catch (ArgumentException ex) when (ex.ParamName == "handler")
+        {
+            rejected = ex.Message.Contains(
+                "suspension requires scheduler-owned logical actor continuation lowering",
+                StringComparison.Ordinal);
+        }
+
+        Require(rejected,
+            "async-void handler must fail before it can escape the actor turn");
+        Require(runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0 &&
+                runtime.StartedCarrierThreads == 0,
+            "rejected async handler consumes no actor, arena or carrier capacity");
     }
 
     private static void RejectedMessagesDoNotStartCarriers()
@@ -845,6 +877,64 @@ internal static class ActorRuntimeSelfTest
             QueueCapacityPerDomain = 64
         }
     };
+
+    private static void DemandBackedActorRuntimeReusesQuotaAfterStop()
+    {
+        using var runtime = new ActorRuntime(new ActorRuntimeOptions
+        {
+            MaxActors = 2,
+            MessagesPerDispatch = 1,
+            MailboxMessages = 4,
+            MailboxBytes = 64,
+            ActorPersistentBytes = 8192,
+            ActorScratchBytes = 1024,
+            ActorMaxAllocations = 8,
+            ActorMaxLifetimePins = 4,
+            ActorMaxReadLoans = 4,
+            NativeBudgetBytes = 4096,
+            DemandBackedActorHeaps = true,
+            Dispatcher = new ActorDispatcherOptions
+            {
+                PrivateWorkers = 1,
+                SharedWorkers = 1,
+                UntrustedWorkers = 1,
+                QueueCapacityPerDomain = 2
+            }
+        });
+        using var done = new CountdownEvent(2);
+        ActorMessageHandler handler = (ctx, msg) =>
+        {
+            var value = ctx.AllocatePersistent(8);
+            ctx.Write(value, 0, msg.Span);
+            var bytes = new byte[1];
+            ctx.Read(value, 0, bytes);
+            Require(bytes[0] == msg.Span[0], "actual dispatch uses dynamic actor heap");
+            done.Signal();
+        };
+        var first = runtime.Spawn(ActorKind.Shared, handler);
+        var second = runtime.Spawn(ActorKind.Shared, handler);
+        Require(runtime.LiveActors == 2 && runtime.NativeReservedBytes == 0,
+            "actual runtime spawns two logical actor heaps with no physical backing");
+        runtime.Send(first, new byte[] { 41 });
+        Require(WaitUntil(() => runtime.CompletedMessages == 1),
+            "first demand-backed actor message completed");
+        Require(runtime.NativeReservedBytes == 4096,
+            "one actor only charged a 4-KiB native slab");
+        runtime.Stop(first);
+        Require(WaitUntil(() => runtime.NativeReservedBytes == 0 &&
+                runtime.LiveActors == 1),
+            "first actor physically frees slab and returns tenant quota");
+        runtime.Send(second, new byte[] { 42 });
+        Require(WaitUntil(() => runtime.CompletedMessages == 2),
+            "second actor executes after first actor reclaimed capacity");
+        Require(runtime.NativeReservedBytes == 4096,
+            "same logical heap size does not force eager reservations");
+        Require(done.Wait(TimeSpan.FromSeconds(5)), "both dynamic actor turns ran");
+        runtime.Stop(second);
+        Require(WaitUntil(() => runtime.NativeReservedBytes == 0 &&
+                runtime.LiveActors == 0),
+            "all dynamically allocated runtime actor heaps are freed");
+    }
 
     private static void ThreeKindsUseAssignedDomainsAndActorArenas()
     {
@@ -1103,6 +1193,8 @@ internal static class ActorRuntimeSelfTest
         var failed = runtime.Spawn(ActorKind.Shared, static (_, _) =>
             throw new InvalidOperationException("synthetic actor failure"));
         var healthy = runtime.Spawn(ActorKind.Shared, (_, _) => healthyDone.Set());
+        Task failedTerminal = runtime.ObserveTermination(failed);
+        Task healthyTerminal = runtime.ObserveTermination(healthy);
 
         runtime.Send(failed, new byte[] { 1 });
         runtime.Send(healthy, new byte[] { 2 });
@@ -1113,10 +1205,17 @@ internal static class ActorRuntimeSelfTest
             "faulted actor turn recorded");
         Require(WaitUntil(() => runtime.LiveActors == 1),
             "faulted actor is retired without killing sibling");
+        Require(WaitUntil(() => failedTerminal.IsCompleted) &&
+                failedTerminal.IsFaulted &&
+                failedTerminal.Exception?.InnerException is InvalidOperationException e &&
+                e.Message == "Actor terminated after an unhandled fault",
+            "unhandled actor failure was reported as clean STOP or leaked guest error");
 
         runtime.Stop(healthy);
-        Require(WaitUntil(() => runtime.LiveActors == 0),
-            "healthy sibling remains independently stoppable");
+        Require(WaitUntil(() => runtime.LiveActors == 0) &&
+                healthyTerminal.Wait(TimeSpan.FromSeconds(5)) &&
+                healthyTerminal.IsCompletedSuccessfully,
+            "healthy sibling must terminate successfully despite peer fault");
     }
 
 
@@ -1142,6 +1241,7 @@ internal static class ActorRuntimeSelfTest
             if (!release.Wait(TimeSpan.FromSeconds(10)))
                 throw new Exception("Failed-turn test timed out");
         });
+        Task admissionTerminal = runtime.ObserveTermination(actor);
 
         runtime.Send(actor, new byte[] { 1 });
         try
@@ -1165,15 +1265,32 @@ internal static class ActorRuntimeSelfTest
 
             var messagesField = typeof(ActorMailbox).GetField(
                 "_messages", BindingFlags.Instance | BindingFlags.NonPublic);
-            if (messagesField?.GetValue(mailbox) is not Queue<byte[]> messages ||
-                messages.Count != 1)
+            if (messagesField?.GetValue(mailbox) is not System.Collections.IEnumerable messages ||
+                mailbox.QueuedMessages != 1)
                 throw new Exception("Could not capture pending envelope");
-            byte[] ownedEnvelope = messages.Peek();
+            // The mailbox stores typed USER/CONTROL envelopes, not raw byte[]
+            // entries. Capture the actual queued USER payload so the existing
+            // failed-turn zeroization oracle still observes the owned buffer.
+            var iterator = messages.GetEnumerator();
+            if (!iterator.MoveNext() || iterator.Current is not object envelope ||
+                iterator.MoveNext())
+                throw new Exception("Expected exactly one pending envelope");
+            var envelopeType = envelope.GetType();
+            var payloadProperty = envelopeType.GetProperty(
+                "Payload", BindingFlags.Instance | BindingFlags.Public);
+            var controlProperty = envelopeType.GetProperty(
+                "IsControl", BindingFlags.Instance | BindingFlags.Public);
+            if (payloadProperty?.GetValue(envelope) is not byte[] ownedEnvelope ||
+                controlProperty?.GetValue(envelope) is not bool isControl || isControl)
+                throw new Exception("Expected one pending user-data envelope");
             release.Set();
             Require(WaitUntil(() => runtime.LiveActors == 0),
                 "turn-admission failure must retire its actor");
             Require(runtime.CompletedMessages == 1 && runtime.FaultedTurns == 1,
                 "failed turn admission accounts for one successful and one failed message");
+            Require(WaitUntil(() => admissionTerminal.IsCompleted) &&
+                    admissionTerminal.IsFaulted,
+                "failed turn admission incorrectly produced clean actor termination");
             Require(ownedEnvelope.AsSpan().IndexOfAnyExcept((byte)0) < 0,
                 "dequeued message must be erased after failed turn admission");
             Require(runtime.NativeReservedBytes == 0,
@@ -1236,6 +1353,80 @@ internal static class ActorRuntimeSelfTest
 
         Require(runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0,
             "both disposal callers observed complete native reclamation");
+    }
+
+
+    // Host-level parity regression: stopping one actor while its physical turn
+    // is executing must revoke mailbox admission, discard its queued DATA, and
+    // preserve both its arena and an unrelated actor until safe quiescence.
+    // This is not evidence of compiler-generated .atto actor guest execution.
+    private static void StopDuringActiveTurnFencesBacklogAcrossDomains()
+    {
+        foreach (ActorKind kind in new[] {
+            ActorKind.Private, ActorKind.Shared, ActorKind.Untrusted
+        })
+        {
+            using var runtime = new ActorRuntime(Options());
+            using var entered = new ManualResetEventSlim();
+            using var release = new ManualResetEventSlim();
+            using var siblingDone = new ManualResetEventSlim();
+            int received = 0;
+
+            var target = runtime.Spawn(kind, (_, _) =>
+            {
+                Interlocked.Increment(ref received);
+                entered.Set();
+                if (!release.Wait(TimeSpan.FromSeconds(10)))
+                    throw new InvalidOperationException("STOP test carrier timed out");
+            });
+
+            // Use a different execution domain so an unrelated actor can
+            // prove progress even while the target's physical turn is blocked.
+            var siblingKind = kind == ActorKind.Private
+                ? ActorKind.Shared : ActorKind.Private;
+            var sibling = runtime.Spawn(siblingKind, (_, _) => siblingDone.Set());
+            Task? stop = null;
+            try
+            {
+                runtime.Send(target, new byte[] { 1 });
+                Require(entered.Wait(TimeSpan.FromSeconds(5)),
+                    "target enters a physical turn before STOP: " + kind);
+                runtime.Send(target, new byte[] { 2, 3, 4 });
+                stop = Task.Run(() => runtime.Stop(target));
+                Require(stop.Wait(TimeSpan.FromSeconds(5)),
+                    "STOP must not wait for a blocked handler: " + kind);
+
+                bool lateSendDenied = false;
+                try { runtime.Send(target, new byte[] { 5 }); }
+                catch (InvalidOperationException) { lateSendDenied = true; }
+                Require(lateSendDenied,
+                    "STOP must revoke future mailbox admission: " + kind);
+                Require(Volatile.Read(ref received) == 1,
+                    "queued DATA must not overtake the blocked turn: " + kind);
+                Require(runtime.LiveActors == 2 && runtime.NativeReservedBytes > 0,
+                    "STOP must retain active actor resources until turn exit: " + kind);
+
+                runtime.Send(sibling, new byte[] { 9 });
+                Require(siblingDone.Wait(TimeSpan.FromSeconds(5)),
+                    "an unaffected actor continues running during STOP: " + kind);
+            }
+            finally
+            {
+                // A failing assertion must never strand the stopped carrier.
+                release.Set();
+            }
+
+            Require(WaitUntil(() => runtime.LiveActors == 1),
+                "STOP finalizes exactly the target after turn exit: " + kind);
+            Require(Volatile.Read(ref received) == 1 &&
+                    WaitUntil(() => runtime.CompletedMessages == 2) &&
+                    runtime.FaultedTurns == 0,
+                "STOP drops queued DATA without counting it as executed: " + kind);
+            runtime.Stop(sibling);
+            Require(WaitUntil(() => runtime.LiveActors == 0 &&
+                     runtime.NativeReservedBytes == 0),
+                "STOP refunds both actors' native arenas: " + kind);
+        }
     }
 
     private static bool WaitUntil(Func<bool> condition) =>

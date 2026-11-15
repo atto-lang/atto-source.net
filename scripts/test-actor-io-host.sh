@@ -33,6 +33,7 @@ mkdir -p "$(dirname "$log")"
 dotnet run --project "$project" -c Release --no-build | tee "$log"
 for receipt in \
   'PASS actor scalar frame ABI v1 host/compiler-boundary tests (NOT guest execution)' \
+  'PASS .NET verified CFG scalar live-spill boundary plan (NOT generated actor CIL or guest execution)' \
   ACTOR_IO_ENVELOPE_RETIREMENT_PASS \
   ACTOR_IO_HALF_CLOSE_PASS \
   ACTOR_IO_HOST_INTEGRATION_PASS \

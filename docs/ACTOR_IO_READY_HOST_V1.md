@@ -5,7 +5,7 @@ Status: host-runtime integration only. No `.atto` guest compiler lowering, OS de
 ## Authority and entrypoints
 
 - `ActorRuntime.SpawnWithIo(kind, mailboxHandler, onInputReady)` mints an immutable `ActorRef` and a host-only `ActorIoHostPort`. Only callers holding this port can feed `io.in`, signal input EOF, read `io.out`, and observe output EOF.
-- On an actor turn, `ActorContext.TryReadInput`, `InputEof`, `TryWriteOutput` and `CompleteOutput` require an active arena turn and current actor generation. A retained context does not confer post-turn authority.
+- On an actor turn, `ActorContext.TryReadInput`, `InputAtEof`, `TryWriteOutput` and `CloseOutput` require an active arena turn and current actor generation. A retained context does not confer post-turn authority.
 - The older two-argument `SpawnWithIo` remains a manual-wakeup compatibility path; it does not register a callback.
 - Host ports are local, non-serializable capabilities. Weak runtime references keep host-held ports from pinning a retired actor, its arena, or sibling actors in memory.
 
@@ -17,7 +17,7 @@ Status: host-runtime integration only. No `.atto` guest compiler lowering, OS de
 - If coalescing leaves buffered input after a callback **actually consumed at least one frame**, the actor is rearmed once. A callback that refuses to consume input is not busy-spun; further readiness needs a new host input event or an explicit future retry policy.
 - Regression tests verify a 256-frame burst causes exactly one callback when that callback drains the queue, while another 256-frame burst with a non-consuming callback does not burn carrier time with repeated callbacks. Both paths must refund outstanding I/O records on STOP.
 - No dedicated I/O thread or CONTROL carrier is created. User callbacks execute on existing PRIVATE/SHARED/UNTRUSTED carriers. They must not block; callers must not assume automatic socket, file or pipe readiness here.
-- `ActorRuntime.Stop` closes DATA admission and cancels queued I/O signals immediately without requiring any mailbox capacity. A live physical turn may complete; I/O-owned bytes are scrubbed at physical finalization, *not* when STOP is first requested.
+- `ActorRuntime.Stop` closes DATA admission and cancels queued I/O signals immediately without requiring any mailbox capacity. A live physical turn may complete; queued I/O-owned bytes are scrubbed when STOP retires the mailbox generation (main #446 retirement callback); physical finalization then disposes the envelope after the live turn exits.
 
 ## Resource accounting
 

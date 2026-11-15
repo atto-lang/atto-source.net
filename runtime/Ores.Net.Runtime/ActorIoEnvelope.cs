@@ -46,16 +46,18 @@ public sealed class ActorIoHostPort
     public bool TryReadOutput(out byte[]? data) =>
         _io.TryReadOutput(_actor, out data);
 
-    // Only the host input writer can signal input EOF.
-    public void CompleteInput()
+    // Only the host input writer can signal input EOF. Repeated close is
+    // idempotent and cannot manufacture more scheduler wakeups.
+    public bool CloseInput()
     {
-        if (_io.TryCompleteInput(_actor))
-            NotifyReadiness();
+        bool closed = _io.CloseInput(_actor);
+        if (closed) NotifyReadiness();
+        return closed;
     }
 
     // Output EOF becomes observable after every previously admitted frame
     // has been drained. The host cannot close the actor's output for it.
-    public bool OutputEof => _io.OutputEof(_actor);
+    public bool OutputAtEof => _io.OutputAtEof(_actor);
 }
 
 /// <summary>
@@ -140,6 +142,8 @@ public sealed record ActorMetadataSnapshot(
 /// This object owns no OS descriptors and never aliases process stdin/stdout/stderr.
 /// It is a bounded in-memory transport intended for the future source-level
 /// io.in/io.out/io.err/io.events/io.meta lowering.
+/// An ActorRef is only an incarnation fence in this host substrate; source-level
+/// actor-vs-bridge read/write capabilities still require separate enforcement.
 /// </summary>
 public sealed class ActorIoEnvelope : IDisposable
 {
@@ -161,8 +165,9 @@ public sealed class ActorIoEnvelope : IDisposable
     private int _errorBytes;
     private int _eventBytes;
     private bool _disposed;
-    private bool _inputCompleted;
-    private bool _outputCompleted;
+    private bool _inputClosed;
+    private bool _outputClosed;
+    private bool _retired;
     private ulong _metadataVersion = 1;
     private IReadOnlyDictionary<string, string> _metadata =
         new ReadOnlyDictionary<string, string>(new Dictionary<string, string>());
@@ -177,6 +182,10 @@ public sealed class ActorIoEnvelope : IDisposable
         if (!_mailbox.Authorizes(_boundActor))
             throw new InvalidOperationException(
                 "Actor I/O envelope requires a live actor generation");
+        // Registration is generation-checked again under the mailbox lock.
+        // Mailbox STOP, Dispose and Restart detach and invoke this retirement
+        // callback outside that lock to avoid I/O -> mailbox inversion.
+        _mailbox.RegisterIoRetirement(_boundActor, Retire);
     }
 
     public bool TryFeedInput(ActorRef actor, ReadOnlySpan<byte> data)
@@ -184,7 +193,7 @@ public sealed class ActorIoEnvelope : IDisposable
         lock (_gate)
         {
             RequireCurrent(actor);
-            return !_inputCompleted &&
+            return !_inputClosed &&
                 TryEnqueueBytes(_input, ref _inputBytes, data);
         }
     }
@@ -215,7 +224,7 @@ public sealed class ActorIoEnvelope : IDisposable
         lock (_gate)
         {
             RequireCurrent(actor);
-            return !_outputCompleted &&
+            return !_outputClosed &&
                 TryEnqueueBytes(_output, ref _outputBytes, data);
         }
     }
@@ -229,54 +238,83 @@ public sealed class ActorIoEnvelope : IDisposable
         }
     }
 
-    /// <summary>
-    /// Host-owned half-close for io.in. Existing queued bytes remain readable,
-    /// but no further bytes can be admitted. Repeated EOF is idempotent.
-    /// </summary>
-    public void CompleteInput(ActorRef actor) => _ = TryCompleteInput(actor);
-
-    // Returns false for an already-published EOF so a host cannot manufacture
-    // unbounded scheduler wakeups by repeatedly closing the same input.
-    internal bool TryCompleteInput(ActorRef actor)
+    /// <summary>Close the inbound byte writer. Already admitted records remain readable.</summary>
+    /// <remarks>EOF is observed only after the inbound queue has drained.
+    /// It does not close the actor mailbox or terminate the actor. Returns
+    /// false for an already-published EOF so a host cannot manufacture
+    /// unbounded scheduler wakeups by repeatedly closing the same input.</remarks>
+    public bool CloseInput(ActorRef actor)
     {
         lock (_gate)
         {
             RequireCurrent(actor);
-            if (_inputCompleted) return false;
-            _inputCompleted = true;
+            if (_inputClosed) return false;
+            _inputClosed = true;
             return true;
         }
     }
 
-    public bool InputEof(ActorRef actor)
+    public bool InputAtEof(ActorRef actor)
     {
         lock (_gate)
         {
             RequireCurrent(actor);
-            return _inputCompleted && _input.Count == 0;
+            return _inputClosed && _input.Count == 0;
+        }
+    }
+
+    /// <summary>Close the outbound byte writer without discarding unread output.</summary>
+    public bool CloseOutput(ActorRef actor)
+    {
+        lock (_gate)
+        {
+            RequireCurrent(actor);
+            if (_outputClosed) return false;
+            _outputClosed = true;
+            return true;
+        }
+    }
+
+    public bool OutputAtEof(ActorRef actor)
+    {
+        lock (_gate)
+        {
+            RequireCurrent(actor);
+            return _outputClosed && _output.Count == 0;
         }
     }
 
     /// <summary>
-    /// Actor-owned half-close for io.out. Admitted output remains drainable
-    /// by the host until the record queue is empty.
+    /// Trusted host/runtime retirement of this exact actor I/O generation.
+    /// This does not stop the actor, close OS descriptors or send supervisor CONTROL.
+    /// Unread byte records are erased; already delivered buffers belong to callers.
+    /// Queued records are refunded to the shared runtime I/O budget.
     /// </summary>
-    public void CompleteOutput(ActorRef actor)
+    public void Retire()
     {
         lock (_gate)
-        {
-            RequireCurrent(actor);
-            _outputCompleted = true;
-        }
+            RetireLocked();
     }
 
-    public bool OutputEof(ActorRef actor)
+    private void RetireLocked()
     {
-        lock (_gate)
-        {
-            RequireCurrent(actor);
-            return _outputCompleted && _output.Count == 0;
-        }
+        if (_retired) return;
+        _retired = true;
+        _inputClosed = true;
+        _outputClosed = true;
+        int queued = _input.Count + _output.Count + _errors.Count + _events.Count;
+        int bytes = checked(_inputBytes + _outputBytes + _errorBytes + _eventBytes);
+        ScrubPending(_input);
+        ScrubPending(_output);
+        _errors.Clear();
+        _events.Clear();
+        _budget?.Release(bytes, queued);
+        _inputBytes = 0;
+        _outputBytes = 0;
+        _errorBytes = 0;
+        _eventBytes = 0;
+        _metadata = new ReadOnlyDictionary<string, string>(
+            new Dictionary<string, string>(StringComparer.Ordinal));
     }
 
     public bool TryEmitError(ActorRef actor, ActorIoDiagnostic diagnostic)
@@ -384,7 +422,7 @@ public sealed class ActorIoEnvelope : IDisposable
         // An envelope belongs to exactly one actor incarnation. Even a fresh,
         // valid ActorRef after mailbox restart cannot reopen records retained
         // by an older generation; the supervisor must construct a new envelope.
-        if (actor != _boundActor || !_mailbox.Authorizes(actor))
+        if (_retired || actor != _boundActor || !_mailbox.Authorizes(actor))
             throw new InvalidOperationException(
                 "Actor I/O capability is stale, foreign, retired, or belongs to another generation");
     }
@@ -405,21 +443,7 @@ public sealed class ActorIoEnvelope : IDisposable
         {
             if (_disposed) return;
             _disposed = true;
-            _inputCompleted = true;
-            _outputCompleted = true;
-            int queued = _input.Count + _output.Count + _errors.Count + _events.Count;
-            int bytes = checked(_inputBytes + _outputBytes + _errorBytes + _eventBytes);
-            ScrubPending(_input);
-            ScrubPending(_output);
-            _errors.Clear();
-            _events.Clear();
-            _budget?.Release(bytes, queued);
-            _inputBytes = 0;
-            _outputBytes = 0;
-            _errorBytes = 0;
-            _eventBytes = 0;
-            _metadata = new ReadOnlyDictionary<string, string>(
-                new Dictionary<string, string>(StringComparer.Ordinal));
+            RetireLocked();
         }
     }
 

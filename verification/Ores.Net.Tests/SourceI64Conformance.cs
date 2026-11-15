@@ -84,6 +84,42 @@ internal static class SourceI64Conformance
             Require(actualCil == expected, "emitted CIL result mismatch for " + id);
         }
 
+        // The bootstrap compiler remains one-function/i64-only. Verify
+        // both alternate entrypoint layouts against actual typed IR and CIL.
+        int endCase = 0;
+        foreach (string source in new[] {
+            "pub fnc main() -> int\n  return 40 + 2;\nend",
+            "pub fnc main() -> int\r\n  return 40 + 2;\r\nend",
+            "pub fnc main() -> int\r  return 40 + 2;\rend",
+            "pub fnc main() -> int /* header comment */\r\n  return 40 + 2;\r\nend",
+            "pub fnc main() -> int :: return 40 + 2; end"
+        })
+        {
+            var typed = OresIrLowering.Lower(OresParser.Parse(source));
+            Require(OresIrReferenceEvaluator.Evaluate(typed) == 42,
+                "end-delimited typed IR execution");
+            string path = Path.Combine(directory.Path, "end-main-" + endCase++ + ".dll");
+            CilEmitter.EmitLibrary(typed, path);
+            using var assembly = AssemblyDefinition.ReadAssembly(path);
+            var method = assembly.MainModule.Types.Single(t =>
+                t.FullName == "Oreslang.Generated.OresProgram").Methods.Single(m => m.Name == "Run");
+            Require(CilReferenceEvaluator.Evaluate(method) == 42,
+                "end-delimited emitted CIL execution");
+        }
+        foreach (var bad in new[] {
+            "fnc main() -> int return 42; end",
+            "fnc main() -> int /* still on one line */ return 42; end",
+            "fnc main(): int :: return 42; end",
+            "fnc main() -> int\n  return 42;",
+            "fnc main() -> int\n  return 42;\nend end",
+            "fnc main() -> Result<int,string> :: return Ok(42); end"
+        })
+        {
+            try { _ = OresParser.Parse(bad); }
+            catch (FormatException) { continue; }
+            throw new InvalidOperationException("unsupported/ambiguous source admitted: " + bad);
+        }
+
         int negativeIndex = 0;
         foreach (var expression in new[]
         {
