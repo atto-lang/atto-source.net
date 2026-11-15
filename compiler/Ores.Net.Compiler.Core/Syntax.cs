@@ -41,7 +41,7 @@ public static partial class OresParser
 
     public static Expression Parse(string source, DotnetHostImportPolicy? policy = null)
     {
-        var tokens = Tokenize(source);
+        var tokens = StripFileExports(Tokenize(source), source);
         RejectUnsupportedSourceActors(tokens);
         RejectUnsupportedScalarTokens(tokens);
         for (int i = 0; i + 1 < tokens.Count; i++)
@@ -51,6 +51,49 @@ public static partial class OresParser
                 throw StaticSelectAdmission.Unsupported(tokens[i].Offset);
         }
         return new Reader(tokens, policy ?? DotnetHostImportPolicy.DenyAll).ParseProgram();
+    }
+
+    /// Parse file-root exports using the shared explicit-export grammar.
+    /// The NativeAOT scalar entrypoint currently implements only fnc main;
+    /// other target kinds and package linking must remain explicit errors.
+    private static List<Token> StripFileExports(List<Token> tokens, string source)
+    {
+        var stripped = new List<Token>(tokens.Count);
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        int braces = 0;
+        for (int i = 0; i < tokens.Count; i++)
+        {
+            var token = tokens[i];
+            if (token.Text == "export")
+            {
+                if (braces != 0)
+                    throw new FormatException($"EXPORT_SCOPE: exports must be file-level at offset {token.Offset}");
+                // Legacy source-only export syntax remains in the standalone
+                // grammar adapter; compiler admission requires canonical pub.
+                if (i + 1 >= tokens.Count || tokens[i + 1].Text != "pub")
+                    throw new FormatException($"EXPORT_PUB_REQUIRED: use 'export pub' at offset {token.Offset}");
+                int j = i + 1;
+                while (j < tokens.Count && tokens[j].Text is not ("" or ";")) j++;
+                if (j >= tokens.Count || tokens[j].Text != ";")
+                    throw new FormatException($"EXPORT_SEMICOLON_REQUIRED: export at offset {token.Offset}");
+                var declaration = ExplicitExportSyntax.Parse(source[token.Offset..(tokens[j].Offset + 1)]);
+                if (declaration.Items.Count != 1 || declaration.Items[0].LocalName != declaration.Items[0].ExternalName)
+                    throw new FormatException($"EXPORT_SCALAR_UNSUPPORTED: grouped/aliased exports at offset {token.Offset}");
+                string name = declaration.Items[0].LocalName;
+                if (!names.Add(name))
+                    throw new FormatException($"EXPORT_DUPLICATE: duplicate export {name} at offset {token.Offset}");
+                if (declaration.Kind is not (null or ExplicitExportKind.Fnc) || name != "main")
+                    throw new FormatException($"EXPORT_BACKEND_UNSUPPORTED: only fnc main is lowered in .NET NativeAOT scalar compiler at offset {token.Offset}");
+                if (declaration.Scope != ExplicitExportScope.Public)
+                    throw new FormatException($"EXPORT_PACKAGE_LINKER_UNSUPPORTED: package-only main needs module-scoped linkage at offset {token.Offset}");
+                i = j;
+                continue;
+            }
+            if (token.Text == "{") braces++;
+            else if (token.Text == "}") braces--;
+            stripped.Add(token);
+        }
+        return stripped;
     }
 
     private static List<Token> Tokenize(string source)
@@ -509,7 +552,13 @@ public static partial class OresParser
                     $"WITH_BACKEND_UNSUPPORTED: immutable with requires checked rt copy/take, "
                     + $"owned field layout/drop and Native AOT reconstruction at offset {_i}");
             // No unchecked array access can enter the shipping scalar CIL path.
-            SafeCollectionSourceAdmission.RejectUnverifiedBracket(ch, start);
+            // Exception: the package-scope brackets of a file-level `export pub[pkg]`
+            // are export syntax, not collection access (validated by StripFileExports).
+            bool exportScopeBracket =
+                (ch == '[' && System.Text.RegularExpressions.Regex.IsMatch(text[..start], @"(^|[^A-Za-z0-9_])export\s+pub\s*$")) ||
+                (ch == ']' && System.Text.RegularExpressions.Regex.IsMatch(text[..start], @"(^|[^A-Za-z0-9_])export\s+pub\s*\[\s*[A-Za-z_][A-Za-z0-9_]*\s*$"));
+            if (!exportScopeBracket)
+                SafeCollectionSourceAdmission.RejectUnverifiedBracket(ch, start);
             // Scalar and structured CIL frontends must agree: state-changing
             // annotations are compiler effects, never inert metadata. Check
             // only lexed tokens, after comments have been skipped.
