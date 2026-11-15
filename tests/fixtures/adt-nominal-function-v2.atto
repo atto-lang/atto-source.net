@@ -1,0 +1,24 @@
+// Nominally checked function boundary and exhaustive match.
+// No numeric enum values are exposed in .atto source.
+define enum Light as
+  Red = 1
+  Green = 2
+  Yellow = 3
+end
+
+fnc next(Light state): Light {
+  match state over
+    on Light.Red -> { return Light.Green; }
+    on Light.Green -> { return Light.Yellow; }
+    on Light.Yellow -> { return Light.Red; }
+  end
+}
+
+pub fnc main(): int {
+  val Light active = next(Light.Red);
+  match active over
+    on Light.Red -> { return 10; }
+    on Light.Green -> { return 0; }
+    on Light.Yellow -> { return 30; }
+  end
+}

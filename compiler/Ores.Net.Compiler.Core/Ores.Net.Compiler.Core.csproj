@@ -4,4 +4,9 @@
   </PropertyGroup>
   <!-- The production Native AOT compiler uses System.Reflection.Metadata only.
        Mono.Cecil remains a verification-only dependency, not a published runtime. -->
+  <!-- Compiler-side host bootstrap binds typed actor layouts to the runtime,
+       but guest actor methods remain fail-closed until verified lowering. -->
+  <ItemGroup>
+    <ProjectReference Include="../../runtime/Ores.Net.Runtime/Ores.Net.Runtime.csproj" />
+  </ItemGroup>
 </Project>

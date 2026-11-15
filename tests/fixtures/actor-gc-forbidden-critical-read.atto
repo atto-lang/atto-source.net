@@ -1,0 +1,13 @@
+// Negative actor source: immutable critical-read must not authorize a write.
+define isolated actor MessageCounter as
+    state {
+        count: int = 0;
+    }
+
+    pub increment(int incoming): int using state.read, state.write {
+        return self.handle_state(critical-read |s| -> {
+            s.count = s.count + incoming;
+            return s.count;
+        });
+    }
+end

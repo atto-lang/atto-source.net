@@ -36,7 +36,7 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Verify exact source and all eight guest fixture Git blobs
+      - name: Verify exact source and all twelve guest fixture Git blobs
         shell: pwsh
         env:
           EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -45,7 +45,7 @@ jobs:
           $head = (git rev-parse HEAD).Trim()
           if ($LASTEXITCODE -ne 0 -or $head -cne $env:EXPECTED_SHA) { throw 'Wrong source checkout' }
           $paths = @(Get-ChildItem 'tests/fixtures/collection-factories' -Filter '*.atto' -File)
-          if ($paths.Count -ne 8) { throw 'Expected exactly eight checked AttoLang guests' }
+          if ($paths.Count -ne 12) { throw 'Expected exactly twelve checked AttoLang guests' }
           foreach ($file in $paths) {
             $path = 'tests/fixtures/collection-factories/' + $file.Name
             $actual = (git hash-object --no-filters $path).Trim()
@@ -69,7 +69,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Native AttoLang compiler failed to publish' }
           $compiler = Join-Path (Resolve-Path $output).Path $env:COMPILER_NAME
           if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) { throw 'Compiler executable missing' }
-      - name: Compile and run two real AttoLang factory guests as NativeAOT binaries
+      - name: Compile and run four real AttoLang factory guests as NativeAOT binaries
         shell: pwsh
         env:
           TARGET_RID: ${{ matrix.rid }}
@@ -79,7 +79,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $root = (Get-Location).Path
           $compiler = Join-Path $root ('artifacts/collection-factory/compiler/' + $env:COMPILER_NAME)
-          $fixtures = @('tuple-record-of-positive','tuple-record-tilde-positive')
+          $fixtures = @('tuple-record-of-positive','tuple-record-tilde-positive','entry-pair-of-positive','entry-pair-tilde-positive')
           foreach ($name in $fixtures) {
             $source = Join-Path $root ('tests/fixtures/collection-factories/' + $name + '.atto')
             $generatedDir = Join-Path $root ('artifacts/collection-factory/generated/' + $name)
@@ -115,7 +115,7 @@ jobs:
             $guestBlob = (git rev-parse ('HEAD:tests/fixtures/collection-factories/' + $name + '.atto')).Trim()
             Write-Host "ATTO_NATIVE_FACTORY_GUEST_EXECUTED backend=net rid=$env:TARGET_RID fixture=$name expected=42 actual=42 source_head=$(git rev-parse HEAD) guest_blob=$guestBlob binary_sha256=$sha"
           }
-      - name: Verify six explicit compiler denials without CIL publication
+      - name: Verify eight explicit compiler denials without CIL publication
         shell: pwsh
         env:
           COMPILER_NAME: ${{ matrix.compiler }}
@@ -129,7 +129,9 @@ jobs:
             @('record-duplicate-negative','E_RECORD_DUPLICATE'),
             @('record-field-negative','E_RECORD_FIELD'),
             @('map-unsupported-negative','E_COLLECTION_FACTORY_UNSUPPORTED'),
-            @('array-unsupported-negative','E_COLLECTION_FACTORY_UNSUPPORTED')
+            @('array-unsupported-negative','E_COLLECTION_FACTORY_UNSUPPORTED'),
+            @('entry-pair-member-negative','E_PAIR_FIELD'),
+            @('entry-pair-escape-negative','E_BINARY_PRODUCT_ESCAPE_UNSUPPORTED')
           )
           foreach ($case in $cases) {
             $name = $case[0]; $expected = $case[1]

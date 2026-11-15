@@ -1,0 +1,182 @@
+name: .NET immutable fixed Array<int> checked lookup NativeAOT proof
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-fixed-array:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Pin exact source head and .atto fixture blobs
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-fA-F]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          test "$(git hash-object contracts/collections/v1/array-inline-some42.atto)" = 25b31e47b22cbe9a6670a0d493591438c75bec46
+          test "$(git hash-object contracts/collections/v1/array-get-copy-immutable42.atto)" = d934d5b494406b7e3753173a445af1c0d446a763
+          test "$(git hash-object contracts/collections/v1/array-get-copy-signed-boundaries42.atto)" = c7fac378157f5c42a886f2b80bd3b6df0c18b762
+          test "$(git hash-object contracts/collections/v1/reject-array-get-copy-bool-index.atto)" = 55649e692ddfae4346d4de5ef4d8cded5e4874fb
+          test "$(git hash-object contracts/collections/v1/array-inline-none42.atto)" = ab483900d565f26854db6cf600caaebe897787c1
+          test "$(git hash-object contracts/collections/v1/array-inline-empty42.atto)" = 4bd862d443281d4b09d668f709417ed1f1a87f77
+          test "$(git hash-object contracts/collections/v1/reject-array-mutable.atto)" = 6dce211769d08e5f3244abc79249a27ff2dda154
+          test "$(git hash-object contracts/collections/v1/reject-array-unsafe-index.atto)" = 36e3a0b5449805ae8f47a94055043ffa2ddb1934
+          test "$(git hash-object contracts/collections/v1/reject-array-oversize.atto)" = 40c396d509de034cc2eca0b0603f7f2c579ad5de
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Execute actual compiler, verified CFG, emitted CIL regression suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release > array-tests.log 2>&1 || {
+            cat array-tests.log >&2
+            exit 1
+          }
+          grep -F 'NET_FIXED_ARRAY_OPTION_GET_TESTS_EXECUTED|positive=37|negative=32|ssa_mutants=11' array-tests.log
+          project=compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj
+          for fixture in contracts/collections/v1/array-inline-{some42,none42,empty42}.atto contracts/collections/v1/array-get-copy-{immutable42,signed-boundaries42}.atto; do
+            dotnet run --project "$project" -c Release -- check-structured "$fixture"
+            if dotnet run --project "$project" -c Release -- check "$fixture"; then
+              echo "Shipping i64 compiler incorrectly admitted experimental array: $fixture" >&2
+              exit 1
+            fi
+          done
+          for fixture in contracts/collections/v1/reject-array-{mutable,unsafe-index,oversize}.atto contracts/collections/v1/reject-array-get-copy-bool-index.atto; do
+            if dotnet run --project "$project" -c Release -- check-structured "$fixture" > array-negative.log 2>&1; then
+              echo "Array negative source accepted: $fixture" >&2
+              exit 1
+            fi
+            if [[ "$fixture" == *get-copy-bool-index.atto ]]; then
+              grep -F "Array<int>.get_copy index must be int" array-negative.log
+            fi
+          done
+      - name: Publish and run real Linux NativeAOT guest binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y clang zlib1g-dev binutils file
+          for variant in some42 none42 empty42 getcopy42 signed42; do
+            if [[ "$variant" == "getcopy42" ]]; then
+              source=contracts/collections/v1/array-get-copy-immutable42.atto
+            elif [[ "$variant" == "signed42" ]]; then
+              source=contracts/collections/v1/array-get-copy-signed-boundaries42.atto
+            else
+              source=contracts/collections/v1/array-inline-$variant.atto
+            fi
+            output=artifacts/fixed-array-$variant
+            bash scripts/publish-linux.sh "$source" "$output" --structured
+            binary=$output/linux-x64/oreslang-app
+            bash verification/assert-linux-native-release.sh "$binary"
+            # A successful string comparison is not proof of a successful guest
+            # exit: test "$(crashing_binary)" = 42 masks its nonzero status.
+            # Run as a standalone assignment under set -e so nonzero exits fail.
+            guest_stdout=$("$binary")
+            test "$guest_stdout" = 42
+            sha256sum "$binary"
+          done
+          compiler=artifacts/compiler/linux-x64/oresnet
+          for source in contracts/collections/v1/reject-array-{mutable,unsafe-index,oversize}.atto contracts/collections/v1/reject-array-get-copy-bool-index.atto; do
+            denied=artifacts/rejected-fixed-array/OresGenerated.dll
+            mkdir -p "$(dirname "$denied")"
+            rm -f -- "$denied"
+            if "$compiler" compile-structured "$source" --out "$denied"; then
+              echo "Native compiler admitted unsafe array: $source" >&2
+              exit 1
+            fi
+            test ! -e "$denied"
+          done
+          sha256sum "$compiler"
+          echo "NET_FIXED_ARRAY_LINUX_NATIVE_AOT_GUEST_42|head=$(git rev-parse HEAD)|variants=5"
+
+  windows-fixed-array:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify Windows exact PR head and source fixture identity
+        shell: pwsh
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if ($env:EXPECTED_HEAD -notmatch '^[0-9a-fA-F]{40}$' -or
+              ((& git rev-parse HEAD).Trim() -cne $env:EXPECTED_HEAD)) {
+            throw 'Wrong exact PR head'
+          }
+          $expected = @{
+            'contracts/collections/v1/array-inline-some42.atto' = '25b31e47b22cbe9a6670a0d493591438c75bec46'
+            'contracts/collections/v1/array-get-copy-immutable42.atto' = 'd934d5b494406b7e3753173a445af1c0d446a763'
+            'contracts/collections/v1/array-get-copy-signed-boundaries42.atto' = 'c7fac378157f5c42a886f2b80bd3b6df0c18b762'
+            'contracts/collections/v1/reject-array-get-copy-bool-index.atto' = '55649e692ddfae4346d4de5ef4d8cded5e4874fb'
+            'contracts/collections/v1/array-inline-none42.atto' = 'ab483900d565f26854db6cf600caaebe897787c1'
+            'contracts/collections/v1/array-inline-empty42.atto' = '4bd862d443281d4b09d668f709417ed1f1a87f77'
+            'contracts/collections/v1/reject-array-mutable.atto' = '6dce211769d08e5f3244abc79249a27ff2dda154'
+            'contracts/collections/v1/reject-array-unsafe-index.atto' = '36e3a0b5449805ae8f47a94055043ffa2ddb1934'
+            'contracts/collections/v1/reject-array-oversize.atto' = '40c396d509de034cc2eca0b0603f7f2c579ad5de'
+          }
+          foreach ($path in $expected.Keys) {
+            if ((& git hash-object $path).Trim() -cne $expected[$path]) {
+              throw "Fixture Git blob mismatch: $path"
+            }
+          }
+          if (& git status --porcelain) { throw 'Dirty checkout' }
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Execute Windows compiler/CIL regression suite
+        shell: pwsh
+        run: |
+          dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
+          if ($LASTEXITCODE -ne 0) { throw 'Managed compiler/CFG/CIL regression failed' }
+          foreach ($source in @('contracts/collections/v1/array-inline-some42.atto', 'contracts/collections/v1/array-get-copy-immutable42.atto', 'contracts/collections/v1/array-get-copy-signed-boundaries42.atto')) {
+            dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -- check-structured $source
+            if ($LASTEXITCODE -ne 0) { throw "Experimental checked array source rejected: $source" }
+          }
+      - name: Publish Linux-independent Windows NativeAOT guest binaries
+        shell: pwsh
+        run: |
+          foreach ($variant in @('some42','none42','empty42','getcopy42','signed42')) {
+            $source = if ($variant -eq 'getcopy42') { 'contracts/collections/v1/array-get-copy-immutable42.atto' } elseif ($variant -eq 'signed42') { 'contracts/collections/v1/array-get-copy-signed-boundaries42.atto' } else { "contracts/collections/v1/array-inline-$variant.atto" }
+            $output = "artifacts/fixed-array-$variant"
+            ./scripts/publish-windows.ps1 -Source $source -Rid win-x64 -Output $output -Structured
+            if ($LASTEXITCODE -ne 0) { throw "NativeAOT publish failed: $variant" }
+            $binary = Join-Path $output 'win-x64/oreslang-app.exe'
+            ./verification/assert-native-release.ps1 -Binary $binary -Rid win-x64
+            $outputValue = & $binary
+            if ($LASTEXITCODE -ne 0 -or ($outputValue -join "`n").Trim() -cne '42') {
+              throw "NativeAOT checked array guest failed: $variant"
+            }
+            (Get-FileHash $binary -Algorithm SHA256).Hash
+          }
+          $compiler = 'artifacts/compiler/win-x64/oresnet.exe'
+          foreach ($source in @(
+            'contracts/collections/v1/reject-array-mutable.atto',
+            'contracts/collections/v1/reject-array-unsafe-index.atto',
+            'contracts/collections/v1/reject-array-oversize.atto',
+            'contracts/collections/v1/reject-array-get-copy-bool-index.atto'
+          )) {
+            $denied = 'artifacts/generated/RejectedArray.dll'
+            Remove-Item -LiteralPath $denied -Force -ErrorAction SilentlyContinue
+            & $compiler compile-structured $source --out $denied
+            if ($LASTEXITCODE -eq 0 -or (Test-Path -LiteralPath $denied)) {
+              throw "NativeAOT compiler accepted unsafe array source: $source"
+            }
+          }
+          (Get-FileHash $compiler -Algorithm SHA256).Hash
+          Write-Host "NET_FIXED_ARRAY_WINDOWS_NATIVE_AOT_GUEST_42|head=$((& git rev-parse HEAD).Trim())|variants=5"
