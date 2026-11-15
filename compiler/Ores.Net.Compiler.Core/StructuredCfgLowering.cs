@@ -72,6 +72,8 @@ public static class OresStructuredCfgLowering
             new Dictionary<string, StructuredFunction>(StringComparer.Ordinal);
         private int nextValue;
         private IReadOnlyDictionary<string, CfgCallSignature>? callSignatures;
+        private sealed record LoopTarget(Block Header, Block Exit, string[] Names);
+        private readonly Stack<LoopTarget> loopTargets = new();
 
         public VerifiedCfgFunction LowerHelper(StructuredFunction helper,
             IReadOnlyDictionary<string, CfgCallSignature> signatures)
@@ -537,6 +539,26 @@ public static class OresStructuredCfgLowering
                     case StructuredWhile loop:
                         current = While(loop, current, variables);
                         break;
+                    case StructuredBreak:
+                    {
+                        if (loopTargets.Count == 0)
+                            throw new FormatException("break outside structured CFG loop");
+                        var loop = loopTargets.Peek();
+                        current.Terminator = new CfgJump(loop.Exit.Name,
+                            Values(loop.Names, variables));
+                        current = null;
+                        break;
+                    }
+                    case StructuredContinue:
+                    {
+                        if (loopTargets.Count == 0)
+                            throw new FormatException("continue outside structured CFG loop");
+                        var loop = loopTargets.Peek();
+                        current.Terminator = new CfgJump(loop.Header.Name,
+                            Values(loop.Names, variables));
+                        current = null;
+                        break;
+                    }
                     default:
                         throw new FormatException("Unsupported structured CFG statement");
                 }
@@ -640,15 +662,20 @@ public static class OresStructuredCfgLowering
 
             Block conditionBlock = header;
             int condition = Expression(statement.Condition, ref conditionBlock, headerVariables);
+            // Create the exit join before lowering the body: break edges can
+            // jump here with the same typed SSA values as the false-test edge.
+            var exitVariables = new Dictionary<string, Binding>(StringComparer.Ordinal);
+            Block exit = Join(names, headerVariables, exitVariables);
             Block body = NewBlock();
             var bodyVariables = new Dictionary<string, Binding>(
                 headerVariables, StringComparer.Ordinal);
-            Block? bodyEnd = EmitStatements(statement.Body, body, bodyVariables);
+            loopTargets.Push(new LoopTarget(header, exit, names));
+            Block? bodyEnd;
+            try { bodyEnd = EmitStatements(statement.Body, body, bodyVariables); }
+            finally { loopTargets.Pop(); }
             if (bodyEnd is not null)
                 bodyEnd.Terminator = new CfgJump(header.Name, Values(names, bodyVariables));
 
-            var exitVariables = new Dictionary<string, Binding>(StringComparer.Ordinal);
-            Block exit = Join(names, headerVariables, exitVariables);
             conditionBlock.Terminator = new CfgBranch(condition, body.Name,
                 Array.Empty<int>(), exit.Name, Values(names, headerVariables));
             foreach (string name in names)
