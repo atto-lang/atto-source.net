@@ -37,6 +37,30 @@ internal static class StructuredCfgLoweringTests
         }
     }
 
+    // Statement-bodied helpers (e.g. comma bodies with locals) are not inlined by the
+    // legacy Lower() path; they use LowerModule()'s independent MethodDef ABI.
+    private static void CheckModule(string source, long expected, string label)
+    {
+        string folder = Path.Combine(Path.GetTempPath(),
+            "ores-structured-cfg-module-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            string output = Path.Combine(folder, "OresGenerated.dll");
+            CilEmitter.EmitLibrary(OresStructuredCfgLowering.LowerModule(source), output);
+            using var assembly = AssemblyDefinition.ReadAssembly(output);
+            var entry = assembly.MainModule.Types.Single(t =>
+                t.FullName == "Oreslang.Generated.OresProgram")
+                .Methods.Single(m => m.Name == "Run");
+            if (CfgCilTestInterpreter.Evaluate(entry) != expected)
+                throw new Exception("Structured module CIL mismatch: " + label);
+        }
+        finally
+        {
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
     // Both the independently verified CFG evaluator and emitted CIL must
     // actually trap on a reachable checked-i64 overflow. Reference-only
     // testing cannot prove the native-code input retains checked opcodes.
@@ -163,7 +187,7 @@ internal static class StructuredCfgLoweringTests
     {
         // These cases pass the real structured typed CFG + generated CIL
         // reference interpreter. They do not claim native host execution.
-        Check("""
+        CheckModule("""
             fnc plus(int a, int b): int { return a + b; }
             fnc add(int n) -> int ::
                 int x = plus(2, 3),
@@ -173,7 +197,7 @@ internal static class StructuredCfgLoweringTests
                 add(37)
             end
             """, 42, "comma fnc body with immutable runtime local and final result");
-        Check("""
+        CheckModule("""
             routine twice(int n) -> int ::
                 int factor = 2,
                 factor * n
