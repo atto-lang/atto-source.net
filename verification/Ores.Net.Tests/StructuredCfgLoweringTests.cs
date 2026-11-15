@@ -183,8 +183,71 @@ internal static class StructuredCfgLoweringTests
         RejectWithDiagnostic(source, "Invalid character at offset " + offset, label);
     }
 
+    private static void NegatedDoIfAotControlFlow()
+    {
+        Check("""
+            fnc main():int {
+                let int i = 0;
+                loop {
+                    i = i + 1;
+                    do ifnot true then break; fi
+                    do unless true then break; fi
+                    do ifnot i < 3 then break; fi
+                }
+                return i;
+            }
+            """, 3, "do-ifnot-loop-break");
+        Check("""
+            fnc main():int {
+                let int i = 0;
+                loop {
+                    i = i + 1;
+                    do unless i < 4 then break; fi
+                }
+                return i;
+            }
+            """, 4, "do-unless-loop-break");
+        Check("""
+            fnc main():int {
+                let int i = 0;
+                loop {
+                    i = i + 1;
+                    do ifnot i eq 3 then continue; fi
+                    break;
+                }
+                return i;
+            }
+            """, 3, "do-ifnot-loop-continue");
+        Check("""
+            fnc main():int {
+                let int outer = 0;
+                let int total = 0;
+                loop {
+                    outer = outer + 1;
+                    do unless outer < 3 then break; fi
+                    let int inner = 0;
+                    loop {
+                        inner = inner + 1;
+                        do ifnot inner < 2 then break; fi
+                        total = total + 1;
+                    }
+                }
+                return total;
+            }
+            """, 2, "nested-loop-break-nearest");
+        Check("fnc main():int{return ifnot false then 7 else 9 fi;}",
+            7, "ifnot-value");
+        Check("fnc main():int{return unless true then 7 else 9 fi;}",
+            9, "unless-value");
+        Reject("fnc main():int{loop{if true then break; fi}return 0;}",
+            "keyword value-if cannot contain break");
+        Reject("fnc main():int{do ifnot false then break; fi return 0;}",
+            "break outside loop");
+    }
+
     public static void Run()
     {
+        NegatedDoIfAotControlFlow();
         // These cases pass the real structured typed CFG + generated CIL
         // reference interpreter. They do not claim native host execution.
         CheckModule("""
