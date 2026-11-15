@@ -177,7 +177,7 @@ Require(SpinWait.SpinUntil(() => runtime.LiveActors == 0 &&
     runtime.NativeReservedBytes == 0, TimeSpan.FromSeconds(10)),
     "remaining actors did not independently retire and refund");
 Console.WriteLine("PASS actor-memory-survivor: same-pool peer reads and writes during pinned STOP and after physical reclaim");
-Console.WriteLine("PASS actor-memory-native-probe: four private heaps (two shared-pool actors), foreign handles denied, pooled carriers, stale context denied, pinned STOP and physical reclaim");
+Console.WriteLine("PASS actor-memory-native-probe: async-void denied, four private heaps (two shared-pool actors), foreign handles denied, pooled carriers, stale context denied, pinned STOP and physical reclaim");
 Console.WriteLine("PASS actor-logical-stack-native-probe: four actor-private heaps, per-receive stack cleanup and foreign-handle denial");
 
 // The first production typed-frame backend uses this same native actor-owned

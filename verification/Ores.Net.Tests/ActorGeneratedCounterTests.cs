@@ -73,6 +73,10 @@ internal static class ActorGeneratedCounterTests
         var messageGolden = File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
             "GeneratedMessageCounterActor.g.cs"));
         var messageGenerated = ActorIncrementSourceEmitter.EmitCSharp(messageIr);
+        Require(!generated.Contains('\r') && !messageGenerated.Contains('\r'),
+            "actor emitter must produce canonical LF-only NativeAOT source");
+        Require(messageGenerated == messageGolden.Replace("\r\n", "\n", StringComparison.Ordinal),
+            "typed actor source must be reproducible byte-identically across host OS");
         Require(messageGenerated.Replace("\r\n", "\n", StringComparison.Ordinal) ==
                 messageGolden.Replace("\r\n", "\n", StringComparison.Ordinal),
             "typed-mail generated NativeAOT source differs from checked golden");

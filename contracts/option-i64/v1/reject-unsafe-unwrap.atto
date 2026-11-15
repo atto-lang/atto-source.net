@@ -1,0 +1,4 @@
+pub fnc main():int {
+  val Option<int> found = Some(42);
+  return found.unwrap();
+}

@@ -92,6 +92,7 @@ public sealed partial class OresVmHost
         internal required IsolateHandle Handle { get; init; }
         internal required int ActorLimit { get; init; }
         internal required int PinLimit { get; init; }
+        internal required DurableLockQueues Durable { get; init; }
         internal Phase Phase;
         internal ulong NextActorEpoch = 1;
         internal readonly Dictionary<ulong, ActorTicket> Actors = new();
@@ -141,6 +142,16 @@ public sealed partial class OresVmHost
             throw new InvalidOperationException("stale or foreign actor ticket");
     }
 
+    /// <summary>
+    /// Canonical TenantVM name for TRUSTED host-only admission. The returned
+    /// legacy IsolateHandle does not represent an enforced hostile-tenant
+    /// VM boundary. NativeVmIsolate continues to fail closed in CreateIsolate.
+    /// </summary>
+    public IsolateHandle CreateTrustedTenantVm(string tenantId, int maxActors = 64,
+        int maxResourcePins = 1024, long maxQueuedMailBytes = 16L * 1024 * 1024)
+        => CreateIsolate(tenantId, maxActors, maxResourcePins,
+            IsolationMode.TrustedInProcess, maxQueuedMailBytes);
+
     public IsolateHandle CreateIsolate(string tenantId, int maxActors = 64, int maxResourcePins = 1024,
         IsolationMode isolation = IsolationMode.TrustedInProcess, long maxQueuedMailBytes = 16L * 1024 * 1024)
     {
@@ -163,7 +174,8 @@ public sealed partial class OresVmHost
             var handle = new IsolateHandle(tenantId, _nextGeneration++);
             _tenants.Add(tenantId, new TenantState {
                 Handle = handle, ActorLimit = maxActors, PinLimit = maxResourcePins,
-                MailLimit = maxQueuedMailBytes
+                MailLimit = maxQueuedMailBytes,
+                Durable = new DurableLockQueues(handle.Generation)
             });
             return handle;
         }
@@ -436,7 +448,8 @@ public sealed partial class OresVmHost
     {
         lock (_gate) {
             var s = Check(handle); CheckActor(s, actor);
-            if (s.PinsByActor[actor] != 0)
+            if (s.PinsByActor[actor] != 0 ||
+                s.Durable.HasActor(new DurableLockQueues.ActorKey(actor.Id, actor.Epoch)))
                 throw new InvalidOperationException("actor has outstanding resources");
             if (actor.ActiveTurn is not null)
                 throw new InvalidOperationException("actor has active logical turn");
@@ -514,7 +527,12 @@ public sealed partial class OresVmHost
                         // memory corruption; OS process mode remains denied.
                         lock (_gate) {
                             if (tenant.Phase == Phase.Running)
+                            {
+                                // Every entry into Quiescing stops durable-queue
+                                // admission, so CompleteShutdown can observe Drained.
+                                tenant.Durable.Quiesce();
                                 tenant.Phase = Phase.Quiescing;
+                            }
                             // The faulted incarnation's state is not trusted
                             // and is never read back.
                             tenant.EndReason ??= "guest-fault";
@@ -546,12 +564,66 @@ public sealed partial class OresVmHost
         }
     }
 
+    // Host-only API; trusted caller must pass a live actor-issued capability.
+    public DurableLockQueues.Admission EnqueueDurable(IsolateHandle handle, ActorTicket actor,
+        ulong lockId, ulong operationId, long payloadBytes)
+    {
+        lock (_gate) {
+            var s = Check(handle); CheckActor(s, actor);
+            if (s.Phase != Phase.Running) throw new InvalidOperationException("durable admission closed");
+            return s.Durable.Enqueue(new DurableLockQueues.ActorKey(actor.Id, actor.Epoch),
+                lockId, operationId, payloadBytes);
+        }
+    }
+
+    public bool ClaimDurable(IsolateHandle handle, DurableLockQueues.Ticket ticket)
+    {
+        lock (_gate) {
+            var s = Check(handle);
+            if (s.Phase != Phase.Running) throw new InvalidOperationException("durable claims closed");
+            return s.Durable.Claim(ticket);
+        }
+    }
+    public DurableLockQueues.Ticket? FinishDurable(IsolateHandle handle, DurableLockQueues.Ticket ticket)
+    {
+        lock (_gate) {
+            var s = Check(handle);
+            if (s.Phase is not (Phase.Running or Phase.Quiescing))
+                throw new InvalidOperationException("durable finish phase");
+            return s.Durable.Finish(ticket);
+        }
+    }
+    public DurableLockQueues.Ticket? CancelDurableHead(IsolateHandle handle,
+        DurableLockQueues.Ticket ticket)
+    {
+        lock (_gate) {
+            var s = Check(handle);
+            if (s.Phase is not (Phase.Running or Phase.Quiescing))
+                throw new InvalidOperationException("durable cancel phase");
+            return s.Durable.CancelHead(ticket);
+        }
+    }
+    public void CancelDurableWaiter(IsolateHandle handle, DurableLockQueues.Ticket ticket)
+    {
+        lock (_gate) {
+            var s = Check(handle);
+            if (s.Phase is not (Phase.Running or Phase.Quiescing))
+                throw new InvalidOperationException("durable cancel phase");
+            s.Durable.CancelWaiter(ticket);
+        }
+    }
+    public DurableLockQueues.Snapshot DurableSnapshot(IsolateHandle handle)
+    {
+        lock (_gate) return Check(handle).Durable.GetSnapshot();
+    }
+
     public void BeginShutdown(IsolateHandle handle)
     {
         lock (_gate) {
             var s = Check(handle);
             if (s.Phase is not (Phase.Running or Phase.Created))
                 throw new InvalidOperationException("shutdown phase");
+            s.Durable.Quiesce();
             s.Phase = Phase.Quiescing;
         }
     }
@@ -560,7 +632,7 @@ public sealed partial class OresVmHost
     {
         lock (_gate) {
             var s = Check(handle);
-            if (s.Phase != Phase.Quiescing || s.Actors.Count != 0 || s.ActivePins != 0 || s.ActiveGuestCalls != 0)
+            if (s.Phase != Phase.Quiescing || s.Actors.Count != 0 || s.ActivePins != 0 || s.ActiveGuestCalls != 0 || !s.Durable.Drained)
                 throw new InvalidOperationException("actor or resource still active");
             s.Phase = Phase.Stopped;
         }
