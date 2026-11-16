@@ -67,6 +67,10 @@
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../tests/fixtures/trap-three-backend-target.atto"
           Link="trap-three-backend-target.atto" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Exact source-identical Atto Rust/Wasm ADT guard corpus. -->
+    <None Include="../../tests/fixtures/adt-guard-v1/**/*.atto"
+          Link="adt-guard-v1/%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
     <!-- The nine canonical .atto guest fixtures are byte-identical with
          platform-conformance and the LLVM/Java parity branches. -->
     <None Include="../../tests/fixtures/caller-trap-parity/*.atto"

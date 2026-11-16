@@ -683,6 +683,7 @@ HeapContainerSourceBoundaryTests.Run(); // actual scalar compiler fail-closed he
 StructuralPatternAdmissionTests.Run();
 QuotedTemplateSourceTests.Run(); // real source lexers and single-quote import graph
 AdtSourceAdmissionTests.Run();
+AdtGuardParityAdmissionTests.Run(); // 24 exact canonical fixtures, not an unsupported-source parity pass
 NumericSeparatorParityTests.Run();
 ExplicitExportSyntaxTests.Run();
 CrossBackendCheckedI64ParityTests.Run();
