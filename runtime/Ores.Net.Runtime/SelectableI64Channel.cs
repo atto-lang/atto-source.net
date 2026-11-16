@@ -203,20 +203,31 @@ public sealed class SelectableI64Channel
         }
     }
 
-    public bool TryWrite(long value)
+    /// <summary>
+    /// Attempt one non-suspending write without installing a waiter.
+    /// A full open channel returns WouldBlock; closure always returns Closed,
+    /// even if the closed channel still holds buffered values.
+    /// This host primitive does not enable guest try writech lowering.
+    /// </summary>
+    public WriteStatus TryWriteResult(long value)
     {
         var notifications = CreateNotificationBatch();
         lock (_gate)
         {
-            if (_closed || _count == _values.Length) return false;
+            if (_closed) return WriteStatus.Closed;
+            if (_count == _values.Length) return WriteStatus.WouldBlock;
             Capture(_readers, notifications);
             _values[_tail] = value;
             _tail = (_tail + 1) % _values.Length;
             _count++;
         }
         notifications.Dispatch();
-        return true;
+        return WriteStatus.Written;
     }
+
+    // Preserve the existing boolean API for host callers.
+    public bool TryWrite(long value) =>
+        TryWriteResult(value) == WriteStatus.Written;
 
     /// <summary>
     /// Atomically enqueue a bounded batch in FIFO order, or enqueue nothing.
