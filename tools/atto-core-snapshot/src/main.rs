@@ -29,6 +29,64 @@ fn git_blob_hash(bytes: &[u8]) -> String {
     format!("{:x}", sha.finalize())
 }
 
+// Unix source CI must not dereference a symlink swapped into the final
+// module filename after the directory listing. A full hostile-concurrency
+// proof for ancestor directory replacement remains outside this gate.
+fn open_module(path: &Path) -> Result<(File, fs::Metadata), String> {
+    let initial = fs::symlink_metadata(path)
+        .map_err(|_| "missing guest module")?;
+    if !initial.is_file() || initial.file_type().is_symlink() {
+        return Err("symlink or unexpected file kind".into());
+    }
+
+    #[cfg(unix)]
+    let file = {
+        use std::os::unix::fs::OpenOptionsExt;
+        fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+            .open(path)
+            .map_err(|_| "unsafe guest module open")?
+    };
+
+    #[cfg(not(unix))]
+    let file = File::open(path).map_err(|_| "unreadable guest module")?;
+
+    let opened = file.metadata().map_err(|_| "unreadable guest module")?;
+    if !opened.is_file() {
+        return Err("unexpected opened file kind".into());
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if opened.nlink() != 1 || opened.dev() != initial.dev()
+            || opened.ino() != initial.ino() {
+            return Err("module identity or link count changed".into());
+        }
+    }
+    Ok((file, opened))
+}
+
+fn require_stable_file(before: &fs::Metadata, after: &fs::Metadata) -> Result<(), String> {
+    if !after.is_file() || before.len() != after.len() {
+        return Err("guest module changed during read".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if before.dev() != after.dev() || before.ino() != after.ino()
+            || before.nlink() != after.nlink()
+            || before.mtime() != after.mtime()
+            || before.mtime_nsec() != after.mtime_nsec()
+            || before.ctime() != after.ctime()
+            || before.ctime_nsec() != after.ctime_nsec() {
+            return Err("guest module changed during read".into());
+        }
+    }
+    Ok(())
+}
+
 fn verify(root: &Path) -> Result<BTreeMap<String, String>, String> {
     real_directory(root)?;
     real_directory(&root.join("contracts"))?;
@@ -56,17 +114,9 @@ fn verify(root: &Path) -> Result<BTreeMap<String, String>, String> {
     let mut verified = BTreeMap::new();
     for (name, expected_sha) in MODULES {
         let path = base.join(name);
-        let meta = fs::symlink_metadata(&path)
-            .map_err(|_| "missing guest module")?;
-        if !meta.is_file() || meta.file_type().is_symlink() {
-            return Err("symlink or unexpected file kind".into());
-        }
-        if meta.len() == 0 || meta.len() > MAX_BYTES as u64 {
+        let (mut file, opened) = open_module(&path)?;
+        if opened.len() == 0 || opened.len() > MAX_BYTES as u64 {
             return Err("missing or oversized guest module".into());
-        }
-        let mut file = File::open(&path).map_err(|_| "unreadable guest module")?;
-        if !file.metadata().map_err(|_| "unreadable guest module")?.is_file() {
-            return Err("unexpected opened file kind".into());
         }
         let mut bytes = Vec::new();
         file.by_ref().take((MAX_BYTES + 1) as u64)
@@ -75,6 +125,8 @@ fn verify(root: &Path) -> Result<BTreeMap<String, String>, String> {
         if bytes.is_empty() || bytes.len() > MAX_BYTES {
             return Err("missing or oversized guest module".into());
         }
+        let final_meta = file.metadata().map_err(|_| "unreadable guest module")?;
+        require_stable_file(&opened, &final_meta)?;
         let source = std::str::from_utf8(&bytes)
             .map_err(|_| "non-UTF8 guest source")?;
         if source.starts_with('\u{feff}') || source.contains('\0') {
@@ -253,6 +305,15 @@ mod tests {
         let mut bytes = fs::read(&path).unwrap();
         bytes.push(0);
         fs::write(path, bytes).unwrap();
+        fixture.reject();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn module_hardlink_denied() {
+        let fixture = Fixture::new();
+        let alias = fixture.root.join("outside-core-hardlink");
+        fs::hard_link(fixture.module("core.atto"), alias).unwrap();
         fixture.reject();
     }
 
