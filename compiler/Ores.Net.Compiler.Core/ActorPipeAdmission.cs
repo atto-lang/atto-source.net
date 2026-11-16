@@ -35,8 +35,8 @@ internal static class ActorPipeAdmission
             EndsExpression(left) && StartsExpression(right);
     }
 
-    internal static FormatException Unsupported(int offset) => new(
-        $"{Diagnostic}: actor 'pipe' requires a typed ActorGraph, owned ActorRefs, " +
+    internal static FormatException Unsupported(int offset, string direction = "pipe") => new(
+        $"{Diagnostic}: actor '{direction}' requires a typed ActorGraph, owned ActorRefs, " +
         "supervisor-bound startup, bounded mailbox admission, atomic link " +
         $"publication and Native AOT guest lowering at offset {offset}");
 
