@@ -24,6 +24,21 @@ Exact(new ActorAdtDataWireV1.SomeOk(-1), "41544144010101ffffffffffffffff");
 Exact(new ActorAdtDataWireV1.SomeOk(long.MinValue), "415441440101010000000000000080");
 Exact(new ActorAdtDataWireV1.SomeErr(""), "415441440101020000");
 Exact(new ActorAdtDataWireV1.SomeErr("é"), "415441440101020200c3a9");
+var random = new Random(20261116);
+for (int i = 0; i < 256; i++)
+{
+    var bits = new byte[8];
+    random.NextBytes(bits);
+    var value = new ActorAdtDataWireV1.SomeOk(BitConverter.ToInt64(bits));
+    Check(ActorAdtDataWireV1.Decode(ActorAdtDataWireV1.Encode(value)) == value,
+        "random signed i64 payload drift");
+}
+for (int length = 0; length <= 256; length += 2)
+{
+    var value = new ActorAdtDataWireV1.SomeErr(new string('x', length));
+    Check(ActorAdtDataWireV1.Decode(ActorAdtDataWireV1.Encode(value)) == value,
+        "bounded Err length drift");
+}
 var good = Hex("415441440101020200c3a9");
 for (int length = 0; length < good.Length; length++)
     Deny(good.AsSpan(0, length).ToArray());
