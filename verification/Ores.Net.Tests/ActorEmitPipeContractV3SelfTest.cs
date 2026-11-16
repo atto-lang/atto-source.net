@@ -96,6 +96,40 @@ internal static class ActorEmitPipeContractV3SelfTest
             Stage("a", "Parse", "int", "int"), Stage("b", "Sink", "string")
         }));
 
+        // The exact Java/LLVM v3 byte-boundary vectors: identity caps are
+        // UTF-8 bytes, not Unicode characters or C# UTF-16 code units.
+        Require(ActorEmitPipeContractV3.Validate(new[]
+        {
+            Stage(new string('x', 256), "Parse", "int", "bool"),
+            Stage("sink", "Sink", "bool")
+        }).Count == 1, "256-byte ASCII identity");
+        string unicode256 = string.Concat(Enumerable.Repeat("🌍", 64));
+        Require(ActorEmitPipeContractV3.Validate(new[]
+        {
+            Stage(unicode256, "Parse", "int", "bool"),
+            Stage("sink", "Sink", "bool")
+        }).Count == 1, "256-byte Unicode identity");
+        Reject(new[]
+        {
+            Stage(new string('x', 257), "Parse", "int", "bool"),
+            Stage("sink", "Sink", "bool")
+        }, "E_ACTOR_PIPE_IDENTITY");
+        Reject(new[]
+        {
+            Stage(unicode256 + "🌍", "Parse", "int", "bool"),
+            Stage("sink", "Sink", "bool")
+        }, "E_ACTOR_PIPE_IDENTITY");
+        Reject(new[]
+        {
+            Stage("abc\\0def", "Parse", "int", "bool"),
+            Stage("sink", "Sink", "bool")
+        }, "E_ACTOR_PIPE_IDENTITY");
+        Reject(new[]
+        {
+            Stage(new string('x', 1_000_000), "Parse", "int", "bool"),
+            Stage("sink", "Sink", "bool")
+        }, "E_ACTOR_PIPE_IDENTITY");
+
         for (int length = 2; length <= 16; length++)
         {
             var chain = Enumerable.Range(0, length)
