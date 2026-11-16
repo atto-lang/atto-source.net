@@ -72,6 +72,17 @@ internal static class StructuredSourceTests
         }, "let remains the only rebindable local");
         Reject("fnc main():int{int x=7;x=8;return x;}",
             "readonly type-first rebinding is forbidden");
+        // Type-right and type-first const are the same compile-time binding.
+        var typeRight = OresStructuredParser.Parse(
+            "fnc main():int{int x=10;const y:int=20;const int z=12;return x+y+z;}");
+        Require(typeRight.Body[1] is StructuredLet {
+            Name: "y", Kind: StructuredBindingKind.Const, ValueType: IrValueType.I64,
+            Initializer: StructuredInt { Value: 20 }
+        }, "type-right const must be folded and fixed like type-first const");
+        RejectFeature("fnc main():int{const x:int=10;x=42;return x;}",
+            "E_IMMUTABLE_REBIND");
+        RejectFeature("fnc main():int{mut int x=10;return x;}",
+            "E_MUT_QUALIFIER");
         // Keep the newer helper/capture test coverage while migrating runtime
         // binding semantics to val. No runtime call may bypass constexpr checks.
         var runtimeVals = OresStructuredParser.Parse(
@@ -108,6 +119,8 @@ internal static class StructuredSourceTests
         RejectFeature("fnc runtime_value():int{return 42;}fnc main():int{int x=runtime_value();return x;}",
             "E_NON_CONST_INITIALIZER");
         RejectFeature("fnc runtime_value():int{return 42;}fnc main():int{const int x=runtime_value();return x;}",
+            "E_NON_CONST_INITIALIZER");
+        RejectFeature("fnc runtime_value():int{return 42;}fnc main():int{const x:int=runtime_value();return x;}",
             "E_NON_CONST_INITIALIZER");
         RejectFeature("fnc main():int{const mut int x=42;return x;}",
             "E_CONST_MUT_UNSUPPORTED");
