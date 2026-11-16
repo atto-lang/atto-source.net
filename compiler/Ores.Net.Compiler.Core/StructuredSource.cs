@@ -939,6 +939,13 @@ public static partial class OresStructuredParser
                 (((ch == '<' || ch == '>') && source[index + 1] == '=') ||
                  source.Substring(index, 2) is "->" or "::" or "&&" or "||"))
                 index += 2;
+            // Reverse functional application is distinct from a comparison
+            // followed by a lambda marker. No CIL named-call/effect lowering
+            // exists yet, so reject the *contiguous* token before generating IR.
+            else if (ch == '<' && index + 1 < source.Length &&
+                     source[index + 1] == '|')
+                throw new FormatException(
+                    $"E_VALUE_PIPE_BACKEND_UNSUPPORTED: reverse <| requires typed named-call, Result/Option and effect lowering before NativeAOT emission at offset {offset}");
             else if (ch == '|' && !moduleMode)
                 throw new FormatException(
                     $"Lexical captures require checked closure lowering at offset {offset}");
