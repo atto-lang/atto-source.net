@@ -3,6 +3,40 @@ using System.Text;
 using System.Globalization;
 using Ores.Net.Runtime;
 
+// The shipping default stays byte-for-byte unchanged. Only the scalar
+// check/compile lane may select the preview v1/v2 callable-body contract.
+int? explicitLanguageVersion = null;
+var retainedArgs = new List<string>();
+for (int index = 0; index < args.Length; index++)
+{
+    string item = args[index];
+    if (item == "--language-version" || item.StartsWith("--language-version=", StringComparison.Ordinal))
+    {
+        if (explicitLanguageVersion.HasValue)
+        {
+            Console.Error.WriteLine("E_LANGUAGE_VERSION: duplicate version selection");
+            return 2;
+        }
+        string? value = item == "--language-version"
+            ? index + 1 < args.Length ? args[++index] : null
+            : item["--language-version=".Length..];
+        if (value is not ("1" or "2"))
+        {
+            Console.Error.WriteLine("E_LANGUAGE_VERSION: expected 1 or 2");
+            return 2;
+        }
+        explicitLanguageVersion = int.Parse(value, CultureInfo.InvariantCulture);
+    }
+    else retainedArgs.Add(item);
+}
+args = retainedArgs.ToArray();
+if (explicitLanguageVersion.HasValue &&
+    (args.Length == 0 || args[0] is not ("check" or "compile")))
+{
+    Console.Error.WriteLine("E_LANGUAGE_VERSION: only scalar check/compile support versioned grammar");
+    return 2;
+}
+
 // The bootstrap CLR capability is a deliberate compiler invocation grant,
 // not an authority inferred from host type names or environment variables.
 // It is valid only for scalar check/compile, never module/structured/facts paths.
@@ -278,7 +312,7 @@ try
         else Console.WriteLine("Experimental structured source and verified CFG: OK");
         return 0;
     }
-    var expression = OresParser.Parse(source, dotnetPolicy);
+    var expression = OresParser.Parse(source, dotnetPolicy, explicitLanguageVersion);
     // Both check and compile require successfully verified typed IR.
     // Production CIL must not bypass SSA/type validation.
     var verified = OresIrLowering.Lower(expression, policy: dotnetPolicy);
