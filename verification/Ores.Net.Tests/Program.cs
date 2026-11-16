@@ -3,6 +3,7 @@ using Mono.Cecil.Cil;
 using Ores.Net.Compiler;
 using Ores.Net.Runtime;
 
+ActorTypedReplySlotsSelfTest.Run(); // NativeAOT-safe host ledger, NOT guest request() lowering
 DeclaredActorReceiveSyntaxTests.Run();
 MtdReceiverAdmissionTests.Run();
 ActorForwardNamespaceAdmissionTests.Run();
