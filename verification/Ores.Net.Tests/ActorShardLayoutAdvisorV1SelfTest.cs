@@ -35,9 +35,9 @@ internal static class ActorShardLayoutAdvisorV1SelfTest
             cold.Recommend(coldTurn, 32).Layout == ActorDataLayout.Aos,
             "insufficient profile never speculates tiled layout");
         Require(cold.Observe(coldTurn, ActorShardAccessKindV1.RowScan, 2) &&
-            cold.Samples == 64, "sampling saturates rather than overflowing");
+            cold.SamplesFor(coldTurn) == 64, "sampling saturates rather than overflowing");
         Require(!cold.Observe(coldTurn, ActorShardAccessKindV1.RowScan) &&
-            cold.Samples == 64, "full profile rejects further samples");
+            cold.SamplesFor(coldTurn) == 64, "full profile rejects further samples");
         var tiled = cold.Recommend(coldTurn, 32, preferredLanes: 8);
         Require(tiled.Layout == ActorDataLayout.Aosoa && tiled.Lanes == 8 &&
             tiled.Samples == 64, "row-local traces select precompiled AoSoA");
@@ -106,7 +106,7 @@ internal static class ActorShardLayoutAdvisorV1SelfTest
         });
         carrier.Start();
         carrier.Join();
-        Require(carrierDenied && columns.Samples == 128,
+        Require(carrierDenied && columns.SamplesFor(columnsTurn) == 128,
             "off-carrier access cannot mutate an active actor's profile");
 
         Deny<ArgumentOutOfRangeException>(() => columns.Observe(columnsTurn,
@@ -158,7 +158,8 @@ internal static class ActorShardLayoutAdvisorV1SelfTest
             ActorDataLayout.Aos, 1);
 
         columns.Retire(columnsTurn);
-        Require(columns.Samples == 0, "retirement scrubs profile counters");
+        Deny<InvalidOperationException>(() => _ = columns.SamplesFor(columnsTurn),
+            "retired profile counters cannot leak to callers");
         Deny<InvalidOperationException>(() => columns.Observe(columnsTurn,
             ActorShardAccessKindV1.ColumnScan),
             "retired advisor cannot record even during old physical turn");
