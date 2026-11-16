@@ -834,6 +834,7 @@ ActorPubSubTurnAuthorityTests.Run();
 ActorPubSubByteQuotaTests.Run();
 ActorPubSubSourceAdmissionTests.Run();
 ActorPipeAdmissionTests.Run(); // compiler gate only; no executable actor guest yet
+DirectionalValuePipeStructuredTests.Run(); // real typed scalar CFG/CIL, not Native AOT actor graph
 ActorPipeSourcePlanV1SelfTest.Run(); // checked scalar CIL oracle, not actor delivery
 ActorEmitPipeContractV3SelfTest.Run(); // compiled-type contract ONLY, no source-emitted actor guest
 NativeTraceContinuationV1SelfTest.Run(); // host-owned W3C scopes; not guest CIL instrumentation
