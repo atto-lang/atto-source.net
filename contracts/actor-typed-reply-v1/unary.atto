@@ -1,0 +1,18 @@
+// ACTOR-REPLY-02/04/05 target source. NOT_EXECUTED in LLVM or .NET.
+// This file is not admitted into shipping scalar-guest builds until the
+// nominal message-mode HIR, reply slot binding and actor-lane await exist.
+define class GetUser implements UnaryRequest<Result<int, UserNotFound>> as
+    const int user_id;
+end
+
+define actor Directory receives GetUser sends Result<int, UserNotFound> as
+    receive(GetUser request) {
+        const result = find_user(request.user_id);
+        reply_to(request).send(result)?;
+    }
+end
+
+pub susp fnc query_user(ActorRef<Directory> directory): Result<int, UserNotFound> {
+    const pending = directory.send(GetUser(42))?;
+    return (await pending.receive())?;
+}
