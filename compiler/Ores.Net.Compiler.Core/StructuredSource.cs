@@ -221,7 +221,7 @@ public static partial class OresStructuredParser
                 i > 1 ? tokens[i - 2].Text : "",
                 i > 0 ? tokens[i - 1].Text : "",
                 tokens[i].Text, tokens[i + 1].Text))
-                throw ActorPipeAdmission.Unsupported(tokens[i].Offset);
+                throw ActorPipeAdmission.Unsupported(tokens[i].Offset, tokens[i].Text);
         }
     }
 
