@@ -40,6 +40,21 @@ internal static class DirectionalValuePipeStructuredTests
 
     public static void Run()
     {
+        // Same five SHA-identical source fixtures as Java and LLVM. Keep
+        // parser admission, emitted CFG/CIL and native guest evidence separate.
+        string corpus = Path.Combine(AppContext.BaseDirectory, "directional-parity");
+        string Read(string filename) => File.ReadAllText(Path.Combine(corpus, filename));
+        CheckCil(Read("directional-value-forward-v1.atto"), 42,
+            "shared forward .atto guest CIL");
+        CheckCil(Read("directional-value-reverse-v1.atto"), 42,
+            "shared reverse .atto guest CIL");
+        CheckCil(Read("directional-rpipe-contextual-name.atto"), 42,
+            "shared contextual rpipe local CIL");
+        RejectStructured(Read("directional-value-mixed-reject.atto"),
+            "E_VALUE_PIPE_DIRECTION");
+        RejectStructured(Read("directional-actor-rpipe-reject.atto"),
+            "E_ACTOR_PIPE_BACKEND_UNSUPPORTED");
+
         const string funcs =
             "fnc increment(int x):int{return x+1;}" +
             "fnc twice(int x):int{return x*2;}";
