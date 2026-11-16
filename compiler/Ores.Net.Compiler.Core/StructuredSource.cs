@@ -179,6 +179,9 @@ public static partial class OresStructuredParser
         {
             if (source[i] == '\0')
                 throw new FormatException($"Source contains NUL at offset {i}");
+            // Import discovery and structured parser must share the same raw-source rule.
+            if (source[i] == (char)0x001b || source[i] == (char)0x007f)
+                throw new FormatException($"Source contains terminal control at offset {i}");
             if (char.IsHighSurrogate(source[i]))
             {
                 if (++i >= source.Length || !char.IsLowSurrogate(source[i]))

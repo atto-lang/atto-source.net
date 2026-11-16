@@ -118,6 +118,9 @@ public static partial class OresParser
             char c = source[i];
             if (c == '\0')
                 throw new FormatException($"Source contains NUL byte at offset {i}");
+            // Original UTF-16 source must reject raw terminal controls in comments/literals.
+            if (c == (char)0x001b || c == (char)0x007f)
+                throw new FormatException($"Source contains terminal control at offset {i}");
             if (char.IsHighSurrogate(c))
             {
                 if (i + 1 >= source.Length || !char.IsLowSurrogate(source[i + 1]))
