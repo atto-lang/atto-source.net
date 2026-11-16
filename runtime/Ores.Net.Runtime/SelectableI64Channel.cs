@@ -225,8 +225,7 @@ public sealed class SelectableI64Channel
     /// </summary>
     public WriteStatus TryWriteBatch(ReadOnlySpan<long> values)
     {
-        // The notification storage is allocated before touching channel state.
-        var notifications = CreateNotificationBatch();
+        NotificationBatch? notifications = null;
         lock (_gate)
         {
             if (_closed) return WriteStatus.Closed;
@@ -236,7 +235,14 @@ public sealed class SelectableI64Channel
                 return WriteStatus.WouldBlock;
             if (values.IsEmpty) return WriteStatus.Written;
 
-            Capture(_readers, notifications);
+            // Fail/empty paths allocate nothing. With no registered readers
+            // successful writes also avoid allocating a callback batch.
+            // Any callback allocations happen before mutating the ring.
+            if (ActiveCount(_readers) != 0)
+            {
+                notifications = CreateNotificationBatch();
+                Capture(_readers, notifications);
+            }
             foreach (var value in values)
             {
                 _values[_tail] = value;
@@ -244,7 +250,7 @@ public sealed class SelectableI64Channel
             }
             _count += values.Length;
         }
-        notifications.Dispatch();
+        notifications?.Dispatch();
         return WriteStatus.Written;
     }
 
