@@ -91,6 +91,9 @@ internal static class NativeInvertedF64LayoutPlanV1Tests
                 ActorDataLayout.Aosoa => 152,
                 _ => throw new Exception("unsupported layout")
             }), "explicit byte geometry matches scalar shard ABI");
+            if (layout == ActorDataLayout.Aosoa)
+                Require(plan.ByteOffset(16, 2) == 512,
+                    "second physical AoSoA tile preserves padded field offset");
             RejectOffset(() => plan.ByteOffset(-1, 0), "negative row");
             RejectOffset(() => plan.ByteOffset(17, 0), "row beyond logical tail");
             RejectOffset(() => plan.ByteOffset(0, -1), "negative field");
