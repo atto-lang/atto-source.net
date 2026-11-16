@@ -1,0 +1,6 @@
+// A terminal checked arithmetic overflow is never converted into None.
+// Real native LLVM guest must trap before the return of 7 at O0 and O2.
+pub fnc main(): int {
+  val Option<int> wrapped = trap (9223372036854775807 + 1);
+  return wrapped.unwrap_or(7);
+}

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Runtime.ExceptionServices;
 using System.Threading;
 
 namespace Ores.Net.Runtime;
@@ -73,6 +74,11 @@ public sealed class ActorDispatchDomains : IDisposable
     private readonly ActorDispatchPool _private;
     private readonly ActorDispatchPool _shared;
     private readonly ActorDispatchPool _untrusted;
+    // A second Dispose must not return while another caller still joins live
+    // carrier threads. Disposers serialize on this plain join gate rather
+    // than blocking on an event, which the async-only runtime audit forbids.
+    private readonly object _disposeGate = new();
+    private ExceptionDispatchInfo? _disposeFailure;
     private int _closed;
 
     public ActorDispatchDomains(ActorDispatcherOptions? options = null)
@@ -118,20 +124,37 @@ public sealed class ActorDispatchDomains : IDisposable
 
     public void Dispose()
     {
-        if (Volatile.Read(ref _closed) != 0)
-            return;
+        // Even if another thread is already disposing, an active worker must
+        // never wait on its own termination: that would deadlock shutdown.
         if (_private.IsCurrentWorker ||
             _shared.IsCurrentWorker ||
             _untrusted.IsCurrentWorker)
             throw new InvalidOperationException(
                 "ActorDispatchDomains.Dispose cannot join its current carrier");
 
-        if (Interlocked.Exchange(ref _closed, 1) != 0)
-            return;
+        // The first disposer holds the gate until every carrier join has
+        // finished; later callers enter only afterwards and then replay the
+        // original shutdown failure, if any, instead of reporting success.
+        lock (_disposeGate)
+        {
+            if (Interlocked.CompareExchange(ref _closed, 1, 0) != 0)
+            {
+                _disposeFailure?.Throw();
+                return;
+            }
 
-        _private.Dispose();
-        _shared.Dispose();
-        _untrusted.Dispose();
+            try
+            {
+                _private.Dispose();
+                _shared.Dispose();
+                _untrusted.Dispose();
+            }
+            catch (Exception error)
+            {
+                _disposeFailure = ExceptionDispatchInfo.Capture(error);
+                throw;
+            }
+        }
     }
 
     private ActorDispatchPool Pool(ActorKind kind) => kind switch

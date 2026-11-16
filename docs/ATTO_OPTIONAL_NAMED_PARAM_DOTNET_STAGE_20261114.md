@@ -41,8 +41,9 @@ source examples that should return 42 if the suite is actually executed.
 The markers remain strictly distinct: `x?: int` and `x?: int?` fail with
 `E_OPTIONAL_FORMAL_ABI_UNSUPPORTED`, while `x: int?` fails with
 `E_OPTION_ABI_UNSUPPORTED` (required but unproved two-word Option call
-ABI). `x: int = 10` fails with
-`E_PARAMETER_DEFAULT_REQUIRES_NAME_QUESTION`. The production scalar
+ABI). `x: int = 10` fails with main's unified
+`E_OPTIONAL_FORMAL_ABI_UNSUPPORTED` default/omission diagnostic, and fixed
+array formals keep main's `E_ARRAY_ABI_UNSUPPORTED`. The production scalar
 frontend remains unchanged. The CIL regression cases are **authored but not
 stepfully executed**; no Native AOT guest or optional/default call parity is
 claimed.

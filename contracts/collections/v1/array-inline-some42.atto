@@ -1,0 +1,8 @@
+pub fnc main():int {
+  val Array<int> numbers = Array.of(10, 42);
+  val Option<int> result = numbers.get(1);
+  if result.is_some() {
+    return result.unwrap_or(0);
+  }
+  return 0;
+}
