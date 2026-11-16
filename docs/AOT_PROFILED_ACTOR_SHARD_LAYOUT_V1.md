@@ -19,11 +19,16 @@ AoS/SoA replicas are introduced.
 
 `ActorShardLayoutAdvisorV1` is internal to the runtime assembly and must
 only be reached through a supervisor/scheduler-authenticated actor turn.
-The actor identity and incarnation parameters fence accidental cross-actor
-or cross-generation reuse; numeric identity checks **do not constitute**
-an unforgeable actor capability. The profiler assumes a single serial
-writer, cannot be shared between concurrent actors, and must be retired
-with its owner. Exposing it as a guest FFI is forbidden.
+The advisor is constructed with the exact owning `ActorArena` and
+an issued `ActorArenaTurn`. Every observation, recommendation and retirement
+revalidates that turn's **object identity, opaque authority, incarnation,
+epoch, live state and admitted carrier thread** using the arena's internal
+gate. Matching numeric actor IDs alone never authorize access.
+The profiler assumes a single serial writer and cannot be shared between
+concurrent actors; it must be retired with its owner. Exposing it as a
+guest FFI is forbidden. A host call to `EnterTurn` remains a trusted
+scheduler admission boundary, not proof that arbitrary guest code may mint
+an actor turn.
 
 - One up-front managed advisor object; `Observe` uses only bounded integer
   counters and no clock, reflection, dynamic compilation, I/O, callbacks,
@@ -37,8 +42,9 @@ with its owner. Exposing it as a guest FFI is forbidden.
   at least two fields and two full preferred tiles.
 - AoSoA lanes are powers of two, 2–1,024; padding is checked against the
   existing 16 MiB native shard quota. Otherwise fall back to AoS.
-- Invalid shape, lane size, foreign incarnation, retired advisor and
-  allocation above the quota fail closed, without allocating a shard.
+- Invalid shape, lane size, foreign/forged/stale or off-carrier turn,
+  retired advisor and allocation above the quota fail closed, without
+  allocating a shard.
 - Retirement clears all counters and rejects subsequent operations.
 
 The ratios are conservative **heuristics**, not a claim of measured
@@ -52,8 +58,9 @@ existing borrow by changing its physical layout.
 The existing `verification/Ores.Net.Tests` executable now calls
 `ActorShardLayoutAdvisorV1SelfTest`. Tests cover cold/saturated counters,
 shape/lanes, access-locality policies, stale incarnation, retirement,
-steady-state sampling allocation deltas, and actual actor-owned unmanaged
-AoS/SoA/AoSoA shard checksums and exact quota refund.
+steady-state sampling allocation deltas, wrong owner with matching numeric
+identity, stale turn epoch, wrong carrier thread, and actual actor-owned
+unmanaged AoS/SoA/AoSoA shard checksums and exact quota refund.
 
 Run on a machine with the .NET 10 SDK:
 
