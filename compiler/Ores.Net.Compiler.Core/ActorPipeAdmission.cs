@@ -31,7 +31,8 @@ internal static class ActorPipeAdmission
         // Distinct from functional '|>': this is the infix actor-link keyword.
         // A syntactically expression-like pair must not become a scalar call
         // or an implicitly unbounded host-only pipeline.
-        return current == "pipe" && EndsExpression(left) && StartsExpression(right);
+        return current is "pipe" or "rpipe" &&
+            EndsExpression(left) && StartsExpression(right);
     }
 
     internal static FormatException Unsupported(int offset) => new(
