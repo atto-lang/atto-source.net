@@ -12,10 +12,9 @@ pub fnc main(): int {
 }
 ```
 
-Also admits `Tuple.of(11,23)[1]` and `~tuple(11,23)[1]`.
+Also admits `Tuple.of(11,23)[1]`. The former `~tuple(...)` constructor alias is now rejected.
 An equivalent closed readonly-record slice admits
-`Record.of(low: 11, high: 23).high` and
-`~record(low: 11, high: 23).high`; duplicate fields, unknown field
+`Record.of(low: 11, high: 23).high`; duplicate fields, unknown field
 names and non-literal values fail before CIL. The record projection is
 also statically scalarized and cannot escape as an object.
 This is a *closed, escaping-free scalarized tuple projection*, not a first-class
@@ -43,11 +42,17 @@ non-literal tuple members, guest collection ownership and actor transport are
 not implemented on .NET.** All require a real typed aggregate and ownership
 representation in HIR, verified CFG, CIL and full NativeAOT execution.
 
-The parser also rejects `~map`, `~array` and other unsupported
-tilde constructors; no host `Dictionary`, `List`, `ValueTuple` or C#
+All `~kind(...)` collection constructors are now **removed** rather than
+merely unsupported. Use canonical `Type.of(...)`; the tilde is reserved
+for structural types/patterns (atto-lang/atto-spec#38). No host `Dictionary`, `List`, `ValueTuple` or C#
 reference model is substituted to claim native AttoLang guest support.
 
 ## Correctness and hardening
+
+The NativeAOT collection-factory fixture gate now compiles two canonical
+`Type.of` guests and expects ten negative cases, including two former
+`~kind` positive fixtures reclassified as `E_COLLECTION_FACTORY_REMOVED`.
+This is an authored verification target, **not** proof of executed CI.
 
 - No `Tuple` namespace collision: shipping scalar frontend accepts only one
   top-level `main` with i64 expression; nominal class/member declarations
