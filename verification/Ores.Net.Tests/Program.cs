@@ -6,6 +6,7 @@ using Ores.Net.Runtime;
 NativeSourceIdentityV1SelfTest.Run();
 ActorTypedReplySlotsSelfTest.Run(); // NativeAOT-safe host ledger, NOT guest request() lowering
 DeclaredActorReceiveSyntaxTests.Run();
+AttoCallableLanguageVersionTests.Run();
 MtdReceiverAdmissionTests.Run();
 ActorForwardNamespaceAdmissionTests.Run();
 
