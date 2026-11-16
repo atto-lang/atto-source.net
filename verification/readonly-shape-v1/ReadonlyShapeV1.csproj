@@ -7,6 +7,12 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../../compiler/Ores.Net.Compiler.Core/ReadonlyVerifiedRecordBridgeV1.cs"
+             Link="ReadonlyVerifiedRecordBridgeV1.cs" />
+    <Compile Include="../../compiler/Ores.Net.Compiler.Core/NativeAggregateLayoutVerifier.cs"
+             Link="NativeAggregateLayoutVerifier.cs" />
+    <Compile Include="../../compiler/Ores.Net.Compiler.Core/TypedOresIr.cs"
+             Link="TypedOresIr.cs" />
     <Compile Include="../../compiler/Ores.Net.Compiler.Core/ReadonlyShapeProjectionV1.cs"
              Link="ReadonlyShapeProjectionV1.cs" />
     <Compile Include="../Ores.Net.Tests/ReadonlyShapeProjectionV1Tests.cs"
