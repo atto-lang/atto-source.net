@@ -8,6 +8,11 @@ public sealed record Unary(char Operator, Expression Value) : Expression;
 public sealed record Binary(char Operator, Expression Left, Expression Right) : Expression;
 // Named intrinsic only. Single '^' is not AttoLang syntax ('^^' is boolean XOR).
 public sealed record NamedBitXor(Expression Left, Expression Right) : Expression;
+// Named signed-64 Integer.rem/mod/pow (Java StrictIntegerArithmetic parity):
+// truncating remainder, Euclidean modulus, checked nonnegative power.
+public sealed record NamedIntegerRem(Expression Left, Expression Right) : Expression;
+public sealed record NamedIntegerMod(Expression Left, Expression Right) : Expression;
+public sealed record NamedIntegerPow(Expression Left, Expression Right) : Expression;
 // Closed-world CLR intrinsic: exact System.Math.Abs(Int64), no dynamic binding.
 public sealed record DotnetMathAbsI64(Expression Value) : Expression;
 public sealed record DotnetMathMaxI64(Expression Left, Expression Right) : Expression;
@@ -27,6 +32,10 @@ public static partial class OresParser
 {
     private const int MaxDepth = 128;
     private const int MaxTokens = 100_000;
+    private const int MaxMacroDeclarations = 8;
+    private const int MaxMacroExpansions = 128;
+    private const int MaxMacroConstSteps = 512;
+    private const int MaxMacroConstDepth = 64;
 
     /// <summary>
     /// Inspect the bounded actor schema without lowering executable guest code.
@@ -41,7 +50,7 @@ public static partial class OresParser
 
     public static Expression Parse(string source, DotnetHostImportPolicy? policy = null)
     {
-        var tokens = Tokenize(source);
+        var tokens = StripFileExports(Tokenize(source), source);
         RejectUnsupportedSourceActors(tokens);
         RejectUnsupportedScalarTokens(tokens);
         for (int i = 0; i + 1 < tokens.Count; i++)
@@ -50,7 +59,50 @@ public static partial class OresParser
                 StaticSelectAdmission.IsStaticSelectFollower(tokens[i + 1].Text))
                 throw StaticSelectAdmission.Unsupported(tokens[i].Offset);
         }
-        return new Reader(tokens, policy ?? DotnetHostImportPolicy.DenyAll).ParseProgram();
+        return new Reader(tokens, policy ?? DotnetHostImportPolicy.DenyAll, source).ParseProgram();
+    }
+
+    /// Parse file-root exports using the shared explicit-export grammar.
+    /// The NativeAOT scalar entrypoint currently implements only fnc main;
+    /// other target kinds and package linking must remain explicit errors.
+    private static List<Token> StripFileExports(List<Token> tokens, string source)
+    {
+        var stripped = new List<Token>(tokens.Count);
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        int braces = 0;
+        for (int i = 0; i < tokens.Count; i++)
+        {
+            var token = tokens[i];
+            if (token.Text == "export")
+            {
+                if (braces != 0)
+                    throw new FormatException($"EXPORT_SCOPE: exports must be file-level at offset {token.Offset}");
+                // Legacy source-only export syntax remains in the standalone
+                // grammar adapter; compiler admission requires canonical pub.
+                if (i + 1 >= tokens.Count || tokens[i + 1].Text != "pub")
+                    throw new FormatException($"EXPORT_PUB_REQUIRED: use 'export pub' at offset {token.Offset}");
+                int j = i + 1;
+                while (j < tokens.Count && tokens[j].Text is not ("" or ";")) j++;
+                if (j >= tokens.Count || tokens[j].Text != ";")
+                    throw new FormatException($"EXPORT_SEMICOLON_REQUIRED: export at offset {token.Offset}");
+                var declaration = ExplicitExportSyntax.Parse(source[token.Offset..(tokens[j].Offset + 1)]);
+                if (declaration.Items.Count != 1 || declaration.Items[0].LocalName != declaration.Items[0].ExternalName)
+                    throw new FormatException($"EXPORT_SCALAR_UNSUPPORTED: grouped/aliased exports at offset {token.Offset}");
+                string name = declaration.Items[0].LocalName;
+                if (!names.Add(name))
+                    throw new FormatException($"EXPORT_DUPLICATE: duplicate export {name} at offset {token.Offset}");
+                if (declaration.Kind is not (null or ExplicitExportKind.Fnc) || name != "main")
+                    throw new FormatException($"EXPORT_BACKEND_UNSUPPORTED: only fnc main is lowered in .NET NativeAOT scalar compiler at offset {token.Offset}");
+                if (declaration.Scope != ExplicitExportScope.Public)
+                    throw new FormatException($"EXPORT_PACKAGE_LINKER_UNSUPPORTED: package-only main needs module-scoped linkage at offset {token.Offset}");
+                i = j;
+                continue;
+            }
+            if (token.Text == "{") braces++;
+            else if (token.Text == "}") braces--;
+            stripped.Add(token);
+        }
+        return stripped;
     }
 
     private static List<Token> Tokenize(string source)
@@ -58,17 +110,25 @@ public static partial class OresParser
         ArgumentNullException.ThrowIfNull(source);
         if (source.Length > 1_048_576)
             throw new FormatException("Source is larger than the 1 MiB bootstrap limit");
+        // Validate original UTF-16 before lexing or comment removal.
+        // Report the first offending code-unit offset, matching the structured
+        // frontend while retaining the scalar admission diagnostic categories.
         for (int i = 0; i < source.Length; i++)
         {
             char c = source[i];
-            if (c == '\0') throw new FormatException("Source contains NUL byte");
+            if (c == '\0')
+                throw new FormatException($"Source contains NUL byte at offset {i}");
+            // Original UTF-16 source must reject raw terminal controls in comments/literals.
+            if (c == (char)0x001b || c == (char)0x007f)
+                throw new FormatException($"Source contains terminal control at offset {i}");
             if (char.IsHighSurrogate(c))
             {
-                if (++i >= source.Length || !char.IsLowSurrogate(source[i]))
-                    throw new FormatException("Source contains invalid UTF-16");
+                if (i + 1 >= source.Length || !char.IsLowSurrogate(source[i + 1]))
+                    throw new FormatException($"Source contains invalid UTF-16 at offset {i}");
+                i++; // Valid supplementary scalar consumes two UTF-16 units.
             }
             else if (char.IsLowSurrogate(c))
-                throw new FormatException("Source contains invalid UTF-16");
+                throw new FormatException($"Source contains invalid UTF-16 at offset {i}");
         }
         // Public parser callers supply UTF-16 strings; the source budget is
         // UTF-8 bytes, matching the disk/CLI boundary, not code-unit count.
@@ -509,7 +569,13 @@ public static partial class OresParser
                     $"WITH_BACKEND_UNSUPPORTED: immutable with requires checked rt copy/take, "
                     + $"owned field layout/drop and Native AOT reconstruction at offset {_i}");
             // No unchecked array access can enter the shipping scalar CIL path.
-            SafeCollectionSourceAdmission.RejectUnverifiedBracket(ch, start);
+            // Exception: the package-scope brackets of a file-level `export pub[pkg]`
+            // are export syntax, not collection access (validated by StripFileExports).
+            bool exportScopeBracket =
+                (ch == '[' && System.Text.RegularExpressions.Regex.IsMatch(text[..start], @"(^|[^A-Za-z0-9_])export\s+pub\s*$")) ||
+                (ch == ']' && System.Text.RegularExpressions.Regex.IsMatch(text[..start], @"(^|[^A-Za-z0-9_])export\s+pub\s*\[\s*[A-Za-z_][A-Za-z0-9_]*\s*$"));
+            if (!exportScopeBracket)
+                SafeCollectionSourceAdmission.RejectUnverifiedBracket(ch, start);
             // Scalar and structured CIL frontends must agree: state-changing
             // annotations are compiler effects, never inert metadata. Check
             // only lexed tokens, after comments have been skipped.
@@ -561,6 +627,9 @@ public static partial class OresParser
                     (text[_i] is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_'))
                     _i++;
                 var word = text[start.._i];
+                if (word == "select" &&
+                    StaticSelectAdmission.FollowedByStaticSelect(text, start))
+                    throw StaticSelectAdmission.Unsupported(start);
                 // G0: do not allow unlowered native authority to be spelled as
                 // an ordinary identifier, parameter, member or callable.
                 if (word == "unsafe")
@@ -663,10 +732,16 @@ public static partial class OresParser
                 _i += 2;
                 return new Token("->", start);
             }
+            // Preserve the explicit free-function header/body separator.
+            if (ch == ':' && _i + 1 < text.Length && text[_i + 1] == ':')
+            {
+                _i += 2;
+                return new Token("::", start);
+            }
             // Lex assignment punctuation so unsupported declarations are rejected
             // at their declaration, rather than at a later initializer. The
             // arithmetic parser still has no assignment production.
-            if ("()+-*/{}:;,.=?[]<>~|".IndexOf(ch) >= 0)
+            if ("()+-*/{}:;,.=?[]<>~|!".IndexOf(ch) >= 0)
             {
                 _i++;
                 return new Token(text[start.._i], start);
@@ -690,9 +765,177 @@ public static partial class OresParser
         }
     }
 
-    private sealed class Reader(List<Token> tokens, DotnetHostImportPolicy policy)
+    private sealed class Reader(List<Token> tokens, DotnetHostImportPolicy policy, string source)
     {
+        // Macro definitions are compiler-only. Neither these declarations nor
+        // their arguments appear in OresIR/CIL, and no runtime expansion exists.
+        private enum MacroKind { ConstIntQuote, SyntaxExprIdentity, SyntaxExprLiteralTwice }
+        private sealed record ScalarMacro(string Name, string Parameter, MacroKind Kind);
+        private readonly Dictionary<string, ScalarMacro> _macros = new(StringComparer.Ordinal);
         private int _index;
+        private int _macroExpansions;
+
+        private static FormatException UnsupportedMacro(int at, string reason) =>
+            new($"NET_MACRO_EXPANDER_REQUIRED: {reason} at offset {at}; " +
+                "macro expansion must finish before OresIR/CIL; runtime fallback is forbidden");
+
+        private static bool IsMacroName(string word)
+        {
+            if (word.Length is 0 or > 128 || !(word[0] is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or '_'))
+                return false;
+            foreach (char ch in word)
+                if (!(ch is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_'))
+                    return false;
+            return word is not ("define" or "pub" or "macro" or "return" or "fnc" or "main" or
+                "quote" or "unquote" or "eval" or "const" or "syntax" or "expr" or
+                "Const" or "Syntax" or "Expr" or "int" or "rt");
+        }
+
+        // Closed scalar stage-0 subset also accepted by LLVM #1026:
+        //   define macro literal(Const<int> x) -> Syntax<Expr> { return quote(x); }
+        //   define macro identity(Syntax<Expr> x) -> Syntax<Expr> { return x; }
+        //   define macro twice(Syntax<Expr> x) -> Syntax<Expr> {
+        //       return quote(unquote(x) + unquote(x)); }
+        // Only closed integer literal arguments can be repeated. This avoids
+        // pre-typecheck ownership/effect amplification and never emits runtime
+        // source parsing, JIT, dynamic code or reflection.
+        // Validate even unused macros: unsupported bodies must never be erased
+        // silently by an AOT compiler.
+        // Malformed/unsupported macro signatures and bodies have one stable
+        // compile-time-only rejection category. Do not let ordinary expression
+        // grammar diagnostics disguise an unimplemented macro expander.
+        private void ExpectMacro(string expected)
+        {
+            if (!Take(expected))
+                throw UnsupportedMacro(Current.Offset,
+                    $"unsupported macro signature/body; expected '{expected}'");
+        }
+
+        private void ParseMacroPrelude()
+        {
+            while (Current.Text is "define" or "pub")
+            {
+                int checkpoint = _index;
+                bool defined = false, exposed = false;
+                while (Current.Text is "define" or "pub")
+                {
+                    if (Take("define"))
+                    {
+                        if (defined) throw UnsupportedMacro(Current.Offset, "duplicate define modifier");
+                        defined = true;
+                    }
+                    else
+                    {
+                        ExpectMacro("pub");
+                        if (exposed) throw UnsupportedMacro(Current.Offset, "duplicate pub modifier");
+                        exposed = true;
+                    }
+                }
+                if (Current.Text != "macro")
+                {
+                    _index = checkpoint; // Normal main declaration: existing grammar owns it.
+                    return;
+                }
+                int at = Current.Offset;
+                _index++;
+                if (!defined || exposed)
+                    throw UnsupportedMacro(at, "public or unqualified macro declarations require checked export/visibility metadata");
+                string name = Current.Text;
+                if (!IsMacroName(name))
+                    throw UnsupportedMacro(at, "invalid or reserved macro name");
+                _index++;
+                ExpectMacro("(");
+                bool constInput;
+                if (Take("Const"))
+                {
+                    ExpectMacro("<"); ExpectMacro("int"); ExpectMacro(">");
+                    constInput = true;
+                }
+                else if (Take("Syntax"))
+                {
+                    ExpectMacro("<"); ExpectMacro("Expr"); ExpectMacro(">");
+                    constInput = false;
+                }
+                else
+                    throw UnsupportedMacro(at, "only Const<int> and Syntax<Expr> inputs are supported");
+                string parameter = Current.Text;
+                if (!IsMacroName(parameter))
+                    throw UnsupportedMacro(at, "invalid macro parameter name");
+                _index++;
+                ExpectMacro(")");
+                ExpectMacro("->"); ExpectMacro("Syntax"); ExpectMacro("<"); ExpectMacro("Expr"); ExpectMacro(">");
+                ExpectMacro("{"); ExpectMacro("return");
+                MacroKind kind;
+                if (constInput)
+                {
+                    ExpectMacro("quote"); ExpectMacro("("); ExpectMacro(parameter); ExpectMacro(")");
+                    kind = MacroKind.ConstIntQuote;
+                }
+                else if (Take("quote"))
+                {
+                    // Deliberately narrow identifier-free typed template:
+                    // exactly two direct, same-parameter unquotes with '+'.
+                    ExpectMacro("(");
+                    ExpectMacro("unquote"); ExpectMacro("("); ExpectMacro(parameter); ExpectMacro(")");
+                    ExpectMacro("+");
+                    ExpectMacro("unquote"); ExpectMacro("("); ExpectMacro(parameter); ExpectMacro(")");
+                    ExpectMacro(")");
+                    kind = MacroKind.SyntaxExprLiteralTwice;
+                }
+                else
+                {
+                    ExpectMacro(parameter);
+                    kind = MacroKind.SyntaxExprIdentity;
+                }
+                ExpectMacro(";"); ExpectMacro("}");
+                if (_macros.Count >= MaxMacroDeclarations)
+                    throw UnsupportedMacro(at, "macro declaration budget exceeded");
+                if (!_macros.TryAdd(name, new ScalarMacro(name, parameter, kind)))
+                    throw UnsupportedMacro(at, "duplicate macro declaration");
+            }
+        }
+
+        private static long EvaluateMacroConst(Expression expression, int at)
+        {
+            int steps = 0;
+            long Visit(Expression node, int depth)
+            {
+                if (++steps > MaxMacroConstSteps || depth > MaxMacroConstDepth)
+                    throw UnsupportedMacro(at, "NET_MACRO_CONST_BUDGET: closed Const<int> AST budget exceeded");
+                try
+                {
+                    switch (node)
+                    {
+                        case Literal number: return number.Value;
+                        case Unary unary when unary.Operator is '+' or '-':
+                        {
+                            long value = Visit(unary.Value, depth + 1);
+                            return unary.Operator == '-' ? checked(-value) : value;
+                        }
+                        case Binary binary when binary.Operator is '+' or '-' or '*':
+                        {
+                            long left = Visit(binary.Left, depth + 1);
+                            long right = Visit(binary.Right, depth + 1);
+                            return binary.Operator switch
+                            {
+                                '+' => checked(left + right),
+                                '-' => checked(left - right),
+                                '*' => checked(left * right),
+                                _ => throw UnsupportedMacro(at, "unsupported const binary operator")
+                            };
+                        }
+                        default:
+                            throw UnsupportedMacro(at, "Const<int> must be a closed scalar AST");
+                    }
+                }
+                catch (OverflowException ex)
+                {
+                    throw new FormatException(
+                        $"NET_MACRO_CONST_OVERFLOW at offset {at}; runtime fallback is forbidden", ex);
+                }
+            }
+            return Visit(expression, 0);
+        }
         private string? _dotnetMathAlias;
         private Token Current => tokens[_index];
 
@@ -732,6 +975,7 @@ public static partial class OresParser
                 _dotnetMathAlias = alias;
                 Expect(";");
             }
+            ParseMacroPrelude();
             bool defined = false, exposed = false;
             while (Current.Text is "define" or "pub")
             {
@@ -751,6 +995,12 @@ public static partial class OresParser
                 throw new FormatException($"STATE_CONTAINER_BACKEND_UNSUPPORTED: protected heap region and critical guard lowering required at offset {Current.Offset}");
             if (Current.Text == "virtual" && _index + 1 < tokens.Count && tokens[_index + 1].Text == "actor")
                 throw new FormatException($"VIRTUAL_ACTOR_BACKEND_UNSUPPORTED: logical key and activation fencing required at offset {Current.Offset}");
+            // Scalar NativeAOT has no originating-slot virtual dispatch or
+            // compiler-owned mailbox ingress. Deny before parsing fnc main.
+            if (Current.Text == "abstract")
+                throw new FormatException($"NET_PRIVATE_ABSTRACT_UNSUPPORTED: Private abstract class hooks require typed virtual dispatch; inherited override authority and trusted actor-hook dispatch require typed lowering at offset {Current.Offset}");
+            if (Current.Text is "class" or "actor")
+                throw new FormatException($"NET_NOMINAL_METHODS_UNSUPPORTED: Nominal class/actor entrypoints require runtime-sealed receiver and CIL lowering at offset {Current.Offset}");
             // Scalar CIL and NativeAOT do not lower nominal ModelGraphs.
             // 'model' is contextual, not globally reserved.
             if (Current.Text == "model")
@@ -760,16 +1010,39 @@ public static partial class OresParser
             Expect("main");
             Expect("(");
             Expect(")");
-            if (!Take(":")) Expect("->");
+            bool arrowReturn = !Take(":");
+            if (arrowReturn) Expect("->");
             Expect("int");
-            Expect("{");
+            bool braced = Take("{");
+            if (!braced)
+            {
+                if (!arrowReturn)
+                    throw new FormatException($"End-delimited main requires '-> int' at offset {Current.Offset}");
+                bool explicitSeparator = Take("::");
+                if (!explicitSeparator)
+                {
+                    var previous = tokens[_index - 1];
+                    int boundaryStart = previous.Offset + previous.Text.Length;
+                    bool hasLineBreak = false;
+                    for (int i = boundaryStart; i < Current.Offset; i++)
+                    {
+                        if (source[i] is '\n' or '\r' or '\u0085' or '\u2028' or '\u2029')
+                        {
+                            hasLineBreak = true;
+                            break;
+                        }
+                    }
+                    if (!hasLineBreak)
+                        throw new FormatException($"Compact end-delimited main requires '::' at offset {Current.Offset}");
+                }
+            }
             if (Current.Text == "guard")
                 throw new FormatException(
                     $"GUARD_BACKEND_UNSUPPORTED: early-exit CFG and ownership lowering required at offset {Current.Offset}");
             Expect("return");
             var expression = ParseAdd(0);
             Expect(";");
-            Expect("}");
+            Expect(braced ? "}" : "end");
             if (Current.Text.Length != 0)
                 throw new FormatException($"Unexpected token at offset {Current.Offset}");
             return expression;
@@ -801,10 +1074,11 @@ public static partial class OresParser
             while (Current.Text is "*" or "/")
             {
                 char op = Current.Text[0];
-                // Reference Oreslang int/int has a float result. This i64-only
-                // frontend must not silently truncate it using CIL div.
+                // int/int is float in Oreslang and remains unsupported in this
+                // i64-only bootstrap; % and ^ are removed at lexical admission.
                 if (op == '/')
-                    throw new FormatException("Division requires float result lowering; unsupported in the i64 source subset");
+                    throw new FormatException(
+                        "Division requires float result lowering; unsupported in the i64 source subset");
                 _index++;
                 var rhs = ParseUnary(depth + 1);
                 left = new Binary(op, left, rhs);
@@ -818,7 +1092,8 @@ public static partial class OresParser
             if (Current.Text.Length > 0 && Current.Text[0] is '\'' or '"' or '\u0060')
                 throw new FormatException(
                     $"STRING_BACKEND_UNSUPPORTED: quoted strings and template interpolation require typed String CIL/NativeAOT lowering at offset {Current.Offset}");
-            if (Current.Text == "rt")
+            if (Current.Text == "rt" &&
+                !(_index + 1 < tokens.Count && tokens[_index + 1].Text == "!"))
             {
                 int at = Current.Offset;
                 _index++;
@@ -841,6 +1116,64 @@ public static partial class OresParser
 
                 throw new FormatException(
                     $"Runtime ownership operation requires typed lowering; unsupported in the .NET scalar backend at offset {at}");
+            }
+            // Every token followed by ! is a macro invocation candidate.
+            // IsMacroName intentionally rejects reserved identifiers, but using
+            // it to *detect* calls would route quote!/eval!/rt!/main! to the
+            // ordinary scalar-expression error instead of the fail-closed
+            // macro diagnostic. The declared-name check still happens below.
+            if (Current.Text.Length != 0 && _index + 1 < tokens.Count &&
+                tokens[_index + 1].Text == "!")
+            {
+                int at = Current.Offset;
+                string name = Current.Text;
+                if (!_macros.TryGetValue(name, out ScalarMacro? macro))
+                    throw UnsupportedMacro(at, $"unresolved macro '{name}'");
+                if (++_macroExpansions > MaxMacroExpansions)
+                    throw UnsupportedMacro(at, "macro expansion count exceeds 128");
+                _index += 2;
+                Expect("(");
+                Expression argument;
+                if (macro.Kind == MacroKind.ConstIntQuote)
+                {
+                    if (!Take("const"))
+                        throw UnsupportedMacro(at, "Const<int> macro requires a const argument");
+                    argument = ParseAdd(depth + 1);
+                    Expect(")");
+                    // Materialize a new checked literal in the compiler AST.
+                    // No token-string rewriting, reflection or JIT execution.
+                    return new Literal(EvaluateMacroConst(argument, at));
+                }
+                if (!Take("syntax") || !Take("expr"))
+                    throw UnsupportedMacro(at, "Syntax<Expr> macro requires syntax expr");
+                if (macro.Kind == MacroKind.SyntaxExprLiteralTwice &&
+                    IsMacroName(Current.Text) &&
+                    (_index + 1 >= tokens.Count || tokens[_index + 1].Text != "!"))
+                    throw UnsupportedMacro(at, "repeated unquote requires a closed integer literal; cannot duplicate a name or call before ownership analysis");
+                argument = ParseAdd(depth + 1);
+                Expect(")");
+                if (macro.Kind == MacroKind.SyntaxExprLiteralTwice)
+                {
+                    // This pre-typecheck expander cannot prove name copyability
+                    // or the absence of effects/ownership transfers. Only a
+                    // closed integer literal is safe to repeat. Both AST
+                    // occurrences MUST have fresh identity (no DAG alias).
+                    if (argument is not Literal number)
+                        throw UnsupportedMacro(at, "repeated unquote requires a closed integer literal; cannot duplicate effects or ownership");
+                    try
+                    {
+                        _ = checked(number.Value + number.Value);
+                    }
+                    catch (OverflowException ex)
+                    {
+                        throw new FormatException(
+                            $"NET_MACRO_CONST_OVERFLOW at offset {at}; runtime fallback is forbidden", ex);
+                    }
+                    return new Binary('+', new Literal(number.Value), new Literal(number.Value));
+                }
+                // Single call-site AST splice: no generated identifier, and
+                // no copied/replayed ownership or effectful expression.
+                return argument;
             }
             if (_dotnetMathAlias is not null && Take(_dotnetMathAlias))
             {
@@ -904,18 +1237,28 @@ public static partial class OresParser
             if (Current.Text is "Map" or "Array" or "List" or "Vector" or "Set")
                 throw new FormatException(
                     $"E_COLLECTION_FACTORY_UNSUPPORTED: {Current.Text}.of requires owned typed aggregate and NativeAOT CIL lowering at offset {Current.Offset}");
+            // Closed named Integer intrinsics with two eager signed-i64 operands.
+            // No generic method invocation or host interoperability is admitted.
             if (Take("Integer"))
             {
                 Expect(".");
-                if (!Take("bitXor"))
+                string operation = Current.Text;
+                if (operation is not ("bitXor" or "rem" or "mod" or "pow"))
                     throw new FormatException(
                         $"Unsupported Integer intrinsic at offset {Current.Offset}");
+                _index++;
                 Expect("(");
                 var left = ParseAdd(depth + 1);
                 Expect(",");
                 var right = ParseAdd(depth + 1);
                 Expect(")");
-                return new NamedBitXor(left, right);
+                return operation switch
+                {
+                    "bitXor" => new NamedBitXor(left, right),
+                    "rem" => new NamedIntegerRem(left, right),
+                    "mod" => new NamedIntegerMod(left, right),
+                    _ => new NamedIntegerPow(left, right)
+                };
             }
             if (Take("+")) return new Unary('+', ParseUnary(depth + 1));
             if (Take("-"))

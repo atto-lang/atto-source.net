@@ -70,6 +70,17 @@ See [managed source backends](docs/MANAGED_SOURCE_BACKENDS.md).
 
 ## Current language support
 
+### Draft compile-time scalar macros
+
+The production scalar frontend also has a restricted, **compiler-only** `define macro`
+stage-0 feature branch: `Const<int>` quotation, `Syntax<Expr>` identity, and
+one literal-only repeated `quote(unquote(value) + unquote(value))` template,
+with checked constant evaluation, fresh compiler AST identities before CIL,
+and explicit rejection of all unsafe or unsupported macro forms. It does not
+implement general typed templates, macro imports/exports, hygiene, or structured-source macro
+execution. **No verified cross-backend Native AOT pass is claimed.**
+See [the macro parity scope and test gates](docs/MACRO_SCALAR_PARITY_V1.md).
+
 The compiler accepts exactly this shape with optional `define`/`pub` modifiers:
 
 ~~~ores
@@ -369,3 +380,15 @@ and overflow source-generated actors; the older trusted-host Counter API is
 kept separate and its managed cells are not arena-isolation evidence.
 See [execution evidence and open parity gates](docs/ACTOR_NATIVE_STATE_FRAMES_INTEGRATION_20261110.md).
 This is not general actor CIL, concurrent-default actor execution or Spin support.
+
+### Alternate main-function body layout (scalar-only)
+
+The i64 bootstrap parser accepts `fnc main() -> int` with a
+newline-delimited `return expression;` and `end`, or
+`fnc main() -> int :: return expression; end` in compact source.
+The explicit `::` is required before removing the signature/body newline.
+These forms use the existing typed checked-i64 IR and CIL emitter; they
+**do not** enable general free/module functions, Option/Result, multiple
+statements, structured match, or actor function bodies. Tests independently
+compare interpreted typed IR against emitted CIL. General compiler parity
+remains an open requirement.

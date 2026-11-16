@@ -54,7 +54,11 @@ public sealed record CfgBranch(
 
 public sealed record CfgBlock(
     string Name, IReadOnlyList<CfgParameter> Parameters,
-    IReadOnlyList<CfgInstruction> Instructions, CfgTerminator Terminator);
+    IReadOnlyList<CfgInstruction> Instructions, CfgTerminator Terminator,
+    // Optional guest arithmetic-overflow edge. This is verifier-visible and
+    // lowers only to a CLR OverflowException handler; host exception identity
+    // is never exposed to source.
+    string? OverflowTarget = null);
 
 public sealed record CfgFunction(
     string Name, IrValueType ResultType, string Entry,
@@ -204,7 +208,7 @@ public static class OresCfgVerifier
                         Arguments = op.Arguments is null ? null : FreezeArguments(op.Arguments)
                     };
                 }).ToArray()),
-                frozenTerminator);
+                frozenTerminator, original.OverflowTarget);
         }
 
         var indexes = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -248,6 +252,7 @@ public static class OresCfgVerifier
             predecessors[i] = new List<int>();
         }
 
+        int overflowRegionCount = 0;
         for (int i = 0; i < blocks.Length; i++)
         {
             var block = blocks[i];
@@ -263,6 +268,42 @@ public static class OresCfgVerifier
                     RegisterEdge(i, branch.FalseTarget, branch.FalseArguments);
                     break;
                 default: throw new FormatException("Unsupported CFG terminator");
+            }
+
+            if (block.OverflowTarget is not null)
+            {
+                if (++overflowRegionCount > 1 ||
+                    block.Terminator is not CfgJump protectedExit ||
+                    !indexes.TryGetValue(block.OverflowTarget, out int handlerIndex) ||
+                    handlerIndex != i + 1 ||
+                    block.OverflowTarget == protectedExit.Target)
+                    throw new FormatException("Invalid CFG arithmetic-overflow region");
+
+                var handler = blocks[handlerIndex];
+                if (handler.Parameters.Count != 0 ||
+                    handler.OverflowTarget is not null ||
+                    handler.Instructions.Count != 1 ||
+                    handler.Instructions[0].Opcode != CfgOpcode.ConstantI64 ||
+                    handler.Terminator is not CfgJump handlerExit ||
+                    handlerExit.Target != protectedExit.Target ||
+                    handlerExit.Arguments.Count != 1 ||
+                    handlerExit.Arguments[0] != handler.Instructions[0].ResultId ||
+                    !indexes.TryGetValue(protectedExit.Target, out int joinIndex) ||
+                    blocks[joinIndex].Parameters.Count != 1 ||
+                    blocks[joinIndex].Parameters[0].Type != IrValueType.I64)
+                    throw new FormatException("Malformed CFG arithmetic-overflow handler");
+
+                if (!block.Instructions.Any(op =>
+                    op.Opcode is CfgOpcode.CheckedAdd or
+                        CfgOpcode.CheckedSubtract or
+                        CfgOpcode.CheckedMultiply or
+                        CfgOpcode.Call))
+                    throw new FormatException(
+                        "Arithmetic-overflow region has no fallible numeric operation");
+
+                // The CLR exception object is an internal transport detail and
+                // carries no SSA value into the guest handler.
+                RegisterEdge(i, block.OverflowTarget, Array.Empty<int>());
             }
         }
 

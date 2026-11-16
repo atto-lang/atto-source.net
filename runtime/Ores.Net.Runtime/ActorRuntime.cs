@@ -9,6 +9,13 @@ public delegate void ActorMessageHandler(
     ActorContext context, ReadOnlyMemory<byte> message);
 
 /// <summary>
+/// Host-substrate I/O continuation: executes on the actor's existing bounded
+/// carrier domain, with the same non-reentrant actor turn as mailbox DATA.
+/// No new carrier, guest closure, synthetic mailbox message or CONTROL lane.
+/// </summary>
+public delegate void ActorIoReadyHandler(ActorContext context);
+
+/// <summary>
 /// Bounded host-runtime options. This remains a runtime integration substrate,
 /// not source-level actor lowering.
 /// </summary>
@@ -35,6 +42,8 @@ public sealed class ActorRuntimeOptions
     public int ActorMaxLifetimePins { get; init; } = 4096;
     public int ActorMaxReadLoans { get; init; } = 4096;
     public long NativeBudgetBytes { get; init; } = 512L * 1024 * 1024;
+    public int MaxIoQueuedBytes { get; init; } = 64 * 1024 * 1024;
+    public int MaxIoQueuedRecords { get; init; } = 65_536;
     public ActorDispatcherOptions Dispatcher { get; init; } = new();
 
     internal void Validate()
@@ -71,6 +80,10 @@ public sealed class ActorRuntimeOptions
             throw new ArgumentOutOfRangeException(nameof(ActorMaxReadLoans));
         if (NativeBudgetBytes <= 0)
             throw new ArgumentOutOfRangeException(nameof(NativeBudgetBytes));
+        if (MaxIoQueuedBytes <= 0 || MaxIoQueuedBytes > 64 * 1024 * 1024)
+            throw new ArgumentOutOfRangeException(nameof(MaxIoQueuedBytes));
+        if (MaxIoQueuedRecords <= 0 || MaxIoQueuedRecords > 65_536)
+            throw new ArgumentOutOfRangeException(nameof(MaxIoQueuedRecords));
 
         ArgumentNullException.ThrowIfNull(Dispatcher);
         Dispatcher.Validate();
@@ -93,10 +106,14 @@ public sealed class ActorContext
     private readonly object _guestFrameGate = new();
     private readonly List<ActorStackFrameHandle> _guestFrames = new();
     private bool _guestFrameFaulted;
+    private readonly ActorIoEnvelope _io;
+    private int _ioInputRecordsRead;
+
+    internal int IoInputRecordsRead => _ioInputRecordsRead;
 
     internal ActorContext(ActorRef self, ActorKind kind,
         ActorArena arena, ActorArenaTurn turn,
-        ActorExecutionContext execution)
+        ActorExecutionContext execution, ActorIoEnvelope io)
     {
         Self = self;
         Kind = kind;
@@ -104,11 +121,45 @@ public sealed class ActorContext
         _turn = turn;
         _stack = execution.Stack;
         Execution = execution;
+        _io = io;
     }
 
     public ActorRef Self { get; }
     public ActorKind Kind { get; }
     public ActorExecutionContext Execution { get; }
+
+    // Actor-side directional I/O. Both operations require a currently
+    // executing physical actor turn, never just a retained ActorRef.
+    // This is host runtime integration, not guest io.* compiler lowering.
+    public bool TryReadInput(out byte[]? data)
+    {
+        ValidateActiveTurn();
+        bool received = _io.TryReadInput(Self, out data);
+        if (received) ++_ioInputRecordsRead;
+        return received;
+    }
+
+    public bool TryWriteOutput(ReadOnlySpan<byte> data)
+    {
+        ValidateActiveTurn();
+        return _io.TryWriteOutput(Self, data);
+    }
+
+    public bool InputAtEof
+    {
+        get
+        {
+            ValidateActiveTurn();
+            return _io.InputAtEof(Self);
+        }
+    }
+
+    // Actor-owned half-close of io.out; false when already closed.
+    public bool CloseOutput()
+    {
+        ValidateActiveTurn();
+        return _io.CloseOutput(Self);
+    }
 
     // Host capability providers must enforce the same physical-turn authority
     // as actor memory access. A retained context is not a reusable credential.
@@ -367,12 +418,14 @@ public sealed class ActorRuntime : IDisposable
     private readonly Dictionary<ulong, ActorCell> _actors = new();
     private readonly ActorRuntimeOptions _options;
     private readonly ActorArenaBudget _nativeBudget;
+    private readonly ActorIoBudget _ioBudget;
     private readonly ActorDispatchDomains _domains;
     private readonly ActorPubSub _pubSub;
 
     private ulong _nextActorId;
     private bool _closed;
     private long _completedMessages;
+    private long _completedIoTurns;
     private long _faultedTurns;
 
     private sealed class ActorCell
@@ -381,7 +434,8 @@ public sealed class ActorRuntime : IDisposable
 
         internal ActorCell(ActorRuntime owner, ActorKind kind,
             ActorMailbox mailbox, ActorArena arena, ActorMessageHandler handler,
-            int stackBytes, int maxStackFrames)
+            int stackBytes, int maxStackFrames, ActorIoBudget ioBudget,
+            ActorIoReadyHandler? ioReadyHandler)
         {
             _owner = owner;
             Kind = kind;
@@ -389,7 +443,11 @@ public sealed class ActorRuntime : IDisposable
             Arena = arena;
             FrameStorage = new ActorFrameStorage(arena, stackBytes, maxStackFrames);
             Handler = handler;
+            IoReadyHandler = ioReadyHandler;
             Reference = mailbox.CurrentRef;
+            Io = new ActorIoEnvelope(mailbox, ioBudget);
+            HostIo = new ActorIoHostPort(Io, Reference,
+                ioReadyHandler is null ? null : owner);
             DispatchAction = Dispatch;
         }
 
@@ -399,11 +457,23 @@ public sealed class ActorRuntime : IDisposable
         internal ActorArena Arena { get; }
         internal ActorFrameStorage FrameStorage { get; }
         internal ulong NextExecutionSequence;
+        internal ActorIoEnvelope Io { get; }
+        internal ActorIoHostPort HostIo { get; }
         internal ActorMessageHandler Handler { get; }
+        internal ActorIoReadyHandler? IoReadyHandler { get; }
         internal ActorRef Reference { get; }
         internal Action DispatchAction { get; }
         internal int Scheduled;
+        // Readiness is a coalesced edge, never one callback per DATA record.
+        // Buffered data stays in the separately bounded ActorIoEnvelope.
+        // If a callback makes input progress, the dispatcher rearms one edge
+        // while buffered input remains; no worker may spin without progress.
+        internal int PendingIoSignals;
+        internal bool PreferIo;
         internal bool Stopping;
+        // A faulted turn must never be reported as a clean actor STOP.
+        // Set under Gate before finalization; no guest exception is retained.
+        internal bool Faulted;
         // Graceful close rejects new DATA while accepted queued turns drain.
         // Stop() remains a distinct immediate abort that scrubs pending data.
         internal bool Draining;
@@ -420,6 +490,7 @@ public sealed class ActorRuntime : IDisposable
         options.Validate();
         _options = options;
         _nativeBudget = new ActorArenaBudget(options.NativeBudgetBytes);
+        _ioBudget = new ActorIoBudget(options.MaxIoQueuedBytes, options.MaxIoQueuedRecords);
         _domains = new ActorDispatchDomains(options.Dispatcher);
         _pubSub = new ActorPubSub(
             maxGroups: Math.Min(options.MaxActors, 4096),
@@ -438,11 +509,18 @@ public sealed class ActorRuntime : IDisposable
     }
 
     public long NativeReservedBytes => _nativeBudget.ReservedBytes;
+    public int IoQueuedBytes => _ioBudget.QueuedBytes;
+    public int IoQueuedRecords => _ioBudget.QueuedRecords;
     public long CompletedMessages => Interlocked.Read(ref _completedMessages);
+    public long CompletedIoTurns => Interlocked.Read(ref _completedIoTurns);
     public long FaultedTurns => Interlocked.Read(ref _faultedTurns);
     public int StartedCarrierThreads => _domains.TotalStartedWorkers;
 
-    public ActorRef Spawn(ActorKind kind, ActorMessageHandler handler)
+    public ActorRef Spawn(ActorKind kind, ActorMessageHandler handler) =>
+        SpawnCore(kind, handler, null);
+
+    private ActorRef SpawnCore(ActorKind kind, ActorMessageHandler handler,
+        ActorIoReadyHandler? ioReadyHandler)
     {
         ArgumentNullException.ThrowIfNull(handler);
         // A C# async lambda can otherwise bind to this void-returning delegate
@@ -493,7 +571,7 @@ public sealed class ActorRuntime : IDisposable
                     ? Math.Min(64 * 1024, Math.Max(1, _options.ActorPersistentBytes / 4))
                     : _options.ActorStackBytes;
                 var cell = new ActorCell(this, kind, mailbox, arena, handler,
-                    stackBytes, _options.ActorMaxStackFrames);
+                    stackBytes, _options.ActorMaxStackFrames, _ioBudget, ioReadyHandler);
                 _actors.Add(candidateId, cell);
                 try
                 {
@@ -514,6 +592,88 @@ public sealed class ActorRuntime : IDisposable
                 mailbox?.Dispose();
                 throw;
             }
+        }
+    }
+
+    /// <summary>
+    /// Mint a separate directional host I/O capability at actor creation.
+    /// Merely knowing the ActorRef does not grant either host-side channel.
+    /// Without an I/O-ready callback, the legacy host must explicitly
+    /// send a mailbox wakeup; the new overload supports direct I/O signaling.
+    /// </summary>
+    public (ActorRef Actor, ActorIoHostPort HostIo) SpawnWithIo(
+        ActorKind kind, ActorMessageHandler handler) =>
+        SpawnWithIoCore(kind, handler, null);
+
+    /// <summary>
+    /// Bind a separate I/O readiness continuation. Host input and initial EOF
+    /// automatically schedule the owning actor without consuming DATA mailbox
+    /// credits. I/O is never an extra reentrant turn or a CONTROL action.
+    /// </summary>
+    public (ActorRef Actor, ActorIoHostPort HostIo) SpawnWithIo(
+        ActorKind kind, ActorMessageHandler handler,
+        ActorIoReadyHandler onInputReady)
+    {
+        ArgumentNullException.ThrowIfNull(onInputReady);
+        return SpawnWithIoCore(kind, handler, onInputReady);
+    }
+
+    private (ActorRef Actor, ActorIoHostPort HostIo) SpawnWithIoCore(
+        ActorKind kind, ActorMessageHandler handler,
+        ActorIoReadyHandler? onInputReady)
+    {
+        var actor = SpawnCore(kind, handler, onInputReady);
+        var cell = Lookup(actor);
+        return (actor, cell.HostIo);
+    }
+
+    /// <summary>
+    /// Publish an already-admitted, bounded input-record/EOF readiness event.
+    /// This is separate from the user mailbox and the trusted STOP control.
+    /// A stale, stopped or already-finalized destination is ignored. Never
+    /// retain a carrier waiting for input; a scheduled token owns the wakeup.
+    /// </summary>
+    internal void NotifyInputReady(ActorRef actor)
+    {
+        ActorCell cell;
+        lock (_gate)
+        {
+            if (_closed || !_actors.TryGetValue(actor.Id, out var found) ||
+                found.Reference != actor || found.IoReadyHandler is null)
+                return;
+            cell = found;
+        }
+
+        bool finalize = false;
+        lock (cell.Gate)
+        {
+            if (cell.Stopping) return;
+            // Collapse a burst of accepted input records into one wakeup.
+            // A callback which consumes at least one frame rearms itself
+            // while input remains, so coalescing cannot strand a progressing
+            // consumer. Repeated EOF is rejected before it reaches here.
+            cell.PendingIoSignals = 1;
+            if (cell.Scheduled != 0) return;
+            try
+            {
+                if (!TryScheduleLocked(cell))
+                {
+                    MarkStoppingLocked(cell);
+                    finalize = true;
+                }
+            }
+            catch
+            {
+                MarkStoppingLocked(cell);
+                finalize = true;
+            }
+        }
+
+        if (finalize)
+        {
+            FinalizeCell(cell);
+            throw new InvalidOperationException(
+                "I/O readiness dispatch failed; actor was safely retired");
         }
     }
 
@@ -608,7 +768,13 @@ public sealed class ActorRuntime : IDisposable
             FinalizeCell(cell);
     }
 
-    internal Task ObserveTermination(ActorRef actor)
+    /// <summary>
+    /// Read-only completion capability: the caller must hold the exact
+    /// runtime-minted actor reference, including its unforgeable nonce.
+    /// The task is acquired before STOP, then remains valid through physical
+    /// actor retirement. It neither reopens the mailbox nor grants dispatch.
+    /// </summary>
+    public Task ObserveTermination(ActorRef actor)
     {
         ActorCell cell = Lookup(actor);
         // Numeric IDs are lookup keys, not observation authority. The immutable
@@ -696,6 +862,26 @@ public sealed class ActorRuntime : IDisposable
         return false;
     }
 
+    // Call only while cell.Gate is held. Native queue delivery may allocate a
+    // managed owned copy; a faulted dequeue stops the actor instead of leaking
+    // native leases or rescheduling forever.
+    private bool TryReceiveMailbox(ActorCell cell, out byte[]? payload, out bool faulted)
+    {
+        faulted = false;
+        try
+        {
+            return cell.Mailbox.TryReceive(out payload);
+        }
+        catch (Exception)
+        {
+            payload = null;
+            faulted = true;
+            Interlocked.Increment(ref _faultedTurns);
+            MarkStoppingLocked(cell);
+            return false;
+        }
+    }
+
     private void RunCell(ActorCell cell)
     {
         ActorRuntime? previous = s_currentRuntime;
@@ -709,31 +895,50 @@ public sealed class ActorRuntime : IDisposable
             int processed = 0;
             while (processed < _options.MessagesPerDispatch)
             {
-                byte[] payload;
+                byte[] payload = Array.Empty<byte>();
+                bool ioReadyTurn;
                 ActorArenaTurn turn;
 
                 lock (cell.Gate)
                 {
                     if (cell.Stopping)
                         break;
-                    byte[]? dequeued;
-                    try
+
+                    // A single scheduled token serializes both inputs. Alternate
+                    // if both queues are ready; NEVER consume user mailbox bytes
+                    // to manufacture an I/O wakeup, or treat I/O as CONTROL.
+                    bool mailReady = cell.Mailbox.QueuedMessages != 0;
+                    if (cell.IoReadyHandler is not null &&
+                        cell.PendingIoSignals != 0 &&
+                        (cell.PreferIo || !mailReady))
                     {
-                        if (!cell.Mailbox.TryReceive(out dequeued) ||
-                            dequeued is null)
-                            break;
+                        --cell.PendingIoSignals;
+                        ioReadyTurn = true;
+                        cell.PreferIo = false;
                     }
-                    catch (Exception)
+                    else if (TryReceiveMailbox(cell, out byte[]? dequeued, out bool dequeueFaulted) &&
+                        dequeued is not null)
                     {
-                        // Native queue delivery may allocate a managed owned
-                        // copy. Faulted dequeue must stop the actor instead
-                        // of leaking native leases or rescheduling forever.
-                        Interlocked.Increment(ref _faultedTurns);
-                        MarkStoppingLocked(cell);
+                        payload = dequeued;
+                        ioReadyTurn = false;
+                        cell.PreferIo = true;
+                    }
+                    else if (dequeueFaulted)
+                    {
+                        break;
+                    }
+                    else if (cell.IoReadyHandler is not null &&
+                        cell.PendingIoSignals != 0)
+                    {
+                        --cell.PendingIoSignals;
+                        ioReadyTurn = true;
+                        cell.PreferIo = false;
+                    }
+                    else
+                    {
                         break;
                     }
 
-                    payload = dequeued;
                     try
                     {
                         turn = cell.Arena.EnterTurn(
@@ -741,17 +946,20 @@ public sealed class ActorRuntime : IDisposable
                     }
                     catch (Exception)
                     {
-                        // The mailbox transferred this buffer to us before
-                        // turn admission. Do not strand sensitive bytes on the
-                        // exceptional path or allow repeated failed scheduling.
-                        CryptographicOperations.ZeroMemory(payload);
+                        // Mailbox ownership was transferred at dequeue; the I/O
+                        // signal owns no buffer. Failed admission retires the
+                        // actor and scrubs any pending I/O at finalization.
+                        if (!ioReadyTurn)
+                            CryptographicOperations.ZeroMemory(payload);
                         Interlocked.Increment(ref _faultedTurns);
+                        cell.Faulted = true;
                         MarkStoppingLocked(cell);
                         break;
                     }
                 }
 
                 bool succeeded = false;
+                int inputRecordsRead = 0;
                 try
                 {
                     using (turn)
@@ -762,10 +970,17 @@ public sealed class ActorRuntime : IDisposable
                             cell.Reference, ++cell.NextExecutionSequence, cell.FrameStorage);
                         execution.Stack.Begin(turn);
                         var context = new ActorContext(
-                            cell.Reference, cell.Kind, cell.Arena, turn, execution);
+                            cell.Reference, cell.Kind, cell.Arena, turn, execution,
+                            cell.Io);
                         try
                         {
-                            cell.Handler(context, payload);
+                            if (ioReadyTurn)
+                            {
+                                cell.IoReadyHandler!(context);
+                                inputRecordsRead = context.IoInputRecordsRead;
+                            }
+                            else
+                                cell.Handler(context, payload);
                             // Swallowing a quota fault cannot turn this receive
                             // into successful completion of its actor generation.
                             execution.Stack.ValidateSynchronousTurnExit(turn);
@@ -781,13 +996,37 @@ public sealed class ActorRuntime : IDisposable
                 {
                     Interlocked.Increment(ref _faultedTurns);
                     lock (cell.Gate)
+                    {
+                        cell.Faulted = true;
                         MarkStoppingLocked(cell);
+                    }
                 }
                 finally
                 {
-                    CryptographicOperations.ZeroMemory(payload);
+                    if (!ioReadyTurn)
+                        CryptographicOperations.ZeroMemory(payload);
                     if (succeeded)
-                        Interlocked.Increment(ref _completedMessages);
+                    {
+                        if (ioReadyTurn)
+                            Interlocked.Increment(ref _completedIoTurns);
+                        else
+                            Interlocked.Increment(ref _completedMessages);
+                    }
+                }
+
+                if (ioReadyTurn && succeeded && inputRecordsRead > 0)
+                {
+                    lock (cell.Gate)
+                    {
+                        // A coalesced queue can still hold input after all
+                        // recorded readiness edges were consumed. If the
+                        // callback demonstrably made forward progress, rearm
+                        // exactly one turn. Never spin a handler that refuses
+                        // to consume input, and never rearm after STOP.
+                        if (!cell.Stopping && cell.PendingIoSignals == 0 &&
+                            cell.Io.HasBufferedInput(cell.Reference))
+                            cell.PendingIoSignals = 1;
+                    }
                 }
 
                 processed++;
@@ -806,18 +1045,21 @@ public sealed class ActorRuntime : IDisposable
                     {
                         finalize = true;
                     }
-                    else if (cell.Mailbox.QueuedMessages != 0)
+                    else if (cell.Mailbox.QueuedMessages != 0 ||
+                        cell.PendingIoSignals != 0)
                     {
                         try
                         {
                             if (!TryScheduleLocked(cell))
                             {
+                                cell.Faulted = true;
                                 MarkStoppingLocked(cell);
                                 finalize = true;
                             }
                         }
                         catch
                         {
+                            cell.Faulted = true;
                             MarkStoppingLocked(cell);
                             finalize = true;
                         }
@@ -850,6 +1092,10 @@ public sealed class ActorRuntime : IDisposable
             return;
 
         cell.Stopping = true;
+        // Trusted CONTROL always wins: pending readiness is discarded without
+        // waiting for mailbox slots, and physical I/O scrub remains deferred
+        // until all in-flight actor turns have quiesced.
+        cell.PendingIoSignals = 0;
         cell.Mailbox.Stop();
         cell.Arena.Retire();
     }
@@ -860,6 +1106,9 @@ public sealed class ActorRuntime : IDisposable
             return;
 
         cell.Mailbox.Stop();
+        // Only the physical finalizer disposes I/O: in-flight actor turns
+        // must finish before their private DATA buffers can be scrubbed.
+        cell.Io.Dispose();
         cell.Arena.Retire();
         cell.Arena.TryReclaim();
         _pubSub.RetireActor(cell.Reference);
@@ -870,7 +1119,14 @@ public sealed class ActorRuntime : IDisposable
                 ReferenceEquals(current, cell))
                 _actors.Remove(cell.Reference.Id);
         }
-        cell.Terminated.TrySetResult();
+        // The observer capability is a terminal *outcome*, not just a
+        // physical-retirement notification. Do not retain or expose a
+        // thrown guest exception (which could capture actor-private data).
+        if (cell.Faulted)
+            cell.Terminated.TrySetException(new InvalidOperationException(
+                "Actor terminated after an unhandled fault"));
+        else
+            cell.Terminated.TrySetResult();
     }
 
     private void EnsureOpenLocked()

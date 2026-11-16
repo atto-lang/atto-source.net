@@ -1,0 +1,5 @@
+// ATTO-TRAP-V1-01: exit 42, successful value gains exactly one Option.
+pub fnc main(): int {
+  val Option<int> value = trap (40 + 2);
+  return value.unwrap();
+}

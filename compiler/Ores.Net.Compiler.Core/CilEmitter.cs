@@ -75,7 +75,8 @@ public static class CilEmitter
                 attributes: MethodBodyAttributes.InitLocals);
             return (bodyOffset, methodCode, localsBlob);
         }, entryName, hostCallIdentity: string.Join(";", program.Instructions
-            .Where(op => op.Opcode is IrOpcode.DotnetMathAbsI64 or IrOpcode.DotnetMathMaxI64)
+            .Where(op => op.Opcode is IrOpcode.DotnetMathAbsI64 or IrOpcode.DotnetMathMaxI64 or
+                IrOpcode.StrictRem or IrOpcode.StrictMod or IrOpcode.StrictPow)
             .Select(op => op.Opcode.ToString()).Distinct().Order(StringComparer.Ordinal)));
     }
 
@@ -126,6 +127,41 @@ public static class CilEmitter
                     metadata.GetOrAddString("Max"), metadata.GetOrAddBlob(signature));
             }
         }
+        // Named signed-64 Integer.rem/mod/pow: closed static calls into the
+        // runtime the AOT host already statically references. One AssemblyRef
+        // and TypeRef per module; never reflection or dynamic code loading.
+        // Integer.bitXor stays main's inline CIL xor (IrOpcode.BitXor).
+        MemberReferenceHandle strictRem = default;
+        MemberReferenceHandle strictMod = default;
+        MemberReferenceHandle strictPow = default;
+        TypeReferenceHandle strictType = default;
+        MemberReferenceHandle StrictCall(string name)
+        {
+            if (strictType.IsNil)
+            {
+                var runtimeAssembly = metadata.AddAssemblyReference(
+                    metadata.GetOrAddString("Ores.Net.Runtime"),
+                    new Version(1, 0, 0, 0), default, default, default, default);
+                strictType = metadata.AddTypeReference(runtimeAssembly,
+                    metadata.GetOrAddString("Ores.Net.Runtime"),
+                    metadata.GetOrAddString("StrictSigned64Arithmetic"));
+            }
+            var signature = new BlobBuilder();
+            new BlobEncoder(signature).MethodSignature().Parameters(2,
+                result => result.Type().Int64(), parameters =>
+                {
+                    parameters.AddParameter().Type().Int64();
+                    parameters.AddParameter().Type().Int64();
+                });
+            return metadata.AddMemberReference(strictType,
+                metadata.GetOrAddString(name), metadata.GetOrAddBlob(signature));
+        }
+        if (program.Instructions.Any(op => op.Opcode == IrOpcode.StrictRem))
+            strictRem = StrictCall("Rem");
+        if (program.Instructions.Any(op => op.Opcode == IrOpcode.StrictMod))
+            strictMod = StrictCall("Mod");
+        if (program.Instructions.Any(op => op.Opcode == IrOpcode.StrictPow))
+            strictPow = StrictCall("Pow");
 
         int maxStack = 1;
         foreach (var operation in program.Instructions)
@@ -147,19 +183,35 @@ public static class CilEmitter
                     il.Call(mathMax);
                     maxStack = 2;
                     break;
+                case IrOpcode.BitXor:
+                    il.LoadLocal(operation.Left!.Value);
+                    il.LoadLocal(operation.Right!.Value);
+                    il.OpCode(ILOpCode.Xor);
+                    maxStack = 2;
+                    break;
                 case IrOpcode.CheckedAdd:
                 case IrOpcode.CheckedSubtract:
                 case IrOpcode.CheckedMultiply:
                 case IrOpcode.CheckedDivide:
+                case IrOpcode.StrictRem:
+                case IrOpcode.StrictMod:
+                case IrOpcode.StrictPow:
                     il.LoadLocal(operation.Left!.Value);
                     il.LoadLocal(operation.Right!.Value);
-                    il.OpCode(operation.Opcode switch
-                    {
-                        IrOpcode.CheckedAdd => ILOpCode.Add_ovf,
-                        IrOpcode.CheckedSubtract => ILOpCode.Sub_ovf,
-                        IrOpcode.CheckedMultiply => ILOpCode.Mul_ovf,
-                        _ => ILOpCode.Div
-                    });
+                    if (operation.Opcode == IrOpcode.StrictRem)
+                        il.Call(strictRem);
+                    else if (operation.Opcode == IrOpcode.StrictMod)
+                        il.Call(strictMod);
+                    else if (operation.Opcode == IrOpcode.StrictPow)
+                        il.Call(strictPow);
+                    else
+                        il.OpCode(operation.Opcode switch
+                        {
+                            IrOpcode.CheckedAdd => ILOpCode.Add_ovf,
+                            IrOpcode.CheckedSubtract => ILOpCode.Sub_ovf,
+                            IrOpcode.CheckedMultiply => ILOpCode.Mul_ovf,
+                            _ => ILOpCode.Div
+                        });
                     maxStack = 2;
                     break;
                 default:

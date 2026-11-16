@@ -46,6 +46,7 @@ bool validEmitActorSource = args.Length == 4 && args[0] == "emit-actor-csharp" &
 // This separate mode only binds the verified external receive slice of the
 // Counter v2 package; it never claims compiled async main or general actors.
 bool validExternalReceive = args.Length == 4 && args[0] == "emit-external-counter-csharp" && args[2] == "--out";
+bool validCounterMain = args.Length == 4 && args[0] == "emit-counter-main-csharp" && args[2] == "--out";
 bool validEmitSource = args.Length == 4 && args[2] == "--out" &&
     (args[0] == "emit-csharp" || args[0] == "emit-fsharp");
 bool validStaticFacts = args.Length == 2 &&
@@ -55,9 +56,9 @@ bool validActorPipePlan = args.Length == 2 && args[0] == "plan-actor-pipe";
 bool moduleCommand = args.Length >= 1 && args[0] is "check-modules" or "compile-modules";
 if ((mathI64Granted && !validCheck && !validCompile) ||
     (!validCheck && !validAsyncRun && !validEnumCheck && !validEnumCompile && !validDeclaredReceiveSyntax && !validCompile && !validStructuredCheck && !validStructuredCompile &&
-     !validStaticFacts && !validTaskCheck && !validTaskCompile && !validActorPipePlan && !validEmitActorSource && !validExternalReceive && !validEmitSource && !moduleCommand))
+     !validStaticFacts && !validTaskCheck && !validTaskCompile && !validActorPipePlan && !validEmitActorSource && !validExternalReceive && !validCounterMain && !validEmitSource && !moduleCommand))
 {
-    Console.Error.WriteLine("usage: oresnet check-enum-v1 FILE.atto | oresnet compile-enum-v1 FILE.atto --out path/OresGenerated.dll | oresnet check input.atto|input.ores | oresnet run-async input.ores | oresnet compile input.atto|input.ores --out path/OresGenerated.dll | oresnet check-task-i64 input.ores | oresnet compile-task-i64 input.ores --out path/OresGenerated.dll | oresnet check-structured input.atto|input.ores | oresnet compile-structured input.atto|input.ores --out path/OresGenerated.dll | oresnet emit-csharp input.atto|input.ores --out path/OresProgram.cs | oresnet emit-fsharp input.atto|input.ores --out path/OresProgram.fs | oresnet static-facts input.atto|input.ores | oresnet static-facts-structured input.atto|input.ores | oresnet plan-actor-pipe input.atto (typed plan only, not executable actors) | oresnet emit-actor-csharp Counter.atto --out path/Actor_Counter.g.cs | oresnet emit-external-counter-csharp ROOT --out path/DeclaredActor_Counter.g.cs | oresnet check-declared-receive-syntax receive.atto (syntax only, NOT guest execution)");
+    Console.Error.WriteLine("usage: oresnet check-enum-v1 FILE.atto | oresnet compile-enum-v1 FILE.atto --out path/OresGenerated.dll | oresnet check input.atto|input.ores | oresnet run-async input.ores | oresnet compile input.atto|input.ores --out path/OresGenerated.dll | oresnet check-task-i64 input.ores | oresnet compile-task-i64 input.ores --out path/OresGenerated.dll | oresnet check-structured input.atto|input.ores | oresnet compile-structured input.atto|input.ores --out path/OresGenerated.dll | oresnet emit-csharp input.atto|input.ores --out path/OresProgram.cs | oresnet emit-fsharp input.atto|input.ores --out path/OresProgram.fs | oresnet static-facts input.atto|input.ores | oresnet static-facts-structured input.atto|input.ores | oresnet plan-actor-pipe input.atto (typed plan only, not executable actors) | oresnet emit-actor-csharp Counter.atto --out path/Actor_Counter.g.cs | oresnet emit-external-counter-csharp ROOT --out path/DeclaredActor_Counter.g.cs | oresnet emit-counter-main-csharp ROOT --out path/GeneratedCounterMainV2.g.cs | oresnet check-declared-receive-syntax receive.atto (syntax only, NOT guest execution)");
     return 2;
 }
 
@@ -100,7 +101,7 @@ try
         Console.WriteLine(Encoding.UTF8.GetString(witness.ToArray()));
         return 0;
     }
-    if (validExternalReceive)
+    if (validExternalReceive || validCounterMain)
     {
         if (!string.Equals(Path.GetExtension(args[3]), ".cs", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("External receive source output requires .cs");
@@ -129,6 +130,17 @@ try
             if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
                 throw new FormatException("External receive source cannot be a symlink");
             sourceUnits.Add("src/counter/" + file, ReadBoundedSource(path, rejectBom: true));
+        }
+        if (validCounterMain)
+        {
+            string mainPath = Path.Combine(counter, "main.atto");
+            if ((File.GetAttributes(mainPath) & FileAttributes.ReparsePoint) != 0)
+                throw new FormatException("Counter main source cannot be a symlink");
+            sourceUnits.Add("src/counter/main.atto", ReadBoundedSource(mainPath, rejectBom: true));
+            var verifiedMain = OresParser.InspectCounterMainV2(sourceUnits);
+            WriteAtomicSource(args[3], CounterMainV2Emitter.EmitCSharp(verifiedMain));
+            Console.WriteLine("VERIFIED_COUNTER_MAIN_V2 async_root=true bounded_profile=true");
+            return 0;
         }
         var verifiedReceive = OresParser.InspectExternalCounterV2(sourceUnits);
         if (verifiedReceive.Namespace != "counter")

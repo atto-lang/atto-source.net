@@ -453,6 +453,187 @@ internal static class SelectableI64ChannelSelfTest
         Require(foreign.Close(), "foreign source subscription closes");
     }
 
+    private static void BatchWriteAllOrNothing()
+    {
+        var channel = new SelectableI64Channel(3);
+        Require(channel.TryWriteBatch(new long[] { 10, 11 }) ==
+                SelectableI64Channel.WriteStatus.Written, "first batch admitted");
+        Require(channel.TryWriteBatch(new long[] { 12, 13 }) ==
+                SelectableI64Channel.WriteStatus.WouldBlock,
+            "insufficient capacity denies entire batch");
+        Require(channel.Count == 2, "denied batch leaves count unchanged");
+        Require(channel.TryWriteBatch(new long[] { 12 }) ==
+                SelectableI64Channel.WriteStatus.Written,
+            "remaining single slot accepts a batch");
+        Require(channel.Count == 3, "exact capacity filled");
+        Require(channel.TryRead(out var a) && a == 10, "first item FIFO");
+        Require(channel.TryRead(out var b) && b == 11, "second item FIFO");
+        Require(channel.TryRead(out var c) && c == 12, "third item FIFO");
+        Require(channel.TryReadResult().Status ==
+                SelectableI64Channel.ReadStatus.WouldBlock,
+            "denied payload never partially published");
+    }
+
+    private static void BatchWriteWrapsWithoutOverwriting()
+    {
+        var channel = new SelectableI64Channel(3);
+        Require(channel.TryWriteBatch(new long[] { 1, 2, 3 }) ==
+                SelectableI64Channel.WriteStatus.Written, "seed full ring");
+        Require(channel.TryRead(out var first) && first == 1,
+            "first ring element consumed");
+        Require(channel.TryRead(out var second) && second == 2,
+            "second ring element consumed");
+        Require(channel.TryWriteBatch(new long[] { 4, 5 }) ==
+                SelectableI64Channel.WriteStatus.Written,
+            "wrapped two-value batch admitted");
+        Require(channel.Count == 3, "wrapped batch fills ring");
+        Require(channel.TryRead(out var third) && third == 3,
+            "unread ring head preserved");
+        Require(channel.TryRead(out var fourth) && fourth == 4,
+            "first wrapped item FIFO");
+        Require(channel.TryRead(out var fifth) && fifth == 5,
+            "second wrapped item FIFO");
+        Require(channel.TryWriteBatch(ReadOnlySpan<long>.Empty) ==
+                SelectableI64Channel.WriteStatus.Written,
+            "empty open batch is no-op");
+        Require(channel.Count == 0, "empty batch preserves count");
+    }
+
+    private static void BatchWriteClosureAndReadiness()
+    {
+        var channel = new SelectableI64Channel(3, 2);
+        var callbacks = 0;
+        var subscription = channel.SubscribeReadable(_ => callbacks++);
+        Require(channel.TryWriteBatch(ReadOnlySpan<long>.Empty) ==
+                SelectableI64Channel.WriteStatus.Written,
+            "empty batch succeeds");
+        Require(callbacks == 0, "empty batch does not wake readers");
+        Require(channel.TryWriteBatch(new long[] { 91, 92 }) ==
+                SelectableI64Channel.WriteStatus.Written,
+            "nonempty batch accepted");
+        Require(callbacks == 1, "batch wakes pending reader only once");
+        Require(channel.Count == 2, "batch publishes two payloads");
+        Require(subscription.Close(), "readiness subscription still revocable");
+        Require(channel.Close(), "close channel with buffered batch");
+        Require(channel.TryWriteBatch(new long[] { 93 }) ==
+                SelectableI64Channel.WriteStatus.Closed,
+            "closed channel denies nonempty batch");
+        Require(channel.TryWriteBatch(ReadOnlySpan<long>.Empty) ==
+                SelectableI64Channel.WriteStatus.Closed,
+            "closed channel denies even empty batch");
+        Require(channel.Count == 2, "closed denial has no side effects");
+        Require(channel.TryRead(out var a) && a == 91, "closed first retained value");
+        Require(channel.TryRead(out var b) && b == 92, "closed second retained value");
+        Require(channel.TryReadResult().Status ==
+                SelectableI64Channel.ReadStatus.Eof, "EOF after batch drain");
+    }
+
+    private static void BatchWriteCallbackFailureDoesNotRollback()
+    {
+        var channel = new SelectableI64Channel(2);
+        var subscription = channel.SubscribeReadable(_ =>
+            throw new InvalidOperationException("batch callback failed"));
+        Require(channel.TryWriteBatch(new long[] { 6, 7 }) ==
+                SelectableI64Channel.WriteStatus.Written,
+            "callback fault must not undo committed batch");
+        Require(channel.NotificationFailure is InvalidOperationException,
+            "batch callback fault retained for supervision");
+        Require(channel.Count == 2, "committed batch remains intact");
+        Require(subscription.Close(), "faulting batch waiter remains revocable");
+        Require(channel.TryRead(out var a) && a == 6, "faulted first item retained");
+        Require(channel.TryRead(out var b) && b == 7, "faulted second item retained");
+    }
+
+    private static void BatchWriteFastPathsDoNotAllocate()
+    {
+        var channel = new SelectableI64Channel(2);
+        var payload = new long[] { 3, 4, 5 };
+        // Warm each call site before measuring a no-readers path.
+        Require(channel.TryWriteBatch(ReadOnlySpan<long>.Empty) ==
+                SelectableI64Channel.WriteStatus.Written, "warm empty batch");
+        Require(channel.TryWriteBatch(payload) ==
+                SelectableI64Channel.WriteStatus.WouldBlock, "warm oversized batch");
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 256; i++)
+        {
+            if (channel.TryWriteBatch(ReadOnlySpan<long>.Empty) !=
+                SelectableI64Channel.WriteStatus.Written)
+                throw new Exception("empty batch status changed");
+            if (channel.TryWriteBatch(payload) !=
+                SelectableI64Channel.WriteStatus.WouldBlock)
+                throw new Exception("oversized batch status changed");
+        }
+        var after = GC.GetAllocatedBytesForCurrentThread();
+        Require(after == before, "empty and rejected batches allocate no managed bytes");
+
+        Require(channel.TryWriteBatch(new long[] { 1, 2 }) ==
+                SelectableI64Channel.WriteStatus.Written, "fill ring");
+        before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 256; i++)
+        {
+            if (channel.TryWriteBatch(payload) !=
+                SelectableI64Channel.WriteStatus.WouldBlock)
+                throw new Exception("full ring status changed");
+        }
+        after = GC.GetAllocatedBytesForCurrentThread();
+        Require(after == before, "full-ring rejection allocates no managed bytes");
+
+        Require(channel.Close(), "close ring");
+        before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 256; i++)
+        {
+            if (channel.TryWriteBatch(payload) !=
+                SelectableI64Channel.WriteStatus.Closed)
+                throw new Exception("closed ring status changed");
+        }
+        after = GC.GetAllocatedBytesForCurrentThread();
+        Require(after == before, "closed-ring rejection allocates no managed bytes");
+    }
+
+    private static void BatchWriteRacesCloseWithoutPartialPublication()
+    {
+        for (var iteration = 0; iteration < 64; iteration++)
+        {
+            var channel = new SelectableI64Channel(2);
+            using var start = new System.Threading.ManualResetEventSlim(false);
+            var outcome = SelectableI64Channel.WriteStatus.WouldBlock;
+            var writer = new System.Threading.Thread(() =>
+            {
+                start.Wait();
+                outcome = channel.TryWriteBatch(new long[] { 31, 32 });
+            });
+            var closer = new System.Threading.Thread(() =>
+            {
+                start.Wait();
+                _ = channel.Close();
+            });
+            writer.Start();
+            closer.Start();
+            start.Set();
+            writer.Join();
+            closer.Join();
+            Require(channel.Closed, "close/write race ends terminal");
+            Require(outcome == SelectableI64Channel.WriteStatus.Written ||
+                    outcome == SelectableI64Channel.WriteStatus.Closed,
+                "racing write is complete or closed, never partial");
+            if (outcome == SelectableI64Channel.WriteStatus.Written)
+            {
+                Require(channel.Count == 2, "accepted race retained entire batch");
+                Require(channel.TryRead(out var first) && first == 31,
+                    "accepted race first element");
+                Require(channel.TryRead(out var second) && second == 32,
+                    "accepted race second element");
+            }
+            else
+            {
+                Require(channel.Count == 0, "denied race leaves no elements");
+            }
+            Require(channel.TryReadResult().Status ==
+                    SelectableI64Channel.ReadStatus.Eof,
+                "racing close leads to EOF only after any complete batch");
+        }
+    }
+
     public static void Run()
     {
         FirstReadyReadWinsWithoutConsumingLoser();
@@ -469,5 +650,11 @@ internal static class SelectableI64ChannelSelfTest
         CloseDrainsBufferedValueBeforeEof();
         CloseWakesPendingWriteAsClosed();
         ForeignSubscriptionCannotCommit();
+        BatchWriteAllOrNothing();
+        BatchWriteWrapsWithoutOverwriting();
+        BatchWriteClosureAndReadiness();
+        BatchWriteCallbackFailureDoesNotRollback();
+        BatchWriteFastPathsDoNotAllocate();
+        BatchWriteRacesCloseWithoutPartialPublication();
     }
 }

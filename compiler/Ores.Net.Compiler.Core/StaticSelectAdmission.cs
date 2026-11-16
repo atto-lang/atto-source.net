@@ -27,7 +27,9 @@ internal static class StaticSelectAdmission
 
         i = end;
         if (!SkipTrivia(source, ref i) || i >= source.Length) return false;
-        if (source[i] == '{') return true;
+        // Typed select<T> is deliberately unsupported too; do not misclassify
+        // "nb select<T>" as an unrelated execution region.
+        if (source[i] is '{' or '<') return true;
         if (!(char.IsLetter(source[i]) || source[i] == '_')) return false;
 
         int start = i++;

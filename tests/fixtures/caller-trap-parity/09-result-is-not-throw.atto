@@ -1,0 +1,8 @@
+// ATTO-TRAP-V1-09: exit 17; Result.Err is successful data, not None.
+fnc wrong(): Result<int,String> { return Err("not an exception"); }
+pub fnc main(): int {
+  val Option<Result<int,String>> outer = trap wrong();
+  if outer.is_none() then return 0; fi
+  if outer.unwrap().is_err() then return 17; fi
+  return 0;
+}

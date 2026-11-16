@@ -64,6 +64,64 @@ internal static class StructuredSourceTests
 
     public static void Run()
     {
+        // Native AOT has no actor hierarchy, trait/interface witness ABI,
+        // runtime-owned receive slot or actor state loan lowering yet. Every
+        // source spelling must fail at the dedicated capability boundary.
+        foreach (var actorSource in new[] {
+            "define actor A1 as end",
+            "actor A1 as end",
+            "actor fnc invoke():int{return 1;}",
+            "fnc actor invoke():int{return 1;}",
+            "actor worker as end",
+            "actor A1 implements Traced as end",
+            "define pub actor A1 as end",
+            "define shared actor A1 as end",
+            "define untrusted actor A1 as end",
+            "define isoactor A1 as end",
+            "define pub isoactor A1 as end",
+            "shared actor A1 { }",
+            "untrusted actor A1 { }",
+            "isoactor A1 { }",
+            // HTTP actor spellings are gated earlier with HTTP_ACTOR_BACKEND_UNSUPPORTED (#481).
+            "define transform actor A1 as end",
+            "define pipe actor A1 as end",
+            "define actor A1 extends Base as end",
+            "define pub actor A1 implements Contract as end",
+            "define actor A1 impl Traced as end"
+        })
+            RejectFeature(actorSource, "receiver-erased method slots");
+        // `define abstract` is refused earlier by main's abstract-hook gate.
+        RejectFeature("define abstract actor A1 as end",
+            "Private abstract class hooks require typed virtual dispatch");
+        // Same canonical lifecycle source as the platform-conformance v1
+        // fixture; .NET must refuse it until ActorRef and CIL state/receive
+        // lowering are actually implemented and executed.
+        RejectFeature(@"// Lifecycle baseline only. No sealed state, inheritance, or actor-group parity claim.
+define actor A1 as
+  receive(ActorMail<int> mail): void {
+    self.send(mail.value + 1);
+    self.end();
+    return;
+  }
+end
+
+pub async routine main(): void {
+  val worker = spawn A1();
+  await worker.get_ready();
+  worker.send(41);
+  val reply = (await worker.outputs.next()).value.unwrap();
+  stdio.stdout.write(reply.value);
+  await worker.get_done();
+  return;
+}
+", "receiver-erased method slots");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{/* define pub actor A1 as end */return 42;}"
+        ).Body.Count == 1, "actor declarations in comments must remain inert");
+        Require(OresStructuredParser.Parse(
+            "fnc main():int{return 42;} // define isoactor A1 as end"
+        ).Body.Count == 1, "line comment actor decoys must remain inert");
+
         // The optional Kestrel host provider is not a source HTTP actor compiler.
         // Neither the serial alias nor explicit or 3x4 concurrency may silently
         // become a scalar function or a generic mailbox actor in Native AOT.
@@ -791,6 +849,36 @@ internal static class StructuredSourceTests
             RejectFeature(source,
                 "Nominal class/actor methods require receiver-erased method slots");
         }
+        // Actor declarations are still unsupported by this scalar CFG/CIL
+        // backend. Every visibility spelling and declaration location must
+        // fail at the nominal capability gate, before partial IR or CIL.
+        foreach (var source in new[] {
+            "define actor Worker as receive(self, int value):void{return;} end",
+            "pub define actor Worker as receive(self, int value):void{return;} end",
+            "define pub actor Worker as receive(self, int value):void{return;} end",
+            "pub define pub actor Worker as receive(self, int value):void{return;} end",
+            "fnc main():int{return 42;} define actor Worker as end",
+            "define module Workers as define actor Worker as end end",
+            "define actor Worker extends Actor as receive(self, int value):void{return;} end",
+            "define actor Worker implements Sendable as receive(self, int value):void{return;} end",
+            "define actor Worker with MailboxPolicy as receive(self, int value):void{return;} end",
+            "define actor Worker as receive(self, int value):void{let int x=value;return;} end"
+        })
+            RejectFeature(source,
+                "Nominal class/actor methods require receiver-erased method slots");
+
+        // Actor spellings inside nested comments and string literals are
+        // inert and must not cause the global token admission check to reject
+        // otherwise supported scalar programs.
+        foreach (var source in new[] {
+            "/* define actor Fake as end */ fnc main():int{return 42;}",
+            "/* outer /* define actor Hidden as end */ still comment */ fnc main():int{return 42;}",
+            "fnc main():int{let int x=42; /* pub define actor Fake as end */ return x;}",
+            "fnc main():int{return 42;} // define actor Fake as end"
+        })
+            Require(OresStructuredParser.Parse(source).Body.Count >= 1, // the let+return case has two statements
+                "inert actor syntax in comments must not alter CFG admission");
+
         // Keywords in comments must not become a global word-scanning gate.
         Require(OresStructuredParser.Parse(
             "fnc main():int{/* initialize -> void :: class val */return 42;}")

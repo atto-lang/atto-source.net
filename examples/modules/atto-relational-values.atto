@@ -1,0 +1,7 @@
+import fnc twice from "./atto-relational-arithmetic.atto";
+
+define module values as
+  pub fnc answer(int n) -> int {
+    return twice(n);
+  }
+end
