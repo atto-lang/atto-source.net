@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../compiler/Ores.Net.Compiler.Core/ReadonlyShapeProjectionV1.cs"
+             Link="ReadonlyShapeProjectionV1.cs" />
+    <Compile Include="../Ores.Net.Tests/ReadonlyShapeProjectionV1Tests.cs"
+             Link="ReadonlyShapeProjectionV1Tests.cs" />
+  </ItemGroup>
+</Project>
