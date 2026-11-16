@@ -52,7 +52,7 @@ public static class ActorAdtDataWireV1
                     throw new ArgumentException("ADT error exceeds byte budget");
                 payload = new byte[2 + error.Length];
                 BinaryPrimitives.WriteUInt16LittleEndian(payload, checked((ushort)error.Length));
-                error.CopyTo(payload.AsSpan(2));
+                error.AsSpan().CopyTo(payload.AsSpan(2));
                 break;
             default:
                 throw new ArgumentException("unknown ADT variant");
@@ -65,7 +65,7 @@ public static class ActorAdtDataWireV1
         output[4] = 1; // version
         output[5] = 1; // nominal family Option<Result<i64,UTF8>>
         output[6] = tag;
-        payload.CopyTo(output.AsSpan(Header));
+        payload.AsSpan().CopyTo(output.AsSpan(Header));
         return output;
     }
 
