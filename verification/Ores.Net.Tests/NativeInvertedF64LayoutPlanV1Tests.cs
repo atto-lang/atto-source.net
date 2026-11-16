@@ -31,6 +31,37 @@ internal static class NativeInvertedF64LayoutPlanV1Tests
 
     internal static void Run()
     {
+        // Metadata-only layout work must NEVER accidentally turn into
+        // guest source admission. Both independent native frontends must
+        // reject the same declaration with an exact lexical offset.
+        foreach (string source in new[] {
+            "define inverted class Particle as end",
+            "define pub inverted class Particle as end",
+            "pub define inverted class Particle as end",
+            "define /* no-guest-lowering */ inverted /* trivia */ class Particle as end",
+            "define\ninverted\nclass Particle as end"
+        })
+        {
+            int offset = source.IndexOf("inverted", StringComparison.Ordinal);
+            string diagnostic =
+                "Inverted class requires checked bracket-row and ownership lowering in the .NET backend at offset " +
+                offset.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            foreach (Action parse in new Action[] {
+                () => { _ = OresParser.Parse(source); },
+                () => { _ = OresStructuredParser.Parse(source); }
+            })
+            {
+                ++checks;
+                try { parse(); }
+                catch (FormatException ex) when (ex.Message == diagnostic) { continue; }
+                throw new Exception("Inverted class bypassed compiler-specific denial: " + source);
+            }
+        }
+        string comment = "fnc main():int{return 42;} /* define inverted class Particle */";
+        Require(OresParser.Parse(comment) is Literal,
+            "comment-only inverted class is not an active scalar declaration");
+        Require(OresStructuredParser.Parse(comment) is not null,
+            "comment-only inverted class is not a structured declaration");
         var nominal = new List<string> { "position", "velocity", "checksum" };
         foreach (var layout in new[] {
             ActorDataLayout.Aos, ActorDataLayout.Soa, ActorDataLayout.Aosoa
