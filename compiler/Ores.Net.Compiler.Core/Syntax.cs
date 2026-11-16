@@ -278,7 +278,7 @@ public static partial class OresParser
                 i > 1 ? tokens[i - 2].Text : "",
                 i > 0 ? tokens[i - 1].Text : "",
                 tokens[i].Text, tokens[i + 1].Text))
-                throw ActorPipeAdmission.Unsupported(tokens[i].Offset);
+                throw ActorPipeAdmission.Unsupported(tokens[i].Offset, tokens[i].Text);
             // Both shipped scalar and structured frontends must reject a
             // nominal supervisor BEFORE source/IR lowering. Check tokens,
             // not substrings: nested comments and lookalike identifiers do
@@ -727,6 +727,11 @@ public static partial class OresParser
                 _i += 2;
                 return new Token("|>", start);
             }
+            if (ch == '<' && _i + 1 < text.Length && text[_i + 1] == '|')
+            {
+                _i += 2;
+                return new Token("<|", start);
+            }
             if (ch == '-' && _i + 1 < text.Length && text[_i + 1] == '>')
             {
                 _i += 2;
@@ -1058,9 +1063,9 @@ public static partial class OresParser
                 _index++;
                 left = new Binary(op, left, ParseMul(depth + 1));
             }
-            if (Current.Text == "|>")
+            if (Current.Text is "|>" or "<|")
                 throw new FormatException(
-                    $"Value pipeline requires named callable lowering; unsupported in .NET i64 bootstrap at offset {Current.Offset}");
+                    $"E_VALUE_PIPE_BACKEND_UNSUPPORTED: functional pipe {Current.Text} requires typed named-call and checked Result/Option/effect lowering in .NET i64 bootstrap at offset {Current.Offset}");
             if (Current.Text == "?")
                 throw new FormatException(
                     $"Ternary expression requires bool typing and CFG branch-merge lowering in .NET Native AOT backend at offset {Current.Offset}");
