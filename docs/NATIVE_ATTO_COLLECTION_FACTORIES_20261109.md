@@ -36,10 +36,13 @@ layout or emit collection ABI from its current i64/bool-only SSA nodes.
 
 ## Not implemented
 
-**Map.of / Entry.of / Pair.of / Array.of / List.of / Vector.of / Set.of,
-general Record.of values, mutable arrays, real heterogenous tuple storage, tuple variables,
-non-literal tuple members, guest collection ownership and actor transport are
-not implemented on .NET.** All require a real typed aggregate and ownership
+**Escaping Map/Entry/Pair/Array/List/Vector/Set values,
+general Record.of values, mutable arrays, heterogeneous owned tuple storage,
+tuple variables, non-literal tuple members, guest collection ownership and
+actor transport are not implemented on .NET.** The narrow compiler-owned
+`Entry.of(...).key/.value` and `Pair.of(...).first/.second` pure-i64 immediate
+projection subsets are implemented as scalar-only, nonescaping compiler paths.
+These do not allocate nominal first-class Entry/Pair guest values. All require a real typed aggregate and ownership
 representation in HIR, verified CFG, CIL and full NativeAOT execution.
 
 All `~kind(...)` collection constructors are now **removed** rather than
