@@ -62,6 +62,18 @@ internal static class ActorPipeAdmissionTests
         _ = OresStructuredParser.Parse(
             "fnc main():int{let int rpipe=41;return rpipe+1;}");
 
+        // Reverse scalar application is a separate contiguous operator.
+        // Neither entry point may translate it to an untyped CIL call or
+        // silently unwrap a Future/Result while typed lowering is absent.
+        foreach (string expression in new[] { "42 <| 1", "42 <| /* gap */ 1" })
+        {
+            string src = "fnc main():int{return " + expression + ";}";
+            AssertValueReverseUnsupported(() => OresParser.Parse(src),
+                "scalar reverse functional expression");
+            AssertValueReverseUnsupported(() => OresStructuredParser.Parse(src),
+                "structured reverse functional expression");
+        }
+
         // The full guest fixture is a future implementation target, not a
         // passing pipeline. Both .NET source compiler entry points deny it.
         string guest = File.ReadAllText(Path.Combine(
@@ -82,6 +94,15 @@ internal static class ActorPipeAdmissionTests
             return;
         }
         throw new Exception(label + ": unsupported actor pipe reached parser acceptance");
+    }
+
+    private static void AssertValueReverseUnsupported(Action parse, string label)
+    {
+        try { parse(); }
+        catch (FormatException error) when (
+            error.Message.Contains("E_VALUE_PIPE_BACKEND_UNSUPPORTED",
+                StringComparison.Ordinal)) { return; }
+        throw new Exception(label + ": required explicit unsupported reverse value-pipe diagnostic");
     }
 
     private static void AssertNotAccepted(Action parse, string label)
