@@ -1775,11 +1775,17 @@ public static partial class OresStructuredParser
                 if (kind == StructuredBindingKind.Const && type == IrValueType.OptionI64)
                     throw new FormatException(
                         $"E_OPTION_CONST_UNSUPPORTED: Option<int> const folding needs tagged-value proof at offset {at}");
-                if (kind == StructuredBindingKind.Const)
+                // Typed scalar const (type-first `int x=e`, `const int x=e`,
+                // `const x:int=e`) must be compile-time evaluable (spec #49,
+                // java #3066). Untyped `const x=e` keeps java's stage-one
+                // meaning: folded when constant, otherwise a fixed readonly
+                // runtime binding.
+                if (kind == StructuredBindingKind.Const && annotated &&
+                    !IsCompileTimeScalar(initializer))
+                    throw new FormatException(
+                        $"E_NON_CONST_INITIALIZER: typed const scalar initializer must be compile-time evaluable at offset {initializer.Offset}");
+                if (kind == StructuredBindingKind.Const && IsCompileTimeScalar(initializer))
                 {
-                    if (!IsCompileTimeScalar(initializer))
-                        throw new FormatException(
-                            $"E_NON_CONST_INITIALIZER: const scalar initializer must be compile-time evaluable at offset {initializer.Offset}");
                     try { constantValue = ConstantValue(initializer); }
                     catch (OverflowException)
                     {
@@ -1904,9 +1910,10 @@ public static partial class OresStructuredParser
             throw new FormatException($"Undefined local '{name}' at offset {at}");
         }
 
-        // Const and bare type-first scalars must be statically evaluable.
-        // Runtime calls/read effects belong under val or let. Any failed
-        // constant evaluation rejects source before CFG/CIL emission.
+        // Typed const and bare type-first scalars must be statically
+        // evaluable; runtime calls/reads belong under val or let. Untyped
+        // const folds only when this holds. Failed evaluation rejects source
+        // before CFG/CIL emission.
         private static bool IsCompileTimeScalar(StructuredExpr expression) =>
             expression switch
             {

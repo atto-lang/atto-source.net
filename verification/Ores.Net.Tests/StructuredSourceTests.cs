@@ -327,9 +327,19 @@ pub async routine main(): void {
         }, "val can capture a runtime value without rebinding");
         Require(runtimeVals.Body[5] is StructuredSet { Name: "mutable" },
             "explicit let remains the only rebindable local");
+        // Untyped const keeps java's stage-one readonly-binding meaning: a
+        // runtime initializer stays a call; only typed scalar const is constexpr.
+        var untypedRuntimeConst = OresStructuredParser.Parse(
+            "fnc inc(int p):int{return p+1;}fnc main():int{const inferred=inc(41);return inferred;}");
+        Require(untypedRuntimeConst.Body[0] is StructuredLet {
+            Name: "inferred", Kind: StructuredBindingKind.Const,
+            Initializer: StructuredCall { Name: "inc" }
+        }, "untyped const from runtime helper remains a readonly call (java parity)");
+        Reject("fnc inc(int p):int{return p+1;}" +
+               "fnc main():int{const x=inc(41);x=0;return x;}",
+            "runtime-initialized untyped const must still deny assignment");
         foreach (var source in new[] {
             "fnc inc(int p):int{return p+1;}fnc main():int{int x=inc(41);return x;}",
-            "fnc inc(int p):int{return p+1;}fnc main():int{const x=inc(41);return x;}",
             "fnc inc(int p):int{return p+1;}fnc main():int{const int x=inc(41);return x;}"
         })
             RejectFeature(source, "E_NON_CONST_INITIALIZER");
@@ -621,6 +631,8 @@ pub async routine main(): void {
             "const bool x=true as bool;if x{return 42;}else{return 0;}",
             "const x=(7 eq 7) as bool;if x{return 42;}else{return 0;}",
             "let x=7 as int;x=42;return x;",
+            "val x=42;const y=x as int;return y;",
+            "val bool x=true;const y=x as bool;if y{return 42;}else{return 0;}",
             "const x=7;if true{const nested=x as int;return nested+35;}else{return 0;}",
             "const x=7;return (x+35) as int;"
         })
@@ -661,8 +673,8 @@ pub async routine main(): void {
             "let x=true;x=7;return 42;",
             "const x=missing;return 42;",
             "const x=x;return 42;",
-            "val x=42;const y=x as int;return y;",
-            "val bool x=true;const y=x as bool;return 42;"
+            "val x=42;const int y=x as int;return y;",
+            "val bool x=true;const bool y=x as bool;return 42;"
         }) Reject("fnc main():int{" + invalid + "}", "scalar cast/inference fail-closed " + invalid);
 
         var runtimeBool = OresStructuredParser.Parse("""

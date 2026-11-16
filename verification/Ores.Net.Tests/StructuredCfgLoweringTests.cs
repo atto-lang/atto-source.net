@@ -190,7 +190,7 @@ internal static class StructuredCfgLoweringTests
         CheckModule("""
             fnc plus(int a, int b): int { return a + b; }
             fnc add(int n) -> int ::
-                int x = plus(2, 3),
+                val int x = plus(2, 3),
                 x + n
             end
             fnc main() -> int ::
@@ -243,8 +243,8 @@ internal static class StructuredCfgLoweringTests
         Check("""
             fnc plus(int a, int b): int { return a + b; }
             fnc main() -> int ::
-                int x = plus(5, 7),
-                int y = plus(x, 29),
+                val int x = plus(5, 7),
+                val int y = plus(x, 29),
                 y + 1
             end
             """, 42, "nested call commas and sequential local visibility");
@@ -297,15 +297,18 @@ internal static class StructuredCfgLoweringTests
             ("fnc inc(int p):int{return p+1;}fnc main():int{val int x=inc(6);return x;}",
                 "typed val runtime helper"),
             ("fnc inc(int p):int{return p+1;}fnc main():int{val x=inc(6);return x;}",
-                "inferred val runtime helper")
+                "inferred val runtime helper"),
+            // Untyped const keeps java's stage-one readonly-binding meaning.
+            ("fnc inc(int p):int{return p+1;}fnc main():int{const x=inc(6);return x;}",
+                "untyped const runtime helper stays a readonly binding")
         })
             Check(source, 7, "const-versus-val CIL binding: " + label);
         Check("fnc main():int{let int x=7;x=8;return x;}",
             8, "explicit let actually rebinds in emitted CIL");
         foreach (var source in new[] {
             "fnc inc(int p):int{return p+1;}fnc main():int{int x=inc(6);return x;}",
-            "fnc inc(int p):int{return p+1;}fnc main():int{const x=inc(6);return x;}",
-            "fnc inc(int p):int{return p+1;}fnc main():int{const int x=inc(6);return x;}"
+            "fnc inc(int p):int{return p+1;}fnc main():int{const int x=inc(6);return x;}",
+            "fnc inc(int p):int{return p+1;}fnc main():int{const x:int=inc(6);return x;}"
         })
             RejectWithDiagnostic(source, "E_NON_CONST_INITIALIZER",
                 "runtime helper cannot initialize implicit/explicit const");
@@ -469,8 +472,10 @@ internal static class StructuredCfgLoweringTests
             42, "type-first bool is immutable typed SSA");
         Check("fnc main():int{int x=(2+5) as int;return x+35;}",
             42, "type-first int with checked identity cast");
-        Check("fnc plus(int n):int{return n+1;}fnc main():int{int x=plus(41);return x;}",
-            42, "type-first immutable runtime helper result");
+        Check("fnc plus(int n):int{return n+1;}fnc main():int{val int x=plus(41);return x;}",
+            42, "val runtime helper result (type-first int is const)");
+        RejectWithDiagnostic("fnc plus(int n):int{return n+1;}fnc main():int{int x=plus(41);return x;}",
+            "E_NON_CONST_INITIALIZER", "type-first int cannot hold a runtime helper result");
         Reject("fnc main():int{int x=7;x=8;return x;}",
             "type-first int binding is immutable by default");
         Reject("fnc main():int{int x=true;return 0;}",
@@ -511,6 +516,7 @@ internal static class StructuredCfgLoweringTests
             ("fnc main():int{return (7 as int as int)*6;}", "chained cast binds before multiplication"),
             ("fnc main():int{const x=7 as int;const y=x as int;return y*6;}", "checked cast through inferred constant reference"),
             ("fnc main():int{let x=7;x=x+1;x=x+34;return x;}", "SSA let multiwrite matches Cranelift LLVM"),
+            ("fnc main():int{let x=7;const snap=x;x=42;return snap+35;}", "untyped const captures prior SSA version"),
             ("fnc main():int{let x=7;val snap=x;x=42;return snap+35;}", "val captures prior SSA version"),
             ("fnc main():int{let x=7;val snap=x as int;x=42;return snap+35;}", "checked cast snapshot cannot alias mutable local"),
             ("fnc main():int{let x=7 as int;x=(x+35) as int;return x;}", "cast applied to mutable SSA replacement"),

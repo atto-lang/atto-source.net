@@ -252,8 +252,6 @@ internal static class OptionI64CompilerTests
             42, "int? readonly Option local (None)");
         Check("fnc main():int{let int? value=None;value=Some(42);return value.unwrap_or(0);}",
             42, "int? mutable Option local pair assignment");
-        Check("fnc main():int{int? value=Some(42);return value.unwrap_or(0);}",
-            42, "int? type-first immutable Option local");
         Check("fnc main():int{if None eq None{return 42;}return 0;}",
             42, "None equals None");
         Check("fnc main():int{if Some(0) eq None{return 0;}return 42;}",
@@ -366,6 +364,8 @@ internal static class OptionI64CompilerTests
             ("no name-first scalar default", "fnc get(x?:int=42):int{return x;}fnc main():int{return 42;}"),
             ("no default without name question", "fnc get(x:int=42):int{return x;}fnc main():int{return 42;}"),
             ("no Option const folding", "fnc main():int{const Option<int> x=Some(42);return x.unwrap_or(0);}"),
+            // Type-first int? is a const (spec #49); runtime Option locals use val (above).
+            ("type-first int? is const; no Option const folding", "fnc main():int{int? value=Some(42);return value.unwrap_or(0);}"),
             ("no mutable borrowed Option", "fnc main():int{let Option<int> x=Some(42);let y=rt borrow x;return 0;}"),
             ("no implicit Some-as-bool", "fnc main():int{if Some(42){return 1;}return 42;}")
         })
