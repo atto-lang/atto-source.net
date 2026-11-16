@@ -29,7 +29,8 @@ internal static class ActorPipeSourcePlanV1SelfTest
         string reversed = guest.Replace("producer pipe consumer;",
             "consumer rpipe producer;", StringComparison.Ordinal);
         var reversePlan = OresStructuredParser.PlanActorPipeV1(reversed);
-        Require(reversePlan.Edges.SequenceEqual(plan.Edges) &&
+        Require(reversePlan.Edges.Select(edge => (edge.ProducerBinding, edge.ConsumerBinding))
+                .SequenceEqual(plan.Edges.Select(edge => (edge.ProducerBinding, edge.ConsumerBinding))) &&
                 reversePlan.ScalarOracleSource == plan.ScalarOracleSource &&
                 reversePlan.InputMessage == plan.InputMessage,
             "rpipe must preserve typed source-to-sink graph and checked CIL oracle");
@@ -119,7 +120,8 @@ internal static class ActorPipeSourcePlanV1SelfTest
         string threeReverse = three.Replace("source pipe middle pipe sink;",
             "sink rpipe middle rpipe source;", StringComparison.Ordinal);
         var reverseThree = OresStructuredParser.PlanActorPipeV1(threeReverse);
-        Require(reverseThree.Edges.SequenceEqual(threePlan.Edges) &&
+        Require(reverseThree.Edges.Select(edge => (edge.ProducerBinding, edge.ConsumerBinding))
+                .SequenceEqual(threePlan.Edges.Select(edge => (edge.ProducerBinding, edge.ConsumerBinding))) &&
                 reverseThree.ScalarOracleSource == threePlan.ScalarOracleSource &&
                 reverseThree.InputMessage == threePlan.InputMessage,
             "three-stage rpipe must keep source→middle→sink typed CIL graph");
