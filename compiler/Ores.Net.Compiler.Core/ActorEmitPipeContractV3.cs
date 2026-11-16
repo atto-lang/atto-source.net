@@ -54,13 +54,15 @@ public static class ActorEmitPipeContractV3
 
     private static void RequireIdentity(string? value)
     {
-        if (string.IsNullOrEmpty(value) || value.Contains('\0'))
+        if (string.IsNullOrEmpty(value))
             throw Reject("E_ACTOR_PIPE_IDENTITY",
                 "actor type and instance IDs must be nonempty and NUL-free");
         // Valid UTF-16 of N code units requires at least N UTF-8 bytes.
         // Bound hostile inputs before scanning the whole identifier.
         if (value.Length > 256)
             throw Reject("E_ACTOR_PIPE_IDENTITY", "actor identifier exceeds 256 UTF-8 bytes");
+        if (value.Contains('\0'))
+            throw Reject("E_ACTOR_PIPE_IDENTITY", "actor identifier contains a NUL code unit");
         int bytes;
         try { bytes = StrictUtf8.GetByteCount(value); }
         catch (EncoderFallbackException)
