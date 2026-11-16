@@ -18,9 +18,9 @@ internal static class ActorPipeAdmission
             // compiles ActorUtils.pipe and ActorUtils::pipe. Do not let these
             // names silently fall through into dynamic or scalar invocation.
             bool actorNamespace = twoBack == "Actor" ||
-                                  (twoBack == "ActorUtils" && current is "pipe" or "rpipe");
+                                  (twoBack == "ActorUtils" && (current is "pipe" or "rpipe"));
             bool staticNamespace = threeBack == "Actor" ||
-                                   (threeBack == "ActorUtils" && current is "pipe" or "rpipe");
+                                   (threeBack == "ActorUtils" && (current is "pipe" or "rpipe"));
             bool actorFactory = (left == "." && actorNamespace) ||
                                 (left == "::" && actorNamespace) || // "::" lexed as one token
                                 (left == ":" && twoBack == ":" && staticNamespace);
@@ -31,7 +31,7 @@ internal static class ActorPipeAdmission
         // Distinct from functional '|>': this is the infix actor-link keyword.
         // A syntactically expression-like pair must not become a scalar call
         // or an implicitly unbounded host-only pipeline.
-        return current is "pipe" or "rpipe" && EndsExpression(left) && StartsExpression(right);
+        return (current is "pipe" or "rpipe") && EndsExpression(left) && StartsExpression(right);
     }
 
     internal static FormatException Unsupported(int offset, string keyword = "pipe") => new(
