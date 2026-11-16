@@ -9,6 +9,10 @@ internal static class ActorPipeAdmissionTests
         var rejected = new (string Expression, string Operator)[]
         {
             ("p pipe c", "pipe"),
+            ("p rpipe c", "rpipe"),
+            ("spawn Consumer() rpipe spawn Producer()", "rpipe"),
+            ("(let sink: Stream<int> = Stream.buffered<int>(64)) rpipe readable", "rpipe"),
+            ("p /* nested /* comment */ ok */ rpipe c", "rpipe"),
             ("spawn Producer() pipe spawn Consumer()", "pipe"),
             ("Producer() pipe Consumer()", "pipe"),
             ("(1+2) pipe (3+4)", "pipe"),
@@ -39,7 +43,8 @@ internal static class ActorPipeAdmissionTests
         {
             "fnc main():int{return 42;} // spawn A() pipe spawn B()",
             "fnc main():int{/* Actor.pipe(Producer(),Consumer()) */return 42;}",
-            "fnc main():int{/* p /* inner pipe */ pipe q */return 42;}"
+            "fnc main():int{/* p /* inner pipe */ pipe q */return 42;}",
+            "fnc main():int{/* sink rpipe source */return 42;}"
         })
         {
             _ = OresParser.Parse(source);
@@ -52,6 +57,10 @@ internal static class ActorPipeAdmissionTests
             "fnc pipe():int{return 41;}fnc main():int{return pipe()+1;}");
         _ = OresStructuredParser.Parse(
             "fnc main():int{let int pipe=41;return pipe+1;}");
+        _ = OresStructuredParser.Parse(
+            "fnc rpipe():int{return 41;}fnc main():int{return rpipe()+1;}");
+        _ = OresStructuredParser.Parse(
+            "fnc main():int{let int rpipe=41;return rpipe+1;}");
 
         // The full guest fixture is a future implementation target, not a
         // passing pipeline. Both .NET source compiler entry points deny it.
