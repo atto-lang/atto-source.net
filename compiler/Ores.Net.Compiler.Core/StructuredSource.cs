@@ -292,8 +292,7 @@ public static partial class OresStructuredParser
                 if (invertedKind.Text != "class")
                     throw new FormatException(
                         $"Inverted declaration requires class or struct kind in the .NET backend at offset {invertedKind.Offset}");
-                throw new FormatException(
-                    $"Inverted class requires checked bracket-row and ownership lowering in the .NET backend at offset {token.Offset}");
+                throw InvertedClassNativeAotAdmission.Unsupported(token.Offset);
             }
             // A supervisor is a distinct compiler-owned CONTROL authority,
             // not a class/actor or a scalar helper. Deny it before CFG/CIL
