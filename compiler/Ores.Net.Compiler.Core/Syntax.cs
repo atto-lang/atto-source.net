@@ -53,7 +53,7 @@ public static partial class OresParser
     {
         if (languageVersion.HasValue && languageVersion.Value is not (1 or 2))
             throw new FormatException("E_LANGUAGE_VERSION: expected language version 1 or 2");
-        var tokens = StripFileExports(Tokenize(source), source);
+        var tokens = StripFileExports(Tokenize(source, allowCaretReturn: languageVersion.HasValue), source);
         RejectUnsupportedSourceActors(tokens);
         RejectUnsupportedScalarTokens(tokens);
         for (int i = 0; i + 1 < tokens.Count; i++)
@@ -108,7 +108,7 @@ public static partial class OresParser
         return stripped;
     }
 
-    private static List<Token> Tokenize(string source)
+    private static List<Token> Tokenize(string source, bool allowCaretReturn = false)
     {
         ArgumentNullException.ThrowIfNull(source);
         if (source.Length > 1_048_576)
@@ -140,7 +140,7 @@ public static partial class OresParser
         ActorPubSubSourceAdmission.RejectUnsupported(source);
         // No structural match lowering or readonly shape metadata in scalar CIL yet.
         StructuralShapeAdmission.RejectUnsupportedPatterns(source);
-        var lexer = new Lexer(source);
+        var lexer = new Lexer(source, allowCaretReturn);
         var tokens = new List<Token>();
         for (;;)
         {
@@ -489,7 +489,7 @@ public static partial class OresParser
     }
     private readonly record struct Token(string Text, int Offset);
 
-    private sealed class Lexer(string text)
+    private sealed class Lexer(string text, bool allowCaretReturn)
     {
         private int _i;
         private bool previousWasWith;
@@ -753,6 +753,14 @@ public static partial class OresParser
                 throw new FormatException($"noncanonical '%' source operator; use named Integer.rem/mod at offset {start}");
             if (ch == '^')
             {
+                // Explicitly versioned Atto source has caret-return token.
+                // The production parser must still require its use at a
+                // statement-return boundary; never reinterpret it as XOR.
+                if (allowCaretReturn && !(_i + 1 < text.Length && text[_i + 1] == '^'))
+                {
+                    _i++;
+                    return new Token("^", start);
+                }
                 // Rejected after lexical trivia and before any scalar instruction
                 // reaches typed IR or CIL. `^^` is the canonical boolean XOR
                 // (spec ch.16), but this frontend only types int scalars, so any
