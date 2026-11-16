@@ -1,4 +1,5 @@
 using Ores.Net.Compiler;
+using Ores.Net.Runtime;
 
 internal static class OresIrReferenceEvaluator
 {
@@ -23,6 +24,9 @@ internal static class OresIrReferenceEvaluator
                 IrOpcode.BitXor => left ^ right,
                 IrOpcode.CheckedDivide => DivideChecked(left, right),
                 IrOpcode.SignedRemainderLiteral => throw new FormatException("Removed Oreslang operator '%' in reference evaluator"),
+                IrOpcode.StrictRem => StrictSigned64Arithmetic.Rem(left, right),
+                IrOpcode.StrictMod => StrictSigned64Arithmetic.Mod(left, right),
+                IrOpcode.StrictPow => StrictSigned64Arithmetic.Pow(left, right),
                 _ => throw new FormatException("Unverified IR opcode")
             };
         }

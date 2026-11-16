@@ -8,6 +8,11 @@ public sealed record Unary(char Operator, Expression Value) : Expression;
 public sealed record Binary(char Operator, Expression Left, Expression Right) : Expression;
 // Named intrinsic only. Single '^' is not AttoLang syntax ('^^' is boolean XOR).
 public sealed record NamedBitXor(Expression Left, Expression Right) : Expression;
+// Named signed-64 Integer.rem/mod/pow (Java StrictIntegerArithmetic parity):
+// truncating remainder, Euclidean modulus, checked nonnegative power.
+public sealed record NamedIntegerRem(Expression Left, Expression Right) : Expression;
+public sealed record NamedIntegerMod(Expression Left, Expression Right) : Expression;
+public sealed record NamedIntegerPow(Expression Left, Expression Right) : Expression;
 // Closed-world CLR intrinsic: exact System.Math.Abs(Int64), no dynamic binding.
 public sealed record DotnetMathAbsI64(Expression Value) : Expression;
 public sealed record DotnetMathMaxI64(Expression Left, Expression Right) : Expression;
@@ -105,17 +110,25 @@ public static partial class OresParser
         ArgumentNullException.ThrowIfNull(source);
         if (source.Length > 1_048_576)
             throw new FormatException("Source is larger than the 1 MiB bootstrap limit");
+        // Validate original UTF-16 before lexing or comment removal.
+        // Report the first offending code-unit offset, matching the structured
+        // frontend while retaining the scalar admission diagnostic categories.
         for (int i = 0; i < source.Length; i++)
         {
             char c = source[i];
-            if (c == '\0') throw new FormatException("Source contains NUL byte");
+            if (c == '\0')
+                throw new FormatException($"Source contains NUL byte at offset {i}");
+            // Original UTF-16 source must reject raw terminal controls in comments/literals.
+            if (c == (char)0x001b || c == (char)0x007f)
+                throw new FormatException($"Source contains terminal control at offset {i}");
             if (char.IsHighSurrogate(c))
             {
-                if (++i >= source.Length || !char.IsLowSurrogate(source[i]))
-                    throw new FormatException("Source contains invalid UTF-16");
+                if (i + 1 >= source.Length || !char.IsLowSurrogate(source[i + 1]))
+                    throw new FormatException($"Source contains invalid UTF-16 at offset {i}");
+                i++; // Valid supplementary scalar consumes two UTF-16 units.
             }
             else if (char.IsLowSurrogate(c))
-                throw new FormatException("Source contains invalid UTF-16");
+                throw new FormatException($"Source contains invalid UTF-16 at offset {i}");
         }
         // Public parser callers supply UTF-16 strings; the source budget is
         // UTF-8 bytes, matching the disk/CLI boundary, not code-unit count.
@@ -614,6 +627,9 @@ public static partial class OresParser
                     (text[_i] is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_'))
                     _i++;
                 var word = text[start.._i];
+                if (word == "select" &&
+                    StaticSelectAdmission.FollowedByStaticSelect(text, start))
+                    throw StaticSelectAdmission.Unsupported(start);
                 // G0: do not allow unlowered native authority to be spelled as
                 // an ordinary identifier, parameter, member or callable.
                 if (word == "unsafe")
@@ -979,6 +995,12 @@ public static partial class OresParser
                 throw new FormatException($"STATE_CONTAINER_BACKEND_UNSUPPORTED: protected heap region and critical guard lowering required at offset {Current.Offset}");
             if (Current.Text == "virtual" && _index + 1 < tokens.Count && tokens[_index + 1].Text == "actor")
                 throw new FormatException($"VIRTUAL_ACTOR_BACKEND_UNSUPPORTED: logical key and activation fencing required at offset {Current.Offset}");
+            // Scalar NativeAOT has no originating-slot virtual dispatch or
+            // compiler-owned mailbox ingress. Deny before parsing fnc main.
+            if (Current.Text == "abstract")
+                throw new FormatException($"NET_PRIVATE_ABSTRACT_UNSUPPORTED: Private abstract class hooks require typed virtual dispatch; inherited override authority and trusted actor-hook dispatch require typed lowering at offset {Current.Offset}");
+            if (Current.Text is "class" or "actor")
+                throw new FormatException($"NET_NOMINAL_METHODS_UNSUPPORTED: Nominal class/actor entrypoints require runtime-sealed receiver and CIL lowering at offset {Current.Offset}");
             // Scalar CIL and NativeAOT do not lower nominal ModelGraphs.
             // 'model' is contextual, not globally reserved.
             if (Current.Text == "model")
@@ -1215,18 +1237,28 @@ public static partial class OresParser
             if (Current.Text is "Map" or "Array" or "List" or "Vector" or "Set")
                 throw new FormatException(
                     $"E_COLLECTION_FACTORY_UNSUPPORTED: {Current.Text}.of requires owned typed aggregate and NativeAOT CIL lowering at offset {Current.Offset}");
+            // Closed named Integer intrinsics with two eager signed-i64 operands.
+            // No generic method invocation or host interoperability is admitted.
             if (Take("Integer"))
             {
                 Expect(".");
-                if (!Take("bitXor"))
+                string operation = Current.Text;
+                if (operation is not ("bitXor" or "rem" or "mod" or "pow"))
                     throw new FormatException(
                         $"Unsupported Integer intrinsic at offset {Current.Offset}");
+                _index++;
                 Expect("(");
                 var left = ParseAdd(depth + 1);
                 Expect(",");
                 var right = ParseAdd(depth + 1);
                 Expect(")");
-                return new NamedBitXor(left, right);
+                return operation switch
+                {
+                    "bitXor" => new NamedBitXor(left, right),
+                    "rem" => new NamedIntegerRem(left, right),
+                    "mod" => new NamedIntegerMod(left, right),
+                    _ => new NamedIntegerPow(left, right)
+                };
             }
             if (Take("+")) return new Unary('+', ParseUnary(depth + 1));
             if (Take("-"))

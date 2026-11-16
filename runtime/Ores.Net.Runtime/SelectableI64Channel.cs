@@ -229,6 +229,42 @@ public sealed class SelectableI64Channel
     public bool TryWrite(long value) =>
         TryWriteResult(value) == WriteStatus.Written;
 
+    /// <summary>
+    /// Atomically enqueue a bounded batch in FIFO order, or enqueue nothing.
+    /// This is a NativeAOT-safe host substrate, not guest Channel&lt;T&gt; lowering.
+    /// Empty batches succeed only while the channel is open.
+    /// </summary>
+    public WriteStatus TryWriteBatch(ReadOnlySpan<long> values)
+    {
+        NotificationBatch? notifications = null;
+        lock (_gate)
+        {
+            if (_closed) return WriteStatus.Closed;
+            // Subtraction avoids overflow and rejects oversized batches,
+            // even when values.Length exceeds total channel capacity.
+            if (values.Length > _values.Length - _count)
+                return WriteStatus.WouldBlock;
+            if (values.IsEmpty) return WriteStatus.Written;
+
+            // Fail/empty paths allocate nothing. With no registered readers
+            // successful writes also avoid allocating a callback batch.
+            // Any callback allocations happen before mutating the ring.
+            if (ActiveCount(_readers) != 0)
+            {
+                notifications = CreateNotificationBatch();
+                Capture(_readers, notifications);
+            }
+            foreach (var value in values)
+            {
+                _values[_tail] = value;
+                _tail = (_tail + 1) % _values.Length;
+            }
+            _count += values.Length;
+        }
+        notifications?.Dispatch();
+        return WriteStatus.Written;
+    }
+
     public ReadResult TryReadResult()
     {
         var notifications = CreateNotificationBatch();

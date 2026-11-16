@@ -40,6 +40,21 @@
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/v1/source-i64/portable-i64.v1.json" Link="portable-i64.v1.json"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/v1/strict-named-integer-arithmetic-v1.json"
+          Link="strict-named-integer-arithmetic-v1.json"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/v1/strict-integer-to-float-exact-v1.json"
+          Link="strict-integer-to-float-exact-v1.json"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/v1/native-math-unary-precision-v1.json"
+          Link="native-math-unary-precision-v1.json"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/v1/bigint-exact-v1.json"
+          Link="bigint-exact-v1.json"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../contracts/v1/decimal-precision-v1.json"
+          Link="decimal-precision-v1.json"
+          CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/v1/state-region-provenance-v1.json" Link="state-region-provenance-v1.json"
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../examples/structured-bindings42.ores" Link="structured-bindings42.ores"
@@ -49,6 +64,13 @@
     <None Include="../../contracts/v1/hpc-finance/guest-manifest.json" Link="hpc-finance-guests-v1.json"
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/v1/hpc-finance/risk-gate-v1.tsv" Link="hpc-finance-risk-v1.tsv"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../tests/fixtures/trap-three-backend-target.atto"
+          Link="trap-three-backend-target.atto" CopyToOutputDirectory="PreserveNewest" />
+    <!-- The nine canonical .atto guest fixtures are byte-identical with
+         platform-conformance and the LLVM/Java parity branches. -->
+    <None Include="../../tests/fixtures/caller-trap-parity/*.atto"
+          Link="caller-trap-parity/%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../tests/fixtures/actor-pipe-two-stage.atto"
           Link="actor-pipe-two-stage.atto" CopyToOutputDirectory="PreserveNewest" />
@@ -64,6 +86,9 @@
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../examples/structured-signed-comparisons.atto"
           Link="structured-signed-comparisons.atto"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../examples/modules/atto-relational-*.atto"
+          Link="module-fixtures/%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../tests/scalar-cast-inference-five-backend.ores" Link="scalar-cast-inference-five-backend.ores"
           CopyToOutputDirectory="PreserveNewest" />

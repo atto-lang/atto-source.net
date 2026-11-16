@@ -179,6 +179,9 @@ public static partial class OresStructuredParser
         {
             if (source[i] == '\0')
                 throw new FormatException($"Source contains NUL at offset {i}");
+            // Import discovery and structured parser must share the same raw-source rule.
+            if (source[i] == (char)0x001b || source[i] == (char)0x007f)
+                throw new FormatException($"Source contains terminal control at offset {i}");
             if (char.IsHighSurrogate(source[i]))
             {
                 if (++i >= source.Length || !char.IsLowSurrogate(source[i]))
@@ -272,7 +275,7 @@ public static partial class OresStructuredParser
                  (tokens[^1].Text == "pub" && tokens.Count > 1 &&
                   tokens[^2].Text == "define")))
                 throw new FormatException(
-                    $"Private abstract class hooks require typed virtual dispatch and superclass-only invocation at offset {token.Offset}");
+                    $"NET_PRIVATE_ABSTRACT_UNSUPPORTED: Private abstract class hooks require typed virtual dispatch and superclass-only invocation; inherited override authority and trusted actor-hook dispatch require typed lowering at offset {token.Offset}");
             if (token.Text == "inverted" && tokens.Count > 0 &&
                 (tokens[^1].Text == "define" ||
                  (tokens[^1].Text == "pub" && tokens.Count > 1 &&
@@ -441,7 +444,7 @@ public static partial class OresStructuredParser
             // Duplicate declarations are diagnosed above, but valid source
             // remains unsupported until typed owner/borrow and CIL lowering.
             throw new FormatException(
-                $"Nominal class/actor methods require receiver-erased method slots, type/borrow checking and Native AOT CIL lowering; unsupported in .NET structured frontend at offset {firstNominalOffset}");
+                $"NET_NOMINAL_METHODS_UNSUPPORTED: Nominal class/actor methods require receiver-erased method slots, type/borrow checking and Native AOT CIL lowering; unsupported in .NET structured frontend at offset {firstNominalOffset}");
         }
         for (int i = 0; i + 1 < tokens.Count; i++)
         {
@@ -857,6 +860,9 @@ public static partial class OresStructuredParser
                 do { index++; } while (index < source.Length &&
                     (Alpha(source[index]) || Digit(source[index]) || source[index] == '_'));
                 string word = source[offset..index];
+                if (word == "select" &&
+                    StaticSelectAdmission.FollowedByStaticSelect(source, offset))
+                    throw StaticSelectAdmission.Unsupported(offset);
                 // The linked-module lexer also enforces the unsafe keyword
                 // reservation before typed module binding and CIL emission.
                 if (word == "unsafe")
@@ -955,7 +961,7 @@ public static partial class OresStructuredParser
             // tagged family is still unsupported, even when reached via
             // linked-unit discovery, and must fail before typed SSA/CIL.
             // This is a complete-token check after skipping source trivia.
-            if (tokenText is "Result" or "Ok" or "Err" or "trap")
+            if (tokenText is "Result" or "Ok" or "Err")
                 throw new FormatException(
                     $"Option/Result/trap requires verified tagged-sum CIL and NativeAOT guest-control lowering at offset {offset}");
             return new Token(tokenText, offset);
@@ -1143,6 +1149,9 @@ public static partial class OresStructuredParser
                         exposed = true;
                     }
                 }
+                if (Current.Text == "trap")
+                    throw new FormatException(
+                        $"Option/Result/trap requires verified tagged-sum CIL and NativeAOT guest-control lowering at offset {Current.Offset}: trap function modifier is unsupported");
                 if (Current.Text is "class" or "actor")
                     throw Error("Nominal class/actor methods require receiver-erased method slots, type/borrow checking and Native AOT CIL lowering; unsupported in .NET structured frontend");
                 if (!Take("fnc")) Expect("routine");
@@ -1859,7 +1868,7 @@ public static partial class OresStructuredParser
                     or "do" or "fi" or "try" or "catch" or "finally"
                     or "is" or "type"
                     or "routine" or "async" or "isoactor" or "guard"
-                    or "Some" or "None" or "Option" or "Array")
+                    or "Some" or "None" or "Option" or "Array" or "trap")
                 throw new FormatException($"Invalid identifier at offset {at}");
             index++;
             return name;
@@ -2028,7 +2037,15 @@ public static partial class OresStructuredParser
         // LLVM's full actor-owned dynamic collection semantics.
         private StructuredExpr ArrayPostfix(StructuredExpr array, int depth)
         {
-            if (array.Type != IrValueType.FixedArrayI64 || !Take("."))
+            if (array.Type != IrValueType.FixedArrayI64)
+                return array;
+            // Linked/module parsing tokenizes brackets for unrelated syntax.
+            // A fixed array must never slip past the typed Option access
+            // verifier through an indexed postfix, even on an out-of-bounds
+            // miss. Keep this negative compiler-owned, not a parse accident.
+            if (Current.Text == "[")
+                throw Error("E_SAFE_COLLECTION_ACCESS_UNSUPPORTED: use typed checked get/get_copy; [] lowering is unsupported");
+            if (!Take("."))
                 return array;
             int at = Current.Offset;
             string operation = Current.Text;
@@ -2150,6 +2167,27 @@ public static partial class OresStructuredParser
         private StructuredExpr Unary(int depth)
         {
             Budget(depth);
+            // First executable caller-side trap slice: the structured compiler
+            // admits only synchronous int expressions. Every admitted operation
+            // is defined to complete normally or raise a terminal checked
+            // arithmetic failure, which must NOT be swallowed into None.
+            // The operand is evaluated exactly once by the existing Some(int)
+            // tagged SSA/CIL lowering; never erase the Option boundary.
+            if (Current.Text == "trap")
+            {
+                int at = Current.Offset;
+                index++;
+                var operand = Unary(depth + 1);
+                if (operand.Type != IrValueType.I64)
+                    throw new FormatException(
+                        $"E_TRAP_PROFILE_UNSUPPORTED: Option/Result/trap requires verified tagged-sum CIL and NativeAOT guest-control lowering for non-int operands at offset {at}");
+                int height = Height(operand) + 1;
+                if (height > MaxDepth)
+                    throw new FormatException($"Structured trap AST depth exceeds limit at offset {at}");
+                var wrapped = new StructuredSome(at, operand);
+                expressionHeights.Add(wrapped, height);
+                return OptionPostfix(wrapped, depth);
+            }
             if (Current.Text.Length > 0 && Current.Text[0] is '\'' or '"' or '\u0060')
                 throw new FormatException(
                     $"STRING_BACKEND_UNSUPPORTED: quoted strings and template interpolation require typed String CFG/CIL/NativeAOT lowering at offset {Current.Offset}");
