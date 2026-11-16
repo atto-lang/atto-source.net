@@ -55,6 +55,33 @@ internal static class ReadonlyShapeProjectionV1Tests
             "proof does not expose mutable List");
         Reject(() => Prove(S(Origin.Class, F("x", Scalar.Bool, 0)),
             [new("x", Scalar.Bool)]), "non-i64 ABI must reject");
+        // Real compiler-verified native record layout, not a caller-authored
+        // Field[] descriptor. Both physically reordered layouts must retain
+        // their source-specific scalar slots.
+        var verifiedA = NativeAggregateLayoutVerifier.Verify(
+            new NativeAggregateLayoutRequest(
+                NativeAggregateValueKind.Record,
+                [IrValueType.I64], ["x"], ShapeId: 10));
+        var verifiedB = NativeAggregateLayoutVerifier.Verify(
+            new NativeAggregateLayoutRequest(
+                NativeAggregateValueKind.Record,
+                [IrValueType.I64, IrValueType.I64],
+                ["padding", "x"], ShapeId: 11));
+        var recordA = ReadonlyVerifiedRecordBridgeV1.ProveVerifiedRecord(
+            verifiedA, 5, 7, WantsX);
+        var recordB = ReadonlyVerifiedRecordBridgeV1.ProveVerifiedRecord(
+            verifiedB, 5, 8, WantsX);
+        Check(recordA.GetField("x").SourceSlot == 0, "typed native record A slot");
+        Check(recordB.GetField("x").SourceSlot == 1, "typed native record B slot");
+        Check(recordA.SourceNominalId == 10 &&
+              recordB.SourceNominalId == 11, "typed schema identity");
+        Check(aSlots[recordA.GetField("x").SourceSlot] +
+              bSlots[recordB.GetField("x").SourceSlot] == 84,
+              "native verified record reordered ABI host oracle");
+        Reject(() => ReadonlyVerifiedRecordBridgeV1.ProveVerifiedRecord(
+            verifiedA, 0, 7, WantsX), "invalid native record generation");
+        Reject(() => ReadonlyVerifiedRecordBridgeV1.ProveVerifiedRecord(
+            verifiedA, 5, 0, WantsX), "expired native record read loan");
         Console.WriteLine("readonly shape NET HOST_WITNESS 16/16; target i64 oracle 84; guest CIL/AOT NOT_EXECUTED");
     }
 }
