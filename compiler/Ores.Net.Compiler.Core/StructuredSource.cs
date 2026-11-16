@@ -508,9 +508,10 @@ public static partial class OresStructuredParser
                     $"E_COLLECTION_FACTORY_UNSUPPORTED: {tokens[i].Text}.of requires typed product/collection CFG and NativeAOT CIL lowering at offset {tokens[i].Offset}");
             if (tokens[i].Text == "~" && i + 1 < tokens.Count &&
                 tokens[i + 1].Text is "tuple" or "map" or "array" or "list" or
-                    "vector" or "set" or "entry" or "pair" or "record")
+                    "vector" or "set" or "entry" or "pair" or "record" or
+                    "slice" or "fixed_array" or "fixed_list")
                 throw new FormatException(
-                    $"E_COLLECTION_FACTORY_UNSUPPORTED: ~{tokens[i + 1].Text} requires typed product/collection CFG and NativeAOT CIL lowering at offset {tokens[i].Offset}");
+                    $"E_COLLECTION_FACTORY_REMOVED: ~{tokens[i + 1].Text} is removed; use Type.of(...), reserving ~ for structural typing at offset {tokens[i].Offset}");
             if ((tokens[i].Text is "tuple" or "structural") &&
                 tokens[i + 1].Text == "(")
                 throw new FormatException(
