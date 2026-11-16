@@ -204,6 +204,10 @@ public static partial class OresStructuredParser
             // when the user spells the chain from sink back to source.
             // This remains a preview-only typed graph, NOT NativeAOT actors.
             var edges = new List<ActorPipeEdgeV1>(stages.Count - 1);
+            // Each lexical rpipe token names the opposite *edge* from the
+            // corresponding source-order index; preserve source offsets with
+            // the real source→sink edge rather than misleading diagnostics.
+            var edgeOffsets = new int[stages.Count - 1];
             Token startPipe = Current;
             string first = Name();
             bool reverse = first == stages[^1].Binding && Current.Text == "rpipe";
@@ -224,13 +228,20 @@ public static partial class OresStructuredParser
                     throw Error(reverse
                         ? "rpipe must follow reverse declaration order exactly"
                         : "pipe must follow declaration order exactly", pipe.Offset);
-                // The type check always runs in actual source→sink order.
-                if (stages[i - 1].MessageOutput != stages[i].MessageInput)
-                    throw Error("nominal pipe output/input message type mismatch", pipe.Offset);
-                edges.Add(new ActorPipeEdgeV1(stages[i - 1].Binding,
-                    stages[i].Binding, pipe.Offset));
+                edgeOffsets[reverse ? stages.Count - 1 - i : i - 1] = pipe.Offset;
             }
             Expect(";");
+            // Type check and emit edges in actual DATA-flow order. This
+            // guarantees both direction spellings produce the SAME graph,
+            // but each failure still points at its own lexical edge operator.
+            for (int i = 1; i < stages.Count; i++)
+            {
+                int at = edgeOffsets[i - 1];
+                if (stages[i - 1].MessageOutput != stages[i].MessageInput)
+                    throw Error("nominal pipe output/input message type mismatch", at);
+                edges.Add(new ActorPipeEdgeV1(stages[i - 1].Binding,
+                    stages[i].Binding, at));
+            }
             if (stages[0].MessageInput != "int")
                 throw Error("v1 input message must be int", startPipe.Offset);
 
