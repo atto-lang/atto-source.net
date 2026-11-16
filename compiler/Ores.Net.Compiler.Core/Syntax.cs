@@ -722,10 +722,12 @@ public static partial class OresParser
             }
             // Recognize the contiguous operator as one token, but never
             // attempt a scalar-only approximation of named-call lowering.
-            if (ch == '|' && _i + 1 < text.Length && text[_i + 1] == '>')
+            if (_i + 1 < text.Length &&
+                ((ch == '|' && text[_i + 1] == '>') ||
+                 (ch == '<' && text[_i + 1] == '|')))
             {
                 _i += 2;
-                return new Token("|>", start);
+                return new Token(text[start.._i], start);
             }
             if (ch == '-' && _i + 1 < text.Length && text[_i + 1] == '>')
             {
@@ -1058,7 +1060,7 @@ public static partial class OresParser
                 _index++;
                 left = new Binary(op, left, ParseMul(depth + 1));
             }
-            if (Current.Text == "|>")
+            if (Current.Text is "|>" or "<|")
                 throw new FormatException(
                     $"Value pipeline requires named callable lowering; unsupported in .NET i64 bootstrap at offset {Current.Offset}");
             if (Current.Text == "?")
