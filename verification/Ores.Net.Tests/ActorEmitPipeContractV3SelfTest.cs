@@ -121,7 +121,7 @@ internal static class ActorEmitPipeContractV3SelfTest
         }, "E_ACTOR_PIPE_IDENTITY");
         Reject(new[]
         {
-            Stage("abc\\0def", "Parse", "int", "bool"),
+            Stage(new string(new[] { 'a', 'b', 'c', (char)0, 'd', 'e', 'f' }), "Parse", "int", "bool"),
             Stage("sink", "Sink", "bool")
         }, "E_ACTOR_PIPE_IDENTITY");
         Reject(new[]
