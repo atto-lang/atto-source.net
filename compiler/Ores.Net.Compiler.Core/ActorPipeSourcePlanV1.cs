@@ -198,22 +198,33 @@ public static partial class OresStructuredParser
             if (stages.Count < 2)
                 throw Error("actor pipe requires at least two owned stages");
 
-            // The source form is one contiguous, ordered pipeline. The
-            // contextual "|" alias is admitted only here, where each bound
-            // operand is statically an owned ActorRef.
+            // Syntax is directional, never port-inferred. "pipe" moves
+            // left→right; "rpipe" moves right→left. Keep the compiler-owned
+            // DATA edges and the CIL scalar oracle in source→sink order, even
+            // when the user spells the chain from sink back to source.
+            // This remains a preview-only typed graph, NOT NativeAOT actors.
             var edges = new List<ActorPipeEdgeV1>(stages.Count - 1);
             Token startPipe = Current;
             string first = Name();
-            if (first != stages[0].Binding)
-                throw Error("pipe must begin at the first owned actor", startPipe.Offset);
+            bool reverse = first == stages[^1].Binding && Current.Text == "rpipe";
+            if (!reverse && first != stages[0].Binding)
+                throw Error("pipe must begin at the source actor (rpipe at the sink actor)", startPipe.Offset);
             for (int i = 1; i < stages.Count; i++)
             {
                 Token pipe = Current;
-                if (!Take("pipe") && !Take("|"))
-                    throw Error("missing ordered actor pipe edge", pipe.Offset);
+                bool linked = reverse ? Take("rpipe") : (Take("pipe") || Take("|"));
+                if (!linked)
+                    throw Error(reverse
+                        ? "missing reverse rpipe edge or mixed pipe/rpipe directions"
+                        : "missing forward pipe edge or mixed pipe/rpipe directions",
+                        pipe.Offset);
                 string target = Name();
-                if (target != stages[i].Binding)
-                    throw Error("pipe must follow declaration order exactly", pipe.Offset);
+                int expected = reverse ? stages.Count - 1 - i : i;
+                if (target != stages[expected].Binding)
+                    throw Error(reverse
+                        ? "rpipe must follow reverse declaration order exactly"
+                        : "pipe must follow declaration order exactly", pipe.Offset);
+                // The type check always runs in actual source→sink order.
                 if (stages[i - 1].MessageOutput != stages[i].MessageInput)
                     throw Error("nominal pipe output/input message type mismatch", pipe.Offset);
                 edges.Add(new ActorPipeEdgeV1(stages[i - 1].Binding,
@@ -238,7 +249,7 @@ public static partial class OresStructuredParser
             _position++;
             Expect(")");
             Expect(";");
-            if (sentTo != first)
+            if (sentTo != stages[0].Binding)
                 throw Error("direct consumer sends bypass owned graph ingress", sendAt.Offset);
 
             foreach (var stage in stages)
