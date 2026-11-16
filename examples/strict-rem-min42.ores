@@ -1,0 +1,4 @@
+// MIN/-1 must produce mathematical remainder zero, never CLR rem overflow.
+define pub fnc main(): int {
+    return Integer.rem(-9223372036854775808, -1) + 42;
+}

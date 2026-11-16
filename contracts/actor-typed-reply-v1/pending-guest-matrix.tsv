@@ -1,0 +1,3 @@
+# fixture	expected	guest_execution	proof_boundary
+unary.atto	ACCEPT	NOT_EXECUTED	SOURCE_ONLY
+stream.atto	ACCEPT	NOT_EXECUTED	SOURCE_ONLY

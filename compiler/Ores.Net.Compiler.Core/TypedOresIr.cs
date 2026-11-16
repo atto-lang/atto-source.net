@@ -11,7 +11,10 @@ public enum IrValueType
     // Source-only tagged (is_some:bool, value:i64) pair in the closed
     // structured Option<int> slice. It NEVER occupies a single CFG SSA slot
     // or CIL local: only its verified primitive components can be emitted.
-    OptionI64
+    OptionI64,
+    // Source-only bounded, immutable Array<int>: its elements are distinct
+    // verified i64 SSA values, not CLR arrays or native guest pointers.
+    FixedArrayI64
 }
 
 public enum IrOpcode
@@ -25,7 +28,12 @@ public enum IrOpcode
     SignedRemainderLiteral,
     // Exact framework API signature: System.Math.Abs(System.Int64) -> System.Int64.
     DotnetMathAbsI64,
-    DotnetMathMaxI64
+    DotnetMathMaxI64,
+    // Named signed-64 Integer.rem/mod/pow: verified static calls into
+    // Ores.Net.Runtime.StrictSigned64Arithmetic (appended; ordinals above stay stable).
+    StrictRem,
+    StrictMod,
+    StrictPow
 }
 
 /// <summary>
@@ -139,7 +147,8 @@ public static class OresIrVerifier
                     throw new FormatException("Removed Oreslang operator '%' in verified IR");
                 if (instruction.Opcode is not (IrOpcode.CheckedAdd or
                     IrOpcode.CheckedSubtract or IrOpcode.CheckedMultiply or
-                    IrOpcode.CheckedDivide))
+                    IrOpcode.CheckedDivide or IrOpcode.BitXor or
+                    IrOpcode.StrictRem or IrOpcode.StrictMod or IrOpcode.StrictPow))
                     throw new FormatException("Unknown IR opcode");
 
                 if (instruction.Constant.HasValue ||
@@ -289,6 +298,24 @@ public static class OresIrLowering
                         results.Push(EmitBinary(opcode, left, right));
                         break;
                     }
+                    case NamedIntegerRem:
+                    case NamedIntegerMod:
+                    case NamedIntegerPow:
+                    {
+                        if (results.Count < 2)
+                            throw new FormatException("IR intrinsic operand underflow");
+                        int right = results.Pop();
+                        int left = results.Pop();
+                        var op = node switch
+                        {
+                            NamedIntegerRem => IrOpcode.StrictRem,
+                            NamedIntegerMod => IrOpcode.StrictMod,
+                            NamedIntegerPow => IrOpcode.StrictPow,
+                            _ => throw new FormatException("Unsupported typed Integer operation")
+                        };
+                        results.Push(EmitBinary(op, left, right));
+                        break;
+                    }
                     default:
                         throw new FormatException("Invalid IR lowering finish frame");
                 }
@@ -319,6 +346,26 @@ public static class OresIrLowering
                         pending.Push(new Pending(binary, true));
                         pending.Push(new Pending(binary.Right, false));
                         pending.Push(new Pending(binary.Left, false));
+                        break;
+                    case NamedBitXor bitXor:
+                        pending.Push(new Pending(bitXor, true));
+                        pending.Push(new Pending(bitXor.Right, false));
+                        pending.Push(new Pending(bitXor.Left, false));
+                        break;
+                    case NamedIntegerRem call:
+                        pending.Push(new Pending(call, true));
+                        pending.Push(new Pending(call.Right, false));
+                        pending.Push(new Pending(call.Left, false));
+                        break;
+                    case NamedIntegerMod call:
+                        pending.Push(new Pending(call, true));
+                        pending.Push(new Pending(call.Right, false));
+                        pending.Push(new Pending(call.Left, false));
+                        break;
+                    case NamedIntegerPow call:
+                        pending.Push(new Pending(call, true));
+                        pending.Push(new Pending(call.Right, false));
+                        pending.Push(new Pending(call.Left, false));
                         break;
                     default:
                         throw new FormatException("Unsupported AST node");
