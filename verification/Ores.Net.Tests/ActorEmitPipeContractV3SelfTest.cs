@@ -130,6 +130,33 @@ internal static class ActorEmitPipeContractV3SelfTest
             Stage("sink", "Sink", "bool")
         }, "E_ACTOR_PIPE_IDENTITY");
 
+        Require(ActorEmitPipeContractV3.MaxEmitObservations == 1024,
+            "v3 emit observation budget shared across Java/LLVM/.NET");
+        var bounded = new ActorEmitStageV3("p0", "Parse", "int",
+            Enumerable.Repeat("bool", ActorEmitPipeContractV3.MaxEmitObservations));
+        Require(ActorEmitPipeContractV3.Validate(new[]
+        {
+            bounded, Stage("sink", "Sink", "bool")
+        }).Count == 1, "1024 typed emission observations admitted");
+        static void RejectEmitBudget(IEnumerable<string> observations)
+        {
+            try
+            {
+                _ = new ActorEmitStageV3("p0", "Parse", "int", observations);
+            }
+            catch (FormatException e) when (
+                e.Message.StartsWith("E_ACTOR_PIPE_EMIT_LIMIT:", StringComparison.Ordinal))
+            {
+                return;
+            }
+            throw new Exception("Actor v3 admitted unbounded typed emission evidence");
+        }
+        RejectEmitBudget(Enumerable.Repeat("bool",
+            ActorEmitPipeContractV3.MaxEmitObservations + 1));
+        // This is intentionally lazy: the constructor must stop after 1025
+        // observations, not materialize the million-entry sequence.
+        RejectEmitBudget(Enumerable.Repeat("int", 1_000_000));
+
         for (int length = 2; length <= 16; length++)
         {
             var chain = Enumerable.Range(0, length)
