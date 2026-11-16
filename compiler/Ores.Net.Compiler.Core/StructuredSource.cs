@@ -890,6 +890,12 @@ public static partial class OresStructuredParser
                 Expect(";");
                 return (new StructuredReturn(at, value), true);
             }
+            // An unqualified 'mut' is neither a declaration kind nor an
+            // implicit 'const mut'. Keep this error distinct from syntax
+            // errors and from the unsupported owned const-mut lowering.
+            if (Current.Text == "mut")
+                throw new FormatException(
+                    $"E_MUT_QUALIFIER: bare mut needs const, val or let at offset {Current.Offset}");
             if (Current.Text is "let" or "val" or "const" or "int" or "bool")
             {
                 // In the v1 scalar subset, a type-first local is exactly const:
