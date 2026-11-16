@@ -4,8 +4,8 @@ namespace Ores.Net.Runtime;
 /// Trusted-host hints for the next actor-owned shard allocation. This is a
 /// bounded, allocation-free-on-observation NativeAOT policy, not a JIT, a
 /// guest-visible profiler, or a migration of an already-live shard.
-/// The actor scheduler must authenticate the owner before calling this API.
-/// One serial actor turn owns each advisor; concurrent writers are forbidden.
+/// Every access requires the exact live owner turn issued by ActorArena.
+/// A serial actor turn owns the advisor; concurrent writers are forbidden.
 /// </summary>
 internal enum ActorShardAccessKindV1 { RowScan = 1, ColumnScan = 2, RandomLookup = 3 }
 
@@ -14,8 +14,7 @@ internal readonly record struct ActorShardLayoutChoiceV1(
 
 internal sealed class ActorShardLayoutAdvisorV1
 {
-    private readonly ulong actorId;
-    private readonly ulong incarnation;
+    private readonly ActorArena arena;
     private readonly int fields;
     private readonly int sampleLimit;
     private int samples;
@@ -24,39 +23,39 @@ internal sealed class ActorShardLayoutAdvisorV1
     private int randomSamples;
     private bool retired;
 
-    internal ActorShardLayoutAdvisorV1(ulong actorId, ulong incarnation, int fields,
-        int sampleLimit = 4096)
+    internal ActorShardLayoutAdvisorV1(ActorArena arena, ActorArenaTurn turn,
+        int fields, int sampleLimit = 4096)
     {
-        if (actorId == 0) throw new ArgumentOutOfRangeException(nameof(actorId));
-        if (incarnation == 0) throw new ArgumentOutOfRangeException(nameof(incarnation));
+        ArgumentNullException.ThrowIfNull(arena);
+        arena.ValidateOwnerTurn(turn);
         if (fields is < 1 or > 4096) throw new ArgumentOutOfRangeException(nameof(fields));
         if (sampleLimit is < 64 or > 65536)
             throw new ArgumentOutOfRangeException(nameof(sampleLimit));
-        this.actorId = actorId;
-        this.incarnation = incarnation;
+        this.arena = arena;
         this.fields = fields;
         this.sampleLimit = sampleLimit;
     }
 
     internal int Samples => samples;
 
-    private void RequireLiveOwner(ulong actor, ulong generation)
+    private void RequireLiveOwner(ActorArenaTurn turn)
     {
-        // Numeric IDs here are only a defense-in-depth generation fence,
-        // NOT a substitute for the scheduler's unforgeable actor authority.
-        if (retired || actor != actorId || generation != incarnation)
-            throw new InvalidOperationException("stale or foreign actor layout advisor");
+        if (retired)
+            throw new InvalidOperationException("retired actor layout advisor");
+        // Validate the real issued capability against arena identity, epoch
+        // and carrier, including after a suspend/resume on a new actor turn.
+        arena.ValidateOwnerTurn(turn);
     }
 
     /// <summary>
-    /// Saturating trace collection. Each call is one already-authenticated
-    /// scheduler observation, or a bounded batch of identical observations.
+    /// Saturating trace collection. Each call requires an admitted actor turn
+    /// and represents one observation or a bounded batch of identical observations.
     /// No heap objects, clock reads, callbacks, or dynamic code are created.
     /// </summary>
-    internal bool Observe(ulong actor, ulong generation,
+    internal bool Observe(ActorArenaTurn turn,
         ActorShardAccessKindV1 access, int count = 1)
     {
-        RequireLiveOwner(actor, generation);
+        RequireLiveOwner(turn);
         if (access is not (ActorShardAccessKindV1.RowScan or
             ActorShardAccessKindV1.ColumnScan or ActorShardAccessKindV1.RandomLookup))
             throw new ArgumentOutOfRangeException(nameof(access));
@@ -79,10 +78,10 @@ internal sealed class ActorShardLayoutAdvisorV1
     /// mutated in place because outstanding handles/loans retain its layout.
     /// These integer heuristics are deterministic, not performance guarantees.
     /// </summary>
-    internal ActorShardLayoutChoiceV1 Recommend(ulong actor, ulong generation,
+    internal ActorShardLayoutChoiceV1 Recommend(ActorArenaTurn turn,
         int rows, int preferredLanes = 8)
     {
-        RequireLiveOwner(actor, generation);
+        RequireLiveOwner(turn);
         if (rows < 1) throw new ArgumentOutOfRangeException(nameof(rows));
         if (preferredLanes is < 1 or > ActorShardColumns.MaxAosoaLanes ||
             (preferredLanes & (preferredLanes - 1)) != 0)
@@ -113,9 +112,9 @@ internal sealed class ActorShardLayoutAdvisorV1
     }
 
     /// <summary>Revoke generation and clear all trace counters at retirement.</summary>
-    internal void Retire(ulong actor, ulong generation)
+    internal void Retire(ActorArenaTurn turn)
     {
-        RequireLiveOwner(actor, generation);
+        RequireLiveOwner(turn);
         retired = true;
         samples = rowSamples = columnSamples = randomSamples = 0;
     }
