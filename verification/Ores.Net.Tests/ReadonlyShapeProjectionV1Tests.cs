@@ -53,6 +53,8 @@ internal static class ReadonlyShapeProjectionV1Tests
             [new("x", Scalar.I64), new("x", Scalar.I64)]), "SP016");
         Check(a.Fields is System.Collections.ObjectModel.ReadOnlyCollection<FieldWitness>,
             "proof does not expose mutable List");
+        Reject(() => Prove(S(Origin.Class, F("x", Scalar.Bool, 0)),
+            [new("x", Scalar.Bool)]), "non-i64 ABI must reject");
         Console.WriteLine("readonly shape NET HOST_WITNESS 16/16; target i64 oracle 84; guest CIL/AOT NOT_EXECUTED");
     }
 }
