@@ -48,8 +48,11 @@ public static partial class OresParser
             "Source must contain a canonical isolated actor state declaration");
     }
 
-    public static Expression Parse(string source, DotnetHostImportPolicy? policy = null)
+    public static Expression Parse(string source, DotnetHostImportPolicy? policy = null,
+                                   int? languageVersion = null)
     {
+        if (languageVersion.HasValue && languageVersion.Value is not (1 or 2))
+            throw new FormatException("E_LANGUAGE_VERSION: expected language version 1 or 2");
         var tokens = StripFileExports(Tokenize(source), source);
         RejectUnsupportedSourceActors(tokens);
         RejectUnsupportedScalarTokens(tokens);
@@ -59,7 +62,7 @@ public static partial class OresParser
                 StaticSelectAdmission.IsStaticSelectFollower(tokens[i + 1].Text))
                 throw StaticSelectAdmission.Unsupported(tokens[i].Offset);
         }
-        return new Reader(tokens, policy ?? DotnetHostImportPolicy.DenyAll, source).ParseProgram();
+        return new Reader(tokens, policy ?? DotnetHostImportPolicy.DenyAll, source, languageVersion).ParseProgram();
     }
 
     /// Parse file-root exports using the shared explicit-export grammar.
@@ -765,7 +768,7 @@ public static partial class OresParser
         }
     }
 
-    private sealed class Reader(List<Token> tokens, DotnetHostImportPolicy policy, string source)
+    private sealed class Reader(List<Token> tokens, DotnetHostImportPolicy policy, string source, int? languageVersion)
     {
         // Macro definitions are compiler-only. Neither these declarations nor
         // their arguments appear in OresIR/CIL, and no runtime expansion exists.
@@ -1014,11 +1017,12 @@ public static partial class OresParser
             if (arrowReturn) Expect("->");
             Expect("int");
             bool braced = Take("{");
+            bool explicitSeparator = false;
             if (!braced)
             {
                 if (!arrowReturn)
                     throw new FormatException($"End-delimited main requires '-> int' at offset {Current.Offset}");
-                bool explicitSeparator = Take("::");
+                explicitSeparator = Take("::");
                 if (!explicitSeparator)
                 {
                     var previous = tokens[_index - 1];
@@ -1032,21 +1036,62 @@ public static partial class OresParser
                             break;
                         }
                     }
-                    if (!hasLineBreak)
+                    if (!hasLineBreak && languageVersion != 1)
                         throw new FormatException($"Compact end-delimited main requires '::' at offset {Current.Offset}");
                 }
             }
+            // Explicit v1/v2 mode ONLY; legacy callers keep their current
+            // unversioned admission and diagnostics. The restricted i64
+            // executable slice accepts pure comma expressions, not arbitrary
+            // effectful steps, locals, actor boundaries or implicit casts.
+            if (!braced && languageVersion is 1 or 2 &&
+                (explicitSeparator || languageVersion == 1))
+            {
+                if (Current.Text == "return" || Current.Text == "^")
+                    throw new FormatException("E_SYNTAX: comma body uses expression-tail syntax");
+                Expression last = ParseAdd(0);
+                int steps = 0;
+                while (Take(","))
+                {
+                    if (++steps > 1024)
+                        throw new FormatException("E_SOURCE_LIMIT: comma body exceeds 1024 items");
+                    if (!VersionedPureScalar(last))
+                        throw new FormatException("E_UNSUPPORTED: discarded comma-body value requires effect-safe lowering");
+                    if (Current.Text is "," or "end" or ";" or "")
+                        throw new FormatException("E_SYNTAX: empty comma-body item");
+                    last = ParseAdd(0);
+                }
+                if (Current.Text == ";")
+                    throw new FormatException("E_SYNTAX: comma body requires ',' not ';'");
+                Expect("end");
+                if (Current.Text.Length != 0)
+                    throw new FormatException($"Unexpected token at offset {Current.Offset}");
+                return last;
+            }
+            if (!braced && languageVersion == 2 && Current.Text is not ("return" or "^"))
+                throw new FormatException("E_LANGUAGE_VERSION: v2 unmarked body requires explicit return; comma tails require '::'");
             if (Current.Text == "guard")
                 throw new FormatException(
                     $"GUARD_BACKEND_UNSUPPORTED: early-exit CFG and ownership lowering required at offset {Current.Offset}");
-            Expect("return");
+            if (!(languageVersion.HasValue && Take("^")))
+                Expect("return");
             var expression = ParseAdd(0);
+            if (!braced && languageVersion == 2 && Current.Text == ",")
+                throw new FormatException("E_LANGUAGE_VERSION: v2 comma body requires '::'");
             Expect(";");
             Expect(braced ? "}" : "end");
             if (Current.Text.Length != 0)
                 throw new FormatException($"Unexpected token at offset {Current.Offset}");
             return expression;
         }
+
+        private static bool VersionedPureScalar(Expression expression) => expression switch
+        {
+            Literal => true,
+            Unary unary => VersionedPureScalar(unary.Value),
+            Binary binary => VersionedPureScalar(binary.Left) && VersionedPureScalar(binary.Right),
+            _ => false
+        };
 
         private Expression ParseAdd(int depth)
         {
