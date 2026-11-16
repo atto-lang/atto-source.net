@@ -36,7 +36,11 @@ internal sealed class ActorShardLayoutAdvisorV1
         this.sampleLimit = sampleLimit;
     }
 
-    internal int Samples => samples;
+    internal int SamplesFor(ActorArenaTurn turn)
+    {
+        RequireLiveOwner(turn);
+        return samples;
+    }
 
     private void RequireLiveOwner(ActorArenaTurn turn)
     {
