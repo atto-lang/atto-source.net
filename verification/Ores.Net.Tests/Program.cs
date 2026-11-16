@@ -847,6 +847,7 @@ ProjectRootSourceTests.Run(); // host-only resolver, not linked .NET source impo
 ActorNativeArenaSelfTest.Run();
 ActorNativeAggregateStoreTests.Run(); // unmanaged per-actor aggregate values, not compiler guest parity
 NativeAggregateLayoutVerifierTests.Run(); // immutable checked HIR layout and native ABI tag matching
+NativeInvertedF64LayoutPlanV1Tests.Run(); // host-only checked F64 inverted geometry, NOT guest CIL
 
 // Import parity is deliberately not claimed for the .NET scalar compiler.
 // Each form must fail at lexical admission with a specific import diagnostic,
