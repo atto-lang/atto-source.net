@@ -278,7 +278,7 @@ public static partial class OresParser
                 i > 1 ? tokens[i - 2].Text : "",
                 i > 0 ? tokens[i - 1].Text : "",
                 tokens[i].Text, tokens[i + 1].Text))
-                throw ActorPipeAdmission.Unsupported(tokens[i].Offset);
+                throw ActorPipeAdmission.Unsupported(tokens[i].Offset, tokens[i].Text);
             // Both shipped scalar and structured frontends must reject a
             // nominal supervisor BEFORE source/IR lowering. Check tokens,
             // not substrings: nested comments and lookalike identifiers do
