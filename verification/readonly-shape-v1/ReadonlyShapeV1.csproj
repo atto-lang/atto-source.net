@@ -13,6 +13,17 @@
              Link="NativeAggregateLayoutVerifier.cs" />
     <Compile Include="../../compiler/Ores.Net.Compiler.Core/TypedOresIr.cs"
              Link="TypedOresIr.cs" />
+    <Compile Include="../../compiler/Ores.Net.Compiler.Core/DotnetHostImportPolicy.cs" Link="DotnetHostImportPolicy.cs" />
+    <Compile Include="../../compiler/Ores.Net.Compiler.Core/Syntax.cs" Link="Syntax.cs" />
+    <Compile Include="../../compiler/Ores.Net.Compiler.Core/ActorStateSchemaMetadata.cs" Link="ActorStateSchemaMetadata.cs" />
+    <Compile Include="../../compiler/Ores.Net.Compiler.Core/StructuralShapeAdmission.cs" Link="StructuralShapeAdmission.cs" />
+    <Compile Include="../../compiler/Ores.Net.Compiler.Core/SafeCollectionSourceAdmission.cs" Link="SafeCollectionSourceAdmission.cs" />
+    <Compile Include="../../compiler/Ores.Net.Compiler.Core/StaticSelectAdmission.cs" Link="StaticSelectAdmission.cs" />
+    <Compile Include="../../compiler/Ores.Net.Compiler.Core/QuotedSourceSyntax.cs" Link="QuotedSourceSyntax.cs" />
+    <Compile Include="../../compiler/Ores.Net.Compiler.Core/ContextualTaskBoundary.cs" Link="ContextualTaskBoundary.cs" />
+    <Compile Include="../../compiler/Ores.Net.Compiler.Core/ActorPubSubSourceAdmission.cs" Link="ActorPubSubSourceAdmission.cs" />
+    <Compile Include="../../compiler/Ores.Net.Compiler.Core/ExplicitExportSyntax.cs" Link="ExplicitExportSyntax.cs" />
+    <Compile Include="../../compiler/Ores.Net.Compiler.Core/ActorPipeAdmission.cs" Link="ActorPipeAdmission.cs" />
     <Compile Include="../../compiler/Ores.Net.Compiler.Core/ReadonlyShapeProjectionV1.cs"
              Link="ReadonlyShapeProjectionV1.cs" />
     <Compile Include="../Ores.Net.Tests/ReadonlyShapeProjectionV1Tests.cs"
