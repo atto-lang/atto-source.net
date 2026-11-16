@@ -425,6 +425,20 @@ public unsafe sealed class ActorArena : IDisposable
     }
 
     /// <summary>
+    /// Trusted internal evidence that this exact actor turn was issued by this
+    /// arena, remains live, and is running on its admitted carrier thread.
+    /// Numeric actor IDs alone are never authorization for profiling or layout.
+    /// </summary>
+    internal void ValidateOwnerTurn(ActorArenaTurn turn)
+    {
+        lock (_gate)
+        {
+            ValidateTurnLocked(turn);
+            EnsureAdmissionOpenLocked();
+        }
+    }
+
+    /// <summary>
     /// Allocate persistent actor-private bytes. Returned storage is zeroed.
     /// Partial frees are non-compacting; the bump region resets only once all
     /// persistent allocations are gone.
