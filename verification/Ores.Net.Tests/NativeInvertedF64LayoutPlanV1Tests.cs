@@ -104,6 +104,23 @@ internal static class NativeInvertedF64LayoutPlanV1Tests
                 persistentBytes: 1024 * 1024, scratchBytes: 4096,
                 maxAllocations: 8, maxReadLoans: 4, maxLifetimePins: 4);
             using var turn = arena.EnterTurn(actorId, 1);
+            using (var foreign = new ActorArena(actorId + 1, incarnation: 1,
+                persistentBytes: 128 * 1024, scratchBytes: 4096,
+                maxAllocations: 4, maxReadLoans: 2, maxLifetimePins: 2))
+            using (var wrongTurn = foreign.EnterTurn(actorId + 1, 1))
+            {
+                ++checks;
+                try { _ = plan.AllocateTrustedHostShard(arena, wrongTurn); }
+                catch (InvalidOperationException)
+                {
+                    Require(arena.PersistentLiveBytes == 0 &&
+                        arena.LiveAllocations == 0,
+                        "foreign actor turn denial consumes no native quota");
+                    goto VerifiedForeignTurnDenied;
+                }
+                throw new Exception("Static layout descriptor granted foreign actor access");
+            }
+        VerifiedForeignTurnDenied:
             var shard = plan.AllocateTrustedHostShard(arena, turn);
             Require(shard.Rows == plan.Rows && shard.Fields == plan.Fields &&
                 shard.ByteLength == plan.ByteLength &&
