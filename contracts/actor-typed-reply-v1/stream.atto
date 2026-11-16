@@ -1,0 +1,22 @@
+// ACTOR-REPLY-06/07 target source. NOT_EXECUTED in LLVM or .NET.
+// ReplyStream<T>.receive() returns Future<Result<Option<T>, ReplyError>>.
+define class SubscribeUpdates implements StreamRequest<int> as
+    const int topic_id;
+end
+
+define actor Publisher receives SubscribeUpdates sends int as
+    receive(SubscribeUpdates request) {
+        const out = reply_to(request);
+        out.send_async(1)?;
+        out.send_async(2)?;
+        out.close()?;
+    }
+end
+
+pub susp fnc consume_updates(ActorRef<Publisher> publisher): int {
+    const stream = publisher.send(SubscribeUpdates(7))?;
+    const first = (await stream.receive())?;
+    const second = (await stream.receive())?;
+    const eof = (await stream.receive())?;
+    return 42;
+}
