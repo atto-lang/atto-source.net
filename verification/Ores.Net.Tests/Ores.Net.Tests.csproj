@@ -72,6 +72,10 @@
     <None Include="../../tests/fixtures/caller-trap-parity/*.atto"
           Link="caller-trap-parity/%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest" />
+    <!-- Exact cross-backend .atto value/graph direction corpus. -->
+    <None Include="../../tests/fixtures/directional-parity/*.atto"
+          Link="directional-parity/%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../tests/fixtures/actor-pipe-two-stage.atto"
           Link="actor-pipe-two-stage.atto" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../tests/fixtures/actor-pipe-three-stage.atto"
