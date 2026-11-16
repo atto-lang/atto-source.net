@@ -4,7 +4,7 @@ Status: host-runtime integration only. No `.atto` guest compiler lowering, OS de
 
 ## Authority and entrypoints
 
-- `ActorRuntime.SpawnWithIo(kind, mailboxHandler, onInputReady)` mints an immutable `ActorRef` and a host-only `ActorIoHostPort`. Only callers holding this port can feed `io.in`, signal input EOF, read `io.out`, and observe output EOF.
+- `ActorRuntime.SpawnWithIo(kind, mailboxHandler, onInputReady)` mints an immutable `ActorRef` and a host-only `ActorIoHostPort`. Only callers holding this port can feed `io.in`, signal input EOF, observe **drained input EOF** (`InputAtEof`), read `io.out`, and observe output EOF. `InputAtEof` is observational only: it never lets the host read actor-owned `io.in` DATA, and a stale/retired port cannot inspect EOF.
 - On an actor turn, `ActorContext.TryReadInput`, `InputAtEof`, `TryWriteOutput` and `CloseOutput` require an active arena turn and current actor generation. A retained context does not confer post-turn authority.
 - The older two-argument `SpawnWithIo` remains a manual-wakeup compatibility path; it does not register a callback.
 - Host ports are local, non-serializable capabilities. Weak runtime references keep host-held ports from pinning a retired actor, its arena, or sibling actors in memory.

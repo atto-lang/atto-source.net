@@ -55,6 +55,11 @@ public sealed class ActorIoHostPort
         return closed;
     }
 
+    // The host can observe when its input half-close has drained through
+    // the actor without acquiring an actor turn or consuming queued DATA.
+    // This does not grant the host permission to read actor-owned io.in.
+    public bool InputAtEof => _io.InputAtEof(_actor);
+
     // Output EOF becomes observable after every previously admitted frame
     // has been drained. The host cannot close the actor's output for it.
     public bool OutputAtEof => _io.OutputAtEof(_actor);
