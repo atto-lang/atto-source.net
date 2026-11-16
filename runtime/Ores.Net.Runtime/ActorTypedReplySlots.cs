@@ -27,24 +27,24 @@ public sealed class ActorTypedReplySlots<T> : IDisposable where T : unmanaged
     /// <summary>VM-private call binding; never serialize or expose to guest mail.</summary>
     public readonly struct ReplyLease
     {
-        internal ReplyLease(ActorTypedReplySlots<T> owner, Endpoint caller, Endpoint callee,
+        internal ReplyLease(WeakReference<ActorTypedReplySlots<T>> ownerRef, Endpoint caller, Endpoint callee,
                             int index, uint generation, ReplyMode mode)
         {
-            Owner = owner;
+            OwnerRef = ownerRef;
             Caller = caller;
             Callee = callee;
             Index = index;
             Generation = generation;
             Mode = mode;
         }
-        internal ActorTypedReplySlots<T>? Owner { get; }
+        internal WeakReference<ActorTypedReplySlots<T>>? OwnerRef { get; }
         internal Endpoint? Caller { get; }
         internal Endpoint? Callee { get; }
         internal int Index { get; }
         internal uint Generation { get; }
         public ReplyMode Mode { get; }
         // Lookup key only; authority additionally requires an authentic Endpoint.
-        public ulong LocalHandle => Owner is null ? 0UL :
+        public ulong LocalHandle => OwnerRef is null ? 0UL :
             ((ulong)Generation << 32) | (uint)(Index + 1);
     }
 
@@ -60,6 +60,8 @@ public sealed class ActorTypedReplySlots<T> : IDisposable where T : unmanaged
         public ReplyMode Mode;
     }
 
+    // A leaked lease cannot keep the entire VM reply slab alive.
+    private readonly WeakReference<ActorTypedReplySlots<T>> _weakSelf;
     private readonly object _gate = new();
     private readonly Slot[] _slots;
     private readonly T[] _ring;
@@ -84,6 +86,7 @@ public sealed class ActorTypedReplySlots<T> : IDisposable where T : unmanaged
             capacity > 65_536 / perStreamItems)
             throw new ArgumentOutOfRangeException(nameof(capacity),
                 "reply ledger must have bounded slots and inline payload credits");
+        _weakSelf = new WeakReference<ActorTypedReplySlots<T>>(this);
         _slots = new Slot[capacity];
         _ring = new T[checked(capacity * perStreamItems)];
         _generation = new uint[capacity];
@@ -128,7 +131,7 @@ public sealed class ActorTypedReplySlots<T> : IDisposable where T : unmanaged
                 Caller = caller, Callee = callee, Active = true, Mode = mode
             };
             ++_pending;
-            return new ReplyLease(this, caller, callee, index, ++_generation[index], mode);
+            return new ReplyLease(_weakSelf, caller, callee, index, ++_generation[index], mode);
         }
     }
 
@@ -242,7 +245,7 @@ public sealed class ActorTypedReplySlots<T> : IDisposable where T : unmanaged
 
     private void RequireCapability(ReplyLease lease, Endpoint endpoint, bool producerSide)
     {
-        if (!ReferenceEquals(lease.Owner, this) ||
+        if (!ReferenceEquals(lease.OwnerRef, _weakSelf) ||
             !ReferenceEquals(endpoint, producerSide ? lease.Callee : lease.Caller))
             throw new UnauthorizedAccessException("reply endpoint authority mismatch");
     }
