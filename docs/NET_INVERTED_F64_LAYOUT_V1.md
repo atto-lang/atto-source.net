@@ -66,6 +66,17 @@ padded-capacity exhaustion.
 dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
 ```
 
+An additional dependency-free **Rust** geometry oracle compares exact AoS,
+SoA and AoSoA F64 offsets, exercises all small 1–65-row layouts for
+non-aliasing, checks tail padding, and rejects malformed or oversized
+regions. It is not a substitute for compiled .NET or native guest tests.
+
+```sh
+rustc --edition=2021 --test tests/native_inverted_f64_layout_v1.rs \
+  -o /tmp/native_inverted_f64_layout_v1
+/tmp/native_inverted_f64_layout_v1
+```
+
 **No successful SDK 10 or Native AOT run has been observed for this PR.**
 Host tests, even when executed, are only proof of the host substrate.
 Before promoting language parity, require a real `.atto` program and
