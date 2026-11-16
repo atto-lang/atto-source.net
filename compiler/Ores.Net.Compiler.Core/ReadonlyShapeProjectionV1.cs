@@ -61,7 +61,8 @@ public static class ReadonlyShapeProjectionV1
                 ?? throw new InvalidOperationException("missing source field: " + expected.Name);
             if (found.SealedActorState)
                 throw new InvalidOperationException("sealed actor field cannot be projected");
-            if (!found.IsPublic || !found.Immutable || !found.EffectFree ||
+            if (expected.Type != Scalar.I64 || found.Type != Scalar.I64 ||
+                !found.IsPublic || !found.Immutable || !found.EffectFree ||
                 found.Type != expected.Type)
                 throw new InvalidOperationException(
                     "field not exact-type public immutable i64: " + expected.Name);
