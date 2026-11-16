@@ -44,7 +44,8 @@ public sealed class ActorTypedReplySlots<T> : IDisposable where T : unmanaged
         internal uint Generation { get; }
         public ReplyMode Mode { get; }
         // Lookup key only; authority additionally requires an authentic Endpoint.
-        public ulong LocalHandle => ((ulong)Generation << 32) | (uint)(Index + 1);
+        public ulong LocalHandle => Owner is null ? 0UL :
+            ((ulong)Generation << 32) | (uint)(Index + 1);
     }
 
     private struct Slot
@@ -72,6 +73,12 @@ public sealed class ActorTypedReplySlots<T> : IDisposable where T : unmanaged
 
     public ActorTypedReplySlots(int capacity, int perStreamItems = 16)
     {
+        unsafe
+        {
+            if (sizeof(T) > 256)
+                throw new ArgumentOutOfRangeException(nameof(T),
+                    "inline reply values over 256 bytes require explicit byte-budget lowering");
+        }
         if (capacity <= 0 || capacity > 65_536 ||
             perStreamItems <= 0 || perStreamItems > 256 ||
             capacity > 65_536 / perStreamItems)
