@@ -13,6 +13,12 @@ FIFO queues, and source-bound `emit(expr)`. All three targets must reject
   identities** cannot. Supervisors cannot become DATA stages.
 - Real type inference must collect emitted expression types from every
   receive control-flow path. Input `ActorMail<T>` does not imply output `T`.
+- The typed receive-body checker must cap each actor's observed `emit(expr)`
+  sites at 1024 before copying, iterating or publishing emission evidence.
+  A 1025th observation fails with `E_ACTOR_PIPE_EMIT_LIMIT`; exactly 1024
+  consistent typed observations remain valid. This per-stage cap is independent
+  of the 2..16 stage bound. Reject incomplete/unknown branch evidence rather
+  than inferring output from the input domain.
 - Adjacent output/input types match exactly: `int` and `bool` only for v3.
   Nonterminal stages must emit a declared type; terminal sinks emit nothing.
 - Supervisor-owned topology is published atomically, invalid links and
