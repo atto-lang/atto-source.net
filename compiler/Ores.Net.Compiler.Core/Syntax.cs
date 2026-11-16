@@ -1036,7 +1036,7 @@ public static partial class OresParser
                             break;
                         }
                     }
-                    if (!hasLineBreak && languageVersion != 1)
+                    if (!hasLineBreak && !languageVersion.HasValue)
                         throw new FormatException($"Compact end-delimited main requires '::' at offset {Current.Offset}");
                 }
             }
