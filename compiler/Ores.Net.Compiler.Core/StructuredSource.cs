@@ -939,6 +939,12 @@ public static partial class OresStructuredParser
                 (((ch == '<' || ch == '>') && source[index + 1] == '=') ||
                  source.Substring(index, 2) is "->" or "::" or "&&" or "||"))
                 index += 2;
+            // Functional value application is a checked expression operator,
+            // never an actor graph or a general closure capability.
+            else if (index + 1 < source.Length &&
+                     ((ch == '|' && source[index + 1] == '>') ||
+                      (ch == '<' && source[index + 1] == '|')))
+                index += 2;
             else if (ch == '|' && !moduleMode)
                 throw new FormatException(
                     $"Lexical captures require checked closure lowering at offset {offset}");
