@@ -42,6 +42,8 @@ public static class ActorAdtDataWireV1
                 tag = 2;
                 if (err.Error is null)
                     throw new ArgumentException("null ADT error value");
+                if (err.Error.Length > MaxErrorBytes)
+                    throw new ArgumentException("ADT error exceeds character budget");
                 byte[] error;
                 try { error = StrictUtf8.GetBytes(err.Error); }
                 catch (EncoderFallbackException ex)
