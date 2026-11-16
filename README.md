@@ -28,3 +28,15 @@ This README describes the repository's intended responsibilities. Feature suppor
 - [Language specification](https://github.com/atto-lang/atto-spec)
 - [Platform conformance](https://github.com/atto-lang/atto-platform-conformance)
 - [Commercial infrastructure](https://github.com/atto-co)
+
+## Repository ownership and contribution routing
+
+**Belongs here:** .NET/CIL backend, NativeAOT compilation, explicit dotnet host-library imports, actor arenas and lifecycle implementation, and .NET-specific compiler tests.
+
+**Belongs elsewhere:** Java/Graal host imports, LLVM lowering and portable language semantics belong in atto-source.java, atto-source.llvm and atto-spec respectively.
+
+**Security and portability boundary:** Do not equate NativeAOT with zero GC: require ownership/capability checks, bounded actor-local heaps/stacks, deterministic reclamation and executed negative tests.
+
+AttoLang is the public name; preserve existing Oreslang repository, CLI and `.ores` compatibility while specifying new portable source in `.atto`. Do not duplicate normative semantics from [atto-spec](https://github.com/atto-lang/atto-spec).
+
+**Evidence gate:** record exact compiler/runtime head and tree, target/toolchain, nonzero executed steps, positive and negative guest results, and explicit passed/failed/unsupported/not-executed states. Host-only CI and `steps=[]` do not establish guest support. README scope is not a feature-completeness claim.
