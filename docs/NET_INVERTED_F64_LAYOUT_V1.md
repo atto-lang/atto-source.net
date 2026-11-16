@@ -52,6 +52,16 @@ These expressions deliberately match the existing .NET
 heterogeneous byte-stride layouts in Java/LLVM, which have independent
 typed/alignment requirements.
 
+## Source admission remains deliberately closed
+
+Both the shipping scalar parser and the experimental structured parser
+recognize declaration-context `define inverted class` / `define pub inverted
+class` and reject with the same capability-specific diagnostic and UTF-16
+source offset. Comments containing those words stay inert. Existing
+`inverted struct` denial is preserved. Verified static metadata cannot
+authorize source compilation into CIL before ownership checking and actual
+guest lowering exist.
+
 ## Testing
 
 The existing `verification/Ores.Net.Tests` runner now invokes
