@@ -57,7 +57,7 @@ fn exact_f64_layout_offsets_and_tail_padding() {
     assert_eq!(aos.offset(3, 2), Ok(88));
     assert_eq!(soa.offset(3, 2), Ok(296));
     assert_eq!(aosoa.offset(3, 2), Ok(152));
-    assert_eq!(aosoa.offset(16, 2), Ok(528));
+    assert_eq!(aosoa.offset(16, 2), Ok(512));
     assert_eq!(aosoa.offset(17, 2), Err("bounds"));
     assert_eq!(aosoa.offset(16, 3), Err("bounds"));
 }
