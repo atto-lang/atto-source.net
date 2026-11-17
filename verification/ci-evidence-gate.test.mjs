@@ -12,7 +12,7 @@ const run = {id:12345,run_attempt:1,workflow_id:384715065,name:"Windows Native A
   repository:{full_name:repo}};
 const jobs = {total_count:2,jobs:[
   {name:"windows-x64",run_id:12345,run_attempt:1,head_sha:sha,
-    status:"completed",conclusion:"success",steps:[
+    runner_id:101,runner_name:"synthetic-windows",status:"completed",conclusion:"success",steps:[
       "Assert exact originating-source checkout (Windows)",
       "Verify pinned Sendable Serializable DATA CONTROL contract",
       "Validate PowerShell verification syntax",
@@ -45,7 +45,7 @@ const jobs = {total_count:2,jobs:[
       "Upload native executable",
     ].map((name,i)=>({name,number:i+1,status:"completed",conclusion:"success"}))},
   {name:"linux-aot-diagnostic",run_id:12345,run_attempt:1,head_sha:sha,
-    status:"completed",conclusion:"success",steps:[
+    runner_id:102,runner_name:"synthetic-linux",status:"completed",conclusion:"success",steps:[
       "Assert exact originating-source checkout (Linux)",
       "Install Linux Native AOT prerequisites",
       "Show Linux .NET toolchain",
@@ -72,7 +72,7 @@ const strictNames=[...readFileSync(new URL('../.github/workflows/strict-linux-na
   .filter(name=>!name.startsWith('Opt-in '));
 const strictExpected={...e,workflow:strictWorkflow};
 const strictRun={...run,name:strictWorkflow,path:'.github/workflows/strict-linux-native-aot.yml',workflow_id:398765873};
-const strictJobs={total_count:1,jobs:[{name:'linux-x64-compiler-and-app',runner_id:42,
+const strictJobs={total_count:1,jobs:[{name:'linux-x64-compiler-and-app',runner_id:42,runner_name:'synthetic-linux',
   run_id:e.runId,run_attempt:e.attempt,head_sha:sha,status:'completed',conclusion:'success',
   steps:strictNames.map((name,i)=>({name,number:i+1,status:'completed',conclusion:'success'}))}]};
 test('strict Linux synthetic full-step contract is accepted',()=>{
@@ -112,6 +112,34 @@ test('strict Linux rejects skipped arithmetic and wrong attempt',()=>{
 });
 const check=(r,j)=>verifyEvidence(r,j,e);
 test("valid exact-head, same-run, full-step evidence",()=>assert.deepEqual(check(run,jobs),[]));
+test("every Windows hosted job requires a real runner identity",()=> {
+  for (const mutate of [
+    j => { delete j.runner_id; },
+    j => { j.runner_id = 0; },
+    j => { j.runner_id = true; },
+    j => { j.runner_name = " "; },
+  ]) {
+    const sample=copy(jobs);
+    mutate(sample.jobs[1]);
+    assert.match(check(run,sample).join(" "),/no allocated runner/);
+  }
+});
+test("a successful extra job with zero steps is denied",()=> {
+  const sample=copy(jobs);
+  sample.jobs.push({name:"extra-success",run_id:12345,run_attempt:1,head_sha:sha,
+    runner_id:123,runner_name:"synthetic-extra",status:"completed",conclusion:"success",steps:[]});
+  sample.total_count++;
+  assert.match(check(run,sample).join(" "),/extra job extra-success has zero executed steps/);
+});
+test("a successful extra job with runner and completed step is accepted",()=> {
+  const sample=copy(jobs);
+  sample.jobs.push({name:"extra-success",run_id:12345,run_attempt:1,head_sha:sha,
+    runner_id:123,runner_name:"synthetic-extra",status:"completed",conclusion:"success",
+    steps:[{name:"Execute diagnostic",number:1,status:"completed",conclusion:"success"}]});
+  sample.total_count++;
+  assert.deepEqual(check(run,sample),[]);
+});
+
 test("zero steps are never proof",()=>{const j=copy(jobs);j.jobs[0].steps=[];assert.match(check(run,j).join(" "),/zero executed/);});
 test("different repository rejected",()=>assert.match(check({...run,repository:{full_name:"other/repo"}},jobs).join(" "),/repository/));
 test("same-name workflow at wrong path rejected",()=>assert.match(
@@ -161,7 +189,7 @@ test("failed opt-in self-hosted fallback remains rejected",()=>{
 });
 test("Rust declaration tooling evidence is admitted and missing Rust tests rejected",()=>{
   const p={...e,workflow:"Integration declaration integrity"};const r={...run,name:p.workflow,path:".github/workflows/integration-declarations.yml",workflow_id:388530125};
-  const j={total_count:1,jobs:[{name:"declaration-integrity",run_id:e.runId,run_attempt:1,head_sha:sha,status:"completed",conclusion:"success",steps:[
+  const j={total_count:1,jobs:[{name:"declaration-integrity",run_id:e.runId,run_attempt:1,head_sha:sha,runner_id:103,runner_name:"synthetic-declarations",status:"completed",conclusion:"success",steps:[
     "Assert exact originating-source checkout","Test Rust repository policy tooling",
     "Verify declaration-only manifest (not a runtime parity claim)"
   ].map((name,i)=>({name,number:i+1,status:"completed",conclusion:"success"}))}]};
