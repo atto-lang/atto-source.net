@@ -29,6 +29,11 @@ node verification/ci-evidence-gate.mjs --repo "$REPO" --head "$HEAD" \
   --workflow "Windows Native AOT" --run run.json --jobs jobs.json
 ```
 
+Every completed-success job must have a positive numeric runner ID and nonblank
+runner name; extra successful jobs must contain at least one completed
+non-housekeeping executable step. Runner setup/teardown and pre/post steps
+alone are insufficient. These checks do **not** establish guest correctness.
+
 The gate fails if any of the following is true: different run/repo/SHA/
 attempt/workflow, non-successful run, incomplete jobs list, missing required
 job, zero executed job steps, missing any explicitly named hosted workflow
