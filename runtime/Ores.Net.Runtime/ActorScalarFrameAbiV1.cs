@@ -142,6 +142,75 @@ public static class ActorScalarFrameAbiV1
         return data[8] == 1;
     }
 
+    /// <summary>
+    /// Trusted compiler boundary primitive: commit typed CFG block parameters
+    /// simultaneously. All sources are staged and every destination checked
+    /// BEFORE the first native write, so swap edges and malformed kind/slot
+    /// proposals cannot partially update the actor's scalar continuation.
+    /// This is a synchronous host operation, NOT guest await or CIL emission.
+    /// </summary>
+    public static void TransferParallel(ActorContext context,
+        ActorStackFrameHandle frame, int[] sourceSlots,
+        int[] destinationSlots, byte[] scalarKinds)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(frame);
+        ArgumentNullException.ThrowIfNull(sourceSlots);
+        ArgumentNullException.ThrowIfNull(destinationSlots);
+        ArgumentNullException.ThrowIfNull(scalarKinds);
+        if (sourceSlots.Length != destinationSlots.Length ||
+            sourceSlots.Length != scalarKinds.Length ||
+            sourceSlots.Length > MaxValueSlots)
+            throw new FormatException("Invalid actor scalar edge transfer arity");
+
+        // Never trust aliases to caller-owned mutable arrays as an edge's
+        // verified source, target or scalar-kind authority.
+        int[] sources = (int[])sourceSlots.Clone();
+        int[] targets = (int[])destinationSlots.Clone();
+        byte[] kinds = (byte[])scalarKinds.Clone();
+
+        // Even a zero-argument CFG edge authenticates its live frame.
+        _ = ReadProgramCounter(context, frame);
+        Span<byte> destinationSeen = stackalloc byte[MaxValueSlots];
+        destinationSeen.Clear();
+        Span<long> stagedValues = stackalloc long[MaxValueSlots];
+        for (int i = 0; i < sources.Length; i++)
+        {
+            int destination = targets[i];
+            if ((uint)destination >= MaxValueSlots ||
+                destinationSeen[destination] != 0)
+                throw new FormatException(
+                    "Invalid or duplicate actor scalar edge destination");
+            destinationSeen[destination] = 1;
+
+            // A trusted CFG may request only exactly type-matched slots.
+            // Both source reads and destination admission cross-check the
+            // frame's immutable, exact-issued type authority.
+            if (kinds[i] == I64Tag)
+            {
+                _ = WritableSlotOffset(context, frame, destination, I64Tag);
+                stagedValues[i] = ReadI64(context, frame, sources[i]);
+            }
+            else if (kinds[i] == BoolTag)
+            {
+                _ = WritableSlotOffset(context, frame, destination, BoolTag);
+                stagedValues[i] = ReadBool(context, frame, sources[i]) ? 1L : 0L;
+            }
+            else
+                throw new FormatException("Unknown actor scalar edge type");
+        }
+
+        // This owner turn is non-reentrant. No guest continuation or user
+        // callback can run between staging and committing these writes.
+        for (int i = 0; i < sources.Length; i++)
+        {
+            if (kinds[i] == I64Tag)
+                WriteI64(context, frame, targets[i], stagedValues[i]);
+            else
+                WriteBool(context, frame, targets[i], stagedValues[i] != 0);
+        }
+    }
+
     public static void Pop(ActorContext context, ActorStackFrameHandle frame)
     {
         Span<byte> header = stackalloc byte[HeaderBytes];

@@ -216,6 +216,25 @@ var guardedActor = typedRuntime.Spawn(ActorKind.Private, (ctx, message) =>
             long.MinValue,
         "restored typed bytes did not preserve canonical immutable type authority");
     ActorScalarFrameAbiV1.Pop(ctx, typedActivation!);
+
+    // Runtime primitive consumed by future generated CFG edge CIL: swap
+    // two values without sequentially clobbering the source. A forged
+    // second destination must deny the whole transfer before any write.
+    var edgeFrame = ActorScalarFrameAbiV1.Push(ctx,
+        new byte[] { 1, 1 }, blockCount: 1);
+    ActorScalarFrameAbiV1.WriteI64(ctx, edgeFrame, 0, 41);
+    ActorScalarFrameAbiV1.WriteI64(ctx, edgeFrame, 1, 42);
+    ActorScalarFrameAbiV1.TransferParallel(ctx, edgeFrame,
+        new[] { 1, 0 }, new[] { 0, 1 }, new byte[] { 1, 1 });
+    Require(ActorScalarFrameAbiV1.ReadI64(ctx, edgeFrame, 0) == 42 &&
+            ActorScalarFrameAbiV1.ReadI64(ctx, edgeFrame, 1) == 41,
+        "published native actor ABI lost simultaneous edge swap semantics");
+    Deny(() => ActorScalarFrameAbiV1.TransferParallel(ctx, edgeFrame,
+        new[] { 0, 1 }, new[] { 0, 1 }, new byte[] { 1, 2 }));
+    Require(ActorScalarFrameAbiV1.ReadI64(ctx, edgeFrame, 0) == 42 &&
+            ActorScalarFrameAbiV1.ReadI64(ctx, edgeFrame, 1) == 41,
+        "malformed native edge caused partial scalar frame mutation");
+    ActorScalarFrameAbiV1.Pop(ctx, edgeFrame);
 });
 typedRuntime.Send(guardedActor, new byte[] { 1 });
 Require(SpinWait.SpinUntil(() => typedRuntime.CompletedMessages == 1,
@@ -230,6 +249,7 @@ Require(SpinWait.SpinUntil(() =>
     typedRuntime.LiveActors == 0 && typedRuntime.NativeReservedBytes == 0,
     TimeSpan.FromSeconds(10)), "native typed scalar frame was not reclaimed");
 Console.WriteLine("PASS actor-scalar-sealed-schema-native-probe: immutable i64/bool layout, forged tags and block counts denied across turns; NOT compiled .atto");
+Console.WriteLine("PASS actor-scalar-nativeaot-parallel-transfer: i64 swap is simultaneous, malformed second destination is failure-atomic; NOT compiled .atto");
 
 // Separate published-native regression for terminal logical actor quotas.
 // The same carrier must continue processing a healthy actor after three
