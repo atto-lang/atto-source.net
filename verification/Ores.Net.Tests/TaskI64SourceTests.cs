@@ -4,10 +4,21 @@ using Ores.Net.Compiler;
 internal static class TaskI64SourceTests
 {
     internal const string Source = "pub fnc main():int {const Future<int> f = Future.from_task(task {return 6 * 7;}); return await f;}";
+    internal const string StdAwaitSource =
+        "pub fnc main():int {const Future<int> f = Future.from_task(task {return 6 * 7;}); return f |> std.await;}";
+
 
     internal static void Run()
     {
         var program = TaskI64Source.Check(Source);
+        // Both spellings use the same verified producer IR and one observed
+        // Future. This is not general coroutine/async source admission.
+        var piped = TaskI64Source.Check(StdAwaitSource);
+        var fixtureSource = File.ReadAllText("tests/fixtures/std-await-v1/task-i64-42.atto");
+        _ = TaskI64Source.Check(fixtureSource);
+        if (!piped.Producer.Instructions.SequenceEqual(program.Producer.Instructions))
+            throw new Exception("std.await changed the checked Task-i64 producer IR");
+
         var dir = Path.Combine(Path.GetTempPath(), "ores-task-ir-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         try
@@ -38,6 +49,14 @@ internal static class TaskI64SourceTests
             _ = TaskI64Source.Check(Source.Replace("task {", "task " + trivia + " {", StringComparison.Ordinal));
         _ = TaskI64Source.Check(Source.Replace("const Future", "let Future", StringComparison.Ordinal));
         foreach (var invalid in new[] {
+            StdAwaitSource.Replace("std.await", "std.await()", StringComparison.Ordinal),
+            StdAwaitSource.Replace("std.await", "std.await2", StringComparison.Ordinal),
+            StdAwaitSource.Replace("f |> std.await", "other |> std.await", StringComparison.Ordinal),
+            StdAwaitSource.Replace("f |> std.await", "f |> std.await |> std.await", StringComparison.Ordinal),
+            StdAwaitSource.Replace("f |> std.await", "f |> std.await(1, 2)", StringComparison.Ordinal),
+            StdAwaitSource.Replace("f |> std.await", "f | std.await", StringComparison.Ordinal),
+            StdAwaitSource.Replace("f |> std.await", "f |> evil.await", StringComparison.Ordinal),
+
             Source.Replace("Future<int>", "Future<bool>", StringComparison.Ordinal),
             Source.Replace("6 * 7", "captured", StringComparison.Ordinal),
             Source.Replace("6 * 7", "await other", StringComparison.Ordinal),
