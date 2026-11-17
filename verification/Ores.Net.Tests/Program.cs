@@ -827,6 +827,7 @@ SelectableI64ChannelSelfTest.Run();
 BoundedDemandI64PortSelfTest.Run(); // host scalar adapter; NOT source Flow<T> or Native AOT guest proof
 SelectableI64FutureSelfTest.Run();
 ActorDispatchDomainsSelfTest.Run();
+ActorDispatchAffinitySelfTest.Run();
 ActorRuntimeSelfTest.Run();
 ActorRuntimeGracefulDrainSelfTest.Run(); // HOST only; not guest pipe lowering
 SupervisorDataFenceParitySelfTest.Run(); // HOST only; stop-vs-send and sibling parity
