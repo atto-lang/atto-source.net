@@ -1,0 +1,218 @@
+{
+  "schema": "oreslang-ownership-bang-ci-observation-v1",
+  "observed_date_utc": "2026-11-16",
+  "source_org": "ores-truffle-oreslang",
+  "security": {
+    "source_main_branch_protected": false,
+    "independent_source_export_reviewer_enabled": false,
+    "active_source_export_destination_approvals": 0,
+    "active_exact_snapshot_approvals": 0,
+    "source_export_authorized": false
+  },
+  "release_claim": "BLOCKED_NOT_EXECUTED",
+  "interpretation": "Read-only historical audit snapshot. API evidence must be independently re-fetched and run attempts checked before any claim; neither this JSON file nor synthetic fixtures certify compiler or guest execution. The absence of artifacts in the inspected first page is not exhaustive proof of all artifacts.",
+  "sources": [
+    {
+      "repository": "ores-truffle-oreslang/attolang-language-spec.md",
+      "repository_id": 1444921662,
+      "pull_request": 67,
+      "head_sha": "a66e13365b31583578f0f0a4aa8fba36719093be",
+      "git_root_tree_sha": "adeab671f7ec4faa52a404fa26c0d47c27425129",
+      "sample": {
+        "run_id": 43766486860,
+        "job_id": 132972648894,
+        "run_status": "completed",
+        "run_conclusion": "failure",
+        "job_status": "completed",
+        "job_conclusion": "failure",
+        "observed_executed_step_count": 0,
+        "inspected_run_artifact_count": 0,
+        "classification": "NOT_EXECUTED"
+      }
+    },
+    {
+      "repository": "ores-truffle-oreslang/oreslang-format",
+      "repository_id": 1406328272,
+      "pull_request": 144,
+      "head_sha": "25432c7b8e02159a4abe9e4baff584eeb3c8bb3c",
+      "git_root_tree_sha": "38fb4e35f7e6e05e38b8b5087911af07147521cd",
+      "sample": {
+        "run_id": 43766442654,
+        "job_id": 132972501667,
+        "run_status": "completed",
+        "run_conclusion": "cancelled",
+        "job_status": "completed",
+        "job_conclusion": "cancelled",
+        "observed_executed_step_count": 0,
+        "inspected_run_artifact_count": 0,
+        "classification": "NOT_EXECUTED"
+      }
+    },
+    {
+      "repository": "ores-truffle-oreslang/oreslang-source.java",
+      "repository_id": 1400792274,
+      "pull_request": 3112,
+      "head_sha": "16f6fc39d023fc702929751c97f9c22398865e2a",
+      "git_root_tree_sha": "20027061e49c05604d3302305758854f68f57ac9",
+      "sample": {
+        "run_id": 43768450795,
+        "job_id": 132978736087,
+        "run_status": "completed",
+        "run_conclusion": "failure",
+        "job_status": "completed",
+        "job_conclusion": "failure",
+        "observed_executed_step_count": 0,
+        "inspected_run_artifact_count": 0,
+        "classification": "NOT_EXECUTED"
+      }
+    },
+    {
+      "repository": "ores-truffle-oreslang/oreslang-source.llvm",
+      "repository_id": 1410897874,
+      "pull_request": 1831,
+      "head_sha": "94c682798e6272c94174478a805deb1a5362c568",
+      "git_root_tree_sha": "5d4b50dd759bf5c5552feaec1e2272cc5ae8e8fb",
+      "sample": {
+        "run_id": 43924910880,
+        "job_id": 133501684248,
+        "run_status": "completed",
+        "run_conclusion": "failure",
+        "job_status": "completed",
+        "job_conclusion": "failure",
+        "observed_executed_step_count": 0,
+        "inspected_run_artifact_count": 0,
+        "classification": "NOT_EXECUTED"
+      }
+    },
+    {
+      "repository": "ores-truffle-oreslang/oreslang-source.net",
+      "repository_id": 1419704375,
+      "pull_request": 531,
+      "head_sha": "41c70523603ad60db6825fc53c8faef3253d7204",
+      "git_root_tree_sha": "7d638fef845a44b41c366d9fd5cfce9c9ddd4f83",
+      "sample": {
+        "run_id": 43768476633,
+        "job_id": 132978818540,
+        "run_status": "completed",
+        "run_conclusion": "failure",
+        "job_status": "completed",
+        "job_conclusion": "failure",
+        "observed_executed_step_count": 0,
+        "inspected_run_artifact_count": 0,
+        "classification": "NOT_EXECUTED"
+      }
+    },
+    {
+      "repository": "ores-truffle-oreslang/oreslang-source.wasm",
+      "repository_id": 1419858954,
+      "pull_request": 490,
+      "head_sha": "6e4c302c3366e1087f385b87384f5422ea1c12c2",
+      "git_root_tree_sha": "c62cb6eebeec7dad315f1efc478ad595c8079da5",
+      "sample": {
+        "run_id": 43768550462,
+        "job_id": 132979050850,
+        "run_status": "completed",
+        "run_conclusion": "failure",
+        "job_status": "completed",
+        "job_conclusion": "failure",
+        "observed_executed_step_count": 0,
+        "inspected_run_artifact_count": 0,
+        "classification": "NOT_EXECUTED"
+      }
+    },
+    {
+      "repository": "ores-truffle-oreslang/oreslang-source.rs",
+      "repository_id": 1426284360,
+      "pull_request": 71,
+      "head_sha": "f4f6f18582f894de10aa60affb18f511f950be7c",
+      "git_root_tree_sha": "d780ddd0f8ceabbc42fce99d4055374cd53f42db",
+      "sample": {
+        "run_id": 43768296883,
+        "job_id": 132978262224,
+        "run_status": "completed",
+        "run_conclusion": "failure",
+        "job_status": "completed",
+        "job_conclusion": "failure",
+        "observed_executed_step_count": 0,
+        "inspected_run_artifact_count": 0,
+        "classification": "NOT_EXECUTED"
+      }
+    },
+    {
+      "repository": "ores-truffle-oreslang/oreslang-source.cranelift",
+      "repository_id": 1437273004,
+      "pull_request": 117,
+      "head_sha": "31be8f6b205dd597f1a1e7535b503b796fbd0349",
+      "git_root_tree_sha": "e6ba6ebc16b5cc5d5e9780bfae4c47d1593b8dbc",
+      "sample": {
+        "run_id": 43768103241,
+        "job_id": 132977646680,
+        "run_status": "completed",
+        "run_conclusion": "failure",
+        "job_status": "completed",
+        "job_conclusion": "failure",
+        "observed_executed_step_count": 0,
+        "inspected_run_artifact_count": 0,
+        "classification": "NOT_EXECUTED"
+      }
+    },
+    {
+      "repository": "ores-truffle-oreslang/oreslang-source.js",
+      "repository_id": 1423606573,
+      "pull_request": 254,
+      "head_sha": "86d311b25822358479d9a951980679ceff049299",
+      "git_root_tree_sha": "2ef5bd5c62838ebd03446817130ef365f5537fec",
+      "sample": {
+        "run_id": 43768249848,
+        "job_id": 132978116500,
+        "run_status": "completed",
+        "run_conclusion": "failure",
+        "job_status": "completed",
+        "job_conclusion": "failure",
+        "observed_executed_step_count": 0,
+        "inspected_run_artifact_count": 0,
+        "classification": "NOT_EXECUTED"
+      }
+    },
+    {
+      "repository": "ores-truffle-oreslang/oreslang-source.hdl",
+      "repository_id": 1423785959,
+      "pull_request": 46,
+      "head_sha": "d8d5390b8610e2d982490c91d5a5e8b7e0fc7d8a",
+      "git_root_tree_sha": "dc0e77bd5d098425c59d2652825a70391dd17164",
+      "sample": {
+        "run_id": 43768208698,
+        "job_id": 132977989034,
+        "run_status": "completed",
+        "run_conclusion": "failure",
+        "job_status": "completed",
+        "job_conclusion": "failure",
+        "observed_executed_step_count": 0,
+        "inspected_run_artifact_count": 0,
+        "classification": "NOT_EXECUTED"
+      }
+    }
+  ],
+  "source_free_probe_samples": [
+    {
+      "repository": "daedalus-fab/atto-ci",
+      "draft_pr": 1,
+      "head_sha": "9c73add45493a0cb4f391a22c99436d67e560e6b",
+      "run_id": 43978838488,
+      "job_id": 133689717134,
+      "observed_executed_step_count": 0,
+      "inspected_run_artifact_count": 0,
+      "classification": "NOT_EXECUTED"
+    },
+    {
+      "repository": "anticaptrad/atto-ci",
+      "draft_pr": 28,
+      "head_sha": "00fd5ffb5fea1e84d7851396547dabfc334bff73",
+      "run_id": 43978986947,
+      "job_id": 133690226633,
+      "observed_executed_step_count": 0,
+      "inspected_run_artifact_count": 0,
+      "classification": "NOT_EXECUTED"
+    }
+  ]
+}
