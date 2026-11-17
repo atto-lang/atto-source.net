@@ -214,10 +214,15 @@ export function verifyEvidence(run, response, expected) {
       fail(job.status==="completed" && job.conclusion==="success",
         `extra job ${job.name} is not successful`);
       // Extra successful jobs with no executable step are not evidence.
-      fail(Array.isArray(job.steps) && job.steps.some(s =>
-        s && s.status === "completed" && s.conclusion === "success" &&
-        typeof s.name === "string" && s.name.trim().length > 0),
-        `extra job ${job.name} has zero executed steps`);
+      fail(Array.isArray(job.steps) && job.steps.some(s => {
+        if (!s || s.status !== "completed" || s.conclusion !== "success" ||
+            typeof s.name !== "string") return false;
+        const name = s.name.replace(/\s+/g, " ").trim().toLowerCase();
+        return name.length > 0 &&
+          !["set up job", "complete job", "initialize containers",
+            "start containers", "stop containers"].includes(name) &&
+          !/^(?:pre|post) /.test(name);
+      }), `extra job ${job.name} has no completed executable step`);
     }
   }
   return errors;
