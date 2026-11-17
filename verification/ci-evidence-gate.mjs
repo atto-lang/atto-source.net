@@ -164,6 +164,11 @@ export function verifyEvidence(run, response, expected) {
     fail(job.run_id === expected.runId, `job ${job.name} belongs to different run`);
     fail(job.run_attempt === expected.attempt, `job ${job.name} belongs to different attempt`);
     fail(job.head_sha === expected.head, `job ${job.name} has different source head`);
+    // Every successful job must have an assigned runner, not only strict Linux.
+    if (job.status === "completed" && job.conclusion === "success")
+      fail(Number.isSafeInteger(job.runner_id) && job.runner_id > 0 &&
+        typeof job.runner_name === "string" && job.runner_name.trim().length > 0,
+        `job ${job.name} has no allocated runner`);
   }
   for (const [name, stepsRequired] of Object.entries(requirements)) {
     const matches=jobs.filter(job=>job && job.name===name);
@@ -208,6 +213,11 @@ export function verifyEvidence(run, response, expected) {
       if (disabledOptional(job)) continue;
       fail(job.status==="completed" && job.conclusion==="success",
         `extra job ${job.name} is not successful`);
+      // Extra successful jobs with no executable step are not evidence.
+      fail(Array.isArray(job.steps) && job.steps.some(s =>
+        s && s.status === "completed" && s.conclusion === "success" &&
+        typeof s.name === "string" && s.name.trim().length > 0),
+        `extra job ${job.name} has zero executed steps`);
     }
   }
   return errors;
