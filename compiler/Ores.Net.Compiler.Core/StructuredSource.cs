@@ -69,8 +69,8 @@ public static class OresStructuredParser
     private const int MaxParameters = 16;
     private const int MaxLocalTypeFields = 64;
 
-    public static StructuredProgram Parse(string source)
-        => ParseCore(source, null).Program;
+    public static StructuredProgram Parse(string source, DotnetHostImportPolicy? policy = null)
+        => ParseCore(source, null, policy).Program;
 
     internal static StructuredLinkedUnit ParseLinked(string source, LinkedModuleContext linking)
         => ParseCore(source, linking);
@@ -119,7 +119,8 @@ public static class OresStructuredParser
         return tokens;
     }
 
-    private static StructuredLinkedUnit ParseCore(string source, LinkedModuleContext? linking)
+    private static StructuredLinkedUnit ParseCore(string source, LinkedModuleContext? linking,
+        DotnetHostImportPolicy? policy = null)
     {
         ValidateSourceInput(source);
         // No structural match lowering or readonly shape metadata in scalar CIL yet.
@@ -274,7 +275,7 @@ public static class OresStructuredParser
                 throw new FormatException(
                     $"Tuple-v2 explicit spread requires single-evaluation checked lowering at offset {tokens[i].Offset}");
         }
-        var reader = new Reader(tokens, linking);
+        var reader = new Reader(tokens, linking, policy);
         return linking is null
             ? new StructuredLinkedUnit(reader.ReadProgram(), null, new Dictionary<string, StructuredFunction>())
             : reader.ReadLinkedUnit();
@@ -442,7 +443,8 @@ public static class OresStructuredParser
         }
     }
 
-    private sealed class Reader(List<Token> tokens, LinkedModuleContext? linking = null)
+    private sealed class Reader(List<Token> tokens, LinkedModuleContext? linking = null,
+        DotnetHostImportPolicy? policy = null)
     {
         private sealed record LocalBinding(IrValueType Type, StructuredBindingKind Kind,
             long? ConstantValue);
@@ -456,6 +458,7 @@ public static class OresStructuredParser
         private readonly List<string> functionOrder = linking is null ? new() : new(linking.MethodOrder);
         private string? declaredModule;
         private string? dotnetAlias;
+        private readonly DotnetHostImportPolicy hostPolicy = policy ?? DotnetHostImportPolicy.DenyAll;
         private int index, statements;
         private IrValueType activeReturnType = IrValueType.I64;
         // Track actual AST height, not just grammar recursion depth. A flat
@@ -509,6 +512,8 @@ public static class OresStructuredParser
             if (Take("import"))
             {
                 Expect("dotnet");
+                // Parse-time grant is independent of the typed CFG verifier's gate.
+                hostPolicy.RequireMathI64();
                 if (Current.Text != "\"System.Math\"")
                     throw Error("DOTNET_IMPORT_UNSUPPORTED: only System.Math is AOT-admitted");
                 index++;

@@ -99,9 +99,11 @@ public static class OresCfgVerifier
     private readonly record struct Definition(int Block, int Instruction, IrValueType Type);
 
     public static VerifiedCfgFunction Verify(CfgFunction function,
-        IReadOnlyDictionary<string, CfgCallSignature>? callees = null)
+        IReadOnlyDictionary<string, CfgCallSignature>? callees = null,
+        DotnetHostImportPolicy? hostPolicy = null)
     {
         ArgumentNullException.ThrowIfNull(function);
+        hostPolicy ??= DotnetHostImportPolicy.DenyAll;
         if (!Identifier(function.Name) ||
             function.ResultType is not (IrValueType.I64 or IrValueType.Bool) ||
             !Identifier(function.Entry))
@@ -319,6 +321,7 @@ public static class OresCfgVerifier
                         break;
                     }
                     case CfgOpcode.DotnetMathAbs:
+                        hostPolicy.RequireMathI64();
                         RequireType(op.Type, IrValueType.I64);
                         if (op.Left is null || op.Right is not null ||
                             op.I64Constant is not null || op.BoolConstant is not null ||
@@ -349,6 +352,8 @@ public static class OresCfgVerifier
                     case CfgOpcode.EqualI64:
                     case CfgOpcode.NotEqualI64:
                     case CfgOpcode.LessThanI64:
+                        if (op.Opcode is CfgOpcode.DotnetMathMax or CfgOpcode.DotnetMathMin)
+                            hostPolicy.RequireMathI64();
                         RequireType(op.Type,
                             op.Opcode is CfgOpcode.EqualI64 or CfgOpcode.NotEqualI64 or CfgOpcode.LessThanI64
                                 ? IrValueType.Bool : IrValueType.I64);

@@ -8,18 +8,19 @@ namespace Ores.Net.Compiler;
 /// </summary>
 public static class OresStructuredCfgLowering
 {
-    public static VerifiedCfgFunction Lower(string source)
+    public static VerifiedCfgFunction Lower(string source, DotnetHostImportPolicy? policy = null)
     {
-        var parsed = OresStructuredParser.Parse(source);
-        return new Builder().Lower(parsed);
+        var parsed = OresStructuredParser.Parse(source, policy);
+        return new Builder(hostPolicy: policy).Lower(parsed);
     }
 
     // ABI path: helpers become independent verified CFG methods. The old
     // Lower() method keeps the deliberately bounded inlining/reference path.
-    public static VerifiedCfgModule LowerModule(string source)
-        => LowerModule(OresStructuredParser.Parse(source));
+    public static VerifiedCfgModule LowerModule(string source, DotnetHostImportPolicy? policy = null)
+        => LowerModule(OresStructuredParser.Parse(source, policy), policy);
 
-    internal static VerifiedCfgModule LowerModule(StructuredProgram program)
+    internal static VerifiedCfgModule LowerModule(StructuredProgram program,
+        DotnetHostImportPolicy? policy = null)
     {
         var helperSignatures = new Dictionary<string, CfgCallSignature>(StringComparer.Ordinal);
         var methods = new List<VerifiedCfgFunction>();
@@ -37,12 +38,12 @@ public static class OresStructuredCfgLowering
             // The method order is the exact source order, NOT the incidental
             // iteration order of a dictionary. A helper may refer only to
             // earlier, already verified signatures.
-            var verified = new Builder(emitCalls: true).LowerHelper(helper, helperSignatures);
+            var verified = new Builder(emitCalls: true, hostPolicy: policy).LowerHelper(helper, helperSignatures);
             methods.Add(verified);
             helperSignatures.Add(name, new CfgCallSignature(helper.ResultType,
                 Array.AsReadOnly(helper.Parameters.Select(p => p.Type).ToArray())));
         }
-        var main = new Builder(emitCalls: true).Lower(program, helperSignatures);
+        var main = new Builder(emitCalls: true, hostPolicy: policy).Lower(program, helperSignatures);
         return new VerifiedCfgModule(main, methods.AsReadOnly());
     }
 
@@ -60,7 +61,7 @@ public static class OresStructuredCfgLowering
             throw new FormatException("Unterminated structured CFG block"));
     }
 
-    private sealed class Builder(bool emitCalls = false)
+    private sealed class Builder(bool emitCalls = false, DotnetHostImportPolicy? hostPolicy = null)
     {
         private readonly List<Block> blocks = new();
         private IReadOnlyDictionary<string, StructuredFunction> functions =
@@ -88,7 +89,7 @@ public static class OresStructuredCfgLowering
                 throw new FormatException("Typed helper has unterminated return path");
             return OresCfgVerifier.Verify(new CfgFunction(helper.Name, helper.ResultType,
                 entry.Name, blocks.Select(b => b.Freeze()).ToArray(),
-                helper.Parameters.Select(p => p.Type).ToArray()), signatures);
+                helper.Parameters.Select(p => p.Type).ToArray()), signatures, hostPolicy);
         }
 
         public VerifiedCfgFunction Lower(StructuredProgram program,
@@ -105,7 +106,7 @@ public static class OresStructuredCfgLowering
                 throw new FormatException("Structured CFG has an unterminated return path");
             return OresCfgVerifier.Verify(new CfgFunction(program.Name,
                 IrValueType.I64, entry.Name, blocks.Select(b => b.Freeze()).ToArray()),
-                signatures);
+                signatures, hostPolicy);
         }
 
         private int NextValue()
