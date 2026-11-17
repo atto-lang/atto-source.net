@@ -464,6 +464,9 @@ public sealed class ActorRuntime : IDisposable
         internal ActorRef Reference { get; }
         internal Action DispatchAction { get; }
         internal int Scheduled;
+        // Lane that ran this actor's last turn (-1 none): a soft placement
+        // hint for the next dispatch, never an ownership claim.
+        internal int HomeLane = -1;
         // Readiness is a coalesced edge, never one callback per DATA record.
         // Buffered data stays in the separately bounded ActorIoEnvelope.
         // If a callback makes input progress, the dispatcher rearms one edge
@@ -481,7 +484,11 @@ public sealed class ActorRuntime : IDisposable
         internal TaskCompletionSource Terminated { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        private void Dispatch() => _owner.RunCell(this);
+        private void Dispatch()
+        {
+            HomeLane = ActorDispatchDomains.CurrentLane;
+            _owner.RunCell(this);
+        }
     }
 
     public ActorRuntime(ActorRuntimeOptions? options = null)
@@ -849,7 +856,7 @@ public sealed class ActorRuntime : IDisposable
         cell.Scheduled = 1;
         try
         {
-            if (_domains.TryDispatch(cell.Kind, cell.DispatchAction))
+            if (_domains.TryDispatch(cell.Kind, cell.DispatchAction, cell.HomeLane, out _))
                 return true;
         }
         catch
