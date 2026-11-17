@@ -129,7 +129,22 @@ test("a successful extra job with zero steps is denied",()=> {
   sample.jobs.push({name:"extra-success",run_id:12345,run_attempt:1,head_sha:sha,
     runner_id:123,runner_name:"synthetic-extra",status:"completed",conclusion:"success",steps:[]});
   sample.total_count++;
-  assert.match(check(run,sample).join(" "),/extra job extra-success has zero executed steps/);
+  assert.match(check(run,sample).join(" "),/extra job extra-success has no completed executable step/);
+});
+test("extra successful job with housekeeping-only steps is denied",()=> {
+  for (const names of [
+    ["Set up job", "Complete job"],
+    ["Set   up job", "Post checkout"],
+    ["Pre checkout", "Post checkout"],
+    ["Initialize containers", "Stop containers"],
+  ]) {
+    const sample=copy(jobs);
+    sample.jobs.push({name:"extra-success",run_id:12345,run_attempt:1,head_sha:sha,
+      runner_id:123,runner_name:"synthetic-extra",status:"completed",conclusion:"success",
+      steps:names.map((name,i)=>({name,number:i+1,status:"completed",conclusion:"success"}))});
+    sample.total_count++;
+    assert.match(check(run,sample).join(" "),/extra job extra-success has no completed executable step/);
+  }
 });
 test("a successful extra job with runner and completed step is accepted",()=> {
   const sample=copy(jobs);
