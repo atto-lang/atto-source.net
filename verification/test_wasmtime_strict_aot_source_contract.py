@@ -184,6 +184,23 @@ class StrictFullAotSourceContract(unittest.TestCase):
             self.assertNotIn(forbidden, script)
 
 
+    def test_native_binary_inspection_rejects_failed_ldd(self) -> None:
+        # ldd | grep under a single leading ! can pass when ldd itself
+        # exits nonzero. Require a standalone (or pipefail-protected)
+        # successful ldd before checking that CLR libraries are absent.
+        local = read("verification/wasmtime-c-api/run_source_local_strict_aot.sh")
+        workflow = read(".github/workflows/wasmtime-strict-aot.yml")
+        self.assertIn("ldd \"$executable\" > \"$work/dependencies.txt\"", local)
+        self.assertIn("not found", local)
+        self.assertNotIn("! ldd ", local)
+        self.assertIn("git clean -ndx", local)
+        self.assertIn("tracked_status=$(git status --porcelain --untracked-files=all)", local)
+        self.assertIn("ignored_status=$(git clean -ndx)", local)
+        self.assertIn('ldd "$RUNNER_TEMP/aot-builder/oresnet-wasmtime-aot-builder" | tee', workflow)
+        self.assertIn('ldd "$RUNNER_TEMP/aot-runner/oresnet-wasmtime-aot-runner" | tee', workflow)
+        self.assertIn("not found", workflow)
+        self.assertNotIn("! ldd ", workflow)
+
     def test_adversarial_negative_cases_stay_wired(self) -> None:
         runner = read(f"{RUNNER}/Program.cs")
         for case in ("swappedArtifact", "changedManifest", "badSignature",
