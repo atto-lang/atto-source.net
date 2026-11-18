@@ -40,10 +40,15 @@ internal static class TrustedAotArtifact
 
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
             FileShare.Read, bufferSize: 4096, options: FileOptions.SequentialScan);
-        if (!stream.CanSeek || stream.Length < 1 || stream.Length > maxLength)
+        if (!stream.CanSeek)
+            throw new SecurityException("AOT artifact input must be seekable");
+        long observedLength = stream.Length;
+        if (observedLength < 1 || observedLength > maxLength)
             throw new SecurityException("AOT artifact exceeds its admission limit");
 
-        using var output = new MemoryStream(capacity: (int)stream.Length);
+        // Pin the capacity to the *same checked length*, never a second
+        // stream.Length read that could race with a concurrent writer.
+        using var output = new MemoryStream(capacity: (int)observedLength);
         byte[] buffer = new byte[Math.Min(8192, maxLength + 1)];
         while (true)
         {
