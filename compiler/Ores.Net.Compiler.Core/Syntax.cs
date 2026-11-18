@@ -732,12 +732,7 @@ public static partial class OresParser
                 _i += 2;
                 return new Token("->", start);
             }
-            if (ch == '<' && _i + 1 < text.Length && text[_i + 1] == '-')
-            {
-                _i += 2;
-                return new Token("<-", start);
-            }
-            if (ch == '•')
+             if (ch == '•')
             {
                 _i++;
                 return new Token("•", start);
@@ -1020,8 +1015,16 @@ public static partial class OresParser
             bool returnFirst = Take("int");
             if (returnFirst)
             {
-                if (!Take("<-") && !Take("•"))
-                    throw new FormatException($"Return-first scalar callable requires '<-' or '•' at offset {Current.Offset}");
+                bool arrow = Take("•");
+                if (!arrow && Current.Text == "<" && _index + 1 < tokens.Count &&
+                    tokens[_index + 1].Text == "-" &&
+                    Current.Offset + 1 == tokens[_index + 1].Offset)
+                {
+                    _index += 2;
+                    arrow = true;
+                }
+                if (!arrow)
+                    throw new FormatException($"Return-first scalar callable requires adjacent '<-' or '•' at offset {Current.Offset}");
             }
             else if (!explicitFnc)
                 throw new FormatException($"Expected fnc or int <-/• declaration at offset {Current.Offset}");
