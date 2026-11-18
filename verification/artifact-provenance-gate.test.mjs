@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {inspectArtifactMetadata} from './artifact-provenance-gate.mjs';
+import {inspectArtifactMetadata, inspectDownloadedArtifactBytes} from './artifact-provenance-gate.mjs';
+import {createHash} from 'node:crypto';
 
 const sha = 'ab'.repeat(20);
 const tree = 'cd'.repeat(20);
@@ -160,4 +161,92 @@ test('does not mutate caller-owned records', () => {
   const r=clone(run), a=clone(response), e=clone(expected);
   inspect(r,a,e);
   assert.deepEqual(r,run); assert.deepEqual(a,response); assert.deepEqual(e,expected);
+});
+
+// Verify real binary bytes: metadata-only consistency remains uncertified.
+const zipBytes = Buffer.from([0x50,0x4b,0x03,0x04,0x41,0x54,0x54,0x4f,0,1,2,3,4]);
+const zipDigest = 'sha256:' + createHash('sha256').update(zipBytes).digest('hex');
+const binaryResponse = (() => {
+  const a=clone(response);
+  a.artifacts[0].size_in_bytes=zipBytes.length;
+  a.artifacts[0].digest=zipDigest;
+  return a;
+})();
+const checkBytes = (r=run, a=binaryResponse, e=expected, name='compiled-guest', bytes=zipBytes) =>
+  inspectDownloadedArtifactBytes(r,a,e,name,bytes);
+
+test('downloaded ZIP bytes match independently validated artifact metadata but remain UNCERTIFIED', () => {
+  const result=checkBytes();
+  assert.equal(result.classification, 'ARTIFACT_BYTES_MATCH_METADATA_UNCERTIFIED');
+  assert.equal(result.artifactId, 123);
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.checks, {
+    runAttemptBound: false, sourceTreeBound: false, downloadDigestChecked: true,
+  });
+  assert.equal(inspect(run,binaryResponse,expected).checks.downloadDigestChecked,false);
+});
+
+test('reject same-length altered ZIP archive even when metadata looks successful', () => {
+  const tampered=Buffer.from(zipBytes);
+  tampered[tampered.length-1]^=1;
+  const result=checkBytes(run,binaryResponse,expected,'compiled-guest',tampered);
+  assert.equal(result.classification,'REJECTED');
+  assert.match(result.errors.join(' '),/SHA-256 digest/);
+});
+
+test('reject wrong ZIP length, empty archive and oversized metadata', () => {
+  for(const bytes of [Buffer.alloc(0),zipBytes.subarray(0,-1),Buffer.concat([zipBytes,Buffer.from([0])])]) {
+    const result=checkBytes(run,binaryResponse,expected,'compiled-guest',bytes);
+    assert.equal(result.classification,'REJECTED');
+    assert.match(result.errors.join(' '),/byte length/);
+  }
+  const a=clone(binaryResponse);
+  a.artifacts[0].size_in_bytes=257*1024*1024;
+  assert.equal(checkBytes(run,a,expected).classification,'REJECTED');
+});
+
+test('reject invalid ZIP local header even with matching hash', () => {
+  const a=clone(binaryResponse);
+  const bytes=Buffer.from('not-a-zip-file', 'utf8');
+  a.artifacts[0].size_in_bytes=bytes.length;
+  a.artifacts[0].digest='sha256:'+createHash('sha256').update(bytes).digest('hex');
+  const result=checkBytes(run,a,expected,'compiled-guest',bytes);
+  assert.equal(result.classification,'REJECTED');
+  assert.match(result.errors.join(' '),/ZIP local-file-header/);
+});
+
+test('reject string, typed-array and object impostors', () => {
+  for (const bytes of [zipBytes.toString('utf8'),new Uint8Array(zipBytes),{},null]) {
+    const result=checkBytes(run,binaryResponse,expected,'compiled-guest',bytes);
+    assert.equal(result.classification,'REJECTED');
+    assert.match(result.errors.join(' '),/binary bytes/);
+  }
+});
+
+test('reject artifact name not independently pinned to the trusted policy', () => {
+  for (const name of ['other-name','compiled-guest\u200b','test-receipt\nFORGED_PASS',{},null]) {
+    const result=checkBytes(run,binaryResponse,expected,name,zipBytes);
+    assert.equal(result.classification,'REJECTED');
+    assert.match(result.errors.join(' '),/not independently authorized/);
+  }
+});
+
+test('deny missing artifact, failed run and wrong run attempt', () => {
+  const a=clone(binaryResponse);
+  a.artifacts[0].name='renamed';
+  assert.equal(checkBytes(run,a,expected).classification,'REJECTED');
+  const r=clone(run);
+  r.conclusion='failure';
+  assert.equal(checkBytes(r,binaryResponse,expected).classification,'REJECTED');
+  r.conclusion='success';r.run_attempt=1;
+  assert.equal(checkBytes(r,binaryResponse,expected).classification,'REJECTED');
+});
+
+test('neither the caller metadata nor binary input are mutated', () => {
+  const r=clone(run),a=clone(binaryResponse),e=clone(expected),bytes=Buffer.from(zipBytes);
+  checkBytes(r,a,e,'compiled-guest',bytes);
+  assert.deepEqual(r,run);
+  assert.deepEqual(a,binaryResponse);
+  assert.deepEqual(e,expected);
+  assert.deepEqual(bytes,zipBytes);
 });
