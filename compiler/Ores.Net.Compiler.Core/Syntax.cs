@@ -732,6 +732,16 @@ public static partial class OresParser
                 _i += 2;
                 return new Token("->", start);
             }
+            if (ch == '<' && _i + 1 < text.Length && text[_i + 1] == '-')
+            {
+                _i += 2;
+                return new Token("<-", start);
+            }
+            if (ch == '•')
+            {
+                _i++;
+                return new Token("•", start);
+            }
             // Preserve the explicit free-function header/body separator.
             if (ch == ':' && _i + 1 < text.Length && text[_i + 1] == ':')
             {
@@ -1006,15 +1016,37 @@ public static partial class OresParser
             if (Current.Text == "model")
                 throw new FormatException(
                     $"MODEL_LOWERING_UNSUPPORTED: .NET requires typed nominal ModelGraph lowering at offset {Current.Offset}");
-            Expect("fnc");
+            bool explicitFnc = Take("fnc");
+            bool returnFirst = Take("int");
+            if (returnFirst)
+            {
+                if (!Take("<-") && !Take("•"))
+                    throw new FormatException($"Return-first scalar callable requires '<-' or '•' at offset {Current.Offset}");
+            }
+            else if (!explicitFnc)
+                throw new FormatException($"Expected fnc or int <-/• declaration at offset {Current.Offset}");
             Expect("main");
             Expect("(");
             Expect(")");
-            bool arrowReturn = !Take(":");
-            if (arrowReturn) Expect("->");
-            Expect("int");
-            bool braced = Take("{");
-            if (!braced)
+            int headerEnd = tokens[_index - 1].Offset + tokens[_index - 1].Text.Length;
+            bool arrowReturn = false;
+            if (!returnFirst)
+            {
+                arrowReturn = !Take(":");
+                if (arrowReturn) Expect("->");
+                Expect("int");
+            }
+            bool braced = !returnFirst && Take("{");
+            if (returnFirst)
+            {
+                var begin = Current;
+                Expect("begin");
+                if (!source[headerEnd..begin.Offset].Any(ch => ch is '\n' or '\r' or '\u0085' or '\u2028' or '\u2029'))
+                    throw new FormatException($"Return-first begin must start on the next line at offset {begin.Offset}");
+                if (!source[(begin.Offset + begin.Text.Length)..Current.Offset].Any(ch => ch is '\n' or '\r' or '\u0085' or '\u2028' or '\u2029'))
+                    throw new FormatException($"Return-first begin must be alone on its line at offset {begin.Offset}");
+            }
+            else if (!braced)
             {
                 if (!arrowReturn)
                     throw new FormatException($"End-delimited main requires '-> int' at offset {Current.Offset}");
@@ -1043,6 +1075,7 @@ public static partial class OresParser
             var expression = ParseAdd(0);
             Expect(";");
             Expect(braced ? "}" : "end");
+            if (returnFirst && !Take(".")) Take(";");
             if (Current.Text.Length != 0)
                 throw new FormatException($"Unexpected token at offset {Current.Offset}");
             return expression;
