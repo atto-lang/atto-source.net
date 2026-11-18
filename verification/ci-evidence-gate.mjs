@@ -110,6 +110,12 @@ const requiredWorkflowIdByWorkflow = {
   "Windows Native AOT": 384715065,
   "Integration declaration integrity": 388530125
 };
+// Reject ambiguous/invisible names in independently acquired CI metadata.
+const evidenceLabel = value => typeof value === "string" &&
+  value.length > 0 && value.length <= 250 && value === value.trim() &&
+  value.normalize("NFKC") === value &&
+  !/[\p{C}\p{M}]/u.test(value);
+
 export function verifyEvidence(run, response, expected) {
   const errors = [];
   const fail = (condition, explanation) => { if (!condition) errors.push(explanation); };
@@ -167,7 +173,7 @@ export function verifyEvidence(run, response, expected) {
     // Every successful job must have an assigned runner, not only strict Linux.
     if (job.status === "completed" && job.conclusion === "success")
       fail(Number.isSafeInteger(job.runner_id) && job.runner_id > 0 &&
-        typeof job.runner_name === "string" && job.runner_name.trim().length > 0,
+        evidenceLabel(job.runner_name),
         `job ${job.name} has no allocated runner`);
   }
   for (const [name, stepsRequired] of Object.entries(requirements)) {
@@ -213,16 +219,33 @@ export function verifyEvidence(run, response, expected) {
       if (disabledOptional(job)) continue;
       fail(job.status==="completed" && job.conclusion==="success",
         `extra job ${job.name} is not successful`);
-      // Extra successful jobs with no executable step are not evidence.
-      fail(Array.isArray(job.steps) && job.steps.some(s => {
-        if (!s || s.status !== "completed" || s.conclusion !== "success" ||
-            typeof s.name !== "string") return false;
-        const name = s.name.replace(/\s+/g, " ").trim().toLowerCase();
-        return name.length > 0 &&
-          !["set up job", "complete job", "initialize containers",
-            "start containers", "stop containers"].includes(name) &&
-          !/^(?:pre|post) /.test(name);
-      }), `extra job ${job.name} has no completed executable step`);
+      // One successful step cannot conceal failed, skipped, malformed or
+      // duplicated siblings; inspect all steps even in unrecognized jobs.
+      if (!Array.isArray(job.steps) || job.steps.length === 0) {
+        errors.push(`extra job ${job.name} has no completed executable step`);
+        continue;
+      }
+      const numbers = new Set(), names = new Set();
+      let executed = 0;
+      for (const step of job.steps) {
+        if (!step || typeof step !== "object" || Array.isArray(step) ||
+            !Number.isSafeInteger(step.number) || step.number <= 0 ||
+            !evidenceLabel(step.name)) {
+          errors.push(`extra job ${job.name} has malformed step`);
+          continue;
+        }
+        fail(!numbers.has(step.number), `extra job ${job.name} has duplicate step number`);
+        fail(!names.has(step.name), `extra job ${job.name} has duplicate step name`);
+        numbers.add(step.number); names.add(step.name);
+        const passed = step.status === "completed" && step.conclusion === "success";
+        fail(passed, `extra job ${job.name} has non-successful step: ${step.name}`);
+        const name = step.name.replace(/\s+/g, " ").toLowerCase();
+        if (passed &&
+            !["set up job", "complete job", "initialize containers",
+              "start containers", "stop containers"].includes(name) &&
+            !/^(?:pre|post) /.test(name)) executed++;
+      }
+      fail(executed > 0, `extra job ${job.name} has no completed executable step`);
     }
   }
   return errors;
