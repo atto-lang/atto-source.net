@@ -91,7 +91,7 @@ export function inspectArtifactMetadata(run, response, expected) {
       errors.push('malformed artifact record');
       continue;
     }
-    const label = typeof a.name === 'string' ? a.name : '<invalid>';
+    const label = safeLabel(a.name) ? a.name : '<invalid>';
     deny(positiveInt(a.id) && !ids.has(a.id), 'duplicate or invalid artifact ID');
     deny(safeLabel(a.name) && !names.has(a.name), 'duplicate or invalid artifact name');
     ids.add(a.id);
@@ -110,7 +110,8 @@ export function inspectArtifactMetadata(run, response, expected) {
   }
   if (Array.isArray(expected.requiredNames) && expected.requiredNames.length <= 100) {
     for (const name of expected.requiredNames) {
-      if (typeof name === 'string') deny(names.has(name), `required artifact ${name} missing`);
+      if (typeof name === 'string') deny(names.has(name),
+        `required artifact ${safeLabel(name) ? name : '<invalid>'} missing`);
     }
   }
   if (errors.length) return rejected();
