@@ -110,6 +110,8 @@ internal static class TrustedAotArtifact
         }
         using (doc)
         {
+        try
+        {
         var root = doc.RootElement;
         if (root.ValueKind != JsonValueKind.Object)
             throw new SecurityException("AOT manifest must be a JSON object");
@@ -143,9 +145,12 @@ internal static class TrustedAotArtifact
         if (!CryptographicOperations.FixedTimeEquals(approvedDigest, actualDigest))
             throw new SecurityException("Native AOT artifact differs from signed manifest");
         }
-        // Type mismatches and numeric overflow are policy denials, not
-        // valid metadata. Avoid leaking parser-specific error categories
-        // into the Native AOT host's security admission contract.
+        catch (Exception ex) when (ex is InvalidOperationException or
+            FormatException or OverflowException)
+        {
+            throw new SecurityException("Malformed signed AOT policy metadata", ex);
+        }
+        }
     }
 
     private static bool IsLowerHexSha256(string? value)
