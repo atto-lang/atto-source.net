@@ -211,6 +211,24 @@ class StrictFullAotSourceContract(unittest.TestCase):
         self.assertNotIn("GITHUB_TOKEN", build)
         self.assertNotIn("git clone", build)
 
+    def test_compiler_free_c_abi_excludes_source_compiler(self) -> None:
+        script = read("verification/wasmtime-c-api/build_compiler_free_50_0_2.sh")
+        fixture = read("verification/wasmtime-c-api/probe_store_abi.c")
+        self.assertIn("grep -Fxq wasmtime_module_new", script)
+        self.assertIn("raw-Wasm compiler entrypoint unexpectedly exported", script)
+        for symbol in ("wasmtime_module_deserialize", "wasmtime_store_new",
+                       "wasmtime_instance_new", "wasmtime_context_set_fuel"):
+            self.assertIn(symbol, script)
+        self.assertIn("cc -std=c11 -Wall -Wextra -Werror", script)
+        self.assertIn("probe_store_abi.c", script)
+        self.assertIn("WASMTIME_COMPILER_FREE_C_ABI_STORE_PASS", script)
+        self.assertIn("WASMTIME_COMPILER_FREE_C_ABI_STORE_PASS", fixture)
+        self.assertIn("wasmtime_store_new(", fixture)
+        self.assertIn("wasmtime_store_delete(", fixture)
+        self.assertIn("wasm_engine_delete(", fixture)
+        self.assertNotIn("wasmtime_module_new(", fixture)
+        self.assertNotIn("wasmtime_module_deserialize(", fixture)
+
     def test_upstream_preflight_is_noncompiling_and_deny_by_default(self) -> None:
         preflight = read("verification/wasmtime-c-api/test_preflight.sh")
         self.assertIn("bash -n \"$builder\"", preflight)
