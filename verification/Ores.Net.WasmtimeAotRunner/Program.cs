@@ -168,6 +168,26 @@ Require(incA(9) == 9, "tenant A independent mutable global");
 Require(incB(4) == 4, "tenant B independent mutable global");
 Require(incA(1) == 10 && incB(1) == 5, "tenant globals remained isolated");
 
+// Global variables alone cannot prove that tenant linear memories are
+// independent. Read/write actual Wasm memory in both Stores, including
+// a second mutation of A while B must retain its original byte.
+var writeA = tenantA.GetAction<int>("write_byte")
+    ?? throw new SecurityException("Missing signed memory-write export");
+var writeB = tenantB.GetAction<int>("write_byte")
+    ?? throw new SecurityException("Missing signed memory-write export");
+var readA = tenantA.GetFunction<int>("read_byte")
+    ?? throw new SecurityException("Missing signed memory-read export");
+var readB = tenantB.GetFunction<int>("read_byte")
+    ?? throw new SecurityException("Missing signed memory-read export");
+Require(readA() == 0 && readB() == 0, "separate zeroed guest memories");
+writeA(0xA1);
+writeB(0xB2);
+Require(readA() == 0xA1 && readB() == 0xB2,
+    "tenant private linear memory after writes");
+writeA(0xC3);
+Require(readA() == 0xC3 && readB() == 0xB2,
+    "neighbor linear memory remains independent");
+
 var oobA = tenantA.GetFunction<int>("out_of_bounds")
     ?? throw new SecurityException("Missing OOB test export");
 ExpectTrap(() => _ = oobA(), "memory out-of-bounds from tenant A");
