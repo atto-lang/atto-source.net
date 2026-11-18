@@ -121,6 +121,52 @@ var spin = spinInstance.GetAction("spin_forever")
 ExpectTrap(spin, "infinite loop fuel exhausted");
 Require(incB(1) == 44, "neighbor B survived fuel exhaustion");
 
+// Exercise the new generation-fenced lifecycle on real Wasmtime Stores.
+// This stays a synthetic probe, not OresVmHost production untrusted admission.
+using (var registry = new TenantStoreRegistry(engine, module, maxTenants: 2))
+{
+    var tenantA = registry.Create("tenant-A");
+    var tenantB = registry.Create("tenant-B");
+    Require(registry.Increment(tenantA, 7) == 7, "registry tenant A initial state");
+    Require(registry.Increment(tenantB, 42) == 42, "registry tenant B initial state");
+    registry.WriteByte(tenantA, 81);
+    Require(registry.ReadByte(tenantB) == 0, "registry cross-tenant memory separation");
+
+    var rejectedForeign = false;
+    using (var foreign = new TenantStoreRegistry(engine, module, maxTenants: 1))
+    {
+        try { _ = foreign.Increment(tenantA, 1); }
+        catch (InvalidOperationException) { rejectedForeign = true; }
+    }
+    Require(rejectedForeign, "foreign host handle incorrectly admitted");
+
+    // A guest fault automatically closes that tenant's admission. It must
+    // never consume the neighbor's Store or block B's continued execution.
+    ExpectTrap(() => registry.TriggerBoundsTrap(tenantA), "registry bounds trap");
+    Require(registry.Increment(tenantB, 1) == 43, "registry neighbor after trap");
+    registry.CompleteShutdown(tenantA);
+    registry.Destroy(tenantA);
+    var refusedStale = false;
+    try { _ = registry.Increment(tenantA, 1); }
+    catch (InvalidOperationException) { refusedStale = true; }
+    Require(refusedStale, "destroyed generation handle was reused");
+
+    var tenantA2 = registry.Create("tenant-A", initialFuel: 1000);
+    Require(registry.Increment(tenantA2, 1) == 1, "fresh Store did not reset globals");
+    Require(registry.ReadByte(tenantA2) == 0, "fresh Store did not reset memory");
+    ExpectTrap(() => registry.TriggerFuelTrap(tenantA2), "registry fuel trap");
+    registry.CompleteShutdown(tenantA2);
+    registry.Destroy(tenantA2);
+    Require(registry.Increment(tenantB, 1) == 44, "neighbor after fuel trap");
+    registry.BeginShutdown(tenantB);
+    registry.CompleteShutdown(tenantB);
+    registry.Destroy(tenantB);
+}
+var importedRegistryDenied = false;
+try { using var invalid = new TenantStoreRegistry(engine, bad); }
+catch (SecurityException) { importedRegistryDenied = true; }
+Require(importedRegistryDenied, "registry incorrectly accepted imported host capability");
+
 Console.WriteLine("NET_WASMTIME_NATIVEAOT_PROBE_PASS");
 return 0;
 
