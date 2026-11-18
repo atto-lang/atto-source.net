@@ -58,9 +58,22 @@ jobs:
             -p:PublishAot=true -p:SelfContained=true
           test -x "$RUNNER_TEMP/wasmtime-probe/oresnet-wasmtime-probe"
           file "$RUNNER_TEMP/wasmtime-probe/oresnet-wasmtime-probe"
-      - name: Execute the published native binary (not dotnet run)
+      - name: Deny unapproved synthetic probe invocation
         shell: bash
         run: |
           set -euo pipefail
-          "$RUNNER_TEMP/wasmtime-probe/oresnet-wasmtime-probe" | tee "$RUNNER_TEMP/wasmtime-probe.log"
+          set +e
+          env -u ORES_WASMTIME_SYNTHETIC_CI_ONLY \
+            "$RUNNER_TEMP/wasmtime-probe/oresnet-wasmtime-probe" \
+            > "$RUNNER_TEMP/wasmtime-denial.log" 2>&1
+          exit_code=$?
+          set -e
+          test "$exit_code" -eq 78
+          grep -Fx WASMTIME_SYNTHETIC_PROBE_NOT_AUTHORIZED "$RUNNER_TEMP/wasmtime-denial.log"
+      - name: Execute the published native binary (synthetic CI opt-in only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ORES_WASMTIME_SYNTHETIC_CI_ONLY=1 \
+            "$RUNNER_TEMP/wasmtime-probe/oresnet-wasmtime-probe" | tee "$RUNNER_TEMP/wasmtime-probe.log"
           grep -Fx NET_WASMTIME_NATIVEAOT_PROBE_PASS "$RUNNER_TEMP/wasmtime-probe.log"

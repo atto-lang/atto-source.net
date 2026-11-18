@@ -35,9 +35,56 @@ bash verification/wasmtime-c-api/build_compiler_free_50_0_2.sh \
   /trusted/public/wasmtime-v50.0.2 /trusted/output/wasmtime-c-api
 ```
 
+### Executed preflight and required native C API proof
+
+Run the noncompiling preflight before any full Rust build:
+
+```bash
+bash verification/wasmtime-c-api/test_preflight.sh
+```
+
+It tests invalid arguments, non-Git inputs, wrong pinned source SHA,
+nonempty output, and that no Cargo/Rust compiler runs on those failures.
+The suite was **executed** locally and passed against Git blob
+`1839bde32e2a3e9fe991e7df42065fbb5f91f60d` of the build script.
+
+The full build now verifies the native library exports the C ABI
+`wasmtime_module_deserialize`, `wasmtime_store_new`,
+`wasmtime_instance_new`, and `wasmtime_context_set_fuel`,
+while **refusing** a library that exports `wasmtime_module_new`,
+the source-Wasm compilation entry point guarded by upstream's
+`WASMTIME_FEATURE_COMPILER`. A separate C program
+(`probe_store_abi.c`) links to the generated library, creates and
+destroys two empty Wasmtime Stores, and emits
+`WASMTIME_COMPILER_FREE_C_ABI_STORE_PASS` if successful.
+The resulting ELF, symbol inventory and smoke log receive SHA-256
+entries in the build receipt.
+
+This is still not a deserialization or .NET Native AOT execution test.
+Unsafe native `.cwasm` blobs are never passed to a Wasmtime
+deserializer during this preflight. Valid precompiled artifacts require
+a reviewed signed producer and matching engine/version/ABI.
+
 A successful command is **not** sufficient to ship this native engine.
 It does not certify the platform's C ABI, native code trap recovery,
 Wasmtime resource limits, a validated guest manifest, or tenant isolation.
+
+### Cargo build-output isolation (2026-11-18)
+
+The compiler-free release candidate now exports a dedicated
+`CARGO_TARGET_DIR=$output_dir/cargo-target` and disables incremental
+compilation **before** invoking Cargo. The source checkout's ambient
+`target/release` directory is never trusted as a native release
+artifact. The output must begin empty; the receipt contains the exact
+Cargo output path, source commit/tree and hashes. The preflight was
+re-executed on the currently committed script with a matching Git blob
+SHA `ad56d1b873617437eeb7db9bde36f9feda620527`.
+
+This reduces accidental reuse of a compiler-enabled or older native
+library from the upstream checkout. It does **not** prove a hermetic
+build, toolchain authenticity, Wasmtime C ABI compatibility, or success
+of the compiled .NET Native AOT guest runner. Those require a funded,
+approved native CI environment.
 
 ## Non-negotiable integration blockers
 

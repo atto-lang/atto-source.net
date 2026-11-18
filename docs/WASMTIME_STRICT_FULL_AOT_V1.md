@@ -82,8 +82,12 @@ binding/native library is available. Never silently substitute version
 50.0.2 in PackageReference until availability and the packaged native
 libwasmtime build are independently verified.
 
-The two experimental builder/runner programs now **require**
-`ORES_WASMTIME_SYNTHETIC_CI_ONLY=1` before doing work. The strict-AOT
+The experimental builder, runner, and separate `WasmtimeProbe` now **require**
+`ORES_WASMTIME_SYNTHETIC_CI_ONLY=1` before test guest execution.
+The probe enforces this both at its CLI entrypoint and inside the
+`TenantStoreRegistry` constructor, and its Linux Native AOT workflow
+explicitly asserts exit 78 without opt-in before running the synthetic
+test with opt-in. The strict-AOT
 workflow executes both binaries **without** this opt-in and demands denial
 (exit 78), then explicitly opts in for trusted synthetic test execution.
 This flag is a guard against accidental use, *not* a production credential,
@@ -187,7 +191,6 @@ steps is `NOT_EXECUTED`. This test is *not* production untrusted-actor
 admission, a proof of the compiler-free Wasmtime 50.0.2 C API build,
 or evidence of compatible patched .NET bindings. Cross-org transfers
 remain forbidden unless #260 and #566 are independently approved.
-
 
 ## Explicit production security blocks
 

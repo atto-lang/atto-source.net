@@ -183,7 +183,6 @@ class StrictFullAotSourceContract(unittest.TestCase):
                           "git clone", "ssh-agent", "workflow_dispatch"):
             self.assertNotIn(forbidden, script)
 
-
     def test_native_binary_inspection_rejects_failed_ldd(self) -> None:
         # ldd | grep under a single leading ! can pass when ldd itself
         # exits nonzero. Require a standalone (or pipefail-protected)
@@ -264,6 +263,19 @@ class StrictFullAotSourceContract(unittest.TestCase):
             self.assertIn(token, build)
         self.assertNotIn("GITHUB_TOKEN", build)
         self.assertNotIn("git clone", build)
+
+    def test_compiler_free_build_never_reuses_checkout_target_artifacts(self) -> None:
+        build = read("verification/wasmtime-c-api/build_compiler_free_50_0_2.sh")
+        self.assertIn('readonly trusted_target_dir="$output_dir/cargo-target"', build)
+        self.assertIn('export CARGO_TARGET_DIR="$trusted_target_dir"', build)
+        self.assertIn('export CARGO_INCREMENTAL=0', build)
+        self.assertIn('readonly lib="$trusted_target_dir/release/libwasmtime.so"', build)
+        self.assertIn('echo "cargo_target_dir=$trusted_target_dir"', build)
+        self.assertNotIn('readonly lib="$source_dir/target/', build)
+        self.assertLess(
+            build.index("readonly trusted_target_dir="),
+            build.index("cargo build -p wasmtime-c-api --release"),
+        )
 
     def test_compiler_free_c_abi_excludes_source_compiler(self) -> None:
         script = read("verification/wasmtime-c-api/build_compiler_free_50_0_2.sh")
