@@ -67,6 +67,13 @@ class StrictFullAotSourceContract(unittest.TestCase):
         self.assertLess(runtime.index("TrustedAotArtifact.Verify("),
                         runtime.index("Module.Deserialize("))
 
+    def test_builder_never_overwrites_existing_artifacts(self) -> None:
+        source = read(f"{BUILDER}/Program.cs")
+        self.assertIn("Directory.EnumerateFileSystemEntries(dir).Any()", source)
+        self.assertIn("FileAttributes.ReparsePoint", source)
+        self.assertIn("FileMode.CreateNew", source)
+        self.assertNotIn("File.WriteAllBytes(", source)
+
     def test_engine_profile_signed_and_agreed(self) -> None:
         builder = read(f"{BUILDER}/Program.cs")
         runner = read(f"{RUNNER}/Program.cs")
@@ -99,7 +106,9 @@ class StrictFullAotSourceContract(unittest.TestCase):
         for case in ("swappedArtifact", "changedManifest", "badSignature",
                      "wrongIssuer", "duplicated signed JSON key",
                      "invalid compiler source identity", "memory out-of-bounds",
-                     "fuel exhaustion", "neighbor survived"):
+                     "fuel exhaustion", "neighbor survived",
+                     "synthetic test signer cannot authorize production guest",
+                     "signed artifact from unapproved Wasmtime native engine"):
             self.assertIn(case, runner)
 
     def test_untrusted_runtime_admission_remains_denied(self) -> None:
