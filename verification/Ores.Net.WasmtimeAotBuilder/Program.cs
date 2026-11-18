@@ -20,6 +20,13 @@ if (args.Length != 1 || string.IsNullOrWhiteSpace(args[0]))
 
 string dir = Path.GetFullPath(args[0]);
 Directory.CreateDirectory(dir);
+var output = new DirectoryInfo(dir);
+// A release builder must never overwrite artifacts from an earlier attempt
+// or follow a final-directory symlink to an attacker-controlled location.
+// Production deployment also needs a protected, isolated build workspace.
+if ((output.Attributes & FileAttributes.ReparsePoint) != 0 ||
+    Directory.EnumerateFileSystemEntries(dir).Any())
+    throw new IOException("Trusted AOT output directory must be a fresh, empty, non-symlink directory");
 
 const string wat = """
 (module
@@ -81,11 +88,22 @@ byte[] signature = signingKey.SignData(
     manifestBytes, HashAlgorithmName.SHA256, RSASignaturePadding.Pss);
 
 // The private key is NEVER serialized, logged or copied to output.
-File.WriteAllBytes(Path.Combine(dir, "guest.cwasm"), nativeArtifact);
-File.WriteAllBytes(Path.Combine(dir, "guest.manifest.json"), manifestBytes);
-File.WriteAllBytes(Path.Combine(dir, "guest.manifest.sig"), signature);
-File.WriteAllText(Path.Combine(dir, "ephemeral-ci-public.pem"),
-    signingKey.ExportSubjectPublicKeyInfoPem(), new UTF8Encoding(false));
+WriteNew("guest.cwasm", nativeArtifact);
+WriteNew("guest.manifest.json", manifestBytes);
+WriteNew("guest.manifest.sig", signature);
+WriteNew("ephemeral-ci-public.pem", Encoding.UTF8.GetBytes(
+    signingKey.ExportSubjectPublicKeyInfoPem()));
+
+// These create-new writes are intentionally single-purpose for the trusted
+// synthetic CI builder. The file name is constant and never guest-controlled.
+void WriteNew(string name, byte[] bytes)
+{
+    using var file = new FileStream(
+        Path.Combine(dir, name), FileMode.CreateNew, FileAccess.Write,
+        FileShare.None);
+    file.Write(bytes);
+    file.Flush(flushToDisk: true);
+}
 
 Console.WriteLine("NET_WASMTIME_TRUSTED_AOT_BUILDER_PASS");
 return 0;
