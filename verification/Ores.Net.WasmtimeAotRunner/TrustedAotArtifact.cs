@@ -17,7 +17,7 @@ internal static class TrustedAotArtifact
     internal const int MaxArtifactBytes = 16 * 1024 * 1024;
     private const int MaxManifestBytes = 4096;
     private const string ExpectedEngineProfile =
-        "fuel-stack262144-mem64off-multimemoryoff-threadsoff";
+        "fuel-stack262144-mem64off-reftypesoff-multimemoryoff-threadsoff";
     private static readonly HashSet<string> ExactFields = new(StringComparer.Ordinal)
     {
         "schema_version", "guest_kind", "wasmtime_version", "target_rid",
