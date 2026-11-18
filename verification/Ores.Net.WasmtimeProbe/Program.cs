@@ -32,6 +32,7 @@ using var config = new Config()
     .WithFuelConsumption(true)
     .WithMaximumStackSize(256 * 1024)
     .WithMemory64(false)
+    .WithReferenceTypes(false) // synthetic proof does not need host GC reference types
     .WithMultiMemory(false)
     .WithWasmThreads(false);
 using var engine = new Engine(config);
