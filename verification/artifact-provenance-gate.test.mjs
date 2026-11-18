@@ -88,6 +88,36 @@ for (const [name, mutate] of attacks) {
   });
 }
 
+test('valid leap-day and fractional UTC timestamps remain admissible as metadata only', () => {
+  for (const valid of [
+    '2024-02-29T00:00:00Z', '2024-02-29T23:59:59.123Z',
+    '2024-02-29T23:59:59.123456789Z', '2026-01-01T00:00:00.1Z',
+  ]) {
+    const a=clone(response);
+    a.artifacts[0].created_at=valid;
+    a.artifacts[0].expires_at='2027-11-24T12:00:00Z';
+    assert.equal(inspect(run,a,expected).classification,
+      'METADATA_CONSISTENT_UNCERTIFIED', valid);
+  }
+});
+
+test('impossible UTC calendar dates must never be normalized', () => {
+  const invalid=[
+    '2026-02-29T12:00:00Z', '2026-02-30T00:00:00Z',
+    '2026-04-31T12:00:00Z', '2026-11-31T23:59:59Z',
+    '2026-00-15T12:00:00Z', '2026-13-01T12:00:00Z',
+    '2026-11-17T24:00:00Z', '2026-11-17T10:60:00Z',
+    '2026-11-17T10:10:60Z', '2026-11-17T10:10:10.1234567890Z',
+  ];
+  for (const value of invalid) {
+    for (const field of ['created_at','expires_at']) {
+      const a=clone(response);
+      a.artifacts[0][field]=value;
+      assert.equal(inspect(run,a,expected).classification,'REJECTED',field+' '+value);
+    }
+  }
+});
+
 test('does not mutate caller-owned records', () => {
   const r=clone(run), a=clone(response), e=clone(expected);
   inspect(r,a,e);
