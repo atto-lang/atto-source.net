@@ -77,6 +77,35 @@ Native AOT test that creates two stores, deliberately trips OOB/unreachable,
 and proves the sibling survives before enabling Windows tenant execution.
 Tests using `dotnet.exe` instead of the published `.exe` are insufficient.
 
+## Generation-fenced multi-tenant Wasmtime lifecycle slice (2026-11-18)
+
+The opt-in Native AOT probe now has a real `TenantStoreRegistry` implemented in
+`verification/Ores.Net.WasmtimeProbe/TenantStoreRegistry.cs`. It is deliberately
+restricted to a **trusted synthetic probe module** and does not make the
+production `OresVmHost.CreateIsolate(WasmtimeSandbox)` admission available.
+
+The registry creates independent Wasmtime `Store`/instance pairs, one fixed
+one-page private memory and a fuel budget per tenant, with a root max-tenant
+quota. A host-issued handle has a monotonically increasing generation and
+issuer identity; foreign/replayed/destroyed handles fail. Guest entry is
+serialized **per Store** rather than globally, and pins active calls so
+quiescence cannot free an executing Store. Runtime guest exceptions revoke
+only that tenant, then explicit drain/destroy disposes its Store. New tenant
+incarnations get fresh memory and globals. Zero imports remain mandatory.
+Windows execution and CoreCLR JIT-host execution reject inside the registry
+itself; the Windows CET blocker is not merely a command-line test check.
+
+`Program.cs` uses genuine Wasmtime instances to test root quota, separate
+memory/globals, cross-registry handle rejection, trap and fuel shutdown,
+neighbor survival, and fresh generation after restart. These are **synthetic
+WAT tests, not .atto source-compiled actor tests**.
+
+**Not yet done:** published Native AOT binary pass; integration with the
+production `OresVmHost` actor/mailbox/capability broker; exact guest import/
+export artifact attestation, aggregate native memory/stack budgets, real
+Atto-generated guest ABI, host I/O teardown and the Windows CET recovery
+problem. Production untrusted admission intentionally remains disabled.
+
 ## Ownership
 - `.net`: Native AOT host integration, Wasmtime Store ownership, admission and lifecycle.
 - `atto-lang/atto-source.wasm`: Wasm guest build/ABI validation; no duplicate parser.
