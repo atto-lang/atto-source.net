@@ -1,3 +1,5 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
+
 // Read-only metadata consistency check for GitHub Actions artifacts.
 // IMPORTANT: a matching REST artifact record is NOT a downloaded-byte digest,
 // immutable source tree proof, run-attempt attestation, or compiler/test pass.
@@ -120,5 +122,76 @@ export function inspectArtifactMetadata(run, response, expected) {
     errors,
     artifactIds: [...ids].sort((a, b) => a - b),
     checks,
+  };
+}
+
+/**
+ * Validate actual downloaded artifact ZIP bytes against GitHub's independently
+ * acquired artifact metadata. This does NOT validate ZIP member contents,
+ * executable behavior, workflow attempt attribution, or the source root tree.
+ * The caller must fetch GitHub JSON and download the artifact independently.
+ * This routine never produces PASS or release certification.
+ *
+ * @param {object} run GitHub run JSON
+ * @param {object} response complete run artifact-list JSON
+ * @param {object} expected independently reviewed identities and required names
+ * @param {string} artifactName expected artifact name
+ * @param {Buffer} archiveBytes downloaded ZIP archive (not extracted entries)
+ */
+export function inspectDownloadedArtifactBytes(run, response, expected, artifactName, archiveBytes) {
+  const metadata = inspectArtifactMetadata(run, response, expected);
+  const errors = [...metadata.errors];
+  const checks = Object.freeze({
+    runAttemptBound: false,
+    sourceTreeBound: false,
+    downloadDigestChecked: false,
+  });
+  const rejected = () => ({classification: 'REJECTED', errors, artifactId: null, checks});
+  if (metadata.classification !== 'METADATA_CONSISTENT_UNCERTIFIED') return rejected();
+  if (!safeLabel(artifactName) || !expected.requiredNames.includes(artifactName)) {
+    errors.push('download artifact name is not independently authorized');
+    return rejected();
+  }
+  const record = response.artifacts.find(a => a.name === artifactName);
+  if (!record || !metadata.artifactIds.includes(record.id)) {
+    errors.push('download artifact is missing from validated run metadata');
+    return rejected();
+  }
+  if (!Buffer.isBuffer(archiveBytes)) {
+    errors.push('downloaded artifact must be binary bytes, not text or an untrusted object');
+    return rejected();
+  }
+  // Conservative memory ceiling; fail closed instead of hashing an unbounded
+  // archive. Large native builds need an independently audited streaming path.
+  const MAX_BYTES = 256 * 1024 * 1024;
+  if (archiveBytes.length === 0 || archiveBytes.length > MAX_BYTES ||
+      archiveBytes.length !== record.size_in_bytes) {
+    errors.push('downloaded artifact byte length does not match trusted metadata or size limit');
+    return rejected();
+  }
+  // GitHub Actions artifact downloads are ZIP archives. This rejects obvious
+  // wrong-file inputs; it does NOT attest internal ZIP entries or extraction.
+  if (archiveBytes.length < 4 || archiveBytes[0] !== 0x50 || archiveBytes[1] !== 0x4b ||
+      archiveBytes[2] !== 0x03 || archiveBytes[3] !== 0x04) {
+    errors.push('downloaded artifact is not a ZIP local-file-header stream');
+    return rejected();
+  }
+  const actual = createHash('sha256').update(archiveBytes).digest();
+  const expectedDigest = Buffer.from(record.digest.slice('sha256:'.length), 'hex');
+  if (expectedDigest.length !== 32 || !timingSafeEqual(actual, expectedDigest)) {
+    errors.push('downloaded artifact bytes do not match GitHub SHA-256 digest metadata');
+    return rejected();
+  }
+  // A hash match is meaningful but never sufficient to certify the artifact
+  // was produced on the specified run attempt or contains executed binaries.
+  return {
+    classification: 'ARTIFACT_BYTES_MATCH_METADATA_UNCERTIFIED',
+    errors,
+    artifactId: record.id,
+    checks: Object.freeze({
+      runAttemptBound: false,
+      sourceTreeBound: false,
+      downloadDigestChecked: true,
+    }),
   };
 }
