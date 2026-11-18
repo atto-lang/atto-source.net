@@ -77,7 +77,23 @@ jobs:
           ! ldd "$RUNNER_TEMP/aot-runner/oresnet-wasmtime-aot-runner" | grep -E '(libcoreclr|libhostfxr|libhostpolicy|libclrjit)'
           sha256sum "$RUNNER_TEMP/aot-builder/oresnet-wasmtime-aot-builder" \
             "$RUNNER_TEMP/aot-runner/oresnet-wasmtime-aot-runner"
+      - name: Reject synthetic executables without explicit CI opt-in
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          "$RUNNER_TEMP/aot-builder/oresnet-wasmtime-aot-builder" "$RUNNER_TEMP/no-authorization" 2>"$RUNNER_TEMP/denied-builder.log"
+          builder_status=$?
+          "$RUNNER_TEMP/aot-runner/oresnet-wasmtime-aot-runner" 2>"$RUNNER_TEMP/denied-runner.log"
+          runner_status=$?
+          set -e
+          test "$builder_status" -eq 78
+          test "$runner_status" -eq 78
+          grep -Fx WASMTIME_SYNTHETIC_PROBE_NOT_AUTHORIZED "$RUNNER_TEMP/denied-builder.log"
+          grep -Fx WASMTIME_SYNTHETIC_PROBE_NOT_AUTHORIZED "$RUNNER_TEMP/denied-runner.log"
       - name: Build and sign trusted synthetic guest AHEAD of runtime
+        env:
+          ORES_WASMTIME_SYNTHETIC_CI_ONLY: '1'
         shell: bash
         run: |
           set -euo pipefail
@@ -92,6 +108,8 @@ jobs:
           # never in the artifact directory or runner.
           test "$(find "$RUNNER_TEMP/aot-artifact" -type f | wc -l)" -eq 4
       - name: Execute published Native AOT runtime on precompiled artifact
+        env:
+          ORES_WASMTIME_SYNTHETIC_CI_ONLY: '1'
         shell: bash
         run: |
           set -euo pipefail

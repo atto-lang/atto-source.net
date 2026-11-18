@@ -119,6 +119,18 @@ class StrictFullAotSourceContract(unittest.TestCase):
         self.assertIn("Malformed signed AOT policy metadata", gate)
         self.assertIn("Invalid trusted AOT signer key", gate)
 
+    def test_known_vulnerable_engine_is_synthetic_opt_in_only(self) -> None:
+        for name in (RUNNER, BUILDER):
+            source = read(f"{name}/Program.cs")
+            self.assertIn('GetEnvironmentVariable("ORES_WASMTIME_SYNTHETIC_CI_ONLY") != "1"', source)
+            self.assertIn("WASMTIME_SYNTHETIC_PROBE_NOT_AUTHORIZED", source)
+            self.assertIn("return 78;", source)
+        workflow = read(".github/workflows/wasmtime-strict-aot.yml")
+        self.assertIn("Reject synthetic executables without explicit CI opt-in", workflow)
+        self.assertEqual(workflow.count("ORES_WASMTIME_SYNTHETIC_CI_ONLY: '1'"), 2)
+        self.assertIn("test \"$builder_status\" -eq 78", workflow)
+        self.assertIn("test \"$runner_status\" -eq 78", workflow)
+
     def test_aot_signature_verified_before_native_code_load(self) -> None:
         runner = read(f"{RUNNER}/Program.cs")
         gate = read(f"{RUNNER}/TrustedAotArtifact.cs")
