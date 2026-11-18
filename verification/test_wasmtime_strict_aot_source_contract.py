@@ -238,10 +238,46 @@ class StrictFullAotSourceContract(unittest.TestCase):
             "build-receipt.txt",
             "git_tree=",
             "WASMTIME_50_0_2_COMPILER_FREE_C_API_BUILD_CANDIDATE_PASS",
+            "wasmtime_module_deserialize",
+            "wasmtime_store_new",
+            "wasmtime_instance_new",
+            "wasmtime_context_set_fuel",
+            "c-api-exports.txt",
         ):
             self.assertIn(token, build)
         self.assertNotIn("GITHUB_TOKEN", build)
         self.assertNotIn("git clone", build)
+
+    def test_compiler_free_c_abi_excludes_source_compiler(self) -> None:
+        script = read("verification/wasmtime-c-api/build_compiler_free_50_0_2.sh")
+        fixture = read("verification/wasmtime-c-api/probe_store_abi.c")
+        self.assertIn("grep -Fxq wasmtime_module_new", script)
+        self.assertIn("raw-Wasm compiler entrypoint unexpectedly exported", script)
+        for symbol in ("wasmtime_module_deserialize", "wasmtime_store_new",
+                       "wasmtime_instance_new", "wasmtime_context_set_fuel"):
+            self.assertIn(symbol, script)
+        self.assertIn("cc -std=c11 -Wall -Wextra -Werror", script)
+        self.assertIn("probe_store_abi.c", script)
+        self.assertIn("WASMTIME_COMPILER_FREE_C_ABI_STORE_PASS", script)
+        self.assertIn("WASMTIME_COMPILER_FREE_C_ABI_STORE_PASS", fixture)
+        self.assertIn("wasmtime_store_new(", fixture)
+        self.assertIn("wasmtime_store_delete(", fixture)
+        self.assertIn("wasm_engine_delete(", fixture)
+        self.assertNotIn("wasmtime_module_new(", fixture)
+        self.assertNotIn("wasmtime_module_deserialize(", fixture)
+
+    def test_upstream_preflight_is_noncompiling_and_deny_by_default(self) -> None:
+        preflight = read("verification/wasmtime-c-api/test_preflight.sh")
+        self.assertIn("bash -n \"$builder\"", preflight)
+        for phrase in (
+            "expect_exit 64 bash \"$builder\"",
+            "expect_exit 65 bash \"$builder\"",
+            "CARGO_SENTINEL",
+            "WASMTIME_COMPILER_FREE_PREFLIGHT_PASS",
+            "git -C \"$work/foreign-checkout\" tag v50.0.2",
+        ):
+            self.assertIn(phrase, preflight)
+        self.assertNotIn("cargo build", preflight)
 
     def test_workflows_pin_same_repo_and_exact_sha(self) -> None:
         for workflow in ("wasmtime-strict-aot.yml", "wasmtime-nativeaot-probe.yml"):
@@ -253,6 +289,7 @@ class StrictFullAotSourceContract(unittest.TestCase):
                 self.assertIn("git rev-parse HEAD", source)
                 self.assertIn("11bd71901bbe5b1630ceea73d27597364c9af683", source)
                 self.assertIn("67a3573c9a986a3f9c594539f4ab511d57bb3ce9", source)
+                self.assertIn("bash verification/wasmtime-c-api/test_preflight.sh", source)
 
     def test_strict_workflow_requires_executed_receipts(self) -> None:
         source = read(".github/workflows/wasmtime-strict-aot.yml")

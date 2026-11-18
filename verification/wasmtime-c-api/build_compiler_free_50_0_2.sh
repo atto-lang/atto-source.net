@@ -12,7 +12,7 @@ if [[ $# -ne 2 ]]; then
   echo 'usage: build_compiler_free_50_0_2.sh <trusted-wasmtime-checkout> <empty-output-dir>' >&2
   exit 64
 fi
-for tool in git cargo rustc sha256sum file nm; do
+for tool in git cargo rustc sha256sum file nm cc; do
   command -v "$tool" >/dev/null || { echo "missing tool: $tool" >&2; exit 69; }
 done
 source_dir=$(cd -- "$1" && pwd -P)
@@ -57,10 +57,49 @@ readonly lib="$source_dir/target/release/libwasmtime.so"
 file "$lib" | grep -F 'ELF 64-bit' >/dev/null || {
   echo 'expected Linux native ELF shared library' >&2; exit 70;
 }
-nm -D --defined-only "$lib" | grep -Eq ' (wasmtime_engine_new|wasm_engine_new)$' || {
-  echo 'required engine entrypoint missing from C-API library' >&2; exit 70;
-}
+# The compiler-free data plane must retain enough C ABI functionality to
+# deserialize *previously trusted* native modules, create independent Stores,
+# instantiate guests, and enforce fuel limits. Merely exporting an Engine
+# constructor is not sufficient to make a useful tenant runtime.
+nm -D --defined-only "$lib" | awk '{print $NF}' > "$output_dir/c-api-exports.txt"
+for required_symbol in \
+  wasmtime_module_deserialize \
+  wasmtime_store_new \
+  wasmtime_instance_new \
+  wasmtime_context_set_fuel; do
+  if ! grep -Fxq "$required_symbol" "$output_dir/c-api-exports.txt"; then
+    echo "required compiler-free C ABI symbol missing: $required_symbol" >&2
+    exit 70
+  fi
+done
+if ! grep -Eq '^(wasmtime_engine_new|wasm_engine_new)$' "$output_dir/c-api-exports.txt"; then
+  echo 'required engine entrypoint missing from C-API library' >&2
+  exit 70
+fi
+
+# The compiler-free runtime library must not export the raw-Wasm compiler
+# entrypoint (upstream guards it with WASMTIME_FEATURE_COMPILER).
+if grep -Fxq wasmtime_module_new "$output_dir/c-api-exports.txt"; then
+  echo 'raw-Wasm compiler entrypoint unexpectedly exported' >&2
+  exit 65
+fi
 cp -- "$lib" "$output_dir/libwasmtime.so"
+
+# Run a public C ABI smoke against the *actual* compiler-free native library.
+# It creates two empty Stores without deserializing untrusted native code.
+readonly script_dir=$(cd -- "$(dirname -- "$0")" && pwd -P)
+cc -std=c11 -Wall -Wextra -Werror \
+  -I "$source_dir/crates/c-api/include" \
+  "$script_dir/probe_store_abi.c" \
+  -L "$output_dir" -Wl,-rpath,"$output_dir" -lwasmtime \
+  -o "$output_dir/probe_store_abi"
+"$output_dir/probe_store_abi" > "$output_dir/store-abi-smoke.log"
+grep -Fxq WASMTIME_COMPILER_FREE_C_ABI_STORE_PASS \
+  "$output_dir/store-abi-smoke.log" || {
+    echo 'native C API engine/store lifecycle smoke missing PASS' >&2
+    exit 70
+  }
+
 {
   echo "upstream_repo=bytecodealliance/wasmtime"
   echo "release_tag=$RELEASE_TAG"
@@ -69,6 +108,8 @@ cp -- "$lib" "$output_dir/libwasmtime.so"
   echo 'cargo_flags=--release --no-default-features --features disable-logging --locked'
   echo "rustc=$(rustc --version)"
   echo "cargo=$(cargo --version)"
-  sha256sum "$output_dir/libwasmtime.so" "$output_dir/cargo-feature-tree.txt"
+  sha256sum "$output_dir/libwasmtime.so" \
+    "$output_dir/cargo-feature-tree.txt" "$output_dir/c-api-exports.txt" \
+    "$output_dir/probe_store_abi" "$output_dir/store-abi-smoke.log"
 } > "$output_dir/build-receipt.txt"
 echo 'WASMTIME_50_0_2_COMPILER_FREE_C_API_BUILD_CANDIDATE_PASS'
