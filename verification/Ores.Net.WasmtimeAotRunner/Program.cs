@@ -87,6 +87,14 @@ using (var metadataSigner = RSA.Create(3072))
         signedJson.Replace("\"target_rid\":", "\"target_rid\": \"wrong-arch\", \"unused\":", StringComparison.Ordinal),
         "unapproved target architecture or unknown JSON property");
     DenySignedMetadata(
+        signedJson.Replace("\"wasmtime_version\": \"50.0.1\"",
+            "\"wasmtime_version\": \"unknown-native-engine\"", StringComparison.Ordinal),
+        "signed artifact from unapproved Wasmtime native engine");
+    DenySignedMetadata(
+        signedJson.Replace("\"guest_kind\": \"synthetic-ci-only\"",
+            "\"guest_kind\": \"production-untrusted\"", StringComparison.Ordinal),
+        "synthetic test signer cannot authorize production guest");
+    DenySignedMetadata(
         signedJson.Replace("\"engine_profile\": \"fuel-stack262144-mem64off-reftypesoff-multimemoryoff-threadsoff\"",
             "\"engine_profile\": \"unapproved-engine-features\"", StringComparison.Ordinal),
         "signed but incompatible Wasmtime engine profile");
