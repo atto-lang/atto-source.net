@@ -29,6 +29,30 @@ if (args.Length != 4)
     return 64;
 }
 
+// Negative fixture: oversize or empty files must be rejected before any
+// native artifact reaches Wasmtime. The read implementation must never
+// allocate in proportion to an attacker-controlled file that grew after stat.
+string boundedReadFixture = Path.Combine(
+    Path.GetTempPath(), "oresnet-aot-read-" + Guid.NewGuid().ToString("N"));
+try
+{
+    File.WriteAllBytes(boundedReadFixture, new byte[65]);
+    ExpectRefused(
+        () => _ = TrustedAotArtifact.ReadBoundedFile(boundedReadFixture, 64),
+        "oversized signed-artifact input");
+    File.WriteAllBytes(boundedReadFixture, Array.Empty<byte>());
+    ExpectRefused(
+        () => _ = TrustedAotArtifact.ReadBoundedFile(boundedReadFixture, 64),
+        "empty signed-artifact input");
+    ExpectRefused(
+        () => _ = TrustedAotArtifact.ReadBoundedFile(boundedReadFixture, 0),
+        "invalid artifact read limit");
+}
+finally
+{
+    File.Delete(boundedReadFixture);
+}
+
 byte[] manifest = TrustedAotArtifact.ReadBoundedFile(args[0], 4096);
 byte[] signature = TrustedAotArtifact.ReadBoundedFile(args[1], 1024);
 byte[] artifact = TrustedAotArtifact.ReadBoundedFile(
