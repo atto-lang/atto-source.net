@@ -2,6 +2,14 @@
 
 AttoLang compiler backend targeting .NET CIL and Native AOT on Windows and Linux.
 
+## Canonical AttoLang naming and specification
+
+This is the canonical [atto-source.net](https://github.com/atto-lang/atto-source.net) home. Use `.atto` source, `atto-*` names, and `https://github.com/atto-lang/atto-source.net.git` for Git remotes. Historical naming is not part of current usage documentation.
+
+- **Normative contract:** [atto-spec](https://github.com/atto-lang/atto-spec), including the versioned ownership, borrowing, equality, lifetime, effects and module-constant contracts. New implementation work must use these specs, not old backend examples.
+- **Guest parity:** [atto-platform-conformance](https://github.com/atto-lang/atto-platform-conformance) and [atto-compilers-parity-testing](https://github.com/atto-lang/atto-compilers-parity-testing). Pin the exact source/tree and toolchain; distinguish passed, failed, unsupported and not-executed outcomes.
+- **Shared and target requirements:** [atto-common-source](https://github.com/atto-lang/atto-common-source) and [atto-target-profiles](https://github.com/atto-lang/atto-target-profiles). Parser-only acceptance and host-only tests do not prove guest execution.
+
 ## Scope
 
 This repository is the AttoLang ecosystem home for:
@@ -37,6 +45,6 @@ This README describes the repository's intended responsibilities. Feature suppor
 
 **Security and portability boundary:** Do not equate NativeAOT with zero GC: require ownership/capability checks, bounded actor-local heaps/stacks, deterministic reclamation and executed negative tests.
 
-AttoLang is the public name; preserve existing Oreslang repository, CLI and `.ores` compatibility while specifying new portable source in `.atto`. Do not duplicate normative semantics from [atto-spec](https://github.com/atto-lang/atto-spec).
+AttoLang is the canonical project identity; use `.atto` and `atto-*` names in current documentation. Do not duplicate normative semantics from [atto-spec](https://github.com/atto-lang/atto-spec).
 
 **Evidence gate:** record exact compiler/runtime head and tree, target/toolchain, nonzero executed steps, positive and negative guest results, and explicit passed/failed/unsupported/not-executed states. Host-only CI and `steps=[]` do not establish guest support. README scope is not a feature-completeness claim.
