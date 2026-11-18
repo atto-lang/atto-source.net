@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "scope": "host-provider-only-not-Oreslang-source-parity",
+  "origin_commit": "9b40c7387c2587368272b3a00e882bb5f049b615",
+  "origin_tree": "a535e720e362ffe64df49c2d18d80a2610488a11",
+  "destination_repository": "ores-dummy-org-6/contract-tests",
+  "verified_private": true,
+  "run_url": "https://github.com/ores-dummy-org-6/contract-tests/actions/runs/40761511361",
+  "job_id": 123074375838,
+  "artifact_id": 12846889748,
+  "destination_receipt": {
+    "binary_sha256": "09886ff3c011cfacd95c4a11e8265c8fddd4dd90e36ef237582b99c2fc71de37",
+    "probe_output": "PASS .NET HTTP real sockets: fresh shared/private actors, transfer/claim revocation, arena body, one writer, HEAD, limits, concurrency, faults, deadlines, finalization and zero native leaks",
+    "scope": "host-provider-only-not-Oreslang-source-parity",
+    "rid": "win-x64",
+    "source_commit": "c1c88f7a7035c8911b95c74dbb1ad7c5a8009a41",
+    "source_tree": "a535e720e362ffe64df49c2d18d80a2610488a11"
+  },
+  "binary_format": "PE32+ executable (console) x86-64, for MS Windows",
+  "artifact_binary_hash_verified": true
+}

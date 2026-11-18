@@ -61,6 +61,32 @@ internal static class CfgVerifierTests
 
     public static void Run()
     {
+        // Typed bool opcodes must not accept integer SSA values, forged result
+        // tags or injected operand metadata. Verifier rejection precedes CIL.
+        foreach (CfgOpcode op in new[] {
+            CfgOpcode.EqualBool, CfgOpcode.NotEqualBool, CfgOpcode.XorBool
+        })
+        {
+            foreach (bool wrongTag in new[] { false, true })
+            {
+                var forged = new CfgFunction("forgedBool", IrValueType.I64,
+                    "entry", new[] {
+                        new CfgBlock("entry", Array.Empty<CfgParameter>(),
+                            new[] {
+                                new CfgInstruction(0, CfgOpcode.ConstantI64, IrValueType.I64,
+                                    I64Constant: 1),
+                                new CfgInstruction(1, CfgOpcode.ConstantBool, IrValueType.Bool,
+                                    BoolConstant: true),
+                                new CfgInstruction(2, op,
+                                    wrongTag ? IrValueType.I64 : IrValueType.Bool,
+                                    Left: 0, Right: 1),
+                                new CfgInstruction(3, CfgOpcode.ConstantI64, IrValueType.I64,
+                                    I64Constant: 42)
+                            }, new CfgReturn(3))
+                    });
+                Reject(forged, "untrusted bool opcode accepted i64 operand/result");
+            }
+        }
         // All four collection positions (blocks, parameters, instructions,
         // edge arguments) must be copied by *indexed, admitted counts* only.
         var indexedEntry = new CfgBlock("start",

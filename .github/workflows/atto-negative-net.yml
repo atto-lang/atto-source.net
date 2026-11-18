@@ -1,0 +1,41 @@
+name: .NET canonical Atto semantic source gates (IR/CIL, NOT NativeAOT)
+on:
+  pull_request:
+    paths:
+      - 'verification/Ores.Net.Tests/AttoSemanticNegativeGateTests.cs'
+      - 'verification/Ores.Net.Tests/Program.cs'
+      - 'compiler/Ores.Net.Compiler.Core/**'
+      - '.github/workflows/atto-negative-net.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-compiler-cil:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Bind source tree and prevent fixture substitution
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          git rev-parse 'HEAD^{tree}'
+          git hash-object verification/Ores.Net.Tests/AttoSemanticNegativeGateTests.cs
+      - name: Set up supported .NET SDK
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # pinned
+        with:
+          dotnet-version: '10.0.x'
+      - name: Run actual .NET parser, typed IR, emitted CIL and diagnostic gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet run -c Release --project verification/Ores.Net.Tests
+          echo '.NET SOURCE/IR/CIL checks executed; NO NativeAOT guest credit'

@@ -1,0 +1,4 @@
+// Checked power at exactly the signed64 minimum must succeed.
+define pub fnc main(): int {
+    return Integer.pow(-2, 63) - -9223372036854775808 + 42;
+}

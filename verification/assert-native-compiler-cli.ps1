@@ -10,6 +10,10 @@ $binary = (Resolve-Path -LiteralPath $Compiler).Path
 $source = (Resolve-Path -LiteralPath $ValidSource).Path
 $work = Join-Path ([IO.Path]::GetTempPath()) ("oresnet-cli-" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $work | Out-Null
+# The .atto copy lives outside $work so the empty-directory check below
+# still proves that validation-only checks publish nothing.
+$attoDir = Join-Path ([IO.Path]::GetTempPath()) ("oresnet-cli-atto-" + [Guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $attoDir | Out-Null
 
 function Assert-Exit {
     param([int]$Expected, [string[]]$Arguments, [string]$Case)
@@ -21,12 +25,27 @@ function Assert-Exit {
     }
 }
 
+Push-Location -LiteralPath $work
 try {
     Assert-Exit -Expected 2 -Arguments @() -Case 'no args'
     Assert-Exit -Expected 2 -Arguments @('compile', $source) -Case 'missing --out'
-    Assert-Exit -Expected 2 -Arguments @('check', $source, '--out', 'ignored') -Case 'check extra args'
+    $out = Join-Path $work 'OresGenerated.dll'
+    Assert-Exit -Expected 2 -Arguments @('check', $source, '--out', $out) -Case 'check must not compile'
+    if (Test-Path -LiteralPath $out) {
+        throw 'Validation-only check unexpectedly published a compiled assembly'
+    }
     Assert-Exit -Expected 2 -Arguments @('compile', $source, '--other', 'ignored') -Case 'unknown flag'
     Assert-Exit -Expected 0 -Arguments @('check', $source) -Case 'valid check'
+    # The canonical extension must exercise the same shipping parser and CIL path.
+    $attoSource = Join-Path $attoDir 'valid.atto'
+    Copy-Item -LiteralPath $source -Destination $attoSource
+    Assert-Exit -Expected 0 -Arguments @('check', $attoSource) -Case 'valid AttoLang check'
+
+    # A successful source/typed-IR check must not become an executable result.
+    # Exactly the separate compile command may publish OresGenerated.dll.
+    if ((Get-ChildItem -LiteralPath $work -Force | Measure-Object).Count -ne 0) {
+        throw 'Validation-only check modified the artifact working directory'
+    }
 
     $oversize = Join-Path $work 'oversize.ores'
     [IO.File]::WriteAllBytes($oversize, [byte[]]::new(1048577))
@@ -38,18 +57,32 @@ try {
 
     $invalidSource = Join-Path $work 'invalid.ores'
     [IO.File]::WriteAllText($invalidSource, 'fnc main():int {return 1 @ 3;}')
-    $out = Join-Path $work 'OresGenerated.dll'
     Assert-Exit -Expected 1 -Arguments @('compile', $invalidSource, '--out', $out) -Case 'invalid syntax'
     if (Test-Path -LiteralPath $out) {
         throw 'Invalid source unexpectedly generated CIL'
     }
 
     Assert-Exit -Expected 0 -Arguments @('compile', $source, '--out', $out) -Case 'valid compile'
+    $attoOutDir = Join-Path $work 'atto-output'
+    New-Item -ItemType Directory -Path $attoOutDir | Out-Null
+    $attoOut = Join-Path $attoOutDir 'OresGenerated.dll'
+    Assert-Exit -Expected 0 -Arguments @('compile', $attoSource, '--out', $attoOut) -Case 'valid AttoLang compile'
+    if (-not (Test-Path -LiteralPath $attoOut) -or (Get-Item -LiteralPath $attoOut).Length -le 0) {
+        throw 'Valid .atto source failed to produce a non-empty assembly'
+    }
+
     if (-not (Test-Path -LiteralPath $out)) {
         throw 'Valid source failed to produce assembly'
+    }
+    # Compile output alone is not an executed Native AOT guest. The separate
+    # Windows Native AOT workflow must publish and RUN oreslang-app.exe.
+    if ((Get-Item -LiteralPath $out).Length -le 0) {
+        throw 'Compiled assembly is empty'
     }
     Write-Host 'Native compiler CLI negative and positive tests passed'
 }
 finally {
+    Pop-Location
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $attoDir -Recurse -Force -ErrorAction SilentlyContinue
 }
