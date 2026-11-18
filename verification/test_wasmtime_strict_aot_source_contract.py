@@ -88,6 +88,37 @@ class StrictFullAotSourceContract(unittest.TestCase):
                          ".WithWasmThreads(false)"):
                 self.assertIn(line, source)
 
+    def test_native_artifact_reader_is_stream_bounded(self) -> None:
+        gate = read(f"{RUNNER}/TrustedAotArtifact.cs")
+        runner = read(f"{RUNNER}/Program.cs")
+        # A previous FileInfo + ReadAllBytes implementation allowed an
+        # oversized allocation if the file grew between the two calls.
+        self.assertIn("using var stream = new FileStream(", gate)
+        self.assertIn("FileShare.Read", gate)
+        self.assertIn("int remaining = maxLength - checked((int)output.Length)", gate)
+        self.assertIn("remaining + 1", gate)
+        self.assertIn("stream.Read(buffer.AsSpan(0, toRead))", gate)
+        self.assertIn("output.ToArray()", gate)
+        self.assertNotIn("File.ReadAllBytes(", gate)
+        for scenario in (
+            "bounded file reader changed valid bytes",
+            "oversized file before native artifact deserialization",
+            "empty file before native artifact deserialization",
+            "malformed PEM public key before native-code admission",
+            "signed schema_version with invalid JSON type",
+            "signed artifact_size with invalid JSON type",
+        ):
+            self.assertIn(scenario, runner)
+
+    def test_signed_json_parser_is_strict_and_bounded(self) -> None:
+        gate = read(f"{RUNNER}/TrustedAotArtifact.cs")
+        self.assertIn("JsonDocumentOptions", gate)
+        self.assertIn("MaxDepth = 8", gate)
+        self.assertIn("AllowTrailingCommas = false", gate)
+        self.assertIn("JsonCommentHandling.Disallow", gate)
+        self.assertIn("Malformed signed AOT policy metadata", gate)
+        self.assertIn("Invalid trusted AOT signer key", gate)
+
     def test_aot_signature_verified_before_native_code_load(self) -> None:
         runner = read(f"{RUNNER}/Program.cs")
         gate = read(f"{RUNNER}/TrustedAotArtifact.cs")
