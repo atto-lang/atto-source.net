@@ -162,6 +162,28 @@ class StrictFullAotSourceContract(unittest.TestCase):
             self.assertIn(f'("{name}")', runner)
         self.assertIn("neighbor linear memory remains independent", runner)
 
+    def test_source_local_exact_sha_runner_is_manual_and_fail_closed(self) -> None:
+        script = read("verification/wasmtime-c-api/run_source_local_strict_aot.sh")
+        for marker in (
+            "expected_head=$1",
+            "git rev-parse HEAD",
+            "git rev-parse 'HEAD^{tree}'",
+            "git status --porcelain --untracked-files=all",
+            "SOURCE_LOCAL_EXACT_HEAD=",
+            "SOURCE_LOCAL_EXACT_TREE=",
+            "python3 verification/test_wasmtime_strict_aot_source_contract.py",
+            "bash verification/wasmtime-c-api/test_preflight.sh",
+            "NET_WASMTIME_TRUSTED_AOT_BUILDER_PASS",
+            "NET_WASMTIME_STRICT_AOT_RUNTIME_PASS",
+            "NET_WASMTIME_STRICT_AOT_E2E_PASS",
+            "env -u ORES_WASMTIME_SYNTHETIC_CI_ONLY",
+        ):
+            self.assertIn(marker, script)
+        for forbidden in ("GITHUB_TOKEN", "actions/checkout", "curl ",
+                          "git clone", "ssh-agent", "workflow_dispatch"):
+            self.assertNotIn(forbidden, script)
+
+
     def test_adversarial_negative_cases_stay_wired(self) -> None:
         runner = read(f"{RUNNER}/Program.cs")
         for case in ("swappedArtifact", "changedManifest", "badSignature",
