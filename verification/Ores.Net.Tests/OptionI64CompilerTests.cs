@@ -96,33 +96,31 @@ internal static class OptionI64CompilerTests
 
     private static void CheckTrapOverflowBypassesOption()
     {
-        // trap is not catch-all. A checked i64 overflow is terminal and must
-        // not become a successful Option<int> or an ordinary None.
-        const string source =
-            "fnc main():int{val Option<int> x=trap (9223372036854775807+1);return x.unwrap_or(0);}";
-        var module = OresStructuredCfgLowering.LowerModule(source);
-        bool referenceFailed = false;
-        try { _ = CfgReferenceEvaluator.Evaluate(module.Main); }
-        catch (OverflowException) { referenceFailed = true; }
-        if (!referenceFailed)
-            throw new Exception("trap swallowed checked overflow in verified CFG");
-        var temp = Path.Combine(Path.GetTempPath(), "atto-trap-cil-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(temp);
-        try
+        // trap yields Result<int, Error> (spec ch. 7). This backend has no
+        // verified Result/Error lowering, so every trap spelling fails closed
+        // with E_TRAP_RESULT_UNSUPPORTED. It never falls back to the retired
+        // Option<int> slice, which would also swallow nothing but give the
+        // program a type the Java and LLVM backends reject.
+        foreach (var (label, source) in new (string, string)[]
         {
-            string output = Path.Combine(temp, "OresGenerated.dll");
-            CilEmitter.EmitLibrary(module, output);
-            using var assembly = AssemblyDefinition.ReadAssembly(output);
-            var method = assembly.MainModule.Types.Single(type =>
-                type.FullName == "Oreslang.Generated.OresProgram")
-                .Methods.Single(candidate => candidate.Name == "Run");
-            bool cilFailed = false;
-            try { _ = CfgCilTestInterpreter.Evaluate(method); }
-            catch (OverflowException) { cilFailed = true; }
-            if (!cilFailed)
-                throw new Exception("trap swallowed checked overflow in emitted CIL");
+            ("checked overflow", "fnc main():int{val Result<int, Error> x=trap (9223372036854775807+1);return x.unwrap_or(0);}"),
+            ("Result int literal", "pub fnc main():int{val Result<int, Error> wrapped=trap 42;return wrapped.unwrap_or(0);}"),
+            ("Result parenthesized", "fnc main():int{val Result<int, Error> wrapped=trap (40+2);return wrapped.unwrap();}"),
+            ("retired Option literal", "pub fnc main():int{val Option<int> wrapped=trap 42;return wrapped.unwrap_or(0);}"),
+            ("retired Option overflow", "fnc main():int{val Option<int> x=trap (9223372036854775807+1);return x.unwrap_or(0);}"),
+            ("retired is_some probe", "fnc main():int{if (trap 0).is_some(){return 42;}return 0;}"),
+            ("typed helper", "fnc add_one(int x):int{return x+1;}fnc main():int{val Result<int, Error> wrapped=trap add_one(41);return wrapped.unwrap_or(0);}"),
+        })
+        {
+            try { _ = OresStructuredCfgLowering.LowerModule(source); }
+            catch (FormatException e) when (
+                e.Message.Contains("E_TRAP_RESULT_UNSUPPORTED", StringComparison.Ordinal)
+                || e.Message.Contains("Option/Result/trap", StringComparison.Ordinal))
+            {
+                continue;
+            }
+            throw new Exception("trap reached CFG without Result<int, Error> lowering: " + label);
         }
-        finally { Directory.Delete(temp, recursive: true); }
     }
 
     private static void Reject(string source, string label)
@@ -234,14 +232,6 @@ internal static class OptionI64CompilerTests
         const string some = "pub fnc main():int{val Option<int> value=Some(42);return value.unwrap_or(0);}";
         const string none = "pub fnc main():int{val Option<int> value=None;return value.unwrap_or(42);}";
         Check(some, 42, "Some(42) tagged payload");
-        Check("pub fnc main():int{val Option<int> wrapped=trap 42;return wrapped.unwrap_or(0);}",
-            42, "trap int literal emits actual tagged Some");
-        Check("fnc main():int{val Option<int> wrapped=trap (40+2);return wrapped.unwrap_or(0);}",
-            42, "trap parenthesized expression retains all operands");
-        Check("fnc main():int{if (trap 0).is_some(){return 42;}return 0;}",
-            42, "trap Some(0) uses the tag, not nonzero payload");
-        CheckModuleHelper("fnc add_one(int x):int{return x+1;}fnc main():int{val Option<int> wrapped=trap add_one(41);return wrapped.unwrap_or(0);}",
-            42, "trap typed helper exactly once through native CIL");
 
         Check(none, 42, "None fallback");
         // Canonical AttoLang type sugar uses exactly the same verified

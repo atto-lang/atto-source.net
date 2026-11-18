@@ -2180,27 +2180,14 @@ public static partial class OresStructuredParser
         private StructuredExpr Unary(int depth)
         {
             Budget(depth);
-            // First executable caller-side trap slice: the structured compiler
-            // admits only synchronous int expressions. Every admitted operation
-            // is defined to complete normally or raise a terminal checked
-            // arithmetic failure, which must NOT be swallowed into None.
-            // The operand is evaluated exactly once by the existing Some(int)
-            // tagged SSA/CIL lowering; never erase the Option boundary.
+            // trap yields Result<T, Error> (spec ch. 7, S-04), and over a Result
+            // it does not wrap again. This backend has no verified Result/Error
+            // CIL lowering, so trap fails closed. It must never fall back to the
+            // retired Option<int> slice, which would give a program a different
+            // type here than on the Java and LLVM backends.
             if (Current.Text == "trap")
-            {
-                int at = Current.Offset;
-                index++;
-                var operand = Unary(depth + 1);
-                if (operand.Type != IrValueType.I64)
-                    throw new FormatException(
-                        $"E_TRAP_PROFILE_UNSUPPORTED: Option/Result/trap requires verified tagged-sum CIL and NativeAOT guest-control lowering for non-int operands at offset {at}");
-                int height = Height(operand) + 1;
-                if (height > MaxDepth)
-                    throw new FormatException($"Structured trap AST depth exceeds limit at offset {at}");
-                var wrapped = new StructuredSome(at, operand);
-                expressionHeights.Add(wrapped, height);
-                return OptionPostfix(wrapped, depth);
-            }
+                throw new FormatException(
+                    $"E_TRAP_RESULT_UNSUPPORTED: Option/Result/trap requires verified tagged-sum CIL and NativeAOT guest-control lowering; trap yields Result<int, Error> and .NET has no Result/Error lowering yet at offset {Current.Offset}");
             if (Current.Text.Length > 0 && Current.Text[0] is '\'' or '"' or '\u0060')
                 throw new FormatException(
                     $"STRING_BACKEND_UNSUPPORTED: quoted strings and template interpolation require typed String CFG/CIL/NativeAOT lowering at offset {Current.Offset}");

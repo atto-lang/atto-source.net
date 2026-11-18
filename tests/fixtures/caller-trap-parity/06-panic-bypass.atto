@@ -1,6 +1,6 @@
-// ATTO-TRAP-V1-06: panic; unwrap(None) never becomes trapped None.
+// ATTO-TRAP-V1-06: panic; unwrap(None) never becomes a trapped Err.
 pub fnc main(): int {
   val Option<int> missing = None;
-  val Option<int> ignored = trap missing.unwrap();
+  val Result<int, Error> ignored = trap missing.unwrap();
   return 0;
 }

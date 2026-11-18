@@ -1,8 +1,8 @@
-// ATTO-TRAP-V1-02: exit 42, Option<Result<int,String>> stays nested.
+// ATTO-TRAP-V1-02: exit 42, a Result is not wrapped again: Result<int, String | Error>.
 fnc checked_id(int id): Result<int,String> {
   return Ok(id);
 }
 pub fnc main(): int {
-  val Option<Result<int,String>> outer = trap checked_id(42);
-  return outer.unwrap().unwrap();
+  val Result<int, String | Error> outer = trap checked_id(42);
+  return outer.unwrap();
 }

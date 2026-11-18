@@ -4,6 +4,6 @@ fnc checked(): int {
   return 42;
 }
 pub fnc main(): int {
-  val Option<int> value = trap checked();
+  val Result<int, Error> value = trap checked();
   return value.unwrap();
 }

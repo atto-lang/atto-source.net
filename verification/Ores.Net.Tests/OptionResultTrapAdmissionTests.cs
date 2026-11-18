@@ -19,15 +19,15 @@ internal static class OptionResultTrapAdmissionTests
         ];
         string[] blobs =
         [
-            "d0ec8a9bc9e73e016cf1c31e2cb35cb84ac281c7",
-            "8dd86350bdfa4dc90e47b7dd5f44bd82b0266157",
-            "0f431f23d40d46cacd07d81714780e0061b6413e",
-            "038d5bfe66996efff91400a8d699dac3e6f43f54",
-            "57a646240880dfc4b633c2f9eeb5b9278dd0022f",
-            "7b674493d50e688666b1fa37f59b990a27f109e4",
-            "6547de51bc2be9b52eca35359a00b692ed434cfb",
-            "057544faa452e4942143503499c4a7b76072ff17",
-            "c5a427450943ac32824e42c1261401777080724e"
+            "a83015bcbc66ed075440fc15972f6933189c2eee",
+            "f2c4eb66f37ad239cc06b05f4be9aa8cac4712f5",
+            "3930a526cc7f1c94005354f1f4d94327d7106069",
+            "cb60075bf1ae15e86ff8013878f5da669269e610",
+            "1f3e6b694b3147a63a2528052cf5ed7c0b7a1a59",
+            "1e1247eb310efea99a6a28aa8fd7013e76e98e7e",
+            "af0d97a1df81ad879529983b21ea2fb5da52824e",
+            "740eb4a196f450ba834918b9fb1c41338177e46f",
+            "fcc43cbc495b90b642c4881ae79f5d4a75a58258"
         ];
         for (int i = 0; i < names.Length; i++)
         {
