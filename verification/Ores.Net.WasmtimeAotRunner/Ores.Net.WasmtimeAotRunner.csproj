@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Separate released-host SHAPE: no WAT/Wasm compilation APIs in this binary.
+       Only in-memory deserialization of a verified, precompiled artifact. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>oresnet-wasmtime-aot-runner</AssemblyName>
+    <PublishAot>true</PublishAot>
+    <SelfContained>true</SelfContained>
+    <PublishTrimmed>true</PublishTrimmed>
+    <IsAotCompatible>true</IsAotCompatible>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Wasmtime" Version="50.0.1" />
+  </ItemGroup>
+  <Import Project="../../build/StrictNativeAot.targets" />
+</Project>
