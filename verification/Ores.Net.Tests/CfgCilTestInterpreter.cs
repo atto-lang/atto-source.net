@@ -8,7 +8,27 @@ internal static class CfgCilTestInterpreter
     public static long Evaluate(MethodDefinition method, int maxSteps = 100_000)
     {
         if (maxSteps <= 0) throw new ArgumentOutOfRangeException(nameof(maxSteps));
-        if (!method.HasBody) throw new FormatException("Missing CFG CIL body");
+        return Execute(method, Array.Empty<long>(), ref maxSteps, 0);
+    }
+
+    // Run a real compiler-emitted helper MethodDef with explicit guest i64
+    // arguments. This is a TEST-ONLY CIL interpreter, never the NativeAOT
+    // compiler/runtime and never an implicit host implementation of .atto.
+    public static long Evaluate(MethodDefinition method, long[] arguments, int maxSteps = 100_000)
+    {
+        ArgumentNullException.ThrowIfNull(method);
+        ArgumentNullException.ThrowIfNull(arguments);
+        if (arguments.Length > 16 || maxSteps <= 0)
+            throw new ArgumentOutOfRangeException(nameof(arguments));
+        return Execute(method, (long[])arguments.Clone(), ref maxSteps, 0);
+    }
+
+    private static long Execute(MethodDefinition method, long[] arguments,
+        ref int remainingSteps, int depth)
+    {
+        if (!method.HasBody || !method.IsStatic ||
+            method.Parameters.Count != arguments.Length || depth > 65)
+            throw new FormatException("Invalid or recursive CFG CIL method call");
 
         var instructions = method.Body.Instructions;
         var indexes = new Dictionary<Instruction, int>();
@@ -18,7 +38,7 @@ internal static class CfgCilTestInterpreter
         var locals = new long[method.Body.Variables.Count];
         var stack = new Stack<long>();
         int pc = 0;
-        for (int step = 0; step < maxSteps; step++)
+        while (remainingSteps-- > 0)
         {
             if (pc < 0 || pc >= instructions.Count)
                 throw new FormatException("CFG CIL branch escaped method");
@@ -39,6 +59,14 @@ internal static class CfgCilTestInterpreter
                 case Code.Ldc_I4_6: stack.Push(6); break;
                 case Code.Ldc_I4_7: stack.Push(7); break;
                 case Code.Ldc_I4_8: stack.Push(8); break;
+                case Code.Ldarg_0: stack.Push(arguments[0]); break;
+                case Code.Ldarg_1: stack.Push(arguments[1]); break;
+                case Code.Ldarg_2: stack.Push(arguments[2]); break;
+                case Code.Ldarg_3: stack.Push(arguments[3]); break;
+                case Code.Ldarg:
+                case Code.Ldarg_S:
+                    stack.Push(arguments[((ParameterDefinition)ins.Operand).Index]);
+                    break;
                 case Code.Ldloc_0: stack.Push(locals[0]); break;
                 case Code.Ldloc_1: stack.Push(locals[1]); break;
                 case Code.Ldloc_2: stack.Push(locals[2]); break;
@@ -60,6 +88,9 @@ internal static class CfgCilTestInterpreter
                 case Code.Mul_Ovf:
                 case Code.Div:
                 case Code.Ceq:
+                case Code.Clt:
+                case Code.Xor:
+                case Code.Cgt:
                 {
                     long right = stack.Pop();
                     long left = stack.Pop();
@@ -70,6 +101,9 @@ internal static class CfgCilTestInterpreter
                         Code.Mul_Ovf => checked(left * right),
                         Code.Div => DivideChecked(left, right),
                         Code.Ceq => left == right ? 1L : 0L,
+                        Code.Clt => left < right ? 1L : 0L,
+                        Code.Xor => left ^ right,
+                        Code.Cgt => left > right ? 1L : 0L,
                         _ => throw new FormatException("Unexpected CFG CIL opcode")
                     });
                     break;
@@ -91,6 +125,27 @@ internal static class CfgCilTestInterpreter
                     bool take = ins.OpCode.Code is Code.Brtrue or Code.Brtrue_S
                         ? nonzero : !nonzero;
                     if (take) pc = indexes[(Instruction)ins.Operand];
+                    break;
+                }
+                case Code.Call:
+                {
+                    // The emitted ABI promises an exact, in-module MethodDef
+                    // token. Resolving by name/arity would let the test lane
+                    // execute a different target from the actual CIL token.
+                    // A MemberRef, external method, virtual target, or call to
+                    // Run is not an admitted static helper invocation.
+                    if (ins.Operand is not MethodDefinition callee ||
+                        !ReferenceEquals(callee.Module, method.Module) ||
+                        !ReferenceEquals(callee.DeclaringType, method.DeclaringType) ||
+                        !callee.IsStatic || !callee.IsPrivate ||
+                        !callee.Name.StartsWith("helper_", StringComparison.Ordinal) ||
+                        !callee.HasBody || callee.Parameters.Count > 16 ||
+                        stack.Count != callee.Parameters.Count)
+                        throw new FormatException("Invalid CFG CIL MethodDef call target");
+                    var callArguments = new long[callee.Parameters.Count];
+                    for (int arg = callArguments.Length - 1; arg >= 0; arg--)
+                        callArguments[arg] = stack.Pop();
+                    stack.Push(Execute(callee, callArguments, ref remainingSteps, depth + 1));
                     break;
                 }
                 case Code.Ret:

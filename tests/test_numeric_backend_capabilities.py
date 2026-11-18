@@ -11,7 +11,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "contracts/v1/numeric-parity/backend.json"
 GOLDEN = ROOT / "contracts/v1/numeric-precision/cases.json"
-SHA = "cb28b5678d380f02c5e4e43bd763da04bdb996fe"
+SHA = "80436f21a95816e2d5e40274daba9b923b3bcec9"
 FEATURES = frozenset((
     "source_i64", "checked_i64_overflow", "binary64_ordering",
     "binary32_arithmetic", "bigint_exact", "decimal_exact",
