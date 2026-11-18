@@ -33,6 +33,14 @@ tag_sha=$(git -C "$source_dir" rev-parse --verify "refs/tags/${RELEASE_TAG}^{com
   echo 'upstream checkout has unreviewed modifications/untracked files' >&2; exit 65;
 }
 
+# Use a fresh, dedicated Cargo target tree inside the checked-empty output
+# directory. Without this, source_dir/target can hold older versions or
+# compiler-enabled libwasmtime binaries that make provenance ambiguous.
+# Never honor an inherited CARGO_TARGET_DIR pointing outside this receipt.
+readonly trusted_target_dir="$output_dir/cargo-target"
+export CARGO_TARGET_DIR="$trusted_target_dir"
+export CARGO_INCREMENTAL=0
+
 # C API minimal embedding documented upstream. No Cranelift/Winch compiler.
 # This is NOT proof that the existing .NET NuGet 50.0.1 binding can link
 # against this library. Native ABI and .cwasm serialization compatibility
@@ -52,7 +60,7 @@ fi
   cargo build -p wasmtime-c-api --release --no-default-features \
     --features disable-logging --locked
 )
-readonly lib="$source_dir/target/release/libwasmtime.so"
+readonly lib="$trusted_target_dir/release/libwasmtime.so"
 [[ -s "$lib" ]] || { echo 'missing compiler-free C-API shared library' >&2; exit 70; }
 file "$lib" | grep -F 'ELF 64-bit' >/dev/null || {
   echo 'expected Linux native ELF shared library' >&2; exit 70;
@@ -105,6 +113,7 @@ grep -Fxq WASMTIME_COMPILER_FREE_C_ABI_STORE_PASS \
   echo "release_tag=$RELEASE_TAG"
   echo "git_commit=$head_sha"
   echo "git_tree=$(git -C "$source_dir" rev-parse HEAD^{tree})"
+  echo "cargo_target_dir=$trusted_target_dir"
   echo 'cargo_flags=--release --no-default-features --features disable-logging --locked'
   echo "rustc=$(rustc --version)"
   echo "cargo=$(cargo --version)"
