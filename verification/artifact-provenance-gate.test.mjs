@@ -118,6 +118,26 @@ test('impossible UTC calendar dates must never be normalized', () => {
   }
 });
 
+test('missing run object is denied without throwing', () => {
+  const result=inspect(null, response, expected);
+  assert.equal(result.classification,'REJECTED');
+  assert.match(result.errors.join(' '),/run record missing/);
+});
+
+test('missing artifact-list object is denied without throwing', () => {
+  const result=inspect(run, null, expected);
+  assert.equal(result.classification,'REJECTED');
+  assert.match(result.errors.join(' '),/artifact response or list missing/);
+});
+
+test('malformed individual artifact record is denied without throwing', () => {
+  const a=clone(response);
+  a.artifacts[0]=null;
+  const result=inspect(run,a,expected);
+  assert.equal(result.classification,'REJECTED');
+  assert.match(result.errors.join(' '),/malformed artifact record/);
+});
+
 test('does not mutate caller-owned records', () => {
   const r=clone(run), a=clone(response), e=clone(expected);
   inspect(r,a,e);
