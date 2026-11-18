@@ -57,9 +57,39 @@ readonly lib="$source_dir/target/release/libwasmtime.so"
 file "$lib" | grep -F 'ELF 64-bit' >/dev/null || {
   echo 'expected Linux native ELF shared library' >&2; exit 70;
 }
-nm -D --defined-only "$lib" | grep -Eq ' (wasmtime_engine_new|wasm_engine_new)$' || {
-  echo 'required engine entrypoint missing from C-API library' >&2; exit 70;
-}
+# The compiler-free data plane must retain enough C ABI functionality to
+# deserialize *previously trusted* native modules, create independent Stores,
+# instantiate guests, and enforce fuel limits. Merely exporting an Engine
+# constructor is not sufficient to make a useful tenant runtime.
+nm -D --defined-only "$lib" | awk '{print $NF}' > "$output_dir/c-api-exports.txt"
+for required_symbol in \
+  wasmtime_module_deserialize \
+  wasmtime_store_new \
+  wasmtime_instance_new \
+  wasmtime_context_set_fuel; do
+  if ! grep -Fxq "$required_symbol" "$output_dir/c-api-exports.txt"; then
+    echo "required compiler-free C ABI symbol missing: $required_symbol" >&2
+    exit 70
+  fi
+done
+if ! grep -Eq '^(wasmtime_engine_new|wasm_engine_new)
+{
+  echo "upstream_repo=bytecodealliance/wasmtime"
+  echo "release_tag=$RELEASE_TAG"
+  echo "git_commit=$head_sha"
+  echo "git_tree=$(git -C "$source_dir" rev-parse HEAD^{tree})"
+  echo 'cargo_flags=--release --no-default-features --features disable-logging --locked'
+  echo "rustc=$(rustc --version)"
+  echo "cargo=$(cargo --version)"
+  sha256sum "$output_dir/libwasmtime.so" \
+    "$output_dir/cargo-feature-tree.txt" "$output_dir/c-api-exports.txt"
+} > "$output_dir/build-receipt.txt"
+echo 'WASMTIME_50_0_2_COMPILER_FREE_C_API_BUILD_CANDIDATE_PASS'
+ \
+  "$output_dir/c-api-exports.txt"; then
+  echo 'required engine entrypoint missing from C-API library' >&2
+  exit 70
+fi
 cp -- "$lib" "$output_dir/libwasmtime.so"
 {
   echo "upstream_repo=bytecodealliance/wasmtime"
