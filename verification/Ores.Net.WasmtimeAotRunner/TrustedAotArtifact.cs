@@ -27,16 +27,35 @@ internal static class TrustedAotArtifact
 
     internal static byte[] ReadBoundedFile(string path, int maxLength)
     {
-        // Check before reading, and again after: a concurrent writer can
-        // mutate a file between stat and read. Deserialization must use the
-        // authenticated in-memory bytes, never reopen a path after checking.
-        var fileInfo = new FileInfo(path);
-        if (!fileInfo.Exists || fileInfo.Length <= 0 ||
-            fileInfo.Length > maxLength)
+        // The input may be concurrently replaced, truncated, or extended.
+        // Open it ONCE and never allocate based on a separate FileInfo stat:
+        // File.ReadAllBytes after a length check can allocate arbitrarily
+        // large memory when an adversary expands the path between the calls.
+        // FileShare.Read is additional protection on Windows, but must not
+        // be relied on as an exclusive writer lock on Unix.
+        if (maxLength <= 0)
+            throw new SecurityException("Invalid AOT artifact read limit");
+        using var input = new FileStream(
+            path, FileMode.Open, FileAccess.Read, FileShare.Read,
+            bufferSize: 4096, options: FileOptions.SequentialScan);
+        long length = input.Length;
+        if (length <= 0 || length > maxLength)
             throw new SecurityException("AOT artifact file exceeds its admission limit");
-        var bytes = File.ReadAllBytes(path);
-        if (bytes.Length == 0 || bytes.Length > maxLength)
-            throw new SecurityException("AOT artifact changed during admission");
+
+        // Allocation is bounded by maxLength. A short read or an appended
+        // byte is rejected; exactly these in-memory bytes are authenticated
+        // and passed to Module.Deserialize (never reopen the original path).
+        byte[] bytes = new byte[checked((int)length)];
+        try
+        {
+            input.ReadExactly(bytes);
+        }
+        catch (EndOfStreamException e)
+        {
+            throw new SecurityException("AOT artifact truncated during admission", e);
+        }
+        if (input.ReadByte() != -1)
+            throw new SecurityException("AOT artifact grew during admission");
         return bytes;
     }
 
