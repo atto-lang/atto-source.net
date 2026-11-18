@@ -69,6 +69,53 @@ runs the builder first and the native runner second, and requires explicit
 PASS markers from both. A workflow that fails with zero executed steps
 is **NOT_EXECUTED**, not a test result. This task has no local .NET SDK.
 
+## Security re-audit: bounded artifact admission and vulnerable engine hold
+
+**2026-11-18 — production NativeAOT Wasmtime execution remains DENIED.**
+The experimental .NET packages are pinned to `Wasmtime 50.0.1`. Wasmtime
+published [GHSA-43j2-gcp4-m22g](https://github.com/bytecodealliance/wasmtime/security/advisories/GHSA-43j2-gcp4-m22g)
+on November 16: a host-process abort bug affecting engine versions
+50.0.0–50.0.1, patched in 50.0.2. The official .NET NuGet listing checked
+today still identifies 50.0.1 as the latest available managed binding.
+The upstream *engine* fix is not evidence that a compatible patched .NET
+binding/native library is available. Never silently substitute version
+50.0.2 in PackageReference until availability and the packaged native
+libwasmtime build are independently verified.
+
+The two experimental builder/runner programs now **require**
+`ORES_WASMTIME_SYNTHETIC_CI_ONLY=1` before doing work. The strict-AOT
+workflow executes both binaries **without** this opt-in and demands denial
+(exit 78), then explicitly opts in for trusted synthetic test execution.
+This flag is a guard against accidental use, *not* a production credential,
+signature, sandbox boundary or approval to run arbitrary tenants.
+Even a successful synthetic CI run must not enable shipping guest admission.
+
+The runner's `TrustedAotArtifact.ReadBoundedFile` now keeps one open
+file handle, checks the size, and reads at most its configured byte limit
+plus one; it never performs an unbounded `File.ReadAllBytes` allocation
+after a separate file-length check. It then verifies the exact in-memory
+artifact bytes before calling `Module.Deserialize`. Malformed public keys,
+JSON and incorrectly typed signed manifest values fail as security
+denials. Regression probes exercise the length limit, empty files,
+invalid PEM, and signed invalid JSON value types.
+
+The .NET `Config.WithReferenceTypes(false)` policy and zero-import
+constraint reduce the attack surface; they **do not independently
+certify that all engine GC features are disabled** or that a vulnerable
+engine is safe for production. The release requirement is a verified
+patched native engine with a matching compiler-free runtime, strict
+imports/feature policy, and genuine Native AOT execution receipts.
+
+The repository's
+[`contracts/private-ci-security.v1.json`](../contracts/private-ci-security.v1.json)
+denies private-source cross-organization mirroring without specific
+protected-source approval, independent security/code-owner review, and
+exact source/destination Git blob/tree attestation. Available Actions
+minutes, a user request, an alternate private repo, or agent credentials
+do not themselves satisfy those gates. No private source is to be
+exported until they are satisfied. Existing source-org Wasmtime Actions
+have failed with zero executed job steps; they are not a runtime test.
+
 ## Explicit production security blocks
 
 **1. Trust anchor:** The synthetic builder emits its own ephemeral test
