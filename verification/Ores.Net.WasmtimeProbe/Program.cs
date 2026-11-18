@@ -60,7 +60,7 @@ const string scalarGuest = """
     i32.const 65536
     i32.load)
   (func (export "spin_forever")
-    (loop br 0))
+    (loop (br 0)))
 )
 """;
 using var module = Module.FromText(engine, "probe-scalar", scalarGuest);
