@@ -164,7 +164,7 @@ public static partial class OresStructuredParser
 
     internal static IReadOnlyList<SourceImport> ReadLinkedImports(string source)
     {
-        var reader = new Reader(LexLinked(source));
+        var reader = new Reader(LexLinked(source), source);
         return reader.ReadImports();
     }
 
@@ -525,7 +525,7 @@ public static partial class OresStructuredParser
                     $"Tuple-v2 explicit spread requires single-evaluation checked lowering at offset {tokens[i].Offset}");
         }
         RejectUnsupportedMacros(tokens);
-        var reader = new Reader(tokens, linking);
+        var reader = new Reader(tokens, source, linking);
         return linking is null
             ? new StructuredLinkedUnit(reader.ReadProgram(), null, new Dictionary<string, StructuredFunction>())
             : reader.ReadLinkedUnit();
@@ -960,6 +960,7 @@ public static partial class OresStructuredParser
             // Only `name!(` is lexed (for the fail-closed macro gate); a lone or
             // spaced `!` keeps main's invalid-character diagnostic.
             else if (ch == '!' && index + 1 < source.Length && source[index + 1] == '(') index++;
+            else if (ch == '•') index++;
             else if ("()+-*{}:;=<>.,?~".IndexOf(ch) >= 0 ||
                 (moduleMode && "[]/>!|&".IndexOf(ch) >= 0)) index++;
             else throw new FormatException($"Invalid character at offset {offset}");
@@ -983,7 +984,7 @@ public static partial class OresStructuredParser
         }
     }
 
-    private sealed class Reader(List<Token> tokens, LinkedModuleContext? linking = null)
+    private sealed class Reader(List<Token> tokens, string source, LinkedModuleContext? linking = null)
     {
         private sealed record LocalBinding(IrValueType Type, StructuredBindingKind Kind,
             long? ConstantValue);
@@ -1061,6 +1062,20 @@ public static partial class OresStructuredParser
         {
             if (!Take(value)) throw Error($"Expected '{value}'");
         }
+        private bool TakeReturnFirstMarker()
+        {
+            if (Take("•")) return true;
+            if (Current.Text == "<" && index + 1 < tokens.Count &&
+                tokens[index + 1].Text == "-" &&
+                Current.Offset + 1 == tokens[index + 1].Offset)
+            {
+                index += 2;
+                return true;
+            }
+            return false;
+        }
+        private bool ContainsLineBreak(int from, int to) =>
+            source[from..to].Any(ch => ch is '\n' or '\r' or '\u0085' or '\u2028' or '\u2029');
         private FormatException Error(string reason) =>
             new($"{reason} at offset {Current.Offset}");
         private void Budget(int depth)
@@ -1169,7 +1184,17 @@ public static partial class OresStructuredParser
                         $"Option/Result/trap requires verified tagged-sum CIL and NativeAOT guest-control lowering at offset {Current.Offset}: trap function modifier is unsupported");
                 if (Current.Text is "class" or "actor")
                     throw Error("Nominal class/actor methods require receiver-erased method slots, type/borrow checking and Native AOT CIL lowering; unsupported in .NET structured frontend");
-                if (!Take("fnc")) Expect("routine");
+                bool explicitFnc = Take("fnc") || Take("routine");
+                bool returnFirst = Current.Text is "int" or "bool" or "void" or "Option" or "Array";
+                IrValueType prefixReturnType = IrValueType.Void;
+                if (returnFirst)
+                {
+                    prefixReturnType = Take("void") ? IrValueType.Void : Type();
+                    if (!TakeReturnFirstMarker())
+                        throw Error("Return-first callable requires adjacent '<-' or '•'");
+                }
+                else if (!explicitFnc)
+                    throw Error("Expected fnc/routine or return-first callable");
                 int at = Current.Offset;
                 string name = Name();
                 // This NativeAOT slice does not lower once-only initialization
@@ -1219,11 +1244,13 @@ public static partial class OresStructuredParser
                     while (Take(","));
                 }
                 Expect(")");
-                bool arrowReturn = Take("->");
-                if (!arrowReturn) Expect(":");
-                if (Current.Text == "(")
+                int headerEnd = tokens[index - 1].Offset + tokens[index - 1].Text.Length;
+                bool arrowReturn = !returnFirst && Take("->");
+                if (!returnFirst && !arrowReturn) Expect(":");
+                if (!returnFirst && Current.Text == "(")
                     throw Error("Tuple-v2 shorthand return requires typed tuple ownership/ABI lowering");
-                IrValueType resultType = Take("void") ? IrValueType.Void : Type();
+                IrValueType resultType = returnFirst
+                    ? prefixReturnType : Take("void") ? IrValueType.Void : Type();
                 if (resultType == IrValueType.OptionI64)
                     throw Error("E_OPTION_ABI_UNSUPPORTED: Option<int> method results need verified two-word ABI");
                 if (resultType == IrValueType.FixedArrayI64)
@@ -1235,7 +1262,7 @@ public static partial class OresStructuredParser
                     if (parameters.Count != 0 || resultType != IrValueType.I64)
                         throw new FormatException($"main must have signature ():int at offset {at}");
                     var (body, returns) = arrowReturn && Current.Text == "::"
-                        ? CommaBody(0) : Block(0);
+                        ? CommaBody(0) : Block(0, returnFirst, headerEnd);
                     if (!returns) throw Error("RETURN_EXPLICIT_REQUIRED: not every main path returns int");
                     return Finish("main", body);
                 }
@@ -1248,7 +1275,7 @@ public static partial class OresStructuredParser
                 activeReturnType = resultType;
                 scopes.Add(parameterTypes);
                 var (helperBody, helperReturns) = arrowReturn && Current.Text == "::"
-                    ? CommaBody(0) : Block(0);
+                    ? CommaBody(0) : Block(0, returnFirst, headerEnd);
                 scopes.RemoveAt(scopes.Count - 1);
                 if (!helperReturns && resultType != IrValueType.Void)
                     throw Error("RETURN_EXPLICIT_REQUIRED: not every non-void helper path returns");
@@ -1355,16 +1382,28 @@ public static partial class OresStructuredParser
             return (Array.AsReadOnly(body.ToArray()), true);
         }
 
-        private (IReadOnlyList<StructuredStmt> Body, bool Returns) Block(int depth)
+        private (IReadOnlyList<StructuredStmt> Body, bool Returns) Block(
+            int depth, bool returnFirst = false, int headerEnd = 0)
         {
             Budget(depth);
-            Expect("{");
+            if (returnFirst)
+            {
+                if (Current.Text != "begin") throw Error("Return-first callable requires begin");
+                var begin = Current;
+                if (!ContainsLineBreak(headerEnd, begin.Offset))
+                    throw Error("Return-first begin must start on the next line");
+                if (index + 1 >= tokens.Count ||
+                    !ContainsLineBreak(begin.Offset + begin.Text.Length, tokens[index + 1].Offset))
+                    throw Error("Return-first begin must be alone on its line");
+                Expect("begin");
+            }
+            else Expect("{");
             scopes.Add(new Dictionary<string, LocalBinding>(StringComparer.Ordinal));
             localTypeScopes.Add(new HashSet<string>(StringComparer.Ordinal));
             aggregateScopes.Add(new Dictionary<string, StaticAggregate>(StringComparer.Ordinal));
             var body = new List<StructuredStmt>();
             bool terminated = false;
-            while (Current.Text != "}")
+            while (Current.Text != (returnFirst ? "end" : "}"))
             {
                 if (Current.Text.Length == 0) throw Error("Unterminated block");
                 if (terminated) throw Error("Unreachable statement");
@@ -1374,7 +1413,8 @@ public static partial class OresStructuredParser
                 body.Add(statement);
                 terminated = returns;
             }
-            Expect("}");
+            Expect(returnFirst ? "end" : "}");
+            if (returnFirst && !Take(".")) Take(";");
             scopes.RemoveAt(scopes.Count - 1);
             localTypeScopes.RemoveAt(localTypeScopes.Count - 1);
             aggregateScopes.RemoveAt(aggregateScopes.Count - 1);
