@@ -1,0 +1,36 @@
+name: .NET Wasmtime real Native AOT probe
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'verification/Ores.Net.WasmtimeProbe/**'
+      - '.github/workflows/wasmtime-nativeaot-probe.yml'
+      - 'build/StrictNativeAot.targets'
+
+permissions:
+  contents: read
+
+jobs:
+  linux-x64-wasmtime-nativeaot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Publish real Native AOT host (Wasmtime 50.0.1)
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet publish verification/Ores.Net.WasmtimeProbe/Ores.Net.WasmtimeProbe.csproj \
+            -c Release -r linux-x64 -o "$RUNNER_TEMP/wasmtime-probe" \
+            -p:PublishAot=true -p:SelfContained=true
+          test -x "$RUNNER_TEMP/wasmtime-probe/oresnet-wasmtime-probe"
+          file "$RUNNER_TEMP/wasmtime-probe/oresnet-wasmtime-probe"
+      - name: Execute the published native binary (not dotnet run)
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/wasmtime-probe/oresnet-wasmtime-probe" | tee "$RUNNER_TEMP/wasmtime-probe.log"
+          grep -Fx NET_WASMTIME_NATIVEAOT_PROBE_PASS "$RUNNER_TEMP/wasmtime-probe.log"
