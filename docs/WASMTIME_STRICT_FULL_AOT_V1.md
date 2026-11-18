@@ -69,6 +69,35 @@ runs the builder first and the native runner second, and requires explicit
 PASS markers from both. A workflow that fails with zero executed steps
 is **NOT_EXECUTED**, not a test result. This task has no local .NET SDK.
 
+## November 2026 Wasmtime advisory gate
+
+As of 2026-11-18, the pinned Wasmtime 50.0.1 is in the upstream
+affected-version ranges for at least:
+
+* [GHSA-43j2-gcp4-m22g](https://github.com/bytecodealliance/wasmtime/security/advisories/GHSA-43j2-gcp4-m22g)
+  (possible host-process abort through stale WebAssembly GC heap base).
+  The advisory states the bug is not exploitable when Wasm GC is disabled
+  or the embedder provides no host functions that return GC objects.
+* [GHSA-2674-w29h-wqvj](https://github.com/bytecodealliance/wasmtime/security/advisories/GHSA-2674-w29h-wqvj)
+  (host abort if the runtime was compiled without threads support but the
+  Wasm threads proposal is incorrectly enabled).
+
+Upstream lists **50.0.2** as the corresponding patched version. The
+synthetic proof explicitly disables reference types and threads and exposes
+**zero host imports**, so these specific exploit preconditions are not
+established in this fixture; that narrow observation must NEVER be used
+to authorize a future production actor/import configuration.
+
+**Release blocker:** Do not certify 50.0.1 for untrusted production
+admission. Update to a verified patched Wasmtime C API/binding pair
+(including the actual shipped RID-specific native library) when a compatible
+patched .NET package or auditable build is available. Rebuild ALL signed
+precompiled native guest artifacts with the exact patched version and engine
+profile. Do not silently update one side only, and do not assume the Rust
+crate's release implies the matching NuGet package exists. Review fresh
+advisories, perform the strict Native AOT execution proof, and inspect the
+package's native dependency provenance first. The runtime remains **DENY**.
+
 ## Explicit production security blocks
 
 **1. Trust anchor:** The synthetic builder emits its own ephemeral test
