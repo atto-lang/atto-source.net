@@ -5,7 +5,7 @@ using Wasmtime;
 
 // Full-AOT execution *candidate*: published .NET Native AOT binary, and a
 // separately Wasmtime-precompiled guest. This executable contains no calls
-// to Module.FromText/FromBytes/FromFile or any guest compiler API.
+// to any Wasm module compiler API.
 //
 // NOT production: the public key is a command-line fixture input and is NOT
 // a pinned organizational signing identity. The builder generates an
