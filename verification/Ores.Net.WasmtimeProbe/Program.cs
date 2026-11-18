@@ -28,6 +28,15 @@ if (RuntimeFeature.IsDynamicCodeSupported)
     return 78;
 }
 
+// This package is retained ONLY for a synthetic Native AOT test. The pinned
+// Wasmtime 50.0.1 native engine has security advisories fixed in 50.0.2;
+// it must not become an accidentally runnable untrusted tenant service.
+if (Environment.GetEnvironmentVariable("ORES_WASMTIME_SYNTHETIC_CI_ONLY") != "1")
+{
+    Console.Error.WriteLine("WASMTIME_SYNTHETIC_PROBE_NOT_AUTHORIZED");
+    return 78;
+}
+
 using var config = new Config()
     .WithFuelConsumption(true)
     .WithMaximumStackSize(256 * 1024)
