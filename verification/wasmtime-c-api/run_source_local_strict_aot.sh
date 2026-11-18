@@ -21,8 +21,16 @@ actual_head=$(git rev-parse HEAD)
 [[ "$actual_head" == "$expected_head" ]] || {
   echo "refusing source SHA mismatch: $actual_head" >&2; exit 65;
 }
-[[ -z "$(git status --porcelain --untracked-files=all)" ]] || {
+# Both tracked/untracked AND ignored build outputs must be absent.
+# Ignored obj/bin files can influence compiler inputs while remaining invisible
+# to porcelain status; use a dry-run only and never delete user files here.
+tracked_status=$(git status --porcelain --untracked-files=all) || exit 65
+[[ -z "$tracked_status" ]] || {
   echo 'refusing dirty source checkout' >&2; exit 65;
+}
+ignored_status=$(git clean -ndx) || exit 65
+[[ -z "$ignored_status" ]] || {
+  echo 'refusing ignored/untracked build inputs in source checkout' >&2; exit 65;
 }
 actual_tree=$(git rev-parse 'HEAD^{tree}')
 [[ "$actual_tree" =~ ^[0-9a-f]{40}$ ]] || exit 65
@@ -51,7 +59,10 @@ runner="$work/runner/oresnet-wasmtime-aot-runner"
 for executable in "$builder" "$runner"; do
   test -x "$executable"
   file "$executable" | grep -F 'ELF 64-bit'
-  ! ldd "$executable" | grep -E '(libcoreclr|libhostfxr|libhostpolicy|libclrjit)'
+  # First REQUIRE successful inspection. Negating an ldd | grep pipeline
+  # alone lets failed ldd pass as though the binary has no CLR dependency.
+  ldd "$executable" > "$work/dependencies.txt"
+  ! grep -E '(libcoreclr|libhostfxr|libhostpolicy|libclrjit|not found)' "$work/dependencies.txt"
   sha256sum "$executable"
 done
 
