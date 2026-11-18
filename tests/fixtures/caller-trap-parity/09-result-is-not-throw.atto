@@ -1,0 +1,7 @@
+// ATTO-TRAP-V1-09: exit 17; Result.Err is data and stays one Result layer.
+fnc wrong(): Result<int,String> { return Err("not an exception"); }
+pub fnc main(): int {
+  val Result<int, String | Error> outer = trap wrong();
+  if outer.is_err() then return 17; fi
+  return 0;
+}

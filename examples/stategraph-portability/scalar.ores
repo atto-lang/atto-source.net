@@ -1,0 +1,4 @@
+// NativeAOT StateGraph scalar step: stable guest output 42.
+define pub fnc main(): int {
+  return (6 + 1) * 6;
+}

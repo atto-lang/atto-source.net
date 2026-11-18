@@ -1,0 +1,1 @@
+pub fnc main():int { return Map.of<int,int>(1 => 2); }
