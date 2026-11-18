@@ -36,6 +36,47 @@ Wasmtime itself normally compiles Wasm to native instructions at runtime. If the
 - Native AOT host and guest artifact provenance and compatibility evidence at exact Git SHA, nonempty executed CI steps and independently reviewed boundary behavior.
 - If end-to-end no-JIT AOT is required, independent proof of authenticated precompiled guest artifacts and a compiler-free runtime path.
 
+
+## Implemented opt-in Native AOT engine probe (still NOT production)
+
+`verification/Ores.Net.WasmtimeProbe` now references the **exact**
+`Wasmtime 50.0.1` NuGet version, outside the shipping CIL/runtime host.
+It uses a real Wasmtime `Engine`, one shared immutable synthetic WAT
+`Module`, and two distinct `Store`s with private mutable globals and
+non-shared one-page Wasm32 linear memories. The probe rejects any imports,
+disables memory64/multi-memory/threads, enables fuel and stack limits, and
+exercises out-of-bounds traps, infinite-loop fuel exhaustion, fresh store
+creation and a surviving neighboring store. WAT is a synthetic **host probe**;
+the tests DO NOT prove real `.atto` guest compiler/ABI parity. The source
+implementation does NOT route through `OresVmHost`.
+
+On Linux x64 the exact published Native AOT binary, **not** `dotnet run`,
+is tested by `.github/workflows/wasmtime-nativeaot-probe.yml`:
+
+```sh
+dotnet publish verification/Ores.Net.WasmtimeProbe/Ores.Net.WasmtimeProbe.csproj \
+  -c Release -r linux-x64 -o /tmp/wasmtime-probe -p:PublishAot=true
+/tmp/wasmtime-probe/oresnet-wasmtime-probe
+```
+
+**Status:** source committed, executable Native AOT CI not yet verified.
+No .NET SDK available in the author's local execution environment.
+
+### Windows x64 CET blocker: FAIL CLOSED
+
+As of this decision, upstream
+[wasmtime-dotnet #374](https://github.com/bytecodealliance/wasmtime-dotnet/issues/374)
+remains **open**. Its report documents a .NET 9+/10 Windows x64
+CET-shadow-stack conflict where hardware-signaled Wasm traps can *fail-fast
+the entire host process*, instead of terminating one guest. This violates
+our fundamental neighbor-survival rule. The probe therefore exits **78**
+on **all Windows** and untrusted `OresVmHost` admission remains disabled.
+Do **not** disable CET for production. Require an upstream fix, an
+independently reviewed mitigation preserving hardening, and a real Windows
+Native AOT test that creates two stores, deliberately trips OOB/unreachable,
+and proves the sibling survives before enabling Windows tenant execution.
+Tests using `dotnet.exe` instead of the published `.exe` are insufficient.
+
 ## Ownership
 - `.net`: Native AOT host integration, Wasmtime Store ownership, admission and lifecycle.
 - `atto-lang/atto-source.wasm`: Wasm guest build/ABI validation; no duplicate parser.
