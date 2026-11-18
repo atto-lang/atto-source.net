@@ -106,6 +106,39 @@ export artifact attestation, aggregate native memory/stack budgets, real
 Atto-generated guest ABI, host I/O teardown and the Windows CET recovery
 problem. Production untrusted admission intentionally remains disabled.
 
+## Consolidation of the second C-ABI spike (2026-11-18)
+
+PR #564 contained a second opt-in `spikes/wasmtime-dotnet` test program.
+The reusable security checks have been consolidated into this PR's
+`verification/Ores.Net.WasmtimeProbe`, which already has the more complete
+`TenantStoreRegistry` lifecycle and Linux Native AOT CI workflow. Do not
+ship or maintain two competing Wasmtime host adapters.
+
+The consolidated probe now has `TrustedProbeModuleAdmission`, which
+requires the synthetic Wasm fixture to have a valid binary header/version,
+a bounded size and an exact SHA-256 digest, using constant-time comparison.
+It refuses imports even when the checksum matches. The executable tests cover
+digest substitution, malformed header, empty and oversized input, denied
+imports, duplicate/over-quota tenant admission and a stale handle after
+reincarnation, in addition to memory, globals, trap and fuel isolation.
+
+**Security limitation:** the expected checksum is computed from test-owned
+WAT at runtime. It demonstrates an integrity check, **not authentication**.
+Real tenants cannot supply their own approved digest, signed Wasmtime native
+code, WAT source or CLR assemblies. A production build/release service must
+sign and review a versioned manifest binding Wasm identity, imports/exports,
+target architecture, Wasmtime version and provenance before any native
+precompiled artifact may be loaded. `Module.FromBytes` compiles guest
+code at runtime and is therefore strictly confined to the synthetic probe;
+full no-JIT guest AOT is an unimplemented shipping release gate.
+
+The Wasmtime probe workflow now pins checkout and setup-dotnet actions to
+full reviewed SHAs, disables persisted checkout credentials, and asserts
+that the checked-out Git SHA matches the pull request head. The publish
+and executable smoke still require actual runner steps; GitHub Actions
+failure with an empty `steps` collection is **NOT_EXECUTED**, not a
+compiler or guest-test failure.
+
 ## Ownership
 - `.net`: Native AOT host integration, Wasmtime Store ownership, admission and lifecycle.
 - `atto-lang/atto-source.wasm`: Wasm guest build/ABI validation; no duplicate parser.
