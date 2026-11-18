@@ -8,14 +8,29 @@ const SHA40 = /^[0-9a-f]{40}$/;
 const fullSha = x => typeof x === 'string' && SHA40.test(x);
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 const validDigest = x => typeof x === 'string' && DIGEST.test(x);
-const ALLOWED_TIME = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z$/;
+const ALLOWED_TIME = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?Z$/;
 
 const positiveInt = x => Number.isSafeInteger(x) && x > 0;
 const plainObject = x => x !== null && typeof x === 'object' && !Array.isArray(x);
 const safeLabel = x => typeof x === 'string' && x.length > 0 && x.length <= 250 &&
   x === x.trim() && x.normalize('NFKC') === x && !/[\p{C}\p{M}]/u.test(x);
-const timestamp = x => typeof x === 'string' && ALLOWED_TIME.test(x) &&
-  Number.isFinite(Date.parse(x));
+// Date.parse silently normalizes e.g. February 30 into March 2. Treat
+// timestamps as security evidence and compare the parsed UTC fields exactly.
+const timestamp = x => {
+  if (typeof x !== 'string') return false;
+  const match = ALLOWED_TIME.exec(x);
+  if (!match) return false;
+  const parsed = new Date(x);
+  if (!Number.isFinite(parsed.getTime())) return false;
+  const [, year, month, day, hour, minute, second, fractional] = match;
+  return parsed.getUTCFullYear() === Number(year) &&
+    parsed.getUTCMonth() + 1 === Number(month) &&
+    parsed.getUTCDate() === Number(day) &&
+    parsed.getUTCHours() === Number(hour) &&
+    parsed.getUTCMinutes() === Number(minute) &&
+    parsed.getUTCSeconds() === Number(second) &&
+    parsed.getUTCMilliseconds() === Number((fractional ?? '').padEnd(3, '0').slice(0, 3));
+};
 
 /**
  * @param {object} run independently fetched GitHub Actions run object
