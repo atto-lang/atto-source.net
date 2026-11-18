@@ -45,6 +45,11 @@ internal sealed class TenantStoreRegistry : IDisposable
             throw new PlatformNotSupportedException("Windows Wasmtime CET trap recovery not certified");
         if (RuntimeFeature.IsDynamicCodeSupported)
             throw new PlatformNotSupportedException("Wasmtime tenant probe requires a published Native AOT host");
+        // Defense in depth: do not permit direct callers of the registry to
+        // bypass the synthetic-only CLI consent guard. This environment flag
+        // is not a production security authorization or sandbox boundary.
+        if (Environment.GetEnvironmentVariable("ORES_WASMTIME_SYNTHETIC_CI_ONLY") != "1")
+            throw new SecurityException("Wasmtime 50.0.1 registry is synthetic-CI-only");
         if (maxTenants is < 1 or > 128) throw new ArgumentOutOfRangeException(nameof(maxTenants));
         if (module.Imports.Count != 0)
             throw new SecurityException("untrusted Wasm must not import host APIs");
