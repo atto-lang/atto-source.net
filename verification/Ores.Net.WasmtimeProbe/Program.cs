@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Security;
+using System.Security.Cryptography;
 using Wasmtime;
 
 // Native AOT execution *probe*, not the production OresVmHost guest pathway.
@@ -63,8 +64,50 @@ const string scalarGuest = """
     (loop (br 0)))
 )
 """;
-using var module = Module.FromText(engine, "probe-scalar", scalarGuest);
+// Authorize only this known, in-repository *synthetic* fixture for the probe.
+ // Do not treat an expected digest supplied by a tenant as authorization.
+byte[] trustedWasm = Module.ConvertText(scalarGuest);
+byte[] approvedDigest = SHA256.HashData(trustedWasm);
+using var module = TrustedProbeModuleAdmission.Load(engine, trustedWasm, approvedDigest);
 RequireNoImports(module);
+
+// Regression gates deliberately exercise the admission function, not only
+// validation of a known-good Module produced directly by the test host.
+byte[] mismatchedDigest = (byte[])approvedDigest.Clone();
+mismatchedDigest[0] ^= 0x80;
+ExpectAdmissionDenied(() =>
+{
+    using var _ = TrustedProbeModuleAdmission.Load(engine, trustedWasm, mismatchedDigest);
+}, "mismatched SHA-256 digest");
+
+byte[] malformedHeader = (byte[])trustedWasm.Clone();
+malformedHeader[0] = 0x7f;
+ExpectAdmissionDenied(() =>
+{
+    using var _ = TrustedProbeModuleAdmission.Load(
+        engine, malformedHeader, SHA256.HashData(malformedHeader));
+}, "invalid Wasm header even with a matching digest");
+
+ExpectAdmissionDenied(() =>
+{
+    using var _ = TrustedProbeModuleAdmission.Load(
+        engine, Array.Empty<byte>(), approvedDigest);
+}, "empty Wasm module");
+
+byte[] oversizedFixture = new byte[1024 * 1024 + 1];
+ExpectAdmissionDenied(() =>
+{
+    using var _ = TrustedProbeModuleAdmission.Load(
+        engine, oversizedFixture, approvedDigest);
+}, "oversized Wasm module");
+
+byte[] importedWasm = Module.ConvertText(
+    "(module (import \"env\" \"host_ptr\" (func)))");
+ExpectAdmissionDenied(() =>
+{
+    using var _ = TrustedProbeModuleAdmission.Load(
+        engine, importedWasm, SHA256.HashData(importedWasm));
+}, "validated Wasm must not gain ambient host imports");
 
 // A real Wasmtime Store/instance per tenant. A single immutable Module can
 // be shared between stores without sharing its mutable guest memory/globals.
@@ -179,6 +222,13 @@ static void RequireNoImports(Module module)
 {
     if (module.Imports.Count != 0)
         throw new SecurityException("Wasm guest imports denied");
+}
+
+static void ExpectAdmissionDenied(Action action, string why)
+{
+    try { action(); }
+    catch (SecurityException) { return; }
+    throw new Exception("WASMTIME_PROBE_FAILED: admitted " + why);
 }
 
 static void ExpectTrap(Action action, string why)
