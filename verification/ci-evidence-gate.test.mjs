@@ -202,6 +202,25 @@ test("current Windows native guest and artifact stages are mandatory",()=> {
   }
 });
 
+test("enabled trusted Windows runner requires compiled C# and F# source",()=> {
+  const source=readFileSync(new URL("../.github/workflows/windows-native-aot.yml",import.meta.url),"utf8");
+  const block=source.split("  self-hosted-windows-static-facts:\n")[1]
+    ?.split(/^  [a-z][a-z0-9-]*:/m)[0];
+  assert.ok(block,"trusted Windows runner job missing");
+  const names=[...block.matchAll(/^      - name: (.+)$/gm)].map(m=>m[1]);
+  const stage="Compile verified C# and F# source on trusted exact-head runner";
+  assert.ok(names.includes(stage));
+  const sample=copy(jobs);
+  sample.jobs.push({name:"self-hosted-windows-static-facts",run_id:12345,run_attempt:1,
+    head_sha:sha,runner_id:101,runner_name:"synthetic-trusted-windows",
+    status:"completed",conclusion:"success",
+    steps:names.map((name,i)=>({name,number:i+1,status:"completed",conclusion:"success"}))});
+  sample.total_count++;
+  assert.deepEqual(check(run,sample),[]);
+  sample.jobs[2].steps=sample.jobs[2].steps.filter(s=>s.name!==stage);
+  assert.match(check(run,sample).join(" "),/missing successful step/);
+});
+
 test("zero steps are never proof",()=>{const j=copy(jobs);j.jobs[0].steps=[];assert.match(check(run,j).join(" "),/zero executed/);});
 test("different repository rejected",()=>assert.match(check({...run,repository:{full_name:"other/repo"}},jobs).join(" "),/repository/));
 test("same-name workflow at wrong path rejected",()=>assert.match(
