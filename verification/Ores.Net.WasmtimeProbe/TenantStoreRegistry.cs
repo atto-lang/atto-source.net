@@ -1,4 +1,5 @@
 using System.Security;
+using System.Runtime.CompilerServices;
 using Wasmtime;
 
 // Experimental real-Store lifecycle; trusted synthetic module only.
@@ -38,6 +39,12 @@ internal sealed class TenantStoreRegistry : IDisposable
 
     internal TenantStoreRegistry(Engine engine, Module module, int maxTenants = 4)
     {
+        // Do not let a new caller bypass Program's Windows CET fail-closed
+        // check or silently switch the proof from Native AOT to CoreCLR JIT.
+        if (OperatingSystem.IsWindows())
+            throw new PlatformNotSupportedException("Windows Wasmtime CET trap recovery not certified");
+        if (RuntimeFeature.IsDynamicCodeSupported)
+            throw new PlatformNotSupportedException("Wasmtime tenant probe requires a published Native AOT host");
         if (maxTenants is < 1 or > 128) throw new ArgumentOutOfRangeException(nameof(maxTenants));
         if (module.Imports.Count != 0)
             throw new SecurityException("untrusted Wasm must not import host APIs");
@@ -121,8 +128,11 @@ internal sealed class TenantStoreRegistry : IDisposable
                     if (entry.Phase != Phase.Running)
                         throw new InvalidOperationException("queued guest admission cancelled");
                 try { return body(entry.Instance); }
-                catch (TrapException)
+                catch (Exception)
                 {
+                    // Any failure while entering/executing a guest closes
+                    // its admission. Only its owner may drain and dispose it;
+                    // the neighbor's Store must remain independent.
                     lock (_gate) entry.Phase = Phase.Quiescing;
                     throw;
                 }
