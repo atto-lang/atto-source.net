@@ -1,0 +1,81 @@
+name: .NET Wasmtime strict full-AOT end-to-end candidate
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'verification/Ores.Net.WasmtimeAotBuilder/**'
+      - 'verification/Ores.Net.WasmtimeAotRunner/**'
+      - '.github/workflows/wasmtime-strict-aot.yml'
+      - 'build/StrictNativeAot.targets'
+
+permissions:
+  contents: read
+
+jobs:
+  linux-x64-strict-nativeaot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Assert exact branch head identity
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          echo "NET_WASMTIME_AOT_TESTED_HEAD=$EXPECTED_HEAD"
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: '10.0.x'
+      - name: Fail if guest Wasm compilation entered the AOT runtime source
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -RE 'Module\.(FromBytes|FromFile|FromText|FromStream|FromTextFile|ConvertText)|\.Serialize\(' \
+            verification/Ores.Net.WasmtimeAotRunner --include='*.cs'
+      - name: Publish both .NET programs as native AOT executables
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet publish verification/Ores.Net.WasmtimeAotBuilder/Ores.Net.WasmtimeAotBuilder.csproj \
+            -c Release -r linux-x64 -o "$RUNNER_TEMP/aot-builder" \
+            -p:PublishAot=true -p:SelfContained=true
+          dotnet publish verification/Ores.Net.WasmtimeAotRunner/Ores.Net.WasmtimeAotRunner.csproj \
+            -c Release -r linux-x64 -o "$RUNNER_TEMP/aot-runner" \
+            -p:PublishAot=true -p:SelfContained=true
+          test -x "$RUNNER_TEMP/aot-builder/oresnet-wasmtime-aot-builder"
+          test -x "$RUNNER_TEMP/aot-runner/oresnet-wasmtime-aot-runner"
+          file "$RUNNER_TEMP/aot-builder/oresnet-wasmtime-aot-builder"
+          file "$RUNNER_TEMP/aot-runner/oresnet-wasmtime-aot-runner"
+      - name: Build and sign trusted synthetic guest AHEAD of runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/aot-artifact"
+          "$RUNNER_TEMP/aot-builder/oresnet-wasmtime-aot-builder" \
+            "$RUNNER_TEMP/aot-artifact" | tee "$RUNNER_TEMP/wasmtime-builder.log"
+          grep -Fx NET_WASMTIME_TRUSTED_AOT_BUILDER_PASS \
+            "$RUNNER_TEMP/wasmtime-builder.log"
+          test -s "$RUNNER_TEMP/aot-artifact/guest.cwasm"
+          test -s "$RUNNER_TEMP/aot-artifact/guest.manifest.sig"
+          # The test-only private key exists in memory in the builder,
+          # never in the artifact directory or runner.
+          test "$(find "$RUNNER_TEMP/aot-artifact" -type f | wc -l)" -eq 4
+      - name: Execute published Native AOT runtime on precompiled artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/aot-runner/oresnet-wasmtime-aot-runner" \
+            "$RUNNER_TEMP/aot-artifact/guest.manifest.json" \
+            "$RUNNER_TEMP/aot-artifact/guest.manifest.sig" \
+            "$RUNNER_TEMP/aot-artifact/guest.cwasm" \
+            "$RUNNER_TEMP/aot-artifact/ephemeral-ci-public.pem" \
+            | tee "$RUNNER_TEMP/wasmtime-runner.log"
+          grep -Fx NET_WASMTIME_STRICT_AOT_RUNTIME_PASS \
+            "$RUNNER_TEMP/wasmtime-runner.log"
+          echo "NET_WASMTIME_STRICT_AOT_E2E_PASS"
