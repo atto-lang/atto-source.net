@@ -31,6 +31,14 @@ const string wat = """
     i32.add
     global.set $counter
     global.get $counter)
+  ;; Deliberate mutable linear-memory witness: two Stores must never alias.
+  (func (export "write_byte") (param i32)
+    i32.const 0
+    local.get 0
+    i32.store8)
+  (func (export "read_byte") (result i32)
+    i32.const 0
+    i32.load8_u)
   (func (export "out_of_bounds") (result i32)
     i32.const 65536
     i32.load)
