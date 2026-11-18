@@ -138,6 +138,24 @@ test('malformed individual artifact record is denied without throwing', () => {
   assert.match(result.errors.join(' '),/malformed artifact record/);
 });
 
+test('untrusted artifact names cannot inject lines into diagnostics', () => {
+  for (const invalid of ['a\nFORGED_PASS', 'a\rFORGED_PASS', 'a\u202eFORGED_PASS']) {
+    const a=clone(response);
+    a.artifacts[0].name=invalid;
+    const result=inspect(run,a,expected);
+    assert.equal(result.classification,'REJECTED');
+    assert.ok(result.errors.every(error => !error.includes('FORGED_PASS')));
+  }
+});
+
+test('untrusted policy artifact names cannot inject lines into diagnostics', () => {
+  const e=clone(expected);
+  e.requiredNames[0]='a\nFORGED_PASS';
+  const result=inspect(run,response,e);
+  assert.equal(result.classification,'REJECTED');
+  assert.ok(result.errors.every(error => !error.includes('FORGED_PASS')));
+});
+
 test('does not mutate caller-owned records', () => {
   const r=clone(run), a=clone(response), e=clone(expected);
   inspect(r,a,e);
