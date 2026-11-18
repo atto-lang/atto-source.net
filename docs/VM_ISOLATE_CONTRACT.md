@@ -70,9 +70,12 @@ Resource pins are explicit host bookkeeping, **not** proof of physical
 OS/FFI callback retirement. No user source compiler lowering to a per-tenant
 entry ABI is provided. Do not rely on `AssemblyLoadContext`, reflection
 emit, runtime CIL generation or process-global mutable statics to isolate
-Native AOT tenants. Untrusted tenants use `IsolationMode.NativeVmIsolate`
-(validated Wasm on the shared native TenantVm core, same process), which
-fails closed until that core is wired in. See `spikes/tenant-vm-dotnet`.
+Native AOT tenants. Untrusted tenants now require explicit `IsolationMode.WasmtimeSandbox`
+(validated Wasm under an independent Wasmtime Store/instance/memory), which
+fails closed until the Wasmtime provider is wired into the Native AOT host.
+The legacy `IsolationMode.NativeVmIsolate` remains fail-closed; its
+`spikes/tenant-vm-dotnet` experiment is historical, not selected policy.
+See [Wasmtime decision](WASMTIME_TENANTVM_DECISION_20261118.md).
 
 Tests: `VmIsolateHostTests.Run()` is wired into the existing
 `verification/Ores.Net.Tests/Program.cs` suite; the .NET toolchain must
