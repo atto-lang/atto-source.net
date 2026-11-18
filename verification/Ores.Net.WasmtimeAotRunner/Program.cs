@@ -65,6 +65,45 @@ using (var wrongIssuer = RSA.Create(3072))
         "untrusted signing identity");
 }
 
+// Re-sign *malformed metadata* with a fresh test issuer to prove that
+// correct cryptography alone does not override the ABI/feature/RID policy.
+// These ephemeral local keys are never a production trust authority.
+string signedJson = System.Text.Encoding.UTF8.GetString(manifest);
+using (var metadataSigner = RSA.Create(3072))
+{
+    string signedByLocalTestKey = metadataSigner.ExportSubjectPublicKeyInfoPem();
+    void DenySignedMetadata(string changed, string reason)
+    {
+        if (changed == signedJson)
+            throw new Exception("Malformed metadata test fixture did not change: " + reason);
+        byte[] content = System.Text.Encoding.UTF8.GetBytes(changed);
+        byte[] proof = metadataSigner.SignData(content,
+            HashAlgorithmName.SHA256, RSASignaturePadding.Pss);
+        ExpectRefused(() => TrustedAotArtifact.Verify(
+            content, proof, artifact, signedByLocalTestKey), reason);
+    }
+
+    DenySignedMetadata(
+        signedJson.Replace("\"target_rid\":", "\"target_rid\": \"wrong-arch\", \"unused\":", StringComparison.Ordinal),
+        "unapproved target architecture or unknown JSON property");
+    DenySignedMetadata(
+        signedJson.Replace("\"engine_profile\": \"fuel-stack262144-mem64off-multimemoryoff-threadsoff\"",
+            "\"engine_profile\": \"unapproved-engine-features\"", StringComparison.Ordinal),
+        "signed but incompatible Wasmtime engine profile");
+    DenySignedMetadata(
+        signedJson.Replace("\"guest_abi\": \"atto-tenantvm-test-i32-v0\"",
+            "\"guest_abi\": \"unapproved-guest-abi\"", StringComparison.Ordinal),
+        "signed but incompatible actor entry ABI");
+    DenySignedMetadata(
+        signedJson.Replace("\"schema_version\": 1,",
+            "\"schema_version\": 1, \"guest_kind\": \"duplicated\",", StringComparison.Ordinal),
+        "duplicated signed JSON key");
+    DenySignedMetadata(
+        signedJson.Replace("\"source_sha256\": \"",
+            "\"source_sha256\": \"bad-", StringComparison.Ordinal),
+        "invalid compiler source identity");
+}
+
 using var config = new Config()
     .WithFuelConsumption(true)
     .WithMaximumStackSize(256 * 1024)
