@@ -146,6 +146,34 @@ test("extra successful job with housekeeping-only steps is denied",()=> {
     assert.match(check(run,sample).join(" "),/extra job extra-success has no completed executable step/);
   }
 });
+test("extra successful job must reject tainted sibling steps",()=> {
+  const good={name:"Execute diagnostic",number:1,status:"completed",conclusion:"success"};
+  const attacks=[
+    [good,{name:"Actual test",number:2,status:"completed",conclusion:"failure"}],
+    [good,{name:"Actual test",number:2,status:"completed",conclusion:"skipped"}],
+    [good,{...good,number:2}],
+    [good,{name:"Actual test",number:1,status:"completed",conclusion:"success"}],
+    [good,{name:"Actual test",number:true,status:"completed",conclusion:"success"}],
+    [good,{name:"Actual"+String.fromCharCode(0x200b)+"test",number:2,status:"completed",conclusion:"success"}]
+  ];
+  for (const steps of attacks) {
+    const sample=copy(jobs);
+    sample.jobs.push({name:"extra-success",run_id:12345,run_attempt:1,head_sha:sha,
+      runner_id:123,runner_name:"synthetic-extra",status:"completed",conclusion:"success",steps});
+    sample.total_count++;
+    assert.notDeepEqual(check(run,sample),[], "tainted extra job must be denied");
+  }
+});
+test("invisible/combining runner names cannot prove allocation",()=> {
+  const sample=copy(jobs);
+  for (const bad of [String.fromCharCode(0x200b),String.fromCharCode(0x034f),
+                     "valid"+String.fromCharCode(0x200b)+"name"]) {
+    sample.jobs[0].runner_name=bad;
+    assert.match(check(run,sample).join(" "),/no allocated runner/);
+  }
+  sample.jobs[0].runner_name="valid-host";
+  assert.deepEqual(check(run,sample),[]);
+});
 test("a successful extra job with runner and completed step is accepted",()=> {
   const sample=copy(jobs);
   sample.jobs.push({name:"extra-success",run_id:12345,run_attempt:1,head_sha:sha,
