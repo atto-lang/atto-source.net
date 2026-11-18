@@ -69,6 +69,23 @@ A successful command is **not** sufficient to ship this native engine.
 It does not certify the platform's C ABI, native code trap recovery,
 Wasmtime resource limits, a validated guest manifest, or tenant isolation.
 
+### Cargo build-output isolation (2026-11-18)
+
+The compiler-free release candidate now exports a dedicated
+`CARGO_TARGET_DIR=$output_dir/cargo-target` and disables incremental
+compilation **before** invoking Cargo. The source checkout's ambient
+`target/release` directory is never trusted as a native release
+artifact. The output must begin empty; the receipt contains the exact
+Cargo output path, source commit/tree and hashes. The preflight was
+re-executed on the currently committed script with a matching Git blob
+SHA `ad56d1b873617437eeb7db9bde36f9feda620527`.
+
+This reduces accidental reuse of a compiler-enabled or older native
+library from the upstream checkout. It does **not** prove a hermetic
+build, toolchain authenticity, Wasmtime C ABI compatibility, or success
+of the compiled .NET Native AOT guest runner. Those require a funded,
+approved native CI environment.
+
 ## Non-negotiable integration blockers
 
 1. **Binding version match.** The existing `Wasmtime` NuGet 50.0.1
