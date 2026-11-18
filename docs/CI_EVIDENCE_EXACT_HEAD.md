@@ -31,8 +31,11 @@ node verification/ci-evidence-gate.mjs --repo "$REPO" --head "$HEAD" \
 
 Every completed-success job must have a positive numeric runner ID and nonblank
 runner name; extra successful jobs must contain at least one completed
-non-housekeeping executable step. Runner setup/teardown and pre/post steps
-alone are insufficient. These checks do **not** establish guest correctness.
+non-housekeeping executable step. An extra job containing any failed, skipped,
+malformed, or duplicate step is rejected even if another step passed. Runner
+names and extra-step names reject invisible, combining and compatibility
+characters. Runner setup/teardown and pre/post steps alone are insufficient.
+These checks do **not** establish guest correctness.
 
 The gate fails if any of the following is true: different run/repo/SHA/
 attempt/workflow, non-successful run, incomplete jobs list, missing required
