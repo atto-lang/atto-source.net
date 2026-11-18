@@ -50,8 +50,15 @@ jobs:
             -p:PublishAot=true -p:SelfContained=true
           test -x "$RUNNER_TEMP/aot-builder/oresnet-wasmtime-aot-builder"
           test -x "$RUNNER_TEMP/aot-runner/oresnet-wasmtime-aot-runner"
-          file "$RUNNER_TEMP/aot-builder/oresnet-wasmtime-aot-builder"
-          file "$RUNNER_TEMP/aot-runner/oresnet-wasmtime-aot-runner"
+          # Assert ELF native executables, not managed DLL apphost shims.
+          file "$RUNNER_TEMP/aot-builder/oresnet-wasmtime-aot-builder" | tee "$RUNNER_TEMP/aot-builder-file.txt"
+          file "$RUNNER_TEMP/aot-runner/oresnet-wasmtime-aot-runner" | tee "$RUNNER_TEMP/aot-runner-file.txt"
+          grep -F 'ELF 64-bit' "$RUNNER_TEMP/aot-builder-file.txt"
+          grep -F 'ELF 64-bit' "$RUNNER_TEMP/aot-runner-file.txt"
+          ! ldd "$RUNNER_TEMP/aot-builder/oresnet-wasmtime-aot-builder" | grep -E '(libcoreclr|libhostfxr|libhostpolicy|libclrjit)'
+          ! ldd "$RUNNER_TEMP/aot-runner/oresnet-wasmtime-aot-runner" | grep -E '(libcoreclr|libhostfxr|libhostpolicy|libclrjit)'
+          sha256sum "$RUNNER_TEMP/aot-builder/oresnet-wasmtime-aot-builder" \
+            "$RUNNER_TEMP/aot-runner/oresnet-wasmtime-aot-runner"
       - name: Build and sign trusted synthetic guest AHEAD of runtime
         shell: bash
         run: |
