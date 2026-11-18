@@ -42,6 +42,7 @@ using var config = new Config()
     .WithFuelConsumption(true)
     .WithMaximumStackSize(256 * 1024)
     .WithMemory64(false)
+    .WithReferenceTypes(false) // no GC/reference-type imports or host-provided GC refs
     .WithMultiMemory(false)
     .WithWasmThreads(false);
 using var engine = new Engine(config);
@@ -68,7 +69,7 @@ string manifest =
     "  \"guest_kind\": \"synthetic-ci-only\",\n" +
     "  \"wasmtime_version\": \"50.0.1\",\n" +
     "  \"target_rid\": \"" + rid + "\",\n" +
-    "  \"engine_profile\": \"fuel-stack262144-mem64off-multimemoryoff-threadsoff\",\n" +
+    "  \"engine_profile\": \"fuel-stack262144-mem64off-reftypesoff-multimemoryoff-threadsoff\",\n" +
     "  \"guest_abi\": \"atto-tenantvm-test-i32-v0\",\n" +
     "  \"source_sha256\": \"" + sourceSha256 + "\",\n" +
     "  \"artifact_sha256\": \"" + artifactSha256 + "\",\n" +
