@@ -36,9 +36,35 @@ byte[] artifact = TrustedAotArtifact.ReadBoundedFile(
 string ephemeralCiVerifier = System.Text.Encoding.UTF8.GetString(
     TrustedAotArtifact.ReadBoundedFile(args[3], 8192));
 
+// File admission must remain genuinely bounded even if the file changes
+// size after an initial stat. The one-handle reader must not use
+// File.ReadAllBytes or allocate an attacker-selected amount of memory.
+string admissionFixture = Path.Combine(
+    Path.GetTempPath(), "atto-aot-bounded-" + Guid.NewGuid().ToString("N"));
+try
+{
+    File.WriteAllBytes(admissionFixture, new byte[] { 1, 2, 3, 4 });
+    Require(TrustedAotArtifact.ReadBoundedFile(admissionFixture, 4)
+        .AsSpan().SequenceEqual(new byte[] { 1, 2, 3, 4 }),
+        "bounded file reader changed valid bytes");
+    ExpectRefused(() => _ = TrustedAotArtifact.ReadBoundedFile(admissionFixture, 3),
+        "oversized file before native artifact deserialization");
+    File.WriteAllBytes(admissionFixture, Array.Empty<byte>());
+    ExpectRefused(() => _ = TrustedAotArtifact.ReadBoundedFile(admissionFixture, 4),
+        "empty file before native artifact deserialization");
+}
+finally
+{
+    if (File.Exists(admissionFixture)) File.Delete(admissionFixture);
+}
+
 // All of these must reject before Wasmtime ever receives an artifact. A
 // malicious serialized native-code blob is not safely validated by Wasmtime.
 TrustedAotArtifact.Verify(manifest, signature, artifact, ephemeralCiVerifier);
+
+ExpectRefused(() => TrustedAotArtifact.Verify(
+    manifest, signature, artifact, "not-a-public-key"),
+    "malformed PEM public key before native-code admission");
 
 byte[] swappedArtifact = (byte[])artifact.Clone();
 swappedArtifact[0] ^= 1;
@@ -102,6 +128,14 @@ using (var metadataSigner = RSA.Create(3072))
         signedJson.Replace("\"guest_abi\": \"atto-tenantvm-test-i32-v0\"",
             "\"guest_abi\": \"unapproved-guest-abi\"", StringComparison.Ordinal),
         "signed but incompatible actor entry ABI");
+    DenySignedMetadata(
+        signedJson.Replace("\"schema_version\": 1,",
+            "\"schema_version\": [],", StringComparison.Ordinal),
+        "signed schema_version with invalid JSON type");
+    DenySignedMetadata(
+        signedJson.Replace("\"artifact_size\": " + artifact.Length,
+            "\"artifact_size\": \"not-a-number\"", StringComparison.Ordinal),
+        "signed artifact_size with invalid JSON type");
     DenySignedMetadata(
         signedJson.Replace("\"schema_version\": 1,",
             "\"schema_version\": 1, \"guest_kind\": \"duplicated\",", StringComparison.Ordinal),
