@@ -87,7 +87,7 @@ using (var metadataSigner = RSA.Create(3072))
         signedJson.Replace("\"target_rid\":", "\"target_rid\": \"wrong-arch\", \"unused\":", StringComparison.Ordinal),
         "unapproved target architecture or unknown JSON property");
     DenySignedMetadata(
-        signedJson.Replace("\"engine_profile\": \"fuel-stack262144-mem64off-multimemoryoff-threadsoff\"",
+        signedJson.Replace("\"engine_profile\": \"fuel-stack262144-mem64off-reftypesoff-multimemoryoff-threadsoff\"",
             "\"engine_profile\": \"unapproved-engine-features\"", StringComparison.Ordinal),
         "signed but incompatible Wasmtime engine profile");
     DenySignedMetadata(
@@ -108,6 +108,7 @@ using var config = new Config()
     .WithFuelConsumption(true)
     .WithMaximumStackSize(256 * 1024)
     .WithMemory64(false)
+    .WithReferenceTypes(false) // match signed precompile profile; deny GC reference types
     .WithMultiMemory(false)
     .WithWasmThreads(false);
 using var engine = new Engine(config);
