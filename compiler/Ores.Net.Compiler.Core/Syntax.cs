@@ -1108,8 +1108,7 @@ public static partial class OresParser
                     ownership = "mut borrow";
                 if (operation == "borrow" && _index + 1 < tokens.Count &&
                     tokens[_index + 1].Text == "mut")
-                    throw new FormatException(
-                        $"Legacy ownership spelling 'rt borrow mut' is rejected; use 'rt mut borrow' at offset {at}");
+                    ownership = "mut borrow"; // compatible legacy order, same unsupported typed gate
                 if (ownership is "copy" or "share" or "take" or "borrow" or "mut borrow")
                     throw new FormatException(
                         $"Ownership operation 'rt {ownership}' requires typed actor-arena lowering; unsupported in the .NET scalar backend at offset {at}");
@@ -1117,6 +1116,23 @@ public static partial class OresParser
                 throw new FormatException(
                     $"Runtime ownership operation requires typed lowering; unsupported in the .NET scalar backend at offset {at}");
             }
+            // Recognize the new contextual ownership prefix before macro
+            // expansion, but fail closed: this scalar subset has no typed
+            // ownership/actor-arena Native AOT lowering. Only a verb touching
+            // '!' is an ownership operator; 'copy !foo' is not.
+            int verbIndex = Current.Text == "mut" ? _index + 1 : _index;
+            if (verbIndex + 1 < tokens.Count &&
+                (Current.Text != "mut" ||
+                    (tokens[verbIndex].Text == "borrow")) &&
+                (tokens[verbIndex].Text is "copy" or "take" or "borrow" or "share") &&
+                tokens[verbIndex + 1].Text == "!" &&
+                (verbIndex + 2 >= tokens.Count ||
+                    tokens[verbIndex + 2].Text is not ("=" or "eq")) &&
+                tokens[verbIndex + 1].Offset ==
+                    tokens[verbIndex].Offset + tokens[verbIndex].Text.Length)
+                throw new FormatException(
+                    $"OWNERSHIP_BANG_BACKEND_UNSUPPORTED: '{(Current.Text == "mut" ? "mut " : "")}{tokens[verbIndex].Text}!' requires typed ownership and actor-arena Native AOT lowering at offset {Current.Offset}");
+
             // Every token followed by ! is a macro invocation candidate.
             // IsMacroName intentionally rejects reserved identifiers, but using
             // it to *detect* calls would route quote!/eval!/rt!/main! to the
