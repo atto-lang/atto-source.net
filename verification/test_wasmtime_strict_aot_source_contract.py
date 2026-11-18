@@ -8,7 +8,6 @@ sandbox. Run a real published Native AOT binary as a separate release gate.
 from __future__ import annotations
 
 import json
-import re
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -51,9 +50,11 @@ class StrictFullAotSourceContract(unittest.TestCase):
     def test_precompiled_runtime_does_not_compile_guest(self) -> None:
         for source in (read(f"{RUNNER}/Program.cs"),
                        read(f"{RUNNER}/TrustedAotArtifact.cs")):
-            self.assertIsNone(re.search(
-                r"\\bModule\\.(FromText|FromBytes|FromFile|FromStream|"
-                r"FromTextFile|FromTextStream|ConvertText|Validate)\\s*\\(", source))
+            for forbidden in ("Module.FromText(", "Module.FromBytes(",
+                              "Module.FromFile(", "Module.FromStream(",
+                              "Module.FromTextFile(", "Module.FromTextStream(",
+                              "Module.ConvertText(", "Module.Validate("):
+                self.assertNotIn(forbidden, source)
             self.assertNotIn("Module.DeserializeFile(", source)
             self.assertNotIn(".Serialize(", source)
 
