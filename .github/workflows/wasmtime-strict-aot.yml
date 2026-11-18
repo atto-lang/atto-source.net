@@ -17,6 +17,17 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
+      # Private repository: a foreign PR head must not be executable under
+      # source-org credentials, even when GitHub allows the workflow to start.
+      - name: Deny cross-repository checkout before fetching source
+        shell: bash
+        env:
+          SOURCE_REPO: ${{ github.repository }}
+          PR_HEAD_REPO_ID: ${{ github.event.pull_request.head.repo.id || '1419704375' }}
+        run: |
+          set -euo pipefail
+          test "$SOURCE_REPO" = 'ores-truffle-oreslang/oreslang-source.net'
+          test "$PR_HEAD_REPO_ID" = '1419704375'
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
