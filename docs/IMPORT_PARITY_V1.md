@@ -10,11 +10,13 @@ until its own parser, resolver and linker/runtime pass the positive tests.
 1. `./x` and `../x` resolve relative to the importing source. Bare names
    such as `.hidden/x` or `..backup/x` use configured search roots instead.
 2. `+/x` (not `+x` or experimental `@/x`) is confined lexically to the nearest `.ores.pkg.toml` root,
-   rejects missing manifests, missing sources and every `..` component (including in-root traversal); it never
-   falls through to ambient search paths.
+   rejects missing manifests and source files, plus any empty, `.` or `..` path component;
+   `+/` and `pkg:` require forward-slash separators and never normalize backslashes into authority.
 3. `pkg:alias/x` requires an explicitly declared zed-pkg dependency alias;
-   it never initiates package installation. Unknown aliases and invalid
-   identifiers must fail closed.
+   it never initiates package installation. Unknown aliases, invalid
+   identifiers, noncanonical segments, and symlinks escaping the selected
+   package's physical root must fail closed. Context transitions must validate
+   that the imported source's physical identity matches the declared target.
 4. Bare search precedence: `[source].roots`, `[source].import_paths`,
    colon-separated `ORES_PATHS`, then host-separator `ORESLANG_PATH`.
    Omitted `roots` defaults to `["."]`; explicit `roots = []` remains empty;
@@ -66,3 +68,19 @@ graphs in Wasm, implement corresponding .NET and Forge graphs, then run a shared
 per-backend conformance fixture corpus. Do not promote parity on documentation
 alone. Java/Graal's source-export security policy must be honored for private
 cross-organization CI mirroring.
+
+## Stacked .NET configured-root resolver hardening
+
+The independent host-only `ProjectRootSourceResolver` now respects a
+restricted, validated `[project] root = "subdir"` instead of always
+assuming `+/` is anchored to the manifest directory. It rejects
+duplicate, dotted, absolute, traversal, malformed and missing root
+values, and checks for filesystem reparse points at every selected-root
+component and every resolved import component. This restricted subset
+is not a complete TOML parser or a descriptor-relative filesystem
+sandbox; concurrent hostile renames remain outside this contract.
+
+The .NET scalar compiler still **rejects** source imports before CIL
+emission and has no source-unit linking. A positive resolver test is
+not executable import parity. Tests are authored; they need an
+actual .NET runner pass on the exact branch before promotion.
