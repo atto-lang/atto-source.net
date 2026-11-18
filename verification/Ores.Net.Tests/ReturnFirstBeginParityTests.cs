@@ -11,13 +11,14 @@ internal static class ReturnFirstBeginParityTests
 
     private static void RejectBoth(string source)
     {
+        bool scalarRejected = false;
+        bool structuredRejected = false;
         try { _ = OresParser.Parse(source); }
-        catch (FormatException) { goto Structured; }
-        throw new Exception("scalar admitted malformed return-first source: " + source);
-    Structured:
+        catch (FormatException) { scalarRejected = true; }
         try { _ = OresStructuredParser.Parse(source); }
-        catch (FormatException) { return; }
-        throw new Exception("structured admitted malformed return-first source: " + source);
+        catch (FormatException) { structuredRejected = true; }
+        Require(scalarRejected, "scalar admitted malformed return-first source: " + source);
+        Require(structuredRejected, "structured admitted malformed return-first source: " + source);
     }
 
     public static void Run()
