@@ -1,0 +1,18 @@
+// AttoLang trap semantic fixture: identical native compiler target in 3 backends.
+// Expected real guest main() result: signed integer 7.
+// trap over a Result does not wrap it again: Result<int, String | Error>.
+// No class, actor, I/O, or exception transport dependency in this core fixture.
+fnc checked_id(int id): Result<int, String> {
+  if id < 0 then
+    return Err("id must be nonnegative");
+  fi
+  return Ok(id);
+}
+
+pub fnc main(): int {
+  val Result<int, String | Error> success = trap checked_id(5);
+  val Result<int, String | Error> invalid = trap checked_id(-1);
+  if success.is_err(); then return 103; fi
+  if invalid.is_ok(); then return 104; fi
+  return success.unwrap() + 2;
+}

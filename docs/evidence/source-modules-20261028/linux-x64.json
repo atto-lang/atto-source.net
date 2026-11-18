@@ -1,0 +1,53 @@
+{
+  "schema": 1,
+  "scope": "checked-int-bool-native-module-execution-not-full-Spin",
+  "origin_commit": "2c019f210d620d0c0ffed171e390d47007424e58",
+  "origin_tree": "f34d2cb26ef1720891a514a95fa50d59ea5e0e0c",
+  "mirror_repository": "ores-dummy-org-6/contract-tests",
+  "verified_private": true,
+  "run_url": "https://github.com/ores-dummy-org-6/contract-tests/actions/runs/40767067589",
+  "job_id": 123093953995,
+  "native_compiler_publish_and_execution": "passed",
+  "imported_overflow": {
+    "exit_code": 70,
+    "diagnostic": "Oreslang arithmetic overflow",
+    "evidence": "same job Imported helper preserves checked overflow step"
+  },
+  "unsupported_nominal_gate": "classified rejection; no emitted CIL",
+  "native_app": {
+    "source_commit": "e9fe44b41900b68a8aba945cf7e7977d310f6d61",
+    "binary_sha256": "7002f8053b612acf03da0a775ab99764ee0013a34c37e08808a092bc275345f9",
+    "output": "42",
+    "source_tree": "f34d2cb26ef1720891a514a95fa50d59ea5e0e0c",
+    "rid": "linux-x64",
+    "scope": "checked-int-bool-module-native-execution-not-full-Spin"
+  },
+  "source_graph": {
+    "scope": "verified-int-bool-modules-not-full-Spin",
+    "graph_sha256": "36b97cadb7074f647f1ef0c169559322a79d0a5a3ead237973e8701d92057491",
+    "sources": [
+      {
+        "path": "0/base.ores",
+        "sha256": "068548ffbc662ee0eb09318f253ff65ebcc60a18ee9eaab62bec9857203949bc",
+        "utf8_bytes": 44
+      },
+      {
+        "path": "0/left.ores",
+        "sha256": "ea9fc919c321d3b2df5bd95cbdc57a1299a4952034e2ecb51f877899a71646fe",
+        "utf8_bytes": 110
+      },
+      {
+        "path": "0/main.ores",
+        "sha256": "8d3b0d35e731f9e5a9dab5eb97a4ea1dc48cf69404da330813baeff1be21ba41",
+        "utf8_bytes": 138
+      },
+      {
+        "path": "0/right.ores",
+        "sha256": "50013cb6070cb410ebb1b39c18971210455516f2a9fca6e49524a22aa2564941",
+        "utf8_bytes": 108
+      }
+    ]
+  },
+  "downloaded_binary_sha256_verified": true,
+  "binary_format": "ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=ddc644e1c62fb3e240e70d575874dd4030e05ace, for GNU/Linux 3.2.0, stripped"
+}

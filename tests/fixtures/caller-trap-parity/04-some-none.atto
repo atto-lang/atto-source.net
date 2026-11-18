@@ -1,0 +1,11 @@
+// ATTO-TRAP-V1-04: exit 13, an Option value is ordinary data inside Ok.
+fnc missing(): Option<int> { return None; }
+pub fnc main(): int {
+  val Result<Option<int>, Error> nested = trap missing();
+  if nested.is_ok() then
+    if nested.unwrap().is_none() then
+      return 13;
+    fi
+  fi
+  return 0;
+}
