@@ -33,7 +33,8 @@ byte[] manifest = TrustedAotArtifact.ReadBoundedFile(args[0], 4096);
 byte[] signature = TrustedAotArtifact.ReadBoundedFile(args[1], 1024);
 byte[] artifact = TrustedAotArtifact.ReadBoundedFile(
     args[2], TrustedAotArtifact.MaxArtifactBytes);
-string ephemeralCiVerifier = File.ReadAllText(args[3]);
+string ephemeralCiVerifier = System.Text.Encoding.UTF8.GetString(
+    TrustedAotArtifact.ReadBoundedFile(args[3], 8192));
 
 // All of these must reject before Wasmtime ever receives an artifact. A
 // malicious serialized native-code blob is not safely validated by Wasmtime.
