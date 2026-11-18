@@ -15,6 +15,31 @@ from the originating repo, at the reviewed run ID/attempt, independently of
 the source branch being reviewed. Fake fixture data must never be used as
 release evidence.
 
+## Artifact provenance metadata is not execution certification
+
+The read-only `verification/artifact-provenance-gate.mjs` inspector accepts
+independently fetched, **complete** GitHub Actions run and artifact-list JSON
+plus separately reviewed source repository numeric identity, commit SHA,
+root-tree SHA, run ID, run attempt, and required artifact names. It rejects
+missing/duplicate/truncated artifacts, expired or empty artifacts, malformed
+SHA-256 digest **metadata**, foreign repositories, wrong commit/run IDs,
+and inconsistent artifact origin metadata.
+
+Run its actual Node.js regression tests on an authorized source-local checkout:
+
+```bash
+node --test verification/artifact-provenance-gate.test.mjs
+```
+
+The positive result is **`METADATA_CONSISTENT_UNCERTIFIED`**, never `PASS`.
+GitHub's artifact metadata cannot identify the specific workflow **attempt**,
+verify the **downloaded artifact bytes**, independently attest the **source
+tree**, or prove the contained compiler/guest tests ran. Those checks are
+always reported as `false`. Releasing artifacts requires a separately
+downloaded-and-hashed artifact, an exact-run-attempt source/tree-bound receipt,
+and the real stepful required compiler/test job evidence. The inspector never
+authorizes copying private source to another organization.
+
 ## Capture and validate a real run
 
 ```bash
