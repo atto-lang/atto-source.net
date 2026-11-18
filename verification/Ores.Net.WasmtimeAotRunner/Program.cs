@@ -22,6 +22,14 @@ if (RuntimeFeature.IsDynamicCodeSupported)
     Console.Error.WriteLine("WASMTIME_STRICT_AOT_REQUIRES_PUBLISHED_NATIVE_AOT");
     return 78;
 }
+// Deliberate test-only opt-in. Wasmtime 50.0.1 carries fixed-in-50.0.2
+// upstream advisories, and this CLI accepts an ephemeral test trust key.
+// Never allow it to be mistaken for a production untrusted tenant service.
+if (Environment.GetEnvironmentVariable("ORES_WASMTIME_SYNTHETIC_CI_ONLY") != "1")
+{
+    Console.Error.WriteLine("WASMTIME_SYNTHETIC_PROBE_NOT_AUTHORIZED");
+    return 78;
+}
 if (args.Length != 4)
 {
     Console.Error.WriteLine(
