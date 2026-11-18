@@ -9,6 +9,7 @@ on:
       - '.github/workflows/wasmtime-strict-aot.yml'
       - 'build/StrictNativeAot.targets'
       - 'verification/test_wasmtime_strict_aot_source_contract.py'
+      - 'verification/wasmtime-c-api/**'
       - 'contracts/private-ci-security.v1.json'
 
 permissions:

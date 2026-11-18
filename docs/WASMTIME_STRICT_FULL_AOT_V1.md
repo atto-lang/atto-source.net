@@ -116,6 +116,27 @@ do not themselves satisfy those gates. No private source is to be
 exported until they are satisfied. Existing source-org Wasmtime Actions
 have failed with zero executed job steps; they are not a runtime test.
 
+## Patched compiler-free native C ABI candidate
+
+The separate [Wasmtime v50.0.2 minimal C API candidate](../verification/wasmtime-c-api/README.md)
+now pins the official patched upstream release commit
+`f9a93b049a23bef9a33cfa3888f32af33a178749`, requests
+`wasmtime-c-api --release --no-default-features`, rejects Cranelift/Winch
+compiler features in Cargo's resolved feature tree, and writes a
+build-receipt candidate with native library SHA-256 and Git identity.
+Its shell syntax and no-argument fail-closed behavior were verified;
+**the Rust/native library was not built** in this environment.
+
+Do not swap a 50.0.2 `libwasmtime` binary under the 50.0.1 managed
+binding: the exact C ABI and serialized module identity must match.
+A compiled native library must also be tested from a real published
+.NET Native AOT host. The existing 50.0.1 synthetic smoke remains test-only
+and never authorizes untrusted tenant admission.
+
+See [issue #566](https://github.com/ores-truffle-oreslang/oreslang-source.net/issues/566)
+for the independent, private-source snapshot-specific CI carrier approval
+request. No cross-org private tree copy has been approved or executed.
+
 ## November 2026 Wasmtime advisory gate
 
 **Release HOLD:** the synthetic proof is currently pinned to Wasmtime

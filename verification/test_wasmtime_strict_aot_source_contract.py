@@ -97,6 +97,9 @@ class StrictFullAotSourceContract(unittest.TestCase):
         self.assertIn("FileShare.Read", gate)
         self.assertIn("int remaining = maxLength - checked((int)output.Length)", gate)
         self.assertIn("remaining + 1", gate)
+        self.assertIn("long observedLength = stream.Length", gate)
+        self.assertIn("capacity: (int)observedLength", gate)
+        self.assertEqual(gate.count("stream.Length;"), 1)
         self.assertIn("stream.Read(buffer.AsSpan(0, toRead))", gate)
         self.assertIn("output.ToArray()", gate)
         self.assertNotIn("File.ReadAllBytes(", gate)
@@ -150,7 +153,7 @@ class StrictFullAotSourceContract(unittest.TestCase):
         builder = read(f"{BUILDER}/Program.cs")
         self.assertNotIn("File.ReadAllBytes(", verifier)
         self.assertIn("maxLength + 1", verifier)
-        self.assertIn("output.Length != openedLength", verifier)
+        self.assertIn("output.Length != observedLength", verifier)
         self.assertIn("oversized signed-artifact input", runner)
         self.assertIn("empty signed-artifact input", runner)
         self.assertIn("invalid artifact read limit rejected", runner)
@@ -197,6 +200,26 @@ class StrictFullAotSourceContract(unittest.TestCase):
                     "require_destination_blob_tree_commit_ref_attestation",
                     "never_infer_approval_from_actions_minutes"):
             self.assertIs(transfer[key], True)
+
+    def test_patched_compiler_free_c_abi_candidate_is_pinned(self) -> None:
+        build = read("verification/wasmtime-c-api/build_compiler_free_50_0_2.sh")
+        self.assertIn(
+            "f9a93b049a23bef9a33cfa3888f32af33a178749", build)
+        self.assertIn("readonly RELEASE_TAG=v50.0.2", build)
+        self.assertIn("refs/tags/", build)
+        self.assertIn("git -C \"$source_dir\" status --porcelain", build)
+        for token in (
+            "cargo build -p wasmtime-c-api --release --no-default-features",
+            "--features disable-logging --locked",
+            "wasmtime-(cranelift|winch)",
+            "sha256sum",
+            "build-receipt.txt",
+            "git_tree=",
+            "WASMTIME_50_0_2_COMPILER_FREE_C_API_BUILD_CANDIDATE_PASS",
+        ):
+            self.assertIn(token, build)
+        self.assertNotIn("GITHUB_TOKEN", build)
+        self.assertNotIn("git clone", build)
 
     def test_workflows_pin_same_repo_and_exact_sha(self) -> None:
         for workflow in ("wasmtime-strict-aot.yml", "wasmtime-nativeaot-probe.yml"):
