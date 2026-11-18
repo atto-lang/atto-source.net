@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Isolated feasibility gate. Do not attach this package to the shipping
+       NativeAOT host until the untrusted TenantVM acceptance suite passes. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <PublishAot>true</PublishAot>
+    <IsAotCompatible>true</IsAotCompatible>
+    <SelfContained>true</SelfContained>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- The managed binding uses native Wasmtime via the C ABI/P/Invoke.
+         Pin a reviewed version; upgrades require a new exact-RID AOT test. -->
+    <PackageReference Include="Wasmtime" Version="50.0.1" />
+  </ItemGroup>
+</Project>
