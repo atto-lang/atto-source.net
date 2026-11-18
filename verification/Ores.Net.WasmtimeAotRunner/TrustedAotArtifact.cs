@@ -27,36 +27,40 @@ internal static class TrustedAotArtifact
 
     internal static byte[] ReadBoundedFile(string path, int maxLength)
     {
-        // The input may be concurrently replaced, truncated, or extended.
-        // Open it ONCE and never allocate based on a separate FileInfo stat:
-        // File.ReadAllBytes after a length check can allocate arbitrarily
-        // large memory when an adversary expands the path between the calls.
-        // FileShare.Read is additional protection on Windows, but must not
-        // be relied on as an exclusive writer lock on Unix.
-        if (maxLength <= 0)
-            throw new SecurityException("Invalid AOT artifact read limit");
-        using var input = new FileStream(
-            path, FileMode.Open, FileAccess.Read, FileShare.Read,
-            bufferSize: 4096, options: FileOptions.SequentialScan);
-        long length = input.Length;
-        if (length <= 0 || length > maxLength)
-            throw new SecurityException("AOT artifact file exceeds its admission limit");
+        // Do not call File.ReadAllBytes after a separate FileInfo.Length stat:
+        // an attacker can grow the file between those operations and make
+        // ReadAllBytes allocate far beyond the claimed resource limit.
+        //
+        // Keep one file handle from start to finish, reject non-seekable
+        // inputs, and never read more than maxLength + 1 bytes regardless
+        // of concurrent modifications. The later signature/digest check
+        // authenticates the exact in-memory bytes supplied to Wasmtime.
+        if (maxLength < 1 || maxLength > MaxArtifactBytes)
+            throw new ArgumentOutOfRangeException(nameof(maxLength));
 
-        // Allocation is bounded by maxLength. A short read or an appended
-        // byte is rejected; exactly these in-memory bytes are authenticated
-        // and passed to Module.Deserialize (never reopen the original path).
-        byte[] bytes = new byte[checked((int)length)];
-        try
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+            FileShare.Read, bufferSize: 4096, options: FileOptions.SequentialScan);
+        if (!stream.CanSeek || stream.Length < 1 || stream.Length > maxLength)
+            throw new SecurityException("AOT artifact exceeds its admission limit");
+
+        long openedLength = stream.Length;
+        using var output = new MemoryStream(capacity: checked((int)openedLength));
+        byte[] buffer = new byte[Math.Min(8192, maxLength + 1)];
+        while (true)
         {
-            input.ReadExactly(bytes);
+            int remaining = maxLength - checked((int)output.Length);
+            int toRead = Math.Min(buffer.Length, remaining + 1);
+            int count = stream.Read(buffer.AsSpan(0, toRead));
+            if (count == 0) break;
+            if (count > remaining)
+                throw new SecurityException("AOT artifact grew during bounded read");
+            output.Write(buffer.AsSpan(0, count));
         }
-        catch (EndOfStreamException e)
-        {
-            throw new SecurityException("AOT artifact truncated during admission", e);
-        }
-        if (input.ReadByte() != -1)
-            throw new SecurityException("AOT artifact grew during admission");
-        return bytes;
+        if (output.Length == 0)
+            throw new SecurityException("Empty AOT artifact");
+        if (output.Length != openedLength)
+            throw new SecurityException("AOT artifact truncated while reading");
+        return output.ToArray();
     }
 
     internal static void Verify(
@@ -77,15 +81,40 @@ internal static class TrustedAotArtifact
             throw new SecurityException("Missing pinned AOT verifier identity");
 
         using var verifier = RSA.Create();
-        verifier.ImportFromPem(trustedPublicKeyPem);
-        if (verifier.KeySize < 3072 ||
-            !verifier.VerifyData(manifestBytes, signature,
-                HashAlgorithmName.SHA256, RSASignaturePadding.Pss))
-            throw new SecurityException("AOT manifest signer not trusted");
+        try
+        {
+            verifier.ImportFromPem(trustedPublicKeyPem);
+            if (verifier.KeySize < 3072 ||
+                !verifier.VerifyData(manifestBytes, signature,
+                    HashAlgorithmName.SHA256, RSASignaturePadding.Pss))
+                throw new SecurityException("AOT manifest signer not trusted");
+        }
+        catch (Exception ex) when (ex is CryptographicException or ArgumentException)
+        {
+            throw new SecurityException("Invalid trusted AOT signer key", ex);
+        }
 
         // Parse ONLY after verifying signature; reject duplicated or unknown
         // JSON properties so a second parser cannot reinterpret policy.
-        using var doc = JsonDocument.Parse(manifestBytes);
+        // Set a low maximum depth; this schema has no nested values.
+        JsonDocument doc;
+        try
+        {
+            doc = JsonDocument.Parse(manifestBytes, new JsonDocumentOptions
+            {
+                AllowTrailingCommas = false,
+                CommentHandling = JsonCommentHandling.Disallow,
+                MaxDepth = 8
+            });
+        }
+        catch (JsonException ex)
+        {
+            throw new SecurityException("Invalid signed AOT manifest JSON", ex);
+        }
+        using (doc)
+        {
+        try
+        {
         var root = doc.RootElement;
         if (root.ValueKind != JsonValueKind.Object)
             throw new SecurityException("AOT manifest must be a JSON object");
@@ -118,6 +147,13 @@ internal static class TrustedAotArtifact
         byte[] actualDigest = SHA256.HashData(artifact);
         if (!CryptographicOperations.FixedTimeEquals(approvedDigest, actualDigest))
             throw new SecurityException("Native AOT artifact differs from signed manifest");
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or
+            FormatException or OverflowException)
+        {
+            throw new SecurityException("Malformed signed AOT policy metadata", ex);
+        }
+        }
     }
 
     private static bool IsLowerHexSha256(string? value)

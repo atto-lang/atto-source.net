@@ -22,6 +22,14 @@ if (RuntimeFeature.IsDynamicCodeSupported)
     Console.Error.WriteLine("WASMTIME_STRICT_AOT_REQUIRES_PUBLISHED_NATIVE_AOT");
     return 78;
 }
+// Deliberate test-only opt-in. Wasmtime 50.0.1 carries fixed-in-50.0.2
+// upstream advisories, and this CLI accepts an ephemeral test trust key.
+// Never allow it to be mistaken for a production untrusted tenant service.
+if (Environment.GetEnvironmentVariable("ORES_WASMTIME_SYNTHETIC_CI_ONLY") != "1")
+{
+    Console.Error.WriteLine("WASMTIME_SYNTHETIC_PROBE_NOT_AUTHORIZED");
+    return 78;
+}
 if (args.Length != 4)
 {
     Console.Error.WriteLine(
@@ -29,9 +37,9 @@ if (args.Length != 4)
     return 64;
 }
 
-// Negative fixture: oversize or empty files must be rejected before any
-// native artifact reaches Wasmtime. The read implementation must never
-// allocate in proportion to an attacker-controlled file that grew after stat.
+// A bounded-read regression that executes in the published NativeAOT runner.
+// Synthetic files are created privately in the runner temp directory: this is
+// NOT an attacker-controlled Oreslang guest admission path.
 string boundedReadFixture = Path.Combine(
     Path.GetTempPath(), "oresnet-aot-read-" + Guid.NewGuid().ToString("N"));
 try
@@ -44,9 +52,10 @@ try
     ExpectRefused(
         () => _ = TrustedAotArtifact.ReadBoundedFile(boundedReadFixture, 64),
         "empty signed-artifact input");
-    ExpectRefused(
-        () => _ = TrustedAotArtifact.ReadBoundedFile(boundedReadFixture, 0),
-        "invalid artifact read limit");
+    bool deniedInvalidLimit = false;
+    try { _ = TrustedAotArtifact.ReadBoundedFile(boundedReadFixture, 0); }
+    catch (ArgumentOutOfRangeException) { deniedInvalidLimit = true; }
+    Require(deniedInvalidLimit, "invalid artifact read limit rejected");
 }
 finally
 {
@@ -60,9 +69,35 @@ byte[] artifact = TrustedAotArtifact.ReadBoundedFile(
 string ephemeralCiVerifier = System.Text.Encoding.UTF8.GetString(
     TrustedAotArtifact.ReadBoundedFile(args[3], 8192));
 
+// File admission must remain genuinely bounded even if the file changes
+// size after an initial stat. The one-handle reader must not use
+// File.ReadAllBytes or allocate an attacker-selected amount of memory.
+string admissionFixture = Path.Combine(
+    Path.GetTempPath(), "atto-aot-bounded-" + Guid.NewGuid().ToString("N"));
+try
+{
+    File.WriteAllBytes(admissionFixture, new byte[] { 1, 2, 3, 4 });
+    Require(TrustedAotArtifact.ReadBoundedFile(admissionFixture, 4)
+        .AsSpan().SequenceEqual(new byte[] { 1, 2, 3, 4 }),
+        "bounded file reader changed valid bytes");
+    ExpectRefused(() => _ = TrustedAotArtifact.ReadBoundedFile(admissionFixture, 3),
+        "oversized file before native artifact deserialization");
+    File.WriteAllBytes(admissionFixture, Array.Empty<byte>());
+    ExpectRefused(() => _ = TrustedAotArtifact.ReadBoundedFile(admissionFixture, 4),
+        "empty file before native artifact deserialization");
+}
+finally
+{
+    if (File.Exists(admissionFixture)) File.Delete(admissionFixture);
+}
+
 // All of these must reject before Wasmtime ever receives an artifact. A
 // malicious serialized native-code blob is not safely validated by Wasmtime.
 TrustedAotArtifact.Verify(manifest, signature, artifact, ephemeralCiVerifier);
+
+ExpectRefused(() => TrustedAotArtifact.Verify(
+    manifest, signature, artifact, "not-a-public-key"),
+    "malformed PEM public key before native-code admission");
 
 byte[] swappedArtifact = (byte[])artifact.Clone();
 swappedArtifact[0] ^= 1;
@@ -111,6 +146,14 @@ using (var metadataSigner = RSA.Create(3072))
         signedJson.Replace("\"target_rid\":", "\"target_rid\": \"wrong-arch\", \"unused\":", StringComparison.Ordinal),
         "unapproved target architecture or unknown JSON property");
     DenySignedMetadata(
+        signedJson.Replace("\"wasmtime_version\": \"50.0.1\"",
+            "\"wasmtime_version\": \"unknown-native-engine\"", StringComparison.Ordinal),
+        "signed artifact from unapproved Wasmtime native engine");
+    DenySignedMetadata(
+        signedJson.Replace("\"guest_kind\": \"synthetic-ci-only\"",
+            "\"guest_kind\": \"production-untrusted\"", StringComparison.Ordinal),
+        "synthetic test signer cannot authorize production guest");
+    DenySignedMetadata(
         signedJson.Replace("\"engine_profile\": \"fuel-stack262144-mem64off-reftypesoff-multimemoryoff-threadsoff\"",
             "\"engine_profile\": \"unapproved-engine-features\"", StringComparison.Ordinal),
         "signed but incompatible Wasmtime engine profile");
@@ -118,6 +161,14 @@ using (var metadataSigner = RSA.Create(3072))
         signedJson.Replace("\"guest_abi\": \"atto-tenantvm-test-i32-v0\"",
             "\"guest_abi\": \"unapproved-guest-abi\"", StringComparison.Ordinal),
         "signed but incompatible actor entry ABI");
+    DenySignedMetadata(
+        signedJson.Replace("\"schema_version\": 1,",
+            "\"schema_version\": [],", StringComparison.Ordinal),
+        "signed schema_version with invalid JSON type");
+    DenySignedMetadata(
+        signedJson.Replace("\"artifact_size\": " + artifact.Length,
+            "\"artifact_size\": \"not-a-number\"", StringComparison.Ordinal),
+        "signed artifact_size with invalid JSON type");
     DenySignedMetadata(
         signedJson.Replace("\"schema_version\": 1,",
             "\"schema_version\": 1, \"guest_kind\": \"duplicated\",", StringComparison.Ordinal),
@@ -168,9 +219,8 @@ Require(incA(9) == 9, "tenant A independent mutable global");
 Require(incB(4) == 4, "tenant B independent mutable global");
 Require(incA(1) == 10 && incB(1) == 5, "tenant globals remained isolated");
 
-// Global variables alone cannot prove that tenant linear memories are
-// independent. Read/write actual Wasm memory in both Stores, including
-// a second mutation of A while B must retain its original byte.
+// A mutable Wasm linear-memory witness across independently allocated Stores.
+// Isolated counter globals alone are insufficient evidence of memory isolation.
 var writeA = tenantA.GetAction<int>("write_byte")
     ?? throw new SecurityException("Missing signed memory-write export");
 var writeB = tenantB.GetAction<int>("write_byte")
@@ -182,8 +232,7 @@ var readB = tenantB.GetFunction<int>("read_byte")
 Require(readA() == 0 && readB() == 0, "separate zeroed guest memories");
 writeA(0xA1);
 writeB(0xB2);
-Require(readA() == 0xA1 && readB() == 0xB2,
-    "tenant private linear memory after writes");
+Require(readA() == 0xA1 && readB() == 0xB2, "separate linear memory writes");
 writeA(0xC3);
 Require(readA() == 0xC3 && readB() == 0xB2,
     "neighbor linear memory remains independent");
