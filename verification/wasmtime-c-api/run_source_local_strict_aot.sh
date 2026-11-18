@@ -14,7 +14,7 @@ cd "$(dirname -- "${BASH_SOURCE[0]}")/../.."
 [[ "$(uname -s)" == "Linux" && "$(uname -m)" == "x86_64" ]] || {
   echo 'requires isolated Linux x64 runner' >&2; exit 69;
 }
-for binary in git python3 dotnet bash file ldd sha256sum grep mktemp; do
+for binary in git python3 bash file ldd sha256sum grep mktemp; do
   command -v "$binary" >/dev/null || { echo "missing tool: $binary" >&2; exit 69; }
 done
 actual_head=$(git rev-parse HEAD)
@@ -34,6 +34,7 @@ python3 verification/test_wasmtime_strict_aot_source_contract.py
 bash -n verification/wasmtime-c-api/build_compiler_free_50_0_2.sh
 bash verification/wasmtime-c-api/test_preflight.sh
 
+command -v dotnet >/dev/null || { echo "missing .NET SDK" >&2; exit 69; }
 [[ "$(dotnet --version)" == 10.* ]] || {
   echo 'requires .NET SDK 10.x and Native AOT build toolchain' >&2; exit 69;
 }
