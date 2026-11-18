@@ -29,19 +29,24 @@ const jobs = {total_count:2,jobs:[
       "Adversarial scalar runner self-tests (Windows)",
       "Shared scalar source admission on the released Native AOT compiler",
       "Execute real Windows Native AOT binary",
+      "Execute authorized CLR Abs and Max through Windows Native AOT",
       "Confirm strict Native AOT PE and reject managed assembly",
       "Reject corrupted Native AOT PE headers",
       "Execute Native AOT checked-arithmetic error cases",
       "Reject managed sidecar next to an otherwise native executable",
       "Compile verified CFG into a real Windows Native AOT executable",
       "Prove experimental structured source in real Windows Native AOT",
+      "Execute canonical .atto signed relational source in Windows Native AOT",
       "Execute typed source helper calls in real Windows Native AOT",
       "Execute typed statement-bodied helpers in real Windows Native AOT",
       "Verify typed bindings in executed Windows Native AOT",
       "Execute shared five-backend native.add source in real Windows Native AOT",
       "Execute shared native.precedence in Windows Native AOT",
+      "Execute typed Integer.rem guest in Windows Native AOT",
+      "Execute checked Integer.pow and bitXor in Windows Native AOT",
       "Emit exact-head Windows Native AOT run receipt",
       "Upload exact-head Windows Native AOT receipt",
+      "Upload signed64 remainder native executables",
       "Upload native executable",
     ].map((name,i)=>({name,number:i+1,status:"completed",conclusion:"success"}))},
   {name:"linux-aot-diagnostic",run_id:12345,run_attempt:1,head_sha:sha,
@@ -181,6 +186,20 @@ test("a successful extra job with runner and completed step is accepted",()=> {
     steps:[{name:"Execute diagnostic",number:1,status:"completed",conclusion:"success"}]});
   sample.total_count++;
   assert.deepEqual(check(run,sample),[]);
+});
+
+test("current Windows native guest and artifact stages are mandatory",()=> {
+  for (const name of [
+    "Execute authorized CLR Abs and Max through Windows Native AOT",
+    "Execute canonical .atto signed relational source in Windows Native AOT",
+    "Execute typed Integer.rem guest in Windows Native AOT",
+    "Execute checked Integer.pow and bitXor in Windows Native AOT",
+    "Upload signed64 remainder native executables"
+  ]) {
+    const sample=copy(jobs);
+    sample.jobs[0].steps=sample.jobs[0].steps.filter(s=>s.name!==name);
+    assert.match(check(run,sample).join(" "),/missing successful step/,name);
+  }
 });
 
 test("zero steps are never proof",()=>{const j=copy(jobs);j.jobs[0].steps=[];assert.match(check(run,j).join(" "),/zero executed/);});
