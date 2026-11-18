@@ -1,0 +1,12 @@
+// ATTO-TRAP-V1-05: exit 9; only an ordinary Error is caught, as Err(Error).
+fnc fail(): int {
+  throw Error("ordinary failure");
+}
+fnc via_call(): int {
+  return fail();
+}
+pub fnc main(): int {
+  val Result<int, Error> result = trap via_call();
+  if result.is_err() then return 9; fi
+  return 0;
+}

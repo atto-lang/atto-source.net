@@ -1,0 +1,47 @@
+name: Oreslang client scalar Native AOT (six guest executions required)
+on:
+  pull_request:
+    paths:
+      - 'contracts/clients/scalar-v1/**'
+      - 'verification/assert-clients-scalar-linux-native-aot.sh'
+      - '.github/workflows/client-scalar-native-aot.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  linux-native-aot-client-scalar:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact source head
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          echo "SOURCE_HEAD=$EXPECTED"
+          echo "SOURCE_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install native prerequisites
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev binutils file
+      - name: Build exact-source Native AOT compiler
+        run: |
+          set -euo pipefail
+          bash -n verification/assert-clients-scalar-linux-native-aot.sh
+          dotnet publish compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj \
+            -c Release -r linux-x64 -o artifacts/compiler/linux-x64 -warnaserror
+          bash verification/assert-linux-native-release.sh artifacts/compiler/linux-x64/oresnet
+      - name: Execute six native AOT guests and three compiler rejections
+        run: |
+          set -euo pipefail
+          bash verification/assert-clients-scalar-linux-native-aot.sh
+      - name: Explicit scope boundary
+        run: |
+          echo 'Six positive Native AOT scalar guests and three compiler rejections required.'
+          echo 'No claim for async, HTTP, JSON, actor, full SDK, Java, LLVM, Wasm or Cranelift.'

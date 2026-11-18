@@ -1,0 +1,202 @@
+using System.Globalization;
+
+namespace Ores.Net.Compiler;
+
+/// <summary>
+/// Frozen, source-checked IR for the first synchronous actor-state operation.
+/// No arbitrary user statement/expression or delegated scheduler authority.
+/// </summary>
+public sealed class VerifiedActorIncrement
+{
+    internal VerifiedActorIncrement(ActorStateSchemaMetadata schema,
+        string method, int methodOffset, string field, int fieldIndex, long delta,
+        string? scalarMailParameter = null)
+    {
+        Schema = schema;
+        MethodName = method;
+        MethodOffset = methodOffset;
+        FieldName = field;
+        FieldIndex = fieldIndex;
+        Delta = delta;
+        ScalarMailParameter = scalarMailParameter;
+    }
+    public ActorStateSchemaMetadata Schema { get; }
+    public string MethodName { get; }
+    public int MethodOffset { get; }
+    public string FieldName { get; }
+    public int FieldIndex { get; }
+    public long Delta { get; }
+    // Non-null only for a single source-typed owned int mailbox input.
+    public string? ScalarMailParameter { get; }
+}
+
+/// <summary>
+/// Strictly bounded first guest actor method grammar. The syntax is parsed by
+/// the same lexer as scalar sources. No text regex or substring admission.
+/// Exactly one synchronous checked state increment is allowed. Its input is
+/// either the previously supported literal +1 or one owned int message;
+/// all other actor bodies fail closed.
+/// </summary>
+public static partial class OresParser
+{
+    public static VerifiedActorIncrement InspectSynchronousActorIncrement(string source)
+    {
+        var tokens = Tokenize(source);
+        var schema = FindActorStateSchema(tokens) ??
+            throw new FormatException("Expected one isolated actor state declaration");
+        int p = 0;
+
+        Token At() => tokens[Math.Min(p, tokens.Count - 1)];
+        bool Take(string word)
+        {
+            if (At().Text != word) return false;
+            p++;
+            return true;
+        }
+        void Expect(string word)
+        {
+            if (!Take(word))
+                throw new FormatException(
+                    $"Actor increment requires '{word}' at offset {At().Offset}");
+        }
+        string Identifier()
+        {
+            var text = At().Text;
+            if (text.Length == 0 || text[0] is not (>= 'a' and <= 'z' or >= 'A' and <= 'Z' or '_') ||
+                text.Skip(1).Any(ch => ch is not (>= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' or '_')))
+                throw new FormatException($"Actor method requires identifier at offset {At().Offset}");
+            p++;
+            return text;
+        }
+
+        Expect("define");
+        _ = Take("pub");
+        Expect("isolated");
+        Expect("actor");
+        if (Identifier() != schema.ActorName)
+            throw new FormatException("Actor name does not match validated schema");
+        Expect("as");
+        Expect("state");
+        Expect("{");
+        // Every field in the state prefix was already strictly validated by
+        // FindActorStateSchema. Skip precisely one tokenized declaration block.
+        // This method slice never admits nested state-layout statements.
+        int consumed = 0;
+        while (At().Text != "}")
+        {
+            if (At().Text.Length == 0 || At().Text == "{" || ++consumed > 128)
+                throw new FormatException("Malformed or excessive actor state schema");
+            p++;
+        }
+        Expect("}");
+        Expect("pub");
+        var methodOffset = At().Offset;
+        var methodName = Identifier();
+        Expect("(");
+        string? scalarMailParameter = null;
+        if (Take("int"))
+            scalarMailParameter = Identifier();
+        Expect(")");
+        Expect(":");
+        Expect("int");
+        Expect("using");
+        Expect("state");
+        Expect(".");
+        Expect("read");
+        Expect(",");
+        Expect("state");
+        Expect(".");
+        Expect("write");
+        Expect("{");
+        Expect("return");
+        // Only the statically verified state intrinsic may omit self.
+        // This is not general name-based method dispatch.
+        bool explicitSelf = Take("self");
+        if (explicitSelf) Expect(".");
+        Expect("handle_state");
+        Expect("(");
+        int criticalOffset = At().Offset;
+        Expect("critical");
+        // The compiler-owned state writer requires the canonical contiguous
+        // modifier. A bare legacy `critical` token must never mint an
+        // exclusive mutable loan (nor silently assume a write effect).
+        if (At().Text != "-" || At().Offset != criticalOffset + 8)
+            throw new FormatException("Increment requires adjacent critical-write");
+        Expect("-");
+        if (At().Text != "write" || At().Offset != criticalOffset + 9)
+            throw new FormatException("Increment requires exclusive critical-write");
+        Expect("write");
+        Expect("|");
+        var parameter = Identifier();
+        Expect("|");
+        Expect("->");
+        Expect("{");
+        var writeReceiver = Identifier();
+        Expect(".");
+        var writeField = Identifier();
+        Expect("=");
+        var readReceiver = Identifier();
+        Expect(".");
+        var readField = Identifier();
+        Expect("+");
+        var deltaToken = At();
+        long delta = 0; // The typed-mail form has no source-literal delta.
+        if (scalarMailParameter is not null)
+        {
+            if (deltaToken.Text != scalarMailParameter)
+                throw new FormatException(
+                    $"Actor increment requires its single owned int input at offset {deltaToken.Offset}");
+        }
+        else
+        {
+            if (deltaToken.Text.Length == 0 ||
+                deltaToken.Text.Any(c => c != '_' && (c < '0' || c > '9')) ||
+                !long.TryParse(deltaToken.Text.Replace("_", "", StringComparison.Ordinal),
+                    NumberStyles.None, CultureInfo.InvariantCulture, out long sourceDelta) ||
+                sourceDelta != 1)
+                throw new FormatException(
+                    $"Actor increment supports only checked + 1 at offset {deltaToken.Offset}");
+            delta = sourceDelta;
+        }
+        p++;
+        Expect(";");
+        Expect("return");
+        var returnReceiver = Identifier();
+        Expect(".");
+        var returnField = Identifier();
+        Expect(";");
+        Expect("}");
+        Expect(")");
+        Expect(";");
+        Expect("}");
+        Expect("end");
+        if (At().Text.Length != 0)
+            throw new FormatException($"Unexpected trailing actor source at offset {At().Offset}");
+
+        // Lexical parameters may not shadow implicit receiver authority.
+        // Explicit self.handle_state is unambiguous for a parameter named
+        // handle_state, but neither spelling permits a redefined self.
+        if (scalarMailParameter == "self" || parameter == "self" ||
+            (!explicitSelf && scalarMailParameter == "handle_state"))
+            throw new FormatException("Actor self/state intrinsic is shadowed");
+        if (scalarMailParameter == parameter
+            || writeReceiver != parameter || readReceiver != parameter ||
+            returnReceiver != parameter || writeField != readField ||
+            readField != returnField)
+            throw new FormatException("State callback alias or field mismatch");
+        var field = schema.Fields.FirstOrDefault(x => x.Name == writeField);
+        if (field is null || field.Kind != ActorStateFieldKind.Int64)
+            throw new FormatException("Actor increment requires a declared int state field");
+        // This opt-in source emitter never grants actor lifecycle or
+        // supervisor CONTROL authority. Preserve the same reserved hook
+        // namespace as the declared-actor ABI rather than letting a public
+        // ordinary method be compiled under a privileged selector.
+        if (new[] { "handle_state", "init", "receive", "send", "end",
+                    "tear_down", "on_start", "on_stop", "on_restart",
+                    "on_panic", "on_throw", "on_throws", "on_raise",
+                    "on_recover" }.Contains(methodName, StringComparer.Ordinal))
+            throw new FormatException("Reserved actor runtime method name");
+        return new VerifiedActorIncrement(schema, methodName, methodOffset,
+            writeField, field.Index, delta, scalarMailParameter);
+    }
+}
