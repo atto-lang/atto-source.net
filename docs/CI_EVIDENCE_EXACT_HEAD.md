@@ -40,6 +40,30 @@ downloaded-and-hashed artifact, an exact-run-attempt source/tree-bound receipt,
 and the real stepful required compiler/test job evidence. The inspector never
 authorizes copying private source to another organization.
 
+## Independently hash downloaded artifact bytes
+
+The metadata inspector only verifies GitHub's *reported* SHA-256. For an
+independently downloaded ZIP, call `inspectDownloadedArtifactBytes(run,
+artifacts, expected, requiredArtifactName, archiveBuffer)` exported by
+`verification/artifact-provenance-gate.mjs`. The caller must provide
+the **complete, independently fetched** source-repository run and artifact
+list, a separately reviewed source head/tree/run/attempt and required names,
+and the actual downloaded ZIP bytes as a Node.js `Buffer`. This additional
+check rejects wrong artifact names, wrong sizes, non-ZIP headers,
+more than 256 MiB of in-memory input, or any SHA-256 byte mismatch
+(using constant-time comparison). The bundled native-Node adversarial tests
+cover same-length tampering, wrong file type, forged names, incorrect run
+attempts and nonbinary inputs.
+
+Even when bytes match exactly, the result is
+`ARTIFACT_BYTES_MATCH_METADATA_UNCERTIFIED`, **not PASS**. Neither this
+digest check nor ZIP magic byte checking validates ZIP members, the
+source root tree, the individual artifact's workflow attempt, executed
+compiler/guest code, or test assertions. Independent provenance and
+runtime execution receipts remain mandatory for release. Large artifacts
+require a separately audited streaming verifier rather than raising the
+in-memory cap.
+
 ## Capture and validate a real run
 
 ```bash
