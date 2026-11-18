@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- A trusted BUILD-TIME compiler, never shipped as the tenant execution host. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>oresnet-wasmtime-aot-builder</AssemblyName>
+    <PublishAot>true</PublishAot>
+    <SelfContained>true</SelfContained>
+    <PublishTrimmed>true</PublishTrimmed>
+    <IsAotCompatible>true</IsAotCompatible>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Wasmtime" Version="50.0.1" />
+  </ItemGroup>
+  <Import Project="../../build/StrictNativeAot.targets" />
+</Project>
