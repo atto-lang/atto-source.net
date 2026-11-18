@@ -170,6 +170,13 @@ using (var registry = new TenantStoreRegistry(engine, module, maxTenants: 2))
 {
     var tenantA = registry.Create("tenant-A");
     var tenantB = registry.Create("tenant-B");
+
+    // The root host must reject both duplicate tenant identity and an
+    // over-quota third tenant, without corrupting either admitted Store.
+    ExpectInvalidOperation(() => _ = registry.Create("tenant-A"),
+        "duplicate tenant admission");
+    ExpectInvalidOperation(() => _ = registry.Create("tenant-C"),
+        "max-tenant quota admission");
     Require(registry.Increment(tenantA, 7) == 7, "registry tenant A initial state");
     Require(registry.Increment(tenantB, 42) == 42, "registry tenant B initial state");
     registry.WriteByte(tenantA, 81);
@@ -195,6 +202,8 @@ using (var registry = new TenantStoreRegistry(engine, module, maxTenants: 2))
     Require(refusedStale, "destroyed generation handle was reused");
 
     var tenantA2 = registry.Create("tenant-A", initialFuel: 1000);
+    ExpectInvalidOperation(() => _ = registry.Increment(tenantA, 1),
+        "reincarnated tenant must not accept stale handle");
     Require(registry.Increment(tenantA2, 1) == 1, "fresh Store did not reset globals");
     Require(registry.ReadByte(tenantA2) == 0, "fresh Store did not reset memory");
     ExpectTrap(() => registry.TriggerFuelTrap(tenantA2), "registry fuel trap");
@@ -222,6 +231,13 @@ static void RequireNoImports(Module module)
 {
     if (module.Imports.Count != 0)
         throw new SecurityException("Wasm guest imports denied");
+}
+
+static void ExpectInvalidOperation(Action action, string why)
+{
+    try { action(); }
+    catch (InvalidOperationException) { return; }
+    throw new Exception("WASMTIME_PROBE_FAILED: admitted " + why);
 }
 
 static void ExpectAdmissionDenied(Action action, string why)
