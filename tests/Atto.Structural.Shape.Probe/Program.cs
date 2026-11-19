@@ -37,6 +37,14 @@ static class Program
               ReadonlyShapeFieldAbi.BindInt(catLayout, "foo", cat).ReadInt() == 83,
               "different nominal field offsets");
         Check(ReadonlyShapeFieldAbi.BindInt(catLayout, "foo", cat).ReadInt() == 42, "owner reuse");
+        // Host-only proof that readonly structural access does not mutate
+        // source storage. This is not an Atto compiler implicit-borrow test.
+        var dogBefore = (byte[])dog.Clone();
+        var catBefore = (byte[])cat.Clone();
+        _ = ReadonlyShapeFieldAbi.BindInt(dogLayout, "foo", dog).ReadInt();
+        _ = ReadonlyShapeFieldAbi.BindInt(catLayout, "foo", cat).ReadInt();
+        Check(dog.AsSpan().SequenceEqual(dogBefore) && cat.AsSpan().SequenceEqual(catBefore),
+            "readonly shape loan must not write its owner");
         Reject("E_TYPE", () => { _ = ReadonlyShapeFieldAbi.BindInt(catLayout, "missing", cat); });
         Reject("E_TYPE", () => {
             var l = new ClassLayout("Wrong", [Field("foo", ScalarKind.Bool, 0)]);
