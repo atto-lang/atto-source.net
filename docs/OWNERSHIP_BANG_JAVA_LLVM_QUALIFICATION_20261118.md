@@ -8,17 +8,17 @@ Prepared on 2026-11-19 UTC. Source-local documentation only. Existing [runner re
 
 **Important change:** [Java ownership-bang #3186](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/3186), PR head `176694acbbc09c365f434e906e7ed3c035a95193`, was **merged by another actor** into Java `main`. Its merge commit `1f6d48e2cb7f76dfe4fec3ad357319f17277439a` contains the canonical `borrow! mut` parser and SHA-pinned guest fixtures (verified by source Git-blob readback). **No actual executed JUnit or Truffle guest receipt has been observed; the merge is NOT a parity certificate.** The exact merge commit, not the older PR head, is the next Java qualification target.
 
-[LLVM #1903](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/1903) remains a **draft, open, unmerged** compiler fix at `d8291593d94d7cf5f73eebe3a755d4ede3c4604a`, with the `rt borrow mut` CTest guest registered at default/O0/O2.
+[LLVM #1903](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/1903) remains a **draft, open, unmerged** compiler fix (GitHub last reported a new merge conflict with advancing `main`) at `d8291593d94d7cf5f73eebe3a755d4ede3c4604a`, with the `rt borrow mut` CTest guest registered at default/O0/O2.
 
 | Target | Exact immutable source under test | Git root tree | Compiler execution |
 | --- | --- | --- | --- |
-| Java merged #3186 | `1f6d48e2cb7f76dfe4fec3ad357319f17277439a` | Unverified (requires independent Git API readback) | NOT_EXECUTED |
-| LLVM draft #1903 | `d8291593d94d7cf5f73eebe3a755d4ede3c4604a` | Unverified (requires independent Git API readback) | NOT_EXECUTED |
+| Java merged #3186 | `1f6d48e2cb7f76dfe4fec3ad357319f17277439a` | `a4402e1967e0ed63fe39d26931ece935c341e820` (direct Git commit API readback) | NOT_EXECUTED |
+| LLVM draft #1903 | `d8291593d94d7cf5f73eebe3a755d4ede3c4604a` | `93171e31744e4a758b622028c1c875b773ff2c30` (direct Git commit API readback) | NOT_EXECUTED |
 
 ### New private-source-preserving, source-local Linux fallback proposals
 
-- [Java draft CI #3191](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/3191), workflow-PR head `ef7c69e01a14b7f155904ea94d8684a4209475b6`. Its reviewed workflow checks out only the immutable Java **merged** source commit above from the same Java repository. Requires an isolated `oreslang-bang-java-isolated` self-hosted Linux runner, an explicit owner-approved CI PR head and source SHA in repository variables, and a separately applied `ownership-bang-ci-approved` label.
-- [LLVM draft CI #1904](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/1904), workflow-PR head `22eb20db6d46cf5ae484a3fa16be541642be5606`. Its reviewed workflow checks out only LLVM draft #1903's exact source head from the same LLVM repo. Requires dedicated `oreslang-bang-llvm-isolated` ephemeral runner and same dual-SHA approval.
+- [Java draft CI #3191](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/3191), workflow-PR head `4fccdb37a29e2723cd200ed67d75037b11e34023`. Its reviewed workflow checks out only the immutable Java **merged** source commit above from the same Java repository. Requires an isolated `oreslang-bang-java-isolated` self-hosted Linux runner, an explicit owner-approved CI PR head and source SHA in repository variables, and a separately applied `ownership-bang-ci-approved` label.
+- [LLVM draft CI #1904](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/1904), workflow-PR head `5661e120980aa43d0062d2d414ae8c2eb9e12fc5`. Its reviewed workflow checks out only LLVM draft #1903's exact source head from the same LLVM repo. Requires dedicated `oreslang-bang-llvm-isolated` ephemeral runner and same dual-SHA approval.
 - **Both CI proposals are OFF BY DEFAULT and NOT_EXECUTED.** No runner was registered or configured, no variable or approval label was set, and no private source was exported. See the per-repository `docs/OWNERSHIP_BANG_SOURCE_LOCAL_LINUX_RUNNER.md` for administrator-only setup and teardown. Source-local runners still depend on GitHub Actions organization policy allowing scheduling. The GitHub app cannot access billing/runner registration.
 
 ### Executed-step evidence remains absent
