@@ -77,6 +77,37 @@ static class Program
             _ = new ClassLayout("Invalid", [Field("foo", ScalarKind.Int, 1)]);
         });
         Reject("E_MOVED", () => { _ = ReadonlyShapeFieldAbi.BindInt(dogLayout, "foo", dog, true); });
+        // Malformed compiler-owned layout metadata must fail closed before
+        // establishing a borrowed field view (host-only ABI regression).
+        Reject("E_LAYOUT", () => {
+            _ = new ClassLayout("NegativeOffset", [Field("foo", ScalarKind.Int, -8)]);
+        });
+        Reject("E_LAYOUT", () => {
+            _ = new ClassLayout("EmptyName", [Field("", ScalarKind.Int, 0)]);
+        });
+        Reject("E_LAYOUT", () => {
+            _ = new ClassLayout("NullDescriptor", new FieldDescriptor[] { null! });
+        });
+        Reject("E_SOURCE_LIMIT", () => {
+            var fields = new FieldDescriptor[33];
+            for (var i = 0; i < fields.Length; i++)
+                fields[i] = Field($"field_{i}", ScalarKind.Int, i * 8);
+            _ = new ClassLayout("OverLimit", fields);
+        });
+        Reject("E_BOUNDS", () => {
+            _ = ReadonlyShapeFieldAbi.BindInt(dogLayout, "foo", new byte[7]);
+        });
+        Reject("E_BOUNDS", () => {
+            var tooFar = new ClassLayout("VeryFar", [Field("foo", ScalarKind.Int, int.MaxValue - 7)]);
+            _ = ReadonlyShapeFieldAbi.BindInt(tooFar, "foo", dog);
+        });
+        // Source metadata must be immutable after capture, despite mutable
+        // arrays being supplied by the compiler host.
+        var mutableDescriptors = new[] { Field("foo", ScalarKind.Int, 0) };
+        var snapshot = new ClassLayout("Snapshot", mutableDescriptors);
+        mutableDescriptors[0] = Field("replaced", ScalarKind.Int, 8);
+        Check(ReadonlyShapeFieldAbi.BindInt(snapshot, "foo", dog).ReadInt() == 41,
+              "class field metadata must be defensively copied");
         Console.WriteLine($"DOTNET_SHAPE_FIELD_WITNESS_PASS checks={_passed}");
         return 0;
     }
