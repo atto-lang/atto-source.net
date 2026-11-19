@@ -4,6 +4,21 @@
 
 Prepared on 2026-11-19 UTC. Source-local documentation only. Existing [runner recovery runbook](OWNERSHIP_BANG_RUNNER_RECOVERY_20261116.md) and [historical head ledger](evidence/ownership-bang-20261116-source-head-ledger.json) remain authoritative background, not current execution proof. See [runner admission #427](https://github.com/ores-truffle-oreslang/oreslang-source.net/issues/427), [governance #260](https://github.com/ores-truffle-oreslang/oreslang-source.net/issues/260), and [historical transfer inventory #239](https://github.com/ores-truffle-oreslang/oreslang-source.net/issues/239).
 
+## Current correction PR heads (updated 2026-11-19 UTC)
+
+The earlier #3112 / #1831 entries below are **merged baseline heads**, not the current correction PR heads. Test / approve only the **current exact heads** for these open changes:
+
+| Source correction | Current exact PR head | Root tree | Executed compiler/guest evidence |
+| --- | --- | --- | --- |
+| [Java draft #3186](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/3186) | `176694acbbc09c365f434e906e7ed3c035a95193` | UNVERIFIED | NOT_EXECUTED |
+| [LLVM draft #1903](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/1903) | `d8291593d94d7cf5f73eebe3a755d4ede3c4604a` | UNVERIFIED | NOT_EXECUTED |
+
+Both PRs were source-locally reconciled and last reported mergeable, but they are deliberately **draft and unmerged**. Java includes three SHA-pinned mutable-borrow `.atto` guest fixtures; LLVM includes the SHA-pinned legacy `rt borrow mut` native guest under default, O0 and O2 CTest registrations. The source-only readback checks are **not compiler execution**. The requested Java test command is `mvn -B -ntp -Dtest=OwnershipBangAliasesTest,OwnershipBangGuestTest test`; LLVM's command is listed below. After any head change, re-pin this packet before qualification.
+
+**Source runner admission evidence:** A selected job re-run was accepted in each source repo, but GitHub created a new failed job with `steps=[]`, zero artifacts, and a job-log download returning `404 BlobNotFound`. Java [run 44430114082](https://github.com/ores-truffle-oreslang/oreslang-source.java/actions/runs/44430114082) job `135247159045` is on the **superseded** Java head `bf020ce7c90e0cce21c25b8c3700780eaf6d41f0`; it **cannot** certify Java #3186's new head. LLVM [run 44429270289](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/44429270289), job `135247173762`, is on LLVM's current head, but has no executable steps. The admission-denial root cause remains **UNCONFIRMED**, and private-source export remains **DENIED**.
+
+The current machine-readable targets are in `current_followup_pr_targets` in the adjacent JSON. The historic `targets` field remains for provenance of the merged baseline heads; do not substitute an earlier commit's Git tree for either new feature head.
+
 ## The candidate runner and the hard security boundary
 
 - Candidate destination: private `quaestor-ledger-test/atto-ci`, numeric repository ID `1458333874`. This is an **unapproved candidate**, NOT an allowlisted private source destination.
