@@ -120,11 +120,11 @@
       "repository_id": 1400792274,
       "pr": 3186,
       "head_sha": "176694acbbc09c365f434e906e7ed3c035a95193",
-      "source_root_tree_sha": null,
+      "source_root_tree_sha": "a4402e1967e0ed63fe39d26931ece935c341e820",
       "draft": false,
       "merged": true,
-      "mergeability_last_observed": true,
-      "root_tree_status": "UNVERIFIED",
+      "mergeability_last_observed": null,
+      "root_tree_status": "READ_BACK_FROM_SOURCE_GIT_COMMIT_OBJECT",
       "compiler_execution": "NOT_EXECUTED",
       "tests": [
         "OwnershipBangAliasesTest",
@@ -145,11 +145,11 @@
       "repository_id": 1410897874,
       "pr": 1903,
       "head_sha": "d8291593d94d7cf5f73eebe3a755d4ede3c4604a",
-      "source_root_tree_sha": null,
+      "source_root_tree_sha": "93171e31744e4a758b622028c1c875b773ff2c30",
       "draft": true,
       "merged": false,
-      "mergeability_last_observed": true,
-      "root_tree_status": "UNVERIFIED",
+      "mergeability_last_observed": false,
+      "root_tree_status": "READ_BACK_FROM_SOURCE_GIT_COMMIT_OBJECT",
       "compiler_execution": "NOT_EXECUTED",
       "tests": [
         "native_ownership_bang_aliases_parser_and_checker",
@@ -252,24 +252,28 @@
       {
         "repository": "ores-truffle-oreslang/oreslang-source.java",
         "ci_pr": 3191,
-        "ci_workflow_head_sha": "ef7c69e01a14b7f155904ea94d8684a4209475b6",
+        "ci_workflow_head_sha": "4fccdb37a29e2723cd200ed67d75037b11e34023",
         "source_under_test_sha": "1f6d48e2cb7f76dfe4fec3ad357319f17277439a",
         "runner_label": "oreslang-bang-java-isolated",
         "approved": false,
         "enabled": false,
         "executed": false,
-        "workflow_path": ".github/workflows/ownership-bang-source-local.yml"
+        "workflow_path": ".github/workflows/ownership-bang-source-local.yml",
+        "ci_workflow_root_tree_sha": null,
+        "source_under_test_tree_sha": "a4402e1967e0ed63fe39d26931ece935c341e820"
       },
       {
         "repository": "ores-truffle-oreslang/oreslang-source.llvm",
         "ci_pr": 1904,
-        "ci_workflow_head_sha": "22eb20db6d46cf5ae484a3fa16be541642be5606",
+        "ci_workflow_head_sha": "5661e120980aa43d0062d2d414ae8c2eb9e12fc5",
         "source_under_test_sha": "d8291593d94d7cf5f73eebe3a755d4ede3c4604a",
         "runner_label": "oreslang-bang-llvm-isolated",
         "approved": false,
         "enabled": false,
         "executed": false,
-        "workflow_path": ".github/workflows/ownership-bang-source-local.yml"
+        "workflow_path": ".github/workflows/ownership-bang-source-local.yml",
+        "ci_workflow_root_tree_sha": null,
+        "source_under_test_tree_sha": "93171e31744e4a758b622028c1c875b773ff2c30"
       }
     ],
     "must_check": [
@@ -279,6 +283,7 @@
       "same-repository checkout only; no cross-org private Git object transfer",
       "enabled nonsecret vars and approval label only after review",
       "real nonempty completed steps and artifact ZIP integrity verified after executing tests"
-    ]
+    ],
+    "current_observation": "Java CI #3191 and LLVM CI #1904 each draft/mergeable, workflow variables disabled, no self-hosted runner registered; native compiler LLVM #1903 has an unresolved new merge conflict against current main. Do not merge or certify until semantic resolution and actual executed jobs."
   }
 }
