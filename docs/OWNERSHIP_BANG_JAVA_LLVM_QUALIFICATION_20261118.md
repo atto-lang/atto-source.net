@@ -41,6 +41,16 @@ The current Java merged commit has new first-page source-free runs: [physical-so
 
 The adjacent JSON now records the merged Java source identity, LLVM draft head, two independently reviewed candidate **workflow** SHAs and the absence of actual runner registration/authorization, preserving the separate original merged-benchmark entries for historical provenance.
 
+## Verified independent-review identity conflict (2026-11-19 UTC)
+
+**Critical source-export approval blocker:** Current `.github/CODEOWNERS` in Java, LLVM, and .NET assigns critical workflow/security changes to `@ORESoftware`. The GitHub repository owner object for [ORESoftware/flags-2-env](https://github.com/ORESoftware/flags-2-env) resolves that account to **immutable user ID `11139560`**, account type `User`. But the source governance file `.github/private-ci-independent-reviewer.json` excludes reviewer IDs `11139560` and `2148448`, while its independent reviewer remains disabled and unset. Consequently a `@ORESoftware` CODEOWNER review **cannot satisfy the required independent source-export reviewer**. This is an observed identity-policy conflict, not a license to relax the exclusion.
+
+The source repositories' `main` branches all reported `protected=false` in direct GitHub branch metadata: Java, LLVM, and .NET. CODEOWNERS file presence is therefore not proof of enforced independent review. The two CI-only PRs had no recorded reviews and cannot be approved by their author as an independent export reviewer.
+
+**Required administration:** Provision a different eligible reviewer with verified write authority, update CODEOWNER ownership through protected non-self-approved change controls, enable enforceable protection on source `main`, and activate the exact source commit/root-tree/destination immutable-repo-ID/retention policy only after that independent review. Do not mark `@ORESoftware` as an eligible source-export approver under the existing exclusion. Source-local ephemeral runner authorization remains a separate administrator decision, not a private cross-org transfer; neither workflow is activated or executed.
+
+The machine-readable manifest contains `governance_identity_conflict_20261119`. Its fail-closed policy assertions and four deliberate negative mutations passed source-only verification. They are not CI compiler tests.
+
 ## The candidate runner and the hard security boundary
 
 - Candidate destination: private `quaestor-ledger-test/atto-ci`, numeric repository ID `1458333874`. This is an **unapproved candidate**, NOT an allowlisted private source destination.
