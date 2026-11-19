@@ -8,17 +8,17 @@ Prepared on 2026-11-19 UTC. Source-local documentation only. Existing [runner re
 
 **Important change:** [Java ownership-bang #3186](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/3186), PR head `176694acbbc09c365f434e906e7ed3c035a95193`, was **merged by another actor** into Java `main`. Its merge commit `1f6d48e2cb7f76dfe4fec3ad357319f17277439a` contains the canonical `borrow! mut` parser and SHA-pinned guest fixtures (verified by source Git-blob readback). **No actual executed JUnit or Truffle guest receipt has been observed; the merge is NOT a parity certificate.** The exact merge commit, not the older PR head, is the next Java qualification target.
 
-[LLVM #1903](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/1903) remains a **draft, open, unmerged** compiler fix, source-locally rebased onto current `main` with mergeability rechecked at `84c1bddf1807888c5f5904e18d14c71cb6b01d26`, with the `rt borrow mut` CTest guest registered at default/O0/O2.
+[LLVM #1903](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/1903) remains a **draft, open, unmerged** compiler fix, source-locally rebased onto current `main` with mergeability rechecked at `5eba17e441faacc85d446c2f6b12c1537709c48c`, with the `rt borrow mut` CTest guest registered at default/O0/O2.
 
 | Target | Exact immutable source under test | Git root tree | Compiler execution |
 | --- | --- | --- | --- |
 | Java merged #3186 | `1f6d48e2cb7f76dfe4fec3ad357319f17277439a` | `a4402e1967e0ed63fe39d26931ece935c341e820` (direct Git commit API readback) | NOT_EXECUTED |
-| LLVM draft #1903 | `84c1bddf1807888c5f5904e18d14c71cb6b01d26` | `4203e26e774eae11086a989c6a512b7f19609f08` (direct Git commit API readback) | NOT_EXECUTED |
+| LLVM draft #1903 | `5eba17e441faacc85d446c2f6b12c1537709c48c` | `74aed6c4fa17b372b181886147b4594325458ed4` (direct Git commit API readback) | NOT_EXECUTED |
 
 ### New private-source-preserving, source-local Linux fallback proposals
 
 - [Java draft CI #3191](https://github.com/ores-truffle-oreslang/oreslang-source.java/pull/3191), workflow-PR head `43f799b5d439ade92012be493cf1196365acaf6c`. Its reviewed workflow checks out only the immutable Java **merged** source commit above from the same Java repository. Requires an isolated `oreslang-bang-java-isolated` self-hosted Linux runner, an explicit owner-approved CI PR head and source SHA in repository variables, and a separately applied `ownership-bang-ci-approved` label.
-- [LLVM draft CI #1904](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/1904), workflow-PR head `7ddc16884a4cb3f554f8bc6cd2307791d6ba0ca4`. Its reviewed workflow checks out only LLVM draft #1903's exact source head from the same LLVM repo. Requires dedicated `oreslang-bang-llvm-isolated` ephemeral runner and same dual-SHA approval.
+- [LLVM draft CI #1904](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/pull/1904), workflow-PR head `d904cb587d8e77a898f80ced1a29e2317da211a2`. Its reviewed workflow checks out only LLVM draft #1903's exact source head from the same LLVM repo. Requires dedicated `oreslang-bang-llvm-isolated` ephemeral runner and same dual-SHA approval.
 - **Both CI proposals are OFF BY DEFAULT and NOT_EXECUTED.** No runner was registered or configured, no variable or approval label was set, and no private source was exported. See the per-repository `docs/OWNERSHIP_BANG_SOURCE_LOCAL_LINUX_RUNNER.md` for administrator-only setup and teardown. Source-local runners still depend on GitHub Actions organization policy allowing scheduling. The GitHub app cannot access billing/runner registration.
 
 ### Independent alternate runner and synthetic evidence hardening
@@ -29,7 +29,9 @@ The carrier's [original source-free canary #44212748860, attempt 3](https://gith
 
 Further **source-local** hardening in CI draft #3191 and #1904 now pins actual SHA-1 Git blobs of test fixtures, requires clean builds (Java Maven `clean test`, LLVM fresh CMake build), validates the full 24-case LLVM ownership-bang CTest inventory and preserves its detailed `LastTest.log`, and recalculates receipt/report SHA256 before upload. Both CI-only branches were independently rebased onto current `main`, preserving exact workflow and runbook blob identities. Both remain draft/unmerged/off-by-default and will not run without administrator-approved exact workflow/source SHAs and isolated runner registration.
 
-**LLVM correction #1903** is now source-locally rebased at `84c1bddf1807888c5f5904e18d14c71cb6b01d26` with root tree `4203e26e774eae11086a989c6a512b7f19609f08`; 24 required CTest names reconcile with the frozen CMake registrations, but neither the LLVM compiler nor native guest tests have run. Earlier #1903 job receipts on a superseded head are invalid for the new head.
+**LLVM correction #1903** is now source-locally rebased at `5eba17e441faacc85d446c2f6b12c1537709c48c` with root tree `74aed6c4fa17b372b181886147b4594325458ed4`; 24 required CTest names reconcile with the frozen CMake registrations, but neither the LLVM compiler nor native guest tests have run. Earlier #1903 job receipts on a superseded head are invalid for the new head.
+
+**Latest source admission attempt:** At the reconciled LLVM head `5eba17e441faacc85d446c2f6b12c1537709c48c`, source Actions [real-LLVM guest #44455440518](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/44455440518), [native-admission #44455440406](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/44455440406), and [ownership grammar #44455440517](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/44455440517) have sampled jobs with **zero executed steps and zero artifacts**. CI workflow #1904 must use the updated exact-source SHA/tree and **new** CI-only workflow PR SHA. The connected GitHub API explicitly rejects Actions runner-registration and Actions-permission endpoints; the authorized repository/org administrator must complete those controls outside this chat. Source-private export remains DENY under issue #260.
 
 ### Executed-step evidence remains absent
 
