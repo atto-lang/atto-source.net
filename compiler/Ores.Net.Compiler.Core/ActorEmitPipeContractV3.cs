@@ -25,8 +25,18 @@ public sealed record ActorEmitStageV3
         ReceiveType = receiveType;
         // Freeze all compiler-provided typed observations before any routing
         // validation. Never retain a mutable list from the parser/type checker.
-        EmitTypes = Array.AsReadOnly((emitTypes ??
-            throw new ArgumentNullException(nameof(emitTypes))).ToArray());
+        ArgumentNullException.ThrowIfNull(emitTypes);
+        var observations = new List<string>();
+        foreach (string type in emitTypes)
+        {
+            // Do not exhaust an untrusted or infinite IEnumerable before
+            // checking the same bounded source evidence as Java and LLVM.
+            if (observations.Count >= ActorEmitPipeContractV3.MaxEmitObservations)
+                throw new FormatException(
+                    "E_ACTOR_PIPE_EMIT_LIMIT: actor body exceeds 1024 typed emit observations");
+            observations.Add(type);
+        }
+        EmitTypes = Array.AsReadOnly(observations.ToArray());
         Supervisor = supervisor;
     }
 }
@@ -36,6 +46,7 @@ public sealed record ActorEmitLinkV3(string Source, string Target, string Payloa
 public static class ActorEmitPipeContractV3
 {
     public const int MaxStages = 16;
+    public const int MaxEmitObservations = 1024;
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
     private static FormatException Reject(string code, string message) =>
@@ -43,9 +54,15 @@ public static class ActorEmitPipeContractV3
 
     private static void RequireIdentity(string? value)
     {
-        if (string.IsNullOrEmpty(value) || value.Contains('\0'))
+        if (string.IsNullOrEmpty(value))
             throw Reject("E_ACTOR_PIPE_IDENTITY",
                 "actor type and instance IDs must be nonempty and NUL-free");
+        // Valid UTF-16 of N code units requires at least N UTF-8 bytes.
+        // Bound hostile inputs before scanning the whole identifier.
+        if (value.Length > 256)
+            throw Reject("E_ACTOR_PIPE_IDENTITY", "actor identifier exceeds 256 UTF-8 bytes");
+        if (value.Contains('\0'))
+            throw Reject("E_ACTOR_PIPE_IDENTITY", "actor identifier contains a NUL code unit");
         int bytes;
         try { bytes = StrictUtf8.GetByteCount(value); }
         catch (EncoderFallbackException)
