@@ -1,0 +1,4 @@
+// Right-associative reverse application: twice(increment(20)).
+fnc increment(int value): int { return value + 1; }
+fnc twice(int value): int { return value * 2; }
+pub fnc main(): int { return twice <| increment <| 20; }

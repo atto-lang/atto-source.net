@@ -221,7 +221,7 @@ public static partial class OresStructuredParser
                 i > 1 ? tokens[i - 2].Text : "",
                 i > 0 ? tokens[i - 1].Text : "",
                 tokens[i].Text, tokens[i + 1].Text))
-                throw ActorPipeAdmission.Unsupported(tokens[i].Offset);
+                throw ActorPipeAdmission.Unsupported(tokens[i].Offset, tokens[i].Text);
         }
     }
 
@@ -953,6 +953,12 @@ public static partial class OresStructuredParser
             else if (index + 1 < source.Length &&
                 (((ch == '<' || ch == '>') && source[index + 1] == '=') ||
                  source.Substring(index, 2) is "->" or "::" or "&&" or "||"))
+                index += 2;
+            // Functional value application is a checked expression operator,
+            // never an actor graph or a general closure capability.
+            else if (index + 1 < source.Length &&
+                     ((ch == '|' && source[index + 1] == '>') ||
+                      (ch == '<' && source[index + 1] == '|')))
                 index += 2;
             else if (ch == '|' && !moduleMode)
                 throw new FormatException(
@@ -1994,7 +2000,67 @@ public static partial class OresStructuredParser
             }
             throw Error("E_OPTION_METHOD_UNSUPPORTED: use is_some(), is_none(), or unwrap_or(int)");
         }
-        private StructuredExpr Expr(int depth) => Conditional(depth + 1);
+        // The structured NativeAOT subset admits only already-declared,
+        // statically bound unary named helper functions. It deliberately
+        // does NOT implement actor graphs, inline closures, partial calls,
+        // asynchronous flattening, or an implicit dynamic fallback.
+        // f <| g <| x is right associative and uses the same typed call CFG
+        // as x |> g |> f, with no repeated evaluation of x.
+        private StructuredExpr Expr(int depth)
+        {
+            Budget(depth);
+            var reverse = new List<(string Name, int Offset)>();
+            while (index + 1 < tokens.Count && tokens[index + 1].Text == "<|")
+            {
+                if (reverse.Count >= 64)
+                    throw Error("E_VALUE_PIPE_BUDGET: reverse application exceeds 64 stages");
+                int at = Current.Offset;
+                string stage = Name();
+                Expect("<|");
+                reverse.Add((stage, at));
+            }
+
+            var value = Conditional(depth + 1);
+            if (reverse.Count > 0 && Current.Text == "|>")
+                throw Error("E_VALUE_PIPE_DIRECTION: parenthesize mixed <| and |> applications");
+            for (int i = reverse.Count - 1; i >= 0; --i)
+                value = ApplyValueStage(reverse[i].Name, reverse[i].Offset, value);
+
+            int forwards = 0;
+            while (Current.Text == "|>")
+            {
+                int at = Current.Offset;
+                index++;
+                if (++forwards > 64)
+                    throw Error("E_VALUE_PIPE_BUDGET: forward application exceeds 64 stages");
+                string name = Name();
+                value = ApplyValueStage(name, at, value);
+            }
+            if (Current.Text == "<|")
+                throw Error("E_VALUE_PIPE_DIRECTION: parenthesize mixed |> and <| applications");
+            return value;
+        }
+
+        private StructuredExpr ApplyValueStage(string name, int at, StructuredExpr input)
+        {
+            if (scopes.Any(scope => scope.ContainsKey(name)))
+                throw new FormatException(
+                    $"E_VALUE_PIPE_STAGE: local '{name}' is not a proven callable at offset {at}");
+            if (!visible.TryGetValue(name, out var target))
+                throw new FormatException(
+                    $"E_VALUE_PIPE_STAGE: named helper '{name}' is undefined or not visible at offset {at}");
+            if (target.Parameters.Count != 1)
+                throw new FormatException(
+                    $"E_VALUE_PIPE_ARITY: '{name}' must have exactly one typed parameter at offset {at}");
+            Require(input, target.Parameters[0].Type, "Value-pipeline stage input type mismatch");
+            int height = Height(input) + 1;
+            if (height > MaxDepth)
+                throw new FormatException($"Value-pipeline AST depth exceeds limit at offset {at}");
+            var call = new StructuredCall(at, target.Name,
+                Array.AsReadOnly(new StructuredExpr[] { input }), target.ResultType);
+            expressionHeights.Add(call, height);
+            return call;
+        }
         private StructuredExpr Conditional(int depth)
         {
             Budget(depth);
