@@ -144,12 +144,12 @@
       "repository": "ores-truffle-oreslang/oreslang-source.llvm",
       "repository_id": 1410897874,
       "pr": 1903,
-      "head_sha": "d8291593d94d7cf5f73eebe3a755d4ede3c4604a",
-      "source_root_tree_sha": "93171e31744e4a758b622028c1c875b773ff2c30",
+      "head_sha": "84c1bddf1807888c5f5904e18d14c71cb6b01d26",
+      "source_root_tree_sha": "4203e26e774eae11086a989c6a512b7f19609f08",
       "draft": true,
       "merged": false,
-      "mergeability_last_observed": false,
-      "root_tree_status": "READ_BACK_FROM_SOURCE_GIT_COMMIT_OBJECT",
+      "mergeability_last_observed": true,
+      "root_tree_status": "DIRECT_GIT_COMMIT_OBJECT_READBACK_2026_11_19",
       "compiler_execution": "NOT_EXECUTED",
       "tests": [
         "native_ownership_bang_aliases_parser_and_checker",
@@ -161,8 +161,8 @@
       "reviewed_fixture_blobs": {
         "rt-borrow-mut-native.atto": "e7b2cb178c266262a94df18dd88c46ae9d32632b"
       },
-      "notes": "Still open draft at this checked head. Prior native runner retry zero-step/no artifact. Candidate source-local CI #1904 remains disabled and unexecuted.",
-      "source_under_test_sha": "d8291593d94d7cf5f73eebe3a755d4ede3c4604a"
+      "notes": "Rebased source-locally preserving newer main CMake/frontend, exact source tree independently read from GitHub; 24 native ownership-bang CTests registered; no compiler, guest, sanitizer runtime executions. Source-org CI is NOT_EXECUTED. Source CI PR #1904 repinned.",
+      "source_under_test_sha": "84c1bddf1807888c5f5904e18d14c71cb6b01d26"
     }
   ],
   "admission_probe_observations": [
@@ -182,7 +182,7 @@
       "run_id": 44429270289,
       "job_id": 135247173762,
       "source_head_sha": "d8291593d94d7cf5f73eebe3a755d4ede3c4604a",
-      "superseded": false,
+      "superseded": true,
       "execution_steps": 0,
       "artifacts": 0,
       "conclusion": "failure",
@@ -252,30 +252,30 @@
       {
         "repository": "ores-truffle-oreslang/oreslang-source.java",
         "ci_pr": 3191,
-        "ci_workflow_head_sha": "4fccdb37a29e2723cd200ed67d75037b11e34023",
+        "ci_workflow_head_sha": "43f799b5d439ade92012be493cf1196365acaf6c",
         "source_under_test_sha": "1f6d48e2cb7f76dfe4fec3ad357319f17277439a",
         "runner_label": "oreslang-bang-java-isolated",
         "approved": false,
         "enabled": false,
         "executed": false,
         "workflow_path": ".github/workflows/ownership-bang-source-local.yml",
-        "ci_workflow_root_tree_sha": "dd942c888fdf832f0fa80127bba66a0e416b3f8d",
+        "ci_workflow_root_tree_sha": "c50af3cf848fd6f9fc18fe74c6149f09d4e7a096",
         "source_under_test_tree_sha": "a4402e1967e0ed63fe39d26931ece935c341e820",
-        "mergeability_last_observed": false
+        "mergeability_last_observed": true
       },
       {
         "repository": "ores-truffle-oreslang/oreslang-source.llvm",
         "ci_pr": 1904,
-        "ci_workflow_head_sha": "5661e120980aa43d0062d2d414ae8c2eb9e12fc5",
-        "source_under_test_sha": "d8291593d94d7cf5f73eebe3a755d4ede3c4604a",
+        "ci_workflow_head_sha": "7ddc16884a4cb3f554f8bc6cd2307791d6ba0ca4",
+        "source_under_test_sha": "84c1bddf1807888c5f5904e18d14c71cb6b01d26",
         "runner_label": "oreslang-bang-llvm-isolated",
         "approved": false,
         "enabled": false,
         "executed": false,
         "workflow_path": ".github/workflows/ownership-bang-source-local.yml",
-        "ci_workflow_root_tree_sha": "15feceb3216cd9b0133a246131f2042c85730565",
-        "source_under_test_tree_sha": "93171e31744e4a758b622028c1c875b773ff2c30",
-        "mergeability_last_observed": false
+        "ci_workflow_root_tree_sha": "d9d9bf86af2a320f7e1406a1b86d82e9eefcf4ad",
+        "source_under_test_tree_sha": "4203e26e774eae11086a989c6a512b7f19609f08",
+        "mergeability_last_observed": true
       }
     ],
     "must_check": [
@@ -286,6 +286,44 @@
       "enabled nonsecret vars and approval label only after review",
       "real nonempty completed steps and artifact ZIP integrity verified after executing tests"
     ],
-    "current_observation": "As last rechecked, Java CI #3191 and LLVM CI #1904 were draft/open but reported mergeable=false after source main advanced; this is NOT runner admission evidence. Compiler LLVM #1903 also reported mergeable=false. Mergeability is volatile and needs independent conflict review before merging. No runners registered, no approval vars enabled, no compiler tests executed, source export remains prohibited."
+    "current_observation": "Draft Java CI #3191 and LLVM CI #1904 were rebased onto their respective current main with exact workflow/runbook blob identity checks. They remain open, unmerged, off by default, and require admin runner registration and SHA approvals. LLVM source fix #1903 now source-locally rebased at 84c1... and mergeable. No real Java/LLVM executed CI receipt and no private source export."
+  },
+  "source_free_alternate_evidence_20261119": {
+    "carrier_repository": "quaestor-ledger-test/atto-ci",
+    "carrier_repository_id": 1458333874,
+    "original_source_free_canary": {
+      "run_id": 44212748860,
+      "attempt": 3,
+      "job_id": 135291055347,
+      "executed_steps_successful": 6,
+      "artifact_id": 14491444377,
+      "digest_sha256": "bd069c78bf6d9d99854e04b7656805ee0c2abb6805f28d8b71ce4384a8f73781"
+    },
+    "synthetic_evidence_gate": {
+      "pr": 7,
+      "source_free_carrier_head_sha": "fd38c58897147d8bfb7c293f14730c1053c25d05",
+      "run_id": 44444480481,
+      "run_attempt": 1,
+      "job_id": 135293163894,
+      "tests_completed": 22,
+      "tests_passed": 22,
+      "tests_failed": 0,
+      "negative_cases_rejected": 21,
+      "positive_cases_accepted": 1,
+      "job_status": "completed",
+      "job_conclusion": "success",
+      "job_steps_completed_successful": 8,
+      "artifact_id": 14492467767,
+      "artifact_zip_size_bytes": 1449,
+      "artifact_zip_sha256": "3b7f3af32c725ece8255458ef1aea1fab3454dec69b86afdebbe4ad3845c4f8f",
+      "artifact_digest_independently_verified": true,
+      "artifact_internal_checksums_verified": true,
+      "source_contents_transferred": false,
+      "compiler_guest_executed": false,
+      "scope": "SYNTHETIC_EVIDENCE_VALIDATOR_ONLY"
+    },
+    "private_source_export_authorized": false,
+    "source_org_runner_admission_restored": false,
+    "budget_exact_remaining_unknown": true
   }
 }
