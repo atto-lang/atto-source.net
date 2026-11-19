@@ -1,0 +1,1 @@
+fnc helper(): int { return 42; }
