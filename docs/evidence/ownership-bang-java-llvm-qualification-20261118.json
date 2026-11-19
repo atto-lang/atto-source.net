@@ -1,0 +1,116 @@
+{
+  "schema": "oreslang-ownership-bang-source-local-qualification-v1",
+  "prepared_utc": "2026-11-19",
+  "classification": "PREPARATION_ONLY_NOT_EXECUTED",
+  "export_authorized": false,
+  "source_org_runner_admission": "UNRESOLVED",
+  "governance_issue": "https://github.com/ores-truffle-oreslang/oreslang-source.net/issues/260",
+  "runner_issue": "https://github.com/ores-truffle-oreslang/oreslang-source.net/issues/427",
+  "candidate_carrier": {
+    "repository": "quaestor-ledger-test/atto-ci",
+    "immutable_repository_id": 1458333874,
+    "authorization": "NOT_APPROVED",
+    "infrastructure_only": true,
+    "source_free_run_id": 44212748860,
+    "attempt": 2,
+    "job_id": 135231411544,
+    "job_conclusion": "success",
+    "substantive_steps_successful": 4,
+    "node_tests_passed": 2,
+    "artifact_id": 14483897425,
+    "artifact_name": "source-free-net560-canary-44212748860-2",
+    "artifact_zip_bytes": 611,
+    "artifact_zip_sha256": "436e090c4a1865a034debb13c9141a398e8c06ffb222c35977713e17e6938186"
+  },
+  "source_governance_readback": {
+    "policy_path": ".github/private-ci-independent-reviewer.json",
+    "independent_reviewer_enabled": false,
+    "independent_reviewer": null,
+    "disallowed_reviewer_ids": [
+      11139560,
+      2148448
+    ],
+    "active_destination_entries": 0,
+    "active_snapshot_entries": 0,
+    "protected_main_verified": false,
+    "approval_required": true
+  },
+  "targets": [
+    {
+      "repository": "ores-truffle-oreslang/oreslang-source.llvm",
+      "repository_id": 1410897874,
+      "pr": 1831,
+      "head_sha": "94c682798e6272c94174478a805deb1a5362c568",
+      "source_root_tree_sha": "5d4b50dd759bf5c5552feaec1e2272cc5ae8e8fb",
+      "tree_provenance": "historic source-local 2026-11-16 ledger for SAME commit SHA; must independently verify before any export",
+      "pr_merged": true,
+      "current_compiler_evidence": "NOT_EXECUTED",
+      "build_commands": [
+        "cmake -S . -B build -DBUILD_TESTING=ON",
+        "cmake --build build --target oreslang-llvmc oreslang-native-ownership-bang-aliases-test --parallel 2",
+        "ctest --test-dir build --output-on-failure -R '^native_ownership_bang_'"
+      ],
+      "required_test_groups": [
+        "native_ownership_bang_aliases_parser_and_checker",
+        "native_ownership_bang_*_guest",
+        "native_ownership_bang_*_O0",
+        "native_ownership_bang_*_O2",
+        "native_ownership_bang_*_reject",
+        "native_ownership_bang_*_sanitizer_runtime_smoke"
+      ],
+      "requirements": [
+        "CMake registered tests enumerated and selected count reconciled",
+        "all required cases executed; fail when disabled/missing",
+        "real emitted LLVM IR linked with Clang and actual guest runs where labeled guest",
+        "compiler-negative cases fail without emitted IR",
+        "fixture Git blob hashes checked",
+        "sanitizer-runtime smoke is not proof of instrumented Oreslang IR"
+      ]
+    },
+    {
+      "repository": "ores-truffle-oreslang/oreslang-source.java",
+      "repository_id": 1400792274,
+      "pr": 3112,
+      "head_sha": "e52172a7acd489d70ae10a62bcf47816b3e7cf32",
+      "source_root_tree_sha": null,
+      "tree_provenance": "NOT_AVAILABLE from current connector response; independent Git tree API readback mandatory before approval",
+      "pr_merged": true,
+      "current_compiler_evidence": "NOT_EXECUTED",
+      "build_commands": [
+        "mvn -B -ntp -Dtest=OwnershipBangAliasesTest,OwnershipBangGuestTest test"
+      ],
+      "required_test_groups": [
+        "OwnershipBangAliasesTest",
+        "OwnershipBangGuestTest"
+      ],
+      "requirements": [
+        "prove JUnit test counts and fixture SHA validation",
+        "execute actual Java/Truffle guest; expect stdout exactly 42 for each of compact/spaced/legacy",
+        ".atto guest execution is NOT Graal Native Image AOT",
+        "explicitly resolve borrow! mut canonical disagreement with spec before parity certification",
+        "checked handle aliases ref!/deref!/unref! need separate typed/runtime evidence or fail closed"
+      ]
+    }
+  ],
+  "cross_repo_spec": {
+    "repository": "ores-truffle-oreslang/attolang-language-spec.md",
+    "pr": 67,
+    "head_sha": "676b35a07f68436960c07281aee4f86fae8b3abc",
+    "canonical_mutable_borrow": "borrow! mut value",
+    "checked_handle_prefixes": [
+      "ref!",
+      "deref!",
+      "unref!"
+    ],
+    "status": "TARGET_NOT_CERTIFIED"
+  },
+  "admission_gate": [
+    "re-read current source PR SHA and independently resolve immutable root-tree SHA",
+    "require source-local trusted runner admission OR independent protected review and active exact SHA/tree/destination/test-plan authorization",
+    "require nonempty completed executable steps assigned to a runner for required jobs",
+    "reject cancelled, zero-step, skipped, missing, or ambiguous jobs",
+    "verify run attempt, expected workflow, test counts, exact guest behavior and downloaded artifact SHA256",
+    "never treat source-free carrier success as compiler parity",
+    "never mirror source or merge on this packet alone"
+  ]
+}
