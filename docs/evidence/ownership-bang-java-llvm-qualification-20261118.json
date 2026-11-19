@@ -136,7 +136,7 @@
         "mut-compact.atto": "a7e3b55ebd128a671cdb48ede3557aee6dc1b2b0",
         "mut-rt-tail.atto": "b1e982f0ca85291a5e9924e3c6ff571ba13efebe"
       },
-      "notes": "Source-local parser and fixture readback passed; no JUnit or Truffle guest execution. Prior rerun 44430114082 was on superseded head bf020ce7, NOT this head."
+      "notes": "Source-local readback passed. At CURRENT head, runner smoke #44431180090 job 135248641371, ownership/JUnit gate #44431180451 job 135248642487, and ci/test #44431180572 job 135248644205 all failed with zero steps/artifacts; no compiler/JUnit/Truffle guest execution. Older rerun #44430114082 was on superseded head bf020ce7."
     },
     {
       "repository": "ores-truffle-oreslang/oreslang-source.llvm",
@@ -184,6 +184,39 @@
       "artifacts": 0,
       "conclusion": "failure",
       "logs": "404 BlobNotFound"
+    },
+    {
+      "repo": "ores-truffle-oreslang/oreslang-source.java",
+      "run_id": 44431180090,
+      "job_id": 135248641371,
+      "source_head_sha": "176694acbbc09c365f434e906e7ed3c035a95193",
+      "superseded": false,
+      "execution_steps": 0,
+      "artifacts": 0,
+      "conclusion": "failure",
+      "job": "synthetic-smoke"
+    },
+    {
+      "repo": "ores-truffle-oreslang/oreslang-source.java",
+      "run_id": 44431180451,
+      "job_id": 135248642487,
+      "source_head_sha": "176694acbbc09c365f434e906e7ed3c035a95193",
+      "superseded": false,
+      "execution_steps": 0,
+      "artifacts": 0,
+      "conclusion": "failure",
+      "job": "copy-policy-junit"
+    },
+    {
+      "repo": "ores-truffle-oreslang/oreslang-source.java",
+      "run_id": 44431180572,
+      "job_id": 135248644205,
+      "source_head_sha": "176694acbbc09c365f434e906e7ed3c035a95193",
+      "superseded": false,
+      "execution_steps": 0,
+      "artifacts": 0,
+      "conclusion": "failure",
+      "job": "test"
     }
   ]
 }
