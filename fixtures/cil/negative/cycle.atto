@@ -1,0 +1,2 @@
+fnc loop(int x): int { return loop(x); }
+fnc main(): int { return loop(42); }

@@ -1,0 +1,1 @@
+fnc main(): bool { return true; }

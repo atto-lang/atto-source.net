@@ -1,0 +1,2 @@
+fnc one(int x): int { return x + 1; }
+fnc main(): int { return one(); }
