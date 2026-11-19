@@ -144,12 +144,12 @@
       "repository": "ores-truffle-oreslang/oreslang-source.llvm",
       "repository_id": 1410897874,
       "pr": 1903,
-      "head_sha": "84c1bddf1807888c5f5904e18d14c71cb6b01d26",
-      "source_root_tree_sha": "4203e26e774eae11086a989c6a512b7f19609f08",
+      "head_sha": "5eba17e441faacc85d446c2f6b12c1537709c48c",
+      "source_root_tree_sha": "74aed6c4fa17b372b181886147b4594325458ed4",
       "draft": true,
       "merged": false,
       "mergeability_last_observed": true,
-      "root_tree_status": "DIRECT_GIT_COMMIT_OBJECT_READBACK_2026_11_19",
+      "root_tree_status": "DIRECT_SOURCE_GIT_COMMIT_READBACK",
       "compiler_execution": "NOT_EXECUTED",
       "tests": [
         "native_ownership_bang_aliases_parser_and_checker",
@@ -161,8 +161,8 @@
       "reviewed_fixture_blobs": {
         "rt-borrow-mut-native.atto": "e7b2cb178c266262a94df18dd88c46ae9d32632b"
       },
-      "notes": "Rebased source-locally preserving newer main CMake/frontend, exact source tree independently read from GitHub; 24 native ownership-bang CTests registered; no compiler, guest, sanitizer runtime executions. Source-org CI is NOT_EXECUTED. Source CI PR #1904 repinned.",
-      "source_under_test_sha": "84c1bddf1807888c5f5904e18d14c71cb6b01d26"
+      "notes": "Current source #1903 was reconciled via a two-parent commit atop newer main, incorporating the previous ownership-bang feature head. Source parser, guest fixture immutable blob e7b2cb..., and all 24 native ownership-bang CTest registrations were read back at this exact SHA. Source LLVM workflows #44455440518, #44455440406 and #44455440517 finished with 0 executable steps/0 artifacts. Executed compiler and native guest evidence remains NOT_EXECUTED.",
+      "source_under_test_sha": "5eba17e441faacc85d446c2f6b12c1537709c48c"
     }
   ],
   "admission_probe_observations": [
@@ -242,6 +242,39 @@
       "artifacts": 0,
       "conclusion": "failure",
       "job": "receipt-checker-self-tests"
+    },
+    {
+      "repo": "ores-truffle-oreslang/oreslang-source.llvm",
+      "run_id": 44455440518,
+      "job_id": 135329203080,
+      "source_head_sha": "5eba17e441faacc85d446c2f6b12c1537709c48c",
+      "superseded": false,
+      "execution_steps": 0,
+      "artifacts": 0,
+      "conclusion": "failure",
+      "job": "real-llvm-guest"
+    },
+    {
+      "repo": "ores-truffle-oreslang/oreslang-source.llvm",
+      "run_id": 44455440406,
+      "job_id": 135329202603,
+      "source_head_sha": "5eba17e441faacc85d446c2f6b12c1537709c48c",
+      "superseded": false,
+      "execution_steps": 0,
+      "artifacts": 0,
+      "conclusion": "failure",
+      "job": "native-admission"
+    },
+    {
+      "repo": "ores-truffle-oreslang/oreslang-source.llvm",
+      "run_id": 44455440517,
+      "job_id": 135329203352,
+      "source_head_sha": "5eba17e441faacc85d446c2f6b12c1537709c48c",
+      "superseded": false,
+      "execution_steps": 0,
+      "artifacts": 0,
+      "conclusion": "failure",
+      "job": "llvm-native-ownership"
     }
   ],
   "source_local_runner_recovery": {
@@ -266,15 +299,15 @@
       {
         "repository": "ores-truffle-oreslang/oreslang-source.llvm",
         "ci_pr": 1904,
-        "ci_workflow_head_sha": "7ddc16884a4cb3f554f8bc6cd2307791d6ba0ca4",
-        "source_under_test_sha": "84c1bddf1807888c5f5904e18d14c71cb6b01d26",
+        "ci_workflow_head_sha": "d904cb587d8e77a898f80ced1a29e2317da211a2",
+        "source_under_test_sha": "5eba17e441faacc85d446c2f6b12c1537709c48c",
         "runner_label": "oreslang-bang-llvm-isolated",
         "approved": false,
         "enabled": false,
         "executed": false,
         "workflow_path": ".github/workflows/ownership-bang-source-local.yml",
-        "ci_workflow_root_tree_sha": "d9d9bf86af2a320f7e1406a1b86d82e9eefcf4ad",
-        "source_under_test_tree_sha": "4203e26e774eae11086a989c6a512b7f19609f08",
+        "ci_workflow_root_tree_sha": "b5fa33b4a6f4c7adfefe8579ffc5d55b0938bc8d",
+        "source_under_test_tree_sha": "74aed6c4fa17b372b181886147b4594325458ed4",
         "mergeability_last_observed": true
       }
     ],
@@ -286,7 +319,7 @@
       "enabled nonsecret vars and approval label only after review",
       "real nonempty completed steps and artifact ZIP integrity verified after executing tests"
     ],
-    "current_observation": "Draft Java CI #3191 and LLVM CI #1904 were rebased onto their respective current main with exact workflow/runbook blob identity checks. They remain open, unmerged, off by default, and require admin runner registration and SHA approvals. LLVM source fix #1903 now source-locally rebased at 84c1... and mergeable. No real Java/LLVM executed CI receipt and no private source export."
+    "current_observation": "LLVM #1903 source changed to 5eba17e441faacc85d446c2f6b12c1537709c48c (tree 74aed6c...), CI-only #1904 was repinned to new immutable source at workflow commit d904cb587d8e77a898f80ced1a29e2317da211a2 (tree b5fa33...). Current source-org jobs continue to fail at 0 steps. Approval state not observed active; no admin Actions runner registration through connected tools; export forbidden."
   },
   "source_free_alternate_evidence_20261119": {
     "carrier_repository": "quaestor-ledger-test/atto-ci",
