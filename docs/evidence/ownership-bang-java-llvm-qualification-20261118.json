@@ -112,5 +112,78 @@
     "verify run attempt, expected workflow, test counts, exact guest behavior and downloaded artifact SHA256",
     "never treat source-free carrier success as compiler parity",
     "never mirror source or merge on this packet alone"
+  ],
+  "baseline_target_interpretation": "targets[] records merged baseline PRs, NOT the current correction PRs. Current correction heads are in current_followup_pr_targets[]; source root trees must be independently verified before any approval.",
+  "current_followup_pr_targets": [
+    {
+      "repository": "ores-truffle-oreslang/oreslang-source.java",
+      "repository_id": 1400792274,
+      "pr": 3186,
+      "head_sha": "176694acbbc09c365f434e906e7ed3c035a95193",
+      "source_root_tree_sha": null,
+      "draft": true,
+      "merged": false,
+      "mergeability_last_observed": true,
+      "root_tree_status": "UNVERIFIED",
+      "compiler_execution": "NOT_EXECUTED",
+      "tests": [
+        "OwnershipBangAliasesTest",
+        "OwnershipBangGuestTest"
+      ],
+      "planned_command": "mvn -B -ntp -Dtest=OwnershipBangAliasesTest,OwnershipBangGuestTest test",
+      "reviewed_fixture_blobs": {
+        "mut-canonical.atto": "a518f08a495763f349c7ab21baa5d61d0cfc7769",
+        "mut-compact.atto": "a7e3b55ebd128a671cdb48ede3557aee6dc1b2b0",
+        "mut-rt-tail.atto": "b1e982f0ca85291a5e9924e3c6ff571ba13efebe"
+      },
+      "notes": "Source-local parser and fixture readback passed; no JUnit or Truffle guest execution. Prior rerun 44430114082 was on superseded head bf020ce7, NOT this head."
+    },
+    {
+      "repository": "ores-truffle-oreslang/oreslang-source.llvm",
+      "repository_id": 1410897874,
+      "pr": 1903,
+      "head_sha": "d8291593d94d7cf5f73eebe3a755d4ede3c4604a",
+      "source_root_tree_sha": null,
+      "draft": true,
+      "merged": false,
+      "mergeability_last_observed": true,
+      "root_tree_status": "UNVERIFIED",
+      "compiler_execution": "NOT_EXECUTED",
+      "tests": [
+        "native_ownership_bang_aliases_parser_and_checker",
+        "native_ownership_bang_rt_borrow_mut_guest",
+        "native_ownership_bang_rt_borrow_mut_O0",
+        "native_ownership_bang_rt_borrow_mut_O2"
+      ],
+      "planned_command": "cmake -S . -B build -DBUILD_TESTING=ON && cmake --build build --target oreslang-llvmc oreslang-native-ownership-bang-aliases-test --parallel 2 && ctest --test-dir build --output-on-failure -R '^native_ownership_bang_'",
+      "reviewed_fixture_blobs": {
+        "rt-borrow-mut-native.atto": "e7b2cb178c266262a94df18dd88c46ae9d32632b"
+      },
+      "notes": "Source-local fixture and CTest registration readback passed; exact-head rerun 44429270289, latest job 135247173762, failed before executing any steps. No native compiler/guest output."
+    }
+  ],
+  "admission_probe_observations": [
+    {
+      "repo": "ores-truffle-oreslang/oreslang-source.java",
+      "run_id": 44430114082,
+      "job_id": 135247159045,
+      "source_head_sha": "bf020ce7c90e0cce21c25b8c3700780eaf6d41f0",
+      "superseded": true,
+      "execution_steps": 0,
+      "artifacts": 0,
+      "conclusion": "failure",
+      "logs": "404 BlobNotFound"
+    },
+    {
+      "repo": "ores-truffle-oreslang/oreslang-source.llvm",
+      "run_id": 44429270289,
+      "job_id": 135247173762,
+      "source_head_sha": "d8291593d94d7cf5f73eebe3a755d4ede3c4604a",
+      "superseded": false,
+      "execution_steps": 0,
+      "artifacts": 0,
+      "conclusion": "failure",
+      "logs": "404 BlobNotFound"
+    }
   ]
 }
