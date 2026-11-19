@@ -299,14 +299,14 @@
       {
         "repository": "ores-truffle-oreslang/oreslang-source.llvm",
         "ci_pr": 1904,
-        "ci_workflow_head_sha": "b1e6066e59c322ac2df895c698ace1d73b651da0",
+        "ci_workflow_head_sha": "1dc6087f734694cfb794a00169b4170fe1a63f29",
         "source_under_test_sha": "5eba17e441faacc85d446c2f6b12c1537709c48c",
         "runner_label": "oreslang-bang-llvm-isolated",
         "approved": false,
         "enabled": false,
         "executed": false,
         "workflow_path": ".github/workflows/ownership-bang-source-local.yml",
-        "ci_workflow_root_tree_sha": "5290cbfcdc6433e85271fe305e65261aebc49774",
+        "ci_workflow_root_tree_sha": "ba1cf5e8549d82ace8036ce6c4bf3b09cae10d66",
         "source_under_test_tree_sha": "74aed6c4fa17b372b181886147b4594325458ed4",
         "mergeability_last_observed": true
       }
@@ -319,7 +319,7 @@
       "enabled nonsecret vars and approval label only after review",
       "real nonempty completed steps and artifact ZIP integrity verified after executing tests"
     ],
-    "current_observation": "LLVM CI-only draft #1904 exact new workflow SHA b1e6066e59c322ac2df895c698ace1d73b651da0 (root tree 5290cb...) uses exact equality to frozen 24 CTest names; local source-free CMake/CTest parser simulation accepted the exact 24 and rejected substituted name or wrong total. Native compiler/guest execution still NOT_EXECUTED. Both source CI PRs remain draft, no independent approval; no source export authorization.",
+    "current_observation": "LLVM CI #1904 updated to exact 24 ACTUALLY EXECUTED CTests + same-repo compiler-binary artifact; latest workflow SHA 1dc6087f734694cfb794a00169b4170fe1a63f29. Local synthetic CMake/CTest actually ran 24 trivial no-source tests and exercised guard negatives, but no private LLVM code compiled. Source org CI still 0-step failing. Draft and administrator variables disabled.",
     "llvm_inventory_metadata_gate_20261119": {
       "status": "SYNTHETIC_LOCAL_VALIDATION_ONLY",
       "exact_case_count": 24,
@@ -329,6 +329,21 @@
       "ctest_source_compile_executed": false,
       "approved": false,
       "workflow_head": "b1e6066e59c322ac2df895c698ace1d73b651da0"
+    },
+    "llvm_execution_proof_hardening_20261119": {
+      "current_ci_head_sha": "1dc6087f734694cfb794a00169b4170fe1a63f29",
+      "test_registration_count_required": 24,
+      "test_execution_count_required": 24,
+      "requires_100_percent_real_ctest_execution": true,
+      "compiler_binary_uploaded_on_success_to_source_repo": true,
+      "sha256_manifest_includes_compiler_binary": true,
+      "source_free_local_synthetic_ctest_executions": 24,
+      "metadata_gate_accepts_correct_summary": true,
+      "metadata_gate_rejects_wrong_execution_count": true,
+      "metadata_gate_rejects_partial_success": true,
+      "private_source_compiler_executed": false,
+      "runner_approved": false,
+      "private_source_export_authorized": false
     }
   },
   "source_free_alternate_evidence_20261119": {
