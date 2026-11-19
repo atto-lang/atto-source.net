@@ -259,7 +259,7 @@
         "enabled": false,
         "executed": false,
         "workflow_path": ".github/workflows/ownership-bang-source-local.yml",
-        "ci_workflow_root_tree_sha": null,
+        "ci_workflow_root_tree_sha": "dd942c888fdf832f0fa80127bba66a0e416b3f8d",
         "source_under_test_tree_sha": "a4402e1967e0ed63fe39d26931ece935c341e820"
       },
       {
@@ -272,7 +272,7 @@
         "enabled": false,
         "executed": false,
         "workflow_path": ".github/workflows/ownership-bang-source-local.yml",
-        "ci_workflow_root_tree_sha": null,
+        "ci_workflow_root_tree_sha": "15feceb3216cd9b0133a246131f2042c85730565",
         "source_under_test_tree_sha": "93171e31744e4a758b622028c1c875b773ff2c30"
       }
     ],
