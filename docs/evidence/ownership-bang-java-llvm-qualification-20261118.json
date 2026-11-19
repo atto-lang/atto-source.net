@@ -358,5 +358,31 @@
     "private_source_export_authorized": false,
     "source_org_runner_admission_restored": false,
     "budget_exact_remaining_unknown": true
+  },
+  "governance_identity_conflict_20261119": {
+    "status": "CONFIRMED_SOURCE_EXPORT_REVIEW_BLOCKER",
+    "github_account": "ORESoftware",
+    "immutable_account_id": 11139560,
+    "account_type": "User",
+    "identity_evidence": "https://api.github.com/repos/ORESoftware/flags-2-env (owner.login, owner.id, owner.type)",
+    "excluded_independent_reviewers": [
+      11139560,
+      2148448
+    ],
+    "assignments_confirmed_at": [
+      "ores-truffle-oreslang/oreslang-source.java/.github/CODEOWNERS",
+      "ores-truffle-oreslang/oreslang-source.llvm/.github/CODEOWNERS",
+      "ores-truffle-oreslang/oreslang-source.net/.github/CODEOWNERS"
+    ],
+    "critical_workflow_path_owner": "@ORESoftware",
+    "source_main_protection_checked_20261119": {
+      "ores-truffle-oreslang/oreslang-source.java": false,
+      "ores-truffle-oreslang/oreslang-source.llvm": false,
+      "ores-truffle-oreslang/oreslang-source.net": false
+    },
+    "reason": "@ORESoftware maps to immutable GitHub user ID 11139560, explicitly excluded from independent source-export review; same CODEOWNER review cannot certify independence.",
+    "required_action": "An authorized source org administrator must designate an eligible distinct reviewer with source write access, establish enforceable protected-main and independent CODEOWNER review, and authorize exact reviewed source/tree/destination/retention tuple before a private cross-org export.",
+    "source_local_ci_independent_review_status": "NOT_APPROVED: source-local CI PRs have zero review submissions; no runner provisioned or label applied",
+    "no_export_until_resolved": true
   }
 }
