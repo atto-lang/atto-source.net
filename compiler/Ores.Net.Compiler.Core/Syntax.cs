@@ -28,6 +28,14 @@ internal static class MutableShareAdmission
         new(DiagnosticPrefix + offset);
 }
 
+// One fail-closed diagnostic shared by both native source frontends. Static
+// F64 host layout metadata does NOT authorize source inverted-class lowering.
+internal static class InvertedClassNativeAotAdmission
+{
+    internal static FormatException Unsupported(int offset) =>
+        new($"Inverted class requires checked bracket-row and ownership lowering in the .NET backend at offset {offset}");
+}
+
 public static partial class OresParser
 {
     private const int MaxDepth = 128;
@@ -55,6 +63,7 @@ public static partial class OresParser
             throw new FormatException("E_LANGUAGE_VERSION: expected language version 1 or 2");
         var tokens = StripFileExports(Tokenize(source, allowCaretReturn: languageVersion.HasValue), source);
         RejectUnsupportedSourceActors(tokens);
+        RejectUnsupportedInvertedClasses(tokens);
         RejectUnsupportedScalarTokens(tokens);
         for (int i = 0; i + 1 < tokens.Count; i++)
         {
@@ -329,6 +338,24 @@ public static partial class OresParser
             if (word is "suspends" or "await")
                 throw new FormatException(
                     $"E_SUSPENDS_UNSUPPORTED: suspension requires .NET continuation/effect lowering at offset {tokens[i].Offset}");
+        }
+    }
+
+    private static void RejectUnsupportedInvertedClasses(List<Token> tokens)
+    {
+        // Match source declaration tokens, not raw comments or string text.
+        // Both define inverted class and define pub inverted class are denied
+        // until typed source HIR, per-field loans and native CIL exist.
+        for (int i = 1; i + 1 < tokens.Count; ++i)
+        {
+            if (tokens[i].Text != "inverted" ||
+                tokens[i + 1].Text != "class")
+                continue;
+            bool declared = tokens[i - 1].Text == "define" ||
+                (tokens[i - 1].Text == "pub" && i >= 2 &&
+                 tokens[i - 2].Text == "define");
+            if (declared)
+                throw InvertedClassNativeAotAdmission.Unsupported(tokens[i].Offset);
         }
     }
 
