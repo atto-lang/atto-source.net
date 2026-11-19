@@ -285,28 +285,28 @@
       {
         "repository": "ores-truffle-oreslang/oreslang-source.java",
         "ci_pr": 3191,
-        "ci_workflow_head_sha": "43f799b5d439ade92012be493cf1196365acaf6c",
+        "ci_workflow_head_sha": "0dbb0b7d3222435926383733dbab15cf035c0cea",
         "source_under_test_sha": "1f6d48e2cb7f76dfe4fec3ad357319f17277439a",
         "runner_label": "oreslang-bang-java-isolated",
         "approved": false,
         "enabled": false,
         "executed": false,
         "workflow_path": ".github/workflows/ownership-bang-source-local.yml",
-        "ci_workflow_root_tree_sha": "c50af3cf848fd6f9fc18fe74c6149f09d4e7a096",
+        "ci_workflow_root_tree_sha": "58b9e4c8f0e4a80cf46c69a93475e4dee9e655ad",
         "source_under_test_tree_sha": "a4402e1967e0ed63fe39d26931ece935c341e820",
         "mergeability_last_observed": true
       },
       {
         "repository": "ores-truffle-oreslang/oreslang-source.llvm",
         "ci_pr": 1904,
-        "ci_workflow_head_sha": "d904cb587d8e77a898f80ced1a29e2317da211a2",
+        "ci_workflow_head_sha": "7d8f742c13a5955b8e24ca7e4c39c1898409ebf1",
         "source_under_test_sha": "5eba17e441faacc85d446c2f6b12c1537709c48c",
         "runner_label": "oreslang-bang-llvm-isolated",
         "approved": false,
         "enabled": false,
         "executed": false,
         "workflow_path": ".github/workflows/ownership-bang-source-local.yml",
-        "ci_workflow_root_tree_sha": "b5fa33b4a6f4c7adfefe8579ffc5d55b0938bc8d",
+        "ci_workflow_root_tree_sha": "707855e8374379856d319ae9334149f730a3d75d",
         "source_under_test_tree_sha": "74aed6c4fa17b372b181886147b4594325458ed4",
         "mergeability_last_observed": true
       }
@@ -319,7 +319,7 @@
       "enabled nonsecret vars and approval label only after review",
       "real nonempty completed steps and artifact ZIP integrity verified after executing tests"
     ],
-    "current_observation": "LLVM #1903 source changed to 5eba17e441faacc85d446c2f6b12c1537709c48c (tree 74aed6c...), CI-only #1904 was repinned to new immutable source at workflow commit d904cb587d8e77a898f80ced1a29e2317da211a2 (tree b5fa33...). Current source-org jobs continue to fail at 0 steps. Approval state not observed active; no admin Actions runner registration through connected tools; export forbidden."
+    "current_observation": "Source-local CI #3191 and #1904 rebased onto the latest respective main heads on November 19, 2026 UTC. Both drafts mergeable; workflow+runbook blob identity preserved during rebase (Java and LLVM 24/24 static safety invariants each pass). Source LLVM #1903 at 5eba17e441faacc85d446c2f6b12c1537709c48c has no executed compiler test; sampled native workflow jobs zero steps. Zero CI PR approvals/reviews or approval labels observed. No registered runner or permitted export was established through connector."
   },
   "source_free_alternate_evidence_20261119": {
     "carrier_repository": "quaestor-ledger-test/atto-ci",
