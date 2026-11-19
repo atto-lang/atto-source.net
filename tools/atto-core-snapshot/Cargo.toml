@@ -6,4 +6,4 @@ publish = false
 
 [dependencies]
 sha1 = "=0.10.6"
-libc = "0.2"
+libc = "=0.2.191"
