@@ -9,7 +9,7 @@ static class Program
     }
     private static int Main()
     {
-        var id = new ReceiptIdentityV1(1, 11, 12, 13, 14, 15, 16, 1);
+        var id = new ReceiptIdentityV1(1, 11, 12, 13, 14, 17, 15, 16, 1);
         var gate = new ProxyReceiptGateV1(id);
         Check(!gate.DestinationAdmitted);
         Check(!gate.ApplyVerified(id, ReceiptEventV1.Started));
@@ -19,6 +19,7 @@ static class Program
         Check(!gate.ApplyVerified(id with {Tenant = 100}, ReceiptEventV1.Admitted));
         Check(!gate.ApplyVerified(id with {CallerIncarnation = 100}, ReceiptEventV1.Admitted));
         Check(!gate.ApplyVerified(id with {TargetIncarnation = 100}, ReceiptEventV1.Admitted));
+        Check(!gate.ApplyVerified(id with {AssociationGeneration = 100}, ReceiptEventV1.Admitted));
         Check(!gate.ApplyVerified(id with {PlacementEpoch = 100}, ReceiptEventV1.Admitted));
         Check(!gate.ApplyVerified(id with {Attempt = 100}, ReceiptEventV1.Admitted));
         Check(!gate.ApplyVerified(id with {ProtocolMajor = 2}, ReceiptEventV1.Admitted));
