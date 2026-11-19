@@ -6,12 +6,14 @@ namespace Atto.Runtime.Proxy;
 
 public readonly record struct ReceiptIdentityV1(
     uint ProtocolMajor, ulong Tenant, ulong CallerIncarnation,
-    ulong TargetActor, ulong TargetIncarnation, ulong PlacementEpoch,
+    ulong TargetActor, ulong TargetIncarnation, ulong AssociationGeneration,
+    ulong PlacementEpoch,
     ulong MessageId, ulong Attempt)
 {
     public bool IsValid =>
         ProtocolMajor == 1 && Tenant != 0 && CallerIncarnation != 0 &&
-        TargetActor != 0 && TargetIncarnation != 0 && PlacementEpoch != 0 &&
+        TargetActor != 0 && TargetIncarnation != 0 && AssociationGeneration != 0 &&
+        PlacementEpoch != 0 &&
         MessageId != 0 && Attempt != 0;
 }
 
