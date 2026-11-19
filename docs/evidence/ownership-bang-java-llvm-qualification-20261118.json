@@ -121,8 +121,8 @@
       "pr": 3186,
       "head_sha": "176694acbbc09c365f434e906e7ed3c035a95193",
       "source_root_tree_sha": null,
-      "draft": true,
-      "merged": false,
+      "draft": false,
+      "merged": true,
       "mergeability_last_observed": true,
       "root_tree_status": "UNVERIFIED",
       "compiler_execution": "NOT_EXECUTED",
@@ -136,7 +136,9 @@
         "mut-compact.atto": "a7e3b55ebd128a671cdb48ede3557aee6dc1b2b0",
         "mut-rt-tail.atto": "b1e982f0ca85291a5e9924e3c6ff571ba13efebe"
       },
-      "notes": "Source-local readback passed. At CURRENT head, runner smoke #44431180090 job 135248641371, ownership/JUnit gate #44431180451 job 135248642487, and ci/test #44431180572 job 135248644205 all failed with zero steps/artifacts; no compiler/JUnit/Truffle guest execution. Older rerun #44430114082 was on superseded head bf020ce7."
+      "notes": "GitHub reports source PR #3186 merged (not by this monitor); checked merged commit contains canonical parser and pinned fixtures. Post-merge source-free run 44435049581 job 135261692611 and report-checker run 44435049521 job 135261692072 failed zero-step/no artifacts. No JUnit/Truffle executed evidence. Source-local recovery CI proposal #3191 is separate, disabled and unexecuted.",
+      "merged_commit_sha": "1f6d48e2cb7f76dfe4fec3ad357319f17277439a",
+      "source_under_test_sha": "1f6d48e2cb7f76dfe4fec3ad357319f17277439a"
     },
     {
       "repository": "ores-truffle-oreslang/oreslang-source.llvm",
@@ -159,7 +161,8 @@
       "reviewed_fixture_blobs": {
         "rt-borrow-mut-native.atto": "e7b2cb178c266262a94df18dd88c46ae9d32632b"
       },
-      "notes": "Source-local fixture and CTest registration readback passed; exact-head rerun 44429270289, latest job 135247173762, failed before executing any steps. No native compiler/guest output."
+      "notes": "Still open draft at this checked head. Prior native runner retry zero-step/no artifact. Candidate source-local CI #1904 remains disabled and unexecuted.",
+      "source_under_test_sha": "d8291593d94d7cf5f73eebe3a755d4ede3c4604a"
     }
   ],
   "admission_probe_observations": [
@@ -217,6 +220,65 @@
       "artifacts": 0,
       "conclusion": "failure",
       "job": "test"
+    },
+    {
+      "repo": "ores-truffle-oreslang/oreslang-source.java",
+      "run_id": 44435049581,
+      "job_id": 135261692611,
+      "source_head_sha": "1f6d48e2cb7f76dfe4fec3ad357319f17277439a",
+      "superseded": false,
+      "execution_steps": 0,
+      "artifacts": 0,
+      "conclusion": "failure",
+      "job": "physical-source"
+    },
+    {
+      "repo": "ores-truffle-oreslang/oreslang-source.java",
+      "run_id": 44435049521,
+      "job_id": 135261692072,
+      "source_head_sha": "1f6d48e2cb7f76dfe4fec3ad357319f17277439a",
+      "superseded": false,
+      "execution_steps": 0,
+      "artifacts": 0,
+      "conclusion": "failure",
+      "job": "receipt-checker-self-tests"
     }
-  ]
+  ],
+  "source_local_runner_recovery": {
+    "status": "ADMIN_REGISTRATION_REQUIRED_OFF_BY_DEFAULT",
+    "cross_org_source_export_permitted": false,
+    "admin_actions_completed": false,
+    "candidates": [
+      {
+        "repository": "ores-truffle-oreslang/oreslang-source.java",
+        "ci_pr": 3191,
+        "ci_workflow_head_sha": "ef7c69e01a14b7f155904ea94d8684a4209475b6",
+        "source_under_test_sha": "1f6d48e2cb7f76dfe4fec3ad357319f17277439a",
+        "runner_label": "oreslang-bang-java-isolated",
+        "approved": false,
+        "enabled": false,
+        "executed": false,
+        "workflow_path": ".github/workflows/ownership-bang-source-local.yml"
+      },
+      {
+        "repository": "ores-truffle-oreslang/oreslang-source.llvm",
+        "ci_pr": 1904,
+        "ci_workflow_head_sha": "22eb20db6d46cf5ae484a3fa16be541642be5606",
+        "source_under_test_sha": "d8291593d94d7cf5f73eebe3a755d4ede3c4604a",
+        "runner_label": "oreslang-bang-llvm-isolated",
+        "approved": false,
+        "enabled": false,
+        "executed": false,
+        "workflow_path": ".github/workflows/ownership-bang-source-local.yml"
+      }
+    ],
+    "must_check": [
+      "owner Actions general policy billing and runner-group eligibility",
+      "selfhosted ephemeral runner registered to source repository only",
+      "explicit review of source SHA and CI-only workflow PR SHA",
+      "same-repository checkout only; no cross-org private Git object transfer",
+      "enabled nonsecret vars and approval label only after review",
+      "real nonempty completed steps and artifact ZIP integrity verified after executing tests"
+    ]
+  }
 }
