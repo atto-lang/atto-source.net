@@ -299,14 +299,14 @@
       {
         "repository": "ores-truffle-oreslang/oreslang-source.llvm",
         "ci_pr": 1904,
-        "ci_workflow_head_sha": "7d8f742c13a5955b8e24ca7e4c39c1898409ebf1",
+        "ci_workflow_head_sha": "b1e6066e59c322ac2df895c698ace1d73b651da0",
         "source_under_test_sha": "5eba17e441faacc85d446c2f6b12c1537709c48c",
         "runner_label": "oreslang-bang-llvm-isolated",
         "approved": false,
         "enabled": false,
         "executed": false,
         "workflow_path": ".github/workflows/ownership-bang-source-local.yml",
-        "ci_workflow_root_tree_sha": "707855e8374379856d319ae9334149f730a3d75d",
+        "ci_workflow_root_tree_sha": "5290cbfcdc6433e85271fe305e65261aebc49774",
         "source_under_test_tree_sha": "74aed6c4fa17b372b181886147b4594325458ed4",
         "mergeability_last_observed": true
       }
@@ -319,7 +319,17 @@
       "enabled nonsecret vars and approval label only after review",
       "real nonempty completed steps and artifact ZIP integrity verified after executing tests"
     ],
-    "current_observation": "Source-local CI #3191 and #1904 rebased onto the latest respective main heads on November 19, 2026 UTC. Both drafts mergeable; workflow+runbook blob identity preserved during rebase (Java and LLVM 24/24 static safety invariants each pass). Source LLVM #1903 at 5eba17e441faacc85d446c2f6b12c1537709c48c has no executed compiler test; sampled native workflow jobs zero steps. Zero CI PR approvals/reviews or approval labels observed. No registered runner or permitted export was established through connector."
+    "current_observation": "LLVM CI-only draft #1904 exact new workflow SHA b1e6066e59c322ac2df895c698ace1d73b651da0 (root tree 5290cb...) uses exact equality to frozen 24 CTest names; local source-free CMake/CTest parser simulation accepted the exact 24 and rejected substituted name or wrong total. Native compiler/guest execution still NOT_EXECUTED. Both source CI PRs remain draft, no independent approval; no source export authorization.",
+    "llvm_inventory_metadata_gate_20261119": {
+      "status": "SYNTHETIC_LOCAL_VALIDATION_ONLY",
+      "exact_case_count": 24,
+      "valid_24_accepted": true,
+      "one_substituted_name_denied": true,
+      "wrong_total_denied": true,
+      "ctest_source_compile_executed": false,
+      "approved": false,
+      "workflow_head": "b1e6066e59c322ac2df895c698ace1d73b651da0"
+    }
   },
   "source_free_alternate_evidence_20261119": {
     "carrier_repository": "quaestor-ledger-test/atto-ci",
