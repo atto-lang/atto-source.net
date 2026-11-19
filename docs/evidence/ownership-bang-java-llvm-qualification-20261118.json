@@ -319,7 +319,7 @@
       "enabled nonsecret vars and approval label only after review",
       "real nonempty completed steps and artifact ZIP integrity verified after executing tests"
     ],
-    "current_observation": "LLVM CI #1904 updated to exact 24 ACTUALLY EXECUTED CTests + same-repo compiler-binary artifact; latest workflow SHA 1dc6087f734694cfb794a00169b4170fe1a63f29. Local synthetic CMake/CTest actually ran 24 trivial no-source tests and exercised guard negatives, but no private LLVM code compiled. Source org CI still 0-step failing. Draft and administrator variables disabled.",
+    "current_observation": "A 24-case source-free CMake/CTest admission script with seven adversarial invalid-result denials was added to private alternate carrier PR #7 and verified locally under CMake/CTest 3.31.6; the new carrier Actions attempts #44556389528, #44556419524, and #44556468321 all FAILED BEFORE ANY STEPS (latest job 135674161704; zero artifacts). Historical alternate success #44444480481 cannot confirm current hosted-runner capacity. No source Git objects were transferred. Source-org Java and LLVM Actions also continue zero-step. Export stays DENY and no compiler code executed.",
     "llvm_inventory_metadata_gate_20261119": {
       "status": "SYNTHETIC_LOCAL_VALIDATION_ONLY",
       "exact_case_count": 24,
@@ -382,7 +382,49 @@
     },
     "private_source_export_authorized": false,
     "source_org_runner_admission_restored": false,
-    "budget_exact_remaining_unknown": true
+    "budget_exact_remaining_unknown": true,
+    "latest_reattempt_utc_20261119": {
+      "carrier_repository": "quaestor-ledger-test/atto-ci",
+      "carrier_pr": 7,
+      "carrier_head": "ad2efb8bced1ae7f4dedc54035cb50711867f594",
+      "relevant_source_free_changes": [
+        "source-free/ctest-admission.sh",
+        ".github/workflows/source-free-evidence-gate-20261119.yml"
+      ],
+      "latest_run_id": 44556468321,
+      "latest_job_id": 135674161704,
+      "latest_status": "completed",
+      "latest_conclusion": "failure",
+      "executed_steps": 0,
+      "uploaded_artifacts": 0,
+      "prior_failures": [
+        {
+          "run": 44556389528,
+          "steps": 0
+        },
+        {
+          "run": 44556419524,
+          "steps": 0
+        }
+      ],
+      "previous_success_run": 44444480481,
+      "previous_success_is_historical": true,
+      "local_source_free_ctest": {
+        "executed": 24,
+        "passed": 24,
+        "adversarial_mutations_denied": 7,
+        "compiler_source_exported": false,
+        "compiler_compiled": false,
+        "cmake_version": "3.31.6",
+        "ctest_version": "3.31.6",
+        "sha256_zip": "8b80320ea4e0b8fd305eac0efaff9e8c51bb7a1cd6e4b691487460c2324abe22",
+        "local_only": true
+      },
+      "remote_24_ctest_run_confirmed": false,
+      "runner_capacity_currently_confirmed": false,
+      "private_source_export_authorized": false,
+      "source_compiler_executed": false
+    }
   },
   "governance_identity_conflict_20261119": {
     "status": "CONFIRMED_SOURCE_EXPORT_REVIEW_BLOCKER",
