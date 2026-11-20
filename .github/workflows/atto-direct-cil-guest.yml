@@ -7,6 +7,8 @@ on:
       - "fixtures/cil/**"
       - "scripts/test-cil-guest.sh"
       - "scripts/test-match-cil-guest.sh"
+      - "scripts/test-stdio-cil-guest.sh"
+      - "fixtures/match-return-forms-v1/**"
       - ".github/workflows/atto-direct-cil-guest.yml"
   push:
     branches: [main]
@@ -37,3 +39,6 @@ jobs:
       - name: Compile and execute guarded match direct CIL, CoreCLR, NativeAOT guests
         shell: bash
         run: bash scripts/test-match-cil-guest.sh
+      - name: Compile and execute original Atto stdout match programs (CoreCLR and NativeAOT)
+        shell: bash
+        run: bash scripts/test-stdio-cil-guest.sh
