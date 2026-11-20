@@ -288,7 +288,7 @@ internal static class Emitter
         generated.AppendLine("internal static class Program {");
         generated.AppendLine("  private static int Main() {");
         generated.AppendLine("    GuestResult result = Guest.Run();");
-        generated.AppendLine("    if (Guest.CallCount != ${program.Main.Expression is TrapCall ? 1 : 0})");
+        generated.Append("    if (Guest.CallCount != ").Append(program.Main.Expression is TrapCall ? "1" : "0").AppendLine(")");
         generated.AppendLine("      throw new InvalidOperationException(\"helper invoked multiple times or not at all\");");
         generated.AppendLine("    if (Guest.LastReturnedResult is not null && !ReferenceEquals(Guest.LastReturnedResult, result))");
         generated.AppendLine("      throw new InvalidOperationException(\"trap replaced an existing Result identity\");");
