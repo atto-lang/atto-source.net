@@ -92,3 +92,20 @@ dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true \
 test -x /tmp/atto-cil-hosted-policy-nativeaot/Atto.Cil.Guest.Host
 expect_42 HOSTED_POLICY_NATIVEAOT_GUEST /tmp/atto-cil-hosted-policy-nativeaot/Atto.Cil.Guest.Host
 echo "ATTO_HOSTED_POLICY_DIRECT_CIL_GUEST_PASS status=compiled-CIL-and-NativeAOT"
+
+# Verify the full 56-vector reference registry as two compiled Atto guest
+# functions with 28 guarded checks each (bounded, no interpreter).
+test "$(git hash-object fixtures/cil/hosted-policy-vectors-main.atto)" = fab89196d07080d9ec2a9902220b82a5f13e7bff
+cat stdlib/std/http_response_policy.atto \
+    stdlib/std/fs_text_policy.atto \
+    fixtures/cil/hosted-policy-vectors-main.atto > artifacts/hosted-policy-vectors-linked.atto
+dotnet run --no-build -c Release --project "$compiler" -- \
+    artifacts/hosted-policy-vectors-linked.atto "$guest"
+test -s "$guest"
+dotnet build "$host" -c Release
+expect_42 HOSTED_POLICY_56_VECTORS_CORECLR dotnet run --no-build -c Release --project "$host"
+dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true \
+  --self-contained true -o /tmp/atto-cil-hosted-policy-vectors-nativeaot
+test -x /tmp/atto-cil-hosted-policy-vectors-nativeaot/Atto.Cil.Guest.Host
+expect_42 HOSTED_POLICY_56_VECTORS_NATIVEAOT /tmp/atto-cil-hosted-policy-vectors-nativeaot/Atto.Cil.Guest.Host
+echo "ATTO_HOSTED_POLICY_VECTOR_PARITY_PASS signed_i64_cases=56"
