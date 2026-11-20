@@ -75,6 +75,41 @@ Future interpreter/compiler changes must not silently invoke this class
 from unverified guest input. The current scalar direct-CIL compiler keeps
 actor/suspension syntax rejected.
 
+## 2026-11-20 adversarial hardening audit (still host-only)
+
+**Physical carrier authorization:** the actor turn now captures the issuing
+managed thread ID. Even a real issued token cannot read/write frames or
+complete a turn from a second carrier while the first turn is live. The old
+turn remains valid on its issuing carrier. After its proper completion, a
+**new** physical carrier may start a new turn and recover the same sealed
+actor-owned logical frames. This prevents accidental cross-thread authority
+transfer without blocking legitimate cross-dispatch migration.
+
+**New authored negatives and stress cases:** off-carrier read and EndTurn
+rejection; replayed EndTurn rejection; separate-carrier frame recovery;
+256 consecutive 127-operation dispatches (32,512 reductions, 254 polls);
+zero/oversized charge and invalid-alignment atomicity; tenant disposal
+during an active physical turn; and 240 actor alloc/use/reclaim iterations
+across four concurrent host threads. All remain **NOT_EXECUTED** pending
+actual compiled .NET CoreCLR and Windows/Linux NativeAOT runs.
+
+**Critical limits:** a valid host-issued turn capability is currently the
+only caller authority. Logical frames and fuel are not inserted into emitted
+guest CIL, cannot interrupt arbitrary native code, do not prove physical
+stack-overflow containment, and do not enforce critical-section or borrow
+checks until the verified actor scheduler/IR supplies that context. Invalid
+compiler charge weights throw atomically, but the trusted compiler MUST
+reject them before emitting guest code; this host-only API is not a
+guest-callable bypass.
+
+**Private CI hold:** protected-main
+`.github/private-ci-approved-repositories.txt` contains **zero active
+authorized destinations** on this audit. No source code may be transferred
+to another GitHub organization solely because a private carrier exists.
+[CI authorization/admission issue #34](https://github.com/atto-lang/atto-source.net/issues/34)
+requests source-runner remediation or independent approved-destination
+authorization. No cross-organization mirror was created by this audit.
+
 ## Verification and release hold
 
 Standalone .NET 8 executable:
