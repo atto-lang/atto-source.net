@@ -19,10 +19,56 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     steps:
+      # On Git for Windows, core.autocrlf=true rewrites committed LF blobs
+      # to CRLF. A raw-blob identity check must verify an exact checkout,
+      # not a platform-transcoded one. Set this before actions/checkout.
+      - name: Disable platform-dependent Git checkout conversion
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config --global core.autocrlf false
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot pin Git raw checkout mode' }
+          git config --global core.eol lf
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot pin Git LF checkout mode' }
+          $conversion = (git config --global --get core.autocrlf).Trim()
+          if ($LASTEXITCODE -ne 0 -or $conversion -cne 'false') {
+            throw 'Git checkout conversion is not disabled'
+          }
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Verify immutable exact source before compiler execution
+        shell: pwsh
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:EXPECTED_HEAD -cnotmatch '^[0-9a-f]{40}$') {
+            throw 'Expected source commit must be a full hexadecimal SHA'
+          }
+          $actual = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $actual -cne $env:EXPECTED_HEAD) {
+            throw "Source checkout mismatch expected=$env:EXPECTED_HEAD actual=$actual"
+          }
+          # git status/diff can invoke configured clean filters. This
+          # verifier reads tracked files as raw bytes, checks HEAD/index tree
+          # identity, and rejects untracked files including ignored injections.
+          # Keep the prior Linux self-test exercising hostile Git filter cases.
+          $python = if ($env:RUNNER_OS -ceq 'Windows') { 'python' } else { 'python3' }
+          if ($env:RUNNER_OS -ceq 'Linux') {
+            & $python scripts/verify-raw-worktree.py --self-test
+            if ($LASTEXITCODE -ne 0) { throw 'Raw worktree self-test failed' }
+          }
+          & $python scripts/verify-raw-worktree.py .
+          if ($LASTEXITCODE -ne 0) { throw 'Raw worktree identity differs from exact HEAD' }
+          $tree = (git rev-parse 'HEAD^{tree}').Trim()
+          if ($LASTEXITCODE -ne 0 -or $tree -cnotmatch '^[0-9a-f]{40}$') {
+            throw 'Unable to pin source root tree identity'
+          }
+          Write-Output "EXACT_SOURCE_HEAD=$actual"
+          Write-Output "EXACT_SOURCE_TREE=$tree"
+          Write-Output "RUN_ID=$env:GITHUB_RUN_ID ATTEMPT=$env:GITHUB_RUN_ATTEMPT"
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
         with:
           dotnet-version: 10.0.x
