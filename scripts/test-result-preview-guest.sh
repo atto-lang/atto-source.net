@@ -3,6 +3,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 command -v dotnet >/dev/null || { echo 'DOTNET_SDK_MISSING' >&2; exit 2; }
+case "${ATTO_RESULT_CLR_ONLY:-0}" in
+  0|1) ;;
+  *) echo 'INVALID_CLR_ONLY_MODE' >&2; exit 2 ;;
+esac
 project=compiler/Atto.Cil.ResultPreview/Atto.Cil.ResultPreview.csproj
 dotnet build "$project" -c Release
 work="$(mktemp -d)"
@@ -28,13 +32,15 @@ for entry in \
   dotnet "$target/clr/Atto.ResultPreview.Guest.dll" >"$target/clr.out"
   grep -Fx "$expected" "$target/clr.out"
   grep -Fx 'ATTO_RESULT_GUEST=CSHARP_TO_CIL_PREVIEW' "$target/clr.out"
-  dotnet publish "$target/Atto.ResultPreview.Guest.csproj" -c Release \
-    -r linux-x64 -p:PublishAot=true --self-contained true -o "$target/native"
-  test -x "$target/native/Atto.ResultPreview.Guest"
-  "$target/native/Atto.ResultPreview.Guest" >"$target/native.out"
-  cmp "$target/clr.out" "$target/native.out"
+  if [[ "${ATTO_RESULT_CLR_ONLY:-0}" == 0 ]]; then
+    dotnet publish "$target/Atto.ResultPreview.Guest.csproj" -c Release \
+      -r linux-x64 -p:PublishAot=true --self-contained true -o "$target/native"
+    test -x "$target/native/Atto.ResultPreview.Guest"
+    "$target/native/Atto.ResultPreview.Guest" >"$target/native.out"
+    cmp "$target/clr.out" "$target/native.out"
+  fi
 done
-echo 'ATTO_RESULT_PREVIEW_COMPILED_CLR_NATIVEAOT=PASS'
+echo 'ATTO_RESULT_PREVIEW_COMPILED_CLR_GUESTS=PASS'
 for entry in \
   unapproved_throw:E_EFFECT \
   trap_nonexistent:E_SYMBOL \
@@ -60,5 +66,11 @@ for entry in \
   }
 done
 echo 'ATTO_RESULT_PREVIEW_NEGATIVE_NO_ARTIFACT=PASS'
+if [[ "${ATTO_RESULT_CLR_ONLY:-0}" == 0 ]]; then
+  echo 'ATTO_RESULT_PREVIEW_COMPILED_CLR_NATIVEAOT=PASS'
+else
+  echo 'ATTO_RESULT_PREVIEW_COMPILED_CLR_ONLY=PASS'
+  echo 'ATTO_RESULT_NATIVEAOT=NOT_EXECUTED'
+fi
 echo 'ATTO_RESULT_DIRECT_CIL_GUEST=NOT_EXECUTED'
 echo 'ATTO_RESULT_TENANT_VM_ISOLATION=NOT_EXECUTED'
