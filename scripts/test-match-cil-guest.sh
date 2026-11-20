@@ -74,7 +74,8 @@ for entry in \
     guarded-no-fallback:E_MATCH \
     binder-leak:E_SYMBOL \
     result-not-int:E_TYPE \
-    unguarded-after-default:E_MATCH; do
+    unguarded-after-default:E_MATCH \
+    assignment-expression:E_PARSE; do
   check_rejected "${entry%%:*}" "${entry#*:}" negative/
 done
 
