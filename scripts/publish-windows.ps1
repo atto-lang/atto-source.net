@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory = $true)][string]$Source,
     [ValidateSet('win-x64', 'win-arm64')][string]$Rid = 'win-x64',
-    [string]$Output = 'artifacts/apps'
+    [string]$Output = 'artifacts/apps',
+    [switch]$TenantIsolateSmoke
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -44,5 +45,11 @@ if (Test-Path (Join-Path $publishOut 'OresGenerated.dll')) {
 }
 if (Test-Path (Join-Path $publishOut 'oreslang-app.runtimeconfig.json')) {
     throw 'Framework-dependent runtime configuration unexpectedly found'
+}
+if ($TenantIsolateSmoke) {
+    # Deliberately target the known examples/hello.ores => 14 fixture.
+    # Execute the distributed Native AOT executable, not dotnet run.
+    & $binary --isolate-smoke
+    if ($LASTEXITCODE -ne 0) { throw 'Native AOT generated CIL tenant-isolate smoke failed' }
 }
 Write-Host "Native AOT executable: $binary"

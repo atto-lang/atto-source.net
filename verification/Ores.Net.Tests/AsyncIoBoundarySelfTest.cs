@@ -40,6 +40,28 @@ internal static class AsyncIoBoundarySelfTest
                 actor.Replace("ActorMailbox", "Socket"), "ActorRuntime.cs"))) ||
             !Forbidden.Any(r => r.Pattern.IsMatch(ReviewedMailboxCode(actor, "OtherRuntime.cs"))))
             throw new Exception("FAILED: socket boundary exception became broader than reviewed mailbox site");
+        // The tenant host also has one reviewed, phase-fenced ActorMailbox send.
+        // This is not a general exemption for .Send, Socket or arbitrary files.
+        const string hostActor = "internal ActorMailbox Mailbox { get; } " +
+            "public void SendActor(IsolateHandle handle, ActorTicket actor, ActorRef destination, ReadOnlySpan<byte> payload) " +
+            "{ var s = Check(handle); CheckActor(s, actor); if (s.Phase != Phase.Running) throw new InvalidOperationException(); actor.Mailbox.Send(destination, payload); }";
+        if (Forbidden.Any(r => r.Pattern.IsMatch(ReviewedMailboxCode(hostActor, "OresVmHost.cs"))))
+            throw new Exception("FAILED: host-owned actor mailbox mistaken for socket I/O");
+        if (!Forbidden.Any(r => r.Pattern.IsMatch(ReviewedMailboxCode(hostActor, "OtherRuntime.cs"))) ||
+            !Forbidden.Any(r => r.Pattern.IsMatch(ReviewedMailboxCode(
+                hostActor.Replace("ActorTicket actor", "object actor"), "OresVmHost.cs"))) ||
+            !Forbidden.Any(r => r.Pattern.IsMatch(ReviewedMailboxCode(
+                hostActor.Replace("CheckActor(s, actor);", ""), "OresVmHost.cs"))) ||
+            !Forbidden.Any(r => r.Pattern.IsMatch(ReviewedMailboxCode(
+                hostActor.Replace("if (s.Phase != Phase.Running) throw new InvalidOperationException();", ""),
+                "OresVmHost.cs"))) ||
+            !Forbidden.Any(r => r.Pattern.IsMatch(ReviewedMailboxCode(
+                hostActor.Replace("actor.Mailbox.Send(destination, payload);",
+                    "actor.Mailbox.Send(destination, payload); actor.Mailbox.Send(destination, payload);"),
+                "OresVmHost.cs"))) ||
+            !Forbidden.Any(r => r.Pattern.IsMatch(ReviewedMailboxCode(
+                hostActor + " Socket socket; socket.Send(data);", "OresVmHost.cs"))))
+            throw new Exception("FAILED: host mailbox socket exemption escaped exact typed/guarded call");
         string root = FindRepositoryRoot();
         string runtime = Path.Combine(root, "runtime");
         int scanned = 0;
@@ -67,15 +89,63 @@ internal static class AsyncIoBoundarySelfTest
 
     private static string ReviewedMailboxCode(string code, string fileName)
     {
-        if (fileName != "ActorRuntime.cs" ||
-            !Regex.IsMatch(code, @"\binternal\s+ActorMailbox\s+Mailbox\s*\{\s*get\s*;\s*\}",
-                RegexOptions.CultureInvariant) ||
+        const string typedMailbox = @"\binternal\s+ActorMailbox\s+Mailbox\s*\{\s*get\s*;\s*\}";
+        if (!Regex.IsMatch(code, typedMailbox, RegexOptions.CultureInvariant) ||
             Regex.IsMatch(code, @"\bSocket\b|\bSystem\s*\.\s*Net\b", RegexOptions.CultureInvariant))
             return code;
-        // No file-wide exemption: only this concrete bounded-memory call is
-        // removed from this lexical socket audit. All other calls still scan.
-        return Regex.Replace(code, @"\bcell\s*\.\s*Mailbox\s*\.\s*Send\s*\(",
-            "VerifiedActorMailboxAdmission(", RegexOptions.CultureInvariant);
+
+        if (fileName == "ActorRuntime.cs")
+        {
+            // Existing reviewed bounded-memory mailbox site only.
+            return Regex.Replace(code, @"\bcell\s*\.\s*Mailbox\s*\.\s*Send\s*\(",
+                "VerifiedActorMailboxAdmission(", RegexOptions.CultureInvariant);
+        }
+        if (fileName != "OresVmHost.cs")
+            return code;
+
+        // A second, distinct actor-owned mailbox site lives in the tenant
+        // host. Admit only the exact typed SendActor method, its tenant/actor
+        // and running-phase guards, and exactly one mailbox Send call.
+        const string send = @"\bactor\s*\.\s*Mailbox\s*\.\s*Send\s*\(\s*destination\s*,\s*payload\s*\)";
+        const string signature =
+            @"\bpublic\s+void\s+SendActor\s*\(\s*IsolateHandle\s+handle\s*,\s*" +
+            @"ActorTicket\s+actor\s*,\s*ActorRef\s+destination\s*,\s*" +
+            @"ReadOnlySpan\s*<\s*byte\s*>\s+payload\s*\)";
+        var method = Regex.Match(code, signature, RegexOptions.CultureInvariant);
+        if (!method.Success ||
+            Regex.Matches(code, send, RegexOptions.CultureInvariant).Count != 1)
+            return code;
+
+        int open = code.IndexOf('{', method.Index + method.Length);
+        if (open < 0 || !string.IsNullOrWhiteSpace(
+                code.Substring(method.Index + method.Length, open - method.Index - method.Length)))
+            return code;
+        int depth = 0;
+        int close = -1;
+        for (int i = open; i < code.Length; i++)
+        {
+            if (code[i] == '{') depth++;
+            else if (code[i] == '}' && --depth == 0) { close = i; break; }
+        }
+        if (close < 0) return code;
+
+        string body = code.Substring(open, close - open + 1);
+        var admission = Regex.Match(body, @"\bCheck\s*\(\s*handle\s*\)", RegexOptions.CultureInvariant);
+        var actorGuard = Regex.Match(body, @"\bCheckActor\s*\(\s*s\s*,\s*actor\s*\)", RegexOptions.CultureInvariant);
+        var phaseGuard = Regex.Match(body, @"\bs\s*\.\s*Phase\s*!=\s*Phase\s*\.\s*Running",
+            RegexOptions.CultureInvariant);
+        var call = Regex.Match(body, send, RegexOptions.CultureInvariant);
+        if (!admission.Success || !actorGuard.Success || !phaseGuard.Success ||
+            !call.Success || admission.Index >= actorGuard.Index ||
+            actorGuard.Index >= phaseGuard.Index || phaseGuard.Index >= call.Index ||
+            !Regex.IsMatch(body.Substring(phaseGuard.Index, call.Index - phaseGuard.Index),
+                @"\bthrow\s+new\s+InvalidOperationException\s*\(",
+                RegexOptions.CultureInvariant))
+            return code;
+
+        string safeBody = Regex.Replace(body, send, "VerifiedActorMailboxAdmission(",
+            RegexOptions.CultureInvariant);
+        return code.Substring(0, open) + safeBody + code.Substring(close + 1);
     }
 
     private static string FindRepositoryRoot()

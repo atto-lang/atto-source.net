@@ -7,7 +7,7 @@ public sealed record Literal(long Value) : Expression;
 public sealed record Unary(char Operator, Expression Value) : Expression;
 public sealed record Binary(char Operator, Expression Left, Expression Right) : Expression;
 
-public static class OresParser
+public static partial class OresParser
 {
     private const int MaxDepth = 128;
     private const int MaxTokens = 100_000;
@@ -352,7 +352,7 @@ public static class OresParser
             // Lex assignment punctuation so unsupported declarations are rejected
             // at their declaration, rather than at a later initializer. The
             // arithmetic parser still has no assignment production.
-            if ("()+-*/%{}:;.=?|".IndexOf(ch) >= 0)
+            if ("()+-*/%{}:;.=?|,".IndexOf(ch) >= 0)
             {
                 _i++;
                 return new Token(text[start.._i], start);

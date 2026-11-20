@@ -68,4 +68,9 @@ dotnet clean "$host" -c Release -r "$rid" "-p:GeneratedAssembly=$generated"
 dotnet publish "$host" -c Release -r "$rid" -o "$app_dir" \
   "-p:GeneratedAssembly=$generated" -warnaserror
 bash verification/assert-linux-native-release.sh "$app"
+# For the known examples/hello.ores generated entry (14), run the actual
+# standalone Native AOT binary, not a framework-dependent test host.
+if [[ "${ORES_NET_ISOLATE_SMOKE:-0}" == "1" ]]; then
+  "$app" --isolate-smoke
+fi
 echo 'LINUX_NET_NATIVE_AOT_COMPILER_AND_APP_PUBLISHED'
