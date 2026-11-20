@@ -42,7 +42,8 @@ for case in \
   seq-trailing:E_SEQ_COMMA \
   seq-leading:E_SEQ_COMMA \
   seq-semicolon:E_PARSE \
-  seq-tuple:E_PARSE; do
+  seq-tuple:E_PARSE \
+  seq-too-many:E_LIMIT; do
   name="$(echo "$case" | cut -d: -f1)"
   diagnostic="$(echo "$case" | cut -d: -f2)"
   rm -f artifacts/Rejected.dll
@@ -58,7 +59,7 @@ for case in \
   }
   test ! -e artifacts/Rejected.dll || { echo "NEGATIVE_ARTIFACT_LEAK case=$name"; exit 1; }
 done
-echo "ATTO_DIRECT_CIL_NEGATIVE_PASS checks=17"
+echo "ATTO_DIRECT_CIL_NEGATIVE_PASS checks=18"
 dotnet build "$host" -c Release
 expect_42 CORECLR_GUEST dotnet run --no-build -c Release --project "$host"
 dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true \
