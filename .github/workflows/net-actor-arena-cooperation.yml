@@ -43,7 +43,113 @@ jobs:
           $head = (git rev-parse HEAD).Trim()
           if ($head -ne $env:EXPECTED_SHA) { throw "Wrong source head: $head" }
           if ((git status --porcelain).Length -ne 0) { throw 'Dirty source checkout' }
+          $tree = (git rev-parse 'HEAD^{tree}').Trim()
+          if (-not ($tree -match '^[0-9a-f]{40}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $receipt = dotnet run -c Release --project verification/Atto.Net.ActorRuntime.Tests
+          if ($LASTEXITCODE -ne 0) { throw 'Managed actor probe failed' }
+          $receipt | Out-Host
+          if (-not ($receipt | Select-String -Pattern '^ATTO_NET_ACTOR_ARENA_COOPERATION_PASS cases=[0-9]+
+      - name: Publish and execute actual NativeAOT host probe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path $env:RUNNER_TEMP 'atto-actor-aot'
+          dotnet publish verification/Atto.Net.ActorRuntime.Tests -c Release -r ${{ matrix.rid }} -p:PublishAot=true --self-contained true -o $out
+          if ($LASTEXITCODE -ne 0) { throw 'NativeAOT publish failed' }
+          $binary = Join-Path $out '${{ matrix.executable }}'
+          if (-not (Test-Path $binary)) { throw 'Published native binary missing' }
+          $hash = (Get-FileHash -Algorithm SHA256 $binary).Hash
+          "ATTO_NET_ACTOR_NATIVE_SHA256=$hash"
+          $receipt = & $binary
+          if ($LASTEXITCODE -ne 0) { throw 'NativeAOT actor probe failed' }
+          $receipt | Out-Host
+          if (-not ($receipt | Select-String -Pattern '^ATTO_NET_ACTOR_ARENA_COOPERATION_PASS cases=[0-9]+$')) {
+            throw 'NativeAOT runtime receipt missing'
+          }
+)) { throw 'Invalid Git tree SHA' }
           "ATTO_NET_ACTOR_SOURCE_HEAD=$head"
+          "ATTO_NET_ACTOR_SOURCE_TREE=$tree"
+          $paths = @(
+            'runtime/Atto.Net.ActorRuntime/Atto.Net.ActorRuntime.csproj',
+            'runtime/Atto.Net.ActorRuntime/ActorArena.cs',
+            'runtime/Atto.Net.ActorRuntime/GuestCooperationBudget.cs',
+            'runtime/Atto.Net.ActorRuntime/TenantVm.cs',
+            'verification/Atto.Net.ActorRuntime.Tests/Atto.Net.ActorRuntime.Tests.csproj',
+            'verification/Atto.Net.ActorRuntime.Tests/Program.cs'
+          )
+          foreach ($path in $paths) {
+            $entry = (git ls-files --stage -- $path)
+            if (-not $entry) { throw "Missing required tracked file: $path" }
+            $expectedBlob = ($entry -split '\\s+')[1]
+            $actualBlob = (git hash-object -- $path).Trim()
+            if ($expectedBlob -ne $actualBlob) { throw "Git blob mismatch: $path" }
+            "ATTO_NET_ACTOR_BLOB=$path $actualBlob"
+          }
+      - name: Run actual managed host probes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          dotnet run -c Release --project verification/Atto.Net.ActorRuntime.Tests
+          if ($LASTEXITCODE -ne 0) { throw 'Managed actor probe failed' }
+      - name: Publish and execute actual NativeAOT host probe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path $env:RUNNER_TEMP 'atto-actor-aot'
+          dotnet publish verification/Atto.Net.ActorRuntime.Tests -c Release -r ${{ matrix.rid }} -p:PublishAot=true --self-contained true -o $out
+          if ($LASTEXITCODE -ne 0) { throw 'NativeAOT publish failed' }
+          $binary = Join-Path $out '${{ matrix.executable }}'
+          if (-not (Test-Path $binary)) { throw 'Published native binary missing' }
+          $hash = (Get-FileHash -Algorithm SHA256 $binary).Hash
+          "ATTO_NET_ACTOR_NATIVE_SHA256=$hash"
+          $receipt = & $binary
+          if ($LASTEXITCODE -ne 0) { throw 'NativeAOT actor probe failed' }
+          $receipt | Out-Host
+          if (-not ($receipt | Select-String -Pattern '^ATTO_NET_ACTOR_ARENA_COOPERATION_PASS cases=[0-9]+$')) {
+            throw 'NativeAOT runtime receipt missing'
+          }
+)) {
+            throw 'Managed actor test receipt missing'
+          }
+      - name: Publish and execute actual NativeAOT host probe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path $env:RUNNER_TEMP 'atto-actor-aot'
+          dotnet publish verification/Atto.Net.ActorRuntime.Tests -c Release -r ${{ matrix.rid }} -p:PublishAot=true --self-contained true -o $out
+          if ($LASTEXITCODE -ne 0) { throw 'NativeAOT publish failed' }
+          $binary = Join-Path $out '${{ matrix.executable }}'
+          if (-not (Test-Path $binary)) { throw 'Published native binary missing' }
+          $hash = (Get-FileHash -Algorithm SHA256 $binary).Hash
+          "ATTO_NET_ACTOR_NATIVE_SHA256=$hash"
+          $receipt = & $binary
+          if ($LASTEXITCODE -ne 0) { throw 'NativeAOT actor probe failed' }
+          $receipt | Out-Host
+          if (-not ($receipt | Select-String -Pattern '^ATTO_NET_ACTOR_ARENA_COOPERATION_PASS cases=[0-9]+$')) {
+            throw 'NativeAOT runtime receipt missing'
+          }
+)) { throw 'Invalid Git tree SHA' }
+          "ATTO_NET_ACTOR_SOURCE_HEAD=$head"
+          "ATTO_NET_ACTOR_SOURCE_TREE=$tree"
+          $paths = @(
+            'runtime/Atto.Net.ActorRuntime/Atto.Net.ActorRuntime.csproj',
+            'runtime/Atto.Net.ActorRuntime/ActorArena.cs',
+            'runtime/Atto.Net.ActorRuntime/GuestCooperationBudget.cs',
+            'runtime/Atto.Net.ActorRuntime/TenantVm.cs',
+            'verification/Atto.Net.ActorRuntime.Tests/Atto.Net.ActorRuntime.Tests.csproj',
+            'verification/Atto.Net.ActorRuntime.Tests/Program.cs'
+          )
+          foreach ($path in $paths) {
+            $entry = (git ls-files --stage -- $path)
+            if (-not $entry) { throw "Missing required tracked file: $path" }
+            $expectedBlob = ($entry -split '\\s+')[1]
+            $actualBlob = (git hash-object -- $path).Trim()
+            if ($expectedBlob -ne $actualBlob) { throw "Git blob mismatch: $path" }
+            "ATTO_NET_ACTOR_BLOB=$path $actualBlob"
+          }
       - name: Run actual managed host probes
         shell: pwsh
         run: |
