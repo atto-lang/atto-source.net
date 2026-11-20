@@ -17,6 +17,10 @@ internal sealed record Literal(long Number) : Expression;
 internal sealed record Arg(string Name) : Expression;
 internal sealed record Binary(string Op, Expression Left, Expression Right) : Expression;
 internal sealed record Call(string Name, List<Expression> Args) : Expression;
+// A bounded, integer-only return-position match. Binders are scoped to each arm.
+// The match subject is evaluated exactly once into a CIL local.
+internal sealed record ValueArm(long? Literal, string? Binding, Expression? Guard, Expression Result);
+internal sealed record ValueMatch(Expression Subject, List<ValueArm> Arms) : Expression;
 internal sealed record Function(string Name, List<string> Args, Expression Return);
 
 internal sealed class Parser
@@ -58,7 +62,8 @@ internal sealed class Parser
             else if (c is >= '0' and <= '9')
                 while (i < source.Length && source[i] is >= '0' and <= '9') i++;
             else if (c == '-' && i < source.Length && source[i] == '>') i++;
-            else if (!"(){}:;,+-*/".Contains(c))
+            else if (c == '=' && i < source.Length && source[i] == '=') i++;
+            else if (!"(){}:;,+-*/^>".Contains(c))
                 throw new CompilerError("E_LEX", $"unsupported source character at {start}");
             _tokens.Add(source[start..i]);
             if (_tokens.Count > 8192) throw new CompilerError("E_LIMIT", "8192 token limit");
@@ -84,9 +89,13 @@ internal sealed class Parser
             } while (Eat(","));
             Require(")");
             if (!Eat(":")) Require("->");
-            Require("int"); Require("{"); Require("return");
+            Require("int"); Require("{");
+            if (!Eat("return") && !Eat("^"))
+                throw new CompilerError("E_PARSE", "expected return or ^");
             var expression = ParseExpr(0, 0);
-            Require(";"); Require("}");
+            if (!Eat(";") && expression is not ValueMatch)
+                throw new CompilerError("E_PARSE", "expected ; after return");
+            Require("}");
             result.Add(new Function(name, args, expression));
             if (result.Count > 64) throw new CompilerError("E_LIMIT", "64 function limit");
         }
@@ -98,6 +107,7 @@ internal sealed class Parser
         Expression left;
         if (Eat("(")) { left = ParseExpr(0, depth + 1); Require(")"); }
         else if (Eat("-")) left = new Binary("-", new Literal(0), ParseExpr(30, depth + 1));
+        else if (Eat("match")) left = ParseValueMatch(depth + 1);
         else if (Peek.Length > 0 && Peek[0] is >= '0' and <= '9')
         {
             var raw = Peek; _position++;
@@ -123,12 +133,81 @@ internal sealed class Parser
         }
         while (true)
         {
-            int precedence = Peek is "*" or "/" ? 20 : Peek is "+" or "-" ? 10 : -1;
+            int precedence = Peek is "*" or "/" ? 20 : Peek is "+" or "-" ? 10
+                : Peek is ">" or "eq" or "==" ? 5 : -1;
             if (precedence < min) break;
             var op = Peek; _position++;
             left = new Binary(op, left, ParseExpr(precedence + 1, depth + 1));
         }
         return left;
+    }
+
+    private Expression ParseValueMatch(int depth)
+    {
+        if (depth > 16) throw new CompilerError("E_LIMIT", "match nesting limit");
+        var subject = ParseExpr(0, depth + 1);
+        Require("over");
+        List<ValueArm> arms = [];
+        while (Peek != "end")
+        {
+            if (Peek == "<eof>") throw new CompilerError("E_PARSE", "expected end of match");
+            if (arms.Count >= 128) throw new CompilerError("E_LIMIT", "match arm limit");
+            Require("on");
+            long? literal = null;
+            string? binder = null;
+            if (Eat("_"))
+            {
+                // Wildcard: no binding.
+            }
+            else if (Peek.Length > 0 && Peek[0] is >= '0' and <= '9')
+            {
+                var raw = Peek;
+                _position++;
+                if (!long.TryParse(raw, NumberStyles.None, CultureInfo.InvariantCulture, out var n))
+                    throw new CompilerError("E_LITERAL", "match pattern outside signed i64");
+                literal = n;
+            }
+            else if (Eat("-"))
+            {
+                var raw = Peek;
+                _position++;
+                if (!long.TryParse("-" + raw, NumberStyles.AllowLeadingSign,
+                    CultureInfo.InvariantCulture, out var n))
+                    throw new CompilerError("E_LITERAL", "negative match pattern outside signed i64");
+                literal = n;
+            }
+            else
+            {
+                binder = Name();
+                if (binder is "on" or "when" or "over" or "end" or "match")
+                    throw new CompilerError("E_PARSE", "invalid match binder");
+            }
+            Expression? guard = Eat("when") ? ParseExpr(0, depth + 1) : null;
+            Require("->");
+            Expression result;
+            bool braced = Eat("{");
+            if (braced)
+            {
+                // Scope is deliberately narrow: only an explicit return is
+                // accepted; silently falling through is never a value arm.
+                if (!Eat("return") && !Eat("^"))
+                    throw new CompilerError("E_RETURN", "match block arm must explicitly return");
+                result = ParseExpr(0, depth + 1);
+                Require(";");
+                Require("}");
+                Eat(",");
+            }
+            else
+            {
+                result = ParseExpr(0, depth + 1);
+                if (!Eat(",") && Peek != "end")
+                    throw new CompilerError("E_PARSE", "expected comma after value arm");
+            }
+            arms.Add(new ValueArm(literal, binder, guard, result));
+        }
+        Require("end");
+        if (arms.Count == 0) throw new CompilerError("E_MATCH", "empty match");
+        return new ValueMatch(subject, arms);
     }
 }
 
