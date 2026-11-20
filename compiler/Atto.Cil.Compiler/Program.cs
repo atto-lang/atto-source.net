@@ -35,7 +35,13 @@ internal sealed class Parser
         var name = Peek;
         if (name.Length == 0 || !(name[0] is >= 'a' and <= 'z' or '_') ||
             name.Any(c => !(c is >= 'a' and <= 'z' or >= '0' and <= '9' or '_')) ||
-            name is "fnc" or "pub" or "return" or "int" or "bool" or "val")
+            name is "fnc" or "pub" or "return" or "int" or "bool" or "val" or "let"
+                or "true" or "false" or "actor" or "unsafe" or "await" or "async"
+                or "susp" or "suspends" or "critical" or "trap" or "panic"
+                or "raise" or "throw" or "borrow" or "take" or "share"
+                or "copy" or "drop" or "pin" or "rt" or "io" or "stdio"
+                or "process" or "spawn" or "select" or "import" or "module"
+                or "define" or "namespace" or "use" or "pipe" or "rpipe")
             throw new CompilerError("E_NAME", $"expected snake_case identifier, got {name}");
         _position++;
         return name;
@@ -44,6 +50,8 @@ internal sealed class Parser
     {
         if (Encoding.UTF8.GetByteCount(source) > 65536)
             throw new CompilerError("E_LIMIT", "64 KiB source limit");
+        if (source.Any(c => c > 127 || c == '\0'))
+            throw new CompilerError("E_SOURCE", "non-ASCII/NUL source is not admitted by the scalar CIL frontend");
         for (int i = 0; i < source.Length;)
         {
             var c = source[i];
@@ -156,7 +164,18 @@ internal sealed class Parser
         if (depth > 32) throw new CompilerError("E_LIMIT", "expression nesting limit");
         Expression left;
         if (Eat("(")) { left = ParseExpr(0, depth + 1); Require(")"); }
-        else if (Eat("-")) left = new Binary("-", new Literal(0), ParseExpr(30, depth + 1));
+        else if (Eat("-"))
+        {
+            // The signed minimum is valid even though its positive magnitude
+            // cannot be represented by long.TryParse. Do not parse +2^63 and
+            // negate it, or use unchecked arithmetic for this case.
+            if (Peek == "9223372036854775808")
+            {
+                _position++;
+                left = new Literal(long.MinValue);
+            }
+            else left = new Binary("-", new Literal(0), ParseExpr(30, depth + 1));
+        }
         else if (Peek.Length > 0 && Peek[0] is >= '0' and <= '9')
         {
             var raw = Peek; _position++;
@@ -352,15 +371,37 @@ internal sealed class CIL(List<Function> functions)
         var output = new BlobBuilder();
         builder.Serialize(output);
         var finalPath = Path.GetFullPath(destination);
-        Directory.CreateDirectory(Path.GetDirectoryName(finalPath)!);
+        // A successfully compiled guest must never clobber a previously
+        // published DLL, nor may failed admission delete an older artifact.
+        // Parents are pre-existing trusted build directories; a hostile parent
+        // requires an additional directory-descriptor/ACL security boundary.
+        var parent = Path.GetDirectoryName(finalPath)!;
+        if (!Directory.Exists(parent))
+            throw new CompilerError("E_OUTPUT", "output directory must already exist");
+        if (File.Exists(finalPath) || Directory.Exists(finalPath))
+            throw new CompilerError("E_OUTPUT", "refusing to overwrite existing guest");
         var temporary = finalPath + ".tmp";
+        bool ownTemporary = false;
         try
         {
-            using (var stream = new FileStream(temporary, FileMode.Create, FileAccess.Write))
+            // CreateNew is exclusive: a competing regular file or symlink
+            // at the temporary pathname cannot be truncated by our writer.
+            using (var stream = new FileStream(temporary, FileMode.CreateNew,
+                       FileAccess.Write, FileShare.None))
+            {
+                ownTemporary = true;
                 output.WriteContentTo(stream);
-            File.Move(temporary, finalPath, true);
+                stream.Flush(flushToDisk: true);
+            }
+            // No-overwrite publication, including the race between the
+            // earlier output existence check and the final move.
+            File.Move(temporary, finalPath, overwrite: false);
+            ownTemporary = false;
         }
-        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+        finally
+        {
+            if (ownTemporary && File.Exists(temporary)) File.Delete(temporary);
+        }
     }
 
     private void Generate(Expression e, Function f, InstructionEncoder il)
@@ -417,7 +458,11 @@ internal static class Program
         }
         try
         {
-            if (File.Exists(args[1])) File.Delete(args[1]);
+            // Never mutate the destination before parsing, type checking,
+            // and complete code emission. Failed source must preserve an
+            // already-compiled DLL byte-for-byte.
+            if (new FileInfo(args[0]).Length > 65536)
+                throw new CompilerError("E_LIMIT", "64 KiB source limit");
             string source = File.ReadAllText(args[0], new UTF8Encoding(false, true));
             var fns = new Parser(source).Parse();
             new CIL(fns).Emit(args[1], source);
