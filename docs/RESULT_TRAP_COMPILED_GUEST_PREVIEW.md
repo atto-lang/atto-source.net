@@ -38,7 +38,11 @@ imports, and host calls, are rejected before emitting any guest artifact.
 Run `bash scripts/test-result-preview-guest.sh` on Linux with .NET 8,
 NativeAOT prerequisites and real nonzero-step CI. The script compiles
 generated code with Roslyn, executes CoreCLR and Linux NativeAOT guests,
-compares stdout, and checks negative no-artifact rejections.
+compares stdout, and checks negative no-artifact rejections. A separate
+`ATTO_RESULT_CLR_ONLY=1 bash scripts/test-result-preview-guest.sh` mode
+runs the same CoreCLR guest and negative no-artifact fixtures without
+NativeAOT, emitting `ATTO_RESULT_NATIVEAOT=NOT_EXECUTED`. A CoreCLR-only
+pass **never** qualifies the full NativeAOT gate.
 
 The authoring environment lacks a .NET SDK; all new .NET build/CLR/AOT
 tests are **AUTHORED_NOT_EXECUTED** until exact-head executed evidence.
