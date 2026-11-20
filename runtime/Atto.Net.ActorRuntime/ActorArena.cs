@@ -80,7 +80,10 @@ public unsafe sealed class ActorArena : IDisposable
     {
         _tenant = tenant;
         _capacity = capacity;
-        _frames = new ActorFrameHandle[maximumFrames];
+        // Each admitted frame consumes at least one native payload byte.
+        // Never let tiny arenas reserve huge managed metadata tables:
+        // cap host frame slots by the capacity that can physically fit.
+        _frames = new ActorFrameHandle[Math.Min(maximumFrames, capacity)];
         _meter = new GuestCooperationBudget(logicalFuel);
         _native = (byte*)NativeMemory.AllocZeroed((nuint)capacity);
         if (_native == null) throw new OutOfMemoryException("Actor native arena allocation failed");
@@ -89,6 +92,7 @@ public unsafe sealed class ActorArena : IDisposable
     public int NativeReservedBytes { get { lock (_gate) return _native == null ? 0 : _capacity; } }
     public bool IsStopped { get { lock (_gate) return _stopping; } }
     public int FrameDepth { get { lock (_gate) return _depth; } }
+    public int FrameCapacity => _frames.Length;
 
     public ActorTurn BeginTurn()
     {
