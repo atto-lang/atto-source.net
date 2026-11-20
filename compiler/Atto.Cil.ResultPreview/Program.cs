@@ -27,8 +27,12 @@ internal sealed class Parser
     private const int MaxTokens = 512;
     private readonly List<string> _tokens = [];
     private int _position;
-    private string Peek => _tokens[_position];
-    private string Next() => _tokens[_position++];
+    private string Peek => _position < _tokens.Count ? _tokens[_position] : "<eof>";
+    private string Next()
+    {
+        if (_position >= _tokens.Count) throw new PreviewError("E_PARSE");
+        return _tokens[_position++];
+    }
     private bool Eat(string value) { if (Peek != value) return false; _position++; return true; }
     private void Require(string value)
     {
@@ -289,7 +293,7 @@ internal static class Program
         var target = Path.GetFullPath(args[1]);
         try
         {
-            if (File.Exists(target)) File.Delete(target);
+            if (File.Exists(target)) throw new PreviewError("E_OUTPUT_EXISTS");
             var source = File.ReadAllText(args[0], new UTF8Encoding(false, true));
             var guest = Emitter.Generate(new Parser(source).Parse());
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
