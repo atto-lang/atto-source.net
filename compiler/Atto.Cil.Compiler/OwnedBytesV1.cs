@@ -54,6 +54,8 @@ internal sealed class OwnedBytesV1 : IDisposable
     {
         lock (gate)
         {
+            if (order != ByteOrderV1.Little && order != ByteOrderV1.Big)
+                throw new ByteFailureV1(ByteFaultV1.Value);
             int start = Offset(caller, at, width);
             ulong result = 0;
             for (int i = 0; i < width; i++)
@@ -69,6 +71,8 @@ internal sealed class OwnedBytesV1 : IDisposable
     {
         lock (gate)
         {
+            if (order != ByteOrderV1.Little && order != ByteOrderV1.Big)
+                throw new ByteFailureV1(ByteFaultV1.Value);
             int start = Offset(caller, at, width);
             ulong max = (1UL << (8 * width)) - 1;
             if (value < 0 || (ulong)value > max)
