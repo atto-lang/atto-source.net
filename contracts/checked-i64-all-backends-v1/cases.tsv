@@ -1,0 +1,15 @@
+safe-zero|value|sum(0,0)|0
+safe-upper|value|sum(9223372036854775807,-1)|9223372036854775806
+safe-lower|value|subtract(-9223372036854775808,-1)|-9223372036854775807
+safe-multiply|value|multiply(-3037000499,3037000499)|-9223372030926249001
+safe-negate|value|opposite(-42)|42
+safe-min-rem|value|remainder(-9223372036854775808,-1)|0
+safe-negative-rem|value|remainder(-7,3)|-1
+overflow-add|overflow|sum(9223372036854775807,1)|ORES_I64_OVERFLOW
+overflow-sub|overflow|subtract(-9223372036854775808,1)|ORES_I64_OVERFLOW
+overflow-mul|overflow|multiply(3037000500,3037000500)|ORES_I64_OVERFLOW
+overflow-negate|overflow|opposite(-9223372036854775808)|ORES_I64_OVERFLOW
+overflow-mul-min|overflow|multiply(-9223372036854775808,-1)|ORES_I64_OVERFLOW
+overflow-cancel|overflow|subtract(sum(9223372036854775807,1),1)|ORES_I64_OVERFLOW
+overflow-argument|overflow|sum(opposite(-9223372036854775808),1)|ORES_I64_OVERFLOW
+zero-divisor|zero|remainder(1,0)|DIVISION_BY_ZERO
