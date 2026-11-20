@@ -142,6 +142,82 @@ for spec in \
 done
 echo "ATTO_PIPELINE_POSITIVE_GUEST_PASS cases=4 nativeaot_cases=2"
 
+# The entire signed-i64 value cannot be transported through an OS process
+# exit code. Observe the *compiled CIL method* via a fixed .NET bridge
+# that formats the returned long without calculating the guest expression.
+value_host=tests/Atto.Cil.Value.Host/Atto.Cil.Value.Host.csproj
+rm -f "$guest"
+dotnet run --no-build -c Release --project "$compiler" -- \
+  fixtures/cil/pipelines/signed-int64-min.atto "$guest"
+dotnet build "$value_host" -c Release -t:Rebuild
+actual_min="$(dotnet run --no-build -c Release --project "$value_host" \
+  2>/tmp/atto-cil-min.stderr)"
+test "$actual_min" = "-9223372036854775808" || {
+  echo "ATTO_CIL_I64_MIN_WRONG_VALUE observed=$actual_min" >&2; exit 1;
+}
+test ! -s /tmp/atto-cil-min.stderr
+echo "ATTO_CIL_I64_MIN_CORECLR=EXECUTED"
+dotnet publish "$value_host" -c Release -r linux-x64 -p:PublishAot=true \
+  --self-contained true -o /tmp/atto-cil-i64-min-aot
+aot_min="$(/tmp/atto-cil-i64-min-aot/Atto.Cil.Value.Host)"
+test "$aot_min" = "-9223372036854775808" || {
+  echo "ATTO_CIL_I64_MIN_NATIVEAOT_WRONG_VALUE observed=$aot_min" >&2; exit 1;
+}
+echo "ATTO_CIL_I64_MIN_NATIVEAOT=EXECUTED"
+
+# Checked overflow must be rejected by the emitted CLR arithmetic itself.
+rm -f "$guest"
+dotnet run --no-build -c Release --project "$compiler" -- \
+  fixtures/cil/pipelines/checked-overflow.atto "$guest"
+dotnet build "$value_host" -c Release -t:Rebuild
+set +e
+dotnet run --no-build -c Release --project "$value_host" \
+  > /tmp/atto-cil-overflow.stdout 2>/tmp/atto-cil-overflow.stderr
+overflow_status=$?
+set -e
+test "$overflow_status" -ne 0 || {
+  echo "ATTO_CIL_CHECKED_OVERFLOW_WRAPPED" >&2; exit 1;
+}
+test ! -s /tmp/atto-cil-overflow.stdout
+grep -Fq 'OverflowException' /tmp/atto-cil-overflow.stderr || {
+  echo "ATTO_CIL_CHECKED_OVERFLOW_WRONG_DIAGNOSTIC" >&2; exit 1;
+}
+echo "ATTO_CIL_CHECKED_OVERFLOW_TRAPPED=EXECUTED"
+
+# A rejected source must not delete or rewrite an unrelated preexisting DLL.
+sentinel=artifacts/AttoExistingSentinel.dll
+printf 'do-not-replace-atto-binary\n' > "$sentinel"
+sentinel_before="$(sha256sum "$sentinel" | cut -d' ' -f1)"
+set +e
+dotnet run --no-build -c Release --project "$compiler" -- \
+  fixtures/cil/pipelines/negative/wrong-type.atto "$sentinel" \
+  >/tmp/atto-cil-preserve.stdout 2>/tmp/atto-cil-preserve.stderr
+preserve_rc=$?
+set -e
+test "$preserve_rc" -eq 2
+grep -Fq 'E_TYPE:' /tmp/atto-cil-preserve.stderr
+test "$sentinel_before" = "$(sha256sum "$sentinel" | cut -d' ' -f1)" || {
+  echo "ATTO_CIL_NEGATIVE_DELETED_PREEXISTING_DLL" >&2; exit 1;
+}
+echo "ATTO_CIL_NEGATIVE_PRESERVES_PREEXISTING_OUTPUT=PASS"
+
+# Exclusive temporary creation: an attacker-planted .tmp may not be truncated.
+temp=artifacts/AttoBlocked.dll.tmp
+blocked=artifacts/AttoBlocked.dll
+rm -f "$temp" "$blocked"
+printf 'do-not-truncate\n' > "$temp"
+set +e
+dotnet run --no-build -c Release --project "$compiler" -- \
+  fixtures/cil/pipelines/block-body-83.atto "$blocked" \
+  >/tmp/atto-cil-temp.stdout 2>/tmp/atto-cil-temp.stderr
+blocked_rc=$?
+set -e
+test "$blocked_rc" -ne 0 && test ! -e "$blocked"
+test "$(cat "$temp")" = "do-not-truncate"
+rm -f "$temp"
+echo "ATTO_CIL_EXCLUSIVE_TEMP_CREATE=PASS"
+
+
 for spec in \
   mixed-forward-reverse:E_PARSE \
   mixed-reverse-forward:E_PARSE \
@@ -152,7 +228,9 @@ for spec in \
   bad-callee:E_PARSE \
   forward-local:E_SYMBOL \
   duplicate-local:E_DUP_LOCAL \
-  arrow-brace-no-return:E_PARSE; do
+  arrow-brace-no-return:E_PARSE \
+  signed-int64-underflow:E_LITERAL \
+  reserved-authority:E_NAME; do
   name="$(printf '%s' "$spec" | cut -d: -f1)"
   diagnostic="$(printf '%s' "$spec" | cut -d: -f2)"
   reject="artifacts/RejectedPipeline.dll"
@@ -178,4 +256,4 @@ for spec in \
     exit 1
   }
 done
-echo "ATTO_PIPELINE_NEGATIVE_PASS cases=10"
+echo "ATTO_PIPELINE_NEGATIVE_PASS cases=12"
