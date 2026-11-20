@@ -106,6 +106,18 @@ public static class ActorPipelinePolicyTests
             stages.Select((stage, i) =>
                 i == 0 ? stage with { Id = "src\0spoof" } : stage).ToArray(),
             edges));
+        var hostileStages = new OneCountOnlyList<ActorPipelinePolicy.Stage>(stages.ToArray());
+        var hostileEdges = new OneCountOnlyList<ActorPipelinePolicy.Edge>(edges.ToArray());
+        var boundedPlan = new ActorPipelinePolicy(hostileStages, hostileEdges);
+        Check(boundedPlan.ForwardAll("src").Count == 3,
+            "hostile graph iterator/count escaped checked snapshot");
+        Check(hostileStages.CountReads == 1 && hostileEdges.CountReads == 1,
+            "graph admission reread untrusted collection count");
+        Reject(() => new ActorPipelinePolicy(
+            new OneCountOnlyList<ActorPipelinePolicy.Stage>(stages.ToArray(), failIndex: 1),
+            edges));
+        Reject(() => new ActorPipelinePolicy(
+            stages, new OneCountOnlyList<ActorPipelinePolicy.Edge>(edges.ToArray(), failIndex: 1)));
         // Two classes of mutable input are copied on publication.
         var mutableEdges = edges.ToList();
         var frozenPlan = new ActorPipelinePolicy(stages, mutableEdges);
@@ -219,5 +231,25 @@ public static class ActorPipelinePolicyTests
 
         ActorPipelinePolicy.Stage[] withDuplicateId() =>
             new[] { stages[0], stages[0] };
+    }
+
+    private sealed class OneCountOnlyList<T> : IReadOnlyList<T>
+    {
+        private readonly T[] _values;
+        private readonly int _failIndex;
+        public int CountReads { get; private set; }
+        public OneCountOnlyList(T[] values, int failIndex = -1)
+        {
+            _values = values;
+            _failIndex = failIndex;
+        }
+        public int Count => ++CountReads == 1 ? _values.Length : int.MaxValue;
+        public T this[int index] => index == _failIndex
+            ? throw new ArgumentOutOfRangeException(nameof(index))
+            : _values[index];
+        public IEnumerator<T> GetEnumerator() =>
+            throw new InvalidOperationException("Hostile iterator must not execute");
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() =>
+            throw new InvalidOperationException("Hostile iterator must not execute");
     }
 }

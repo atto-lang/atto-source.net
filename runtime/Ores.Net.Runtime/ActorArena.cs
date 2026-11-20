@@ -49,6 +49,8 @@ public sealed unsafe class ActorArena : IDisposable
     // Exact issuance metadata: in-bounds offsets are not themselves authority.
     // Fixed-size ushort entries avoid unbounded per-allocation bookkeeping.
     private readonly ushort[] _scratchLengths = new ushort[ScratchBytes];
+    [ThreadStatic] private static ActorArena? s_carrierArena;
+    [ThreadStatic] private static Turn? s_carrierTurn;
     private byte* _memory;
     private Turn? _turn;
     private System.Threading.Thread? _carrier;
@@ -71,13 +73,16 @@ public sealed unsafe class ActorArena : IDisposable
             throw new InvalidOperationException("actor arena busy");
         try
         {
-            if (_retired || _turn is not null || actor != _actor || incarnation != _incarnation)
+            if (_retired || _turn is not null || actor != _actor || incarnation != _incarnation ||
+                s_carrierArena is not null)
                 throw new InvalidOperationException("actor arena admission denied");
             // Managed thread IDs are process-scoped integers and may be reused
             // after a thread lifetime. Hold the actual Thread object while a
             // turn is active so a later carrier cannot inherit old authority.
             _carrier = System.Threading.Thread.CurrentThread;
             _turn = new Turn();
+            s_carrierArena = this;
+            s_carrierTurn = _turn;
             return _turn;
         }
         finally
@@ -89,7 +94,8 @@ public sealed unsafe class ActorArena : IDisposable
     private void RequireTurn(Turn turn)
     {
         if (_retired || _turn is null || !ReferenceEquals(_turn, turn) ||
-            !ReferenceEquals(_carrier, System.Threading.Thread.CurrentThread))
+            !ReferenceEquals(_carrier, System.Threading.Thread.CurrentThread) ||
+            !ReferenceEquals(s_carrierArena, this) || !ReferenceEquals(s_carrierTurn, turn))
             throw new InvalidOperationException("wrong or stale actor turn");
     }
 
@@ -105,6 +111,8 @@ public sealed unsafe class ActorArena : IDisposable
             _scratchTop = 0;
             _turn = null;
             _carrier = null;
+            s_carrierTurn = null;
+            s_carrierArena = null;
         }
         finally
         {
