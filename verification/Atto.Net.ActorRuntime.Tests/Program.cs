@@ -495,6 +495,50 @@ internal static class Program
         _cases++;
     }
 
+    private static void RacyStopAndTurnExitRefundExactlyOnce()
+    {
+        // STOP may race with the final physical EndTurn, but neither
+        // thread can free native memory while a live turn still owns it.
+        using var tenant = new TenantVm(maximumActors: 1, maximumNativeBytes: 64);
+        using var actor = tenant.CreateActor(arenaBytes: 64);
+        var turn = actor.BeginTurn();
+        var frame = actor.PushFrame(turn, 8);
+        actor.WriteFrame(turn, frame, 0, new byte[] { 42 });
+        Exception? fault = null;
+        var faultLock = new object();
+        using var go = new ManualResetEventSlim(false);
+        Thread[] stops = new Thread[4];
+        for (int i = 0; i < stops.Length; i++)
+        {
+            stops[i] = new Thread(() =>
+            {
+                try
+                {
+                    Check(go.Wait(10_000),
+                        "STOP stress started before deadline");
+                    for (int j = 0; j < 200; j++)
+                        actor.Stop();
+                }
+                catch (Exception ex) { lock (faultLock) fault ??= ex; }
+            });
+            stops[i].Start();
+        }
+        go.Set();
+        actor.EndTurn(turn);
+        foreach (var worker in stops)
+            Check(worker.Join(millisecondsTimeout: 10_000),
+                "STOP stress worker terminates");
+        if (fault is not null) throw new Exception("STOP stress failed", fault);
+        Check(tenant.NativeReservedBytes == 0 &&
+              tenant.LiveActorCount == 0 &&
+              actor.FrameDepth == 0,
+            "concurrent STOP and physical exit free/refund exactly once");
+        Expect<InvalidOperationException>(
+            () => actor.BeginTurn(),
+            "stopped incarnation cannot be restarted");
+        _cases++;
+    }
+
     private static void ConcurrentActorLifecycleStress()
     {
         using var tenant = new TenantVm(maximumActors: 8, maximumNativeBytes: 512);
@@ -570,6 +614,7 @@ internal static class Program
             QuiescentTenantDisposal();
             InvalidAdmissionIsAtomic();
             ConcurrentActorLifecycleStress();
+            RacyStopAndTurnExitRefundExactlyOnce();
             TinyArenaCapsManagedFrameMetadata();
             TenantFuelSurvivesActorReincarnation();
             Console.WriteLine($"ATTO_NET_ACTOR_ARENA_COOPERATION_PASS cases={_cases}");
