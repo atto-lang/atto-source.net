@@ -34,3 +34,31 @@ never a cross-org token, and require nonempty actual executed test steps.
 
 Oreslang .NET architecture is consulted for compatibility but its compiler
 and runtime results cannot be counted as AttoLang executable parity.
+
+
+## Draft scalar expression sequence parity
+
+The direct CIL candidate branch now lowers `seq(a, b, c)` and
+`(> a, b, c)` as bounded, left-to-right `int64` expression sequences.
+Earlier expressions generate IL followed by `pop`; the final expression
+supplies the return value. `seq(value)` is permitted. Nested sequences,
+precedence and explicit function-call arguments remain distinct from
+tuple syntax. The `seq` identifier is reserved, never dispatched as a
+user-defined function.
+
+No expression member may be a binding/statement in this experimental
+single-expression compiler. Maximum 16 members and existing expression
+depth/source budgets apply. Empty/leading/trailing commas, literal tuple
+parentheses, and `seq(a; b)` fail closed with typed diagnostics.
+
+`scripts/test-cil-guest.sh` builds a generated CIL guest linked to the
+CoreCLR and NativeAOT hosts, tests nested/call-argument/singleton
+sequences, and confirms runtime exceptions from *non-final* checked
+integer overflow and division by zero. It also rejects malformed
+sequences without publishing a `.dll` artifact.
+
+**Evidence status:** tests are submitted but require execution by a
+runner with .NET SDK/NativeAOT prerequisites. Do not mark cross-backend
+parity `passed` from a new PR, a host-only test, or an Actions job
+with zero executed steps. All actors, ownership, suspend, `defer`, and
+versioned comma-body syntax remain unsupported by this CIL subset.
