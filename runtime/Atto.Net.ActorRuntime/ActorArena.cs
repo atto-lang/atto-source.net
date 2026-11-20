@@ -4,7 +4,10 @@ using System.Security.Cryptography;
 
 namespace Atto.Net.ActorRuntime;
 
-public sealed class ActorResourceExhaustedException(string reason) : InvalidOperationException(reason);
+public sealed class ActorResourceExhaustedException : InvalidOperationException
+{
+    public ActorResourceExhaustedException(string reason) : base(reason) { }
+}
 
 /// <summary>Exact-issued physical turn authority; never serialize or send.</summary>
 public sealed class ActorTurn
