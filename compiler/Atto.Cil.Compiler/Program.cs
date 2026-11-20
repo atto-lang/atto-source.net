@@ -103,14 +103,17 @@ internal sealed class Parser
             if (!Eat(":")) Require("->");
             Require("int"); Require("{");
             List<InlineTask> prelude = [];
-            while (Peek is "sync" or "do")
+            while (Peek == "do")
             {
-                bool isDiscard = Eat("do");
-                if (isDiscard && Peek != "sync")
+                Eat("do");
+                if (Peek != "sync")
                     throw new CompilerError("E_TASK_UNSUPPORTED", "do task requires TaskScope");
-                prelude.Add(ParseInlineTask(0, isDiscard));
+                prelude.Add(ParseInlineTask(0, requireVoid: true));
                 Eat(";");
             }
+            if (Peek == "sync")
+                throw new CompilerError("E_SYNTAX",
+                    "standalone sync task statement requires do");
             Require("return");
             var expression = ParseExpr(0, 0);
             Require(";"); Require("}");
@@ -144,14 +147,17 @@ internal sealed class Parser
                 "do sync task only accepts a void payload");
         Require("{");
         List<InlineTask> prelude = [];
-        while (Peek is "sync" or "do")
+        while (Peek == "do")
         {
-            bool isDiscard = Eat("do");
-            if (isDiscard && Peek != "sync")
+            Eat("do");
+            if (Peek != "sync")
                 throw new CompilerError("E_TASK_UNSUPPORTED", "do task requires TaskScope");
-            prelude.Add(ParseInlineTask(depth + 1, isDiscard));
+            prelude.Add(ParseInlineTask(depth + 1, requireVoid: true));
             Eat(";");
         }
+        if (Peek == "sync")
+            throw new CompilerError("E_SYNTAX",
+                "standalone sync task statement requires do");
         Expression? result = null;
         if (Eat("return"))
         {
