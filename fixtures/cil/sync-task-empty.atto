@@ -1,5 +1,5 @@
-// Exact inline lexical form: empty body, no Future or child TaskId.
+// Exact void inline statement form; no Future or child TaskId.
 pub fnc main(): int {
-    sync task {}
+    do sync task {};
     return 42;
 }
