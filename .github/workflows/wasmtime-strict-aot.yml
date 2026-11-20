@@ -1,0 +1,126 @@
+name: .NET Wasmtime strict full-AOT end-to-end candidate
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'verification/Ores.Net.WasmtimeAotBuilder/**'
+      - 'verification/Ores.Net.WasmtimeAotRunner/**'
+      - '.github/workflows/wasmtime-strict-aot.yml'
+      - 'build/StrictNativeAot.targets'
+      - 'verification/test_wasmtime_strict_aot_source_contract.py'
+      - 'verification/wasmtime-c-api/**'
+      - 'contracts/private-ci-security.v1.json'
+
+permissions:
+  contents: read
+
+jobs:
+  linux-x64-strict-nativeaot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      # Private repository: a foreign PR head must not be executable under
+      # source-org credentials, even when GitHub allows the workflow to start.
+      - name: Deny cross-repository checkout before fetching source
+        shell: bash
+        env:
+          SOURCE_REPO: ${{ github.repository }}
+          PR_HEAD_REPO_ID: ${{ github.event.pull_request.head.repo.id || '1419704375' }}
+        run: |
+          set -euo pipefail
+          test "$SOURCE_REPO" = 'ores-truffle-oreslang/oreslang-source.net'
+          test "$PR_HEAD_REPO_ID" = '1419704375'
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Assert exact branch head identity
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          echo "NET_WASMTIME_AOT_TESTED_HEAD=$EXPECTED_HEAD"
+      - name: Verify offline fail-closed double-AOT source contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 verification/test_wasmtime_strict_aot_source_contract.py
+          bash verification/wasmtime-c-api/test_preflight.sh
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: '10.0.x'
+      - name: Fail if guest Wasm compilation entered the AOT runtime source
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -RE 'Module\.(FromBytes|FromFile|FromText|FromStream|FromTextFile|ConvertText)|\.Serialize\(' \
+            verification/Ores.Net.WasmtimeAotRunner --include='*.cs'
+      - name: Publish both .NET programs as native AOT executables
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet publish verification/Ores.Net.WasmtimeAotBuilder/Ores.Net.WasmtimeAotBuilder.csproj \
+            -c Release -r linux-x64 -o "$RUNNER_TEMP/aot-builder" \
+            -p:PublishAot=true -p:SelfContained=true
+          dotnet publish verification/Ores.Net.WasmtimeAotRunner/Ores.Net.WasmtimeAotRunner.csproj \
+            -c Release -r linux-x64 -o "$RUNNER_TEMP/aot-runner" \
+            -p:PublishAot=true -p:SelfContained=true
+          test -x "$RUNNER_TEMP/aot-builder/oresnet-wasmtime-aot-builder"
+          test -x "$RUNNER_TEMP/aot-runner/oresnet-wasmtime-aot-runner"
+          # Assert ELF native executables, not managed DLL apphost shims.
+          file "$RUNNER_TEMP/aot-builder/oresnet-wasmtime-aot-builder" | tee "$RUNNER_TEMP/aot-builder-file.txt"
+          file "$RUNNER_TEMP/aot-runner/oresnet-wasmtime-aot-runner" | tee "$RUNNER_TEMP/aot-runner-file.txt"
+          grep -F 'ELF 64-bit' "$RUNNER_TEMP/aot-builder-file.txt"
+          grep -F 'ELF 64-bit' "$RUNNER_TEMP/aot-runner-file.txt"
+          ! ldd "$RUNNER_TEMP/aot-builder/oresnet-wasmtime-aot-builder" | grep -E '(libcoreclr|libhostfxr|libhostpolicy|libclrjit)'
+          ! ldd "$RUNNER_TEMP/aot-runner/oresnet-wasmtime-aot-runner" | grep -E '(libcoreclr|libhostfxr|libhostpolicy|libclrjit)'
+          sha256sum "$RUNNER_TEMP/aot-builder/oresnet-wasmtime-aot-builder" \
+            "$RUNNER_TEMP/aot-runner/oresnet-wasmtime-aot-runner"
+      - name: Reject synthetic executables without explicit CI opt-in
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          "$RUNNER_TEMP/aot-builder/oresnet-wasmtime-aot-builder" "$RUNNER_TEMP/no-authorization" 2>"$RUNNER_TEMP/denied-builder.log"
+          builder_status=$?
+          "$RUNNER_TEMP/aot-runner/oresnet-wasmtime-aot-runner" 2>"$RUNNER_TEMP/denied-runner.log"
+          runner_status=$?
+          set -e
+          test "$builder_status" -eq 78
+          test "$runner_status" -eq 78
+          grep -Fx WASMTIME_SYNTHETIC_PROBE_NOT_AUTHORIZED "$RUNNER_TEMP/denied-builder.log"
+          grep -Fx WASMTIME_SYNTHETIC_PROBE_NOT_AUTHORIZED "$RUNNER_TEMP/denied-runner.log"
+      - name: Build and sign trusted synthetic guest AHEAD of runtime
+        env:
+          ORES_WASMTIME_SYNTHETIC_CI_ONLY: '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/aot-artifact"
+          "$RUNNER_TEMP/aot-builder/oresnet-wasmtime-aot-builder" \
+            "$RUNNER_TEMP/aot-artifact" | tee "$RUNNER_TEMP/wasmtime-builder.log"
+          grep -Fx NET_WASMTIME_TRUSTED_AOT_BUILDER_PASS \
+            "$RUNNER_TEMP/wasmtime-builder.log"
+          test -s "$RUNNER_TEMP/aot-artifact/guest.cwasm"
+          test -s "$RUNNER_TEMP/aot-artifact/guest.manifest.sig"
+          # The test-only private key exists in memory in the builder,
+          # never in the artifact directory or runner.
+          test "$(find "$RUNNER_TEMP/aot-artifact" -type f | wc -l)" -eq 4
+      - name: Execute published Native AOT runtime on precompiled artifact
+        env:
+          ORES_WASMTIME_SYNTHETIC_CI_ONLY: '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/aot-runner/oresnet-wasmtime-aot-runner" \
+            "$RUNNER_TEMP/aot-artifact/guest.manifest.json" \
+            "$RUNNER_TEMP/aot-artifact/guest.manifest.sig" \
+            "$RUNNER_TEMP/aot-artifact/guest.cwasm" \
+            "$RUNNER_TEMP/aot-artifact/ephemeral-ci-public.pem" \
+            | tee "$RUNNER_TEMP/wasmtime-runner.log"
+          grep -Fx NET_WASMTIME_STRICT_AOT_RUNTIME_PASS \
+            "$RUNNER_TEMP/wasmtime-runner.log"
+          echo "NET_WASMTIME_STRICT_AOT_E2E_PASS"

@@ -36,12 +36,13 @@ a security sandbox. No general guest-code tenant isolation is claimed.
 7. Include a distinct status/result ABI, including legitimate signed
    negative values. Check native artifact entry ABI **before** function
    pointer casts; ABI version mismatch must fail closed.
-8. Tenants, including hostile ones, share one OS process with one VM-isolate
-   each (conformance tenant isolation v2). A host-owned registry like this one
-   is not that isolate by itself. Untrusted tenants run as validated Wasm on
-   the shared native TenantVm core; tenant-supplied native code, FFI pointers
-   and CIL are refused. A process sandbox is optional defense in depth, never
-   required.
+8. Untrusted .NET guests run only as validated Wasm in an independently owned
+   Wasmtime Store/instance/memory (decision 2026-11-18), never as untrusted CIL,
+   tenant-supplied native code, FFI pointers or an ordinary CLR heap. The
+   .NET Native AOT host and Wasmtime tenant Stores may share one OS process,
+   which is not itself an OS security sandbox. Untrusted admission MUST fail
+   closed until the actual Wasmtime engine, quotas and teardown are verified.
+   See [Wasmtime TenantVM decision](WASMTIME_TENANTVM_DECISION_20261118.md).
 
 ## V8 lessons and crucial differences
 
@@ -69,9 +70,12 @@ Resource pins are explicit host bookkeeping, **not** proof of physical
 OS/FFI callback retirement. No user source compiler lowering to a per-tenant
 entry ABI is provided. Do not rely on `AssemblyLoadContext`, reflection
 emit, runtime CIL generation or process-global mutable statics to isolate
-Native AOT tenants. Untrusted tenants use `IsolationMode.NativeVmIsolate`
-(validated Wasm on the shared native TenantVm core, same process), which
-fails closed until that core is wired in. See `spikes/tenant-vm-dotnet`.
+Native AOT tenants. Untrusted tenants now require explicit `IsolationMode.WasmtimeSandbox`
+(validated Wasm under an independent Wasmtime Store/instance/memory), which
+fails closed until the Wasmtime provider is wired into the Native AOT host.
+The legacy `IsolationMode.NativeVmIsolate` remains fail-closed; its
+`spikes/tenant-vm-dotnet` experiment is historical, not selected policy.
+See [Wasmtime decision](WASMTIME_TENANTVM_DECISION_20261118.md).
 
 Tests: `VmIsolateHostTests.Run()` is wired into the existing
 `verification/Ores.Net.Tests/Program.cs` suite; the .NET toolchain must

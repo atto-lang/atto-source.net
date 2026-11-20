@@ -1,0 +1,79 @@
+name: .NET Wasmtime real Native AOT probe
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'verification/Ores.Net.WasmtimeProbe/**'
+      - '.github/workflows/wasmtime-nativeaot-probe.yml'
+      - 'build/StrictNativeAot.targets'
+      - 'verification/test_wasmtime_strict_aot_source_contract.py'
+      - 'verification/wasmtime-c-api/**'
+      - 'contracts/private-ci-security.v1.json'
+
+permissions:
+  contents: read
+
+jobs:
+  linux-x64-wasmtime-nativeaot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      # Private repository: a foreign PR head must not be executable under
+      # source-org credentials, even when GitHub allows the workflow to start.
+      - name: Deny cross-repository checkout before fetching source
+        shell: bash
+        env:
+          SOURCE_REPO: ${{ github.repository }}
+          PR_HEAD_REPO_ID: ${{ github.event.pull_request.head.repo.id || '1419704375' }}
+        run: |
+          set -euo pipefail
+          test "$SOURCE_REPO" = 'ores-truffle-oreslang/oreslang-source.net'
+          test "$PR_HEAD_REPO_ID" = '1419704375'
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Assert exact checkout identity
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          echo "WASMTIME_TESTED_HEAD=$EXPECTED_HEAD"
+      - name: Verify offline fail-closed double-AOT source contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 verification/test_wasmtime_strict_aot_source_contract.py
+          bash verification/wasmtime-c-api/test_preflight.sh
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: '10.0.x'
+      - name: Publish real Native AOT host (Wasmtime 50.0.1)
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet publish verification/Ores.Net.WasmtimeProbe/Ores.Net.WasmtimeProbe.csproj \
+            -c Release -r linux-x64 -o "$RUNNER_TEMP/wasmtime-probe" \
+            -p:PublishAot=true -p:SelfContained=true
+          test -x "$RUNNER_TEMP/wasmtime-probe/oresnet-wasmtime-probe"
+          file "$RUNNER_TEMP/wasmtime-probe/oresnet-wasmtime-probe"
+      - name: Deny unapproved synthetic probe invocation
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          env -u ORES_WASMTIME_SYNTHETIC_CI_ONLY \
+            "$RUNNER_TEMP/wasmtime-probe/oresnet-wasmtime-probe" \
+            > "$RUNNER_TEMP/wasmtime-denial.log" 2>&1
+          exit_code=$?
+          set -e
+          test "$exit_code" -eq 78
+          grep -Fx WASMTIME_SYNTHETIC_PROBE_NOT_AUTHORIZED "$RUNNER_TEMP/wasmtime-denial.log"
+      - name: Execute the published native binary (synthetic CI opt-in only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ORES_WASMTIME_SYNTHETIC_CI_ONLY=1 \
+            "$RUNNER_TEMP/wasmtime-probe/oresnet-wasmtime-probe" | tee "$RUNNER_TEMP/wasmtime-probe.log"
+          grep -Fx NET_WASMTIME_NATIVEAOT_PROBE_PASS "$RUNNER_TEMP/wasmtime-probe.log"

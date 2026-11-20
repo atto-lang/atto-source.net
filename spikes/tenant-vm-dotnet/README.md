@@ -1,5 +1,11 @@
 # Tenant VMs in a .NET process
 
+> **Historical LLVM native-core spike, not the selected untrusted .NET implementation.**
+> The 2026-11-18 [.NET Wasmtime decision](../../docs/WASMTIME_TENANTVM_DECISION_20261118.md)
+> chooses validated Wasm guests in independent Wasmtime Stores for untrusted
+> tenants, retaining this spike only as historical execution evidence. No
+> untrusted admission path in `OresVmHost` is certified by these results.
+
 One .NET process, up to 1000 tenants, with guests running on the shared native core through its C API
 rather than as CIL. This is the .NET backend of the design in `oreslang-source.llvm`,
 `docs/TENANT_VM_IN_PROCESS_V1.md`. It is a spike, not yet wired into this repository's host.

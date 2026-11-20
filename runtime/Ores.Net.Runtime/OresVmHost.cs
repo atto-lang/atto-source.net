@@ -10,11 +10,11 @@ public sealed partial class OresVmHost
     public enum Phase { Created, Running, Quiescing, Stopped }
 
     // A NativeAOT host-owned dictionary is NOT a separate tenant CLR heap.
-    // Untrusted tenants get a NativeVmIsolate: validated Wasm on the shared
-    // native TenantVm core, in this same process (tenant isolation v2). It
-    // refuses admission until that core is wired in; it never falls back to
-    // TrustedInProcess.
-    public enum IsolationMode { TrustedInProcess, NativeVmIsolate }
+    // Untrusted guests must use validated Wasm in a Wasmtime-owned tenant Store.
+    // The legacy NativeVmIsolate value is retained for API compatibility but
+    // is NOT a route for untrusted tenants. Both modes must fail closed until
+    // the actual Wasmtime guest engine, quotas and teardown are wired and tested.
+    public enum IsolationMode { TrustedInProcess, NativeVmIsolate, WasmtimeSandbox }
 
     public sealed class IsolateHandle
     {
@@ -169,7 +169,8 @@ public sealed partial class OresVmHost
     /// <summary>
     /// Canonical TenantVM name for TRUSTED host-only admission. The returned
     /// legacy IsolateHandle does not represent an enforced hostile-tenant
-    /// VM boundary. NativeVmIsolate continues to fail closed in CreateIsolate.
+    /// VM boundary. NativeVmIsolate and WasmtimeSandbox fail closed until
+    /// validated Wasm execution is separately implemented and verified.
     /// </summary>
     public IsolateHandle CreateTrustedTenantVm(string tenantId, int maxActors = 64,
         int maxResourcePins = 1024, long maxQueuedMailBytes = 16L * 1024 * 1024)
@@ -179,6 +180,12 @@ public sealed partial class OresVmHost
     public IsolateHandle CreateIsolate(string tenantId, int maxActors = 64, int maxResourcePins = 1024,
         IsolationMode isolation = IsolationMode.TrustedInProcess, long maxQueuedMailBytes = 16L * 1024 * 1024)
     {
+        // The host MUST never silently downgrade untrusted Wasm to an ordinary
+        // CLR object graph or to the old native TenantVM spike. Native AOT of
+        // this host does not by itself sandbox guest code.
+        if (isolation == IsolationMode.WasmtimeSandbox)
+            throw new InvalidOperationException(
+                "Wasmtime tenant sandbox not wired into this Native AOT host; untrusted guest admission denied");
         if (isolation != IsolationMode.TrustedInProcess)
             throw new InvalidOperationException("native TenantVm isolate not wired into this host yet");
         // Dot-only IDs are future path/namespace control components, not

@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Separate experimental binary: do not silently add a Wasmtime dependency
+       to the released CIL application or enable an unverified guest path. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>oresnet-wasmtime-probe</AssemblyName>
+    <PublishAot>true</PublishAot>
+    <SelfContained>true</SelfContained>
+    <PublishTrimmed>true</PublishTrimmed>
+    <IsAotCompatible>true</IsAotCompatible>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Version intentionally exact: release/security audit must review upgrades. -->
+    <PackageReference Include="Wasmtime" Version="50.0.1" />
+  </ItemGroup>
+  <Import Project="../../build/StrictNativeAot.targets" />
+</Project>
