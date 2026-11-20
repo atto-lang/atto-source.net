@@ -1,0 +1,34 @@
+name: Restricted Result Trap compiled guest preview
+on:
+  push:
+    branches:
+      - feat/result-trap-compiled-guest-preview-20261120
+  pull_request:
+    paths:
+      - 'compiler/Atto.Cil.ResultPreview/**'
+      - 'verification/Atto.ResultPreview.Guest.csproj'
+      - 'fixtures/result_preview/**'
+      - 'scripts/test-result-preview-guest.sh'
+      - '.github/workflows/result-trap-compiled-preview.yml'
+jobs:
+  compiled-guest:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Exact checked-out head and clean workspace
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+      - name: Execute CLR and NativeAOT compiled guest matrix
+        run: bash scripts/test-result-preview-guest.sh
