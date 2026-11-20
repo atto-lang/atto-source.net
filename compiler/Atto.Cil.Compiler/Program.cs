@@ -58,11 +58,42 @@ internal sealed class Parser
             else if (c is >= '0' and <= '9')
                 while (i < source.Length && source[i] is >= '0' and <= '9') i++;
             else if (c == '-' && i < source.Length && source[i] == '>') i++;
+            else if (c == '"')
+            {
+                // Tokenize quoted strings atomically: an embedded `=>` is
+                // data, not an entry operator; comments are handled above.
+                // String *execution* remains unsupported by the scalar CIL
+                // backend. Bound literals to prevent unbounded preflight work.
+                bool closed = false;
+                while (i < source.Length)
+                {
+                    if (source[i] == '\\')
+                    {
+                        if (i + 1 >= source.Length) break;
+                        i += 2;
+                        continue;
+                    }
+                    if (source[i] == '"') { i++; closed = true; break; }
+                    if (source[i] == '\n' || source[i] == '\r') break;
+                    i++;
+                    if (i - start > 4096)
+                        throw new CompilerError("E_LIMIT", "string token exceeds 4096 characters");
+                }
+                if (!closed) throw new CompilerError("E_LEX", "unterminated quoted string");
+            }
+            else if (c == '=' && i < source.Length && source[i] == '>')
+                throw new CompilerError("E_UNSUPPORTED_MAP_ENTRY",
+                    "first-class Entry<K,V> and Map<K,V> require checked CIL ownership/lowering");
             else if (!"(){}:;,+-*/".Contains(c))
                 throw new CompilerError("E_LEX", $"unsupported source character at {start}");
             _tokens.Add(source[start..i]);
             if (_tokens.Count > 8192) throw new CompilerError("E_LIMIT", "8192 token limit");
         }
+        // Builtin Map/Entry must not be mistaken for scalar user symbols.
+        // Token-based inspection avoids triggering on comments/strings.
+        if (_tokens.Contains("Map") || _tokens.Contains("Entry"))
+            throw new CompilerError("E_UNSUPPORTED_MAP_ENTRY",
+                "typed Map/Entry runtime and CIL lowering are not implemented");
         _tokens.Add("<eof>");
     }
     internal List<Function> Parse()
