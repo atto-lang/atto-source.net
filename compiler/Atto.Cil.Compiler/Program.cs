@@ -21,7 +21,12 @@ internal sealed record Call(string Name, List<Expression> Args) : Expression;
 // The match subject is evaluated exactly once into a CIL local.
 internal sealed record ValueArm(long? Literal, string? Binding, Expression? Guard, Expression Result);
 internal sealed record ValueMatch(Expression Subject, List<ValueArm> Arms) : Expression;
-internal sealed record Function(string Name, List<string> Args, Expression Return);
+// The admitted statement profile is deliberately bounded: output statements
+// execute in source order, then one final return. No silent fallthrough.
+internal abstract record Statement;
+internal sealed record PrintLine(Expression Value) : Statement;
+internal sealed record ReturnStmt(Expression Value) : Statement;
+internal sealed record Function(string Name, List<string> Args, List<Statement> Body);
 
 internal sealed class Parser
 {
@@ -63,7 +68,7 @@ internal sealed class Parser
                 while (i < source.Length && source[i] is >= '0' and <= '9') i++;
             else if (c == '-' && i < source.Length && source[i] == '>') i++;
             else if (c == '=' && i < source.Length && source[i] == '=') i++;
-            else if (!"(){}:;,+-*/^>=".Contains(c))
+            else if (!"(){}:;,+-*/^>=.".Contains(c))
                 throw new CompilerError("E_LEX", $"unsupported source character at {start}");
             _tokens.Add(source[start..i]);
             if (_tokens.Count > 8192) throw new CompilerError("E_LIMIT", "8192 token limit");
@@ -90,13 +95,41 @@ internal sealed class Parser
             Require(")");
             if (!Eat(":")) Require("->");
             Require("int"); Require("{");
-            if (!Eat("return") && !Eat("^"))
-                throw new CompilerError("E_PARSE", "expected return or ^");
-            var expression = ParseExpr(0, 0);
-            if (!Eat(";") && expression is not ValueMatch)
-                throw new CompilerError("E_PARSE", "expected ; after return");
+            List<Statement> statements = [];
+            while (Peek != "}" && Peek != "<eof>")
+            {
+                if (statements.Count >= 64)
+                    throw new CompilerError("E_LIMIT", "64 function statement limit");
+                if (Eat("return") || Eat("^"))
+                {
+                    var expression = ParseExpr(0, 0);
+                    if (!Eat(";") && expression is not ValueMatch)
+                        throw new CompilerError("E_PARSE", "expected ; after return");
+                    statements.Add(new ReturnStmt(expression));
+                    if (Peek != "}")
+                        throw new CompilerError("E_RETURN", "statements after final return are forbidden");
+                    break;
+                }
+                if (Eat("stdio"))
+                {
+                    if (!Eat(".") || !Eat("println"))
+                        throw new CompilerError("E_STDIO", "only stdio.println(int) is supported");
+                    Require("(");
+                    if (Eat(")"))
+                        throw new CompilerError("E_STDIO", "stdio.println requires exactly one int");
+                    var value = ParseExpr(0, 0);
+                    if (!Eat(")"))
+                        throw new CompilerError("E_STDIO", "stdio.println requires exactly one int");
+                    Require(";");
+                    statements.Add(new PrintLine(value));
+                    continue;
+                }
+                throw new CompilerError("E_PARSE", "unsupported function statement");
+            }
+            if (statements.Count == 0 || statements[^1] is not ReturnStmt)
+                throw new CompilerError("E_PARSE", "function requires a final return");
             Require("}");
-            result.Add(new Function(name, args, expression));
+            result.Add(new Function(name, args, statements));
             if (result.Count > 64) throw new CompilerError("E_LIMIT", "64 function limit");
         }
         return result;
@@ -211,7 +244,7 @@ internal sealed class Parser
     }
 }
 
-internal sealed class CIL(List<Function> functions)
+internal sealed class CIL(List<Function> functions, bool allowStdio)
 {
     private readonly List<Function> _functions = functions;
     private readonly Dictionary<string, int> _symbols = new(StringComparer.Ordinal);
@@ -232,8 +265,26 @@ internal sealed class CIL(List<Function> functions)
             if (state[id] == 2) return;
             if (state[id] == 1) throw new CompilerError("E_CYCLE", _functions[id].Name);
             state[id] = 1;
-            if (WalkExpr(_functions[id].Return, _functions[id], new HashSet<string>(StringComparer.Ordinal), 0) != CheckedType.Int)
-                throw new CompilerError("E_TYPE", "function must return int");
+            foreach (var statement in _functions[id].Body)
+            {
+                switch (statement)
+                {
+                    case PrintLine p:
+                        if (!allowStdio)
+                            throw new CompilerError("E_PERMISSION", "stdio requires host --allow-stdio");
+                        if (WalkExpr(p.Value, _functions[id],
+                            new HashSet<string>(StringComparer.Ordinal), 0) != CheckedType.Int)
+                            throw new CompilerError("E_TYPE", "stdio.println expects int");
+                        break;
+                    case ReturnStmt r:
+                        if (WalkExpr(r.Value, _functions[id],
+                            new HashSet<string>(StringComparer.Ordinal), 0) != CheckedType.Int)
+                            throw new CompilerError("E_TYPE", "function must return int");
+                        break;
+                    default:
+                        throw new CompilerError("E_PARSE", "unsupported function statement");
+                }
+            }
             state[id] = 2;
         }
 
@@ -310,6 +361,29 @@ internal sealed class CIL(List<Function> functions)
         var objectRef = metadata.AddTypeReference(runtimeRef,
             metadata.GetOrAddString("System"), metadata.GetOrAddString("Object"));
 
+        // Only a trusted host-approved CLI profile may bind guest stdout to
+        // process-global System.Console. This grant is not a TenantVM
+        // capability proof; untrusted tenants must use host-owned channels.
+        MemberReferenceHandle consoleWriteLine = default;
+        if (_functions.Any(f => f.Body.Any(stmt => stmt is PrintLine)))
+        {
+            if (!allowStdio)
+                throw new CompilerError("E_PERMISSION", "stdio requires host --allow-stdio");
+            var consoleRef = metadata.AddAssemblyReference(
+                metadata.GetOrAddString("System.Console"), new Version(8, 0, 0, 0),
+                default, metadata.GetOrAddBlob(new byte[] {
+                    0xb0, 0x3f, 0x5f, 0x7f, 0x11, 0xd5, 0x0a, 0x3a
+                }), default, default);
+            var consoleType = metadata.AddTypeReference(consoleRef,
+                metadata.GetOrAddString("System"), metadata.GetOrAddString("Console"));
+            var signature = new BlobBuilder();
+            new BlobEncoder(signature).MethodSignature().Parameters(1,
+                ret => ret.Void(),
+                pars => pars.AddParameter().Type().Int64());
+            consoleWriteLine = metadata.AddMemberReference(consoleType,
+                metadata.GetOrAddString("WriteLine"), metadata.GetOrAddBlob(signature));
+        }
+
         // One initialized i64 slot per maximum nested match level.
         // Storing the subject once prevents repeated calls or side effects.
         var localSig = new BlobBuilder();
@@ -322,8 +396,22 @@ internal sealed class CIL(List<Function> functions)
         {
             var code = new BlobBuilder();
             var il = new InstructionEncoder(code, new ControlFlowBuilder());
-            Generate(f.Return, f, il, new Dictionary<string, int>(StringComparer.Ordinal), 0);
-            il.OpCode(ILOpCode.Ret);
+            foreach (var statement in f.Body)
+            {
+                switch (statement)
+                {
+                    case PrintLine p:
+                        Generate(p.Value, f, il, new Dictionary<string, int>(StringComparer.Ordinal), 0);
+                        il.Call(consoleWriteLine);
+                        break;
+                    case ReturnStmt r:
+                        Generate(r.Value, f, il, new Dictionary<string, int>(StringComparer.Ordinal), 0);
+                        il.OpCode(ILOpCode.Ret);
+                        break;
+                    default:
+                        throw new CompilerError("E_INTERNAL", "unchecked statement");
+                }
+            }
             bodyOffsets.Add(bodyStream.AddMethodBody(il, maxStack: 64,
                 localVariablesSignature: localSigHandle));
         }
@@ -437,10 +525,12 @@ internal static class Program
 {
     private static int Main(string[] args)
     {
-        if (args.Length != 2 || !args[0].EndsWith(".atto", StringComparison.Ordinal) ||
-            !args[1].EndsWith(".dll", StringComparison.Ordinal))
+        if ((args.Length != 2 && args.Length != 3) ||
+            !args[0].EndsWith(".atto", StringComparison.Ordinal) ||
+            !args[1].EndsWith(".dll", StringComparison.Ordinal) ||
+            (args.Length == 3 && args[2] != "--allow-stdio"))
         {
-            Console.Error.WriteLine("usage: atto-cil input.atto output.dll");
+            Console.Error.WriteLine("usage: atto-cil input.atto output.dll [--allow-stdio]");
             return 64;
         }
         try
@@ -448,7 +538,7 @@ internal static class Program
             if (File.Exists(args[1])) File.Delete(args[1]);
             string source = File.ReadAllText(args[0], new UTF8Encoding(false, true));
             var fns = new Parser(source).Parse();
-            new CIL(fns).Emit(args[1], source);
+            new CIL(fns, allowStdio: args.Length == 3).Emit(args[1], source);
             Console.WriteLine($"ATTO_DIRECT_CIL_PASS functions={fns.Count}");
             return 0;
         }
