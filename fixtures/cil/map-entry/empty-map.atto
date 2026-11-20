@@ -1,0 +1,5 @@
+// This is a valid proposed Map expression; current CIL backend must reject.
+pub fnc main(): int {
+    let mut Map<string, int> x = {};
+    return 0;
+}
