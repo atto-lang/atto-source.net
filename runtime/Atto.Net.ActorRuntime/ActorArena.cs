@@ -277,7 +277,19 @@ public unsafe sealed class ActorArena : IDisposable
         lock (_gate)
         {
             EnsureActive(turn);
-            try { return _meter.Charge(weight, backedge); }
+            // Invalid compiler weights have no accounting side effects.
+            if (weight is 0 or > GuestCooperationBudget.MaximumCharge)
+                throw new ArgumentOutOfRangeException(nameof(weight));
+            try
+            {
+                // The actor and the parent tenant have independent hard fuel
+                // ceilings. Do not debit tenant fuel for an already exhausted
+                // actor; a spent tenant quota is NEVER refunded on restart.
+                if (weight > _meter.Snapshot().RemainingFuel ||
+                    !_tenant.TryChargeLogicalFuel(weight))
+                    TerminalFailure("Actor or tenant logical fuel exhausted");
+                return _meter.Charge(weight, backedge);
+            }
             catch (ActorResourceExhaustedException)
             {
                 _terminal = true;
