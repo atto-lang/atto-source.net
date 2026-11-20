@@ -87,7 +87,7 @@ internal sealed class Parser
             // Recognize punctuation needed to reach a stable typed-feature
             // rejection. This does not enable assignments/generic runtime
             // values in the scalar parser; unsupported forms still fail closed.
-            else if (!"(){}:;,+-*/=<>".Contains(c))
+            else if (!"(){}[]:;,+-*/=<>.".Contains(c))
                 throw new CompilerError("E_LEX", $"unsupported source character at {start}");
             _tokens.Add(source[start..i]);
             if (_tokens.Count > 8192) throw new CompilerError("E_LIMIT", "8192 token limit");
@@ -97,6 +97,15 @@ internal sealed class Parser
         if (_tokens.Contains("Map") || _tokens.Contains("Entry"))
             throw new CompilerError("E_UNSUPPORTED_MAP_ENTRY",
                 "typed Map/Entry runtime and CIL lowering are not implemented");
+        // Closed Record indexing requires a proved fixed field slot and
+        // referent-mutation authority; nominal Structs never get a dynamic
+        // bracket indexer. Neither feature is lowerable by this scalar CIL.
+        if (_tokens.Contains("Record"))
+            throw new CompilerError("E_UNSUPPORTED_RECORD",
+                "closed Record static slot access and mutable field lowering are not implemented");
+        if (_tokens.Contains("[") || _tokens.Contains("]"))
+            throw new CompilerError("E_UNSUPPORTED_INDEX_WRITE",
+                "bracket indexing needs checked Map/Record type resolution; nominal Struct brackets are prohibited");
         _tokens.Add("<eof>");
     }
     internal List<Function> Parse()
