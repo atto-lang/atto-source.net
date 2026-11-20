@@ -110,6 +110,25 @@ to another GitHub organization solely because a private carrier exists.
 requests source-runner remediation or independent approved-destination
 authorization. No cross-organization mirror was created by this audit.
 
+### Sealed scalar ABI raw-access guard (security hardening)
+
+Once a frame has a sealed scalar schema, **typed i64/bool APIs are the only
+allowed payload accessors**. Untyped `ReadFrame` or `WriteFrame` with nonempty
+buffers causes terminal actor failure, checked again by `EndTurn` even if
+the caller swallows the first exception. Pre-seal raw byte initialization is
+permitted, but `SealScalarSchema` validates canonical boolean slots
+immediately (tag 0 or 1 and seven zero padding bytes), before publishing
+immutable scalar-kind metadata. Separate adversarial cases exercise denied
+raw writes, denied raw reads, and noncanonical raw pre-seal initialization.
+This prevents bypass of typed scalar inspection; it is still **trusted-host
+code only** and does not supply a guest sandbox.
+
+Frame alignment is an **arena-relative logical offset** requirement (1–64
+power-of-two), not an alignment guarantee for the underlying native pointer,
+which is never exposed. Consumers must use the provided byte-wise typed
+accessors rather than reinterpret native memory as raw vector/struct
+pointers.
+
 ## Verification and release hold
 
 Standalone .NET 8 executable:
