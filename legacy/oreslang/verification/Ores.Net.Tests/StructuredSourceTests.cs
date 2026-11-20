@@ -588,12 +588,12 @@ pub async routine main(): void {
                     Operator: StructuredOperator.EqualBool,
                     Left: StructuredBool { Value: false },
                     Right: StructuredBool { Value: false }
-                }, word + " must lower to typed boolean inversion");
-            var nested = OresStructuredParser.Parse(
+                } }, word + " must lower to typed boolean inversion");
+            var nestedNegated = OresStructuredParser.Parse(
                 "fnc main():int{" + word + " true; then " +
                 "ifnot false then return 42; else return 0; fi " +
                 "else return 11; fi}");
-            Require(nested.Body[0] is StructuredIf {
+            Require(nestedNegated.Body[0] is StructuredIf {
                 Else: not null
             }, "nested negated conditional keeps outer else");
             var braced = OresStructuredParser.Parse(

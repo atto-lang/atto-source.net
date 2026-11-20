@@ -653,6 +653,8 @@ CapabilityIoLifecycleV1SelfTest.Run();
 ActorStateSchemaAdmissionTests.Run();
 ActorStateLayoutIntegrationTests.Run();
 ActorGeneratedCounterTests.Run();
+VmActorStateCellsTests.Run(); // compiled but never executed before 2026-11-20
+VmActorHeapModelTests.Run(); // atto-spec ch. 27 actor heap model for OresVmHost actors
 DeclaredActorCounterV2Tests.Run();
 CounterMainV2Tests.Run();
 SourceByteBudgetTests.Run();
