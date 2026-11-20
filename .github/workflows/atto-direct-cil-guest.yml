@@ -6,6 +6,8 @@ on:
       - "tests/Atto.Cil.Guest.Host/**"
       - "fixtures/cil/**"
       - "scripts/test-cil-guest.sh"
+      - "tests/Atto.Cil.Result.Host/**"
+      - "scripts/test-result-int-parse-host.sh"
       - ".github/workflows/atto-direct-cil-guest.yml"
   push:
     branches: [main]
@@ -33,3 +35,6 @@ jobs:
       - name: Compile and execute real Atto CIL/NativeAOT guest and negatives
         shell: bash
         run: bash scripts/test-cil-guest.sh
+      - name: Execute Result int.parse host-only reference on CoreCLR and NativeAOT
+        shell: bash
+        run: bash scripts/test-result-int-parse-host.sh
