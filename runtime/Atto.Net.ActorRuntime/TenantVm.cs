@@ -12,20 +12,41 @@ public sealed class TenantVm : IDisposable
     private readonly int _maximumActors;
     private readonly int _maximumNativeBytes;
     private int _nativeBytes;
+    private ulong _remainingLogicalFuel;
     private bool _closed;
 
-    public TenantVm(int maximumActors = 64, int maximumNativeBytes = 16 * 1024 * 1024)
+    public TenantVm(
+        int maximumActors = 64,
+        int maximumNativeBytes = 16 * 1024 * 1024,
+        ulong maximumTotalLogicalFuel = GuestCooperationBudget.MaximumLogicalFuel)
     {
         if (maximumActors is < 1 or > 4096)
             throw new ArgumentOutOfRangeException(nameof(maximumActors));
         if (maximumNativeBytes is < 64 or > 256 * 1024 * 1024)
             throw new ArgumentOutOfRangeException(nameof(maximumNativeBytes));
+        if (maximumTotalLogicalFuel is 0 or > GuestCooperationBudget.MaximumLogicalFuel)
+            throw new ArgumentOutOfRangeException(nameof(maximumTotalLogicalFuel));
         _maximumActors = maximumActors;
         _maximumNativeBytes = maximumNativeBytes;
+        _remainingLogicalFuel = maximumTotalLogicalFuel;
     }
 
     public int NativeReservedBytes { get { lock (_gate) return _nativeBytes; } }
     public int LiveActorCount { get { lock (_gate) return _actors.Count; } }
+    public ulong RemainingLogicalFuel { get { lock (_gate) return _remainingLogicalFuel; } }
+
+    // Charge irreversibly against the tenant lifetime, not actor lifetime.
+    // All calls originate from an authenticated physical actor turn. Never
+    // take an actor gate from inside this tenant gate.
+    internal bool TryChargeLogicalFuel(ulong weight)
+    {
+        lock (_gate)
+        {
+            if (_closed || weight > _remainingLogicalFuel) return false;
+            _remainingLogicalFuel -= weight;
+            return true;
+        }
+    }
 
     public ActorArena CreateActor(
         int arenaBytes = 64 * 1024, int maximumFrames = 256,
