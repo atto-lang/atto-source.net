@@ -40,6 +40,9 @@ public sealed unsafe class ActorArena : IDisposable
         public ulong Generation;
         public int Length;
         public bool Live;
+        // An integer slot/generation and a Guid are provenance, not the
+        // actual grant. Only the exact opaque host-issued Handle is authority.
+        public Handle? Issued;
     }
 
     private readonly ulong _actor, _incarnation;
@@ -123,10 +126,16 @@ public sealed unsafe class ActorArena : IDisposable
             for (var i = 0; i < SlotCount; ++i)
             {
                 if (_slots[i].Live || _slots[i].Generation == 0) continue;
-                _slots[i].Live = true;
+                // Construct the opaque capability before marking native
+                // storage occupied: allocation failure cannot strand a
+                // live slot with no issued handle to release it.
+                var handle = new Handle(_domain, i, _slots[i].Generation);
+                CryptographicOperations.ZeroMemory(
+                    new Span<byte>(_memory + i * SlotBytes, SlotBytes));
                 _slots[i].Length = length;
-                CryptographicOperations.ZeroMemory(new Span<byte>(_memory + i * SlotBytes, SlotBytes));
-                return new Handle(_domain, i, _slots[i].Generation);
+                _slots[i].Issued = handle;
+                _slots[i].Live = true;
+                return handle;
             }
             throw new InvalidOperationException("actor arena slot quota exhausted");
         }
@@ -142,8 +151,9 @@ public sealed unsafe class ActorArena : IDisposable
         if (handle.Domain != _domain || handle.Slot < 0 || handle.Slot >= SlotCount)
             throw new InvalidOperationException("foreign actor arena handle");
         ref var slot = ref _slots[handle.Slot];
-        if (!slot.Live || slot.Generation != handle.Generation)
-            throw new InvalidOperationException("stale actor arena handle");
+        if (!slot.Live || slot.Generation != handle.Generation ||
+            !ReferenceEquals(slot.Issued, handle))
+            throw new InvalidOperationException("stale or forged actor arena handle");
         return slot.Length;
     }
 
@@ -189,6 +199,7 @@ public sealed unsafe class ActorArena : IDisposable
             CryptographicOperations.ZeroMemory(new Span<byte>(_memory + handle.Slot * SlotBytes, SlotBytes));
             slot.Live = false;
             slot.Length = 0;
+            slot.Issued = null;
             slot.Generation = slot.Generation == ulong.MaxValue ? 0 : slot.Generation + 1;
         }
         finally
