@@ -66,3 +66,6 @@ for fixture in fixtures/cil/precedence.atto fixtures/cil/forward-call.atto; do
   expect_42 EXTRA_CORECLR_GUEST dotnet run --no-build -c Release --project "$host"
 done
 echo "ATTO_DIRECT_CIL_POSITIVE_PASS fixtures=3"
+
+# Bounded guarded integer value-match parity (actual CIL guests + no-artifact rejects).
+bash scripts/test-guarded-match.sh
