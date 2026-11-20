@@ -73,6 +73,11 @@ static class Program
         var independent = DirectedPipePlanner.Plan(new[] {
             A("other_producer","int","int"), A("other_consumer","int",null)
         }, DirectedPipeDirection.Pipe);
+        var sameSink = DirectedPipePlanner.Plan(new[] {
+            A("other_producer","int","int"), c
+        }, DirectedPipeDirection.Pipe);
+        Reject("E_PIPE_INPUT_OCCUPIED", () =>
+            DirectedPipePlanner.CheckUnicast(new[] { forward, sameSink }));
         DirectedPipePlanner.CheckUnicast(new[] { forward, independent });
         Ok(true, "disjoint pipelines");
         Console.WriteLine($"ATTO_NET_DIRECTED_PIPE_HOST_PASS checks={Checks}");
