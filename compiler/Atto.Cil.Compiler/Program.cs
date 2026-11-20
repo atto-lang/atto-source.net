@@ -58,12 +58,37 @@ internal sealed class Parser
             else if (c is >= '0' and <= '9')
                 while (i < source.Length && source[i] is >= '0' and <= '9') i++;
             else if (c == '-' && i < source.Length && source[i] == '>') i++;
-            else if (!"(){}:;,+-*/".Contains(c))
+            else if (!"(){}:;,+-*/<>".Contains(c))
                 throw new CompilerError("E_LEX", $"unsupported source character at {start}");
             _tokens.Add(source[start..i]);
             if (_tokens.Count > 8192) throw new CompilerError("E_LIMIT", "8192 token limit");
         }
         _tokens.Add("<eof>");
+        // The native CIL backend is scalar-only. Still enforce nominal
+        // resource construction grammar using comment-free lexer tokens:
+        // old Mutex<T>(...) must not masquerade as a function/struct call.
+        for (int index = 0; index < _tokens.Count; index++)
+        {
+            if (_tokens[index] != "Mutex" || index + 1 >= _tokens.Count ||
+                _tokens[index + 1] != "<") continue;
+            int depth = 0, closing = -1;
+            for (int i = index + 1; i < _tokens.Count; i++)
+            {
+                if (_tokens[i] == "<") depth++;
+                else if (_tokens[i] == ">")
+                {
+                    if (--depth == 0) { closing = i; break; }
+                    if (depth < 0) break;
+                }
+            }
+            if (closing < 0 || closing + 1 >= _tokens.Count ||
+                _tokens[closing + 1] != "(") continue;
+            if (index == 0 || _tokens[index - 1] != "new")
+                throw new CompilerError("E_NEW_REQUIRED",
+                    "Mutex<T> is an opaque resource class: new Mutex<T>(value) is required");
+            throw new CompilerError("E_LOCK_UNSUPPORTED",
+                "CIL backend has no compiled MutexLease or asynchronous scheduler");
+        }
     }
     internal List<Function> Parse()
     {
