@@ -129,6 +129,48 @@ has the full source root tree.
   access, revocation and Git-object retention. Removing a ref does not
   securely purge its objects. No public mirrors or unapproved publishing.
 
+## Independent approval evidence register (blank until verified)
+
+The repository's current GitHub App cannot read private-main protection details
+or billing/runner-admission annotations. Do not infer them from CODEOWNERS,
+policy comments, the PR author's write permission, or another organization's
+successful Actions run.
+
+Before a *separate* activation PR is even considered, the authorized
+administrator and **distinct** independent security reviewer should attach
+these machine-checkable facts to [issue #34](https://github.com/atto-lang/atto-source.net/issues/34).
+Blank fields mean **NOT VERIFIED**; textual notes are not substitutes for
+GitHub-enforced branch rules:
+
+| Required evidence | Current state / independently supplied value |
+|---|---|
+| GitHub plan permits private-repo protection | NOT VERIFIED: rulesets returned entitlement HTTP 403 |
+| Effective source `main.protected` and ruleset ID | FAIL: `false`; no approved bypass route |
+| Admin read-back of required PR, CODEOWNER, stale-review dismissal, force-push/delete restrictions | NOT VERIFIED |
+| Independent reviewer exact login and numeric GitHub ID | NOT PROVISIONED |
+| Independent reviewer has source `write` or higher | NOT VERIFIED |
+| Reviewer ID not `11139560` or `2148448` | NOT VERIFIED |
+| CODEOWNER `@ORESoftware` separate from reviewer | REQUIRED; no approval yet |
+| Source-main policy approval PR, its merge SHA, and independent review SHA | NOT AUTHORIZED |
+| Exact source commit / source root tree | `2d98b781522319020225e7e20dfd442f50fe52df` / `efe5c294e1d47ef7dc429a0c0bfcb0fc5b45fd4d` (candidate only) |
+| Destination private repository and immutable numeric ID | `embedded-alerts-test/atto-ci` / `1458334665` (candidate only) |
+| Trusted carrier base commit / workflow blob SHA / reviewer | NOT VERIFIED |
+| Carrier `.NET 8` Linux/Windows meaningful assigned-runner admission | NOT VERIFIED |
+| Approved source-path allowlist + individually reviewed Git blob SHAs | PROPOSED ABOVE; NOT APPROVED |
+| Private ref expiration, access log, artifacts/cache policy and revocation plan | NOT VERIFIED |
+
+Admin investigation of the source Actions failure should record the **actual**
+job annotation, runner/billing policy or organization access denial, affected
+run ID, and source-free canary run with nonzero executed steps. A workflow
+with `steps=[]` cannot diagnose a compiler failure. If source-side runners
+recover, prefer that route and **do not activate any carrier policy**.
+
+Only after all entries are independently verified may an authorized maintainer
+prepare the separately reviewed one-shot activation. No one should fill the
+register with invented account IDs, plausible branch settings, or stale
+foreign-PR CI evidence. An "APPROVED" label, comment, or static test does not
+itself alter the protected-main policy.
+
 ## Explicit current disposition
 
 **No activation, no source export, no executed CoreCLR/NativeAOT tests,
