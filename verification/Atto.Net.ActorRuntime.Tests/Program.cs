@@ -284,6 +284,40 @@ internal static class Program
     }
 
 
+    private static void LogicalFramesSurviveCarrierMigration()
+    {
+        using var tenant = new TenantVm(maximumActors: 1, maximumNativeBytes: 64);
+        using var actor = tenant.CreateActor(arenaBytes: 64);
+        var first = actor.BeginTurn();
+        var frame = actor.PushFrame(first, 8);
+        actor.SealScalarSchema(first, frame, [ActorScalarKind.I64], 1);
+        actor.WriteI64(first, frame, 0, 123456789);
+        actor.EndTurn(first);
+
+        Exception? failure = null;
+        var nextCarrier = new Thread(() =>
+        {
+            try
+            {
+                var next = actor.BeginTurn();
+                Check(actor.ReadI64(next, frame, 0) == 123456789,
+                    "new physical carrier can recover actor-owned frame");
+                actor.PopFrame(next, frame);
+                actor.EndTurn(next);
+            }
+            catch (Exception ex) { failure = ex; }
+        });
+        nextCarrier.Start();
+        Check(nextCarrier.Join(millisecondsTimeout: 10_000),
+            "actor migrated turn finishes on second physical carrier");
+        if (failure is not null)
+            throw new Exception("Cross-turn carrier migration failed", failure);
+        actor.Stop();
+        Check(tenant.NativeReservedBytes == 0,
+            "carrier migration retains exact arena lifetime and refund");
+        _cases++;
+    }
+
     private static void LongRunPollCannotBeEvaded()
     {
         // A malicious actor that yields after 127 reductions must not receive
@@ -399,6 +433,7 @@ internal static class Program
             PersistentPollAndFairness();
             ReentrancyFailsClosed();
             LongRunPollCannotBeEvaded();
+            LogicalFramesSurviveCarrierMigration();
             QuiescentTenantDisposal();
             InvalidAdmissionIsAtomic();
             Console.WriteLine($"ATTO_NET_ACTOR_ARENA_COOPERATION_PASS cases={_cases}");
