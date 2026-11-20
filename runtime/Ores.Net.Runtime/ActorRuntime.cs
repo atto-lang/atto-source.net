@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -103,6 +104,72 @@ public sealed class ActorContext
         _frames.Pop(_turn, execution, frame);
     public void FinishFrames(ActorFrameExecution execution) =>
         _frames.Finish(_turn, execution);
+
+    // Compiler-generated finally paths must preserve the ORIGINAL terminal
+    // budget exception. A failed nested PushFrame poisons/scrubs every frame,
+    // so an ordinary PopFrame would throw a secondary InvalidOperationException
+    // and hide ActorFrameBudgetExceededException during CIL unwinding.
+    // These functions authenticate the physical carrier FIRST, then permit
+    // cleanup to be a no-op only for an ALREADY poisoned actor. The synchronous
+    // dispatcher still rejects every poisoned actor at turn exit, even if
+    // guest/host code catches the original exception.
+    public void PopFrameOnUnwind(
+        ActorFrameExecution execution, ActorFrameHandle frame)
+    {
+        _arena.ValidatePhysicalTurn(_turn);
+        if (!_frames.IsPoisoned)
+            _frames.Pop(_turn, execution, frame);
+    }
+
+    public void FinishFramesOnUnwind(ActorFrameExecution execution)
+    {
+        _arena.ValidatePhysicalTurn(_turn);
+        if (!_frames.IsPoisoned)
+            _frames.Finish(_turn, execution);
+    }
+
+    // These canonical little-endian scalar accessors are callable by
+    // precompiled metadata-only CIL. The frame reference is still authenticated
+    // for each physical turn by ActorFrameStack; there is no native pointer
+    // escape or dynamic reflection. Typed bool occupies one aligned 8-byte
+    // slot and rejects noncanonical (including high-byte) representations.
+    public void WriteFrameI64(ActorFrameExecution execution, ActorFrameHandle frame,
+        int offset, long value)
+    {
+        Span<byte> raw = stackalloc byte[8];
+        BinaryPrimitives.WriteInt64LittleEndian(raw, value);
+        WriteFrame(execution, frame, offset, raw);
+    }
+
+    public long ReadFrameI64(ActorFrameExecution execution, ActorFrameHandle frame,
+        int offset)
+    {
+        Span<byte> raw = stackalloc byte[8];
+        ReadFrame(execution, frame, offset, raw);
+        return BinaryPrimitives.ReadInt64LittleEndian(raw);
+    }
+
+    public void WriteFrameBool(ActorFrameExecution execution, ActorFrameHandle frame,
+        int offset, bool value)
+    {
+        Span<byte> raw = stackalloc byte[8];
+        raw.Clear();
+        raw[0] = value ? (byte)1 : (byte)0;
+        WriteFrame(execution, frame, offset, raw);
+    }
+
+    public bool ReadFrameBool(ActorFrameExecution execution, ActorFrameHandle frame,
+        int offset)
+    {
+        Span<byte> raw = stackalloc byte[8];
+        ReadFrame(execution, frame, offset, raw);
+        if (raw[0] > 1)
+            throw new InvalidOperationException("Noncanonical actor bool frame value");
+        for (int i = 1; i < raw.Length; i++)
+            if (raw[i] != 0)
+                throw new InvalidOperationException("Noncanonical actor bool frame padding");
+        return raw[0] == 1;
+    }
 
     public ActorRef Self { get; }
     public ActorKind Kind { get; }

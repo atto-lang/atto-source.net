@@ -104,11 +104,110 @@ IDs and unsupported scalar kinds before any generated CIL is emitted.
 
 `CfgActorFrameLayoutSelfTest` exercises deterministic slot offsets,
 post-verification input mutation, and a configured frame-byte budget that
-fails closed. These are **compile-time layout tests**, not a guest compiler
-using `ActorFrameStack`. The actual CIL emitter still emits CLR locals and
-uses CLR carrier stacks. Future work must connect the plan to real typed
-spill/restore, ownership/drop scheduling, source `.atto` actor methods and
-continuations; `Plan` alone must never be recorded as guest parity.
+fails closed. These are **compile-time layout tests**, not executable guest
+proof. The legacy scalar CIL emitter still uses CLR locals; the new opt-in
+actor-frame CIL emitter below uses these typed slots for scalar SSA
+spill/restore, but still executes on CLR carrier stacks and does not yet
+lower ownership/drop, source `.atto` actor methods or continuations.
+`Plan` alone must never be recorded as guest parity.
+
+## M1.7 opt-in verified-CFG-to-actor-owned CIL spill/restore
+
+**Authored only; compile and execution NOT_VERIFIED.** In addition to the
+nonexecuting layout planner, `CilEmitter.EmitActorFrameLibrary` now accepts
+a frozen verified CFG function or acyclic verified module and writes a separate
+metadata-only CIL assembly using the explicit
+`OresProgram.Run(ActorContext)` ABI. Helpers have the CIL signature
+`helper_name(ActorContext, ActorFrameExecution, source_parameters...)`.
+
+- The generated entry calls `BeginFrames` and `PushFrame`, every helper
+  inherits the same exact-issued execution ticket but pushes its own frame.
+  Each boolean/i64 SSA definition is stored through the corresponding typed
+  `WriteFrameBool`/`WriteFrameI64` host primitive, and subsequent operands
+  are restored via `ReadFrameBool`/`ReadFrameI64`. Both use fixed-size
+  canonical little-endian byte encoding, with no raw pointer export.
+- CFG edge transfer uses short-lived *typed carrier locals* for parallel
+  edge-argument staging (necessary for swaps); otherwise there is no CLR
+  SSA local table in the generated actor entry/helper. The context, execution
+  token, frame token, and return scalar also live in CLR locals.
+- Each method's successful frame admission precedes a real CIL
+  `try/finally` region. All CFG returns compile to `leave`. The `finally`
+  calls `PopFrameOnUnwind`; the entry also calls
+  `FinishFramesOnUnwind`. Both validate the physical turn and permit a
+  cleanup-only no-op after the stack was already terminally poisoned, so a
+  nested frame quota failure does **not** get masked by a second cleanup
+  exception. Exceptions from checked arithmetic and nested helper calls
+  traverse the same cleanup. The synchronous dispatcher still rejects
+  poisoned actor state at turn exit even if a guest catches the first fault.
+- Managed host regressions also deliberately poison a nested frame stack,
+  then verify the original `ActorFrameBudgetExceededException` survives
+  compiler-style finally cleanup; off-carrier cleanup is still denied.
+- The source interpreter does not gain `define actor` admission from this
+  opt-in backend. Even this emitted CIL executes on a CLR physical carrier
+  stack and cannot contain arbitrary `StackOverflowException` or support
+  suspension and resumption. Static call linkage remains acyclic.
+- Frame budgets are checked before creating the output assembly; the native
+  frame slab is bounded at runtime by its configured byte/frame limits.
+  Method references and signatures are emitted statically, without reflection,
+  `Assembly.Load`, runtime JIT, or dynamically generated methods.
+
+`CfgActorFrameCilSelfTest` performs **metadata inspection only** on a
+generated two-argument helper fixture: it checks the explicit
+actor-context/execution ABI, emitted typed frame calls, real finally/EH
+regions, distinct helper frame scopes, checked-add opcode, byte-for-byte
+deterministic PE output, bool branches, and no-output rejection of an
+oversized verified frame. A separate synchronous host test exercises typed
+runtime roundtrips and exceptional frame cleanup. **Neither is a
+compiler-backed guest execution receipt**, and neither establishes full
+Native AOT app linkage. The existing source-local .NET 10 test workflow will
+have to execute these tests at the exact PR head before this milestone can
+be considered compiled/verified.
+
+## Source-owned compiled PE / Native AOT execution gate (authored)
+
+The `actor-memory-native-aot.yml` workflow now contains a separate **real
+compiled-code** gate, not just an imitation of compiler semantics in host
+C#. At the workflow's checked-out exact PR SHA, `Ores.Net.ActorFrameFixtureGen`
+reads the tracked `actor_frame_abi.atto` scalar source and lowers it with
+`OresStructuredCfgLowering.LowerModule` to verified typed CFG. It invokes
+`CilEmitter.EmitActorFrameLibrary` to produce
+`verification/Ores.Net.ActorCompiledProbe/Generated/OresGenerated.dll`,
+then independently regenerates the same source to a separate destination
+and requires byte-identical PE files.
+
+`Ores.Net.ActorCompiledProbe` has a **static assembly reference** to that
+prebuilt generated PE. Missing PE is a build error; the probe has no
+`Assembly.Load`, Reflection.Emit, runtime source compiler, or dynamic
+fallback. Both Linux x64 and Windows x64 workflow jobs publish this probe
+with `PublishAot=true`, then execute the resulting platform-native binary.
+
+The program checks two deliberate frame-capacity configurations:
+
+- At 32 bytes/actor, generated `Run(ActorContext)` pushes an entry frame
+  and calls a generated `plus_one` helper. The aggregate typed frame
+  byte requirement must exceed 32; the probe must observe exactly an
+  `ActorFrameBudgetExceededException` when the nested **compiled helper**
+  tries to enter. A separate sibling actor must complete its own frame
+  writes on the **same single shared carrier**, and all native budget
+  charges are reclaimed.
+- At 128 bytes/actor, that **same generated PE** must run on a new actor
+  and return `42` through the compiled helper; completion and STOP must
+  refund all actor memory. The fixture generator independently checks the
+  actual verified main+helper frame byte totals fall between these bounds,
+  so a malformed fixture cannot merely cause a generic fault.
+
+This is a genuine **compiled scalar CFG on Native AOT** receipt only if the
+runner starts and the binary actually executes with the required exact
+`PASS actor-compiled-cfg-nativeaot` log line at the same head/tree.
+It is **not canonical source `define actor` lowering**: the `.atto`
+fixture contains ordinary scalar functions, and `ActorRuntime.Spawn`
+is still called by a trusted C# host. It is also not isolated native
+machine stack overflow, await/select suspension, source-level borrow
+checking or actor supervisor/CONTROL parity.
+
+**Currently NOT_EXECUTED / NOT_CERTIFIED.** GitHub source Actions jobs have
+failed at runner admission with no executed steps; no Native AOT result,
+compiled actor CIL execution or hosted successful build is claimed.
 
 ## Parity not yet established
 
@@ -120,10 +219,11 @@ continuations; `Plan` alone must never be recorded as guest parity.
    stack. Managed C# handler recursion and generated CIL still use a CLR
    carrier stack. An actual `StackOverflowException` may terminate the
    process; this implementation does not claim to catch it.
-3. The frame slab holds opaque bytes, not a generated typed frame layout,
-   return PCs, register roots, stack maps, checked affine loans, or
-   `SourceTask` continuations. Native/FFI execution and optimizer tail calls
-   need separate evidence.
+3. The optional verified scalar CFG path now generates a typed i64/bool
+   frame layout and synchronous spill/restore. It does **not** generate
+   return PCs, register roots, GC/stack maps, checked affine loans, or
+   `SourceTask` continuations. Native/FFI execution, optimizer tail calls,
+   non-scalar ownership, and finalizers still need separate evidence.
 4. Each actor stack is one logical execution at a time. A full multi-task
    scheduler must add compiler-owned task selection, parking and wakeup
    fencing, without executing another handler while its actor's turn is
@@ -136,10 +236,11 @@ continuations; `Plan` alone must never be recorded as guest parity.
 - Run real `dotnet run --project verification/Ores.Net.Tests -c Release`
   and both platform NativeAOT host probes at the **exact PR head**, verifying
   nonzero executed steps, head SHA, tree SHA, and output logs.
-- Add compiler-owned frame descriptors, reserved before guest calls, and
-  actual guest local/return/spill lowering. Ensure all paths including
-  exceptions, cancellation, `defer`, actor STOP, and mutual tail calls
-  execute the correct stack discipline.
+- Extend the authored scalar verified CFG frame descriptors and synchronous
+  spills to **actual canonical `.atto` actor methods** and non-scalar
+  locals/return PCs/borrow/drop plans. Prove exception, cancellation,
+  `defer`, actor STOP, await/resume and mutual tail-call stack discipline
+  in executed Native AOT guests.
 - Prove a canonical `.atto` guest test: bounded recursion in actor A fails
   safely, actor B responds on its existing shared carrier, STOP/restart
   invalidates A's old frame tokens, and suspended frames resume on a distinct
