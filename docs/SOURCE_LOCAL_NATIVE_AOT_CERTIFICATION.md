@@ -70,7 +70,15 @@ and [reconciliation #214](https://github.com/ores-truffle-oreslang/oreslang-sour
   The recorded API path is an operator assertion, not proof of provenance.
 - [ ] Download each corresponding original GitHub artifact and independently
   verify presence, origin run/attempt, binary file types (ELF/PE), binary
-  SHA-256 digests and application outputs. A digest *printed in a receipt*
+  SHA-256 digests and application outputs.
+  The Linux artifact must contain the receipt plus the five exact native compiler/application
+  binaries; the Windows artifact must contain the receipt plus the two exact PE
+  binaries. Independently extract the original artifacts, map their stored paths
+  to the receipt entries (the upload action can omit the shared `artifacts/`
+  prefix), inspect real file formats, and recompute SHA-256 over the byte
+  contents. Reject any missing, unexpected or mismatched binary. The metadata
+  verifier alone cannot prove binary contents; do not count a receipt-only
+  artifact as Native AOT certification. A digest *printed in a receipt*
   alone does not establish that the binary or its source was correct.
 - [ ] Validate the actual compiled release against its exact **tested source
   commit/tree**, never a newer head or a different GitHub organization.
@@ -125,6 +133,38 @@ with independently reviewed evidence before invoking:
 node --test verification/source-local-receipt-gate.test.mjs
 node verification/source-local-receipt-gate.mjs bundle.json
 \`\`\`
+
+
+After independently downloading the **original** GitHub Actions artifacts and
+extracting them into two separate directories (do not execute the contained
+binaries), run the source-free byte verifier as a second independent gate:
+
+```bash
+node --test verification/source-local-artifact-byte-gate.test.mjs
+node verification/source-local-artifact-byte-gate.mjs bundle.json \
+  /path/to/linux-extracted /path/to/windows-extracted
+```
+
+It rejects unknown/missing files, symlinks, modified receipts, bad SHA-256,
+managed PE/CLR headers, and wrong x86-64 ELF/PE signatures. It accepts either
+the original shared `artifacts/` prefix or the GitHub upload-action's
+uniformly stripped layout, but not mixed or wildcard contents. The verifier
+requires the existing run/job/approval metadata gate to pass first.
+
+**Extract safely:** inspect each original ZIP entry *before* extraction. Reject
+absolute paths, `../` traversals, symbolic links, hardlinks and special files;
+extract to fresh, operator-owned directories that no other process can modify,
+and keep them quiescent throughout byte verification. On platforms that expose
+`O_NOFOLLOW`, the verifier opens both executable and receipt paths with
+that flag in addition to its inode/size/re-read checks; the final-component
+protection does **not** stop a hostile process from concurrently replacing an
+ancestor directory. Do not treat local path checking alone as a secure
+sandbox or as proof of real Native AOT execution.
+
+Synthetic
+test fixtures do **not** establish that any private-main protection, runner
+isolation, reviewer authorization, native compilation or actual binary
+execution occurred; those require separate independent read-back.
 
 For each run ID and attempt, independently retrieve the source-org metadata:
 

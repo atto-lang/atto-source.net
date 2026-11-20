@@ -496,3 +496,56 @@ for (const [label, source] of [['Windows AOT', trustedWindows], ['Windows fence'
 }
 
 console.log('TRUSTED_SOURCE_LOCAL_AOT_WORKFLOW_CONTRACT_PASSED');
+
+ 
+// Exact native upload inventory: a receipt without the binary bytes cannot be
+// independently rehashed. No wildcard, directory-wide, or secret-bearing upload.
+function assertNativeArtifactAllowlist(source, expected, label) {
+  const lines = source.split(/\r?\n/);
+  const indices = lines.flatMap((line, i) =>
+    /^        uses: actions\/upload-artifact@[0-9a-f]{40}(?:\s+#.*)?$/.test(line) ? [i] : []);
+  assert.equal(indices.length, 1, label + ': exactly one pinned upload-artifact action');
+  const ix = lines.findIndex((line, i) => i > indices[0] && line === '          path: |');
+  assert.ok(ix >= 0, label + ': explicit multiline native artifact inventory missing');
+  const observed = [];
+  let i = ix + 1;
+  while (i < lines.length && lines[i].startsWith('            ')) {
+    observed.push(lines[i].slice(12));
+    i++;
+  }
+  assert.deepEqual(observed, expected, label + ': receipt and binary allowlist must be exact');
+  assert.equal(lines[i], '          if-no-files-found: error', label + ': missing file must fail');
+  assert.equal(lines[i+1], '          retention-days: 14', label + ': retention must be bounded');
+}
+const linuxArtifactPaths = [
+  "artifacts/evidence/source-local-linux-sha256.txt",
+  "artifacts/compiler/linux-x64/oresnet",
+  "artifacts/apps/linux-x64/oreslang-app",
+  "artifacts/parity/linux-x64/oreslang-app",
+  "artifacts/parity-precedence/linux-x64/oreslang-app",
+  "artifacts/structured/linux-x64/oreslang-app"
+];
+const windowsArtifactPaths = [
+  "artifacts/evidence/source-local-windows.json",
+  "artifacts/compiler/win-x64/oresnet.exe",
+  "artifacts/apps/win-x64/oreslang-app.exe"
+];
+assertNativeArtifactAllowlist(trusted, linuxArtifactPaths, 'Linux');
+assertNativeArtifactAllowlist(trustedWindows, windowsArtifactPaths, 'Windows');
+for (const [source, paths, label] of [
+  [trusted, linuxArtifactPaths, 'Linux'],
+  [trustedWindows, windowsArtifactPaths, 'Windows'],
+]) {
+  for (const change of [
+    s => s.replace('            ' + paths[1] + '\n', ''),
+    s => s.replace('            ' + paths[1], '            artifacts/**/*'),
+    s => s.replace('          if-no-files-found: error', '          if-no-files-found: warn'),
+    s => s.replace('          retention-days: 14', '          retention-days: 90'),
+  ]) {
+    const mutated = change(source);
+    assert.notEqual(mutated, source, label + ': ineffective mutation');
+    assert.throws(() => assertNativeArtifactAllowlist(mutated, paths, label),
+      label + ': unapproved artifact mutation accepted');
+  }
+}
+

@@ -153,6 +153,12 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: oreslang-net-source-local-linux-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/evidence/source-local-linux-sha256.txt
+          path: |
+            artifacts/evidence/source-local-linux-sha256.txt
+            artifacts/compiler/linux-x64/oresnet
+            artifacts/apps/linux-x64/oreslang-app
+            artifacts/parity/linux-x64/oreslang-app
+            artifacts/parity-precedence/linux-x64/oreslang-app
+            artifacts/structured/linux-x64/oreslang-app
           if-no-files-found: error
           retention-days: 14

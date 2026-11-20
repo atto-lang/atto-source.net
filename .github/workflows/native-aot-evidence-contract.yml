@@ -20,6 +20,8 @@ on:
       - 'verification/trusted-bootstrap-admission.test.mjs'
       - 'verification/source-local-receipt-gate.mjs'
       - 'verification/source-local-receipt-gate.test.mjs'
+      - 'verification/source-local-artifact-byte-gate.mjs'
+      - 'verification/source-local-artifact-byte-gate.test.mjs'
       - 'docs/SOURCE_LOCAL_NATIVE_AOT_CERTIFICATION.md'
   workflow_dispatch:
 
@@ -53,3 +55,5 @@ jobs:
         run: node --test verification/trusted-bootstrap-admission.test.mjs
       - name: Check trusted receipt metadata
         run: node --test verification/source-local-receipt-gate.test.mjs
+      - name: Check native artifact bytes verifier against adversarial fixtures
+        run: node --test verification/source-local-artifact-byte-gate.test.mjs
