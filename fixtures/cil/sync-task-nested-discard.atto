@@ -2,7 +2,7 @@
 // permitted as a value-producing expression without do.
 pub fnc main(): int {
     do sync task<void> {
-        sync task {}
+        do sync task {};
         do sync task<void> { return; };
         do sync task {};
         return;
