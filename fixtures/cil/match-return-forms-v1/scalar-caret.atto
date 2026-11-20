@@ -1,0 +1,19 @@
+// NativeAOT/CoreCLR scalar adaptation; ^ is a return alias in statement position.
+// expect-exit: 4
+fnc classify(int value): int {
+  ^ match value over
+    on 0 -> { return 0; }
+    on 1 -> { return 1; }
+    on n when n > 1 -> { return 2; }
+    on _ -> { return -1; }
+  end
+}
+fnc xyx(int value): int {
+  ^ match value over
+    on 0 -> 0,
+    on 1 -> 1,
+    on n when n > 1 -> 2,
+    on _ -> -1,
+  end
+}
+pub fnc main(): int { return classify(7) + xyx(7); }
