@@ -323,18 +323,37 @@ internal sealed class CIL(List<Function> functions)
         switch (e)
         {
             case Literal c: il.LoadConstantI8(c.Number); return;
+            case BoolLiteral b: il.LoadConstantI4(b.Value ? 1 : 0); return;
             case Arg a: il.LoadArgument(f.Args.IndexOf(a.Name)); return;
             case Binary b:
-                Generate(b.Left, f, il); Generate(b.Right, f, il);
-                il.OpCode(b.Op switch
+                Generate(b.Left, f, il);
+                Generate(b.Right, f, il);
+                switch (b.Op)
                 {
-                    "+" => ILOpCode.Add_ovf,
-                    "-" => ILOpCode.Sub_ovf,
-                    "*" => ILOpCode.Mul_ovf,
-                    "/" => ILOpCode.Div,
-                    _ => throw new CompilerError("E_PARSE", b.Op)
-                });
-                return;
+                    case "+": il.OpCode(ILOpCode.Add_ovf); return;
+                    case "-": il.OpCode(ILOpCode.Sub_ovf); return;
+                    case "*": il.OpCode(ILOpCode.Mul_ovf); return;
+                    case "/": il.OpCode(ILOpCode.Div); return;
+                    case "<": il.OpCode(ILOpCode.Clt); return;
+                    case ">": il.OpCode(ILOpCode.Cgt); return;
+                    case "==": il.OpCode(ILOpCode.Ceq); return;
+                    case "!=":
+                        il.OpCode(ILOpCode.Ceq);
+                        il.LoadConstantI4(0);
+                        il.OpCode(ILOpCode.Ceq);
+                        return;
+                    case "<=":
+                        il.OpCode(ILOpCode.Cgt);
+                        il.LoadConstantI4(0);
+                        il.OpCode(ILOpCode.Ceq);
+                        return;
+                    case ">=":
+                        il.OpCode(ILOpCode.Clt);
+                        il.LoadConstantI4(0);
+                        il.OpCode(ILOpCode.Ceq);
+                        return;
+                    default: throw new CompilerError("E_TYPE", b.Op);
+                }
             case Call c:
                 foreach (var arg in c.Args) Generate(arg, f, il);
                 il.Call(MetadataTokens.MethodDefinitionHandle(_symbols[c.Name] + 1));
