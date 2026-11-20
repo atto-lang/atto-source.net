@@ -18,6 +18,19 @@ internal static class ActorArenaTests
         var tb = b.BeginTurn(102, 1);
         var h = a.Allocate(ta, 2);
         a.Write(ta, h, new byte[] { 7, 9 });
+        // Reflection in a trusted host can reconstruct the public numeric
+        // tuple; that must not create an actor-owned native memory capability.
+        var handleType = typeof(ActorArena.Handle);
+        var handleFlags = System.Reflection.BindingFlags.Instance |
+                          System.Reflection.BindingFlags.NonPublic;
+        var handleCtor = handleType.GetConstructors(handleFlags).Single();
+        var handleDomain = (Guid)handleType.GetField("Domain", handleFlags)!.GetValue(h)!;
+        var handleSlot = (int)handleType.GetField("Slot", handleFlags)!.GetValue(h)!;
+        var handleGen = (ulong)handleType.GetField("Generation", handleFlags)!.GetValue(h)!;
+        var forgedSameHandle = (ActorArena.Handle)handleCtor.Invoke(
+            new object[] { handleDomain, handleSlot, handleGen });
+        ExpectFailure(() => a.Read(ta, forgedSameHandle));
+
         if (!a.Read(ta, h).SequenceEqual(new byte[] { 7, 9 }))
             throw new Exception("persistent arena read/write");
         ExpectFailure(() => b.Read(tb, h));
@@ -39,6 +52,10 @@ internal static class ActorArenaTests
             (Guid)domainField.GetValue(scratch)!, ta, 1, 1
         });
         ExpectFailure(() => a.ReadScratch(ta, forged));
+        var exactScratchClone = (ActorArena.Scratch)scratchCtor.Invoke(
+            new object[] { (Guid)domainField.GetValue(scratch)!, ta, 0, 2 });
+        ExpectFailure(() => a.ReadScratch(ta, exactScratchClone));
+
         if (!a.ReadScratch(ta, scratch).SequenceEqual(new byte[] { 5, 6 }))
             throw new Exception("valid issued scratch handle rejected");
         ExpectFailure(() => a.Dispose());
