@@ -43,12 +43,32 @@ internal sealed class Parser
         (value[0] is >= 'a' and <= 'z' or '_') &&
         value.All(c => c is >= 'a' and <= 'z' or >= '0' and <= '9' or '_');
 
+    // Names become C# member identifiers after type checking. A subset
+    // of valid Atto snake_case words are C# keywords/contextual names;
+    // reject them BEFORE publishing generated source.
+    private static readonly HashSet<string> Reserved = new(StringComparer.Ordinal)
+    {
+        "abstract", "as", "base", "bool", "break", "byte", "case", "catch",
+        "char", "checked", "class", "const", "continue", "decimal", "default",
+        "delegate", "do", "double", "else", "enum", "event", "explicit",
+        "extern", "false", "finally", "fixed", "float", "for", "foreach",
+        "goto", "if", "implicit", "in", "int", "interface", "internal",
+        "is", "lock", "long", "namespace", "new", "null", "object",
+        "operator", "out", "override", "params", "private", "protected",
+        "public", "readonly", "ref", "return", "sbyte", "sealed", "short",
+        "sizeof", "stackalloc", "static", "string", "struct", "switch",
+        "this", "throw", "true", "try", "typeof", "uint", "ulong",
+        "unchecked", "unsafe", "ushort", "using", "virtual", "void",
+        "volatile", "while", "record", "required", "scoped", "global",
+        "file", "async", "await", "var", "dynamic", "init", "with",
+        "partial", "yield", "where", "get", "set", "value", "from",
+        "select", "fnc", "pub", "trap", "Result", "Error", "Ok",
+        "Err", "throws", "sync", "task", "panic", "raise"
+    };
     private string Name()
     {
         string value = Next();
-        if (!IsAsciiName(value) || value is "fnc" or "pub" or "return" or "throw" or
-            "trap" or "int" or "Result" or "Error" or "Ok" or "Err" or "throws" or
-            "do" or "sync" or "task" or "await" or "panic" or "raise")
+        if (!IsAsciiName(value) || Reserved.Contains(value))
             throw new PreviewError("E_NAME");
         return value;
     }
