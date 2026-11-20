@@ -68,8 +68,14 @@ jobs:
           foreach ($path in $paths) {
             $entry = (git ls-files --stage -- $path)
             if (-not $entry) { throw "Missing tracked file: $path" }
-            $expectedBlob = ($entry -split '\s+')[1]
-            $actualBlob = (git hash-object -- $path).Trim()
+            $parts = $entry -split '\s+'
+            if ($parts.Length -lt 4 -or $parts[0] -ne '100644') {
+              throw "Required source must be a regular Git blob: $path"
+            }
+            $expectedBlob = $parts[1]
+            # Reapply Git clean filters on Windows, rather than comparing
+            # CRLF checkout bytes to canonical LF blob bytes.
+            $actualBlob = (git hash-object --path="$path" -- "$path").Trim()
             if ($expectedBlob -ne $actualBlob) { throw "Git blob mismatch: $path" }
             "ATTO_NET_ACTOR_BLOB=$path $actualBlob"
           }
