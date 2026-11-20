@@ -63,6 +63,14 @@ internal sealed class Parser
             _tokens.Add(source[start..i]);
             if (_tokens.Count > 8192) throw new CompilerError("E_LIMIT", "8192 token limit");
         }
+        // Source lexer recognizes both CONTINUOUS DATA graph keywords, but
+        // this strict scalar CIL compiler has no ActorRef, channel, stream,
+        // PipeHandle or tenant-capability runtime. Never generate a .dll for
+        // a guessed actor pipe or confuse this with functional |> / <|.
+        // Comments have already been stripped by the bounded source lexer.
+        if (_tokens.Contains("pipe") || _tokens.Contains("rpipe"))
+            throw new CompilerError("E_UNSUPPORTED_CONTINUOUS_PIPE",
+                "typed pipe/rpipe needs checked source/sink DATA transport and NativeAOT PipeHandle");
         _tokens.Add("<eof>");
     }
     internal List<Function> Parse()
