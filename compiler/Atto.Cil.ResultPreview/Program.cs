@@ -312,7 +312,7 @@ internal static class Emitter
         generated.AppendLine("      throw new InvalidOperationException(\"helper invoked multiple times or not at all\");");
         generated.AppendLine("    if (Guest.LastReturnedResult is not null && !ReferenceEquals(Guest.LastReturnedResult, result))");
         generated.AppendLine("      throw new InvalidOperationException(\"trap replaced an existing Result identity\");");
-        generated.AppendLine("    if (Guest.LastThrownError is not null && (result is not GuestErr caught || !ReferenceEquals(caught.Error, Guest.LastThrownError)))");
+        generated.AppendLine("    if (Guest.LastThrownError is not null && (result is not GuestErr || !ReferenceEquals(((GuestErr)result).Error, Guest.LastThrownError)))");
         generated.AppendLine("      throw new InvalidOperationException(\"trap lost the original thrown Error identity\");");
         generated.AppendLine("    Console.WriteLine(result switch {");
         generated.AppendLine("      GuestOk ok => \"ATTO_RESULT=Ok(\" + ok.Value + \")\",");
