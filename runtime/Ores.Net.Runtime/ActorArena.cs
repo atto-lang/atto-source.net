@@ -46,6 +46,11 @@ public sealed unsafe class ActorArena : IDisposable
     private readonly Guid _domain = Guid.NewGuid();
     private readonly object _gate = new();
     private readonly Slot[] _slots = new Slot[SlotCount];
+    // A generational numeric tuple alone is forgeable by reflection or an
+    // unsafe host component. Validate the exact scheduler-issued capability.
+    private readonly Handle?[] _issuedHandles = new Handle?[SlotCount];
+    private readonly System.Collections.Generic.HashSet<Scratch> _issuedScratch =
+        new(System.Collections.Generic.ReferenceEqualityComparer.Instance);
     // Exact issuance metadata: in-bounds offsets are not themselves authority.
     // Fixed-size ushort entries avoid unbounded per-allocation bookkeeping.
     private readonly ushort[] _scratchLengths = new ushort[ScratchBytes];
@@ -102,6 +107,7 @@ public sealed unsafe class ActorArena : IDisposable
             RequireTurn(turn);
             CryptographicOperations.ZeroMemory(new Span<byte>(_memory + SlotCount * SlotBytes, _scratchTop));
             Array.Clear(_scratchLengths);
+            _issuedScratch.Clear();
             _scratchTop = 0;
             _turn = null;
             _carrier = null;
@@ -123,10 +129,14 @@ public sealed unsafe class ActorArena : IDisposable
             for (var i = 0; i < SlotCount; ++i)
             {
                 if (_slots[i].Live || _slots[i].Generation == 0) continue;
+                // Construct before publishing metadata; an allocation failure
+                // must not strand a live native slot with no owning handle.
+                var issued = new Handle(_domain, i, _slots[i].Generation);
+                CryptographicOperations.ZeroMemory(new Span<byte>(_memory + i * SlotBytes, SlotBytes));
                 _slots[i].Live = true;
                 _slots[i].Length = length;
-                CryptographicOperations.ZeroMemory(new Span<byte>(_memory + i * SlotBytes, SlotBytes));
-                return new Handle(_domain, i, _slots[i].Generation);
+                _issuedHandles[i] = issued;
+                return issued;
             }
             throw new InvalidOperationException("actor arena slot quota exhausted");
         }
@@ -142,7 +152,8 @@ public sealed unsafe class ActorArena : IDisposable
         if (handle.Domain != _domain || handle.Slot < 0 || handle.Slot >= SlotCount)
             throw new InvalidOperationException("foreign actor arena handle");
         ref var slot = ref _slots[handle.Slot];
-        if (!slot.Live || slot.Generation != handle.Generation)
+        if (!slot.Live || slot.Generation != handle.Generation ||
+            !ReferenceEquals(_issuedHandles[handle.Slot], handle))
             throw new InvalidOperationException("stale actor arena handle");
         return slot.Length;
     }
@@ -189,6 +200,7 @@ public sealed unsafe class ActorArena : IDisposable
             CryptographicOperations.ZeroMemory(new Span<byte>(_memory + handle.Slot * SlotBytes, SlotBytes));
             slot.Live = false;
             slot.Length = 0;
+            _issuedHandles[handle.Slot] = null;
             slot.Generation = slot.Generation == ulong.MaxValue ? 0 : slot.Generation + 1;
         }
         finally
@@ -207,6 +219,10 @@ public sealed unsafe class ActorArena : IDisposable
             if (length <= 0 || length > ScratchBytes - _scratchTop)
                 throw new ArgumentOutOfRangeException(nameof(length), "scratch quota");
             var handle = new Scratch(_domain, turn, _scratchTop, length);
+            // Heap bookkeeping must observe exactly this issued object, not a
+            // reconstructed in-bounds (domain,turn,offset,length) tuple.
+            if (!_issuedScratch.Add(handle))
+                throw new InvalidOperationException("duplicate scratch issue");
             _scratchLengths[_scratchTop] = checked((ushort)length);
             _scratchTop += length;
             return handle;
@@ -224,7 +240,8 @@ public sealed unsafe class ActorArena : IDisposable
             handle.Offset < 0 || handle.Offset >= ScratchBytes ||
             handle.Offset >= _scratchTop || handle.Length <= 0 ||
             handle.Length > _scratchTop - handle.Offset ||
-            _scratchLengths[handle.Offset] != handle.Length)
+            _scratchLengths[handle.Offset] != handle.Length ||
+            !_issuedScratch.Contains(handle))
             throw new InvalidOperationException("foreign or stale scratch handle");
     }
 
