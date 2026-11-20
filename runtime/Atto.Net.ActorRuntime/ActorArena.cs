@@ -166,6 +166,8 @@ public unsafe sealed class ActorArena : IDisposable
         {
             EnsureActive(turn);
             ValidateFrame(frame, offset, bytes.Length);
+            if (frame.SealedKinds is not null && bytes.Length != 0)
+                TerminalFailure("Raw byte write cannot bypass a sealed scalar frame");
             bytes.CopyTo(new Span<byte>(_native + frame.Offset + offset, bytes.Length));
         }
     }
@@ -176,6 +178,8 @@ public unsafe sealed class ActorArena : IDisposable
         {
             EnsureActive(turn);
             ValidateFrame(frame, offset, destination.Length);
+            if (frame.SealedKinds is not null && destination.Length != 0)
+                TerminalFailure("Raw byte read cannot bypass a sealed scalar frame");
             new ReadOnlySpan<byte>(_native + frame.Offset + offset, destination.Length).CopyTo(destination);
         }
     }
@@ -197,6 +201,12 @@ public unsafe sealed class ActorArena : IDisposable
             foreach (var kind in kinds)
                 if (kind is not (ActorScalarKind.I64 or ActorScalarKind.Bool))
                     throw new ArgumentOutOfRangeException(nameof(kinds));
+            // All newly sealed bool slots must already be canonical.
+            // Otherwise pre-seal raw writes can smuggle invalid bool bits
+            // into a typed continuation and bypass validation until use.
+            for (int slot = 0; slot < kinds.Length; slot++)
+                if (kinds[slot] == ActorScalarKind.Bool)
+                    ValidateCanonicalBool(frame.Offset + slot * 8);
             frame.SealedKinds = kinds.ToArray();
             frame.SealedBlockCount = blockCount;
         }
@@ -237,12 +247,8 @@ public unsafe sealed class ActorArena : IDisposable
         lock (_gate)
         {
             int offset = ValidateScalarSlot(turn, frame, slot, ActorScalarKind.Bool);
-            var bytes = new ReadOnlySpan<byte>(_native + offset, 8);
-            if (bytes[0] > 1)
-                TerminalFailure("Noncanonical actor bool tag");
-            for (int i = 1; i < 8; i++)
-                if (bytes[i] != 0) TerminalFailure("Noncanonical actor bool padding");
-            return bytes[0] == 1;
+            ValidateCanonicalBool(offset);
+            return _native[offset] == 1;
         }
     }
 
@@ -310,6 +316,16 @@ public unsafe sealed class ActorArena : IDisposable
     }
 
     public void Dispose() => Stop();
+
+    private void ValidateCanonicalBool(int offset)
+    {
+        var bytes = new ReadOnlySpan<byte>(_native + offset, 8);
+        if (bytes[0] > 1)
+            TerminalFailure("Noncanonical actor bool tag");
+        for (int i = 1; i < 8; i++)
+            if (bytes[i] != 0)
+                TerminalFailure("Noncanonical actor bool padding");
+    }
 
     private int ValidateScalarSlot(
         ActorTurn turn, ActorFrameHandle frame, int slot, ActorScalarKind expected)
