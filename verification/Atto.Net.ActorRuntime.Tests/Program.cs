@@ -124,15 +124,47 @@ internal static class Program
             () => actor.SealScalarSchema(turn, frame, declared, 4),
             "schema cannot be resealed");
 
-        // Host raw-byte mutator cannot turn a corrupt payload into valid bool.
-        actor.WriteFrame(turn, frame, 9, new byte[] { 2 });
+        // Raw-byte APIs must not bypass a sealed frame's typed ABI.
         Expect<ActorResourceExhaustedException>(
-            () => actor.ReadBool(turn, frame, 1),
-            "noncanonical bool padding must terminate actor");
+            () => actor.WriteFrame(turn, frame, 9, new byte[] { 2 }),
+            "untyped writes into sealed scalar frame are terminal");
         Expect<ActorResourceExhaustedException>(
             () => actor.EndTurn(turn),
-            "caught corruption fault remains terminal at dispatcher exit");
-        Check(actor.NativeReservedBytes == 0, "corrupt actor arena reclaimed");
+            "caught sealed-frame bypass remains terminal at dispatcher exit");
+        Check(actor.NativeReservedBytes == 0, "poisoned actor arena reclaimed");
+
+        using (var rawReader = tenant.CreateActor(arenaBytes: 128))
+        {
+            var readTurn = rawReader.BeginTurn();
+            var readFrame = rawReader.PushFrame(readTurn, 8);
+            rawReader.SealScalarSchema(readTurn, readFrame,
+                [ActorScalarKind.Bool], 1);
+            Expect<ActorResourceExhaustedException>(
+                () => rawReader.ReadFrame(readTurn, readFrame, 0, new byte[1]),
+                "untyped reads of sealed bool data are terminal");
+            Expect<ActorResourceExhaustedException>(
+                () => rawReader.EndTurn(readTurn),
+                "caught raw-read bypass is terminal at dispatcher exit");
+        }
+
+        // Before sealing, raw initialization is allowed. The seal itself
+        // must validate canonical bool data, not defer failure until read.
+        using (var malformed = tenant.CreateActor(arenaBytes: 128))
+        {
+            var corruptTurn = malformed.BeginTurn();
+            var corruptFrame = malformed.PushFrame(corruptTurn, 8);
+            malformed.WriteFrame(corruptTurn, corruptFrame, 0,
+                new byte[] { 1, 7 });
+            Expect<ActorResourceExhaustedException>(
+                () => malformed.SealScalarSchema(corruptTurn, corruptFrame,
+                    [ActorScalarKind.Bool], 1),
+                "sealing rejects nonzero boolean padding");
+            Expect<ActorResourceExhaustedException>(
+                () => malformed.EndTurn(corruptTurn),
+                "caught pre-seal corruption cannot complete dispatch");
+        }
+        Check(tenant.NativeReservedBytes == 128,
+            "only healthy sibling actor remains allocated");
         var goodTurn = sibling.BeginTurn();
         var goodFrame = sibling.PushFrame(goodTurn, 8);
         sibling.SealScalarSchema(goodTurn, goodFrame, [ActorScalarKind.Bool], 1);
