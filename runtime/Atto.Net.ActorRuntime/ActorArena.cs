@@ -305,6 +305,24 @@ public unsafe sealed class ActorArena : IDisposable
         }
     }
 
+    // Only TenantVm.CreateActor's failed registry publication path may call
+    // this method. The instance has never been admitted or charged to its
+    // parent tenant, so using ReleaseActor here would be a double-refund.
+    internal void DiscardUnpublishedAllocation()
+    {
+        lock (_gate)
+        {
+            if (_activeTurn is not null || _depth != 0)
+                throw new InvalidOperationException("Cannot discard an active actor");
+            if (_native == null) return;
+            CryptographicOperations.ZeroMemory(new Span<byte>(_native, _capacity));
+            NativeMemory.Free(_native);
+            _native = null;
+            _stopping = true;
+            Array.Clear(_frames);
+        }
+    }
+
     public void Stop()
     {
         lock (_gate)
