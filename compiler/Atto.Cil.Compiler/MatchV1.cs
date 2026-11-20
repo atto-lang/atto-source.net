@@ -22,6 +22,12 @@ internal sealed partial class Parser
             if (Peek == "<eof>") throw new CompilerError("E_PARSE", "unterminated match");
             if (arms.Count >= 64) throw new CompilerError("E_LIMIT", "64 match arm limit");
             Require("on");
+            // The current direct-CIL compiler is restricted to integer
+            // patterns. Do not reinterpret `on is Ok<line>` as a catch-all
+            // binder named "is": this would silently fabricate ADT support.
+            if (Peek == "is")
+                throw new CompilerError("E_UNSUPPORTED_TYPE",
+                    "nominal on is Ok/Err/Some/None needs typed Result/Option CIL lowering");
             long? literal = null;
             string? binding = null;
             bool wildcard = Eat("_");
