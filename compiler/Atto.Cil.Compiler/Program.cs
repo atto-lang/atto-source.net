@@ -41,7 +41,8 @@ internal sealed class Parser
                 or "raise" or "throw" or "borrow" or "take" or "share"
                 or "copy" or "drop" or "pin" or "rt" or "io" or "stdio"
                 or "process" or "spawn" or "select" or "import" or "module"
-                or "define" or "namespace" or "use" or "pipe" or "rpipe")
+                or "define" or "namespace" or "use" or "pipe" or "rpipe"
+                or "sync" or "task" or "yield")
             throw new CompilerError("E_NAME", $"expected snake_case identifier, got {name}");
         _position++;
         return name;
