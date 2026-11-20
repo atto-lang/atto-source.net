@@ -66,7 +66,19 @@ public sealed class TenantVm : IDisposable
 
             // Construction can fail before any budget or actor is published.
             var actor = new ActorArena(this, arenaBytes, maximumFrames, logicalFuel);
-            _actors.Add(actor);
+            try
+            {
+                // Publication is transactional: if managed registry allocation
+                // fails, native memory must not escape without a registered
+                // owner and corresponding tenant reservation.
+                if (!_actors.Add(actor))
+                    throw new InvalidOperationException("Duplicate actor admission");
+            }
+            catch
+            {
+                actor.DiscardUnpublishedAllocation();
+                throw;
+            }
             _nativeBytes += arenaBytes;
             return actor;
         }
