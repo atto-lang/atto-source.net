@@ -66,3 +66,53 @@ for fixture in fixtures/cil/precedence.atto fixtures/cil/forward-call.atto; do
   expect_42 EXTRA_CORECLR_GUEST dotnet run --no-build -c Release --project "$host"
 done
 echo "ATTO_DIRECT_CIL_POSITIVE_PASS fixtures=3"
+
+# Compiled guest parity for the bounded non-owning local Pointer<int> profile.
+# Each source fixture is compiled to CIL, then executed in CoreCLR AND
+# in a separately published NativeAOT executable. The C# bridge is fixed;
+# the return value originates exclusively in compiled .atto guest code.
+for fixture in \
+  fixtures/cil/pointer-local-rt.atto \
+  fixtures/cil/pointer-local-mixed-bang.atto \
+  fixtures/cil/pointer-local-all-bang.atto; do
+  name="$(basename "$fixture" .atto)"
+  dotnet run --no-build -c Release --project "$compiler" -- "$fixture" "$guest"
+  test -s "$guest"
+  dotnet build "$host" -c Release
+  expect_42 POINTER_CORECLR_GUEST dotnet run --no-build -c Release --project "$host"
+  output="/tmp/atto-cil-nativeaot-$name"
+  dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true \
+    --self-contained true -o "$output"
+  test -x "$output/Atto.Cil.Guest.Host"
+  expect_42 POINTER_NATIVEAOT_GUEST "$output/Atto.Cil.Guest.Host"
+done
+echo "ATTO_POINTER_LOCAL_CIL_NATIVEAOT_PASS guests=3"
+
+# All pointer-negative fixtures require a scoped E_POINTER_* failure and
+# an empty emitted-artifact directory. This is compiled-source rejection,
+# NOT a regex-only lint or a host-model-only witness.
+pointer_reject_count=0
+for fixture in fixtures/cil/negative/pointer-*.atto; do
+  diagnostic="$(sed -n 's|^// expect-error: ||p' "$fixture")"
+  test -n "$diagnostic" || { echo "MISSING_POINTER_DIAGNOSTIC $fixture" >&2; exit 1; }
+  rm -f artifacts/Rejected.dll
+  set +e
+  dotnet run --no-build -c Release --project "$compiler" -- \
+    "$fixture" artifacts/Rejected.dll \
+    >/tmp/atto-pointer-negative.stdout 2>/tmp/atto-pointer-negative.stderr
+  result=$?
+  set -e
+  test "$result" -eq 2 || { echo "POINTER_NEGATIVE_STATUS_FAILED $fixture rc=$result" >&2; exit 1; }
+  grep -Fq "$diagnostic:" /tmp/atto-pointer-negative.stderr || {
+    cat /tmp/atto-pointer-negative.stderr
+    echo "POINTER_NEGATIVE_DIAGNOSTIC_FAILED $fixture expected=$diagnostic" >&2
+    exit 1
+  }
+  test ! -e artifacts/Rejected.dll || {
+    echo "POINTER_NEGATIVE_CIL_ARTIFACT_LEAK $fixture" >&2
+    exit 1
+  }
+  pointer_reject_count=$((pointer_reject_count + 1))
+done
+test "$pointer_reject_count" -eq 19
+echo "ATTO_POINTER_LOCAL_CIL_NEGATIVE_PASS rejected=$pointer_reject_count"

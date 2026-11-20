@@ -6,6 +6,7 @@ on:
       - "tests/Atto.Cil.Guest.Host/**"
       - "fixtures/cil/**"
       - "scripts/test-cil-guest.sh"
+      - "docs/POINTER_LOCAL_CIL_NATIVEAOT_V1.md"
       - ".github/workflows/atto-direct-cil-guest.yml"
   push:
     branches: [main]
