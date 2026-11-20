@@ -104,6 +104,27 @@ public sealed class ActorContext
     public void FinishFrames(ActorFrameExecution execution) =>
         _frames.Finish(_turn, execution);
 
+    // Canonical actor-owned native slab typed spill ABI; compiler CIL
+    // generation and source-level await/actor lowering remain separate.
+    public ActorFrameHandle PushTypedFrame(ActorFrameExecution execution,
+        ActorFrameTypedLayout layout) => _frames.PushTyped(_turn, execution, layout);
+
+    public void WriteFrameI64(ActorFrameExecution execution,
+        ActorFrameHandle frame, int slot, long value) =>
+        _frames.WriteI64(_turn, execution, frame, slot, value);
+
+    public long ReadFrameI64(ActorFrameExecution execution,
+        ActorFrameHandle frame, int slot) =>
+        _frames.ReadI64(_turn, execution, frame, slot);
+
+    public void WriteFrameBool(ActorFrameExecution execution,
+        ActorFrameHandle frame, int slot, bool value) =>
+        _frames.WriteBool(_turn, execution, frame, slot, value);
+
+    public bool ReadFrameBool(ActorFrameExecution execution,
+        ActorFrameHandle frame, int slot) =>
+        _frames.ReadBool(_turn, execution, frame, slot);
+
     public ActorRef Self { get; }
     public ActorKind Kind { get; }
 

@@ -17,7 +17,118 @@ internal static class ActorFrameStackSelfTest
         StopDuringLiveTurnMustAllowAuthenticatedUnwind();
         FrameAuthorityIsNotJsonData();
         AsyncVoidHostHandlersFailAdmission();
+        TypedActorSlotsDenyRawBypass();
+        SameTurnContinuationResumePoisonsOnlyItsActor();
+        ReplayedContinuationPoisonsOnlyItsOwner();
         Console.WriteLine("PASS .NET actor frame slab host tests (NOT compiler-backed .atto or native stack isolation)");
+    }
+
+    private static void TypedActorSlotsDenyRawBypass()
+    {
+        var callerTypes = new[] { ActorFrameScalarKind.I64, ActorFrameScalarKind.Bool };
+        var layout = new ActorFrameTypedLayout(callerTypes);
+        callerTypes[0] = ActorFrameScalarKind.Bool;
+        Require(layout.SlotCount == 2 && layout.ByteLength == 16 &&
+                layout.GetKind(0) == ActorFrameScalarKind.I64,
+            "typed layout freezes caller schema before issuing native frames");
+
+        bool missing = false;
+        try { _ = new ActorFrameTypedLayout(); }
+        catch (ArgumentOutOfRangeException) { missing = true; }
+        Require(missing, "zero-slot typed frame admission fails closed");
+        missing = false;
+        try { _ = new ActorFrameTypedLayout((ActorFrameScalarKind)99); }
+        catch (ArgumentOutOfRangeException) { missing = true; }
+        Require(missing, "unknown scalar kind cannot mint typed frame layout");
+
+        using var arena = new ActorArena(7670, 1, 256, 128, 4, 2, 2);
+        using var frames = new ActorFrameStack(arena, new ActorArenaBudget(128), 4, 128);
+        using var turn = arena.EnterTurn(7670, 1);
+        var execution = frames.Begin(turn);
+        var typed = frames.PushTyped(turn, execution, layout);
+        frames.WriteI64(turn, execution, typed, 0, long.MinValue);
+        frames.WriteBool(turn, execution, typed, 1, true);
+        Require(frames.ReadI64(turn, execution, typed, 0) == long.MinValue &&
+                frames.ReadBool(turn, execution, typed, 1),
+            "canonical typed spill slots survive native host read/write");
+        frames.WriteBool(turn, execution, typed, 1, false);
+        Require(!frames.ReadBool(turn, execution, typed, 1),
+            "canonical bool false clears the entire typed scalar slot");
+        frames.WriteBool(turn, execution, typed, 1, true);
+        ExpectInvalid(() => frames.Write(turn, execution, typed, 8, new byte[] { 2 }),
+            "raw bytes cannot forge a noncanonical typed bool");
+        ExpectInvalid(() => frames.Read(turn, execution, typed, 0, new byte[8]),
+            "typed native values cannot be read through raw byte API");
+        ExpectInvalid(() => frames.WriteI64(turn, execution, typed, 1, 42),
+            "bool slot cannot receive i64 writes");
+        ExpectInvalid(() => _ = frames.ReadBool(turn, execution, typed, 0),
+            "i64 slot cannot masquerade as bool");
+        bool slotBound = false;
+        try { _ = frames.ReadI64(turn, execution, typed, 2); }
+        catch (ArgumentOutOfRangeException) { slotBound = true; }
+        Require(slotBound, "typed slot bounds prevent out-of-frame reads");
+        frames.Pop(turn, execution, typed);
+        var untyped = frames.Push(turn, execution, 16);
+        ExpectInvalid(() => frames.WriteI64(turn, execution, untyped, 0, 1),
+            "untyped host frames cannot masquerade as compiler spills");
+        frames.Pop(turn, execution, untyped);
+        frames.Finish(turn, execution);
+    }
+
+    private static void SameTurnContinuationResumePoisonsOnlyItsActor()
+    {
+        using var arena = new ActorArena(7680, 1, 256, 128, 4, 2, 2);
+        using var frames = new ActorFrameStack(arena, new ActorArenaBudget(128), 4, 128);
+        using var turn = arena.EnterTurn(7680, 1);
+        var execution = frames.Begin(turn);
+        var root = frames.Push(turn, execution, 16);
+        var continuation = frames.Suspend(turn, execution);
+        ExpectInvalid(() => frames.Resume(turn, execution, continuation),
+            "suspending physical turn cannot claim its own continuation");
+        Require(frames.IsPoisoned,
+            "same-turn resume protocol violation is terminal for the owner");
+        ExpectInvalid(() => frames.Read(turn, execution, root, 0, new byte[1]),
+            "poisoned actor cannot recover canceled frame bytes");
+    }
+
+    private static void ReplayedContinuationPoisonsOnlyItsOwner()
+    {
+        using var owner = new ActorArena(7960, 1, 256, 128, 4, 2, 2);
+        using var sibling = new ActorArena(7961, 1, 256, 128, 4, 2, 2);
+        using var ownerFrames = new ActorFrameStack(
+            owner, new ActorArenaBudget(128), 4, 128);
+        using var siblingFrames = new ActorFrameStack(
+            sibling, new ActorArenaBudget(128), 4, 128);
+        ActorFrameExecution execution;
+        ActorFrameContinuation ticket;
+        using (var first = owner.EnterTurn(7960, 1))
+        {
+            execution = ownerFrames.Begin(first);
+            _ = ownerFrames.PushTyped(first, execution,
+                new ActorFrameTypedLayout(ActorFrameScalarKind.I64));
+            ticket = ownerFrames.Suspend(first, execution);
+            ownerFrames.ValidateTurnExit(first);
+        }
+        using (var next = owner.EnterTurn(7960, 1))
+        {
+            ownerFrames.Resume(next, execution, ticket);
+            ExpectInvalid(() => ownerFrames.Resume(next, execution, ticket),
+                "the same ticket cannot be consumed a second time");
+            Require(ownerFrames.IsPoisoned,
+                "replay invalidates only the actor whose ticket was reused");
+        }
+        using (var peer = sibling.EnterTurn(7961, 1))
+        {
+            var peerExecution = siblingFrames.Begin(peer);
+            var frame = siblingFrames.PushTyped(peer, peerExecution,
+                new ActorFrameTypedLayout(ActorFrameScalarKind.Bool));
+            siblingFrames.WriteBool(peer, peerExecution, frame, 0, true);
+            Require(siblingFrames.ReadBool(peer, peerExecution, frame, 0),
+                "another actor's frame remains operational after ticket replay");
+            siblingFrames.Pop(peer, peerExecution, frame);
+            siblingFrames.Finish(peer, peerExecution);
+            siblingFrames.ValidateTurnExit(peer);
+        }
     }
 
     private static void IndependentSlabsAndByteCopies()

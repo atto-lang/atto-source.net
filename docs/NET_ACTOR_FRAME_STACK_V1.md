@@ -151,3 +151,73 @@ continuations; `Plan` alone must never be recorded as guest parity.
   Java PR #2627, LLVM and Forge actor heap/runtime branches, and the shared
   platform-conformance actor-stack contract (#562). Retain independent
   approval and private-source CI export gates.
+
+## Canonical typed spill and suspension-epoch hardening
+
+The follow-up canonical actor-frame API supports immutable 1–128-slot
+`ActorFrameTypedLayout` descriptors with `i64` and `bool` types.
+Each scalar occupies an eight-byte little-endian slot. Only typed APIs may
+read or write typed frames; the existing raw byte operations are explicitly
+denied on typed frames, preventing forged bool contents or scalar kind
+confusion. Untyped host frame handles cannot access typed slots. Descriptors
+are snapshots of caller-provided types, not mutable aliases.
+
+The existing exact-issued `ActorFrameContinuation` is now additionally
+fenced to the physical-turn epoch in which suspension occurred.
+A continuation must resume on a **strictly later authenticated arena turn**;
+attempting to reclaim it within the original carrier turn poisons only that
+actor's logical frame stack. No CLR machine stack is suspended or switched.
+
+The `CfgActorFrameLayoutSelfTest` now also parses real structured AttoLang
+function source through the existing verified CFG lowering, derives a
+compiler-owned scalar slot layout, and feeds it into an actor's canonical
+private native frame slab for a host-only typed round-trip. This is **not**
+generated guest CIL spill/restore, and actor/await source remains unsupported.
+
+The expanded `ActorFrameStackSelfTest` covers typed schema snapshotting,
+negative unknown kinds, raw-byte type bypass attempts, wrong-kind and
+out-of-range accesses, untyped token confusion, and same-physical-turn
+continuation replay. Execution remains **NOT_EXECUTED** until SDK and
+exact-head NativeAOT runners actually run these tests.
+
+### Source-local NativeAOT typed-spill and continuation proof gate
+
+The source-owned `Ores.Net.ActorFrameProbe` now exercises the canonical typed
+`i64`/`bool` spill ABI **inside the published native host executable**.
+The surviving actor is checked against raw-byte typed-frame access, wrong
+slot kinds and caller-schema mutation. Separate native actor-frame executions
+exercise typed spill data across distinct authenticated physical turns and
+same-turn resume rejection with actor-local terminal poisoning.
+
+The Linux/Windows workflow requires exact full-line receipts
+`actor-frame-nativeaot-typed-spills` and
+`actor-frame-nativeaot-resume-epoch`, along with the existing actor memory,
+native quota and async-void guards. It also prints the actual SHA-256 of the
+published probe binary. These are **authored tests**, not native execution
+evidence until the exact-head workflows allocate a runner and execute them.
+Even when they pass, the probe remains trusted **host continuation logic**;
+the source compiler does not yet generate .atto actor call/await CIL frames.
+
+### Compiler/native typed slot-limit alignment
+
+The general CFG frame planner can still describe larger SSA graphs for
+non-actor consumers. A new `PlanCanonicalTyped` admission gate imposes the
+canonical actor spill ABI's **128 scalar slots / 1024 bytes** on compiler-owned
+typed layouts before a runtime frame can be allocated. An independently
+verified 129-definition CFG remains valid under the general CFG planner, but
+is rejected at canonical typed-frame planning. The source-derived
+CFG-to-runtime actor host probe now uses this stricter gate, and
+`actor-memory-native-aot.yml` triggers on compiler-core changes too.
+This is source-level admission hardening, **not** generated guest CIL/await
+execution evidence.
+
+### Replayed continuation negative control
+
+The CoreCLR host suite and Linux/Windows native probe now each
+**consume a valid continuation ticket in a later authenticated physical
+turn and then attempt a second claim of that exact ticket**. They require
+an `InvalidOperationException` and terminal poisoning of that owning
+actor's frame stack. The host suite additionally verifies that a
+different actor's typed frame remains usable. This is a deliberately
+negative host scheduler-protocol test, not source-level `.atto`
+continuation execution.
