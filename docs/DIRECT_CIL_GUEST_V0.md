@@ -57,3 +57,40 @@ never a cross-org token, and require nonempty actual executed test steps.
 
 Oreslang .NET architecture is consulted for compatibility but its compiler
 and runtime results cannot be counted as AttoLang executable parity.
+
+
+## Checked signed-i64 and output publication hardening
+
+The bounded direct-CIL frontend now admits the signed minimum
+`-9223372036854775808` without ever parsing a nonrepresentable *positive*
+64-bit literal. It rejects `-9223372036854775809` and reserved
+authority/effect identifiers such as `unsafe` at source admission.
+
+Guest DLL output is **never replaced or deleted by the compiler**. It
+validates and emits the entire checked CIL image before trying to publish,
+requires an existing output directory, exclusively creates the temporary
+path using `FileMode.CreateNew`, flushes the temporary image to disk,
+and uses `File.Move(..., overwrite: false)` for final publication.
+Compiler tests must intentionally choose fresh output paths for each
+successful build. Invalid sources must leave an existing prior DLL
+byte-identical; a competing temporary file must not be truncated.
+These checks assume a trusted build directory and do **not** constitute
+a TenantVM security boundary against adversarial directory replacement.
+
+Added an independent, fixed `Atto.Cil.Value.Host` adapter that only
+formats the **actual compiled CIL** `main(): int` return value. It can
+therefore observe `int64::MIN` without squeezing the 64-bit result into an
+8-bit OS exit status. The supplemental matrix requires CoreCLR and
+NativeAOT minimum-value execution and requires an actual
+`OverflowException` rather than wraparound for a checked `MAX+1`
+pipeline. Twelve pipeline-negative fixtures, no-overwrite replay,
+byte-preserving invalid-source refusal and temporary-path protection
+are included in `scripts/test-cil-guest.sh`.
+
+**Verification status:** these are committed compiler and test changes.
+There is no `dotnet` SDK in the local execution environment used for
+this implementation pass, and GitHub Actions job admission still fails.
+The new CoreCLR and NativeAOT tests have **not executed**. The
+conformance ledger must remain `not_executed` until an exact-head
+runner provides real CLR/NativeAOT guest evidence. This remains a
+restricted direct-CIL subset, not the production multi-tenant compiler.
