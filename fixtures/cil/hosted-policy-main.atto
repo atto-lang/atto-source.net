@@ -21,6 +21,9 @@ pub fnc main(): int {
   if fs_text_range_admissible(9, 2, 10) then return 17; fi
   if fs_text_range_admissible(9, 1, 10) == false then return 18; fi
   if fs_text_range_admissible(9223372036854775807, 1, 9223372036854775807) then return 19; fi
+  // The invalid signed bounds must exit before any checked subtraction.
+  if fs_text_range_admissible(9223372036854775807, 1, -1) then return 23; fi
+  if fs_text_replacement_admissible(9223372036854775807, 1, -1, 9223372036854775807) then return 24; fi
   if fs_text_replacement_admissible(4, 7, 5, 8) == false then return 20; fi
   if fs_text_replacement_admissible(4, 8, 5, 8) then return 21; fi
   if fs_text_replacement_admissible(1, 9223372036854775807, 1, 9223372036854775807) == false then return 22; fi
