@@ -64,6 +64,20 @@ internal static class OptionResultTrapAdmissionTests
     public static void Run()
     {
         VerifyCanonicalSourceIsStillFailClosed();
+        // Bang exceptional control is reserved and must never reach scalar
+        // NativeAOT lowering via a renamed identifier or host exception.
+        foreach (var op in new[] { "trap!", "throw!", "raise!", "panic!" })
+        {
+            string source = $"fnc main():int{{{op} value; return 7;}}";
+            try { _ = OresParser.Parse(source); }
+            catch (FormatException error) when (
+                error.Message.Contains("EXCEPTION_BANG_BACKEND_UNSUPPORTED", StringComparison.Ordinal))
+            {
+                continue;
+            }
+            throw new Exception("Unverified exceptional-control bang reached scalar CIL: " + op);
+        }
+
 
         // 12 genuine source spellings, none of which may be lowered as an
         // untyped scalar, or falsely counted as a semantic negative pass.
