@@ -1,0 +1,1 @@
+Source-free runner admission probe. No source checkout, tokens, secrets, or private files. Only tests whether the source-org push-triggered canary can receive an Actions runner.
