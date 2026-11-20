@@ -20,7 +20,8 @@ expect_42() {
   echo "ATTO_DIRECT_CIL_$label"_PASS exit=42
 }
 dotnet build "$compiler" -c Release
-dotnet run --no-build -c Release --project "$compiler" -- fixtures/cil/seq-call-args.atto "$guest"
+# The initial NativeAOT guest must exercise BOTH seq and the |> pipeline.
+dotnet run --no-build -c Release --project "$compiler" -- fixtures/cil/seq-pipeline-result.atto "$guest"
 test -s "$guest"
 
 for case in \
