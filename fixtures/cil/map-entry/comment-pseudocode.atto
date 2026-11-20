@@ -1,0 +1,4 @@
+// "foo" => 5 as Entry<string, int> Map is a comment, not guest code.
+pub fnc main(): int {
+    return 42;
+}
