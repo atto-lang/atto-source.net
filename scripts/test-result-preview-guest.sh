@@ -39,7 +39,8 @@ for entry in \
   unsupported_option:E_PARSE \
   unsupported_question:E_LEX \
   overflow:E_LITERAL \
-  injection:E_STRING; do
+  injection:E_STRING \
+  host_keyword:E_NAME; do
   case_name="${entry%%:*}"
   expected="${entry#*:}"
   output="$work/$case_name/Program.cs"
