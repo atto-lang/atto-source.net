@@ -41,6 +41,10 @@ for case in \
   do-sync-task-nonvoid:E_TASK_RETURN_TYPE \
   do-sync-task-inferred-nonvoid:E_TASK_RETURN_TYPE \
   do-sync-task-nested-nonvoid:E_TASK_RETURN_TYPE \
+  sync-task-standalone-void:E_SYNTAX \
+  sync-task-standalone-typed-void:E_SYNTAX \
+  sync-task-nested-standalone-void:E_SYNTAX \
+  sync-task-standalone-nonvoid:E_SYNTAX \
   sync-task-missing-return:E_TASK_RETURN_TYPE \
   sync-task-void-as-value:E_TASK_RETURN_TYPE \
   sync-task-bad-type:E_TASK_UNSUPPORTED \
@@ -63,7 +67,7 @@ for case in \
   }
   test ! -e artifacts/Rejected.dll || { echo "NEGATIVE_ARTIFACT_LEAK case=$name"; exit 1; }
 done
-echo "ATTO_DIRECT_CIL_NEGATIVE_PASS checks=24"
+echo "ATTO_DIRECT_CIL_NEGATIVE_PASS checks=28"
 dotnet build "$host" -c Release
 expect_42 CORECLR_GUEST dotnet run --no-build -c Release --project "$host"
 dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true \
