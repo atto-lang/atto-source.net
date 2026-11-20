@@ -1,0 +1,2 @@
+// A quoted string is data; CIL scalar backend rejects string *execution*.
+pub fnc main(): int { return "Result<int,Error> ? trap"; }

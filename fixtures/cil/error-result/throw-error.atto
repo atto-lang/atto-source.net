@@ -1,0 +1,2 @@
+fnc explode(): int throws Error { throw Error("bad"); }
+pub fnc main(): int { return explode(); }

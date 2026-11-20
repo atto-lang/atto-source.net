@@ -87,10 +87,30 @@ internal sealed class Parser
             // Recognize punctuation needed to reach a stable typed-feature
             // rejection. This does not enable assignments/generic runtime
             // values in the scalar parser; unsupported forms still fail closed.
-            else if (!"(){}[]:;,+-*/=<>.".Contains(c))
+            else if (!"(){}[]:;,+-*/=<>.?".Contains(c))
                 throw new CompilerError("E_LEX", $"unsupported source character at {start}");
             _tokens.Add(source[start..i]);
             if (_tokens.Count > 8192) throw new CompilerError("E_LIMIT", "8192 token limit");
+        }
+        // The CIL scalar guest has no typed Result/Option values, error
+        // identities, or cleanup-aware ?/trap unwinding. Reject these Atto
+        // constructs *after lexing* so strings/comments cannot impersonate
+        // executable effects, and before any CIL metadata/artifact is created.
+        // Do not replace Result with an int sentinel or catch CLR exceptions
+        // as though they were source Error values.
+        if (_tokens.Any(t => t is "Result" or "Option" or "Ok" or "Err" or
+              "Some" or "None" or "Error" or "trap" or "throw" or
+              "raise" or "panic" or "try" or "catch" or "finally" or
+              "defer" or "recover" or "?"))
+            throw new CompilerError("E_UNSUPPORTED_RESULT_EFFECTS",
+                "Result/Option, postfix ?, trap and source Error handling require typed CIL lowering");
+        for (int tokenIndex = 0; tokenIndex + 2 < _tokens.Count; tokenIndex++)
+        {
+            if (_tokens[tokenIndex] == "int" &&
+                _tokens[tokenIndex + 1] == "." &&
+                _tokens[tokenIndex + 2] == "parse")
+                throw new CompilerError("E_UNSUPPORTED_RESULT_EFFECTS",
+                    "int.parse(string) requires Result<int,Error> and checked guest CIL lowering");
         }
         // Builtin Map/Entry must not be mistaken for scalar user symbols.
         // Token-based inspection avoids triggering on comments/strings.

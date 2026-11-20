@@ -71,3 +71,4 @@ echo "ATTO_DIRECT_CIL_POSITIVE_PASS fixtures=3"
 # Contract negatives explicitly reject unsupported first-class Map/Entry,
 # and prove quoted pseudo-syntax does not trip the typed-feature gate.
 bash scripts/test-map-entry-admission.sh
+bash scripts/test-result-error-admission.sh
