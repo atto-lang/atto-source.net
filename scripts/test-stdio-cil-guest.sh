@@ -77,7 +77,7 @@ for form in return caret; do
 
   aot="/tmp/atto-stdio-${form}-nativeaot"
   dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true \
-    --no-incremental --self-contained true -o "$aot"
+    --self-contained true -o "$aot"
   test -x "$aot/Atto.Cil.Guest.Host"
   expect_clean_guest "NativeAOT-${form}" "$aot/Atto.Cil.Guest.Host"
 done
