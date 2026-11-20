@@ -310,14 +310,22 @@ internal sealed class CIL(List<Function> functions)
         var objectRef = metadata.AddTypeReference(runtimeRef,
             metadata.GetOrAddString("System"), metadata.GetOrAddString("Object"));
 
+        // One initialized i64 slot per maximum nested match level.
+        // Storing the subject once prevents repeated calls or side effects.
+        var localSig = new BlobBuilder();
+        var locals = new BlobEncoder(localSig).LocalVariableSignature(17);
+        for (int i = 0; i < 17; i++) locals.AddVariable().Type().Int64();
+        var localSigHandle = metadata.AddStandaloneSignature(metadata.GetOrAddBlob(localSig));
+
         List<int> bodyOffsets = [];
         foreach (var f in _functions)
         {
             var code = new BlobBuilder();
-            var il = new InstructionEncoder(code);
-            Generate(f.Return, f, il);
+            var il = new InstructionEncoder(code, new ControlFlowBuilder());
+            Generate(f.Return, f, il, new Dictionary<string, int>(StringComparer.Ordinal), 0);
             il.OpCode(ILOpCode.Ret);
-            bodyOffsets.Add(bodyStream.AddMethodBody(il, maxStack: 64));
+            bodyOffsets.Add(bodyStream.AddMethodBody(il, maxStack: 64,
+                localVariablesSignature: localSigHandle));
         }
         int nextParameter = 1;
         for (int i = 0; i < _functions.Count; i++)
@@ -361,26 +369,64 @@ internal sealed class CIL(List<Function> functions)
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }
 
-    private void Generate(Expression e, Function f, InstructionEncoder il)
+    private void Generate(Expression e, Function f, InstructionEncoder il,
+        Dictionary<string, int> bindings, int matchDepth)
     {
         switch (e)
         {
             case Literal c: il.LoadConstantI8(c.Number); return;
-            case Arg a: il.LoadArgument(f.Args.IndexOf(a.Name)); return;
+            case Arg a:
+                if (bindings.TryGetValue(a.Name, out var slot)) il.LoadLocal(slot);
+                else il.LoadArgument(f.Args.IndexOf(a.Name));
+                return;
             case Binary b:
-                Generate(b.Left, f, il); Generate(b.Right, f, il);
+                Generate(b.Left, f, il, bindings, matchDepth);
+                Generate(b.Right, f, il, bindings, matchDepth);
                 il.OpCode(b.Op switch
                 {
                     "+" => ILOpCode.Add_ovf,
                     "-" => ILOpCode.Sub_ovf,
                     "*" => ILOpCode.Mul_ovf,
                     "/" => ILOpCode.Div,
+                    ">" => ILOpCode.Cgt,
+                    "eq" or "==" => ILOpCode.Ceq,
                     _ => throw new CompilerError("E_PARSE", b.Op)
                 });
                 return;
             case Call c:
-                foreach (var arg in c.Args) Generate(arg, f, il);
+                foreach (var arg in c.Args) Generate(arg, f, il, bindings, matchDepth);
                 il.Call(MetadataTokens.MethodDefinitionHandle(_symbols[c.Name] + 1));
+                return;
+            case ValueMatch m:
+                if (matchDepth >= 16) throw new CompilerError("E_LIMIT", "match nesting limit");
+                Generate(m.Subject, f, il, bindings, matchDepth + 1);
+                il.StoreLocal(matchDepth);
+                var done = il.DefineLabel();
+                foreach (var arm in m.Arms)
+                {
+                    var next = il.DefineLabel();
+                    if (arm.Literal is long literal)
+                    {
+                        il.LoadLocal(matchDepth);
+                        il.LoadConstantI8(literal);
+                        il.Branch(ILOpCode.Bne_un, next);
+                    }
+                    var armBindings = new Dictionary<string, int>(bindings, StringComparer.Ordinal);
+                    if (arm.Binding != null) armBindings[arm.Binding] = matchDepth;
+                    if (arm.Guard != null)
+                    {
+                        Generate(arm.Guard, f, il, armBindings, matchDepth + 1);
+                        il.Branch(ILOpCode.Brfalse, next);
+                    }
+                    Generate(arm.Result, f, il, armBindings, matchDepth + 1);
+                    il.Branch(ILOpCode.Br, done);
+                    il.MarkLabel(next);
+                }
+                // The checker requires an unguarded catchall, making this
+                // unreachable. Retain an explicit trap if invariants drift.
+                il.OpCode(ILOpCode.Ldnull);
+                il.OpCode(ILOpCode.Throw);
+                il.MarkLabel(done);
                 return;
             default: throw new CompilerError("E_TYPE", "unexpected expression");
         }
