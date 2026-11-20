@@ -2,16 +2,62 @@
 """Negative policy mutations; no claim of guest/runtime execution."""
 import copy
 import json
+import hashlib
+import re
 import os
 import stat
 import unittest
 import tempfile
 from unittest.mock import patch
 from pathlib import Path
-from verify_persistent_actor_data_contract import (ContractError, validate, validate_raw,
-                                                    read_bounded_contract)
+import importlib.util
+import sys
+
+_POLICY_PATH = Path(__file__).with_name("verify_persistent_actor_data_contract.py")
+_POLICY_SPEC = importlib.util.spec_from_file_location(
+    "verify_persistent_actor_data_contract", _POLICY_PATH)
+if _POLICY_SPEC is None or _POLICY_SPEC.loader is None:
+    raise RuntimeError("cannot load adjacent pinned actor-data policy verifier")
+_policy = importlib.util.module_from_spec(_POLICY_SPEC)
+sys.modules[_POLICY_SPEC.name] = _policy
+_POLICY_SPEC.loader.exec_module(_policy)
+ContractError = _policy.ContractError
+validate = _policy.validate
+validate_raw = _policy.validate_raw
+read_bounded_contract = _policy.read_bounded_contract
 
 DATA = Path(__file__).resolve().parents[1] / "contracts/v1/persistent_actor_data_v1.json"
+ROOT = DATA.parents[2]
+WORKFLOW = ROOT / ".github/workflows/persistent-actor-data-contract.yml"
+PINNED = (
+    "contracts/v1/persistent_actor_data_v1.json",
+    "scripts/verify_persistent_actor_data_contract.py",
+    "scripts/test_persistent_actor_data_contract.py",
+)
+
+def check_workflow_git_blob_pins(workflow):
+    for name in PINNED:
+        body = (ROOT / name).read_bytes()
+        header = b"blob " + str(len(body)).encode("ascii") + b"\0"
+        actual = hashlib.sha1(header + body).hexdigest()
+        pattern = re.compile(
+            r'(?m)^[ \t]*test "\$\(git hash-object ' + re.escape(name) +
+            r'\)" = "([0-9a-f]{40})"[ \t]*$')
+        matches = pattern.findall(workflow)
+        if matches != [actual]:
+            raise AssertionError("persistent CI pin missing, ambiguous or stale: " + name)
+        tree_line = (
+            'test "$(git ls-tree HEAD -- ' + name +
+            ' | awk \'{print $1 ":" $2 ":" $3}\')" = "100644:blob:' + actual + '"'
+        )
+        if workflow.count(tree_line) != 1:
+            raise AssertionError("persistent CI tree mode/type pin missing or ambiguous: " + name)
+        regular_line = "test -f " + name + " && test ! -L " + name
+        if workflow.count(regular_line) != 1:
+            raise AssertionError("persistent CI working-tree regular-file check missing or ambiguous: " + name)
+
+
+
 
 
 class PersistentActorPolicyTest(unittest.TestCase):
@@ -27,6 +73,42 @@ class PersistentActorPolicyTest(unittest.TestCase):
 
     def test_original(self):
         validate(self.base)
+
+    def test_workflow_git_blob_pins_match_exact_source(self):
+        check_workflow_git_blob_pins(WORKFLOW.read_text(encoding="utf-8"))
+
+    def test_workflow_rejects_stale_script_pin(self):
+        original = WORKFLOW.read_text(encoding="utf-8")
+        check_workflow_git_blob_pins(original)
+        script = PINNED[-1]
+        body = (ROOT / script).read_bytes()
+        digest = hashlib.sha1(
+            b"blob " + str(len(body)).encode("ascii") + b"\0" + body
+        ).hexdigest()
+        replacement = "0" * 40 if digest != "0" * 40 else "1" * 40
+        tampered = original.replace(
+            'git hash-object ' + script + ')" = "' + digest + '"',
+            'git hash-object ' + script + ')" = "' + replacement + '"')
+        self.assertNotEqual(tampered, original)
+        with self.assertRaisesRegex(AssertionError, "stale"):
+            check_workflow_git_blob_pins(tampered)
+
+    def test_workflow_rejects_missing_tree_mode_pin(self):
+        original = WORKFLOW.read_text(encoding="utf-8")
+        check_workflow_git_blob_pins(original)
+        name = PINNED[0]
+        body = (ROOT / name).read_bytes()
+        digest = hashlib.sha1(
+            b"blob " + str(len(body)).encode("ascii") + b"\0" + body
+        ).hexdigest()
+        tree_line = (
+            'test "$(git ls-tree HEAD -- ' + name +
+            ' | awk \'{print $1 ":" $2 ":" $3}\')" = "100644:blob:' + digest + '"'
+        )
+        tampered = original.replace(tree_line, "# removed committed mode/type pin")
+        self.assertNotEqual(tampered, original)
+        with self.assertRaisesRegex(AssertionError, "tree mode/type"):
+            check_workflow_git_blob_pins(tampered)
 
     def test_duplicate_wire_key(self):
         with self.assertRaises(ContractError):
@@ -207,7 +289,7 @@ class PersistentActorPolicyTest(unittest.TestCase):
                 return native_fstat(fd)
             with patch("verify_persistent_actor_data_contract.os.fstat",
                        side_effect=raced_fstat):
-                with self.assertRaisesRegex(ContractError, "path changed during read"):
+                with self.assertRaisesRegex(ContractError, "changed during read"):
                     read_bounded_contract(path)
             self.assertEqual(calls, 2)
 
@@ -226,7 +308,7 @@ class PersistentActorPolicyTest(unittest.TestCase):
                 with self.subTest(flag=flag, value=value):
                     with patch.object(os, flag, value, create=True):
                         with patch.object(os, "open", side_effect=AssertionError("unsafe open")) as opened:
-                            with self.assertRaisesRegex(ContractError, "safe independent"):
+                            with self.assertRaisesRegex(ContractError, "secure no-follow"):
                                 read_bounded_contract(DATA)
                             opened.assert_not_called()
 
@@ -236,7 +318,7 @@ class PersistentActorPolicyTest(unittest.TestCase):
                 with self.subTest(flag=flag, value=value):
                     with patch.object(os, flag, value, create=True):
                         with patch.object(os, "open", side_effect=AssertionError("unsafe open")) as opened:
-                            with self.assertRaisesRegex(ContractError, "safe independent"):
+                            with self.assertRaisesRegex(ContractError, "secure no-follow"):
                                 read_bounded_contract(DATA)
                             opened.assert_not_called()
 
@@ -248,7 +330,7 @@ class PersistentActorPolicyTest(unittest.TestCase):
             with self.subTest(flag=flag, value=value):
                 with patch.object(os, flag, value, create=True):
                     with patch.object(os, "open", side_effect=AssertionError("unsafe open")) as opened:
-                        with self.assertRaisesRegex(ContractError, "safe independent"):
+                        with self.assertRaisesRegex(ContractError, "secure no-follow"):
                             read_bounded_contract(DATA)
                         opened.assert_not_called()
 
@@ -338,12 +420,50 @@ class PersistentActorPolicyTest(unittest.TestCase):
                 return os.stat_result(fields)
             return before
         with patch.object(Path, "lstat", mutated):
-            with self.assertRaisesRegex(ContractError, "path changed during read"):
+            with self.assertRaisesRegex(ContractError, "changed during read"):
                 read_bounded_contract(DATA)
         self.assertEqual(reads[0], 2)
 
+    def test_secure_open_flags_missing_or_aliased_fail_closed(self):
+        # Simulate platforms/shims with missing, zero or overlapping flag bits.
+        # A failed admission must not even attempt to open the fixture.
+        for nonblock, nofollow in ((0, 1), (1, 0), (1, 1), (3, 1),
+                                   (1, 3), (None, 1), (1, None),
+                                   (True, 1), (1, "bad")):
+            with self.subTest(nonblock=nonblock, nofollow=nofollow):
+                with patch.object(os, "O_NONBLOCK", nonblock, create=True):
+                    with patch.object(os, "O_NOFOLLOW", nofollow, create=True):
+                        with patch.object(os, "open", side_effect=AssertionError("unsafe open")):
+                            with self.assertRaisesRegex(ContractError, "secure no-follow"):
+                                read_bounded_contract(DATA)
+
+
+    def test_secure_flags_reject_directory_access_and_optional_aliases(self):
+        # All required bits must be independent; checking only NOFOLLOW vs
+        # NONBLOCK misses shims that alias a real mode or directory flag.
+        scenarios = (
+            ("O_DIRECTORY", 0),
+            ("O_DIRECTORY", None),
+            ("O_DIRECTORY", os.O_NOFOLLOW),
+            ("O_NOFOLLOW", os.O_DIRECTORY),
+            ("O_NONBLOCK", os.O_ACCMODE),
+            ("O_ACCMODE", os.O_NOFOLLOW),
+            ("O_ACCMODE", 0),
+            ("O_CLOEXEC", os.O_NOFOLLOW),
+            ("O_BINARY", os.O_NONBLOCK),
+            ("O_BINARY", -1),
+        )
+        for name, value in scenarios:
+            with self.subTest(flag=name, value=value):
+                with patch.object(os, name, value, create=True):
+                    with patch.object(os, "open", side_effect=AssertionError("unsafe open")):
+                        with self.assertRaisesRegex(ContractError, "secure no-follow"):
+                            read_bounded_contract(DATA)
+
+
+
 if __name__ == "__main__":
-    expected = 42
+    expected = 47
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(PersistentActorPolicyTest)
     if suite.countTestCases() != expected:
         raise SystemExit(f"FAIL persistent-data gate: expected {expected} tests, "

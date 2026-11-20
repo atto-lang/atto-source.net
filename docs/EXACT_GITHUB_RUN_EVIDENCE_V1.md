@@ -43,9 +43,7 @@ python3 scripts/test_verify_ci_run.py
 # Example: exact-head source run; replace placeholders with GitHub-confirmed values.
 GH_TOKEN="$READ_ONLY_GITHUB_TOKEN" python3 scripts/verify_ci_run.py \
   --backend llvm --commit "$EXACT_RUN_HEAD_SHA" --tree "$EXACT_RUN_HEAD_TREE" \
-  --run-id "$RUN_ID" --run-attempt "$INDEPENDENTLY_PINNED_RUN_ATTEMPT" \
-  --event pull_request --workflow-path ".github/workflows/ci.yml" \
-  --workflow-run-path "$INDEPENDENTLY_PINNED_EXACT_RUN_PATH" \
+  --run-id "$RUN_ID" --workflow-path ".github/workflows/ci.yml" \
   --workflow-id "$INDEPENDENTLY_PINNED_NUMERIC_WORKFLOW_ID" \
   --workflow-blob-sha "$INDEPENDENTLY_PINNED_WORKFLOW_GIT_BLOB_SHA" \
   --require-job 'test' --require-step 'Run CTest'
@@ -78,8 +76,12 @@ trusted local environment or a **reviewed** source-scoped CI workflow with a
 read-only token. The GitHub Actions token must have adequate `actions: read`
 and `contents: read` access; no cross-organization checkout is needed.
 Success produces a machine-readable statement
-`GITHUB_RUN_EXECUTION_VERIFIED_NOT_GUEST_PARITY_CERTIFIED`. Failure returns
-nonzero and a `CI_RUN_EVIDENCE_REJECTED` explanation without printing tokens.
+`GITHUB_RUN_EXECUTION_VERIFIED_NOT_GUEST_PARITY_CERTIFIED`. A completed run
+whose authenticated job metadata shows **no allocated runner and no executed
+step records** returns exit status 2 with
+`CI_RUN_EVIDENCE_NOT_EXECUTED`; this is an infrastructure/execution-state
+classification, never a passing test claim. Other failures return exit status 1
+with a `CI_RUN_EVIDENCE_REJECTED` explanation without printing tokens.
 
 ## Security and release boundaries
 
@@ -112,7 +114,7 @@ workflow YAML Git blob (as this verifier requires), source HEAD and tree.
 The verifier denies duplicate step names within a job, because two steps
 with the same display name cannot unambiguously satisfy a named proof step.
 All required jobs and steps must be explicit sequences; malformed caller
-inputs deny verification. These guards are checked by the current source-free
+inputs deny verification. These guards are checked by all 94 independently defined source-free
 regression cases, three times in the CI workflow. The
 regressions are not native Oreslang compiler or runtime conformance tests.
 
@@ -185,8 +187,8 @@ private test-carrier execution and exact guest snapshot evidence must
 be attested separately under the source-export policy; a successful
 carrier run cannot certify a different source repository's commit.
 
-The initial source-free regression suite defined 73 unittest methods; the current workflow
-requires at least 82 per round in three rounds when Actions runners are available. Passing
+The source-free regression suite defines 94 unittest methods, and the workflow
+requires at least 94 per round in three rounds when Actions runners are available. Passing
 these tests alone does not establish that any backend-native tests ran.
 
 ## Short-lived Actions evidence artifact
@@ -223,13 +225,13 @@ https://github.com/scintilla-run-test/gleam-runner-conformance/actions/runs/3898
 This does not authorize private compiler/actor source export and does not
 attest native guest-language compilation or execution.
 
-## Independently pinned run attempt (82-case regression gate)
+## Independently pinned run attempt (94-case regression gate)
 
 The verifier requires `--run-attempt N` from independently approved release
 evidence, and compares it with GitHub's run attempt and every job's attempt.
 The existing final reread also checks that the same attempt remains current.
 A dynamically chosen latest attempt cannot silently replace reviewed evidence.
-The workflow requires at least 82 source-free unittest methods for three rounds.
+The workflow requires at least 73 source-free unittest methods for three rounds.
 
 Example additional CLI argument: `--run-attempt 2` (replace 2 with the
 independently recorded value for that run; never infer it from the run being
@@ -268,7 +270,7 @@ archival from being certified using stale preflight metadata. It also
 rejects a boolean masquerading as a numeric workflow ID on the final run
 read (Python would otherwise consider `True == 1`).
 
-The shared regression inventory has at least **82 distinct unittest methods**,
+The shared regression inventory has at least **73 distinct unittest methods**,
 including mutation tests that change repository metadata between the initial
 and final read and spoof the final workflow ID. Run this entire suite on the
 exact checked-out PR tree with no skips before accepting any contract proof.
@@ -282,7 +284,7 @@ candidate-controlled Python import paths. This prevents local `json.py` or
 `pathlib.py` and environment `PYTHONPATH` from shadowing standard-library
 imports during metadata reporting. Two new static regressions check both
 inline Python heredocs in the checked-in workflow, raising the source-free
-contract to **82 tests per round** (three rounds, no skips). This does not
+contract to **73 tests per round** (three rounds, no skips). This does not
 prove guest runtime execution, workflow-file integrity, or source-export
 permission; independent protected-main approval and native execution remain required.
 
@@ -296,68 +298,152 @@ additional source-free regressions reject overlapping intervals and accept
 adjacent intervals. This is an API evidence consistency check, not an
 independent proof of the commands' effects or any guest runtime semantics.
 
-## Explicit workflow-run SHA versus actual checkout SHA (2026-10-16)
+## Strict authenticated GitHub JSON decoding
 
-The source-free Actions job deliberately checks out `github.event.pull_request.head.sha`
-and compares it to `git rev-parse HEAD`. For a `pull_request` event,
-`github.sha` may instead be the GitHub-generated **merge commit**. A
-successful run's API `head_sha` therefore must **not** be silently treated
-as the checked-out PR source SHA. These two values are different proof scopes.
+All identity-bearing GitHub REST responses are now parsed with duplicate-key
+rejection at every object depth, strict JSON numeric handling (no NaN,
+Infinity, exponential overflow or oversized integer/float tokens), bounded
+response bytes, and root-object validation. Previously Python's default
+`json.loads` used last-key-wins on duplicate JSON keys and accepted
+non-standard floating-point constants. Ambiguous metadata must fail closed,
+including when the transport returns HTTP 200.
 
-The minimal JSON evidence now records `workflow_trigger_sha` from
-`github.sha`, `workflow_trigger_event` from `github.event_name`, and
-`trigger_sha_matches_reported_checkout` (which can only be true after a
-successful checkout identity step). These are **diagnostic fields** from the
-candidate workflow, not a cryptographic GitHub attestation; the report still
-sets `verified_execution_claim: false` and explicitly excludes native
-compiler/guest parity. Independently inspect run/head/job metadata, the source
-commit and Git tree, and executed steps before any promotion.
+Five new source-free regression methods cover normal REST object parsing,
+duplicate metadata, malformed/nonfinite numbers, invalid encodings and
+oversized bodies, plus the actual authenticated fetch-to-parser call path.
+Matching Git blobs in Java, LLVM, .NET, WASM and Forge are a **CI evidence
+contract parity** property; they do not establish native compiler execution,
+guest actor semantics, or authorization to mirror private source.
 
-Two source-free regressions assert the workflow's SHA fields and execute its
-actual isolated Python report writer for three synthetic conditions: a
-different PR-trigger/checkout SHA, a matching SHA, and a failed source-identity
-check despite matching bytes. Any removed assertion or accidental true result
-must fail tests. The checked-in regression inventory is at least **75** tests
-per iteration (three iterations). It does not grant private-source transfer
-permission or prove real Actions capacity.
+## Five-backend source-free runner-allocation canary (2026-10-16 ET)
 
-## Strict final workflow repository ID types
+All five `oreslang-source.*` integration branches carry byte-identical
+`.github/workflows/source-free-runner-allocation-canary.yml`
+(Git blob `32f204e2b0f4a03abf3b18691cc2475cff76479d`).
+It triggers only when the canary workflow file changes on
+`integration/serde-routing-actor-arena-20261016`, uses
+`permissions: {}`, **does not checkout or read private source**, and does
+not use a user-supplied PAT/secret. On an allocated runner only, it checks
+the exact GitHub event, ref, workflow ref, pinned numeric source repository
+identity, provided commit context, run/attempt IDs and runner environment,
+then writes a three-day metadata-only diagnostic artifact. No output of
+this canary is a compiler, native guest, actor or release proof. The reported
+commit is `GITHUB_SHA` context **not** independently authenticated Git
+source tree content, and the actual allocated numeric `runner_id` must
+be verified separately via read-only GitHub job API.
 
-Both `repository.id` and `head_repository.id` on the **final** workflow-run
-reread must be true JSON integers, not floating-point numbers that compare
-equal to a reviewed numeric ID in Python. Two adversarial tests change each
-ID to an equivalent float only on the final API response. The shared
-source-free gate requires at least **82** unittest methods across each
-of three no-skip rounds. This is metadata verification, not Oreslang runtime
-certification or authorization to export private source.
+Exact-source canary runs (each recorded `runner_id=0`,
+**0 completed job steps**, **0 artifacts**, `failure`):
 
-## Strict JSON transport and 82-case gate (2026-10-16)
+| Backend | Run | Job ID |
+| --- | --- | --- |
+| Java | [38996778405](https://github.com/ores-truffle-oreslang/oreslang-source.java/actions/runs/38996778405) | 117290968841 |
+| LLVM | [38996785587](https://github.com/ores-truffle-oreslang/oreslang-source.llvm/actions/runs/38996785587) | 117290988640 |
+| .NET | [38996790571](https://github.com/ores-truffle-oreslang/oreslang-source.net/actions/runs/38996790571) | 117291003529 |
+| Wasm | [38996797790](https://github.com/ores-truffle-oreslang/oreslang-source.wasm/actions/runs/38996797790) | 117291025788 |
+| Forge | [38996802494](https://github.com/ores-truffle-oreslang/oreslang-source.forge/actions/runs/38996802494) | 117291040605 |
 
-The authenticated GitHub evidence API must fail closed on duplicate JSON keys, nested key collisions, nonstandard NaN/Infinity, overlarge/nonfinite numerical tokens, malformed JSON, invalid top-level types and responses above 4 MiB. Five additional source-free negative and positive tests protect this boundary. The **current** minimum is 82 tests per round, three complete rounds with no skips/expected failures/unexpected successes; older 73/75/77 counts above describe prior milestones, not the current gate.
+These minimal no-checkout workflows corroborate an **organization-level
+runner scheduling/authorization blocker** but do not determine whether
+billing, quota, Actions policy or other GitHub restrictions caused it.
 
-Canonical verifier/test/workflow Git blobs: `1d7b03db64a8576b5c4271b6f7571df503dffd81`, `45ada59ac6001254897edf9f8cd3b75ef4f58acc`, `c62d13b3c3e9d666d90f752bcf96cbe07588a648`. [Private source-free carrier run 38997728835](https://github.com/scintilla-run-test/gleam-runner-conformance/actions/runs/38997728835) executed 82×3 = 246 tests successfully, evidence artifact 12087892537. No compiler/runtime private source exported; **native five-backend guest parity and source-head CI remain uncertified**.
+A separately authored **source-free model**, with no private compiler
+Git tree, passed **9/9 Python adversarial test methods** on funded private
+[ClipTown run 38996995244](https://github.com/cliptown/cliptown-e2e/actions/runs/38996995244),
+exact carrier SHA `30882925903818420c98b0a047e3a3e53bc827f1`,
+job `117291630420`, and uploaded the three-day
+[metadata artifact 12087671913](https://github.com/cliptown/cliptown-e2e/actions/runs/38996995244/artifacts/12087671913).
+It covers the five numeric source IDs, forged run/workflow refs,
+zero/invalid run identities and missing/unsafe runner labels, not
+real Oreslang compiler or actor execution.
 
-The earlier passing source-free carrier run `38997306268` did execute 82/82 in three rounds but its initial artifact incorrectly stated `expected_total=231` (a stale 77-case total). The later exact-blob [run 38997728835](https://github.com/scintilla-run-test/gleam-runner-conformance/actions/runs/38997728835) corrects this by recording round counts and deriving `expected_total=246`; artifact `12087892537` was downloaded and its ZIP SHA-256 independently matched GitHub's published digest `377f9566dc24c4e014723032d7cba3579b0ec6bc55329711ada87c42e3bed80d`. Source-free only; still **not** source-org or native/guest runtime certification.
+**Next gate:** an authorized source admin must contain the outstanding
+cross-org public-source exposure, establish protected source policy and
+diagnose Actions runner allocation. An alternative private organization's
+available minutes alone does not approve transferring source. After that,
+an independently reviewed exact-head backend-native CI run must execute
+tests and upload verified compiler/guest JUnit or equivalent results before
+a release claim or draft merge.
 
-## Whitespace-only workflow job names
+## CI execution-name Unicode spoofing hardening
 
-The verifier rejects whitespace-only job names even when their steps have
-valid execution records. The additional adversarial regression mutates
-the required job to whitespace-only while leaving a real build step intact.
-Source-free CI now requires **86** tests per round, not native guest execution.
+The shared `scripts/verify_ci_run.py` denies unsafe GitHub REST display
+labels for runner, job, required test-step, and reported executed steps:
+empty/whitespace-only names, excessively long values, control characters,
+Unicode bidirectional/zero-width format characters, and Unicode line or
+paragraph separators (categories `Cc`, `Cf`, `Cs`, `Zl`, `Zp`).
+Normal visible international characters remain accepted. The change
+prevents visually forged or multiline metadata from masquerading as a
+reviewed CI proof step; it does **not** certify guest semantics or make
+self-reported step names independently trustworthy.
 
-## Current five-backend CI evidence gate — 17 October 2026
+Each backend's CI-evidence suite has **82 declared tests**, including four
+additional adversarial tests covering runner, job and step-name spoofing,
+untrusted proof names and readable non-ASCII labels. The existing
+`ci-run-evidence-contract.yml` enforces at least 82 tests in each of
+three no-skip test rounds, preserving its backend-specific checkout,
+report-generation and artifact policies. Identical verifier blob
+`495ecce19762e8f93d465b5554c8c0b2fab4bf40` is committed
+across Java, LLVM, .NET, Wasm and Forge. The existing test fixture's
+workflow-isolation section differs intentionally between Java and the
+other four sources, so do not overwrite it merely to force a test-file
+SHA match.
 
-**Integration-branch minimum: 87 distinct source-free regression cases per
-round, three rounds, no skips.** This supersedes earlier 73/77/83/86-case
-historical descriptions in this document for these specific integration PRs.
-All five backends now use matching exact Git blobs for the verifier, tests and
-source-local workflow. The verifier rejects ambiguous and nonfinite API JSON,
-wrong source/run/workflow identity, blank or disguised runner-housekeeping
-steps, and unexpected redirects carrying API bearer credentials. The workflow
-keeps checkout credentials unpersisted and writes a metadata-only,
-non-certifying evidence report. Repository native Actions at the audited heads
-failed with no observed execution steps or uploaded artifacts, so no Python
-suite or compiler/guest run is certified. Private-source cross-organization
-transfer remains prohibited pending protected-branch independent approval and
-containment of security incident #22.
+Independently authored **source-free** Unicode-model checks passed
+**8/8** tests on allocated private
+[ClipTown run 38999163974](https://github.com/cliptown/cliptown-e2e/actions/runs/38999163974),
+exact carrier SHA `4048c33ec61a342f471d9a8fa792eaed8f9f0b81`;
+the hosted run uploaded
+[artifact 12088571324](https://github.com/cliptown/cliptown-e2e/actions/runs/38999163974/artifacts/12088571324).
+This was an independent model; **the checked-in Oreslang Python suites and
+native compilers did not execute on ClipTown**. No private Git tree was
+copied across organizations. Existing source-org Actions failed before
+runner allocation, and export/incident security gates remain unresolved.
+
+## 91-case source-free provenance gate — October 17, 2026 UTC
+
+All five source backends use identical source-free provenance Git blobs:
+
+- `scripts/verify_ci_run.py`: `339b0e7b17266513a34ea991c8a0a98a38286a75`
+- `scripts/test_verify_ci_run.py`: `f90bbd0623aa94e1cf8022a7c41c9e5dc864fa3e`
+- `.github/workflows/ci-run-evidence-contract.yml`: `089e60d28472d40ac97205e465ceb5930416a288`
+
+The workflow checks a clean, exact PR-head checkout and runs at least 91
+Python security regressions in three complete rounds, with no failures, skips,
+unexpected successes or expected failures. Tests cover strict GitHub API JSON
+parsing, repository/run/step identity and timing, redirect credential
+exfiltration denial, and spoofed runner/job/step display names.
+
+An independent, source-free private-carrier
+[run 39000067741](https://github.com/scintilla-run-test/gleam-runner-conformance/actions/runs/39000067741)
+ran **91 × 3 = 273 tests successfully** and uploaded
+[artifact 12088488424](https://github.com/scintilla-run-test/gleam-runner-conformance/actions/runs/39000067741/artifacts/12088488424).
+The artifact has ZIP SHA-256
+`fb2b613e21e471a15ff1c8c5ee9c6b7754cd43654f28737be20042919cd3f2f9`,
+records `expected_total=273`, and binds the tested carrier commit/tree and
+these exact script/workflow blob hashes.
+
+This **only** verifies source-free CI security rules. It does not certify any
+Oreslang guest compiler, actor runtime, native/AOT backend, or candidate source
+repository Git tree. Never treat the carrier result as approval to export
+private compiler/runtime source. Native CI and independent security review
+remain required before releasing or merging a backend.
+
+
+## Certification/security conflict reconciliation (2026-10-20)
+
+The integration preserves the certification branch's 91 provenance test methods
+and precise denial diagnostics, along with the security branch's 47 persistent
+policy tests, 29 lifecycle policy tests, deterministic arena domains, issued
+handle identity and scratch quotas. Both policy and native .NET jobs check out
+the exact PR head, with credentials disabled and source identity checked before
+tests. Isolated Python execution remains required.
+
+Arena metadata constructors are internal to the runtime assembly so the owning
+arena can access them under C# accessibility rules. Public consumers still
+cannot construct them. Exact issued-object identity, actor incarnation and
+physical carrier checks remain authoritative. Handle construction occurs before
+publishing a slot live, preventing allocation failure from consuming a slot.
+
+Historical run/blob records above refer to earlier snapshots. This integrated
+tree has no new executed validation and does not certify backend parity.

@@ -12,6 +12,70 @@ internal static class ActorArenaTests
 
     public static void Run()
     {
+        // Domain allocation is deterministic capability authority: malformed
+        // owners consume nothing, values never recycle, and exhaustion is
+        // permanent rather than wrapping into a previously issued domain.
+        // Keep the production helper private; tests use reflection, matching
+        // the suite's existing forged-capability and contention checks.
+        var counterType = typeof(ActorArena).GetNestedType("DomainCounter",
+            System.Reflection.BindingFlags.NonPublic)
+            ?? throw new Exception("arena domain counter fixture unavailable");
+        var counterCtor = counterType.GetConstructors(
+            System.Reflection.BindingFlags.Instance |
+            System.Reflection.BindingFlags.NonPublic).Single();
+        var nextField = counterType.GetField("Next",
+            System.Reflection.BindingFlags.Instance |
+            System.Reflection.BindingFlags.NonPublic)
+            ?? throw new Exception("arena domain counter state unavailable");
+        var claimDomain = typeof(ActorArena).GetMethod("ClaimDomain",
+            System.Reflection.BindingFlags.Static |
+            System.Reflection.BindingFlags.NonPublic)
+            ?? throw new Exception("arena domain claim fixture unavailable");
+
+        object NewCounter(long next) => counterCtor.Invoke(new object[] { next });
+        long CounterValue(object counter) => (long)(nextField.GetValue(counter)
+            ?? throw new Exception("arena domain counter value unavailable"));
+        long Claim(object counter, ulong actor, ulong incarnation)
+        {
+            try
+            {
+                return (long)(claimDomain.Invoke(null,
+                    new object[] { counter, actor, incarnation })
+                    ?? throw new Exception("arena domain claim returned no value"));
+            }
+            catch (System.Reflection.TargetInvocationException failure)
+                when (failure.InnerException is not null)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo
+                    .Capture(failure.InnerException).Throw();
+                throw;
+            }
+        }
+
+        var invalidCounter = NewCounter(7);
+        ExpectFailure(() => Claim(invalidCounter, 0, 1));
+        ExpectFailure(() => Claim(invalidCounter, 1, 0));
+        if (CounterValue(invalidCounter) != 7)
+            throw new Exception("invalid arena identity consumed a domain");
+
+        var exhaustedCounter = NewCounter(long.MaxValue - 1);
+        if (Claim(exhaustedCounter, 1, 1) != long.MaxValue - 1)
+            throw new Exception("arena domain saturation issued wrong value");
+        if (CounterValue(exhaustedCounter) != long.MaxValue)
+            throw new Exception("arena domain counter did not saturate");
+        ExpectFailure(() => Claim(exhaustedCounter, 2, 1));
+        if (CounterValue(exhaustedCounter) != long.MaxValue)
+            throw new Exception("arena domain exhaustion was not permanent");
+
+        var concurrentCounter = NewCounter(1);
+        var domains = new System.Collections.Concurrent.ConcurrentBag<long>();
+        System.Threading.Tasks.Parallel.For(0, 2048, i =>
+            domains.Add(Claim(concurrentCounter, checked((ulong)i + 1), 1)));
+        if (domains.Count != 2048 || domains.Distinct().Count() != 2048 ||
+            domains.Min() != 1 || domains.Max() != 2048 ||
+            CounterValue(concurrentCounter) != 2049)
+            throw new Exception("concurrent arena domains were not unique and contiguous");
+
         using var a = new ActorArena(101, 1);
         using var b = new ActorArena(102, 1);
         ExpectFailure(() => a.BeginTurn(101, 2)); // a recycled actor ID is not an incarnation grant
@@ -20,6 +84,24 @@ internal static class ActorArenaTests
         var tb = b.BeginTurn(102, 1);
         var h = a.Allocate(ta, 2);
         a.Write(ta, h, new byte[] { 7, 9 });
+        // Raw coordinates are not a capability: an exact reflected clone of
+        // a live handle must still fail reference-identity admission.
+        var handleType = typeof(ActorArena.Handle);
+        var handleFlags = System.Reflection.BindingFlags.Instance |
+                          System.Reflection.BindingFlags.NonPublic;
+        var handleDomain = handleType.GetField("Domain", handleFlags)
+            ?? throw new Exception("handle domain fixture unavailable");
+        var handleSlot = handleType.GetField("Slot", handleFlags)
+            ?? throw new Exception("handle slot fixture unavailable");
+        var handleGeneration = handleType.GetField("Generation", handleFlags)
+            ?? throw new Exception("handle generation fixture unavailable");
+        var handleCtor = handleType.GetConstructors(handleFlags).Single();
+        var forgedHandle = (ActorArena.Handle)handleCtor.Invoke(new object[] {
+            (long)handleDomain.GetValue(h)!,
+            (int)handleSlot.GetValue(h)!,
+            (ulong)handleGeneration.GetValue(h)!
+        });
+        ExpectFailure(() => a.Read(ta, forgedHandle));
         // The token alone cannot authorize a concurrent physical carrier.
         var wrongCarrierReadDenied = false;
         var wrongCarrierEndDenied = false;
@@ -49,11 +131,26 @@ internal static class ActorArenaTests
                     System.Reflection.BindingFlags.NonPublic;
         var domainField = scratchType.GetField("Domain", flags)
             ?? throw new Exception("scratch domain fixture unavailable");
+        var offsetField = scratchType.GetField("Offset", flags)
+            ?? throw new Exception("scratch offset fixture unavailable");
+        var lengthField = scratchType.GetField("Length", flags)
+            ?? throw new Exception("scratch length fixture unavailable");
+        var issuanceField = scratchType.GetField("Issuance", flags)
+            ?? throw new Exception("scratch issuance fixture unavailable");
         var scratchCtor = scratchType.GetConstructors(flags).Single();
+        var issuance = (int)issuanceField.GetValue(scratch)!;
         var forged = (ActorArena.Scratch)scratchCtor.Invoke(new object[] {
-            (Guid)domainField.GetValue(scratch)!, ta, 1, 1
+            (long)domainField.GetValue(scratch)!, ta, 1, 1, issuance
         });
         ExpectFailure(() => a.ReadScratch(ta, forged));
+        var exactForged = (ActorArena.Scratch)scratchCtor.Invoke(new object[] {
+            (long)domainField.GetValue(scratch)!,
+            ta,
+            (int)offsetField.GetValue(scratch)!,
+            (int)lengthField.GetValue(scratch)!,
+            issuance
+        });
+        ExpectFailure(() => a.ReadScratch(ta, exactForged));
         if (!a.ReadScratch(ta, scratch).SequenceEqual(new byte[] { 5, 6 }))
             throw new Exception("valid issued scratch handle rejected");
         ExpectFailure(() => a.Dispose());
@@ -158,6 +255,25 @@ internal static class ActorArenaTests
             ExpectFailure(() => migrating.BeginTurn(901, 8));
             migrating.Dispose();
         }
+        // Scratch authority is bounded independently of byte capacity,
+        // matching the 4096-handle ceiling used by the LLVM/WASM paths.
+        // Ending the turn must revoke every issuance and reset the quota.
+        using (var boundedScratch = new ActorArena(902, 1))
+        {
+            var boundedTurn = boundedScratch.BeginTurn(902, 1);
+            for (var i = 0; i < ActorArena.MaxScratchHandles; ++i)
+                _ = boundedScratch.AllocateScratch(boundedTurn, 1);
+            ExpectFailure(() => boundedScratch.AllocateScratch(boundedTurn, 1));
+            boundedScratch.EndTurn(boundedTurn);
+            var resetTurn = boundedScratch.BeginTurn(902, 1);
+            var resetScratch = boundedScratch.AllocateScratch(resetTurn, 1);
+            if (!boundedScratch.ReadScratch(resetTurn, resetScratch)
+                    .SequenceEqual(new byte[] { 0 }))
+                throw new Exception("scratch handle quota reset leaked bytes");
+            boundedScratch.EndTurn(resetTurn);
+            boundedScratch.Dispose();
+        }
+
         using var restarted = new ActorArena(101, 2);
         var tr = restarted.BeginTurn(101, 2);
         ExpectFailure(() => restarted.Read(tr, h));
