@@ -1,0 +1,22 @@
+name: .NET OwnedBytes host-only regression
+on:
+  pull_request:
+    paths:
+      - 'compiler/Atto.Cil.Compiler/OwnedBytesV1.cs'
+      - 'tests/OwnedBytesV1.Host/**'
+      - '.github/workflows/byte-buffer-host-v1.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  dotnet-byte-host:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@d0f020c32d01a4def71f5c1ba67fb6a08e0ce227
+        with:
+          dotnet-version: '8.0.x'
+      - name: Compile/execute CIL host primitive (NOT compiled Atto guest)
+        run: dotnet run --project tests/OwnedBytesV1.Host/OwnedBytesV1.Host.csproj -c Release
