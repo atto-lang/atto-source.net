@@ -1,0 +1,5 @@
+// expect-error: E_STDIO
+pub fnc main(): int {
+  stdio.print(7);
+  return 0;
+}
