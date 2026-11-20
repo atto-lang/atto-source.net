@@ -39,7 +39,7 @@ for form in return caret; do
   dotnet run --no-build -c Release --project "$compiler" -- \
     "fixtures/match-return-forms-v1/native-${form}-scalar.atto" "$guest"
   test -s "$guest"
-  dotnet build "$host" -c Release
+  dotnet build "$host" -c Release --no-incremental
   expect_exit "CoreCLR-${form}-match" 4 dotnet run --no-build -c Release --project "$host"
   aot="/tmp/atto-match-${form}-nativeaot"
   dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true \
@@ -78,6 +78,21 @@ for entry in \
     assignment-expression:E_PARSE; do
   check_rejected "${entry%%:*}" "${entry#*:}" negative/
 done
+
+# Third scalar guest exercises a side-effect-free source call as the
+# match subject. This tests the callable-subject path and scoped binder reuse,
+# including a different 42 exit oracle from the two prior 4-exit guests.
+test "$(git hash-object fixtures/match-return-forms-v1/native-subject-once-scalar.atto)" = "cb9dfe11e65af466c6a520254ed789ce089d1c86"
+dotnet run --no-build -c Release --project "$compiler" -- \
+  fixtures/match-return-forms-v1/native-subject-once-scalar.atto "$guest"
+test -s "$guest"
+dotnet build "$host" -c Release --no-incremental
+expect_exit "CoreCLR-subject-once-match" 42 dotnet run --no-build -c Release --project "$host"
+dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true \
+  --no-incremental --self-contained true -o /tmp/atto-match-subject-once-nativeaot
+test -x /tmp/atto-match-subject-once-nativeaot/Atto.Cil.Guest.Host
+expect_exit "NativeAOT-subject-once-match" 42 /tmp/atto-match-subject-once-nativeaot/Atto.Cil.Guest.Host
+echo "MATCH_CIL_SUBJECT_ONCE_SCALAR_PASS; ORIGINAL_STDOUT_STILL_UNSUPPORTED"
 
 # Exact original positive fixtures use stdio.println, which is deliberately
 # not lowered by the restricted direct-CIL backend. This is an explicit
