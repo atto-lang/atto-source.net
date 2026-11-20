@@ -19,9 +19,34 @@ internal sealed record Binary(string Op, Expression Left, Expression Right) : Ex
 internal sealed record Call(string Name, List<Expression> Args) : Expression;
 internal sealed record Function(string Name, List<string> Args, Expression Return);
 
+// Typed, local-only read lease. Source pointer authority is verified and
+// erased before ordinary CIL lowering; it is never represented as a raw
+// address, heap object, or owner-releasing CheckedRef<Class>.
+internal sealed record BorrowedLocalIntPlan(
+    string Referent, string Handle, string ReadCopy, long Initial)
+{
+    internal Function ToVerifiedScalarFunction()
+    {
+        if (Referent == Handle || Referent == ReadCopy || Handle == ReadCopy)
+            throw new CompilerError("E_POINTER_ALIAS", "local pointer places and handles must be distinct");
+        if (new[] { Referent, Handle, ReadCopy }.Any(n =>
+                n is "main" or "rt" or "ref" or "deref" or "unref" or
+                    "Pointer" or "int" or "val" or "let" or "return" or "fnc"))
+            throw new CompilerError("E_POINTER_NAME", "pointer operand shadows a language keyword");
+        // The closed-world source parser proved one readonly copy, an
+        // exactly-once release, and all-path scalar return. With no
+        // observable pointer identity, this is a legal stack-promotion
+        // to ordinary i64 CIL, not a guest pointer allocation.
+        return new Function("main", [], new Literal(Initial));
+    }
+}
+
 internal sealed class Parser
 {
     private readonly List<string> _tokens = [];
+    // Preserve source-character positions so ref!/deref!/unref! must be
+    // lexically adjacent; token spacing is never inferred from a rewrite.
+    private readonly List<int> _offsets = [];
     private int _position;
     private string Peek => _tokens[_position];
     private bool Eat(string s) { if (Peek != s) return false; _position++; return true; }
@@ -58,15 +83,22 @@ internal sealed class Parser
             else if (c is >= '0' and <= '9')
                 while (i < source.Length && source[i] is >= '0' and <= '9') i++;
             else if (c == '-' && i < source.Length && source[i] == '>') i++;
-            else if (!"(){}:;,+-*/".Contains(c))
+            else if (!"(){}:;,+-*/<>!=.".Contains(c))
                 throw new CompilerError("E_LEX", $"unsupported source character at {start}");
             _tokens.Add(source[start..i]);
+            _offsets.Add(start);
             if (_tokens.Count > 8192) throw new CompilerError("E_LIMIT", "8192 token limit");
         }
         _tokens.Add("<eof>");
+        _offsets.Add(source.Length);
     }
     internal List<Function> Parse()
     {
+        // The canonical lexer has already removed comments and strings.
+        // Any Pointer occurrence must pass the checked local profile;
+        // ordinary calls and source-level generics never gain pointer rights.
+        if (_tokens.Contains("Pointer", StringComparer.Ordinal))
+            return ParseBorrowedLocalPointer();
         List<Function> result = [];
         while (Peek != "<eof>")
         {
@@ -92,6 +124,99 @@ internal sealed class Parser
         }
         return result;
     }
+    private void PointerNeed(string spelling, string code = "E_POINTER_PROFILE")
+    {
+        if (!Eat(spelling))
+            throw new CompilerError(code, $"expected {spelling}; got {Peek}");
+    }
+
+    private string PointerName()
+    {
+        string name;
+        try { name = Name(); }
+        catch (CompilerError e) when (e.Code == "E_NAME")
+        {
+            throw new CompilerError("E_POINTER_NAME", e.Message);
+        }
+        if (name is "main" or "rt" or "ref" or "deref" or "unref" or
+                "Pointer" or "val" or "let" or "return" or "fnc")
+            throw new CompilerError("E_POINTER_NAME", "reserved pointer place or handle name");
+        return name;
+    }
+
+    private void PointerOperation(string name)
+    {
+        if (Eat("rt"))
+        {
+            PointerNeed(name, "E_POINTER_SYNTAX");
+            return;
+        }
+        int offset = _offsets[_position];
+        PointerNeed(name, "E_POINTER_SYNTAX");
+        if (Peek != "!" || _offsets[_position] != offset + name.Length)
+            throw new CompilerError("E_POINTER_SYNTAX",
+                $"ownership {name}! operator must have an adjacent bang");
+        _position++; // !
+    }
+
+    private List<Function> ParseBorrowedLocalPointer()
+    {
+        // Intentionally closed-world: no branches, loops, calls, await,
+        // actor boundaries, FFI, unsafe blocks, pointer copying or alias
+        // mutation. One lexical handle is released before the only return.
+        PointerNeed("pub");
+        PointerNeed("fnc");
+        PointerNeed("main");
+        PointerNeed("(");
+        PointerNeed(")");
+        PointerNeed(":");
+        PointerNeed("int", "E_POINTER_TYPE");
+        PointerNeed("{");
+        PointerNeed("let");
+        var referent = PointerName();
+        PointerNeed(":");
+        PointerNeed("int", "E_POINTER_TYPE");
+        PointerNeed("=");
+        if (!long.TryParse(Peek, NumberStyles.None,
+                CultureInfo.InvariantCulture, out var value))
+            throw new CompilerError("E_POINTER_INITIALIZE",
+                "local pointer source requires an initialized signed int64 literal");
+        _position++;
+        PointerNeed(";");
+
+        PointerNeed("val");
+        PointerNeed("Pointer", "E_POINTER_TYPE");
+        PointerNeed("<", "E_POINTER_TYPE");
+        PointerNeed("int", "E_POINTER_TYPE");
+        PointerNeed(">", "E_POINTER_TYPE");
+        var handle = PointerName();
+        PointerNeed("=");
+        PointerOperation("ref");
+        PointerNeed(referent, "E_POINTER_PLACE");
+        PointerNeed(";");
+
+        PointerNeed("val");
+        var copy = PointerName();
+        PointerNeed("=");
+        PointerOperation("deref");
+        PointerNeed(handle, "E_POINTER_AUTHORITY");
+        PointerNeed(";");
+
+        PointerOperation("unref");
+        PointerNeed(handle, "E_POINTER_AUTHORITY");
+        PointerNeed(";");
+        PointerNeed("return", "E_POINTER_LIFETIME");
+        PointerNeed(copy, "E_POINTER_ESCAPE");
+        PointerNeed(";");
+        PointerNeed("}");
+        if (Peek != "<eof>")
+            throw new CompilerError("E_POINTER_ESCAPE",
+                "local Pointer<int> handles may not escape into other declarations");
+
+        var checkedPlan = new BorrowedLocalIntPlan(referent, handle, copy, value);
+        return [checkedPlan.ToVerifiedScalarFunction()];
+    }
+
     private Expression ParseExpr(int min, int depth)
     {
         if (depth > 32) throw new CompilerError("E_LIMIT", "expression nesting limit");
