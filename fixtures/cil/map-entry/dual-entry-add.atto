@@ -12,4 +12,4 @@ pub fnc main(): int {
     x.add(entry2);
     return x.get("foo").unwrap();
 }
-// expected guest exit: 3; currently UNSUPPORTED on this backend.
+// expected guest exit: 5 (add upserts); currently UNSUPPORTED on this backend.
