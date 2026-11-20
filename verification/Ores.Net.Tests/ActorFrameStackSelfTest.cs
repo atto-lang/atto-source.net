@@ -1,3 +1,4 @@
+using System.Linq;
 using Ores.Net.Runtime;
 
 internal static class ActorFrameStackSelfTest
@@ -6,7 +7,8 @@ internal static class ActorFrameStackSelfTest
     {
         InvalidConfigurationFailsBeforeCarrierAdmission();
         IndependentStacksSurviveTurnsAndRejectForeignAndStaleHandles();
-        BoundsAndLifoExhaustionAreFailureNeutral();
+        InvalidArgumentsAndLifoDenialsAreFailureNeutral();
+        TerminalQuotaFaultsAndSiblingSurvival();
         RetirementAllowsInFlightFrameCleanupButRejectsPush();
         Console.WriteLine(
             "PASS .NET actor-owned logical frame stack host-only regression (not guest/AOT certification)");
@@ -149,17 +151,17 @@ internal static class ActorFrameStackSelfTest
             "actor finalization scrubs and refunds independent arena stacks");
     }
 
-    private static void BoundsAndLifoExhaustionAreFailureNeutral()
+    private static void InvalidArgumentsAndLifoDenialsAreFailureNeutral()
     {
         using var runtime = new ActorRuntime(Options(stackBytes: 128, maxFrames: 2));
         var actor = runtime.Spawn(ActorKind.Private, (context, _) =>
         {
             var root = context.PushStackFrame(8);
             var child = context.PushStackFrame(8);
-            RejectInvalid(() => context.PushStackFrame(8),
-                "frame count exhaustion denies third frame");
-            RejectRange(() => context.PushStackFrame(129),
-                "stack byte budget cannot be bypassed");
+            RejectRange(() => context.PushStackFrame(0),
+                "malformed zero-length frame is rejected without poisoning");
+            RejectRange(() => context.PushStackFrame(8, alignment: 3),
+                "invalid non-power-of-two alignment is nonterminal");
             RejectRange(() =>
                 context.WriteStackFrame(child, 7, new byte[] { 1, 2 }),
                 "frame write cannot cross its issued length");
@@ -193,6 +195,98 @@ internal static class ActorFrameStackSelfTest
         Require(WaitUntil(() =>
             runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0),
             "bounded logical stack retires without native memory leak");
+    }
+
+    private static void TerminalQuotaFaultsAndSiblingSurvival()
+    {
+        using var runtime = new ActorRuntime(new ActorRuntimeOptions
+        {
+            MaxActors = 4, MessagesPerDispatch = 1,
+            MailboxMessages = 4, MailboxBytes = 128,
+            ActorPersistentBytes = 256, ActorScratchBytes = 64,
+            ActorStackBytes = 64, ActorMaxStackFrames = 2,
+            NativeBudgetBytes = 8192,
+            Dispatcher = new ActorDispatcherOptions
+            {
+                PrivateWorkers = 1, SharedWorkers = 1, UntrustedWorkers = 1,
+                QueueCapacityPerDomain = 4
+            }
+        });
+        using var survivorCompleted = new ManualResetEventSlim();
+        var validatedFaults = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var depth = runtime.Spawn(ActorKind.Shared, (context, _) =>
+        {
+            var root = context.PushStackFrame(16);
+            context.PushStackFrame(8);
+            bool caught = false;
+            try { context.PushStackFrame(8); }
+            catch (ActorStackQuotaExceededException) { caught = true; }
+            Require(caught, "depth quota must throw the exact typed exception");
+            RejectInvalid(() => context.ReadStackFrame(root, 0, new byte[1]),
+                "caught depth quota failure must revoke stack reads");
+            validatedFaults.Enqueue("depth");
+        });
+        var bytes = runtime.Spawn(ActorKind.Shared, (context, _) =>
+        {
+            // A typed ABI frame loses its authority after cumulative quota
+            // exhaustion; the host cannot recover by catching the exception.
+            var typed = ActorScalarFrameAbiV1.Push(context, new byte[] { 1, 2 }, 1);
+            ActorScalarFrameAbiV1.WriteI64(context, typed, 0, 42);
+            bool caught = false;
+            try { context.PushStackFrame(24); }
+            catch (ActorStackQuotaExceededException) { caught = true; }
+            Require(caught, "cumulative byte quota must throw exact typed fault");
+            RejectInvalid(() => context.PushStackFrame(8),
+                "caught byte quota failure must revoke new admission");
+            RejectInvalid(() => { ActorScalarFrameAbiV1.ReadI64(context, typed, 0); },
+                "typed scalar spill cannot be read from terminally poisoned stack");
+            RejectInvalid(() => context.PopStackFrame(typed),
+                "terminal stack fault must not permit trusted raw Pop bypass");
+            validatedFaults.Enqueue("aggregate");
+        });
+        var singleFrame = runtime.Spawn(ActorKind.Shared, (context, _) =>
+        {
+            bool caught = false;
+            try { context.PushStackFrame(65); }
+            catch (ActorStackQuotaExceededException) { caught = true; }
+            Require(caught, "oversized single frame must throw exact typed fault");
+            RejectInvalid(() => context.PushStackFrame(1),
+                "single oversized frame poisons only its own actor");
+            validatedFaults.Enqueue("oversized");
+        });
+        var sibling = runtime.Spawn(ActorKind.Shared, (context, _) =>
+        {
+            var frame = context.PushStackFrame(8);
+            context.WriteStackFrame(frame, 0, new byte[] { 42 });
+            byte[] observed = new byte[1];
+            context.ReadStackFrame(frame, 0, observed);
+            Require(observed[0] == 42,
+                "sibling actor frame must survive unrelated quota poisoning");
+            context.PopStackFrame(frame);
+            survivorCompleted.Set();
+        });
+        runtime.Send(depth, new byte[] { 1 });
+        runtime.Send(bytes, new byte[] { 2 });
+        runtime.Send(singleFrame, new byte[] { 3 });
+        runtime.Send(sibling, new byte[] { 4 });
+        Require(survivorCompleted.Wait(TimeSpan.FromSeconds(10)),
+            "healthy actor failed to execute after poisoned actors");
+        Require(SpinWait.SpinUntil(() =>
+                runtime.FaultedTurns == 3 && runtime.CompletedMessages == 1 &&
+                runtime.LiveActors == 1, TimeSpan.FromSeconds(10)),
+            "caught quota faults must not count as successful actor messages");
+        Require(validatedFaults.Count == 3 &&
+                validatedFaults.Contains("depth") &&
+                validatedFaults.Contains("aggregate") &&
+                validatedFaults.Contains("oversized"),
+            "all quota paths must execute and prove terminal denial after catch");
+        Require(runtime.StartedCarrierThreads == 1 &&
+                runtime.NativeReservedBytes > 0,
+            "single shared carrier and sibling native arena remain available");
+        runtime.Stop(sibling);
+        Require(SpinWait.SpinUntil(() =>
+                runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0,
+            TimeSpan.FromSeconds(10)), "all actor arena quotas refunded after STOP");
     }
 
     private static void RetirementAllowsInFlightFrameCleanupButRejectsPush()

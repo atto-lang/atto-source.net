@@ -80,6 +80,17 @@ public sealed class ActorStackFrameNoWireConverter : JsonConverter<ActorStackFra
 /// This is a runtime substrate for future compiler-generated async frames:
 /// it does NOT switch native stacks or implement guest await/actor lowering.
 /// </summary>
+/// <summary>
+/// An actor-local logical frame budget exceeded its admitted bounds. Catching
+/// this exception cannot recover the poisoned actor or complete the turn.
+/// Physical CLR machine-stack overflow is a separate, unproven boundary.
+/// </summary>
+public sealed class ActorStackQuotaExceededException : InvalidOperationException
+{
+    public ActorStackQuotaExceededException() :
+        base("Actor logical stack frame/byte budget exhausted") { }
+}
+
 internal sealed class ActorFrameStack
 {
     private readonly ActorArena _arena;
@@ -88,6 +99,7 @@ internal sealed class ActorFrameStack
     private ActorArenaHandle? _backing;
     private int _depth;
     private int _top;
+    private bool _quotaPoisoned;
 
     internal ActorFrameStack(ActorArena arena, int capacity, int maxFrames)
     {
@@ -107,17 +119,18 @@ internal sealed class ActorFrameStack
     {
         // Unlike cleanup, new frame admission is forbidden after retirement.
         _arena.ValidateActiveTurn(turn);
-        if (bytes <= 0 || bytes > _capacity)
+        EnsureUsable();
+        if (bytes <= 0)
             throw new ArgumentOutOfRangeException(nameof(bytes));
         if (alignment <= 0 || alignment > 64 ||
             (alignment & (alignment - 1)) != 0)
             throw new ArgumentOutOfRangeException(nameof(alignment));
-        if (_depth == _frames.Length)
-            throw new InvalidOperationException("Actor logical frame limit exhausted");
+        if (_depth == _frames.Length || bytes > _capacity)
+            ThrowQuotaExceeded();
 
         int offset = checked((_top + alignment - 1) & ~(alignment - 1));
         if (offset > _capacity || bytes > _capacity - offset)
-            throw new InvalidOperationException("Actor logical stack capacity exhausted");
+            ThrowQuotaExceeded();
 
         // Construct the capability before native admission. A failed allocation
         // cannot increment depth, publish a frame, or change the stack top.
@@ -135,6 +148,7 @@ internal sealed class ActorFrameStack
         int offset, Span<byte> destination)
     {
         _arena.ValidatePhysicalTurn(turn);
+        EnsureUsable();
         ValidateFrame(frame, offset, destination.Length);
         _arena.Read(turn, _backing!, checked(frame.Offset + offset), destination);
     }
@@ -143,6 +157,7 @@ internal sealed class ActorFrameStack
         int offset, ReadOnlySpan<byte> source)
     {
         _arena.ValidatePhysicalTurn(turn);
+        EnsureUsable();
         ValidateFrame(frame, offset, source.Length);
         _arena.Write(turn, _backing!, checked(frame.Offset + offset), source);
     }
@@ -150,6 +165,7 @@ internal sealed class ActorFrameStack
     internal void Pop(ActorArenaTurn turn, ActorStackFrameHandle frame)
     {
         _arena.ValidatePhysicalTurn(turn);
+        EnsureUsable();
         ValidateFrame(frame, 0, 0);
         if (!ReferenceEquals(_frames[_depth - 1], frame))
             throw new InvalidOperationException("Actor logical frames must be popped in LIFO order");
@@ -185,6 +201,7 @@ internal sealed class ActorFrameStack
         ActorStackFrameHandle frame, ReadOnlySpan<byte> declaredTypes, int blocks)
     {
         _arena.ValidateActiveTurn(turn);
+        EnsureUsable();
         ValidateFrame(frame, 0, 0);
         if (declaredTypes.Length is <= 0 or > ActorScalarFrameAbiV1.MaxValueSlots ||
             blocks is <= 0 or > ActorScalarFrameAbiV1.MaxBlocks ||
@@ -200,6 +217,7 @@ internal sealed class ActorFrameStack
         ActorStackFrameHandle frame, int slots, int blocks)
     {
         _arena.ValidatePhysicalTurn(turn);
+        EnsureUsable();
         ValidateFrame(frame, 0, 0);
         if (frame.ScalarSlotCount != slots || frame.ScalarBlockCount != blocks)
             throw new InvalidOperationException(
@@ -210,10 +228,33 @@ internal sealed class ActorFrameStack
         ActorStackFrameHandle frame, int slot, byte expected)
     {
         _arena.ValidatePhysicalTurn(turn);
+        EnsureUsable();
         ValidateFrame(frame, 0, 0);
         if (frame.ScalarKind(slot) != expected)
             throw new InvalidOperationException(
                 "Actor scalar frame slot retyping violates verified CFG schema");
+    }
+
+    // Synchronous dispatch must check this after the host handler returns.
+    // Persistent frames can span turns, but swallowed quota faults cannot.
+    internal void ValidateSynchronousTurnExit(ActorArenaTurn turn)
+    {
+        _arena.ValidatePhysicalTurn(turn);
+        if (_quotaPoisoned)
+            throw new ActorStackQuotaExceededException();
+    }
+
+    private void EnsureUsable()
+    {
+        if (_quotaPoisoned)
+            throw new InvalidOperationException(
+                "Actor logical stack is terminally poisoned after quota exhaustion");
+    }
+
+    private void ThrowQuotaExceeded()
+    {
+        _quotaPoisoned = true;
+        throw new ActorStackQuotaExceededException();
     }
 
     private void ValidateFrame(ActorStackFrameHandle frame, int offset, int count)
