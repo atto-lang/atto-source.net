@@ -13,15 +13,41 @@ Accepted subset:
 
 Signed 64-bit integer parameters and literals; unary minus; parentheses;
 checked +, -, *; integer /; typed function calls including forward references;
-snake_case names; one return expression per function; : int and -> int returns.
+snake_case names; : int and -> int returns; bounded sequential statements:
+up to 63 `stdio.println(int)` statements followed by one final `return` or
+`^` statement. Guarded `return match` and `^ match` support literal,
+binding and wildcard patterns and boolean comparison guards. A `match`
+subject is evaluated once and each arm binding is lexical to its guard/body.
 
-All unsupported forms fail closed: booleans, floats, strings, bindings,
-multiple statements, actors, ownership and borrowing, I/O, imports, async,
-exceptions, recursion and dynamic interop. Limits: 64 KiB UTF-8 source,
-8192 tokens, 64 functions, 8 args per function, 32 expression nesting levels.
+Only trusted process-local CLI sessions may bind `stdio.println(int)`
+to `System.Console.WriteLine(long)`: this requires the explicit
+`--allow-stdio` compiler argument. Without that argument the compiler
+rejects output with `E_PERMISSION` and emits no DLL. This flag is a
+**host authorization request, not a sandbox boundary**: a multi-tenant
+host must never permit untrusted tenant-supplied flags to grant ambient
+process stdout. Untrusted TenantVM actors must instead use a host-owned,
+capability-checked channel and have no direct Console reference.
+
+Other unsupported forms fail closed: arbitrary host I/O, booleans as
+values, floats, strings, local bindings, actors, ownership/borrowing,
+imports, async, exceptions, recursion, dynamic interop, and more complex
+function statements. Limits: 64 KiB UTF-8 source, 8192 tokens, 64
+functions, 64 function statements, 8 args per function, 32 expression
+nesting levels and a bounded 16-level match nesting profile.
 
 On Linux with .NET 8 SDK and NativeAOT prerequisites execute:
     bash scripts/test-cil-guest.sh
+    bash scripts/test-match-cil-guest.sh
+    bash scripts/test-stdio-cil-guest.sh
+
+For a trusted standalone compilation:
+    dotnet run --project compiler/Atto.Cil.Compiler -- \
+      original.atto artifacts/AttoGuest.dll --allow-stdio
+
+The stdout test executes **unmodified** canonical guarded return/caret
+programs through compiled CIL on CoreCLR and NativeAOT, requiring
+exact stdout bytes `2\\n2\\n`, exit 0 and empty stderr.
+Both original sources are SHA pinned to the shared conformance corpus.
 
 This compiles real .atto to artifacts/AttoGuest.dll, executes positive guest
 programs with exit code 42 on the managed CLR and Linux NativeAOT,
