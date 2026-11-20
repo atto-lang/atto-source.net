@@ -6,6 +6,7 @@ on:
       - "tests/Atto.Cil.Guest.Host/**"
       - "fixtures/cil/**"
       - "scripts/test-cil-guest.sh"
+      - "scripts/test-match-cil-guest.sh"
       - ".github/workflows/atto-direct-cil-guest.yml"
   push:
     branches: [main]
@@ -33,3 +34,6 @@ jobs:
       - name: Compile and execute real Atto CIL/NativeAOT guest and negatives
         shell: bash
         run: bash scripts/test-cil-guest.sh
+      - name: Compile and execute guarded match direct CIL, CoreCLR, NativeAOT guests
+        shell: bash
+        run: bash scripts/test-match-cil-guest.sh
