@@ -37,7 +37,13 @@ for case in \
   bool-unsupported:E_PARSE \
   no-main:E_ENTRY \
   typed-task-unsupported:E_TASK_UNSUPPORTED \
-  do-sync-task-unsupported:E_TASK_UNSUPPORTED \
+  do-task-unsupported:E_TASK_UNSUPPORTED \
+  sync-task-missing-return:E_TASK_RETURN_TYPE \
+  sync-task-void-as-value:E_TASK_RETURN_TYPE \
+  sync-task-bad-type:E_TASK_UNSUPPORTED \
+  sync-task-await-unsupported:E_TASK_UNSUPPORTED \
+  sync-task-void-return-type:E_TASK_RETURN_TYPE \
+  sync-task-double-return:E_PARSE \
   sync-reserved:E_RESERVED; do
   name="$(echo "$case" | cut -d: -f1)"
   diagnostic="$(echo "$case" | cut -d: -f2)"
@@ -54,7 +60,7 @@ for case in \
   }
   test ! -e artifacts/Rejected.dll || { echo "NEGATIVE_ARTIFACT_LEAK case=$name"; exit 1; }
 done
-echo "ATTO_DIRECT_CIL_NEGATIVE_PASS checks=15"
+echo "ATTO_DIRECT_CIL_NEGATIVE_PASS checks=21"
 dotnet build "$host" -c Release
 expect_42 CORECLR_GUEST dotnet run --no-build -c Release --project "$host"
 dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true \
@@ -68,4 +74,23 @@ for fixture in fixtures/cil/precedence.atto fixtures/cil/forward-call.atto; do
   dotnet build "$host" -c Release
   expect_42 EXTRA_CORECLR_GUEST dotnet run --no-build -c Release --project "$host"
 done
-echo "ATTO_DIRECT_CIL_POSITIVE_PASS fixtures=3"
+# These are genuine generated Atto CIL, not C# task emulation.
+# Test pure, empty, nested, discarded and value-producing sync task forms.
+for fixture in \
+    fixtures/cil/sync-task-empty.atto \
+    fixtures/cil/sync-task-inline-value.atto \
+    fixtures/cil/sync-task-nested-discard.atto \
+    fixtures/cil/sync-task-function-call.atto; do
+  dotnet run --no-build -c Release --project "$compiler" -- "$fixture" "$guest"
+  dotnet build "$host" -c Release
+  expect_42 INLINE_CORECLR_GUEST dotnet run --no-build -c Release --project "$host"
+done
+
+# Verify one nested inline fixture through the NativeAOT bridge as well.
+dotnet run --no-build -c Release --project "$compiler" -- \
+  fixtures/cil/sync-task-nested-discard.atto "$guest"
+dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true \
+  --self-contained true -o /tmp/atto-cil-inline-nativeaot
+test -x /tmp/atto-cil-inline-nativeaot/Atto.Cil.Guest.Host
+expect_42 INLINE_NATIVEAOT_GUEST /tmp/atto-cil-inline-nativeaot/Atto.Cil.Guest.Host
+echo "ATTO_DIRECT_CIL_POSITIVE_PASS fixtures=7 inline=4"
