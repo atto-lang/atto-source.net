@@ -105,9 +105,10 @@ internal sealed class Parser
             List<InlineTask> prelude = [];
             while (Peek is "sync" or "do")
             {
-                if (Eat("do") && Peek != "sync")
+                bool isDiscard = Eat("do");
+                if (isDiscard && Peek != "sync")
                     throw new CompilerError("E_TASK_UNSUPPORTED", "do task requires TaskScope");
-                prelude.Add(ParseInlineTask(0));
+                prelude.Add(ParseInlineTask(0, isDiscard));
                 Eat(";");
             }
             Require("return");
@@ -122,7 +123,7 @@ internal sealed class Parser
     // This bootstrap intentionally supports only scalar int/void, pure
     // expressions and nested inline blocks. Unknown statements/effects fail
     // before CIL emission. A body return exits this scope, not its caller.
-    private InlineTask ParseInlineTask(int depth)
+    private InlineTask ParseInlineTask(int depth, bool requireVoid = false)
     {
         if (depth > 32) throw new CompilerError("E_LIMIT", "inline task nesting limit");
         Require("sync"); Require("task");
@@ -135,13 +136,20 @@ internal sealed class Parser
             _position++;
             Require(">");
         }
+        // 'do sync task' is strictly a void statement, even without <void>.
+        // A result-producing inline task must be used as 'sync task<int>'
+        // rather than silently discarding its payload through 'do'.
+        if (requireVoid && payload is not null and not "void")
+            throw new CompilerError("E_TASK_RETURN_TYPE",
+                "do sync task only accepts a void payload");
         Require("{");
         List<InlineTask> prelude = [];
         while (Peek is "sync" or "do")
         {
-            if (Eat("do") && Peek != "sync")
+            bool isDiscard = Eat("do");
+            if (isDiscard && Peek != "sync")
                 throw new CompilerError("E_TASK_UNSUPPORTED", "do task requires TaskScope");
-            prelude.Add(ParseInlineTask(depth + 1));
+            prelude.Add(ParseInlineTask(depth + 1, isDiscard));
             Eat(";");
         }
         Expression? result = null;
@@ -157,8 +165,11 @@ internal sealed class Parser
             throw new CompilerError("E_TASK_UNSUPPORTED",
                 "suspension, spawned tasks and scoped cleanup need verified lowering");
         Require("}");
-        if ((payload == "int" && result is null) || (payload == "void" && result is not null))
-            throw new CompilerError("E_TASK_RETURN_TYPE", "inline task body return disagrees with payload");
+        if ((payload == "int" && result is null) ||
+            (payload == "void" && result is not null) ||
+            (requireVoid && result is not null))
+            throw new CompilerError("E_TASK_RETURN_TYPE",
+                "inline task body return disagrees with required void payload");
         return new InlineTask(prelude, result);
     }
 
