@@ -1,0 +1,2 @@
+fnc is_ok(int status): bool { return status + 1; }
+pub fnc main(): int { return 42; }
