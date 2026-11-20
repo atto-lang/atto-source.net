@@ -54,6 +54,11 @@ for case in \
   test ! -e artifacts/Rejected.dll || { echo "NEGATIVE_ARTIFACT_LEAK case=$name"; exit 1; }
 done
 echo "ATTO_DIRECT_CIL_NEGATIVE_PASS checks=14"
+# Compiler-owned graph planning checks; not an executable Atto pipeline.
+dotnet run -c Release --project tests/Atto.Cil.Pipe.Plan/Atto.Cil.Pipe.Plan.csproj \
+  > /tmp/atto-net-pipe-host.log
+grep -Fx 'ATTO_NET_DIRECTED_PIPE_HOST_PASS checks=20' /tmp/atto-net-pipe-host.log
+grep -Fx 'ATTO_NET_PIPE_GUEST_EXECUTION=NOT_EXECUTED' /tmp/atto-net-pipe-host.log
 dotnet build "$host" -c Release
 expect_42 CORECLR_GUEST dotnet run --no-build -c Release --project "$host"
 dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true \
