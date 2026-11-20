@@ -142,13 +142,48 @@ for spec in \
 done
 echo "ATTO_PIPELINE_POSITIVE_GUEST_PASS cases=4 nativeaot_cases=2"
 
+# Seven source byte-pinned supplemental spec edge cases. These are compiler
+# and real guest tests, never a host-calculated reference model.
+while IFS=: read -r name sha; do
+  actual="$(git hash-object "fixtures/cil/pipelines/edge/$name.atto")"
+  test "$actual" = "$sha" || {
+    echo "ATTO_CIL_EDGE_FIXTURE_DRIFT name=$name actual=$actual" >&2
+    exit 2
+  }
+done <<'EDGE_BLOBS'
+two-argument-61:4089c524db1d076593994ad65acb5ca7f90eea32
+preapplied-grouped-42:9a89ada18865fead0d92a7de75415957fbb5f67f
+signed-i64-min:bbc22347d7ccb0a5be1a7c2193f11c5f2f4805cc
+checked-overflow:59bb890b54addc1659065ab55cd565771523bfce
+reject-i64-positive-overflow:2e584ee01ee74a3a31e282cf0116957f9ff95bd1
+reject-i64-negative-underflow:8b63b45e406db3e19aa793e0f7a627914623b9e0
+reject-reserved-unsafe:b159def3fa26ca6023395e1c546b95c1b929fd14
+EDGE_BLOBS
+for case in two-argument-61:61 preapplied-grouped-42:42; do
+  IFS=: read -r name expected <<< "$case"
+  rm -f "$guest"
+  dotnet run --no-build -c Release --project "$compiler" -- \
+    "fixtures/cil/pipelines/edge/$name.atto" "$guest"
+  test -s "$guest"
+  dotnet build "$host" -c Release -t:Rebuild
+  expect_pipeline_exit "$name-EDGE-CORECLR" "$expected" \
+    dotnet run --no-build -c Release --project "$host"
+  dotnet publish "$host" -c Release -r linux-x64 \
+    -p:PublishAot=true --self-contained true \
+    -o "/tmp/atto-cil-edge-$name"
+  expect_pipeline_exit "$name-EDGE-NATIVEAOT" "$expected" \
+    "/tmp/atto-cil-edge-$name/Atto.Cil.Guest.Host"
+done
+echo 'ATTO_CIL_EDGE_MULTI_ARGUMENT_NATIVE=PASS expected=61,42'
+
+
 # The entire signed-i64 value cannot be transported through an OS process
 # exit code. Observe the *compiled CIL method* via a fixed .NET bridge
 # that formats the returned long without calculating the guest expression.
 value_host=tests/Atto.Cil.Value.Host/Atto.Cil.Value.Host.csproj
 rm -f "$guest"
 dotnet run --no-build -c Release --project "$compiler" -- \
-  fixtures/cil/pipelines/signed-int64-min.atto "$guest"
+  fixtures/cil/pipelines/edge/signed-i64-min.atto "$guest"
 dotnet build "$value_host" -c Release -t:Rebuild
 actual_min="$(dotnet run --no-build -c Release --project "$value_host" \
   2>/tmp/atto-cil-min.stderr)"
@@ -168,7 +203,7 @@ echo "ATTO_CIL_I64_MIN_NATIVEAOT=EXECUTED"
 # Checked overflow must be rejected by the emitted CLR arithmetic itself.
 rm -f "$guest"
 dotnet run --no-build -c Release --project "$compiler" -- \
-  fixtures/cil/pipelines/checked-overflow.atto "$guest"
+  fixtures/cil/pipelines/edge/checked-overflow.atto "$guest"
 dotnet build "$value_host" -c Release -t:Rebuild
 set +e
 dotnet run --no-build -c Release --project "$value_host" \
@@ -257,3 +292,26 @@ for spec in \
   }
 done
 echo "ATTO_PIPELINE_NEGATIVE_PASS cases=12"
+
+for case in \
+  reject-i64-positive-overflow:E_LITERAL \
+  reject-i64-negative-underflow:E_LITERAL \
+  reject-reserved-unsafe:E_NAME; do
+  IFS=: read -r name code <<< "$case"
+  rejected="artifacts/RejectedEdge.dll"
+  rm -f "$rejected"
+  set +e
+  dotnet run --no-build -c Release --project "$compiler" -- \
+    "fixtures/cil/pipelines/edge/$name.atto" "$rejected" \
+    > /tmp/atto-edge-rejected.stdout 2> /tmp/atto-edge-rejected.stderr
+  status=$?
+  set -e
+  test "$status" -eq 2 && test ! -e "$rejected" \
+    && test ! -s /tmp/atto-edge-rejected.stdout \
+    && grep -Fq "$code:" /tmp/atto-edge-rejected.stderr || {
+    echo "ATTO_CIL_EDGE_NEGATIVE_LEAK name=$name status=$status" >&2
+    exit 1
+  }
+done
+echo 'ATTO_CIL_EDGE_NEGATIVE=PASS cases=3'
+
