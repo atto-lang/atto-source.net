@@ -160,7 +160,8 @@ internal sealed partial class CIL(List<Function> functions)
             if (state[id] == 2) return;
             if (state[id] == 1) throw new CompilerError("E_CYCLE", _functions[id].Name);
             state[id] = 1;
-            WalkExpr(_functions[id].Return, _functions[id]);
+            if (WalkExpr(_functions[id].Return, _functions[id]))
+                throw new CompilerError("E_TYPE", "function return type must be int");
             state[id] = 2;
         }
         bool WalkExpr(Expression e, Function owner, HashSet<string>? bound = null)
