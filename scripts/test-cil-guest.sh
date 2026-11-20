@@ -65,7 +65,11 @@ for entry in \
   mixed-channel-stream-forward:6e2528f7c4b278c0fff9671c8c5985bfbd94adb1 \
   mixed-channel-stream-reverse:060b61b80cfb3946a9510edd1190be6256212424 \
   actor-duplicate-direction:d738937d72c791c41d55f088eaed65a5f9ed224f \
-  actor-mixed-directions:1addd9cc44879d24f7e76b2d5eb69d6837a711ab; do
+  actor-mixed-directions:1addd9cc44879d24f7e76b2d5eb69d6837a711ab \
+  stopped-source:cdfa3473793a0eed556288db06ebaa3ed8f9d4c7 \
+  closed-channel:523e0da79a1e373c03c1ef216259b34c0b0c0889 \
+  stopped-consumer:8896a1bf0aef74926be291ace2d86ecf852985b1 \
+  stopped-actor-sink:329661c81fa4bb832fcacbbff5a4fb068e1bb6dd; do
   case_name="${entry%%:*}"
   expected_blob="${entry#*:}"
   fixture="fixtures/pipe-rpipe-v1/${case_name}.atto"
@@ -90,7 +94,7 @@ for entry in \
     echo "CANONICAL_PIPE_ARTIFACT_LEAK case=$case_name" >&2; exit 1;
   }
 done
-echo "ATTO_NET_CANONICAL_PIPE_FAILCLOSED_PASS checks=8"
+echo "ATTO_NET_CANONICAL_PIPE_FAILCLOSED_PASS checks=12"
 # Compiler-owned graph planning checks; not an executable Atto pipeline.
 dotnet run -c Release --project tests/Atto.Cil.Pipe.Plan/Atto.Cil.Pipe.Plan.csproj \
   > /tmp/atto-net-pipe-host.log
