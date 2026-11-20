@@ -720,6 +720,16 @@ public static partial class OresParser
                           $".NET source Future continuation lowering is unavailable at offset {start}"
                         : $"Nested Option remains nested; implicit Option flatten is forbidden; " +
                           $".NET source Option lowering is unavailable at offset {start}");
+                // Canonical bang exceptional control must not degrade to an
+                // ordinary scalar callable or host-side .NET exception.
+                if (word is "trap" or "throw" or "raise" or "panic" &&
+                    _i < text.Length && text[_i] == '!' &&
+                    (_i + 1 >= text.Length || text[_i + 1] != '=') &&
+                    !(text.AsSpan(_i).StartsWith("!eq", StringComparison.Ordinal) &&
+                      (_i + 3 == text.Length ||
+                       !(char.IsLetterOrDigit(text[_i + 3]) || text[_i + 3] == '_'))))
+                    throw new FormatException(
+                        $"EXCEPTION_BANG_BACKEND_UNSUPPORTED: {word}! requires typed Error/Result, checked unwind, actor supervision and verified NativeAOT lowering at offset {start}");
                 if (word is "Option" or "Result" or "Some" or "None" or "Ok" or "Err" or "trap")
                     throw new FormatException(
                         $"Option/Result/trap requires verified tagged-sum CIL and NativeAOT guest-control lowering at offset {start}");
