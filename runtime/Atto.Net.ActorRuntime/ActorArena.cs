@@ -15,8 +15,16 @@ public sealed class ActorResourceExhaustedException : InvalidOperationException
 [JsonConverter(typeof(ActorTurnNoWireConverter))]
 public sealed class ActorTurn
 {
-    internal ActorTurn(ActorArena owner) => Owner = owner;
+    internal ActorTurn(ActorArena owner)
+    {
+        Owner = owner;
+        OriginManagedThreadId = Environment.CurrentManagedThreadId;
+    }
+
     internal ActorArena Owner { get; }
+    // A turn cannot migrate between physical carriers. Suspension must first
+    // close this turn; a later dispatch receives a fresh capability.
+    internal int OriginManagedThreadId { get; }
 }
 
 /// <summary>Exact-issued actor-local logical frame authority; never a wire value.</summary>
@@ -313,8 +321,10 @@ public unsafe sealed class ActorArena : IDisposable
     private void ValidateTurn(ActorTurn turn)
     {
         ArgumentNullException.ThrowIfNull(turn);
-        if (!ReferenceEquals(turn.Owner, this) || !ReferenceEquals(turn, _activeTurn))
-            throw new InvalidOperationException("Foreign, stale or forged actor turn");
+        if (!ReferenceEquals(turn.Owner, this) || !ReferenceEquals(turn, _activeTurn) ||
+            turn.OriginManagedThreadId != Environment.CurrentManagedThreadId)
+            throw new InvalidOperationException(
+                "Foreign, stale, forged or off-carrier actor turn");
     }
 
     private void EnsureActive(ActorTurn turn)
