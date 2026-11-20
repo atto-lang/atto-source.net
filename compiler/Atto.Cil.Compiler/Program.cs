@@ -235,24 +235,34 @@ internal sealed class CIL(List<Function> functions)
             if (state[id] == 2) return;
             if (state[id] == 1) throw new CompilerError("E_CYCLE", _functions[id].Name);
             state[id] = 1;
-            WalkExpr(_functions[id].Return, _functions[id]);
+            var fn = _functions[id];
+            var available = new HashSet<string>(fn.Args, StringComparer.Ordinal);
+            foreach (var binding in fn.Locals)
+            {
+                // Check before publishing the binding; self/future references
+                // cannot accidentally become initialized by source-order changes.
+                WalkExpr(binding.Initializer, fn, available);
+                if (!available.Add(binding.Name))
+                    throw new CompilerError("E_DUP_LOCAL", binding.Name);
+            }
+            WalkExpr(fn.Return, fn, available);
             state[id] = 2;
         }
-        void WalkExpr(Expression e, Function owner)
+        void WalkExpr(Expression e, Function owner, HashSet<string> available)
         {
             switch (e)
             {
                 case Literal: return;
                 case Arg a:
-                    if (!owner.Args.Contains(a.Name)) throw new CompilerError("E_SYMBOL", a.Name);
+                    if (!available.Contains(a.Name)) throw new CompilerError("E_SYMBOL", a.Name);
                     return;
                 case Binary b:
-                    WalkExpr(b.Left, owner); WalkExpr(b.Right, owner);
+                    WalkExpr(b.Left, owner, available); WalkExpr(b.Right, owner, available);
                     return;
                 case Call c:
                     if (!_symbols.TryGetValue(c.Name, out var target)) throw new CompilerError("E_SYMBOL", c.Name);
                     if (_functions[target].Args.Count != c.Args.Count) throw new CompilerError("E_ARITY", c.Name);
-                    foreach (var arg in c.Args) WalkExpr(arg, owner);
+                    foreach (var arg in c.Args) WalkExpr(arg, owner, available);
                     WalkFunction(target);
                     return;
                 default: throw new CompilerError("E_TYPE", "unsupported expression");
@@ -283,9 +293,33 @@ internal sealed class CIL(List<Function> functions)
         {
             var code = new BlobBuilder();
             var il = new InstructionEncoder(code);
+            // Local int64 signatures are explicit ECMA-335 StandAloneSig
+            // records. The 4-slot bound keeps all indexed load/store opcodes
+            // unambiguous and avoids dynamic reflection/runtime codegen.
+            StandaloneSignatureHandle localSignature = default;
+            if (f.Locals.Count > 0)
+            {
+                var localTypes = new BlobBuilder();
+                var enc = new BlobEncoder(localTypes).LocalVariableSignature(f.Locals.Count);
+                foreach (var binding in f.Locals) enc.AddVariable().Type().Int64();
+                localSignature = metadata.AddStandaloneSignature(metadata.GetOrAddBlob(localTypes));
+            }
+            for (int i = 0; i < f.Locals.Count; i++)
+            {
+                Generate(f.Locals[i].Initializer, f, il);
+                il.OpCode(i switch
+                {
+                    0 => ILOpCode.Stloc_0,
+                    1 => ILOpCode.Stloc_1,
+                    2 => ILOpCode.Stloc_2,
+                    3 => ILOpCode.Stloc_3,
+                    _ => throw new CompilerError("E_LIMIT", "4 local bindings per function")
+                });
+            }
             Generate(f.Return, f, il);
             il.OpCode(ILOpCode.Ret);
-            bodyOffsets.Add(bodyStream.AddMethodBody(il, maxStack: 64));
+            bodyOffsets.Add(bodyStream.AddMethodBody(il, maxStack: 64,
+                localVariablesSignature: localSignature));
         }
         int nextParameter = 1;
         for (int i = 0; i < _functions.Count; i++)
@@ -334,7 +368,23 @@ internal sealed class CIL(List<Function> functions)
         switch (e)
         {
             case Literal c: il.LoadConstantI8(c.Number); return;
-            case Arg a: il.LoadArgument(f.Args.IndexOf(a.Name)); return;
+            case Arg a:
+                int argIndex = f.Args.IndexOf(a.Name);
+                if (argIndex >= 0) il.LoadArgument(argIndex);
+                else
+                {
+                    int localIndex = f.Locals.FindIndex(b => b.Name == a.Name);
+                    if (localIndex < 0) throw new CompilerError("E_SYMBOL", a.Name);
+                    il.OpCode(localIndex switch
+                    {
+                        0 => ILOpCode.Ldloc_0,
+                        1 => ILOpCode.Ldloc_1,
+                        2 => ILOpCode.Ldloc_2,
+                        3 => ILOpCode.Ldloc_3,
+                        _ => throw new CompilerError("E_LIMIT", "4 local bindings per function")
+                    });
+                }
+                return;
             case Binary b:
                 Generate(b.Left, f, il); Generate(b.Right, f, il);
                 il.OpCode(b.Op switch
