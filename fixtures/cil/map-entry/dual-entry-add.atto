@@ -1,0 +1,15 @@
+// Atto spec #116 / conformance #98: proposed portable guest acceptance.
+let entry1 = ("foo" => 5) as Entry<string, int>;
+let entry2 = "foo" => 5 (as Entry<string, int>);
+
+pub fnc main(): int {
+    let mut Map<string, int> x = {
+        "foo" => 5
+    };
+    x.set("foo", 6);
+    x["foo"] = 3;
+    x.add(entry1);
+    x.add(entry2);
+    return x.get("foo").unwrap();
+}
+// expected guest exit: 5 (add upserts); currently UNSUPPORTED on this backend.

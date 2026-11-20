@@ -1,0 +1,4 @@
+// Embedded Entry/Map spellings in string data must not trigger the feature gate.
+pub fnc main(): int {
+    return "=> Entry Map Record [foo]";
+}

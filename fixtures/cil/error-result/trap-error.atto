@@ -1,0 +1,4 @@
+pub fnc main(): int {
+  val result = trap fail();
+  return 0;
+}

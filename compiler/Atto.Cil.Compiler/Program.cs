@@ -58,11 +58,74 @@ internal sealed class Parser
             else if (c is >= '0' and <= '9')
                 while (i < source.Length && source[i] is >= '0' and <= '9') i++;
             else if (c == '-' && i < source.Length && source[i] == '>') i++;
-            else if (!"(){}:;,+-*/".Contains(c))
+            else if (c == '"')
+            {
+                // Tokenize quoted strings atomically: an embedded `=>` is
+                // data, not an entry operator; comments are handled above.
+                // String *execution* remains unsupported by the scalar CIL
+                // backend. Bound literals to prevent unbounded preflight work.
+                bool closed = false;
+                while (i < source.Length)
+                {
+                    if (source[i] == '\\')
+                    {
+                        if (i + 1 >= source.Length) break;
+                        i += 2;
+                        continue;
+                    }
+                    if (source[i] == '"') { i++; closed = true; break; }
+                    if (source[i] == '\n' || source[i] == '\r') break;
+                    i++;
+                    if (i - start > 4096)
+                        throw new CompilerError("E_LIMIT", "string token exceeds 4096 characters");
+                }
+                if (!closed) throw new CompilerError("E_LEX", "unterminated quoted string");
+            }
+            else if (c == '=' && i < source.Length && source[i] == '>')
+                throw new CompilerError("E_UNSUPPORTED_MAP_ENTRY",
+                    "first-class Entry<K,V> and Map<K,V> require checked CIL ownership/lowering");
+            // Recognize punctuation needed to reach a stable typed-feature
+            // rejection. This does not enable assignments/generic runtime
+            // values in the scalar parser; unsupported forms still fail closed.
+            else if (!"(){}[]:;,+-*/=<>.?".Contains(c))
                 throw new CompilerError("E_LEX", $"unsupported source character at {start}");
             _tokens.Add(source[start..i]);
             if (_tokens.Count > 8192) throw new CompilerError("E_LIMIT", "8192 token limit");
         }
+        // The CIL scalar guest has no typed Result/Option values, error
+        // identities, or cleanup-aware ?/trap unwinding. Reject these Atto
+        // constructs *after lexing* so strings/comments cannot impersonate
+        // executable effects, and before any CIL metadata/artifact is created.
+        // Do not replace Result with an int sentinel or catch CLR exceptions
+        // as though they were source Error values.
+        if (_tokens.Any(t => t is "Result" or "Option" or "Ok" or "Err" or
+              "Some" or "None" or "Error" or "trap" or "throw" or
+              "raise" or "panic" or "try" or "catch" or "finally" or
+              "defer" or "recover" or "?"))
+            throw new CompilerError("E_UNSUPPORTED_RESULT_EFFECTS",
+                "Result/Option, postfix ?, trap and source Error handling require typed CIL lowering");
+        for (int tokenIndex = 0; tokenIndex + 2 < _tokens.Count; tokenIndex++)
+        {
+            if (_tokens[tokenIndex] == "int" &&
+                _tokens[tokenIndex + 1] == "." &&
+                _tokens[tokenIndex + 2] == "parse")
+                throw new CompilerError("E_UNSUPPORTED_RESULT_EFFECTS",
+                    "int.parse(string) requires Result<int,Error> and checked guest CIL lowering");
+        }
+        // Builtin Map/Entry must not be mistaken for scalar user symbols.
+        // Token-based inspection avoids triggering on comments/strings.
+        if (_tokens.Contains("Map") || _tokens.Contains("Entry"))
+            throw new CompilerError("E_UNSUPPORTED_MAP_ENTRY",
+                "typed Map/Entry runtime and CIL lowering are not implemented");
+        // Closed Record indexing requires a proved fixed field slot and
+        // referent-mutation authority; nominal Structs never get a dynamic
+        // bracket indexer. Neither feature is lowerable by this scalar CIL.
+        if (_tokens.Contains("Record"))
+            throw new CompilerError("E_UNSUPPORTED_RECORD",
+                "closed Record static slot access and mutable field lowering are not implemented");
+        if (_tokens.Contains("[") || _tokens.Contains("]"))
+            throw new CompilerError("E_UNSUPPORTED_INDEX_WRITE",
+                "bracket indexing needs checked Map/Record type resolution; nominal Struct brackets are prohibited");
         _tokens.Add("<eof>");
     }
     internal List<Function> Parse()

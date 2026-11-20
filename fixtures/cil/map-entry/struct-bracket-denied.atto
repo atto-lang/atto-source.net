@@ -1,0 +1,8 @@
+// NEGATIVE: nominal Struct has no string bracket indexer.
+define struct Point as int foo; end
+pub fnc main(): int {
+    let mut Point p = Point{foo: 1};
+    p["foo"] = 3;
+    return 0;
+}
+// Should always reject; never reinterpret as Record or Map.

@@ -1,0 +1,7 @@
+fnc value(): Result<int, Error> { return Err(Error("invalid integer")); }
+pub fnc main(): int {
+  return match value() over
+    on Ok(value) -> value,
+    on Err() -> 0
+  end;
+}
