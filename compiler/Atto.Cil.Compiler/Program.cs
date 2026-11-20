@@ -17,6 +17,8 @@ internal sealed record Literal(long Number) : Expression;
 internal sealed record Arg(string Name) : Expression;
 internal sealed record Binary(string Op, Expression Left, Expression Right) : Expression;
 internal sealed record Call(string Name, List<Expression> Args) : Expression;
+// Restricted i64 expression sequence: all members evaluated, only the tail returned.
+internal sealed record Sequence(List<Expression> Items) : Expression;
 internal sealed record Function(string Name, List<string> Args, Expression Return);
 
 internal sealed class Parser
@@ -34,7 +36,7 @@ internal sealed class Parser
         var name = Peek;
         if (name.Length == 0 || !(name[0] is >= 'a' and <= 'z' or '_') ||
             name.Any(c => !(c is >= 'a' and <= 'z' or >= '0' and <= '9' or '_')) ||
-            name is "fnc" or "pub" or "return" or "int" or "bool")
+            name is "fnc" or "pub" or "return" or "int" or "bool" or "seq")
             throw new CompilerError("E_NAME", $"expected snake_case identifier, got {name}");
         _position++;
         return name;
@@ -58,7 +60,7 @@ internal sealed class Parser
             else if (c is >= '0' and <= '9')
                 while (i < source.Length && source[i] is >= '0' and <= '9') i++;
             else if (c == '-' && i < source.Length && source[i] == '>') i++;
-            else if (!"(){}:;,+-*/".Contains(c))
+            else if (!"(){}:;,+-*/>".Contains(c))
                 throw new CompilerError("E_LEX", $"unsupported source character at {start}");
             _tokens.Add(source[start..i]);
             if (_tokens.Count > 8192) throw new CompilerError("E_LIMIT", "8192 token limit");
@@ -92,11 +94,38 @@ internal sealed class Parser
         }
         return result;
     }
+    // The commas belong to this delimited sequence only; they are not
+    // callable arguments or tuple elements. A scalar sequence has no bindings
+    // and must not skip errors from any earlier evaluated item.
+    private Expression ParseSequenceItems(int depth)
+    {
+        if (Peek == ")") throw new CompilerError("E_SEQ_EMPTY", "sequence requires an expression");
+        List<Expression> items = [];
+        while (true)
+        {
+            if (items.Count >= 16) throw new CompilerError("E_LIMIT", "16 sequence item limit");
+            if (Peek is "," or ")" or ";" or "<eof>")
+                throw new CompilerError("E_SEQ_COMMA", "missing sequence expression");
+            items.Add(ParseExpr(0, depth + 1));
+            if (!Eat(",")) break;
+        }
+        Require(")");
+        return items.Count == 1 ? items[0] : new Sequence(items);
+    }
     private Expression ParseExpr(int min, int depth)
     {
         if (depth > 32) throw new CompilerError("E_LIMIT", "expression nesting limit");
         Expression left;
-        if (Eat("(")) { left = ParseExpr(0, depth + 1); Require(")"); }
+        if (Eat("seq"))
+        {
+            Require("(");
+            left = ParseSequenceItems(depth);
+        }
+        else if (Eat("("))
+        {
+            if (Eat(">")) left = ParseSequenceItems(depth);
+            else { left = ParseExpr(0, depth + 1); Require(")"); }
+        }
         else if (Eat("-")) left = new Binary("-", new Literal(0), ParseExpr(30, depth + 1));
         else if (Peek.Length > 0 && Peek[0] is >= '0' and <= '9')
         {
@@ -160,6 +189,9 @@ internal sealed class CIL(List<Function> functions)
                 case Literal: return;
                 case Arg a:
                     if (!owner.Args.Contains(a.Name)) throw new CompilerError("E_SYMBOL", a.Name);
+                    return;
+                case Sequence seq:
+                    foreach (var item in seq.Items) WalkExpr(item, owner);
                     return;
                 case Binary b:
                     WalkExpr(b.Left, owner); WalkExpr(b.Right, owner);
@@ -250,6 +282,15 @@ internal sealed class CIL(List<Function> functions)
         {
             case Literal c: il.LoadConstantI8(c.Number); return;
             case Arg a: il.LoadArgument(f.Args.IndexOf(a.Name)); return;
+            case Sequence seq:
+                // ECMA-335 Pop removes only the i64 value. Calls and checked
+                // exceptions from earlier expressions remain observable.
+                for (int i = 0; i < seq.Items.Count; i++)
+                {
+                    Generate(seq.Items[i], f, il);
+                    if (i + 1 != seq.Items.Count) il.OpCode(ILOpCode.Pop);
+                }
+                return;
             case Binary b:
                 Generate(b.Left, f, il); Generate(b.Right, f, il);
                 il.OpCode(b.Op switch
