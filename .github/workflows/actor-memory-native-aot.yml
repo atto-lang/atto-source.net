@@ -70,3 +70,4 @@ jobs:
           test -f "$binary"
           "$binary" | tee "$RUNNER_TEMP/actor-frame-native.log"
           grep -Fx 'PASS actor-frame-nativeaot-host: per-actor slabs, terminal budget fault, sibling survives on shared carrier, native quota reclaimed; NOT compiled .atto' "$RUNNER_TEMP/actor-frame-native.log"
+          grep -Fx 'PASS actor-frame-nativeaot-async-guard: direct and multicast async-void admission denied before native allocation' "$RUNNER_TEMP/actor-frame-native.log"
