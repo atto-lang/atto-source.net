@@ -209,3 +209,43 @@ tenant-sandbox certification, untrusted guest admission or compiled `.atto`
 actor claim until exact-current-head real managed and Linux/Windows NativeAOT
 execution, independently reviewed unsafe/concurrency behavior, and all
 GitHub governance checks pass.
+
+## Subsequent security review: sealed scalar and concurrent STOP
+
+The trusted-host raw `ReadFrame` and `WriteFrame` APIs previously accepted
+nonempty requests even after a scalar schema was sealed, bypassing typed i64
+and canonical-bool accessors. They now mark an attempted nonempty raw access
+to a sealed frame as a **terminal actor violation**. `SealScalarSchema`
+checks all bool slots for tag 0/1 and seven zero padding bytes **before**
+publishing the immutable scalar schema. The updated test suite attempts
+both raw read/write bypasses, malformed pre-seal bool padding, and checks
+that caught exceptions cannot complete the dispatcher turn.
+
+The suite also authors a four-worker × 200 STOP-call concurrency probe
+racing with the originating carrier's `EndTurn`; successful execution
+must show exactly one scrub/refund, no active-turn use-after-free, and
+no resurrection of the stopped actor. These tests have not run on
+CoreCLR or NativeAOT in this authoring environment.
+
+The source-org Actions run history has recent failed jobs with
+`steps=[]`, and the feature-branch and source-free admission branches
+show no recorded runs following repository writes. This establishes
+missing executed evidence, not necessarily the root cause of runner
+admission (billing capacity, workflow registration or policy may apply).
+
+A prospective private source-free alternate carrier
+`embedded-alerts-test/atto-ci` (repository ID `1458334665`) has an
+**independent earlier** meaningful, successfully executed .NET 8/NativeAOT
+run [#44794775571](https://github.com/embedded-alerts-test/atto-ci/actions/runs/44794775571)
+with compiler/guest tests on other source, but **not** this PR's head.
+Atto .NET's protected-main source export policy is currently deny-all:
+`.github/private-ci-approved-repositories.txt` has no active destination,
+`.github/private-ci-approved-source-snapshots.txt` has no active snapshot,
+and the independent-reviewer policy is `enabled: false`. A review of
+[issue #34](https://github.com/atto-lang/atto-source.net/issues/34)
+must approve a concrete destination and exact immutable source snapshot
+under protected-main CODEOWNERS before any private Git objects can be
+mirrored. A prior green run cannot grant transfer permission.
+
+**No new private Git-object mirror or compiler/NativeAOT passing claim
+was created by this cycle.**
