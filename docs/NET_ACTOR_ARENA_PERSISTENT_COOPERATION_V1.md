@@ -132,3 +132,61 @@ environment has no `dotnet` SDK; absent executed receipts are
 existing ready PRs: independently review C# unsafe memory accesses, compile
 real guest spills/calls from verified CFG, preserve critical/borrow rules,
 prove physical teardown, and obtain genuine multi-tenant isolation evidence.
+
+
+## 2026-11-20 CI admission and tenant-fuel verification cycle
+
+### Security corrections
+
+1. **Managed frame metadata cap:** the effective number of frame-handle slots
+   is now `min(configured_maximum_frames, actor_arena_bytes)`. Since every
+   logical frame requires at least one native byte, a 64-byte actor can no
+   longer create a 1,024-entry managed handle table while only charging
+   64 native bytes. New regression saturates 64 one-byte frames and asserts
+   terminal quota/refund on the 65th. Managed metadata is still not a
+   separately metered resource; host process-wide quotas remain future work.
+2. **Nonrenewable tenant-wide fuel:** the `TenantVm` now owns an additional,
+   bounded `maximumTotalLogicalFuel` budget. Each authenticated actor charge
+   checks local actor fuel before atomically debiting its parent tenant's
+   persistent budget. Neither STOP, actor reincarnation nor a dispatch
+   handoff restores spent tenant fuel. Invalid weights and already
+   exhausted actors cannot debit the tenant budget. The new negative case
+   charges one actor twice across two incarnations, then denies a third
+   actor despite its fresh local fuel. Admission can still create actors
+   when tenant fuel is exhausted; guest *execution* charges fail terminally.
+3. **Source workflow integrity:** the earlier PowerShell source-index
+   splitting error is corrected to a single-backslash regex `'\\s+'`.
+   Source files must be tracked regular Git blobs (mode `100644`), and
+   `git hash-object --path=...` uses Git's clean filters so LF blob identity
+   is checked correctly against CRLF Windows working trees. The checkout
+   and setup-dotnet actions are pinned to the existing source-main
+   reviewed revisions, not moving tags. These checks are only meaningful
+   once the workflow genuinely runs.
+
+### Exact-head execution attempts and independent review
+
+- Updated the branch-local `push` trigger to request source-repo CoreCLR
+  and Windows/Linux NativeAOT jobs without exporting source.
+- Created the repository's **source-free runner admission** branch
+  `ci/source-free-runner-admission-20261027` from `main`, targeting the
+  preexisting source-free canary workflow. It does not check out code.
+- GitHub returned **zero workflow runs** for both branches on the latest
+  checks. No assigned-runner execution evidence and no negative compiler
+  result exist for this revision.
+- Local environment lacks `dotnet`; external SDK retrieval was
+  unavailable. Accordingly all actual C#/NativeAOT tests remain
+  **NOT_EXECUTED**, not PASSED.
+- CODEOWNER `@ORESoftware` was requested as a PR reviewer and assigned
+  [CI/security issue #34](https://github.com/atto-lang/atto-source.net/issues/34).
+  The reviewer request is not an independent approval; no security review
+  has been submitted.
+- Source protected-main destination allowlist remains **empty**. Never
+  mirror private source to an alternate org until exact destination and
+  snapshot approval is independently recorded there. A prior private
+  carrier run from a different Atto PR does not constitute authorization.
+
+**Release hold:** no ready-for-review promotion, merge, production
+tenant-sandbox certification, untrusted guest admission or compiled `.atto`
+actor claim until exact-current-head real managed and Linux/Windows NativeAOT
+execution, independently reviewed unsafe/concurrency behavior, and all
+GitHub governance checks pass.
