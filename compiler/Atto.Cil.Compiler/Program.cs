@@ -34,8 +34,10 @@ internal sealed class Parser
         var name = Peek;
         if (name.Length == 0 || !(name[0] is >= 'a' and <= 'z' or '_') ||
             name.Any(c => !(c is >= 'a' and <= 'z' or >= '0' and <= '9' or '_')) ||
-            name is "fnc" or "pub" or "return" or "int" or "bool")
+            name is "fnc" or "pub" or "return" or "int" or "bool" or "task" or "await")
             throw new CompilerError("E_NAME", $"expected snake_case identifier, got {name}");
+        if (name == "sync")
+            throw new CompilerError("E_RESERVED", "sync is a reserved task join keyword");
         _position++;
         return name;
     }
@@ -58,12 +60,25 @@ internal sealed class Parser
             else if (c is >= '0' and <= '9')
                 while (i < source.Length && source[i] is >= '0' and <= '9') i++;
             else if (c == '-' && i < source.Length && source[i] == '>') i++;
-            else if (!"(){}:;,+-*/".Contains(c))
+            else if (!"(){}:;,+-*/<>".Contains(c))
                 throw new CompilerError("E_LEX", $"unsupported source character at {start}");
             _tokens.Add(source[start..i]);
             if (_tokens.Count > 8192) throw new CompilerError("E_LIMIT", "8192 token limit");
         }
         _tokens.Add("<eof>");
+        // This scalar CIL subset has neither TaskScope, typed Future<T>,
+        // cancellation nor lexical lock cleanup. Detect target task spellings
+        // from *lexed* words (never from comments) before any CIL is emitted.
+        // Do not reinterpret a task body as a scalar block or treat sync as a
+        // blocking host call. The eventual implementation needs checked MIR.
+        for (int index = 0; index + 1 < _tokens.Count; index++)
+        {
+            if ((_tokens[index] == "task" && _tokens[index + 1] is "{" or "<") ||
+                (_tokens[index] == "sync" && _tokens[index + 1] == "task") ||
+                (_tokens[index] == "do" && _tokens[index + 1] == "task"))
+                throw new CompilerError("E_TASK_UNSUPPORTED",
+                    "typed cancellable tasks need TaskScope/Future and cancellation-safe lock unwind");
+        }
     }
     internal List<Function> Parse()
     {
