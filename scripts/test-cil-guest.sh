@@ -5,6 +5,9 @@ compiler=compiler/Atto.Cil.Compiler/Atto.Cil.Compiler.csproj
 host=tests/Atto.Cil.Guest.Host/Atto.Cil.Guest.Host.csproj
 guest=artifacts/AttoGuest.dll
 mkdir -p artifacts
+# The compiler now intentionally refuses all DLL overwrites; test harness
+# removes only its own known output before deliberate new compilations.
+rm -f "$guest"
 
 expect_42() {
   local label="$1"; shift
@@ -61,6 +64,7 @@ expect_42 NATIVEAOT_GUEST /tmp/atto-cil-nativeaot/Atto.Cil.Guest.Host
 
 # Additional genuine CIL guest executions; neither calculation is in C#.
 for fixture in fixtures/cil/precedence.atto fixtures/cil/forward-call.atto; do
+  rm -f "$guest"
   dotnet run --no-build -c Release --project "$compiler" -- "$fixture" "$guest"
   dotnet build "$host" -c Release
   expect_42 EXTRA_CORECLR_GUEST dotnet run --no-build -c Release --project "$host"
@@ -91,11 +95,36 @@ for spec in \
   name="$(printf '%s' "$spec" | cut -d: -f1)"
   expected="$(printf '%s' "$spec" | cut -d: -f2)"
   fixture="fixtures/cil/pipelines/$name.atto"
+  rm -f "$guest"
   dotnet run --no-build -c Release --project "$compiler" -- "$fixture" "$guest"
   test -s "$guest"
   before="$(sha256sum "$guest" | cut -d' ' -f1)"
-  dotnet run --no-build -c Release --project "$compiler" -- "$fixture" "$guest"
+  # An existing DLL must not be replaced, even by a *valid* second compile.
+  # A competing publisher never gets an implicit overwrite capability.
+  set +e
+  dotnet run --no-build -c Release --project "$compiler" -- "$fixture" "$guest" \
+    > /tmp/atto-pipeline-nooverwrite.stdout 2>/tmp/atto-pipeline-nooverwrite.stderr
+  nooverwrite_status=$?
+  set -e
+  test "$nooverwrite_status" -eq 2 || {
+    echo "ATTO_PIPELINE_EXISTING_DLL_NOT_REJECTED fixture=$name exit=$nooverwrite_status" >&2
+    exit 1
+  }
+  grep -Fq "E_OUTPUT:" /tmp/atto-pipeline-nooverwrite.stderr
   after="$(sha256sum "$guest" | cut -d' ' -f1)"
+  test "$before" = "$after" || {
+    echo "ATTO_PIPELINE_EXISTING_DLL_CLOBBERED fixture=$name" >&2
+    exit 1
+  }
+  # Exact same source recompiled to a fresh destination must remain
+  # deterministic; the production compiler itself must not overwrite.
+  replay="artifacts/ReplayPipeline.dll"
+  rm -f "$replay"
+  dotnet run --no-build -c Release --project "$compiler" -- "$fixture" "$replay"
+  test "$before" = "$(sha256sum "$replay" | cut -d' ' -f1)" || {
+    echo "ATTO_PIPELINE_NONDETERMINISTIC_FRESH_DLL fixture=$name" >&2
+    exit 1
+  }
   test "$before" = "$after" || {
     echo "ATTO_PIPELINE_NONDETERMINISTIC_CIL fixture=$name" >&2
     exit 1
