@@ -283,6 +283,96 @@ internal static class Program
         _cases++;
     }
 
+
+    private static void LongRunPollCannotBeEvaded()
+    {
+        // A malicious actor that yields after 127 reductions must not receive
+        // a fresh polling phase. 256 dispatches exercise 32,512 reductions.
+        using var tenant = new TenantVm(maximumActors: 1, maximumNativeBytes: 64);
+        using var actor = tenant.CreateActor(arenaBytes: 64, logicalFuel: 35_000);
+        int polls = 0;
+        for (int dispatch = 0; dispatch < 256; dispatch++)
+        {
+            var turn = actor.BeginTurn();
+            for (int i = 0; i < 127; i++)
+                if (actor.ChargeBackedge(turn).PollDue) polls++;
+            actor.EndTurn(turn);
+        }
+        var lastTurn = actor.BeginTurn();
+        var snapshot = actor.MeterSnapshot(lastTurn);
+        Check(polls == 254 && snapshot.PollPhase == 0,
+            "256 short turns must accumulate all 254 polls");
+        Check(snapshot.RemainingFuel == 2_488,
+            "32,512 logical reductions permanently charged");
+        Check(actor.ChargeBackedge(lastTurn, 128).PollDue,
+            "maximum legal charge produces one checkpoint");
+        Check(actor.MeterSnapshot(lastTurn).RemainingFuel == 2_360,
+            "weighted charge reduces persistent fuel");
+        actor.EndTurn(lastTurn);
+        actor.Stop();
+        _cases++;
+    }
+
+    private static void QuiescentTenantDisposal()
+    {
+        var tenant = new TenantVm(maximumActors: 1, maximumNativeBytes: 64);
+        var actor = tenant.CreateActor(arenaBytes: 64);
+        var active = actor.BeginTurn();
+        var frame = actor.PushFrame(active, 8);
+        tenant.Dispose();
+        Check(tenant.NativeReservedBytes == 64,
+            "tenant disposal must not free a live physical turn");
+        Expect<ObjectDisposedException>(
+            () => tenant.CreateActor(arenaBytes: 64),
+            "disposed tenant refuses new actor admission");
+        Expect<InvalidOperationException>(
+            () => actor.ReadFrame(active, frame, 0, new byte[1]),
+            "tenant disposal immediately revokes live turn data access");
+        actor.EndTurn(active);
+        Check(tenant.NativeReservedBytes == 0 && tenant.LiveActorCount == 0,
+            "in-flight turn completion refunds tenant memory exactly once");
+        actor.Stop();
+        tenant.Dispose();
+        _cases++;
+    }
+
+    private static void InvalidAdmissionIsAtomic()
+    {
+        using var tenant = new TenantVm(maximumActors: 1, maximumNativeBytes: 64);
+        Expect<ArgumentOutOfRangeException>(
+            () => tenant.CreateActor(arenaBytes: 0),
+            "zero-capacity actor rejected without budget charge");
+        Expect<ArgumentOutOfRangeException>(
+            () => tenant.CreateActor(arenaBytes: 64, maximumFrames: 0),
+            "zero-frame actor rejected without budget charge");
+        Expect<ArgumentOutOfRangeException>(
+            () => tenant.CreateActor(arenaBytes: 64, logicalFuel: 0),
+            "zero-fuel actor rejected without budget charge");
+        Check(tenant.NativeReservedBytes == 0 && tenant.LiveActorCount == 0,
+            "failed admissions do not consume tenant quota");
+        using var actor = tenant.CreateActor(arenaBytes: 64);
+        var turn = actor.BeginTurn();
+        var before = actor.MeterSnapshot(turn);
+        Expect<ArgumentOutOfRangeException>(
+            () => actor.ChargeBackedge(turn, 0),
+            "zero compiler charge is invalid");
+        Expect<ArgumentOutOfRangeException>(
+            () => actor.ChargeOperation(turn, 129),
+            "oversized compiler charge is invalid");
+        Check(actor.MeterSnapshot(turn).Equals(before),
+            "invalid host charge cannot silently debit or advance phase");
+        var frame = actor.PushFrame(turn, 8);
+        Expect<ArgumentOutOfRangeException>(
+            () => actor.PushFrame(turn, 8, alignment: 3),
+            "invalid alignment refused before frame publication");
+        Check(actor.FrameDepth == 1,
+            "invalid frame alignment does not publish any frame");
+        actor.PopFrame(turn, frame);
+        actor.EndTurn(turn);
+        actor.Stop();
+        _cases++;
+    }
+
     private static void ReentrancyFailsClosed()
     {
         using var tenant = new TenantVm(maximumActors: 1, maximumNativeBytes: 64);
@@ -308,6 +398,9 @@ internal static class Program
             StopQuiescenceAndGeneration();
             PersistentPollAndFairness();
             ReentrancyFailsClosed();
+            LongRunPollCannotBeEvaded();
+            QuiescentTenantDisposal();
+            InvalidAdmissionIsAtomic();
             Console.WriteLine($"ATTO_NET_ACTOR_ARENA_COOPERATION_PASS cases={_cases}");
             return 0;
         }
