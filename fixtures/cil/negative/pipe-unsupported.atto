@@ -1,0 +1,2 @@
+// SPEC TARGET: continuous pipe cannot be lowered by narrow CIL scalar compiler.
+pub fnc main(): int { return 1 pipe 2; }
