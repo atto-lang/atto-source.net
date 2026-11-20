@@ -1,0 +1,10 @@
+// Subject call is lowered once into a typed local, then all arm tests reuse it.
+// expect-exit: 42
+fnc subject(): int { return 7; }
+pub fnc main(): int {
+  return match subject() over
+    on n when n > 8 -> 99,
+    on n when n > 1 -> n * 6,
+    on _ -> 0,
+  end
+}
