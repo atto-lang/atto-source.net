@@ -45,6 +45,22 @@ internal static class Program
             () => JsonSerializer.Deserialize("{}", NoWireJsonContext.Default.ActorFrameHandle),
             "frame authority JSON deserialize denied");
         actor.WriteFrame(turn1, frame, 0, new byte[] { 42, 17 });
+        Exception? offCarrierRead = null;
+        Exception? offCarrierExit = null;
+        var otherCarrier = new Thread(() =>
+        {
+            try { actor.ReadFrame(turn1, frame, 0, new byte[2]); }
+            catch (Exception ex) { offCarrierRead = ex; }
+            try { actor.EndTurn(turn1); }
+            catch (Exception ex) { offCarrierExit = ex; }
+        });
+        otherCarrier.Start();
+        Check(otherCarrier.Join(millisecondsTimeout: 10_000),
+            "foreign carrier probe completed");
+        Check(offCarrierRead is InvalidOperationException &&
+              offCarrierExit is InvalidOperationException,
+            "turn capability cannot migrate or terminate on another carrier");
+        _cases++;
         Expect<InvalidOperationException>(
             () => sibling.ReadFrame(siblingTurn, frame, 0, new byte[2]),
             "cross-actor frame read denied");
@@ -73,6 +89,9 @@ internal static class Program
         Check(zero.All(b => b == 0), "reused arena frame is scrubbed");
         actor.PopFrame(turn2, reused);
         actor.EndTurn(turn2);
+        Expect<InvalidOperationException>(
+            () => actor.EndTurn(turn2),
+            "physical turn exit cannot be replayed");
         sibling.EndTurn(siblingTurn);
         foreign.EndTurn(foreignTurn);
         actor.Stop();
