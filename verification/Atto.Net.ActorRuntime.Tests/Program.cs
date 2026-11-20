@@ -407,6 +407,29 @@ internal static class Program
         _cases++;
     }
 
+    private static void TinyArenaCapsManagedFrameMetadata()
+    {
+        using var tenant = new TenantVm(maximumActors: 1, maximumNativeBytes: 64);
+        using var actor = tenant.CreateActor(arenaBytes: 64, maximumFrames: 1024);
+        Check(actor.FrameCapacity == 64,
+            "frame metadata capacity must not exceed native one-byte slots");
+        var turn = actor.BeginTurn();
+        for (int i = 0; i < 64; i++)
+            actor.PushFrame(turn, bytes: 1, alignment: 1);
+        Check(actor.FrameDepth == 64,
+            "tiny arena admits only byte-accounted logical frames");
+        Expect<ActorResourceExhaustedException>(
+            () => actor.PushFrame(turn, bytes: 1, alignment: 1),
+            "65th one-byte frame exhausts tiny actor stack");
+        Expect<ActorResourceExhaustedException>(
+            () => actor.EndTurn(turn),
+            "caught tiny-arena quota failure remains terminal");
+        Check(tenant.NativeReservedBytes == 0 &&
+              tenant.LiveActorCount == 0,
+            "terminal tiny arena is scrubbed and refunded");
+        _cases++;
+    }
+
     private static void ConcurrentActorLifecycleStress()
     {
         using var tenant = new TenantVm(maximumActors: 8, maximumNativeBytes: 512);
@@ -482,6 +505,7 @@ internal static class Program
             QuiescentTenantDisposal();
             InvalidAdmissionIsAtomic();
             ConcurrentActorLifecycleStress();
+            TinyArenaCapsManagedFrameMetadata();
             Console.WriteLine($"ATTO_NET_ACTOR_ARENA_COOPERATION_PASS cases={_cases}");
             return 0;
         }
