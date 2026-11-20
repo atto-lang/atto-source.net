@@ -17,7 +17,8 @@ internal sealed record Literal(long Number) : Expression;
 internal sealed record Arg(string Name) : Expression;
 internal sealed record Binary(string Op, Expression Left, Expression Right) : Expression;
 internal sealed record Call(string Name, List<Expression> Args) : Expression;
-internal sealed record Function(string Name, List<string> Args, Expression Return);
+internal sealed record Binding(string Name, Expression Initializer);
+internal sealed record Function(string Name, List<string> Args, List<Binding> Locals, Expression Return);
 
 internal sealed class Parser
 {
@@ -34,7 +35,7 @@ internal sealed class Parser
         var name = Peek;
         if (name.Length == 0 || !(name[0] is >= 'a' and <= 'z' or '_') ||
             name.Any(c => !(c is >= 'a' and <= 'z' or >= '0' and <= '9' or '_')) ||
-            name is "fnc" or "pub" or "return" or "int" or "bool")
+            name is "fnc" or "pub" or "return" or "int" or "bool" or "val")
             throw new CompilerError("E_NAME", $"expected snake_case identifier, got {name}");
         _position++;
         return name;
@@ -58,13 +59,18 @@ internal sealed class Parser
             else if (c is >= '0' and <= '9')
                 while (i < source.Length && source[i] is >= '0' and <= '9') i++;
             else if (c == '-' && i < source.Length && source[i] == '>') i++;
-            else if (!"(){}:;,+-*/".Contains(c))
+            else if (c == '|' && i < source.Length && source[i] == '>') i++;
+            else if (c == '<' && i < source.Length && source[i] == '|') i++;
+            else if (!"(){}:;,+-*/=".Contains(c))
                 throw new CompilerError("E_LEX", $"unsupported source character at {start}");
             _tokens.Add(source[start..i]);
             if (_tokens.Count > 8192) throw new CompilerError("E_LIMIT", "8192 token limit");
         }
         _tokens.Add("<eof>");
     }
+    // Deliberately bounded int64-only Atto guest subset. Each val initializer
+    // executes once in source order, and an inline arrow body has exactly one
+    // checked implicit return. A brace body still requires explicit return.
     internal List<Function> Parse()
     {
         List<Function> result = [];
@@ -83,16 +89,69 @@ internal sealed class Parser
                 if (args.Count > 8) throw new CompilerError("E_LIMIT", "8 parameter limit");
             } while (Eat(","));
             Require(")");
-            if (!Eat(":")) Require("->");
-            Require("int"); Require("{"); Require("return");
-            var expression = ParseExpr(0, 0);
-            Require(";"); Require("}");
-            result.Add(new Function(name, args, expression));
+            bool colonReturn = Eat(":");
+            if (!colonReturn) Require("->");
+            Require("int");
+            List<Binding> locals;
+            Expression value;
+            if (Eat("{"))
+            {
+                (locals, value) = BraceBody();
+            }
+            else if (colonReturn && Eat("->"))
+            {
+                if (Eat("{"))
+                    (locals, value) = BraceBody();
+                else
+                {
+                    locals = [];
+                    value = ParseExpr(0, 0);
+                    Require(";");
+                }
+            }
+            else throw new CompilerError("E_PARSE", "expected '{' or ': int -> expression;'");
+            result.Add(new Function(name, args, locals, value));
             if (result.Count > 64) throw new CompilerError("E_LIMIT", "64 function limit");
         }
         return result;
     }
-    private Expression ParseExpr(int min, int depth)
+
+    private (List<Binding> Locals, Expression Result) BraceBody()
+    {
+        List<Binding> locals = [];
+        while (Eat("val"))
+        {
+            var name = Name();
+            Require("=");
+            var initializer = ParseExpr(0, 0);
+            Require(";");
+            if (locals.Count >= 4) throw new CompilerError("E_LIMIT", "4 local bindings per function");
+            locals.Add(new Binding(name, initializer));
+        }
+        Require("return");
+        var result = ParseExpr(0, 0);
+        Require(";");
+        Require("}");
+        return (locals, result);
+    }
+
+    private List<Expression> Arguments(int depth)
+    {
+        Require("(");
+        List<Expression> args = [];
+        if (Peek != ")") do
+        {
+            args.Add(ParseExpr(0, depth + 1));
+            if (args.Count > 8) throw new CompilerError("E_LIMIT", "8 call arguments");
+        } while (Eat(","));
+        Require(")");
+        return args;
+    }
+
+    // Arithmetic is tighter than functional application. Reverse application
+    // is right-associative, forward application is left-associative. Both use
+    // the same checked Call AST. Mixed directions require parentheses.
+    private Expression ParseExpr(int min, int depth, string pipeDirection = "")
     {
         if (depth > 32) throw new CompilerError("E_LIMIT", "expression nesting limit");
         Expression left;
@@ -105,28 +164,54 @@ internal sealed class Parser
                 throw new CompilerError("E_LITERAL", "64-bit signed literal overflow");
             left = new Literal(value);
         }
+        else if (Peek is "true" or "false")
+            throw new CompilerError("E_TYPE", "boolean source is outside the int64-only CIL profile");
         else
         {
             var name = Name();
-            if (Eat("("))
-            {
-                List<Expression> args = [];
-                if (Peek != ")") do
-                {
-                    args.Add(ParseExpr(0, depth + 1));
-                    if (args.Count > 8) throw new CompilerError("E_LIMIT", "8 call argument limit");
-                } while (Eat(","));
-                Require(")");
-                left = new Call(name, args);
-            }
+            if (Peek == "(") left = new Call(name, Arguments(depth));
             else left = new Arg(name);
         }
         while (true)
         {
-            int precedence = Peek is "*" or "/" ? 20 : Peek is "+" or "-" ? 10 : -1;
+            int precedence = Peek switch
+            {
+                "*" or "/" => 20,
+                "+" or "-" => 10,
+                "|>" or "<|" => 5,
+                _ => -1
+            };
             if (precedence < min) break;
-            var op = Peek; _position++;
-            left = new Binary(op, left, ParseExpr(precedence + 1, depth + 1));
+            var op = Peek;
+            _position++;
+            if (op is "|>" or "<|")
+            {
+                if (pipeDirection.Length != 0 && pipeDirection != op)
+                    throw new CompilerError("E_PARSE", "mixed pipeline directions require parentheses");
+                pipeDirection = op;
+                if (op == "|>")
+                {
+                    var target = Name();
+                    List<Expression> args = Peek == "(" ? Arguments(depth + 1) : [];
+                    if (args.Count >= 8) throw new CompilerError("E_LIMIT", "8 call arguments");
+                    args.Insert(0, left);
+                    left = new Call(target, args);
+                }
+                else
+                {
+                    string target;
+                    List<Expression> args;
+                    if (left is Arg a) { target = a.Name; args = []; }
+                    else if (left is Call c) { target = c.Name; args = new List<Expression>(c.Args); }
+                    else throw new CompilerError("E_PARSE", "reverse pipeline requires a named function");
+                    if (args.Count >= 8) throw new CompilerError("E_LIMIT", "8 call arguments");
+                    var rhs = ParseExpr(precedence, depth + 1, op);
+                    args.Insert(0, rhs);
+                    left = new Call(target, args);
+                }
+            }
+            else
+                left = new Binary(op, left, ParseExpr(precedence + 1, depth + 1));
         }
         return left;
     }
