@@ -39,6 +39,8 @@ internal static class Program
                 Deny(ByteFaultV1.Value, () => b.Write(Owner, 1, 4, value, order));
                 Check(b.Read(Owner, 1, 4, order) == 0x12345678);
             }
+            Deny(ByteFaultV1.Value, () => b.Read(Owner, 1, 4, (ByteOrderV1)100));
+            Deny(ByteFaultV1.Value, () => b.Write(Owner, 1, 4, 42, (ByteOrderV1)100));
             Deny(ByteFaultV1.Owner, () => b.Read(Other, 0, 4, order));
             Deny(ByteFaultV1.Owner, () => b.Write(Other, 0, 4, 1, order));
             b.Retire(Owner);
