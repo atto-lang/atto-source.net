@@ -15,10 +15,33 @@ Signed 64-bit integer parameters and literals; unary minus; parentheses;
 checked +, -, *; integer /; typed function calls including forward references;
 snake_case names; one return expression per function; : int and -> int returns.
 
-All unsupported forms fail closed: booleans, floats, strings, bindings,
-multiple statements, actors, ownership and borrowing, I/O, imports, async,
-exceptions, recursion and dynamic interop. Limits: 64 KiB UTF-8 source,
-8192 tokens, 64 functions, 8 args per function, 32 expression nesting levels.
+Bounded functional-pipeline extension (proposed, not yet guest-verified):
+- Forward application `value |> function |> next` is left-associated and
+  lowered into ordinary checked function calls.
+- Reverse application `function <| value` and `f <| g <| value` is
+  right-associated and uses the same checked call path.
+- Name-first `: int -> expression;` is a single-expression implicit return.
+  Existing `: int { return expression; }` remains an explicit-return body.
+- Braced bodies can declare at most four immutable `val name = expression;`
+  bindings before the final explicit `return`; each initializer is evaluated
+  once, in source order, into an ECMA-335 int64 local with a declared local
+  signature. Local forward references and name shadowing fail closed.
+- Mixing `<|` and `|>` requires parentheses. Dynamic callees and implicit
+  actor/stream pipelines remain unsupported.
+
+Other unsupported forms still fail closed: booleans, floats, strings, mutable
+bindings, arbitrary control flow, actors, ownership/borrowing, I/O, imports,
+async, exceptions, recursion and dynamic interop. Limits: 64 KiB UTF-8 source,
+8192 tokens, 64 functions, 8 args per function, 4 immutable locals per
+function and 32 expression nesting levels.
+
+The real guest matrix is under `fixtures/cil/pipelines/`: the two exact
+83-result programs, 42-result right association and explicitly grouped
+directions, plus ten negative cases. The test script checks deterministic
+generated CIL, executes all four positives under CoreCLR, publishes both
+83-result programs into NativeAOT hosts, and requires rejected sources to
+leave no DLL. **Authored tests are not execution evidence** until exact-head
+CI logs show nonzero steps and actual successful guest exits.
 
 On Linux with .NET 8 SDK and NativeAOT prerequisites execute:
     bash scripts/test-cil-guest.sh
@@ -34,7 +57,6 @@ never a cross-org token, and require nonempty actual executed test steps.
 
 Oreslang .NET architecture is consulted for compatibility but its compiler
 and runtime results cannot be counted as AttoLang executable parity.
-
 
 ## Draft scalar expression sequence parity
 
@@ -62,3 +84,7 @@ runner with .NET SDK/NativeAOT prerequisites. Do not mark cross-backend
 parity `passed` from a new PR, a host-only test, or an Actions job
 with zero executed steps. All actors, ownership, suspend, `defer`, and
 versioned comma-body syntax remain unsupported by this CIL subset.
+
+## Pipeline and scalar sequence composition
+
+The current draft integration retains both pipeline PR #16 and scoped sequence PR #20. Stage-0 supports checked scalar expression sequencing within callable arguments and pipeline stages, but does not admit sequence-local binding declarations or any host/tenant effects. Full AttoLang parity requires independently executed source/target tests and explicit scope, lifetime, and ownership validation.

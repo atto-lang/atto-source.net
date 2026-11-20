@@ -17,9 +17,10 @@ internal sealed record Literal(long Number) : Expression;
 internal sealed record Arg(string Name) : Expression;
 internal sealed record Binary(string Op, Expression Left, Expression Right) : Expression;
 internal sealed record Call(string Name, List<Expression> Args) : Expression;
-// Restricted i64 expression sequence: all members evaluated, only the tail returned.
+// Bounded scalar expression sequence: evaluate every value, retain the tail.
 internal sealed record Sequence(List<Expression> Items) : Expression;
-internal sealed record Function(string Name, List<string> Args, Expression Return);
+internal sealed record Binding(string Name, Expression Initializer);
+internal sealed record Function(string Name, List<string> Args, List<Binding> Locals, Expression Return);
 
 internal sealed class Parser
 {
@@ -36,7 +37,7 @@ internal sealed class Parser
         var name = Peek;
         if (name.Length == 0 || !(name[0] is >= 'a' and <= 'z' or '_') ||
             name.Any(c => !(c is >= 'a' and <= 'z' or >= '0' and <= '9' or '_')) ||
-            name is "fnc" or "pub" or "return" or "int" or "bool" or "seq")
+            name is "fnc" or "pub" or "return" or "int" or "bool" or "val" or "seq")
             throw new CompilerError("E_NAME", $"expected snake_case identifier, got {name}");
         _position++;
         return name;
@@ -60,13 +61,18 @@ internal sealed class Parser
             else if (c is >= '0' and <= '9')
                 while (i < source.Length && source[i] is >= '0' and <= '9') i++;
             else if (c == '-' && i < source.Length && source[i] == '>') i++;
-            else if (!"(){}:;,+-*/>".Contains(c))
+            else if (c == '|' && i < source.Length && source[i] == '>') i++;
+            else if (c == '<' && i < source.Length && source[i] == '|') i++;
+            else if (!"(){}:;,+-*/=>".Contains(c))
                 throw new CompilerError("E_LEX", $"unsupported source character at {start}");
             _tokens.Add(source[start..i]);
             if (_tokens.Count > 8192) throw new CompilerError("E_LIMIT", "8192 token limit");
         }
         _tokens.Add("<eof>");
     }
+    // Deliberately bounded int64-only Atto guest subset. Each val initializer
+    // executes once in source order, and an inline arrow body has exactly one
+    // checked implicit return. A brace body still requires explicit return.
     internal List<Function> Parse()
     {
         List<Function> result = [];
@@ -85,18 +91,70 @@ internal sealed class Parser
                 if (args.Count > 8) throw new CompilerError("E_LIMIT", "8 parameter limit");
             } while (Eat(","));
             Require(")");
-            if (!Eat(":")) Require("->");
-            Require("int"); Require("{"); Require("return");
-            var expression = ParseExpr(0, 0);
-            Require(";"); Require("}");
-            result.Add(new Function(name, args, expression));
+            bool colonReturn = Eat(":");
+            if (!colonReturn) Require("->");
+            Require("int");
+            List<Binding> locals;
+            Expression value;
+            if (Eat("{"))
+            {
+                (locals, value) = BraceBody();
+            }
+            else if (colonReturn && Eat("->"))
+            {
+                if (Eat("{"))
+                    (locals, value) = BraceBody();
+                else
+                {
+                    locals = [];
+                    value = ParseExpr(0, 0);
+                    Require(";");
+                }
+            }
+            else throw new CompilerError("E_PARSE", "expected '{' or ': int -> expression;'");
+            result.Add(new Function(name, args, locals, value));
             if (result.Count > 64) throw new CompilerError("E_LIMIT", "64 function limit");
         }
         return result;
     }
-    // The commas belong to this delimited sequence only; they are not
-    // callable arguments or tuple elements. A scalar sequence has no bindings
-    // and must not skip errors from any earlier evaluated item.
+
+    private (List<Binding> Locals, Expression Result) BraceBody()
+    {
+        List<Binding> locals = [];
+        while (Eat("val"))
+        {
+            var name = Name();
+            Require("=");
+            var initializer = ParseExpr(0, 0);
+            Require(";");
+            if (locals.Count >= 4) throw new CompilerError("E_LIMIT", "4 local bindings per function");
+            locals.Add(new Binding(name, initializer));
+        }
+        Require("return");
+        var result = ParseExpr(0, 0);
+        Require(";");
+        Require("}");
+        return (locals, result);
+    }
+
+    private List<Expression> Arguments(int depth)
+    {
+        Require("(");
+        List<Expression> args = [];
+        if (Peek != ")") do
+        {
+            args.Add(ParseExpr(0, depth + 1));
+            if (args.Count > 8) throw new CompilerError("E_LIMIT", "8 call arguments");
+        } while (Eat(","));
+        Require(")");
+        return args;
+    }
+
+    // Arithmetic is tighter than functional application. Reverse application
+    // is right-associative, forward application is left-associative. Both use
+    // the same checked Call AST. Mixed directions require parentheses.
+    // Literal sequence delimiters are distinct from function argument commas
+    // and tuple syntax. Only checked i64 expression members are admitted.
     private Expression ParseSequenceItems(int depth)
     {
         if (Peek == ")") throw new CompilerError("E_SEQ_EMPTY", "sequence requires an expression");
@@ -112,7 +170,8 @@ internal sealed class Parser
         Require(")");
         return items.Count == 1 ? items[0] : new Sequence(items);
     }
-    private Expression ParseExpr(int min, int depth)
+
+    private Expression ParseExpr(int min, int depth, string pipeDirection = "")
     {
         if (depth > 32) throw new CompilerError("E_LIMIT", "expression nesting limit");
         Expression left;
@@ -134,28 +193,54 @@ internal sealed class Parser
                 throw new CompilerError("E_LITERAL", "64-bit signed literal overflow");
             left = new Literal(value);
         }
+        else if (Peek is "true" or "false")
+            throw new CompilerError("E_TYPE", "boolean source is outside the int64-only CIL profile");
         else
         {
             var name = Name();
-            if (Eat("("))
-            {
-                List<Expression> args = [];
-                if (Peek != ")") do
-                {
-                    args.Add(ParseExpr(0, depth + 1));
-                    if (args.Count > 8) throw new CompilerError("E_LIMIT", "8 call argument limit");
-                } while (Eat(","));
-                Require(")");
-                left = new Call(name, args);
-            }
+            if (Peek == "(") left = new Call(name, Arguments(depth));
             else left = new Arg(name);
         }
         while (true)
         {
-            int precedence = Peek is "*" or "/" ? 20 : Peek is "+" or "-" ? 10 : -1;
+            int precedence = Peek switch
+            {
+                "*" or "/" => 20,
+                "+" or "-" => 10,
+                "|>" or "<|" => 5,
+                _ => -1
+            };
             if (precedence < min) break;
-            var op = Peek; _position++;
-            left = new Binary(op, left, ParseExpr(precedence + 1, depth + 1));
+            var op = Peek;
+            _position++;
+            if (op is "|>" or "<|")
+            {
+                if (pipeDirection.Length != 0 && pipeDirection != op)
+                    throw new CompilerError("E_PARSE", "mixed pipeline directions require parentheses");
+                pipeDirection = op;
+                if (op == "|>")
+                {
+                    var target = Name();
+                    List<Expression> args = Peek == "(" ? Arguments(depth + 1) : [];
+                    if (args.Count >= 8) throw new CompilerError("E_LIMIT", "8 call arguments");
+                    args.Insert(0, left);
+                    left = new Call(target, args);
+                }
+                else
+                {
+                    string target;
+                    List<Expression> args;
+                    if (left is Arg a) { target = a.Name; args = []; }
+                    else if (left is Call c) { target = c.Name; args = new List<Expression>(c.Args); }
+                    else throw new CompilerError("E_PARSE", "reverse pipeline requires a named function");
+                    if (args.Count >= 8) throw new CompilerError("E_LIMIT", "8 call arguments");
+                    var rhs = ParseExpr(precedence, depth + 1, op);
+                    args.Insert(0, rhs);
+                    left = new Call(target, args);
+                }
+            }
+            else
+                left = new Binary(op, left, ParseExpr(precedence + 1, depth + 1));
         }
         return left;
     }
@@ -179,27 +264,37 @@ internal sealed class CIL(List<Function> functions)
             if (state[id] == 2) return;
             if (state[id] == 1) throw new CompilerError("E_CYCLE", _functions[id].Name);
             state[id] = 1;
-            WalkExpr(_functions[id].Return, _functions[id]);
+            var fn = _functions[id];
+            var available = new HashSet<string>(fn.Args, StringComparer.Ordinal);
+            foreach (var binding in fn.Locals)
+            {
+                // Check before publishing the binding; self/future references
+                // cannot accidentally become initialized by source-order changes.
+                WalkExpr(binding.Initializer, fn, available);
+                if (!available.Add(binding.Name))
+                    throw new CompilerError("E_DUP_LOCAL", binding.Name);
+            }
+            WalkExpr(fn.Return, fn, available);
             state[id] = 2;
         }
-        void WalkExpr(Expression e, Function owner)
+        void WalkExpr(Expression e, Function owner, HashSet<string> available)
         {
             switch (e)
             {
                 case Literal: return;
                 case Arg a:
-                    if (!owner.Args.Contains(a.Name)) throw new CompilerError("E_SYMBOL", a.Name);
+                    if (!available.Contains(a.Name)) throw new CompilerError("E_SYMBOL", a.Name);
                     return;
                 case Sequence seq:
-                    foreach (var item in seq.Items) WalkExpr(item, owner);
+                    foreach (var item in seq.Items) WalkExpr(item, owner, available);
                     return;
                 case Binary b:
-                    WalkExpr(b.Left, owner); WalkExpr(b.Right, owner);
+                    WalkExpr(b.Left, owner, available); WalkExpr(b.Right, owner, available);
                     return;
                 case Call c:
                     if (!_symbols.TryGetValue(c.Name, out var target)) throw new CompilerError("E_SYMBOL", c.Name);
                     if (_functions[target].Args.Count != c.Args.Count) throw new CompilerError("E_ARITY", c.Name);
-                    foreach (var arg in c.Args) WalkExpr(arg, owner);
+                    foreach (var arg in c.Args) WalkExpr(arg, owner, available);
                     WalkFunction(target);
                     return;
                 default: throw new CompilerError("E_TYPE", "unsupported expression");
@@ -230,9 +325,33 @@ internal sealed class CIL(List<Function> functions)
         {
             var code = new BlobBuilder();
             var il = new InstructionEncoder(code);
+            // Local int64 signatures are explicit ECMA-335 StandAloneSig
+            // records. The 4-slot bound keeps all indexed load/store opcodes
+            // unambiguous and avoids dynamic reflection/runtime codegen.
+            StandaloneSignatureHandle localSignature = default;
+            if (f.Locals.Count > 0)
+            {
+                var localTypes = new BlobBuilder();
+                var enc = new BlobEncoder(localTypes).LocalVariableSignature(f.Locals.Count);
+                foreach (var binding in f.Locals) enc.AddVariable().Type().Int64();
+                localSignature = metadata.AddStandaloneSignature(metadata.GetOrAddBlob(localTypes));
+            }
+            for (int i = 0; i < f.Locals.Count; i++)
+            {
+                Generate(f.Locals[i].Initializer, f, il);
+                il.OpCode(i switch
+                {
+                    0 => ILOpCode.Stloc_0,
+                    1 => ILOpCode.Stloc_1,
+                    2 => ILOpCode.Stloc_2,
+                    3 => ILOpCode.Stloc_3,
+                    _ => throw new CompilerError("E_LIMIT", "4 local bindings per function")
+                });
+            }
             Generate(f.Return, f, il);
             il.OpCode(ILOpCode.Ret);
-            bodyOffsets.Add(bodyStream.AddMethodBody(il, maxStack: 64));
+            bodyOffsets.Add(bodyStream.AddMethodBody(il, maxStack: 64,
+                localVariablesSignature: localSignature));
         }
         int nextParameter = 1;
         for (int i = 0; i < _functions.Count; i++)
@@ -281,10 +400,26 @@ internal sealed class CIL(List<Function> functions)
         switch (e)
         {
             case Literal c: il.LoadConstantI8(c.Number); return;
-            case Arg a: il.LoadArgument(f.Args.IndexOf(a.Name)); return;
+            case Arg a:
+                int argIndex = f.Args.IndexOf(a.Name);
+                if (argIndex >= 0) il.LoadArgument(argIndex);
+                else
+                {
+                    int localIndex = f.Locals.FindIndex(b => b.Name == a.Name);
+                    if (localIndex < 0) throw new CompilerError("E_SYMBOL", a.Name);
+                    il.OpCode(localIndex switch
+                    {
+                        0 => ILOpCode.Ldloc_0,
+                        1 => ILOpCode.Ldloc_1,
+                        2 => ILOpCode.Ldloc_2,
+                        3 => ILOpCode.Ldloc_3,
+                        _ => throw new CompilerError("E_LIMIT", "4 local bindings per function")
+                    });
+                }
+                return;
             case Sequence seq:
-                // ECMA-335 Pop removes only the i64 value. Calls and checked
-                // exceptions from earlier expressions remain observable.
+                // A checked trap or function call in a non-final expression
+                // must execute before the following element is reached.
                 for (int i = 0; i < seq.Items.Count; i++)
                 {
                     Generate(seq.Items[i], f, il);
