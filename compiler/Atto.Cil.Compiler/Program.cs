@@ -167,35 +167,68 @@ internal sealed class CIL(List<Function> functions)
         for (int i = 0; i < _functions.Count; i++)
             if (!_symbols.TryAdd(_functions[i].Name, i))
                 throw new CompilerError("E_DUP_FUNCTION", _functions[i].Name);
-        if (!_symbols.TryGetValue("main", out var index) || _functions[index].Args.Count != 0)
+        if (!_symbols.TryGetValue("main", out var index)
+            || _functions[index].Args.Count != 0 || _functions[index].ReturnType != "int")
             throw new CompilerError("E_ENTRY", "requires main(): int with no args");
         int[] state = new int[_functions.Count];
         for (int i = 0; i < state.Length; i++) WalkFunction(i);
+
         void WalkFunction(int id)
         {
             if (state[id] == 2) return;
             if (state[id] == 1) throw new CompilerError("E_CYCLE", _functions[id].Name);
             state[id] = 1;
-            WalkExpr(_functions[id].Return, _functions[id]);
+            var function = _functions[id];
+            foreach (var guard in function.Guards)
+            {
+                Expect(TypeOf(guard.Condition, function), "bool");
+                Expect(TypeOf(guard.Return, function), function.ReturnType);
+            }
+            Expect(TypeOf(function.Return, function), function.ReturnType);
             state[id] = 2;
         }
-        void WalkExpr(Expression e, Function owner)
+
+        static void Expect(string actual, string wanted)
         {
-            switch (e)
+            if (actual != wanted)
+                throw new CompilerError("E_TYPE", $"expected {wanted}, got {actual}");
+        }
+
+        string TypeOf(Expression expression, Function owner)
+        {
+            switch (expression)
             {
-                case Literal: return;
+                case Literal: return "int";
+                case BoolLiteral: return "bool";
                 case Arg a:
-                    if (!owner.Args.Contains(a.Name)) throw new CompilerError("E_SYMBOL", a.Name);
-                    return;
+                    if (!owner.Args.Contains(a.Name))
+                        throw new CompilerError("E_SYMBOL", a.Name);
+                    return "int";
                 case Binary b:
-                    WalkExpr(b.Left, owner); WalkExpr(b.Right, owner);
-                    return;
+                    var left = TypeOf(b.Left, owner);
+                    var right = TypeOf(b.Right, owner);
+                    if (b.Op is "+" or "-" or "*" or "/" or "<" or "<=" or ">" or ">=")
+                    {
+                        Expect(left, "int");
+                        Expect(right, "int");
+                        return b.Op is "+" or "-" or "*" or "/" ? "int" : "bool";
+                    }
+                    if (b.Op is "==" or "!=")
+                    {
+                        if (left != right) throw new CompilerError("E_TYPE",
+                            "equality operands must have identical scalar types");
+                        return "bool";
+                    }
+                    throw new CompilerError("E_TYPE", "unsupported operator");
                 case Call c:
-                    if (!_symbols.TryGetValue(c.Name, out var target)) throw new CompilerError("E_SYMBOL", c.Name);
-                    if (_functions[target].Args.Count != c.Args.Count) throw new CompilerError("E_ARITY", c.Name);
-                    foreach (var arg in c.Args) WalkExpr(arg, owner);
+                    if (!_symbols.TryGetValue(c.Name, out var target))
+                        throw new CompilerError("E_SYMBOL", c.Name);
+                    var called = _functions[target];
+                    if (called.Args.Count != c.Args.Count)
+                        throw new CompilerError("E_ARITY", c.Name);
+                    foreach (var arg in c.Args) Expect(TypeOf(arg, owner), "int");
                     WalkFunction(target);
-                    return;
+                    return called.ReturnType;
                 default: throw new CompilerError("E_TYPE", "unsupported expression");
             }
         }
@@ -223,7 +256,18 @@ internal sealed class CIL(List<Function> functions)
         foreach (var f in _functions)
         {
             var code = new BlobBuilder();
-            var il = new InstructionEncoder(code);
+            // ControlFlowBuilder fixes forward branch offsets and validates
+            // labels; guards must short-circuit before checked subtraction.
+            var il = new InstructionEncoder(code, new ControlFlowBuilder());
+            foreach (var guard in f.Guards)
+            {
+                Generate(guard.Condition, f, il);
+                var skip = il.DefineLabel();
+                il.Branch(ILOpCode.Brfalse, skip);
+                Generate(guard.Return, f, il);
+                il.OpCode(ILOpCode.Ret);
+                il.MarkLabel(skip);
+            }
             Generate(f.Return, f, il);
             il.OpCode(ILOpCode.Ret);
             bodyOffsets.Add(bodyStream.AddMethodBody(il, maxStack: 64));
@@ -234,7 +278,11 @@ internal sealed class CIL(List<Function> functions)
             var f = _functions[i];
             var signature = new BlobBuilder();
             new BlobEncoder(signature).MethodSignature().Parameters(
-                f.Args.Count, r => r.Type().Int64(),
+                f.Args.Count, r =>
+                {
+                    if (f.ReturnType == "bool") r.Type().Boolean();
+                    else r.Type().Int64();
+                },
                 p => { foreach (var arg in f.Args) p.AddParameter().Type().Int64(); });
             metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.HideBySig,
                 MethodImplAttributes.IL, metadata.GetOrAddString(f.Name),
