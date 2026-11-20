@@ -68,12 +68,13 @@ expect_42 NATIVEAOT_GUEST /tmp/atto-cil-nativeaot/Atto.Cil.Guest.Host
 # Additional genuine CIL guest executions; neither calculation is in C#.
 for fixture in fixtures/cil/exit42.atto fixtures/cil/precedence.atto \
   fixtures/cil/forward-call.atto fixtures/cil/seq-nested.atto \
-  fixtures/cil/seq-call-args.atto fixtures/cil/seq-singleton.atto; do
+  fixtures/cil/seq-call-args.atto fixtures/cil/seq-singleton.atto \
+  fixtures/cil/seq-pipeline-tail.atto fixtures/cil/seq-pipeline-result.atto; do
   dotnet run --no-build -c Release --project "$compiler" -- "$fixture" "$guest"
   dotnet build "$host" -c Release
   expect_42 EXTRA_CORECLR_GUEST dotnet run --no-build -c Release --project "$host"
 done
-echo "ATTO_DIRECT_CIL_POSITIVE_PASS fixtures=7 including 3 seq variants"
+echo "ATTO_DIRECT_CIL_POSITIVE_PASS fixtures=9 including 5 seq variants"
 
 # Functional pipeline conformance is compiled from .atto source, not evaluated
 # in shell/C#/Python. The same produced CIL is executed under CoreCLR and,
