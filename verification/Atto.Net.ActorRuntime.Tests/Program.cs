@@ -1,4 +1,6 @@
 using Atto.Net.ActorRuntime;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 internal static class Program
 {
@@ -30,6 +32,18 @@ internal static class Program
         var siblingTurn = sibling.BeginTurn();
         var foreignTurn = foreign.BeginTurn();
         var frame = actor.PushFrame(turn1, 16);
+        Expect<NotSupportedException>(
+            () => JsonSerializer.Serialize(turn1, NoWireJsonContext.Default.ActorTurn),
+            "turn authority JSON serialize denied");
+        Expect<NotSupportedException>(
+            () => JsonSerializer.Serialize(frame, NoWireJsonContext.Default.ActorFrameHandle),
+            "frame authority JSON serialize denied");
+        Expect<NotSupportedException>(
+            () => JsonSerializer.Deserialize("{}", NoWireJsonContext.Default.ActorTurn),
+            "turn authority JSON deserialize denied");
+        Expect<NotSupportedException>(
+            () => JsonSerializer.Deserialize("{}", NoWireJsonContext.Default.ActorFrameHandle),
+            "frame authority JSON deserialize denied");
         actor.WriteFrame(turn1, frame, 0, new byte[] { 42, 17 });
         Expect<InvalidOperationException>(
             () => sibling.ReadFrame(siblingTurn, frame, 0, new byte[2]),
@@ -285,3 +299,8 @@ internal static class Program
         }
     }
 }
+
+[JsonSourceGenerationOptions(GenerationMode = JsonSourceGenerationMode.Metadata)]
+[JsonSerializable(typeof(ActorTurn))]
+[JsonSerializable(typeof(ActorFrameHandle))]
+internal partial class NoWireJsonContext : JsonSerializerContext { }
