@@ -1,5 +1,15 @@
 name: .NET actor arena and persistent cooperation (exact source)
 on:
+  # A branch-local push can trigger this workflow even before its file lands
+  # on protected main. No secrets, private-source export, or runner bypass.
+  push:
+    branches:
+      - feat/net-actor-arena-persistent-meter-20261120
+    paths:
+      - 'runtime/Atto.Net.ActorRuntime/**'
+      - 'verification/Atto.Net.ActorRuntime.Tests/**'
+      - 'docs/NET_ACTOR_ARENA_PERSISTENT_COOPERATION_V1.md'
+      - '.github/workflows/net-actor-arena-cooperation.yml'
   pull_request:
     paths:
       - 'runtime/Atto.Net.ActorRuntime/**'
