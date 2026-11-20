@@ -24,6 +24,7 @@ static void InvalidSend(Action action, string why)
 
 SourceByteBudgetTests.Run();
 ActorArenaTests.Run();
+PersistentActorDataTests.Run();
 ActorPipelinePolicyTests.Run();
 
 // Actor host selectors are not guest source intrinsics on this backend yet.

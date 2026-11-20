@@ -1,0 +1,143 @@
+using System;
+using System.Collections.Generic;
+using System.Numerics;
+using Ores.Net.Runtime;
+
+static class PersistentActorDataTests
+{
+    private static void Require(bool value, string why)
+    {
+        if (!value) throw new Exception("Persistent actor data: " + why);
+    }
+
+    internal static void Run()
+    {
+        var empty = PersistentActorMap.Empty;
+        var root = empty;
+        for (int i = 0; i < 4096; i++)
+            root = root.With("key-" + i.ToString("D5"), i);
+        Require(root.Count == 4096, "count");
+        Require(empty.Count == 0, "old empty root mutated");
+        Require((int?)root.Get("key-01024") == 1024, "lookup");
+
+        var prior = root;
+        var updated = root.With("key-01024", 9001);
+        Require((int?)prior.Get("key-01024") == 1024, "prior root changed");
+        Require((int?)updated.Get("key-01024") == 9001, "updated root wrong");
+        Require(ReferenceEquals(updated, updated.With("key-01024", 9001)),
+            "scalar no-op should preserve root identity");
+
+        var nested = PersistentActorMap.Empty.With("v", new BigInteger(12));
+        var parent = PersistentActorMap.Empty.With("nested", nested);
+        Require(ReferenceEquals(nested, parent.Get("nested")), "nested identity lost");
+        Require(ReferenceEquals(parent, parent.With("nested", nested)),
+            "same nested root must be O(1) no-op");
+        var equalButDistinct = PersistentActorMap.Empty.With("v", new BigInteger(12));
+        var replaced = parent.With("nested", equalButDistinct);
+        Require(ReferenceEquals(equalButDistinct, replaced.Get("nested")),
+            "distinct nested root should replace without deep equality");
+
+        var deleted = updated.Without("key-01024");
+        Require(deleted.Get("key-01024") is null, "delete failed");
+        Require((int?)updated.Get("key-01024") == 9001, "delete mutated prior root");
+        try
+        {
+            _ = root.With("mutable", new List<int>());
+            throw new Exception("mutable List admitted");
+        }
+        catch (ArgumentException) { }
+
+        var hugeKey = new string('x', 4097);
+        Require(!root.TryGetValue(hugeKey, out _), "oversized lookup accepted");
+        Require(root.Get(hugeKey) is null, "oversized key returned an actor value");
+        foreach (var badKey in new[] { "", hugeKey })
+        {
+            try { _ = root.Without(badKey); throw new Exception("bad removal admitted"); }
+            catch (ArgumentOutOfRangeException) { }
+        }
+        Require(root.Count == 4096, "denied keys modified immutable map");
+
+        var port = new PersistentActorMapPort(ActorDataIsolation.Shared, 1, 64);
+        Require(port.Offer(parent, 32), "first port offer");
+        Require(!port.Offer(replaced, 32), "quota did not reject second offer");
+        Require(port.Used == (1, 32L), "receive credit accounting");
+        var delivery = port.TryReceive() ?? throw new Exception("missing delivery");
+        Require(ReferenceEquals(parent, delivery.State), "SHARED immutable root identity copied");
+        Require(port.Used == (1, 32L), "receive prematurely refunded credit");
+        try
+        {
+            port.Close();
+            throw new Exception("close accepted unacknowledged delivery");
+        }
+        catch (InvalidOperationException) { }
+        Require(delivery.Acknowledge(), "first acknowledgement");
+        Require(!delivery.Acknowledge(), "duplicate acknowledgement");
+        Require(port.Used == (0, 0L), "credit not returned exactly once");
+        // Close is idempotently safe only after every checked-out frame settles.
+        port.Close();
+
+        foreach (object badNumber in new object[] {
+            float.NaN, float.PositiveInfinity, double.NaN, double.NegativeInfinity })
+        {
+            try
+            {
+                _ = parent.With("bad-number", badNumber);
+                throw new Exception("nonfinite persistent number admitted");
+            }
+            catch (ArgumentException) { }
+        }
+
+        var sharedChild = PersistentActorMap.Empty.With("leaf", 7);
+        var dag = PersistentActorMap.Empty
+            .With("left", sharedChild)
+            .With("right", sharedChild);
+        var dagCopy = dag.SnapshotForActor(ActorDataIsolation.Private);
+        var leftCopy = (PersistentActorMap?)dagCopy.Get("left");
+        var rightCopy = (PersistentActorMap?)dagCopy.Get("right");
+        Require(leftCopy is not null && ReferenceEquals(leftCopy, rightCopy),
+            "PRIVATE clone failed to preserve internal immutable DAG sharing");
+        Require(!ReferenceEquals(leftCopy, sharedChild),
+            "PRIVATE clone shared sender nested root");
+
+        var privatePort = new PersistentActorMapPort(
+            ActorDataIsolation.Private, 1, 64);
+        Require(privatePort.Offer(parent, 32), "PRIVATE offer");
+        var privateDelivery = privatePort.TryReceive() ??
+            throw new Exception("missing PRIVATE delivery");
+        Require(!ReferenceEquals(parent, privateDelivery.State),
+            "PRIVATE root identity was shared");
+        Require(privateDelivery.State.Get("nested") is PersistentActorMap privateNested,
+            "PRIVATE nested root missing");
+        Require(!ReferenceEquals(nested, privateNested),
+            "PRIVATE nested immutable root identity was shared");
+        Require((BigInteger?)privateNested.Get("v") == new BigInteger(12),
+            "PRIVATE nested value changed");
+        Require(privateDelivery.Acknowledge(), "PRIVATE acknowledgement");
+        privatePort.Close();
+
+        // Acknowledgement is a single linearization point, even when many
+        // foreign completion carriers race on the same delivery token.
+        var concurrentPort = new PersistentActorMapPort(ActorDataIsolation.Shared, 64, 64);
+        Require(concurrentPort.Offer(parent, 1), "race admission");
+        var contested = concurrentPort.TryReceive() ??
+            throw new Exception("missing contested delivery");
+        int winners = 0;
+        System.Threading.Tasks.Parallel.For(0, 128, _ =>
+        {
+            if (contested.Acknowledge())
+                System.Threading.Interlocked.Increment(ref winners);
+        });
+        Require(winners == 1, "racing acknowledgement settled more than once");
+        Require(concurrentPort.Used == (0, 0L), "racing ACK double-refunded credits");
+        concurrentPort.Close();
+        try
+        {
+            _ = concurrentPort.Offer(parent, 1);
+            throw new Exception("closed port accepted new delivery");
+        }
+        catch (InvalidOperationException) { }
+
+        var untrusted = parent.SnapshotForActor(ActorDataIsolation.Untrusted);
+        Require(!ReferenceEquals(parent, untrusted), "UNTRUSTED root identity shared");
+    }
+}
