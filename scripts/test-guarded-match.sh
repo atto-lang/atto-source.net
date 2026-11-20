@@ -16,6 +16,7 @@ check_blob "$fixture_dir/pass/match-guard-block-return.atto" 603df679e1e9b7415cb
 check_blob "$fixture_dir/pass/match-guard-block-caret.atto" 0b2addfef29cd76d60d90bf081f4d326ea2d70df
 check_blob "$fixture_dir/fail/match-guard-no-fallback.atto" 23f8597125af43b3cab294ba8dc9b110d9983ef5
 check_blob "$fixture_dir/fail/match-guard-block-fallthrough.atto" a8ec2c699c4a521508bee85f55a49888064c6948
+check_blob "$fixture_dir/negative/unsupported-adt-is-pattern.atto" a9aeb19ceedbff713fd60ac348f0a9849f18725a
 
 expect_guest_exit() {
   local expected="$1"; shift
@@ -50,7 +51,8 @@ for item in \
   negative/invalid-guard-type:E_TYPE \
   negative/guard-scope-leak:E_SYMBOL \
   negative/unreachable-fallback:E_MATCH \
-  negative/boolean-result:E_TYPE; do
+  negative/boolean-result:E_TYPE \
+  negative/unsupported-adt-is-pattern:E_UNSUPPORTED_TYPE; do
   name="${item%%:*}"; code="${item#*:}"
   rm -f artifacts/Rejected.dll
   set +e
