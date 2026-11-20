@@ -40,6 +40,7 @@ and does not copy the legacy C# runtime into the current direct-CIL compiler.
 - `TenantVm.CreateActor` checks tenant maximum actors, total native bytes,
   per-actor bounds and initial fuel before publishing any authority. The
   allocation is zero-filled. Native memory is never aliased across actors.
+- `System.Text.Json` serialize/deserialize paths for issued turn and frame capabilities are explicitly denied via converters and NativeAOT-safe source-generated negative tests; unrelated codecs must enforce their own no-wire rejection at the broker.
 - `BeginTurn` issues an exact actor-owned token. Each native access and
   metering charge validates that token and actor liveness. A second active
   admission poisons that actor. Old turn and other-tenant tokens are invalid.
