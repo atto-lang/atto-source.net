@@ -1,0 +1,16 @@
+// TARGET FIXTURE ONLY: no compiled guest receipt yet.
+// Closed or stopped DATA ports must reject admission BEFORE publication.
+// Expected setup failure: Err(PipeSetupError); never a partial DATA edge.
+define actor Producer receives int emits int as
+  susp receive(ActorMail<int> mail): void { emit(mail.value); }
+end
+define actor Consumer receives int as
+  susp receive(ActorMail<int> mail): void { }
+end
+pub susp fnc main(): int {
+  val producer = spawn Producer();
+  val consumer = spawn Consumer();
+  consumer.stop();
+  val failed = producer pipe consumer;
+  return 0;
+}
