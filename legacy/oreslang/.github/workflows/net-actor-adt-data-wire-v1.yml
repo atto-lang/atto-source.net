@@ -1,0 +1,39 @@
+name: NET10 actor ADT DATA wire v1 (host-only)
+on:
+  pull_request:
+    paths:
+      - 'runtime/Ores.Net.Runtime/ActorAdtDataWireV1.cs'
+      - 'verification/ActorAdtDataWireV1Smoke/**'
+      - '.github/workflows/net-actor-adt-data-wire-v1.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  exact-head-managed:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@d4c94342e560b34958eacfc5d055d21461ed1c5d
+        with:
+          dotnet-version: '10.0.x'
+      - name: Pin exact source head/tree
+        env:
+          SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_HEAD"
+          git rev-parse HEAD^{tree}
+      - name: Build, execute and verify typed ADT DATA smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet --version
+          dotnet run --project verification/ActorAdtDataWireV1Smoke/ActorAdtDataWireV1Smoke.csproj -c Release \
+            | tee "$RUNNER_TEMP/adt-net.log"
+          grep -Fx 'NET_ADT_DATA_WIRE_V1_PASS|profiles=6|control_authority=none|guest_execution=no' \
+            "$RUNNER_TEMP/adt-net.log"
+      - name: Confirm source not modified
+        run: test -z "$(git status --porcelain)"

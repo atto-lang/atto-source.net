@@ -1,0 +1,14 @@
+// This deliberately bounded helper-call v1 uses expression-only,
+// nonrecursive typed functions. Calls are lowered into verified SSA.
+define pub fnc next_value(int value): int {
+    return value + 1;
+}
+define pub fnc double(int value): int {
+    return value * 2;
+}
+define pub fnc answer(): int {
+    return double(next_value(20));
+}
+define pub fnc main(): int {
+    return answer();
+}

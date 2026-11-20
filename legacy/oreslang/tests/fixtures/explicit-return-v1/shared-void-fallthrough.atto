@@ -1,0 +1,7 @@
+// Both LLVM and .NET compile this same closed return-flow source.
+// A non-void main must return explicitly; a void helper may fall through.
+fnc note(): void {
+}
+pub fnc main(): int {
+  return 0;
+}

@@ -1,0 +1,8 @@
+// NativeAOT structured graph-step countdown and bounded loop.
+define pub fnc main(): int {
+  let int steps = 0;
+  while steps < 42 {
+    steps = steps + 1;
+  }
+  return steps;
+}

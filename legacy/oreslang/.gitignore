@@ -1,0 +1,10 @@
+**/bin/
+**/obj/
+/artifacts/
+/.vs/
+/TestResults/
+*.user
+*.pdb
+
+tmp/
+temp/
