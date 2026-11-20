@@ -18,6 +18,9 @@ for entry in \
     echo "EXACT_SHARED_BLOB_MISMATCH path=$path" >&2; exit 1;
   }
 done
+test "$(git hash-object fixtures/match-return-forms-v1/negative/unsupported-adt-is-pattern.atto)" = "e49fd45f9bca8618ee1fbe6aaae914c80cd1e34f" || {
+  echo "STDIO_ADT_IS_NEGATIVE_BLOB_MISMATCH" >&2; exit 1;
+}
 echo "EXACT_SHARED_MATCH_CORPUS_SHA_VERIFIED=4"
 dotnet build "$compiler" -c Release
 
@@ -68,6 +71,7 @@ check_rejected() {
 }
 check_rejected match-guard-no-fallback E_MATCH fail/
 check_rejected match-guard-block-fallthrough E_RETURN fail/
+check_rejected unsupported-adt-is-pattern E_UNSUPPORTED_TYPE negative/
 for entry in \
     guard-not-bool:E_TYPE \
     duplicate-unreachable:E_MATCH \
