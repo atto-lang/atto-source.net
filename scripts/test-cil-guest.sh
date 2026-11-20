@@ -315,3 +315,36 @@ for case in \
 done
 echo 'ATTO_CIL_EDGE_NEGATIVE=PASS cases=3'
 
+
+
+# Host words for synchronization, task scope, and generators cannot be
+# impersonated by pure scalar CIL function, parameter or local identifiers.
+# A rejected source may never publish a runnable guest DLL.
+for name in sync task yield; do
+  for site in function parameter local; do
+    file="artifacts/negative-reserved-${name}-${site}.atto"
+    rejected="artifacts/negative-reserved-${name}-${site}.dll"
+    case "$site" in
+      function)
+        printf 'fnc %s(int x): int -> x; pub fnc main(): int -> 42 |> %s;\n' "$name" "$name" >"$file" ;;
+      parameter)
+        printf 'fnc f(int %s): int -> 42; pub fnc main(): int -> f(1);\n' "$name" >"$file" ;;
+      local)
+        printf 'pub fnc main(): int { val %s = 42; return %s; }\n' "$name" "$name" >"$file" ;;
+    esac
+    rm -f "$rejected"
+    set +e
+    dotnet run --no-build -c Release --project "$compiler" -- "$file" "$rejected" \
+      > /tmp/atto-cil-reserved.stdout 2> /tmp/atto-cil-reserved.stderr
+    status=$?
+    set -e
+    test "$status" -eq 2 && test ! -e "$rejected" \
+      && test ! -s /tmp/atto-cil-reserved.stdout \
+      && grep -Fq 'E_NAME:' /tmp/atto-cil-reserved.stderr || {
+      echo "ATTO_CIL_RESERVED_WORD_ADMISSION_FAIL name=$name site=$site exit=$status" >&2
+      exit 1
+    }
+    rm -f "$file"
+  done
+done
+echo 'ATTO_CIL_AUTHORITY_WORD_MATRIX=9_NO_GUEST_OUTPUT'
