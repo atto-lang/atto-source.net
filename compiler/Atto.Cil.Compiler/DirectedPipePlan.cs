@@ -106,15 +106,19 @@ internal static class DirectedPipePlanner
         if (plans.Count > 64) throw new ArgumentException("E_PIPE_PLAN_LIMIT");
         var pairs = new HashSet<string>(StringComparer.Ordinal);
         var occupied = new HashSet<string>(StringComparer.Ordinal);
+        var incoming = new HashSet<string>(StringComparer.Ordinal);
         foreach (var p in plans)
         {
             ArgumentNullException.ThrowIfNull(p);
             foreach (var edge in p.DataEdges)
             {
                 var source = p.Tenant + "\0" + edge.Source;
-                var pair = source + "\0" + edge.Sink;
+                var sink = p.Tenant + "\0" + edge.Sink;
+                var pair = source + "\0" + sink;
                 if (!pairs.Add(pair)) throw new ArgumentException("E_PIPE_DUPLICATE_EDGE");
                 if (!occupied.Add(source)) throw new ArgumentException("E_PIPE_OUTPUT_OCCUPIED");
+                // Require an explicit merge adapter for multiple producers.
+                if (!incoming.Add(sink)) throw new ArgumentException("E_PIPE_INPUT_OCCUPIED");
             }
         }
     }
