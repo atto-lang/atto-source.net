@@ -141,6 +141,57 @@ See [issue #566](https://github.com/ores-truffle-oreslang/oreslang-source.net/is
 for the independent, private-source snapshot-specific CI carrier approval
 request. No cross-org private tree copy has been approved or executed.
 
+## November 2026 Wasmtime advisory gate
+
+**Release HOLD:** the synthetic proof is currently pinned to Wasmtime
+50.0.1. Upstream released **50.0.2 on 2026-11-16** with fixes for
+[GHSA-43j2-gcp4-m22g](https://github.com/bytecodealliance/wasmtime/security/advisories/GHSA-43j2-gcp4-m22g)
+(stale Wasm GC heap-base abort) and
+[GHSA-2674-w29h-wqvj](https://github.com/bytecodealliance/wasmtime/security/advisories/GHSA-2674-w29h-wqvj)
+(runtime built without threads feature can abort). The current narrow
+fixture disables reference types and threads and imports no host APIs,
+but this does NOT certify new actor workloads against these advisories.
+
+Do not authorize production tenants while running the unpatched 50.0.1
+native library. Upgrade both the **verified .NET package** and the actual
+RID-specific Wasmtime native library together when the patched binding
+is available; recompile signed guest native artifacts under the matching
+engine build/configuration. The Rust upstream release by itself is not
+proof the matching NuGet package or compiler-free C-API build exists.
+Review the native library provenance and execute exact-head tests first.
+
+## Source-local exact-head Native AOT verification
+
+A manual, **source-local** test harness is available at
+`verification/wasmtime-c-api/run_source_local_strict_aot.sh`. The
+operator supplies one immutable 40-hex Git commit SHA as the argument
+from a checked-out private source repository on an isolated Linux x64
+runner:
+
+```bash
+bash verification/wasmtime-c-api/run_source_local_strict_aot.sh \
+  <approved-exact-source-commit-sha>
+```
+
+The harness refuses dirty checkout and SHA mismatch, emits the exact
+Git commit and root-tree SHA, executes offline structural tests and
+the Wasmtime public-source preflight, publishes both .NET 10 Native AOT
+executables, proves the synthetic CLIs deny execution without explicit
+test opt-in, and runs the signed synthetic fixture only with the opt-in
+set. It checks actual native ELF binaries and requires executable PASS
+markers. The script does not provision a runner, automatically start
+CI, retrieve secrets, fetch private source, or transfer Git objects to
+another organization.
+
+**Operator responsibilities:** protect the source checkout and
+ephemeral runner, do not provide production credentials or persistent
+shared caches, collect actual executed-step receipts securely, and
+destroy temporary artifacts per policy. Failure before any executed
+steps is `NOT_EXECUTED`. This test is *not* production untrusted-actor
+admission, a proof of the compiler-free Wasmtime 50.0.2 C API build,
+or evidence of compatible patched .NET bindings. Cross-org transfers
+remain forbidden unless #260 and #566 are independently approved.
+
 ## Explicit production security blocks
 
 **1. Trust anchor:** The synthetic builder emits its own ephemeral test

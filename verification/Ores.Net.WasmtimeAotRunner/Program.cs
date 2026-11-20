@@ -37,6 +37,31 @@ if (args.Length != 4)
     return 64;
 }
 
+// A bounded-read regression that executes in the published NativeAOT runner.
+// Synthetic files are created privately in the runner temp directory: this is
+// NOT an attacker-controlled Oreslang guest admission path.
+string boundedReadFixture = Path.Combine(
+    Path.GetTempPath(), "oresnet-aot-read-" + Guid.NewGuid().ToString("N"));
+try
+{
+    File.WriteAllBytes(boundedReadFixture, new byte[65]);
+    ExpectRefused(
+        () => _ = TrustedAotArtifact.ReadBoundedFile(boundedReadFixture, 64),
+        "oversized signed-artifact input");
+    File.WriteAllBytes(boundedReadFixture, Array.Empty<byte>());
+    ExpectRefused(
+        () => _ = TrustedAotArtifact.ReadBoundedFile(boundedReadFixture, 64),
+        "empty signed-artifact input");
+    bool deniedInvalidLimit = false;
+    try { _ = TrustedAotArtifact.ReadBoundedFile(boundedReadFixture, 0); }
+    catch (ArgumentOutOfRangeException) { deniedInvalidLimit = true; }
+    Require(deniedInvalidLimit, "invalid artifact read limit rejected");
+}
+finally
+{
+    File.Delete(boundedReadFixture);
+}
+
 byte[] manifest = TrustedAotArtifact.ReadBoundedFile(args[0], 4096);
 byte[] signature = TrustedAotArtifact.ReadBoundedFile(args[1], 1024);
 byte[] artifact = TrustedAotArtifact.ReadBoundedFile(
@@ -193,6 +218,24 @@ var incB = tenantB.GetFunction<int, int>("increment")
 Require(incA(9) == 9, "tenant A independent mutable global");
 Require(incB(4) == 4, "tenant B independent mutable global");
 Require(incA(1) == 10 && incB(1) == 5, "tenant globals remained isolated");
+
+// A mutable Wasm linear-memory witness across independently allocated Stores.
+// Isolated counter globals alone are insufficient evidence of memory isolation.
+var writeA = tenantA.GetAction<int>("write_byte")
+    ?? throw new SecurityException("Missing signed memory-write export");
+var writeB = tenantB.GetAction<int>("write_byte")
+    ?? throw new SecurityException("Missing signed memory-write export");
+var readA = tenantA.GetFunction<int>("read_byte")
+    ?? throw new SecurityException("Missing signed memory-read export");
+var readB = tenantB.GetFunction<int>("read_byte")
+    ?? throw new SecurityException("Missing signed memory-read export");
+Require(readA() == 0 && readB() == 0, "separate zeroed guest memories");
+writeA(0xA1);
+writeB(0xB2);
+Require(readA() == 0xA1 && readB() == 0xB2, "separate linear memory writes");
+writeA(0xC3);
+Require(readA() == 0xC3 && readB() == 0xB2,
+    "neighbor linear memory remains independent");
 
 var oobA = tenantA.GetFunction<int>("out_of_bounds")
     ?? throw new SecurityException("Missing OOB test export");

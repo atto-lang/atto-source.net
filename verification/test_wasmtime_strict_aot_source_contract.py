@@ -147,6 +147,59 @@ class StrictFullAotSourceContract(unittest.TestCase):
         self.assertIn("MaxArtifactBytes = 16 * 1024 * 1024", gate)
         self.assertIn("Module.Deserialize(", runner)
 
+    def test_bounded_artifact_and_two_store_memory_witness(self) -> None:
+        verifier = read(f"{RUNNER}/TrustedAotArtifact.cs")
+        runner = read(f"{RUNNER}/Program.cs")
+        builder = read(f"{BUILDER}/Program.cs")
+        self.assertNotIn("File.ReadAllBytes(", verifier)
+        self.assertIn("maxLength + 1", verifier)
+        self.assertIn("output.Length != observedLength", verifier)
+        self.assertIn("oversized signed-artifact input", runner)
+        self.assertIn("empty signed-artifact input", runner)
+        self.assertIn("invalid artifact read limit rejected", runner)
+        for name in ('write_byte', 'read_byte'):
+            self.assertIn(f'(export "{name}")', builder)
+            self.assertIn(f'("{name}")', runner)
+        self.assertIn("neighbor linear memory remains independent", runner)
+
+    def test_source_local_exact_sha_runner_is_manual_and_fail_closed(self) -> None:
+        script = read("verification/wasmtime-c-api/run_source_local_strict_aot.sh")
+        for marker in (
+            "expected_head=$1",
+            "git rev-parse HEAD",
+            "git rev-parse 'HEAD^{tree}'",
+            "git status --porcelain --untracked-files=all",
+            "SOURCE_LOCAL_EXACT_HEAD=",
+            "SOURCE_LOCAL_EXACT_TREE=",
+            "python3 verification/test_wasmtime_strict_aot_source_contract.py",
+            "bash verification/wasmtime-c-api/test_preflight.sh",
+            "NET_WASMTIME_TRUSTED_AOT_BUILDER_PASS",
+            "NET_WASMTIME_STRICT_AOT_RUNTIME_PASS",
+            "NET_WASMTIME_STRICT_AOT_E2E_PASS",
+            "env -u ORES_WASMTIME_SYNTHETIC_CI_ONLY",
+        ):
+            self.assertIn(marker, script)
+        for forbidden in ("GITHUB_TOKEN", "actions/checkout", "curl ",
+                          "git clone", "ssh-agent", "workflow_dispatch"):
+            self.assertNotIn(forbidden, script)
+
+    def test_native_binary_inspection_rejects_failed_ldd(self) -> None:
+        # ldd | grep under a single leading ! can pass when ldd itself
+        # exits nonzero. Require a standalone (or pipefail-protected)
+        # successful ldd before checking that CLR libraries are absent.
+        local = read("verification/wasmtime-c-api/run_source_local_strict_aot.sh")
+        workflow = read(".github/workflows/wasmtime-strict-aot.yml")
+        self.assertIn("ldd \"$executable\" > \"$work/dependencies.txt\"", local)
+        self.assertIn("not found", local)
+        self.assertNotIn("! ldd ", local)
+        self.assertIn("git clean -ndx", local)
+        self.assertIn("tracked_status=$(git status --porcelain --untracked-files=all)", local)
+        self.assertIn("ignored_status=$(git clean -ndx)", local)
+        self.assertIn('ldd "$RUNNER_TEMP/aot-builder/oresnet-wasmtime-aot-builder" | tee', workflow)
+        self.assertIn('ldd "$RUNNER_TEMP/aot-runner/oresnet-wasmtime-aot-runner" | tee', workflow)
+        self.assertIn("not found", workflow)
+        self.assertNotIn("! ldd ", workflow)
+
     def test_adversarial_negative_cases_stay_wired(self) -> None:
         runner = read(f"{RUNNER}/Program.cs")
         for case in ("swappedArtifact", "changedManifest", "badSignature",

@@ -75,8 +75,12 @@ jobs:
           file "$RUNNER_TEMP/aot-runner/oresnet-wasmtime-aot-runner" | tee "$RUNNER_TEMP/aot-runner-file.txt"
           grep -F 'ELF 64-bit' "$RUNNER_TEMP/aot-builder-file.txt"
           grep -F 'ELF 64-bit' "$RUNNER_TEMP/aot-runner-file.txt"
-          ! ldd "$RUNNER_TEMP/aot-builder/oresnet-wasmtime-aot-builder" | grep -E '(libcoreclr|libhostfxr|libhostpolicy|libclrjit)'
-          ! ldd "$RUNNER_TEMP/aot-runner/oresnet-wasmtime-aot-runner" | grep -E '(libcoreclr|libhostfxr|libhostpolicy|libclrjit)'
+          # A failed ldd MUST fail CI. Never invert an inspection error.
+          ldd "$RUNNER_TEMP/aot-builder/oresnet-wasmtime-aot-builder" | tee "$RUNNER_TEMP/aot-builder-ldd.txt"
+          ! grep -E '(libcoreclr|libhostfxr|libhostpolicy|libclrjit|not found)' "$RUNNER_TEMP/aot-builder-ldd.txt"
+          # A failed ldd MUST fail CI. Never invert an inspection error.
+          ldd "$RUNNER_TEMP/aot-runner/oresnet-wasmtime-aot-runner" | tee "$RUNNER_TEMP/aot-runner-ldd.txt"
+          ! grep -E '(libcoreclr|libhostfxr|libhostpolicy|libclrjit|not found)' "$RUNNER_TEMP/aot-runner-ldd.txt"
           sha256sum "$RUNNER_TEMP/aot-builder/oresnet-wasmtime-aot-builder" \
             "$RUNNER_TEMP/aot-runner/oresnet-wasmtime-aot-runner"
       - name: Reject synthetic executables without explicit CI opt-in

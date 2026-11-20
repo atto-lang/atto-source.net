@@ -62,6 +62,8 @@ internal static class TrustedAotArtifact
         }
         if (output.Length == 0)
             throw new SecurityException("Empty AOT artifact");
+        if (output.Length != observedLength)
+            throw new SecurityException("AOT artifact truncated while reading");
         return output.ToArray();
     }
 
