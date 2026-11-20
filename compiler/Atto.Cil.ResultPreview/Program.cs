@@ -217,22 +217,42 @@ internal static class Emitter
         generated.AppendLine("internal sealed record GuestErr(GuestError Error) : GuestResult;");
         generated.AppendLine("internal sealed class GuestError(string message) { internal string Message { get; } = message; }");
         generated.AppendLine("internal sealed class GuestThrown(GuestError original) : Exception { internal GuestError Original { get; } = original; }");
+        // Trusted guest-test instrumentation: verify a helper is invoked exactly
+        // once and that existing Result and original thrown Error references
+        // survive through the generated trap boundary.
         generated.AppendLine("internal static class Guest {");
+        generated.AppendLine("  internal static int CallCount;");
+        generated.AppendLine("  internal static GuestResult? LastReturnedResult;");
+        generated.AppendLine("  internal static GuestError? LastThrownError;");
         if (program.Helper is { } helper)
         {
             generated.Append("  private static ")
                 .Append(helper.ReturnType == GuestType.Int ? "long " : "GuestResult ")
                 .Append(helper.Name).AppendLine("() {");
+            generated.AppendLine("    CallCount++;");
             if (helper.IsThrow)
-                generated.Append("    throw new GuestThrown(new GuestError(")
-                    .Append(ErrorLiteral(helper.ThrowMessage!)).AppendLine("));");
+            {
+                generated.Append("    GuestError error = new GuestError(")
+                    .Append(ErrorLiteral(helper.ThrowMessage!)).AppendLine(");");
+                generated.AppendLine("    LastThrownError = error;");
+                generated.AppendLine("    throw new GuestThrown(error);");
+            }
             else if (helper.Expression is Scalar scalar)
                 generated.Append("    return ").Append(LongLiteral(scalar.Value)).AppendLine(";");
             else if (helper.Expression is OkValue ok)
-                generated.Append("    return new GuestOk(").Append(LongLiteral(ok.Value)).AppendLine(");");
+            {
+                generated.Append("    GuestResult result = new GuestOk(")
+                    .Append(LongLiteral(ok.Value)).AppendLine(");");
+                generated.AppendLine("    LastReturnedResult = result;");
+                generated.AppendLine("    return result;");
+            }
             else if (helper.Expression is ErrValue err)
-                generated.Append("    return new GuestErr(new GuestError(")
+            {
+                generated.Append("    GuestResult result = new GuestErr(new GuestError(")
                     .Append(ErrorLiteral(err.Message)).AppendLine("));");
+                generated.AppendLine("    LastReturnedResult = result;");
+                generated.AppendLine("    return result;");
+            }
             else throw new PreviewError("E_UNSUPPORTED");
             generated.AppendLine("  }");
         }
@@ -268,6 +288,12 @@ internal static class Emitter
         generated.AppendLine("internal static class Program {");
         generated.AppendLine("  private static int Main() {");
         generated.AppendLine("    GuestResult result = Guest.Run();");
+        generated.AppendLine("    if (Guest.CallCount != ${program.Main.Expression is TrapCall ? 1 : 0})");
+        generated.AppendLine("      throw new InvalidOperationException(\"helper invoked multiple times or not at all\");");
+        generated.AppendLine("    if (Guest.LastReturnedResult is not null && !ReferenceEquals(Guest.LastReturnedResult, result))");
+        generated.AppendLine("      throw new InvalidOperationException(\"trap replaced an existing Result identity\");");
+        generated.AppendLine("    if (Guest.LastThrownError is not null && (result is not GuestErr caught || !ReferenceEquals(caught.Error, Guest.LastThrownError)))");
+        generated.AppendLine("      throw new InvalidOperationException(\"trap lost the original thrown Error identity\");");
         generated.AppendLine("    Console.WriteLine(result switch {");
         generated.AppendLine("      GuestOk ok => \"ATTO_RESULT=Ok(\" + ok.Value + \")\",");
         generated.AppendLine("      GuestErr err => \"ATTO_RESULT=Err(\" + err.Error.Message + \")\",");
