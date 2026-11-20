@@ -46,7 +46,7 @@ internal static class DirectedPipePlanner
         if (written.Count is < 2 or > 16)
             throw new ArgumentException("E_PIPE_STAGE_LIMIT");
         var copy = new List<DirectedPipeStage>(written.Count);
-        var tenant = written[0].Tenant;
+        var tenant = written[0]?.Tenant ?? throw new ArgumentException("E_PIPE_STAGE");
         var seen = new HashSet<string>(StringComparer.Ordinal);
         for (int i = 0; i < written.Count; i++)
         {
@@ -78,6 +78,7 @@ internal static class DirectedPipePlanner
                 if (s.Receives == null || s.Emits != null)
                     throw new ArgumentException("E_PIPE_WRITEONLY_PORT");
             }
+            else throw new ArgumentException("E_PIPE_ENDPOINT");
             copy.Add(s);
         }
         var flow = new List<int>(copy.Count);
