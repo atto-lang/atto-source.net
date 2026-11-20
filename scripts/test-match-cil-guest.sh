@@ -89,7 +89,7 @@ test -s "$guest"
 dotnet build "$host" -c Release --no-incremental
 expect_exit "CoreCLR-subject-once-match" 42 dotnet run --no-build -c Release --project "$host"
 dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true \
-  --no-incremental --self-contained true -o /tmp/atto-match-subject-once-nativeaot
+  --self-contained true -o /tmp/atto-match-subject-once-nativeaot
 test -x /tmp/atto-match-subject-once-nativeaot/Atto.Cil.Guest.Host
 expect_exit "NativeAOT-subject-once-match" 42 /tmp/atto-match-subject-once-nativeaot/Atto.Cil.Guest.Host
 echo "MATCH_CIL_SUBJECT_ONCE_SCALAR_PASS; ORIGINAL_STDOUT_REQUIRES_TRUSTED_HOST_GRANT"
