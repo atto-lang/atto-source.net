@@ -1,0 +1,8 @@
+// TARGET ONLY: closed Record fields are literal-name checked slots.
+pub fnc main(): int {
+    let mut Record r = {foo: 1, "content-type": 2};
+    r["foo"] = 3;
+    r["content-type"] = 7;
+    return r["foo"];
+}
+// intended guest exit: 3; NOT executable in this scalar backend.
