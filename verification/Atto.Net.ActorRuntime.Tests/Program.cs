@@ -407,6 +407,51 @@ internal static class Program
         _cases++;
     }
 
+    private static void ConcurrentActorLifecycleStress()
+    {
+        using var tenant = new TenantVm(maximumActors: 8, maximumNativeBytes: 512);
+        Exception? fault = null;
+        var faultLock = new object();
+        Thread[] workers = new Thread[4];
+        for (int worker = 0; worker < workers.Length; worker++)
+        {
+            int workerId = worker;
+            workers[worker] = new Thread(() =>
+            {
+                try
+                {
+                    for (int iteration = 0; iteration < 60; iteration++)
+                    {
+                        using var actor = tenant.CreateActor(arenaBytes: 64, maximumFrames: 2);
+                        var turn = actor.BeginTurn();
+                        var frame = actor.PushFrame(turn, 8);
+                        actor.SealScalarSchema(turn, frame, [ActorScalarKind.I64], 1);
+                        long expected = workerId * 1000L + iteration;
+                        actor.WriteI64(turn, frame, 0, expected);
+                        Check(actor.ReadI64(turn, frame, 0) == expected,
+                            "concurrent actor-private frame value must not alias siblings");
+                        actor.PopFrame(turn, frame);
+                        actor.EndTurn(turn);
+                        actor.Stop();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    lock (faultLock) fault ??= ex;
+                }
+            });
+            workers[worker].Start();
+        }
+        foreach (var worker in workers)
+            Check(worker.Join(millisecondsTimeout: 20_000),
+                "concurrent actor lifecycle worker terminated");
+        if (fault is not null)
+            throw new Exception("Concurrent actor lifecycle fault", fault);
+        Check(tenant.LiveActorCount == 0 && tenant.NativeReservedBytes == 0,
+            "240 concurrent lifecycle iterations refund every actor arena");
+        _cases++;
+    }
+
     private static void ReentrancyFailsClosed()
     {
         using var tenant = new TenantVm(maximumActors: 1, maximumNativeBytes: 64);
@@ -436,6 +481,7 @@ internal static class Program
             LogicalFramesSurviveCarrierMigration();
             QuiescentTenantDisposal();
             InvalidAdmissionIsAtomic();
+            ConcurrentActorLifecycleStress();
             Console.WriteLine($"ATTO_NET_ACTOR_ARENA_COOPERATION_PASS cases={_cases}");
             return 0;
         }
