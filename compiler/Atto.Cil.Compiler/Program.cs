@@ -17,7 +17,10 @@ internal sealed record Literal(long Number) : Expression;
 internal sealed record Arg(string Name) : Expression;
 internal sealed record Binary(string Op, Expression Left, Expression Right) : Expression;
 internal sealed record Call(string Name, List<Expression> Args) : Expression;
-internal sealed record Function(string Name, List<string> Args, Expression Return);
+// A restricted, non-suspending inline task has the caller's logical TaskId:
+// no Future, TaskSpawn, worker admission or independently cancellable frame.
+internal sealed record InlineTask(List<InlineTask> Prelude, Expression? Result) : Expression;
+internal sealed record Function(string Name, List<string> Args, List<InlineTask> Prelude, Expression Return);
 
 internal sealed class Parser
 {
@@ -66,18 +69,17 @@ internal sealed class Parser
             if (_tokens.Count > 8192) throw new CompilerError("E_LIMIT", "8192 token limit");
         }
         _tokens.Add("<eof>");
-        // This scalar CIL subset has neither TaskScope, typed Future<T>,
-        // cancellation nor lexical lock cleanup. Detect target task spellings
-        // from *lexed* words (never from comments) before any CIL is emitted.
-        // Do not reinterpret a task body as a scalar block or treat sync as a
-        // blocking host call. The eventual implementation needs checked MIR.
+        // Recognize task syntax using real tokens, not comments or identifier
+        // substrings. Only the explicitly pure inline subset below is lowered.
+        // Independently scheduled children still require TaskScope, cancellation
+        // and safe physical retirement; do not fake them with CLR blocking tasks.
         for (int index = 0; index + 1 < _tokens.Count; index++)
         {
-            if ((_tokens[index] == "task" && _tokens[index + 1] is "{" or "<") ||
-                (_tokens[index] == "sync" && _tokens[index + 1] == "task") ||
+            if ((_tokens[index] == "task" && _tokens[index + 1] is "{" or "<" &&
+                 (index == 0 || _tokens[index - 1] != "sync")) ||
                 (_tokens[index] == "do" && _tokens[index + 1] == "task"))
                 throw new CompilerError("E_TASK_UNSUPPORTED",
-                    "typed cancellable tasks need TaskScope/Future and cancellation-safe lock unwind");
+                    "spawning tasks requires verified TaskScope, Future and cancellation");
         }
     }
     internal List<Function> Parse()
@@ -99,19 +101,75 @@ internal sealed class Parser
             } while (Eat(","));
             Require(")");
             if (!Eat(":")) Require("->");
-            Require("int"); Require("{"); Require("return");
+            Require("int"); Require("{");
+            List<InlineTask> prelude = [];
+            while (Peek is "sync" or "do")
+            {
+                if (Eat("do") && Peek != "sync")
+                    throw new CompilerError("E_TASK_UNSUPPORTED", "do task requires TaskScope");
+                prelude.Add(ParseInlineTask(0));
+                Eat(";");
+            }
+            Require("return");
             var expression = ParseExpr(0, 0);
             Require(";"); Require("}");
-            result.Add(new Function(name, args, expression));
+            result.Add(new Function(name, args, prelude, expression));
             if (result.Count > 64) throw new CompilerError("E_LIMIT", "64 function limit");
         }
         return result;
     }
+    // Inline task is a lexical scope, not a child task or OS-thread join.
+    // This bootstrap intentionally supports only scalar int/void, pure
+    // expressions and nested inline blocks. Unknown statements/effects fail
+    // before CIL emission. A body return exits this scope, not its caller.
+    private InlineTask ParseInlineTask(int depth)
+    {
+        if (depth > 32) throw new CompilerError("E_LIMIT", "inline task nesting limit");
+        Require("sync"); Require("task");
+        string? payload = null;
+        if (Eat("<"))
+        {
+            if (Peek is not ("int" or "void"))
+                throw new CompilerError("E_TASK_UNSUPPORTED", "inline task payload type not lowered");
+            payload = Peek;
+            _position++;
+            Require(">");
+        }
+        Require("{");
+        List<InlineTask> prelude = [];
+        while (Peek is "sync" or "do")
+        {
+            if (Eat("do") && Peek != "sync")
+                throw new CompilerError("E_TASK_UNSUPPORTED", "do task requires TaskScope");
+            prelude.Add(ParseInlineTask(depth + 1));
+            Eat(";");
+        }
+        Expression? result = null;
+        if (Eat("return"))
+        {
+            if (!Eat(";"))
+            {
+                result = ParseExpr(0, depth + 1);
+                Require(";");
+            }
+        }
+        if (Peek is "await" or "task" or "susp" or "using" or "defer")
+            throw new CompilerError("E_TASK_UNSUPPORTED",
+                "suspension, spawned tasks and scoped cleanup need verified lowering");
+        Require("}");
+        if ((payload == "int" && result is null) || (payload == "void" && result is not null))
+            throw new CompilerError("E_TASK_RETURN_TYPE", "inline task body return disagrees with payload");
+        return new InlineTask(prelude, result);
+    }
+
     private Expression ParseExpr(int min, int depth)
     {
         if (depth > 32) throw new CompilerError("E_LIMIT", "expression nesting limit");
         Expression left;
-        if (Eat("(")) { left = ParseExpr(0, depth + 1); Require(")"); }
+        if (Peek == "sync") left = ParseInlineTask(depth + 1);
+        else if (Peek is "await" or "task")
+            throw new CompilerError("E_TASK_UNSUPPORTED", "spawn and await require verified TaskScope");
+        else if (Eat("(")) { left = ParseExpr(0, depth + 1); Require(")"); }
         else if (Eat("-")) left = new Binary("-", new Literal(0), ParseExpr(30, depth + 1));
         else if (Peek.Length > 0 && Peek[0] is >= '0' and <= '9')
         {
@@ -165,14 +223,24 @@ internal sealed class CIL(List<Function> functions)
             if (state[id] == 2) return;
             if (state[id] == 1) throw new CompilerError("E_CYCLE", _functions[id].Name);
             state[id] = 1;
+            foreach (var inline in _functions[id].Prelude)
+                WalkInline(inline, _functions[id], false);
             WalkExpr(_functions[id].Return, _functions[id]);
             state[id] = 2;
+        }
+        void WalkInline(InlineTask task, Function owner, bool valueRequired)
+        {
+            if (valueRequired && task.Result is null)
+                throw new CompilerError("E_TASK_RETURN_TYPE", "void inline task used as an int");
+            foreach (var child in task.Prelude) WalkInline(child, owner, false);
+            if (task.Result is not null) WalkExpr(task.Result, owner);
         }
         void WalkExpr(Expression e, Function owner)
         {
             switch (e)
             {
                 case Literal: return;
+                case InlineTask t: WalkInline(t, owner, true); return;
                 case Arg a:
                     if (!owner.Args.Contains(a.Name)) throw new CompilerError("E_SYMBOL", a.Name);
                     return;
@@ -213,6 +281,7 @@ internal sealed class CIL(List<Function> functions)
         {
             var code = new BlobBuilder();
             var il = new InstructionEncoder(code);
+            foreach (var inline in f.Prelude) GenerateInline(inline, f, il, discard: true);
             Generate(f.Return, f, il);
             il.OpCode(ILOpCode.Ret);
             bodyOffsets.Add(bodyStream.AddMethodBody(il, maxStack: 64));
@@ -259,11 +328,24 @@ internal sealed class CIL(List<Function> functions)
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }
 
+    private void GenerateInline(InlineTask task, Function owner, InstructionEncoder il, bool discard)
+    {
+        foreach (var child in task.Prelude) GenerateInline(child, owner, il, discard: true);
+        if (task.Result is null)
+        {
+            if (!discard) throw new CompilerError("E_TASK_RETURN_TYPE", "void inline value");
+            return;
+        }
+        Generate(task.Result, owner, il);
+        if (discard) il.OpCode(ILOpCode.Pop);
+    }
+
     private void Generate(Expression e, Function f, InstructionEncoder il)
     {
         switch (e)
         {
             case Literal c: il.LoadConstantI8(c.Number); return;
+            case InlineTask task: GenerateInline(task, f, il, discard: false); return;
             case Arg a: il.LoadArgument(f.Args.IndexOf(a.Name)); return;
             case Binary b:
                 Generate(b.Left, f, il); Generate(b.Right, f, il);
