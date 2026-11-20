@@ -1,0 +1,8 @@
+// expect-error: E_UNSUPPORTED_TYPE
+// The scalar-only CIL compiler must NOT treat 'is' as a catch-all binder.
+pub fnc main(): int {
+  return match 1 over
+    on is Ok<value> -> 0,
+    on _ -> 1,
+  end;
+}
