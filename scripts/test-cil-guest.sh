@@ -20,7 +20,9 @@ expect_42() {
   echo "ATTO_DIRECT_CIL_$label"_PASS exit=42
 }
 dotnet build "$compiler" -c Release
-dotnet run --no-build -c Release --project "$compiler" -- fixtures/cil/exit42.atto "$guest"
+# The initial guest is a real compiled seq call-argument program so both
+# CoreCLR and NativeAOT below must execute ordered sequence IL.
+dotnet run --no-build -c Release --project "$compiler" -- fixtures/cil/seq-call-args.atto "$guest"
 test -s "$guest"
 
 for case in \
@@ -35,7 +37,12 @@ for case in \
   no-return:E_PARSE \
   duplicate-parameter:E_DUP_PARAM \
   bool-unsupported:E_PARSE \
-  no-main:E_ENTRY; do
+  no-main:E_ENTRY \
+  seq-empty:E_SEQ_EMPTY \
+  seq-trailing:E_SEQ_COMMA \
+  seq-leading:E_SEQ_COMMA \
+  seq-semicolon:E_PARSE \
+  seq-tuple:E_PARSE; do
   name="$(echo "$case" | cut -d: -f1)"
   diagnostic="$(echo "$case" | cut -d: -f2)"
   rm -f artifacts/Rejected.dll
@@ -51,7 +58,7 @@ for case in \
   }
   test ! -e artifacts/Rejected.dll || { echo "NEGATIVE_ARTIFACT_LEAK case=$name"; exit 1; }
 done
-echo "ATTO_DIRECT_CIL_NEGATIVE_PASS checks=12"
+echo "ATTO_DIRECT_CIL_NEGATIVE_PASS checks=17"
 dotnet build "$host" -c Release
 expect_42 CORECLR_GUEST dotnet run --no-build -c Release --project "$host"
 dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true \
@@ -60,9 +67,30 @@ test -x /tmp/atto-cil-nativeaot/Atto.Cil.Guest.Host
 expect_42 NATIVEAOT_GUEST /tmp/atto-cil-nativeaot/Atto.Cil.Guest.Host
 
 # Additional genuine CIL guest executions; neither calculation is in C#.
-for fixture in fixtures/cil/precedence.atto fixtures/cil/forward-call.atto; do
+for fixture in fixtures/cil/exit42.atto fixtures/cil/precedence.atto \
+  fixtures/cil/forward-call.atto fixtures/cil/seq-nested.atto \
+  fixtures/cil/seq-call-args.atto fixtures/cil/seq-singleton.atto; do
   dotnet run --no-build -c Release --project "$compiler" -- "$fixture" "$guest"
   dotnet build "$host" -c Release
   expect_42 EXTRA_CORECLR_GUEST dotnet run --no-build -c Release --project "$host"
 done
-echo "ATTO_DIRECT_CIL_POSITIVE_PASS fixtures=3"
+echo "ATTO_DIRECT_CIL_POSITIVE_PASS fixtures=7 including 3 seq variants"
+# Non-tail side effects are not silently removed: checked CIL must throw on
+# division by zero or signed arithmetic overflow, even when tail value is 42.
+for test_case in seq-prefix-divzero:DivideByZeroException seq-prefix-overflow:OverflowException; do
+  name="${test_case%%:*}"
+  error="${test_case#*:}"
+  dotnet run --no-build -c Release --project "$compiler" -- \
+    "fixtures/cil/$name.atto" "$guest"
+  dotnet build "$host" -c Release
+  set +e
+  dotnet run --no-build -c Release --project "$host" >"/tmp/atto-$name.stdout" 2>"/tmp/atto-$name.stderr"
+  result=$?
+  set -e
+  if [[ "$result" -eq 0 || "$result" -eq 42 ]] || ! grep -Fq "$error" "/tmp/atto-$name.stderr"; then
+    echo "SEQ_PREFIX_TRAP_FAILED case=$name exit=$result" >&2
+    cat "/tmp/atto-$name.stderr" >&2
+    exit 1
+  fi
+done
+echo "ATTO_DIRECT_CIL_SEQ_TRAP_PASS checks=2"
