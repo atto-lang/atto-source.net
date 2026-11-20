@@ -9,5 +9,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../runtime/ProxyReceiptGateV1.cs" Link="ProxyReceiptGateV1.cs" />
+    <Compile Include="../../runtime/HostProxyMailboxTicketsV1.cs" Link="HostProxyMailboxTicketsV1.cs" />
   </ItemGroup>
 </Project>
