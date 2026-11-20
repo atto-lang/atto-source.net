@@ -58,7 +58,7 @@ jobs:
           foreach ($path in $paths) {
             $entry = (git ls-files --stage -- $path)
             if (-not $entry) { throw "Missing tracked file: $path" }
-            $expectedBlob = ($entry -split '\\s+')[1]
+            $expectedBlob = ($entry -split '\s+')[1]
             $actualBlob = (git hash-object -- $path).Trim()
             if ($expectedBlob -ne $actualBlob) { throw "Git blob mismatch: $path" }
             "ATTO_NET_ACTOR_BLOB=$path $actualBlob"
