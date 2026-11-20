@@ -92,11 +92,10 @@ dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true \
   --no-incremental --self-contained true -o /tmp/atto-match-subject-once-nativeaot
 test -x /tmp/atto-match-subject-once-nativeaot/Atto.Cil.Guest.Host
 expect_exit "NativeAOT-subject-once-match" 42 /tmp/atto-match-subject-once-nativeaot/Atto.Cil.Guest.Host
-echo "MATCH_CIL_SUBJECT_ONCE_SCALAR_PASS; ORIGINAL_STDOUT_STILL_UNSUPPORTED"
+echo "MATCH_CIL_SUBJECT_ONCE_SCALAR_PASS; ORIGINAL_STDOUT_REQUIRES_TRUSTED_HOST_GRANT"
 
-# Exact original positive fixtures use stdio.println, which is deliberately
-# not lowered by the restricted direct-CIL backend. This is an explicit
-# UNSUPPORTED result, not the positive parity condition.
-check_rejected match-guard-block-return E_LEX pass/
-check_rejected match-guard-block-caret E_LEX pass/
-echo "MATCH_CIL_SCALAR_NATIVEAOT_PASS; FULL_STDOUT_ORIGINALS_UNSUPPORTED"
+# The exact original positive fixtures now require a trusted host grant;
+# the no-grant gate must reject their stdout access with no artifact.
+check_rejected match-guard-block-return E_PERMISSION pass/
+check_rejected match-guard-block-caret E_PERMISSION pass/
+echo "MATCH_CIL_SCALAR_NATIVEAOT_PASS; STDIO_WITHOUT_HOST_GRANT_DENIED"
