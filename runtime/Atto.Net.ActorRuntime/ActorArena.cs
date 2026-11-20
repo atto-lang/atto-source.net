@@ -1,6 +1,8 @@
 using System.Buffers.Binary;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Atto.Net.ActorRuntime;
 
@@ -10,6 +12,7 @@ public sealed class ActorResourceExhaustedException : InvalidOperationException
 }
 
 /// <summary>Exact-issued physical turn authority; never serialize or send.</summary>
+[JsonConverter(typeof(ActorTurnNoWireConverter))]
 public sealed class ActorTurn
 {
     internal ActorTurn(ActorArena owner) => Owner = owner;
@@ -17,6 +20,7 @@ public sealed class ActorTurn
 }
 
 /// <summary>Exact-issued actor-local logical frame authority; never a wire value.</summary>
+[JsonConverter(typeof(ActorFrameNoWireConverter))]
 public sealed class ActorFrameHandle
 {
     internal ActorFrameHandle(ActorArena owner, int index, int offset, int length)
@@ -343,4 +347,27 @@ public unsafe sealed class ActorArena : IDisposable
         _top = 0;
         _tenant.ReleaseActor(this, _capacity);
     }
+}
+
+//// Only these built-in JSON codecs are explicitly denied. MessagePack,
+//// protobuf, or any other transport must separately deny authority objects
+//// at its broker boundary; these C# types are never guest-message payloads.
+public sealed class ActorTurnNoWireConverter : JsonConverter<ActorTurn>
+{
+    public override ActorTurn Read(
+        ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
+        throw new NotSupportedException("Actor turn authority cannot be deserialized");
+    public override void Write(
+        Utf8JsonWriter writer, ActorTurn value, JsonSerializerOptions options) =>
+        throw new NotSupportedException("Actor turn authority cannot be serialized");
+}
+
+public sealed class ActorFrameNoWireConverter : JsonConverter<ActorFrameHandle>
+{
+    public override ActorFrameHandle Read(
+        ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
+        throw new NotSupportedException("Actor frame authority cannot be deserialized");
+    public override void Write(
+        Utf8JsonWriter writer, ActorFrameHandle value, JsonSerializerOptions options) =>
+        throw new NotSupportedException("Actor frame authority cannot be serialized");
 }
