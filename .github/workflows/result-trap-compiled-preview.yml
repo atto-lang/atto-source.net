@@ -11,6 +11,30 @@ on:
       - 'scripts/test-result-preview-guest.sh'
       - '.github/workflows/result-trap-compiled-preview.yml'
 jobs:
+  compiled-guest-coreclr:
+    name: CoreCLR-only compiled guest and no-artifact rejection
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '8.0.x'
+      - name: Verify clean exact head
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+      - name: Execute strict CLR guest matrix (NativeAOT not claimed)
+        env:
+          ATTO_RESULT_CLR_ONLY: '1'
+        run: bash scripts/test-result-preview-guest.sh
   compiled-guest:
     runs-on: ubuntu-24.04
     permissions:
