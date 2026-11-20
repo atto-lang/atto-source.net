@@ -12,7 +12,9 @@ for entry in \
   throw:'ATTO_RESULT=Err(bad input)' \
   existing_ok:'ATTO_RESULT=Ok(42)' \
   existing_err:'ATTO_RESULT=Err(existing error)' \
-  direct_min:'ATTO_RESULT=Ok(-9223372036854775808)'; do
+  direct_min:'ATTO_RESULT=Ok(-9223372036854775808)' \
+  direct_max:'ATTO_RESULT=Ok(9223372036854775807)' \
+  wide_32:'ATTO_RESULT=Ok(2147483648)'; do
   case_name="${entry%%:*}"
   expected="${entry#*:}"
   target="$work/$case_name"
