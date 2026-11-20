@@ -1,0 +1,11 @@
+# Protected actor attachments — .NET CIL compiler admission
+
+**Status: PARSE-ONLY, NOT EXECUTED / NOT GUEST SUPPORT.** Source authority: [atto-spec #127](https://github.com/atto-lang/atto-spec/pull/127). Portable fixtures: [atto-platform-conformance #113](https://github.com/atto-lang/atto-platform-conformance/pull/113).
+
+The strict scalar CIL compiler previously rejected `define actor` syntax through its ordinary parser, but had no separate state/owner classification for attached `define state on actor`. The new `ActorStateAdmission.Inspect` is a bounded, lexical-comment-aware nominal scanner for exactly one scalar attached schema. It does not evaluate user source, authorize actor access, or construct state in .NET. It recognizes a declared `actor` owner, `let/val` scalar `int/bool` typed members, literal initializers, immutability, duplicate fields/schema, invalid source ranges, source controls and state declaration limits. It does not claim complete actor grammar or a cross-file package linker.
+
+A syntactically valid attachment is **always rejected** with `E_UNSUPPORTED_ACTOR_STATE` before the CIL emitter creates any output. Invalid schema/owner inputs have specific `E_STATE_*` diagnostics and zero output. Inline state remains independently unsupported by the current small scalar CIL parser. This explicitly preserves fail-closed behavior; it is NOT actual actor-state support.
+
+Three exact shared conformance positive target fixtures (Git blobs `5928d4ee91333d7bef062aef85413482a3681562`, `0a65ae01492928bfa426a56687aa1d91bae6b669`, `f9d120096ea9c30357503bedbd549c2694db12c8`) are included, **as expected failures on this backend**. The shell test `scripts/test-actor-state-admission.sh` demands diagnostic, status 2 and no leaked `.dll` on unsupported shapes, then checks a scalar function with a state-looking comment still compiles. It needs an exact-head .NET 8 execution before being reported as passing.
+
+To achieve executable parity: add typed actor AST and sealed per-incarnation state allocation, `on_start()` definite initialization, checked `using state.read/write` across control flow, non-parking guarded lease runtime, mailbox DATA/CONTROL dispatch and NativeAOT supervisor isolation, followed by real guest tests and SHA-bound evidence. Do not mistake this parser milestone for that work.
