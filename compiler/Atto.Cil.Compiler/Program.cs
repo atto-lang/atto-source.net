@@ -215,6 +215,8 @@ internal sealed class CIL(List<Function> functions)
 {
     private readonly List<Function> _functions = functions;
     private readonly Dictionary<string, int> _symbols = new(StringComparer.Ordinal);
+    private enum CheckedType { Int, Bool }
+
     internal void Check()
     {
         for (int i = 0; i < _functions.Count; i++)
@@ -224,31 +226,67 @@ internal sealed class CIL(List<Function> functions)
             throw new CompilerError("E_ENTRY", "requires main(): int with no args");
         int[] state = new int[_functions.Count];
         for (int i = 0; i < state.Length; i++) WalkFunction(i);
+
         void WalkFunction(int id)
         {
             if (state[id] == 2) return;
             if (state[id] == 1) throw new CompilerError("E_CYCLE", _functions[id].Name);
             state[id] = 1;
-            WalkExpr(_functions[id].Return, _functions[id]);
+            if (WalkExpr(_functions[id].Return, _functions[id], new HashSet<string>(StringComparer.Ordinal), 0) != CheckedType.Int)
+                throw new CompilerError("E_TYPE", "function must return int");
             state[id] = 2;
         }
-        void WalkExpr(Expression e, Function owner)
+
+        CheckedType WalkExpr(Expression e, Function owner, HashSet<string> bound, int depth)
         {
+            if (depth > 16) throw new CompilerError("E_LIMIT", "match nesting limit");
             switch (e)
             {
-                case Literal: return;
+                case Literal: return CheckedType.Int;
                 case Arg a:
-                    if (!owner.Args.Contains(a.Name)) throw new CompilerError("E_SYMBOL", a.Name);
-                    return;
+                    if (!owner.Args.Contains(a.Name) && !bound.Contains(a.Name))
+                        throw new CompilerError("E_SYMBOL", a.Name);
+                    return CheckedType.Int;
                 case Binary b:
-                    WalkExpr(b.Left, owner); WalkExpr(b.Right, owner);
-                    return;
+                    if (WalkExpr(b.Left, owner, bound, depth) != CheckedType.Int ||
+                        WalkExpr(b.Right, owner, bound, depth) != CheckedType.Int)
+                        throw new CompilerError("E_TYPE", "integer operands required");
+                    return b.Op is ">" or "eq" or "==" ? CheckedType.Bool : CheckedType.Int;
                 case Call c:
-                    if (!_symbols.TryGetValue(c.Name, out var target)) throw new CompilerError("E_SYMBOL", c.Name);
-                    if (_functions[target].Args.Count != c.Args.Count) throw new CompilerError("E_ARITY", c.Name);
-                    foreach (var arg in c.Args) WalkExpr(arg, owner);
+                    if (!_symbols.TryGetValue(c.Name, out var target))
+                        throw new CompilerError("E_SYMBOL", c.Name);
+                    if (_functions[target].Args.Count != c.Args.Count)
+                        throw new CompilerError("E_ARITY", c.Name);
+                    foreach (var arg in c.Args)
+                        if (WalkExpr(arg, owner, bound, depth) != CheckedType.Int)
+                            throw new CompilerError("E_TYPE", "function expects int arguments");
                     WalkFunction(target);
-                    return;
+                    return CheckedType.Int;
+                case ValueMatch m:
+                    if (WalkExpr(m.Subject, owner, bound, depth + 1) != CheckedType.Int)
+                        throw new CompilerError("E_TYPE", "match subject must be int");
+                    HashSet<long> unguarded = [];
+                    bool covered = false;
+                    foreach (var arm in m.Arms)
+                    {
+                        if (covered || (arm.Literal is long n && unguarded.Contains(n)))
+                            throw new CompilerError("E_MATCH", "unreachable match arm");
+                        var armScope = new HashSet<string>(bound, StringComparer.Ordinal);
+                        if (arm.Binding != null) armScope.Add(arm.Binding);
+                        if (arm.Guard != null &&
+                            WalkExpr(arm.Guard, owner, armScope, depth + 1) != CheckedType.Bool)
+                            throw new CompilerError("E_TYPE", "match guard must be bool");
+                        if (WalkExpr(arm.Result, owner, armScope, depth + 1) != CheckedType.Int)
+                            throw new CompilerError("E_TYPE", "match result must be int");
+                        if (arm.Guard is null)
+                        {
+                            if (arm.Literal is long literal) unguarded.Add(literal);
+                            else covered = true;
+                        }
+                    }
+                    if (!covered)
+                        throw new CompilerError("E_MATCH", "non-exhaustive match: unguarded on _ required");
+                    return CheckedType.Int;
                 default: throw new CompilerError("E_TYPE", "unsupported expression");
             }
         }
