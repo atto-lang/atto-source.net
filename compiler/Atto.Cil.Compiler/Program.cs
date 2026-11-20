@@ -186,6 +186,12 @@ internal sealed class Parser
             if (Peek == "<eof>") throw new CompilerError("E_PARSE", "expected end of match");
             if (arms.Count >= 128) throw new CompilerError("E_LIMIT", "match arm limit");
             Require("on");
+            // Scalar-only CIL matches must not silently treat the 'is' in
+            // on is Ok<line> as a catch-all binding. Until Result/Option
+            // lowering exists, reject the nominal variant profile explicitly.
+            if (Peek == "is")
+                throw new CompilerError("E_UNSUPPORTED_TYPE",
+                    "on is Ok/Err/Some/None requires typed ADT CIL lowering");
             long? literal = null;
             string? binder = null;
             if (Eat("_"))
