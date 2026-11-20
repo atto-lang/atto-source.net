@@ -387,14 +387,16 @@ internal static class Program
         using var actor = tenant.CreateActor(arenaBytes: 64);
         var turn = actor.BeginTurn();
         var before = actor.MeterSnapshot(turn);
+        ulong tenantBefore = tenant.RemainingLogicalFuel;
         Expect<ArgumentOutOfRangeException>(
             () => actor.ChargeBackedge(turn, 0),
             "zero compiler charge is invalid");
         Expect<ArgumentOutOfRangeException>(
             () => actor.ChargeOperation(turn, 129),
             "oversized compiler charge is invalid");
-        Check(actor.MeterSnapshot(turn).Equals(before),
-            "invalid host charge cannot silently debit or advance phase");
+        Check(actor.MeterSnapshot(turn).Equals(before) &&
+              tenant.RemainingLogicalFuel == tenantBefore,
+            "invalid host charge cannot debit actor or tenant fuel");
         var frame = actor.PushFrame(turn, 8);
         Expect<ArgumentOutOfRangeException>(
             () => actor.PushFrame(turn, 8, alignment: 3),
@@ -404,6 +406,37 @@ internal static class Program
         actor.PopFrame(turn, frame);
         actor.EndTurn(turn);
         actor.Stop();
+        _cases++;
+    }
+
+    private static void TenantFuelSurvivesActorReincarnation()
+    {
+        using var tenant = new TenantVm(maximumActors: 1,
+            maximumNativeBytes: 64, maximumTotalLogicalFuel: 256);
+        for (int generation = 0; generation < 2; generation++)
+        {
+            using var actor = tenant.CreateActor(arenaBytes: 64,
+                logicalFuel: 10_000);
+            var turn = actor.BeginTurn();
+            Check(actor.ChargeBackedge(turn, 128).PollDue,
+                "each 128-unit charge reaches a slow poll");
+            actor.EndTurn(turn);
+            actor.Stop();
+            Check(tenant.RemainingLogicalFuel == (ulong)(128 - generation * 128),
+                "tenant fuel never refunds when actor is retired");
+        }
+        using var finalActor = tenant.CreateActor(arenaBytes: 64,
+            logicalFuel: 10_000);
+        var finalTurn = finalActor.BeginTurn();
+        Expect<ActorResourceExhaustedException>(
+            () => finalActor.ChargeBackedge(finalTurn),
+            "reincarnation cannot mint new tenant-wide execution fuel");
+        Expect<ActorResourceExhaustedException>(
+            () => finalActor.EndTurn(finalTurn),
+            "caught tenant fuel exhaustion remains terminal");
+        Check(tenant.RemainingLogicalFuel == 0 &&
+              tenant.NativeReservedBytes == 0,
+            "tenant spent fuel persists while native arena bytes refund");
         _cases++;
     }
 
@@ -506,6 +539,7 @@ internal static class Program
             InvalidAdmissionIsAtomic();
             ConcurrentActorLifecycleStress();
             TinyArenaCapsManagedFrameMetadata();
+            TenantFuelSurvivesActorReincarnation();
             Console.WriteLine($"ATTO_NET_ACTOR_ARENA_COOPERATION_PASS cases={_cases}");
             return 0;
         }
