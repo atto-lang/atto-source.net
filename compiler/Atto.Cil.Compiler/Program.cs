@@ -19,7 +19,7 @@ internal sealed record Binary(string Op, Expression Left, Expression Right) : Ex
 internal sealed record Call(string Name, List<Expression> Args) : Expression;
 internal sealed record Function(string Name, List<string> Args, Expression Return);
 
-internal sealed class Parser
+internal sealed partial class Parser
 {
     private readonly List<string> _tokens = [];
     private int _position;
@@ -58,7 +58,9 @@ internal sealed class Parser
             else if (c is >= '0' and <= '9')
                 while (i < source.Length && source[i] is >= '0' and <= '9') i++;
             else if (c == '-' && i < source.Length && source[i] == '>') i++;
-            else if (!"(){}:;,+-*/".Contains(c))
+            else if ((c is '>' or '<' or '=' or '!') &&
+                i < source.Length && source[i] == '=') i++;
+            else if (!"(){}:;,+-*/^<>=".Contains(c))
                 throw new CompilerError("E_LEX", $"unsupported source character at {start}");
             _tokens.Add(source[start..i]);
             if (_tokens.Count > 8192) throw new CompilerError("E_LIMIT", "8192 token limit");
@@ -84,9 +86,13 @@ internal sealed class Parser
             } while (Eat(","));
             Require(")");
             if (!Eat(":")) Require("->");
-            Require("int"); Require("{"); Require("return");
+            Require("int"); Require("{");
+            if (!Eat("return") && !Eat("^"))
+                throw new CompilerError("E_PARSE", "expected return or caret at function body");
             var expression = ParseExpr(0, 0);
-            Require(";"); Require("}");
+            if (!Eat(";") && Peek != "}")
+                throw new CompilerError("E_PARSE", "expected semicolon after return");
+            Require("}");
             result.Add(new Function(name, args, expression));
             if (result.Count > 64) throw new CompilerError("E_LIMIT", "64 function limit");
         }
@@ -96,7 +102,8 @@ internal sealed class Parser
     {
         if (depth > 32) throw new CompilerError("E_LIMIT", "expression nesting limit");
         Expression left;
-        if (Eat("(")) { left = ParseExpr(0, depth + 1); Require(")"); }
+        if (Eat("match")) left = ParseMatch(depth + 1);
+        else if (Eat("(")) { left = ParseExpr(0, depth + 1); Require(")"); }
         else if (Eat("-")) left = new Binary("-", new Literal(0), ParseExpr(30, depth + 1));
         else if (Peek.Length > 0 && Peek[0] is >= '0' and <= '9')
         {
@@ -123,7 +130,10 @@ internal sealed class Parser
         }
         while (true)
         {
-            int precedence = Peek is "*" or "/" ? 20 : Peek is "+" or "-" ? 10 : -1;
+            int precedence = Peek is "*" or "/" ? 20 :
+                Peek is "+" or "-" ? 10 :
+                Peek is ">" or "<" or ">=" or "<=" ? 5 :
+                Peek is "==" or "!=" ? 4 : -1;
             if (precedence < min) break;
             var op = Peek; _position++;
             left = new Binary(op, left, ParseExpr(precedence + 1, depth + 1));
@@ -132,7 +142,7 @@ internal sealed class Parser
     }
 }
 
-internal sealed class CIL(List<Function> functions)
+internal sealed partial class CIL(List<Function> functions)
 {
     private readonly List<Function> _functions = functions;
     private readonly Dictionary<string, int> _symbols = new(StringComparer.Ordinal);
@@ -153,23 +163,32 @@ internal sealed class CIL(List<Function> functions)
             WalkExpr(_functions[id].Return, _functions[id]);
             state[id] = 2;
         }
-        void WalkExpr(Expression e, Function owner)
+        bool WalkExpr(Expression e, Function owner, HashSet<string>? bound = null)
         {
+            bound ??= new HashSet<string>(StringComparer.Ordinal);
             switch (e)
             {
-                case Literal: return;
+                case Literal: return false;
                 case Arg a:
-                    if (!owner.Args.Contains(a.Name)) throw new CompilerError("E_SYMBOL", a.Name);
-                    return;
+                    if (!owner.Args.Contains(a.Name) && !bound.Contains(a.Name))
+                        throw new CompilerError("E_SYMBOL", a.Name);
+                    return false;
                 case Binary b:
-                    WalkExpr(b.Left, owner); WalkExpr(b.Right, owner);
-                    return;
+                    if (WalkExpr(b.Left, owner, bound) || WalkExpr(b.Right, owner, bound))
+                        throw new CompilerError("E_TYPE", "arithmetic/comparison operands must be int");
+                    return b.Op is ">" or "<" or ">=" or "<=" or "==" or "!=";
                 case Call c:
-                    if (!_symbols.TryGetValue(c.Name, out var target)) throw new CompilerError("E_SYMBOL", c.Name);
-                    if (_functions[target].Args.Count != c.Args.Count) throw new CompilerError("E_ARITY", c.Name);
-                    foreach (var arg in c.Args) WalkExpr(arg, owner);
+                    if (!_symbols.TryGetValue(c.Name, out var target))
+                        throw new CompilerError("E_SYMBOL", c.Name);
+                    if (_functions[target].Args.Count != c.Args.Count)
+                        throw new CompilerError("E_ARITY", c.Name);
+                    foreach (var arg in c.Args)
+                        if (WalkExpr(arg, owner, bound))
+                            throw new CompilerError("E_TYPE", "call arguments must be int");
                     WalkFunction(target);
-                    return;
+                    return false;
+                case ValueMatch m:
+                    return CheckValueMatch(m, bound, (item, scope) => WalkExpr(item, owner, scope));
                 default: throw new CompilerError("E_TYPE", "unsupported expression");
             }
         }
@@ -197,10 +216,22 @@ internal sealed class CIL(List<Function> functions)
         foreach (var f in _functions)
         {
             var code = new BlobBuilder();
-            var il = new InstructionEncoder(code);
+            var il = new InstructionEncoder(code, new ControlFlowBuilder());
+            _nextMatchLocal = 0;
+            int locals = CountMatchLocals(f.Return);
+            if (locals > 256) throw new CompilerError("E_LIMIT", "256 match subject locals limit");
+            StandaloneSignatureHandle localSignature = default;
+            if (locals > 0)
+            {
+                var localBlob = new BlobBuilder();
+                var localTypes = new BlobEncoder(localBlob).LocalVariableSignature(locals);
+                for (int k = 0; k < locals; k++) localTypes.AddVariable().Type().Int64();
+                localSignature = metadata.AddStandaloneSignature(metadata.GetOrAddBlob(localBlob));
+            }
             Generate(f.Return, f, il);
             il.OpCode(ILOpCode.Ret);
-            bodyOffsets.Add(bodyStream.AddMethodBody(il, maxStack: 64));
+            bodyOffsets.Add(bodyStream.AddMethodBody(il, maxStack: 64,
+                localVariablesSignature: localSignature));
         }
         int nextParameter = 1;
         for (int i = 0; i < _functions.Count; i++)
@@ -244,26 +275,59 @@ internal sealed class CIL(List<Function> functions)
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }
 
-    private void Generate(Expression e, Function f, InstructionEncoder il)
+    private void Generate(Expression e, Function f, InstructionEncoder il,
+        Dictionary<string, int>? bound = null)
     {
         switch (e)
         {
-            case Literal c: il.LoadConstantI8(c.Number); return;
-            case Arg a: il.LoadArgument(f.Args.IndexOf(a.Name)); return;
+            case Literal c:
+                il.LoadConstantI8(c.Number);
+                return;
+            case Arg a:
+                if (bound is not null && bound.TryGetValue(a.Name, out int slot))
+                    il.LoadLocal(slot);
+                else
+                    il.LoadArgument(f.Args.IndexOf(a.Name));
+                return;
             case Binary b:
-                Generate(b.Left, f, il); Generate(b.Right, f, il);
-                il.OpCode(b.Op switch
+                Generate(b.Left, f, il, bound);
+                Generate(b.Right, f, il, bound);
+                switch (b.Op)
                 {
-                    "+" => ILOpCode.Add_ovf,
-                    "-" => ILOpCode.Sub_ovf,
-                    "*" => ILOpCode.Mul_ovf,
-                    "/" => ILOpCode.Div,
-                    _ => throw new CompilerError("E_PARSE", b.Op)
-                });
+                    case "+": il.OpCode(ILOpCode.Add_ovf); break;
+                    case "-": il.OpCode(ILOpCode.Sub_ovf); break;
+                    case "*": il.OpCode(ILOpCode.Mul_ovf); break;
+                    case "/": il.OpCode(ILOpCode.Div); break;
+                    case ">": il.OpCode(ILOpCode.Cgt); il.OpCode(ILOpCode.Conv_i8); break;
+                    case "<": il.OpCode(ILOpCode.Clt); il.OpCode(ILOpCode.Conv_i8); break;
+                    case "==": il.OpCode(ILOpCode.Ceq); il.OpCode(ILOpCode.Conv_i8); break;
+                    case "!=":
+                        il.OpCode(ILOpCode.Ceq);
+                        il.OpCode(ILOpCode.Ldc_i4_0);
+                        il.OpCode(ILOpCode.Ceq);
+                        il.OpCode(ILOpCode.Conv_i8);
+                        break;
+                    case ">=":
+                        il.OpCode(ILOpCode.Clt);
+                        il.OpCode(ILOpCode.Ldc_i4_0);
+                        il.OpCode(ILOpCode.Ceq);
+                        il.OpCode(ILOpCode.Conv_i8);
+                        break;
+                    case "<=":
+                        il.OpCode(ILOpCode.Cgt);
+                        il.OpCode(ILOpCode.Ldc_i4_0);
+                        il.OpCode(ILOpCode.Ceq);
+                        il.OpCode(ILOpCode.Conv_i8);
+                        break;
+                    default: throw new CompilerError("E_PARSE", b.Op);
+                }
                 return;
             case Call c:
-                foreach (var arg in c.Args) Generate(arg, f, il);
+                foreach (var arg in c.Args) Generate(arg, f, il, bound);
                 il.Call(MetadataTokens.MethodDefinitionHandle(_symbols[c.Name] + 1));
+                return;
+            case ValueMatch match:
+                EmitValueMatch(match, f, il, bound);
                 return;
             default: throw new CompilerError("E_TYPE", "unexpected expression");
         }
