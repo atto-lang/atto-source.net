@@ -35,7 +35,10 @@ for case in \
   no-return:E_PARSE \
   duplicate-parameter:E_DUP_PARAM \
   bool-unsupported:E_PARSE \
-  no-main:E_ENTRY; do
+  no-main:E_ENTRY \
+  typed-task-unsupported:E_TASK_UNSUPPORTED \
+  do-sync-task-unsupported:E_TASK_UNSUPPORTED \
+  sync-reserved:E_RESERVED; do
   name="$(echo "$case" | cut -d: -f1)"
   diagnostic="$(echo "$case" | cut -d: -f2)"
   rm -f artifacts/Rejected.dll
@@ -51,7 +54,7 @@ for case in \
   }
   test ! -e artifacts/Rejected.dll || { echo "NEGATIVE_ARTIFACT_LEAK case=$name"; exit 1; }
 done
-echo "ATTO_DIRECT_CIL_NEGATIVE_PASS checks=12"
+echo "ATTO_DIRECT_CIL_NEGATIVE_PASS checks=15"
 dotnet build "$host" -c Release
 expect_42 CORECLR_GUEST dotnet run --no-build -c Release --project "$host"
 dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true \
