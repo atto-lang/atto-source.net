@@ -34,7 +34,11 @@ for case in \
   unknown-parameter:E_SYMBOL \
   no-return:E_PARSE \
   duplicate-parameter:E_DUP_PARAM \
-  bool-unsupported:E_PARSE \
+  bool-unsupported:E_ENTRY \
+  bool-return-mismatch:E_TYPE \
+  guard-not-bool:E_TYPE \
+  mixed-equality:E_TYPE \
+  unimplemented-host-io:E_SYMBOL \
   no-main:E_ENTRY; do
   name="$(echo "$case" | cut -d: -f1)"
   diagnostic="$(echo "$case" | cut -d: -f2)"
@@ -51,7 +55,7 @@ for case in \
   }
   test ! -e artifacts/Rejected.dll || { echo "NEGATIVE_ARTIFACT_LEAK case=$name"; exit 1; }
 done
-echo "ATTO_DIRECT_CIL_NEGATIVE_PASS checks=12"
+echo "ATTO_DIRECT_CIL_NEGATIVE_PASS checks=16"
 dotnet build "$host" -c Release
 expect_42 CORECLR_GUEST dotnet run --no-build -c Release --project "$host"
 dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true \
@@ -66,3 +70,25 @@ for fixture in fixtures/cil/precedence.atto fixtures/cil/forward-call.atto; do
   expect_42 EXTRA_CORECLR_GUEST dotnet run --no-build -c Release --project "$host"
 done
 echo "ATTO_DIRECT_CIL_POSITIVE_PASS fixtures=3"
+
+# Compile the byte-identical native Atto common-source policy definitions
+# with the ACTUAL .NET CIL frontend. This validates compiled semantics but
+# does NOT claim package-import linking or physical HTTP/filesystem access.
+test "$(git hash-object stdlib/std/http_response_policy.atto)" = 22757dafe89bc9601d04c8726a09ddf676206c7e
+test "$(git hash-object stdlib/std/fs_text_policy.atto)" = 0cd53216e91ef8de1a764ba5b80ce85c5796c1f2
+cat stdlib/std/http_response_policy.atto \
+    stdlib/std/fs_text_policy.atto \
+    fixtures/cil/hosted-policy-main.atto > artifacts/hosted-policy-linked.atto
+dotnet run --no-build -c Release --project "$compiler" -- \
+    artifacts/hosted-policy-linked.atto "$guest"
+test -s "$guest"
+dotnet build "$host" -c Release
+expect_42 HOSTED_POLICY_CORECLR_GUEST dotnet run --no-build -c Release --project "$host"
+
+# Re-publish against the new generated Atto CIL, never reuse the earlier AOT
+# artifact (which would still embed the old scalar fixture).
+dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true \
+  --self-contained true -o /tmp/atto-cil-hosted-policy-nativeaot
+test -x /tmp/atto-cil-hosted-policy-nativeaot/Atto.Cil.Guest.Host
+expect_42 HOSTED_POLICY_NATIVEAOT_GUEST /tmp/atto-cil-hosted-policy-nativeaot/Atto.Cil.Guest.Host
+echo "ATTO_HOSTED_POLICY_DIRECT_CIL_GUEST_PASS status=compiled-CIL-and-NativeAOT"
