@@ -84,7 +84,10 @@ internal sealed class Parser
             else if (c == '=' && i < source.Length && source[i] == '>')
                 throw new CompilerError("E_UNSUPPORTED_MAP_ENTRY",
                     "first-class Entry<K,V> and Map<K,V> require checked CIL ownership/lowering");
-            else if (!"(){}:;,+-*/".Contains(c))
+            // Recognize punctuation needed to reach a stable typed-feature
+            // rejection. This does not enable assignments/generic runtime
+            // values in the scalar parser; unsupported forms still fail closed.
+            else if (!"(){}:;,+-*/=<>".Contains(c))
                 throw new CompilerError("E_LEX", $"unsupported source character at {start}");
             _tokens.Add(source[start..i]);
             if (_tokens.Count > 8192) throw new CompilerError("E_LIMIT", "8192 token limit");
