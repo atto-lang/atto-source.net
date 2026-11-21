@@ -55,7 +55,14 @@ public sealed unsafe class ControlPlaneArena32 : IDisposable
     }
 
     // All backing is unmanaged; this reports actual reserved bytes, including alignment.
-    public long ReservedBytes => RequiredNativeBytes(_capacity);
+    public long ReservedBytes
+    {
+        get
+        {
+            lock (_gate)
+                return _closed ? 0 : RequiredNativeBytes(_capacity);
+        }
+    }
 
     public ControlPlaneArena32(int capacity)
     {
