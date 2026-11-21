@@ -26,6 +26,10 @@ public sealed class ActorRuntimeOptions
     public int ActorMaxLifetimePins { get; init; } = 4096;
     public int ActorMaxReadLoans { get; init; } = 4096;
     public long NativeBudgetBytes { get; init; } = 512L * 1024 * 1024;
+    // Opt-in native CONTROL summary; existing scheduler/mailbox objects remain managed.
+    // The root record is independent of actor-local guest Ref32 and cannot
+    // be used as a guest capability or evidence of process-wide zero GC.
+    public bool UseNativeControlCounters { get; init; } = false;
     // Matches Java ActorHeapAdmission's fail-closed startup policy.
     // An "untrusted" worker domain is not an isolate or protected process.
     public string GcMode { get; init; } = "hybrid";
@@ -328,6 +332,9 @@ public sealed class ActorRuntime : IDisposable
     private readonly ActorRuntimeOptions _options;
     private readonly ActorArenaBudget _nativeBudget;
     private readonly ActorDispatchDomains _domains;
+    private readonly ControlPlaneArena32? _controlPlane;
+    private readonly ulong _controlRoot;
+    private bool _controlPlaneClosed;
 
     private ulong _nextActorId;
     private bool _closed;
@@ -381,8 +388,34 @@ public sealed class ActorRuntime : IDisposable
         options ??= new ActorRuntimeOptions();
         options.Validate();
         _options = options;
-        _nativeBudget = new ActorArenaBudget(options.NativeBudgetBytes);
-        _domains = new ActorDispatchDomains(options.Dispatcher);
+        ControlPlaneArena32? control = null;
+        try
+        {
+            long remainingBudget = options.NativeBudgetBytes;
+            if (options.UseNativeControlCounters)
+            {
+                // Account every native control byte, including aligned metadata,
+                // BEFORE admitting actor arenas under the remaining budget.
+                long reserved = ControlPlaneArena32.RequiredNativeBytes(1);
+                if (remainingBudget <= reserved)
+                    throw new ArgumentOutOfRangeException(nameof(options.NativeBudgetBytes),
+                        "native control reservation exhausts runtime allocation budget");
+                control = new ControlPlaneArena32(1);
+                _controlRoot = control.Allocate();
+                control.WriteI64(_controlRoot, 0, 0); // live actor count
+                control.WriteI64(_controlRoot, 8, 0); // completed messages
+                remainingBudget -= reserved;
+            }
+            _nativeBudget = new ActorArenaBudget(remainingBudget);
+            _domains = new ActorDispatchDomains(options.Dispatcher);
+            _controlPlane = control;
+        }
+        catch
+        {
+            // Constructor failure must not strand native control memory.
+            control?.Dispose();
+            throw;
+        }
     }
 
     public int LiveActors
@@ -391,6 +424,38 @@ public sealed class ActorRuntime : IDisposable
     }
 
     public long NativeReservedBytes => _nativeBudget.ReservedBytes;
+    public long NativeControlReservedBytes
+    {
+        get
+        {
+            lock (_gate)
+                return _controlPlaneClosed ? 0 : _controlPlane?.ReservedBytes ?? 0;
+        }
+    }
+    public long NativeControlLiveActors
+    {
+        get
+        {
+            lock (_gate)
+            {
+                if (_controlPlane is null || _controlPlaneClosed)
+                    throw new InvalidOperationException("native control counters not admitted");
+                return _controlPlane.ReadI64(_controlRoot, 0);
+            }
+        }
+    }
+    public long NativeControlCompletedMessages
+    {
+        get
+        {
+            lock (_gate)
+            {
+                if (_controlPlane is null || _controlPlaneClosed)
+                    throw new InvalidOperationException("native control counters not admitted");
+                return _controlPlane.ReadI64(_controlRoot, 8);
+            }
+        }
+    }
     public long CompletedMessages => Interlocked.Read(ref _completedMessages);
     public long FaultedTurns => Interlocked.Read(ref _faultedTurns);
     public int StartedCarrierThreads => _domains.TotalStartedWorkers;
@@ -433,11 +498,16 @@ public sealed class ActorRuntime : IDisposable
                     stackBytes, _options.ActorMaxStackFrames,
                     _options.ActorMaxAllocations);
                 _actors.Add(candidateId, cell);
+                // _gate serializes actor admission and final reclamation.
+                // The native root record is a checked summary, not the ActorRef.
+                _controlPlane?.WriteI64(_controlRoot, 0, _actors.Count);
                 _nextActorId = candidateId;
                 return cell.Reference;
             }
             catch
             {
+                // No partially admitted actor if native control publication fails.
+                _actors.Remove(candidateId);
                 arena?.Dispose();
                 throw;
             }
@@ -537,6 +607,19 @@ public sealed class ActorRuntime : IDisposable
             // All queued/running dispatch tokens have returned at this point.
             foreach (ActorCell cell in cells)
                 FinalizeCell(cell);
+
+            lock (_gate)
+            {
+                // All actor dispatch carriers have joined before native root
+                // teardown. Finalizers entering from external Stop are fenced
+                // by _gate and skip native updates after this flag is published.
+                _controlPlaneClosed = true;
+                if (_controlPlane is not null)
+                {
+                    _controlPlane.Drop(_controlRoot);
+                    _controlPlane.Dispose();
+                }
+            }
         }
     }
 
@@ -633,7 +716,13 @@ public sealed class ActorRuntime : IDisposable
                 {
                     CryptographicOperations.ZeroMemory(payload);
                     if (succeeded)
-                        Interlocked.Increment(ref _completedMessages);
+                    {
+                        long completed = Interlocked.Increment(ref _completedMessages);
+                        // No per-message CLR wrapper; the control arena stores
+                        // only a native i64 counter. Other mailbox/context
+                        // allocations are still managed and NOT zero-GC proof.
+                        _controlPlane?.WriteI64(_controlRoot, 8, completed);
+                    }
                 }
 
                 processed++;
@@ -705,7 +794,11 @@ public sealed class ActorRuntime : IDisposable
         {
             if (_actors.TryGetValue(cell.Reference.Id, out ActorCell? current) &&
                 ReferenceEquals(current, cell))
+            {
                 _actors.Remove(cell.Reference.Id);
+                if (!_controlPlaneClosed)
+                    _controlPlane?.WriteI64(_controlRoot, 0, _actors.Count);
+            }
         }
         cell.Terminated.TrySetResult();
     }
