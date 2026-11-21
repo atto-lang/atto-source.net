@@ -10,6 +10,7 @@ on:
       - "scripts/test-match-cil-guest.sh"
       - "scripts/test-stdio-cil-guest.sh"
       - "scripts/verify-direct-cil-integration.sh"
+      - "scripts/test-direct-cil-integrity-harness.sh"
       - "verification/direct-cil-integration-blobs.tsv"
       - "fixtures/match-return-forms-v1/**"
       - ".github/workflows/atto-direct-cil-guest.yml"
@@ -39,6 +40,9 @@ jobs:
           git diff --quiet HEAD --
           test -z "$(git ls-files --others --exclude-standard)"
           git rev-parse 'HEAD^{tree}'
+      - name: Exercise synthetic exact-Git-blob attack regression suite
+        shell: bash
+        run: bash scripts/test-direct-cil-integrity-harness.sh
       - name: Verify exact-source integration blob manifest before compilation
         shell: bash
         run: bash scripts/verify-direct-cil-integration.sh
