@@ -39,6 +39,7 @@ internal sealed unsafe class ControlPlaneArena32 : IDisposable
     private static long s_nextIssuer;
     private readonly object _gate = new();
     private readonly int _capacity;
+    private readonly int _alignedSlotBytes;
     private readonly uint _issuer;
     private byte* _records;
     private Slot* _slots;
@@ -84,10 +85,12 @@ internal sealed unsafe class ControlPlaneArena32 : IDisposable
         {
             long metadata = checked((long)capacity * SlotBytes);
             long paddedMetadata = checked((metadata + NativeAlignment - 1) & ~(long)(NativeAlignment - 1));
+            _alignedSlotBytes = checked((int)paddedMetadata);
             _slots = (Slot*)NativeMemory.AlignedAlloc(checked((nuint)paddedMetadata), NativeAlignment);
             if (_slots == null) throw new OutOfMemoryException("control metadata");
             new Span<byte>(_records, checked(capacity * RecordBytes)).Clear();
-            new Span<byte>((byte*)_slots, checked(capacity * sizeof(Slot))).Clear();
+            // Include allocator alignment padding in the initial scrub.
+            new Span<byte>((byte*)_slots, _alignedSlotBytes).Clear();
             for (int i = 0; i < capacity; i++) _slots[i].Generation = 1;
         }
         catch
@@ -265,7 +268,8 @@ internal sealed unsafe class ControlPlaneArena32 : IDisposable
             if (_closed) return;
             _closed = true;
             new Span<byte>(_records, checked(_capacity * RecordBytes)).Clear();
-            new Span<byte>((byte*)_slots, checked(_capacity * sizeof(Slot))).Clear();
+            // Scrub the entire native allocation, including padded bytes.
+            new Span<byte>((byte*)_slots, _alignedSlotBytes).Clear();
             NativeMemory.AlignedFree(_records);
             NativeMemory.AlignedFree(_slots);
             _records = null;

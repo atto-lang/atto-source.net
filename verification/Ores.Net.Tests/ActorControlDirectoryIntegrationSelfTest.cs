@@ -45,12 +45,18 @@ internal static class ActorControlDirectoryIntegrationSelfTest
                 "root control record begins with zero live actors");
             Require(runtime.NativeControlCompletedMessages == 0,
                 "root control record begins with zero completions");
+            var snapshot = runtime.ReadNativeControlSnapshot();
+            Require(snapshot.LiveActors == 0 && snapshot.CompletedMessages == 0,
+                "native root 128-bit two-counter snapshot starts empty");
             var a = runtime.Spawn(ActorKind.Private, (_, _) => arrived.Set());
             Require(runtime.NativeControlLiveActors == runtime.LiveActors &&
                     runtime.LiveActors == 1, "spawn commits one native control count");
             var b = runtime.Spawn(ActorKind.Private, (_, _) => { });
             Require(runtime.NativeControlLiveActors == 2 && runtime.LiveActors == 2,
                 "second spawn publishes the bounded native count");
+            snapshot = runtime.ReadNativeControlSnapshot();
+            Require(snapshot.LiveActors == 2 && snapshot.CompletedMessages == 0,
+                "one coherent native root snapshot includes both active actors");
 
             runtime.Send(a, new byte[] { 42 });
             Require(arrived.Wait(TimeSpan.FromSeconds(10)), "actor carrier completed actual dispatch");
@@ -59,6 +65,9 @@ internal static class ActorControlDirectoryIntegrationSelfTest
                     runtime.NativeControlCompletedMessages == 1,
                     TimeSpan.FromSeconds(10)),
                 "native completions agree with a real actor dispatch");
+            snapshot = runtime.ReadNativeControlSnapshot();
+            Require(snapshot.LiveActors == 2 && snapshot.CompletedMessages == 1,
+                "one coherent 128-bit snapshot includes the real actor mailbox delivery");
             runtime.Stop(b); // no scheduled turn, synchronous finalization
             Require(SpinWait.SpinUntil(() =>
                     runtime.LiveActors == 1 && runtime.NativeControlLiveActors == 1,
@@ -69,6 +78,27 @@ internal static class ActorControlDirectoryIntegrationSelfTest
                     runtime.LiveActors == 0 && runtime.NativeControlLiveActors == 0,
                     TimeSpan.FromSeconds(10)),
                 "carrier STOP quiesces and reclaims native control count");
+            snapshot = runtime.ReadNativeControlSnapshot();
+            Require(snapshot.LiveActors == 0 && snapshot.CompletedMessages == 1,
+                "STOP must not erase the committed completion count");
+            // The runtime hot-path snapshot returns a value tuple, without
+            // materializing an array or boxing the native 128-bit record.
+            for (int i = 0; i < 8192; i++)
+            {
+                snapshot = runtime.ReadNativeControlSnapshot();
+                if (snapshot.LiveActors != 0 || snapshot.CompletedMessages != 1)
+                    throw new Exception("native root snapshot warmup inconsistency");
+            }
+            long beforeSnapshot = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 8192; i++)
+            {
+                snapshot = runtime.ReadNativeControlSnapshot();
+                if (snapshot.LiveActors != 0 || snapshot.CompletedMessages != 1)
+                    throw new Exception("native root snapshot incoherent");
+            }
+            Require(GC.GetAllocatedBytesForCurrentThread() == beforeSnapshot,
+                "warmed actor-runtime native snapshot must allocate zero CLR bytes");
+            Console.WriteLine("PASS dotnet actor-runtime native control snapshot managed-byte delta=0 (HOST ONLY)");
         }
         finally
         {
@@ -81,6 +111,10 @@ internal static class ActorControlDirectoryIntegrationSelfTest
         try { _ = runtime.NativeControlLiveActors; }
         catch (InvalidOperationException) { rejected = true; }
         Require(rejected, "disposed native control record cannot be dereferenced");
+        rejected = false;
+        try { _ = runtime.ReadNativeControlSnapshot(); }
+        catch (InvalidOperationException) { rejected = true; }
+        Require(rejected, "disposed 128-bit control snapshot must fail closed");
 
         using var legacy = new ActorRuntime(new ActorRuntimeOptions
         {
