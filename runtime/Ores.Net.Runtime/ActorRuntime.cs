@@ -456,6 +456,23 @@ public sealed class ActorRuntime : IDisposable
             }
         }
     }
+    /// <summary>
+    /// Read the host CONTROL root as one coherent 128-bit two-counter snapshot.
+    /// A ValueTuple is returned by value: no per-call managed heap buffer and
+    /// no exposure of the raw issuer-qualified four-byte control handle.
+    /// This is a host scheduler record, not a compiled Atto guest i128.
+    /// </summary>
+    public (long LiveActors, long CompletedMessages) ReadNativeControlSnapshot()
+    {
+        lock (_gate)
+        {
+            if (_controlPlane is null || _controlPlaneClosed)
+                throw new InvalidOperationException("native control counters not admitted");
+            _controlPlane.ReadI128(_controlRoot, out long actors, out long completed);
+            return (actors, completed);
+        }
+    }
+
     public long CompletedMessages => Interlocked.Read(ref _completedMessages);
     public long FaultedTurns => Interlocked.Read(ref _faultedTurns);
     public int StartedCarrierThreads => _domains.TotalStartedWorkers;
