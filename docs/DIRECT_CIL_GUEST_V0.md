@@ -60,3 +60,11 @@ never a cross-org token, and require nonempty actual executed test steps.
 
 Oreslang .NET architecture is consulted for compatibility but its compiler
 and runtime results cannot be counted as AttoLang executable parity.
+
+## Division and signed minimum alignment (2026-11-20)
+
+This branch's guarded-return matcher is **integer-only**. The accepted AttoLang rule is that `int / int` produces `float`. Earlier code on this branch emitted signed-integer CIL `div`, which would incorrectly truncate `5 / 2` to `2`. The source semantic checker now rejects every `/` expression with `E_DIVISION_FLOAT_RESULT` before a DLL is emitted, and the emitter has an independent defense. `scripts/test-match-cil-guest.sh` asserts the diagnostic, nonzero compiler status, and zero output artifact. The exact signed minimum `-9223372036854775808` is also parsed as a single i64 constant, consistent with the independent compiler branch.
+
+This is **not** floating-point execution support in the guarded-match branch. [PR #191](https://github.com/atto-lang/atto-source.net/pull/191) owns bounded binary64 lowering; its type checker and guest fixtures must be integrated into this branch's match/stdio parser before either line of work is released together. Do not merge this draft in a way that restores integer div semantics or discards the other PR's tests.
+
+The direct-CIL workflow installs the root-required .NET 10 SDK alongside the net8 runtime and verifies the exact checkout head. CoreCLR/NativeAOT tests are **NOT_EXECUTED** at this changed head until a real runner performs the jobs. Existing source-export security holds remain in force.
