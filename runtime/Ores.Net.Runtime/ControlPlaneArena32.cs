@@ -167,6 +167,24 @@ public sealed unsafe class ControlPlaneArena32 : IDisposable
         }
     }
 
+    // Concurrent actor carrier completions can publish out of order.
+    // A monotone native i64 summary prevents an older completion from
+    // overwriting a newer count; the caller owns the atomic increment.
+    public void WriteMaxI64(ulong handle, int field, long value)
+    {
+        lock (_gate)
+        {
+            int slot = Validate(handle);
+            if (field != 8 || value < 0)
+                throw new ArgumentOutOfRangeException(nameof(field),
+                    "monotone control completion count requires field 8 and nonnegative value");
+            var bytes = new Span<byte>(_records + slot * RecordBytes + field, 8);
+            long current = BinaryPrimitives.ReadInt64LittleEndian(bytes);
+            if (value > current)
+                BinaryPrimitives.WriteInt64LittleEndian(bytes, value);
+        }
+    }
+
     public long ReadI64(ulong handle, int field)
     {
         lock (_gate)
