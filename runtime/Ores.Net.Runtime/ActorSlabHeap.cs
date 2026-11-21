@@ -528,7 +528,104 @@ public unsafe sealed class ActorSlabHeap : IDisposable
         }
         return output;
     }
+
+    /// <summary>Canonical status codes shared by every backend (golden v2).</summary>
+    public static uint Code(SlabStatus s) => s switch
+    {
+        SlabStatus.Ok => 0,
+        SlabStatus.OutOfMemory => 1,
+        SlabStatus.BudgetExceeded => 2,
+        SlabStatus.InvalidSize => 3,
+        SlabStatus.InvalidAlignment => 4,
+        SlabStatus.InvalidRef => 5,
+        SlabStatus.StaleHandle => 6,
+        SlabStatus.HandleTableFull => 7,
+        SlabStatus.Retired => 8,
+        _ => 99,
+    };
+
+    /// <summary>
+    /// Golden v2: failure paths and edge cases; same script as the C++
+    /// <c>tests/actor_slab_heap_golden_v2_test.cpp</c> (see it for the format).
+    /// </summary>
+    public static List<uint> GoldenScriptV2()
+    {
+        using var h = new ActorSlabHeap(new ActorSlabHeapConfig(256 * 1024, 128 * 1024)
+        {
+            CommitGranule = 16 * 1024, HandleCapacity = 8, HandleGenerationBits = 3,
+        });
+        var output = new List<uint>();
+        uint lcg = 99;
+        uint Next() { lcg = unchecked(lcg * 1664525u + 1013904223u); return lcg >> 8; }
+        static uint Fail(SlabStatus s) => 0x8000_0000u | Code(s);
+        static void Remember(List<uint> v, uint w) { v.Add(w); if (v.Count > 8) v.RemoveAt(0); }
+        static void SwapRemove(List<uint> v, int i) { v[i] = v[^1]; v.RemoveAt(v.Count - 1); }
+        nuint[] sizes = [0, 1, 8, 16, 17, 33, 48, 63, 64, 65, 100, 127, 128, 129, 255, 256, 257, 500, 1000, 2047, 2048, 2049];
+        nuint[] aligns = [1, 8, 16, 32, 64, 128, 3];
+        nuint[] larges = [3000, 4033, 4032, 8000, 12000, 20000];
+        List<uint> live = [], freed = [], handles = [], freedHandles = [];
+        for (var op = 0; op < 3000; op++)
+        {
+            var v = Next() % 16;
+            if (v <= 5)
+            {
+                var s = sizes[Next() % 22];
+                var a = aligns[Next() % 7];
+                var st = h.Allocate(s, a, out var w);
+                if (st == SlabStatus.Ok) { output.Add(w); live.Add(w); } else output.Add(Fail(st));
+            }
+            else if (v <= 8)
+            {
+                if (live.Count == 0) continue;
+                var i = (int)(Next() % (uint)live.Count);
+                var w = live[i];
+                var st = h.Free(w);
+                output.Add(st == SlabStatus.Ok ? 0 : Fail(st));
+                SwapRemove(live, i);
+                Remember(freed, w);
+            }
+            else if (v == 9)
+            {
+                if (freed.Count == 0) continue;
+                var w = freed[(int)(Next() % (uint)freed.Count)];
+                var st = h.Free(w);
+                output.Add(st == SlabStatus.Ok ? 0 : Fail(st));
+                if (st == SlabStatus.Ok) { var i = live.IndexOf(w); if (i >= 0) SwapRemove(live, i); }
+            }
+            else if (v <= 11)
+            {
+                var st = h.AllocateHandle(sizes[1 + Next() % 12], 8, out var x);
+                if (st == SlabStatus.Ok) { output.Add(x); handles.Add(x); } else output.Add(Fail(st));
+            }
+            else if (v <= 13)
+            {
+                if (handles.Count == 0) continue;
+                var i = (int)(Next() % (uint)handles.Count);
+                var w = handles[i];
+                var st = h.FreeHandle(w);
+                output.Add(st == SlabStatus.Ok ? 0 : Fail(st));
+                SwapRemove(handles, i);
+                Remember(freedHandles, w);
+            }
+            else if (v == 14)
+            {
+                if (freedHandles.Count == 0) continue;
+                var st = h.ResolveHandle(freedHandles[(int)(Next() % (uint)freedHandles.Count)], out var w);
+                output.Add(st == SlabStatus.Ok ? w : Fail(st));
+            }
+            else
+            {
+                var st = h.Allocate(larges[Next() % 6], 8, out var w);
+                if (st == SlabStatus.Ok) { output.Add(w); live.Add(w); } else output.Add(Fail(st));
+            }
+        }
+        var stats = h.Stats;
+        output.AddRange([(uint)stats.LiveObjects, (uint)stats.LivePages, (uint)stats.FreePages,
+            stats.QuarantinedHandles, (uint)stats.CommittedBytes]);
+        return output;
+    }
 }
+
 
 public enum SlabStatus : byte
 {

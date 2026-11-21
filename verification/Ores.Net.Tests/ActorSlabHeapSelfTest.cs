@@ -16,7 +16,8 @@ internal static class ActorSlabHeapSelfTest
         HandlesFifoStaleAndQuarantine();
         StressIntegrity();
         GoldenMatchesCppAndRust();
-        Console.WriteLine("ActorSlabHeapSelfTest: PASS (Offset32/Handle32, golden v1)");
+        GoldenV2MatchesCppAndRust();
+        Console.WriteLine("ActorSlabHeapSelfTest: PASS (Offset32/Handle32, golden v1 + v2)");
     }
 
     private static void Check(bool ok, string what)
@@ -147,7 +148,7 @@ internal static class ActorSlabHeapSelfTest
 
     private static void GoldenMatchesCppAndRust()
     {
-        var path = FindGolden();
+        var path = FindGolden("actor_slab_heap_golden_v1.txt");
         var expected = File.ReadAllText(path).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Select(uint.Parse).ToList();
         var actual = ActorSlabHeap.GoldenScriptV1();
         Check(actual.Count == expected.Count, $"golden length {actual.Count} != {expected.Count}");
@@ -155,13 +156,24 @@ internal static class ActorSlabHeapSelfTest
             Check(actual[i] == expected[i], $"golden word {i}: {actual[i]} != {expected[i]}");
     }
 
-    private static string FindGolden()
+    private static void GoldenV2MatchesCppAndRust()
+    {
+        // v2 adds failure paths: canonical codes must agree across backends too.
+        var expected = File.ReadAllText(FindGolden("actor_slab_heap_golden_v2.txt"))
+            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Select(uint.Parse).ToList();
+        var actual = ActorSlabHeap.GoldenScriptV2();
+        Check(actual.Count == expected.Count, $"golden v2 length {actual.Count} != {expected.Count}");
+        for (var i = 0; i < actual.Count; i++)
+            Check(actual[i] == expected[i], $"golden v2 word {i}: {actual[i]} != {expected[i]}");
+    }
+
+    private static string FindGolden(string name)
     {
         for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir != null; dir = dir.Parent)
         {
-            var candidate = Path.Combine(dir.FullName, "contracts", "actor-slab-heap", "v1", "actor_slab_heap_golden_v1.txt");
+            var candidate = Path.Combine(dir.FullName, "contracts", "actor-slab-heap", "v1", name);
             if (File.Exists(candidate)) return candidate;
         }
-        throw new FileNotFoundException("contracts/actor-slab-heap/v1/actor_slab_heap_golden_v1.txt");
+        throw new FileNotFoundException("contracts/actor-slab-heap/v1/" + name);
     }
 }
