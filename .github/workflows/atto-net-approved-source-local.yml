@@ -50,12 +50,17 @@ jobs:
             'X-GitHub-Api-Version' = '2022-11-28'
           }
           $branch = Invoke-RestMethod -Uri 'https://api.github.com/repos/atto-lang/atto-source.net/branches/main' -Headers $headers
-          if ($branch.name -ne 'main' -or $branch.protected -ne $true) {
+          # PowerShell's -ne is coercing and case-insensitive. GitHub API
+          # protection must be an actual JSON boolean, not the string "true".
+          if ($branch.name -cne 'main' -or -not ($branch.protected -is [bool]) -or
+              $branch.protected -ne $true) {
             throw 'E_SOURCE_MAIN_NOT_PROTECTED'
           }
           $pr = Invoke-RestMethod -Uri 'https://api.github.com/repos/atto-lang/atto-source.net/pulls/33' -Headers $headers
-          if ($pr.number -ne 33 -or $pr.head.sha -ne $env:SOURCE_HEAD -or
-              $pr.head.repo.full_name -ne 'atto-lang/atto-source.net') {
+          # Do not accept stringified PR numbers or case-folded SHA aliases.
+          if (-not ($pr.number -is [int]) -or $pr.number -ne 33 -or
+              $pr.head.sha -cne $env:SOURCE_HEAD -or
+              $pr.head.repo.full_name -cne 'atto-lang/atto-source.net') {
             throw 'E_ACTOR_PR_SOURCE_DRIFT'
           }
           "ATTO_SOURCE_LOCAL_PROTECTED_MAIN_CONFIRMED actor_pr_head=$env:SOURCE_HEAD"
