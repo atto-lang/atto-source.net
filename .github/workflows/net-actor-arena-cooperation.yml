@@ -100,50 +100,14 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $receipt = dotnet run -c Release --project verification/Atto.Net.ActorRuntime.Tests
+          $receipt = @(dotnet run -c Release --project verification/Atto.Net.ActorRuntime.Tests)
           if ($LASTEXITCODE -ne 0) { throw 'Managed actor probe failed' }
           $receipt | Out-Host
-          $passLines = @($receipt | Where-Object { $_ -match '^ATTO_NET_ACTOR_ARENA_COOPERATION_PASS cases=[0-9]+
-      - name: Publish and execute actual NativeAOT host probe
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $out = Join-Path $env:RUNNER_TEMP 'atto-actor-aot'
-          dotnet publish verification/Atto.Net.ActorRuntime.Tests -c Release -r ${{ matrix.rid }} -p:PublishAot=true --self-contained true -o $out
-          if ($LASTEXITCODE -ne 0) { throw 'NativeAOT publish failed' }
-          $binary = Join-Path $out '${{ matrix.executable }}'
-          if (-not (Test-Path $binary)) { throw 'Published native binary missing' }
-          $hash = (Get-FileHash -Algorithm SHA256 $binary).Hash
-          "ATTO_NET_ACTOR_NATIVE_SHA256=$hash"
-          $receipt = & $binary
-          if ($LASTEXITCODE -ne 0) { throw 'NativeAOT actor probe failed' }
-          $receipt | Out-Host
-          $passLines = @($receipt | Where-Object { $_ -match '^ATTO_NET_ACTOR_ARENA_COOPERATION_PASS cases=[0-9]+
- })
+          $passLines = @($receipt | Where-Object { $_ -match '^ATTO_NET_ACTOR_ARENA_COOPERATION_PASS cases=[0-9]+$' })
           if ($passLines.Count -ne 1) { throw 'Managed actor test receipt missing or ambiguous' }
-          $match = [regex]::Match($passLines[0], 'cases=([0-9]+)
-      - name: Publish and execute actual NativeAOT host probe
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $out = Join-Path $env:RUNNER_TEMP 'atto-actor-aot'
-          dotnet publish verification/Atto.Net.ActorRuntime.Tests -c Release -r ${{ matrix.rid }} -p:PublishAot=true --self-contained true -o $out
-          if ($LASTEXITCODE -ne 0) { throw 'NativeAOT publish failed' }
-          $binary = Join-Path $out '${{ matrix.executable }}'
-          if (-not (Test-Path $binary)) { throw 'Published native binary missing' }
-          $hash = (Get-FileHash -Algorithm SHA256 $binary).Hash
-          "ATTO_NET_ACTOR_NATIVE_SHA256=$hash"
-          $receipt = & $binary
-          if ($LASTEXITCODE -ne 0) { throw 'NativeAOT actor probe failed' }
-          $receipt | Out-Host
-          if (-not ($receipt | Select-String -Pattern '^ATTO_NET_ACTOR_ARENA_COOPERATION_PASS cases=[0-9]+$')) {
-            throw 'NativeAOT runtime receipt missing'
-          }
-)
-          $managedCases = [int]$match.Groups[1].Value
-          if ($managedCases -lt 40) {
-            throw "Actor managed probe coverage dropped below 40: $managedCases"
-          }
+          $parsed = [regex]::Match($passLines[0], 'cases=([0-9]+)$')
+          $managedCases = [int]$parsed.Groups[1].Value
+          if ($managedCases -lt 40) { throw "Managed actor test case-count coverage dropped: $managedCases" }
           Add-Content -LiteralPath $env:GITHUB_ENV -Value "ATTO_MANAGED_CASES=$managedCases"
           "ATTO_NET_ACTOR_MANAGED_CASES=$managedCases"
       - name: Publish and execute actual NativeAOT host probe
@@ -157,107 +121,14 @@ jobs:
           if (-not (Test-Path $binary)) { throw 'Published native binary missing' }
           $hash = (Get-FileHash -Algorithm SHA256 $binary).Hash
           "ATTO_NET_ACTOR_NATIVE_SHA256=$hash"
-          $receipt = & $binary
+          $receipt = @(& $binary)
           if ($LASTEXITCODE -ne 0) { throw 'NativeAOT actor probe failed' }
           $receipt | Out-Host
-          if (-not ($receipt | Select-String -Pattern '^ATTO_NET_ACTOR_ARENA_COOPERATION_PASS cases=[0-9]+$')) {
-            throw 'NativeAOT runtime receipt missing'
-          }
- })
+          $passLines = @($receipt | Where-Object { $_ -match '^ATTO_NET_ACTOR_ARENA_COOPERATION_PASS cases=[0-9]+$' })
           if ($passLines.Count -ne 1) { throw 'NativeAOT actor test receipt missing or ambiguous' }
-          $match = [regex]::Match($passLines[0], 'cases=([0-9]+)
- })
-          if ($passLines.Count -ne 1) { throw 'Managed actor test receipt missing or ambiguous' }
-          $match = [regex]::Match($passLines[0], 'cases=([0-9]+)
-      - name: Publish and execute actual NativeAOT host probe
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $out = Join-Path $env:RUNNER_TEMP 'atto-actor-aot'
-          dotnet publish verification/Atto.Net.ActorRuntime.Tests -c Release -r ${{ matrix.rid }} -p:PublishAot=true --self-contained true -o $out
-          if ($LASTEXITCODE -ne 0) { throw 'NativeAOT publish failed' }
-          $binary = Join-Path $out '${{ matrix.executable }}'
-          if (-not (Test-Path $binary)) { throw 'Published native binary missing' }
-          $hash = (Get-FileHash -Algorithm SHA256 $binary).Hash
-          "ATTO_NET_ACTOR_NATIVE_SHA256=$hash"
-          $receipt = & $binary
-          if ($LASTEXITCODE -ne 0) { throw 'NativeAOT actor probe failed' }
-          $receipt | Out-Host
-          if (-not ($receipt | Select-String -Pattern '^ATTO_NET_ACTOR_ARENA_COOPERATION_PASS cases=[0-9]+$')) {
-            throw 'NativeAOT runtime receipt missing'
-          }
-)
-          $managedCases = [int]$match.Groups[1].Value
-          if ($managedCases -lt 40) {
-            throw "Actor managed probe coverage dropped below 40: $managedCases"
-          }
-          Add-Content -LiteralPath $env:GITHUB_ENV -Value "ATTO_MANAGED_CASES=$managedCases"
-          "ATTO_NET_ACTOR_MANAGED_CASES=$managedCases"
-      - name: Publish and execute actual NativeAOT host probe
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $out = Join-Path $env:RUNNER_TEMP 'atto-actor-aot'
-          dotnet publish verification/Atto.Net.ActorRuntime.Tests -c Release -r ${{ matrix.rid }} -p:PublishAot=true --self-contained true -o $out
-          if ($LASTEXITCODE -ne 0) { throw 'NativeAOT publish failed' }
-          $binary = Join-Path $out '${{ matrix.executable }}'
-          if (-not (Test-Path $binary)) { throw 'Published native binary missing' }
-          $hash = (Get-FileHash -Algorithm SHA256 $binary).Hash
-          "ATTO_NET_ACTOR_NATIVE_SHA256=$hash"
-          $receipt = & $binary
-          if ($LASTEXITCODE -ne 0) { throw 'NativeAOT actor probe failed' }
-          $receipt | Out-Host
-          if (-not ($receipt | Select-String -Pattern '^ATTO_NET_ACTOR_ARENA_COOPERATION_PASS cases=[0-9]+$')) {
-            throw 'NativeAOT runtime receipt missing'
-          }
-)
-          $nativeCases = [int]$match.Groups[1].Value
-          if (-not $env:ATTO_MANAGED_CASES -or
-              $nativeCases -ne [int]$env:ATTO_MANAGED_CASES) {
-            throw "Actor CoreCLR/NativeAOT case mismatch: managed=$env:ATTO_MANAGED_CASES native=$nativeCases"
+          $parsed = [regex]::Match($passLines[0], 'cases=([0-9]+)$')
+          $nativeCases = [int]$parsed.Groups[1].Value
+          if (-not $env:ATTO_MANAGED_CASES -or $nativeCases -ne [int]$env:ATTO_MANAGED_CASES) {
+            throw "Managed/NativeAOT assertion mismatch: $env:ATTO_MANAGED_CASES vs $nativeCases"
           }
           "ATTO_NET_ACTOR_MANAGED_NATIVEAOT_PARITY_PASS cases=$nativeCases rid=${{ matrix.rid }}"
- })
-          if ($passLines.Count -ne 1) { throw 'Managed actor test receipt missing or ambiguous' }
-          $match = [regex]::Match($passLines[0], 'cases=([0-9]+)
-      - name: Publish and execute actual NativeAOT host probe
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $out = Join-Path $env:RUNNER_TEMP 'atto-actor-aot'
-          dotnet publish verification/Atto.Net.ActorRuntime.Tests -c Release -r ${{ matrix.rid }} -p:PublishAot=true --self-contained true -o $out
-          if ($LASTEXITCODE -ne 0) { throw 'NativeAOT publish failed' }
-          $binary = Join-Path $out '${{ matrix.executable }}'
-          if (-not (Test-Path $binary)) { throw 'Published native binary missing' }
-          $hash = (Get-FileHash -Algorithm SHA256 $binary).Hash
-          "ATTO_NET_ACTOR_NATIVE_SHA256=$hash"
-          $receipt = & $binary
-          if ($LASTEXITCODE -ne 0) { throw 'NativeAOT actor probe failed' }
-          $receipt | Out-Host
-          if (-not ($receipt | Select-String -Pattern '^ATTO_NET_ACTOR_ARENA_COOPERATION_PASS cases=[0-9]+$')) {
-            throw 'NativeAOT runtime receipt missing'
-          }
-)
-          $managedCases = [int]$match.Groups[1].Value
-          if ($managedCases -lt 40) {
-            throw "Actor managed probe coverage dropped below 40: $managedCases"
-          }
-          Add-Content -LiteralPath $env:GITHUB_ENV -Value "ATTO_MANAGED_CASES=$managedCases"
-          "ATTO_NET_ACTOR_MANAGED_CASES=$managedCases"
-      - name: Publish and execute actual NativeAOT host probe
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $out = Join-Path $env:RUNNER_TEMP 'atto-actor-aot'
-          dotnet publish verification/Atto.Net.ActorRuntime.Tests -c Release -r ${{ matrix.rid }} -p:PublishAot=true --self-contained true -o $out
-          if ($LASTEXITCODE -ne 0) { throw 'NativeAOT publish failed' }
-          $binary = Join-Path $out '${{ matrix.executable }}'
-          if (-not (Test-Path $binary)) { throw 'Published native binary missing' }
-          $hash = (Get-FileHash -Algorithm SHA256 $binary).Hash
-          "ATTO_NET_ACTOR_NATIVE_SHA256=$hash"
-          $receipt = & $binary
-          if ($LASTEXITCODE -ne 0) { throw 'NativeAOT actor probe failed' }
-          $receipt | Out-Host
-          if (-not ($receipt | Select-String -Pattern '^ATTO_NET_ACTOR_ARENA_COOPERATION_PASS cases=[0-9]+$')) {
-            throw 'NativeAOT runtime receipt missing'
-          }
