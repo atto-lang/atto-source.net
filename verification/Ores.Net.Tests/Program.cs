@@ -458,6 +458,7 @@ ActorScalarFrameAbiSelfTest.Run(); // verified CFG layout/native spill boundary,
 ProjectRootSourceTests.Run(); // host-only resolver, not linked .NET source imports
 ActorNativeArenaSelfTest.Run();
 ActorGuestHeap32SelfTest.Run();
+ActorControlDirectoryIntegrationSelfTest.Run(); // opt-in native root counters, real host dispatch only
 
 // Import parity is deliberately not claimed for the .NET scalar compiler.
 // Each form must fail at lexical admission with a specific import diagnostic,
