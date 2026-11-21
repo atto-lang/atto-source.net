@@ -6,11 +6,16 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+# Serialize manual attestations: never allow a new dispatch to interrupt a
+# currently running exact-SHA isolated one-shot source verification.
+concurrency:
+  group: atto-net-approved-source-local-exact-sha
+  cancel-in-progress: false
 
 jobs:
   actor-managed-native:
     # The default-branch workflow is manually dispatched by an approved operator.
-    if: ${{ github.repository == 'atto-lang/atto-source.net' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    if: ${{ github.repository == 'atto-lang/atto-source.net' && github.event.repository.private == true && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
     runs-on: ${{ fromJSON(matrix.runner_labels) }}
     timeout-minutes: 45
     strategy:
@@ -48,6 +53,10 @@ jobs:
           if (@(git status --porcelain).Count -ne 0) { throw 'Dirty actor source checkout' }
           "ATTO_SOURCE_LOCAL_ACTOR_HEAD=$head"
           "ATTO_SOURCE_LOCAL_ACTOR_TREE=$tree"
+          "ATTO_SOURCE_LOCAL_RUN_ID=${{ github.run_id }} ATTEMPT=${{ github.run_attempt }} WORKFLOW_SHA=${{ github.workflow_sha }}"
+          if (-not $env:RUNNER_NAME -or $env:RUNNER_ENVIRONMENT -ne 'self-hosted') {
+            throw 'Source-local real tests require an assigned isolated self-hosted runner'
+          }
       - name: Install .NET 10 SDK and .NET 8 runtime
         uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # pinned v4
         with:
@@ -99,7 +108,7 @@ jobs:
           "ATTO_ACTOR_SOURCE_LOCAL_NATIVEAOT_PASS rid=$env:RID count=$count sha256=$digest"
 
   cil-linux-native:
-    if: ${{ github.repository == 'atto-lang/atto-source.net' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    if: ${{ github.repository == 'atto-lang/atto-source.net' && github.event.repository.private == true && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
     runs-on: [self-hosted, linux, x64, atto-net-approved-one-shot]
     timeout-minutes: 60
     env:
@@ -121,6 +130,9 @@ jobs:
           git diff --quiet HEAD --
           test -z "$(git ls-files --others --exclude-standard)"
           echo "ATTO_SOURCE_LOCAL_CIL_HEAD=$SOURCE_HEAD TREE=$SOURCE_TREE"
+          echo "ATTO_SOURCE_LOCAL_RUN_ID=${{ github.run_id }} ATTEMPT=${{ github.run_attempt }} WORKFLOW_SHA=${{ github.workflow_sha }}"
+          test -n "${RUNNER_NAME:-}"
+          test "${RUNNER_ENVIRONMENT:-}" = "self-hosted"
       - name: Run 12 source-free Git-integrity regression cases and verify actual Atto fixture blobs
         shell: bash
         run: |
