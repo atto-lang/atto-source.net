@@ -9,6 +9,8 @@ on:
       - "scripts/test-cil-guest.sh"
       - "scripts/test-match-cil-guest.sh"
       - "scripts/test-stdio-cil-guest.sh"
+      - "scripts/verify-direct-cil-integration.sh"
+      - "verification/direct-cil-integration-blobs.tsv"
       - "fixtures/match-return-forms-v1/**"
       - ".github/workflows/atto-direct-cil-guest.yml"
   push:
@@ -37,6 +39,9 @@ jobs:
           git diff --quiet HEAD --
           test -z "$(git ls-files --others --exclude-standard)"
           git rev-parse 'HEAD^{tree}'
+      - name: Verify exact-source integration blob manifest before compilation
+        shell: bash
+        run: bash scripts/verify-direct-cil-integration.sh
       - name: Install root-pinned .NET 10 SDK and .NET 8 target runtime
         uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
         with:

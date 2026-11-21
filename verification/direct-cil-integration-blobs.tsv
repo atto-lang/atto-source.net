@@ -1,0 +1,37 @@
+# 35 verified original Atto compiler fixtures and helper files retained from #26/#191.
+# SHA-1 Git object ID TAB repo-relative path. Do not export private files to carriers.
+1dec4dddd18007f6e3691f1192853daac024a8cc	docs/DIRECT_CIL_FLOAT_DIVISION_ADMISSION_V1.md
+71db81e48564fce742ba2525a775bcdf3905af84	docs/DIRECT_CIL_GUEST_V0.md
+bcb843ea3c8b68f4cd1fed846cea5a1fe08b2154	fixtures/cil/float-division.atto
+30849fa8e2884772d430cd792877bef3e00a6ef8	fixtures/cil/negative/float-result-as-int-arg.atto
+2dde225d8e0d7defe89826688fd0e27ccce11582	fixtures/cil/negative/float-result-in-int-return.atto
+f405599f101013f13163a04c432d45be6e24bb0f	fixtures/cil/negative/int-division-float-required.atto
+93833a34d9a1ffe9efcf7478534acaccd75b552c	fixtures/cil/negative/int-division-in-helper.atto
+340ceca88cf6c7dff0f7691d3268c4214abc127b	fixtures/cil/negative/int-division-nested.atto
+cbc54d05f1b635ebbcb4564ec2177c6b5c000568	fixtures/cil/negative/signed-min-underflow.atto
+23af705116afaf094445848ec9a5440fb2e77aea	fixtures/cil/negative/unsupported-float-addition.atto
+93d5fbebf0fdd5dbc113d4b2a35aed6b25d5c6d9	fixtures/cil/signed-min-boundary.atto
+a8ec2c699c4a521508bee85f55a49888064c6948	fixtures/match-return-forms-v1/fail/match-guard-block-fallthrough.atto
+23f8597125af43b3cab294ba8dc9b110d9983ef5	fixtures/match-return-forms-v1/fail/match-guard-no-fallback.atto
+ea164826c6b7047a09d62dc055ef6cd488b4f02b	fixtures/match-return-forms-v1/native-caret-scalar.atto
+aec987bd0d3158a07757e9c66a96aca34123570f	fixtures/match-return-forms-v1/native-return-scalar.atto
+cb9dfe11e65af466c6a520254ed789ce089d1c86	fixtures/match-return-forms-v1/native-subject-once-scalar.atto
+070872e72b3be40c9c1f3ae98321986ff0a8306b	fixtures/match-return-forms-v1/negative/assignment-expression.atto
+ae050d4ac044ab7147ddfb2b6630a73bb7fd0b21	fixtures/match-return-forms-v1/negative/binder-leak.atto
+d6c2c0a6afecf27f237251a49967023ab07d992e	fixtures/match-return-forms-v1/negative/duplicate-unreachable.atto
+d5fae7587cc0857c693c31adfeced5cb64c426f3	fixtures/match-return-forms-v1/negative/guard-not-bool.atto
+54881aaf4f9916dde02c9b658006779fe3c4efb2	fixtures/match-return-forms-v1/negative/guarded-no-fallback.atto
+be6c3e336b768648c72f2d23d1f7b3489f62240e	fixtures/match-return-forms-v1/negative/int-division-float-required.atto
+bc1e4d96bd0dade7d777ac7472d1a04acd1b126e	fixtures/match-return-forms-v1/negative/result-not-int.atto
+b73e30920c480b2cfd8ee58b72775c4e21bd092d	fixtures/match-return-forms-v1/negative/stdio-after-return.atto
+d1d4d75ec344e3bdd77814f01085afb9872b5214	fixtures/match-return-forms-v1/negative/stdio-empty-arguments.atto
+a6a400c1b1d2268c9ba50df110f85ff05d29d9dc	fixtures/match-return-forms-v1/negative/stdio-missing-return.atto
+737acdbaa7ebdbbbbec0bb01396c30176c2a18e1	fixtures/match-return-forms-v1/negative/stdio-nonint.atto
+9217cf9ee701928aaca47733a7cfbc4552e91582	fixtures/match-return-forms-v1/negative/stdio-too-many-arguments.atto
+297eebeac5eb35e49da5a50cc504e2b0ac9e5b5d	fixtures/match-return-forms-v1/negative/stdio-unknown-member.atto
+11192dd065aa1192687a185809077bc28515477b	fixtures/match-return-forms-v1/negative/unguarded-after-default.atto
+e49fd45f9bca8618ee1fbe6aaae914c80cd1e34f	fixtures/match-return-forms-v1/negative/unsupported-adt-is-pattern.atto
+0b2addfef29cd76d60d90bf081f4d326ea2d70df	fixtures/match-return-forms-v1/pass/match-guard-block-caret.atto
+603df679e1e9b7415cb8b798d4a2143545dd27b8	fixtures/match-return-forms-v1/pass/match-guard-block-return.atto
+06d643868e654840ae0e275bc333d078277a62d9	tests/Atto.Cil.Float.Guest.Host/Atto.Cil.Float.Guest.Host.csproj
+3b8f45dfcb6e27ebce7dea7caec29379f3dedea3	tests/Atto.Cil.Float.Guest.Host/Program.cs
