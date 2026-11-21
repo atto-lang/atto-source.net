@@ -56,6 +56,22 @@ foreach (char terminalControl in new[] { '\u001b', '\u007f' })
         $"terminal control at offset {embeddedOffset}", "structured embedded control offset");
     RejectDiagnostic(() => OresStructuredParser.Parse(trailing),
         $"terminal control at offset {trailingOffset}", "structured trailing control offset");
+
+    // Validate raw source before parsing, even when a control occurs inside a
+    // syntactically unsupported quoted string or as the first source code unit.
+    // An unrelated syntax error must not disguise a terminal-control bypass.
+    string quoted = "fnc main():int{const string s = \"" +
+        terminalControl + "\"; return 42;}";
+    int quotedOffset = quoted.IndexOf(terminalControl);
+    RejectDiagnostic(() => OresParser.Parse(quoted),
+        $"terminal control at offset {quotedOffset}", "scalar quoted raw control");
+    RejectDiagnostic(() => OresStructuredParser.Parse(quoted),
+        $"terminal control at offset {quotedOffset}", "structured quoted raw control");
+    string leading = terminalControl + "fnc main():int{return 42;}";
+    RejectDiagnostic(() => OresParser.Parse(leading),
+        "terminal control at offset 0", "scalar leading raw control");
+    RejectDiagnostic(() => OresStructuredParser.Parse(leading),
+        "terminal control at offset 0", "structured leading raw control");
 }
 Require(OresParser.Parse("fnc main():int{\r\n\treturn 42;\r\n}") is not null,
     "ordinary scalar CRLF and TAB must remain accepted");
