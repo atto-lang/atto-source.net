@@ -6,6 +6,7 @@ using Ores.Net.Runtime;
 ReadonlyShapeProjectionV1Tests.Run();
 NativeSourceIdentityV1SelfTest.Run();
 ActorTypedReplySlotsSelfTest.Run(); // NativeAOT-safe host ledger, NOT guest request() lowering
+ActorSlabHeapSelfTest.Run(); // 32-bit actor slab heap; golden shared with LLVM and rs/wasm
 DeclaredActorReceiveSyntaxTests.Run();
 AttoCallableLanguageVersionTests.Run();
 MtdReceiverAdmissionTests.Run();
