@@ -18,6 +18,8 @@ Check(ControlPlaneArena32.SlotBits == 20 && ControlPlaneArena32.GenerationBits =
       "control Ref32 bit partition must not be mislabeled");
 Check(ControlPlaneArena32.RecordBytes == 32, "physical record width");
 Check(ControlPlaneArena32.RequiredNativeBytes(1) == 48, "12-byte slot metadata is padded to 16");
+Check(ControlPlaneArena32.RequiredNativeBytes(2) == 88, "two 12-byte slots require 24 native metadata bytes");
+Check(ControlPlaneArena32.RequiredNativeBytes(3) == 136, "three slots pad 36 metadata bytes to 40");
 using (var a = new ControlPlaneArena32(2))
 using (var b = new ControlPlaneArena32(2))
 {
