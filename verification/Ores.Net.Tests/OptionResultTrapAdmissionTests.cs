@@ -5,8 +5,66 @@ internal static class OptionResultTrapAdmissionTests
     private const string Diagnostic =
         "Option/Result/trap requires verified tagged-sum CIL and NativeAOT guest-control lowering";
 
+    // This corpus is the exact shared nine-case .atto acceptance set, not a
+    // copied text interpretation. A rejected case is NOT a runtime parity pass.
+    private static void VerifyCanonicalSourceIsStillFailClosed()
+    {
+        string[] names =
+        [
+            "01-some-int.atto", "02-some-result-ok.atto",
+            "03-some-result-err.atto", "04-some-none.atto",
+            "05-ordinary-throw.atto", "06-panic-bypass.atto",
+            "07-exactly-once.atto", "08-type-mismatch.atto",
+            "09-result-is-not-throw.atto"
+        ];
+        string[] blobs =
+        [
+            "a83015bcbc66ed075440fc15972f6933189c2eee",
+            "f2c4eb66f37ad239cc06b05f4be9aa8cac4712f5",
+            "3930a526cc7f1c94005354f1f4d94327d7106069",
+            "cb60075bf1ae15e86ff8013878f5da669269e610",
+            "1f3e6b694b3147a63a2528052cf5ed7c0b7a1a59",
+            "1e1247eb310efea99a6a28aa8fd7013e76e98e7e",
+            "af0d97a1df81ad879529983b21ea2fb5da52824e",
+            "740eb4a196f450ba834918b9fb1c41338177e46f",
+            "fcc43cbc495b90b642c4881ae79f5d4a75a58258"
+        ];
+        for (int i = 0; i < names.Length; i++)
+        {
+            var raw = File.ReadAllBytes(Path.Combine(
+                AppContext.BaseDirectory, "caller-trap-parity", names[i]));
+            byte[] header = System.Text.Encoding.ASCII.GetBytes(
+                "blob " + raw.Length + "\0");
+            using var digest = System.Security.Cryptography.IncrementalHash.CreateHash(
+                System.Security.Cryptography.HashAlgorithmName.SHA1);
+            digest.AppendData(header);
+            digest.AppendData(raw);
+            string actual = Convert.ToHexString(digest.GetHashAndReset()).ToLowerInvariant();
+            if (actual != blobs[i])
+                throw new Exception("Canonical Atto caller-trap guest was modified: " + names[i]);
+
+            string source = System.Text.Encoding.UTF8.GetString(raw);
+            try
+            {
+                _ = OresStructuredCfgLowering.LowerModule(source);
+            }
+            catch (FormatException)
+            {
+                // Current NativeAOT CIL does NOT support any full canonical
+                // cases, including unwrap(), typed Result and ordinary throw.
+                // This only confirms an unsupported feature fails closed.
+                continue;
+            }
+            throw new Exception(
+                "UNVERIFIED_PARITY: canonical Atto source reached CIL " +
+                "without native guest semantics: " + names[i]);
+        }
+    }
+
     public static void Run()
     {
+        VerifyCanonicalSourceIsStillFailClosed();
+
         // 12 genuine source spellings, none of which may be lowered as an
         // untyped scalar, or falsely counted as a semantic negative pass.
         string[] unimplemented =
@@ -44,7 +102,7 @@ internal static class OptionResultTrapAdmissionTests
             "fnc main():int{return Err(7);}",
             "fnc main():int{return Result(7);}",
             "fnc main():int{val Result<int,int> x=Ok(7);return 7;}",
-            "fnc main():int{return trap(7);}",
+            "fnc main():int{return trap true;}",
             "trap fnc main():int{return 7;}"
         })
         {
@@ -56,6 +114,44 @@ internal static class OptionResultTrapAdmissionTests
                 continue;
             }
             throw new Exception("Structured CIL admitted or misclassified unsupported tagged source: " + source);
+        }
+
+        // Exact .atto bytes are shared with the executable Java/Graal guest
+        // and LLVM's native-source gate. The current structured/CIL .NET
+        // backend must fail closed rather than accidentally promise parity.
+        string sharedSource = File.ReadAllText(Path.Combine(
+            AppContext.BaseDirectory, "trap-three-backend-target.atto"));
+        try
+        {
+            _ = OresStructuredCfgLowering.LowerModule(sharedSource);
+            throw new Exception("Unimplemented cross-backend trap guest reached .NET CFG/CIL");
+        }
+        catch (FormatException error) when
+            (error.Message.Contains(Diagnostic, StringComparison.Ordinal) &&
+             error.Message.Contains("offset ", StringComparison.Ordinal))
+        {
+            // Correct capability diagnostic, NOT an executable guest parity pass.
+        }
+        foreach (var source in new[]
+        {
+            "fnc main():int{return trap false;}",
+            "fnc checked():bool{return true;} fnc main():int{return (trap checked()).is_some();}",
+            "fnc main():int{val Option<int> outcome=trap Some(7);return 7;}",
+            "fnc main():int{val Result<int,String> outcome=Err(\"ordinary\");return 7;}",
+            "fnc main():int{val Option<Result<int,String>> outcome=trap checked();return 7;}"
+        })
+        {
+            try
+            {
+                _ = OresStructuredCfgLowering.LowerModule(source);
+            }
+            catch (FormatException error) when
+                (error.Message.Contains(Diagnostic, StringComparison.Ordinal) &&
+                 error.Message.Contains("offset ", StringComparison.Ordinal))
+            {
+                continue;
+            }
+            throw new Exception("Unsupported native trap/Result reached verified SSA: " + source);
         }
 
         // Reconcile with the experimental closed Option<int> path, rather
@@ -100,7 +196,7 @@ internal static class OptionResultTrapAdmissionTests
                 "fnc main():int { return Result(7); }",
                 "fnc main():int { return Ok(7); }",
                 "fnc main():int { return Err(7); }",
-                "fnc main():int { return trap(7); }",
+                "fnc main():int { return trap true; }",
                 "trap fnc main():int { return 7; }"
             })
             {

@@ -1,9 +1,18 @@
+using System.Buffers.Binary;
+
 namespace Ores.Net.Runtime;
 
 /// <summary>
 /// Trusted NativeAOT host-owned scalar state storage for a single actor
 /// instance. This is NOT source compiler lowering or a tenant OS sandbox.
 /// Every cell access validates and uses the state loan under one host lock.
+///
+/// atto-spec chapter 27 section 1: the state words live in the actor's own
+/// heap (<see cref="ActorTicket.Heap"/>), one 8-byte little-endian word per
+/// field at actor-relative offset <c>index * 8</c>, in unmanaged arena bytes
+/// outside the CLR GC. Only the field kinds (bookkeeping) are managed. Each
+/// access runs inside one owner-validated arena turn, and retirement scrubs,
+/// frees and refunds the bytes.
 /// </summary>
 public sealed partial class OresVmHost
 {
@@ -12,17 +21,22 @@ public sealed partial class OresVmHost
     public readonly record struct ActorStateField(
         ActorStateScalarKind Kind, long Int64Default = 0, bool BooleanDefault = false);
 
-    internal sealed class ActorStateCell
-    {
-        internal ActorStateCell(ActorStateField field) {
-            Kind = field.Kind;
-            Int64Value = field.Int64Default;
-            BooleanValue = field.BooleanDefault;
-        }
+    private const int ActorStateWordBytes = sizeof(long);
 
-        internal readonly ActorStateScalarKind Kind;
-        internal long Int64Value;
-        internal bool BooleanValue;
+    private static long LoadActorStateWord(ActorTicket actor, int index)
+    {
+        Span<byte> word = stackalloc byte[ActorStateWordBytes];
+        using (var heapTurn = actor.Heap.EnterTurn(actor.Id, actor.Epoch))
+            actor.Heap.Read(heapTurn, actor.StateBlock!, index * ActorStateWordBytes, word);
+        return BinaryPrimitives.ReadInt64LittleEndian(word);
+    }
+
+    private static void StoreActorStateWord(ActorTicket actor, int index, long value)
+    {
+        Span<byte> word = stackalloc byte[ActorStateWordBytes];
+        BinaryPrimitives.WriteInt64LittleEndian(word, value);
+        using var heapTurn = actor.Heap.EnterTurn(actor.Id, actor.Epoch);
+        actor.Heap.Write(heapTurn, actor.StateBlock!, index * ActorStateWordBytes, word);
     }
 
     /// <summary>
@@ -84,12 +98,12 @@ public sealed partial class OresVmHost
             var tenant = Check(handle);
             CheckActor(tenant, actor);
             if (tenant.Phase != Phase.Running || actor.ActiveTurn is not null ||
-                actor.NextTurnGeneration != 1 || actor.StateCells is not null)
+                actor.NextTurnGeneration != 1 || actor.StateKinds is not null)
                 throw new InvalidOperationException("actor state layout admission closed");
             if (fields.Length is < 1 or > 16)
                 throw new InvalidOperationException("actor state requires 1 to 16 scalar fields");
 
-            var cells = new ActorStateCell[fields.Length];
+            var kinds = new ActorStateScalarKind[fields.Length];
             for (var i = 0; i < fields.Length; ++i) {
                 var field = fields[i];
                 if (field.Kind != ActorStateScalarKind.Int64 &&
@@ -98,27 +112,41 @@ public sealed partial class OresVmHost
                 if ((field.Kind == ActorStateScalarKind.Int64 && field.BooleanDefault) ||
                     (field.Kind == ActorStateScalarKind.Boolean && field.Int64Default != 0))
                     throw new InvalidOperationException("actor state default does not match scalar kind");
-                cells[i] = new ActorStateCell(field);
+                kinds[i] = field.Kind;
             }
-            actor.StateCells = cells;
+
+            // Allocate and initialize the state words in the actor heap before
+            // publishing the layout: a failed charge leaves the actor unconfigured.
+            Span<byte> word = stackalloc byte[ActorStateWordBytes];
+            using (var heapTurn = actor.Heap.EnterTurn(actor.Id, actor.Epoch)) {
+                var block = actor.Heap.AllocatePersistent(
+                    heapTurn, fields.Length * ActorStateWordBytes, ActorStateWordBytes);
+                for (var i = 0; i < fields.Length; ++i) {
+                    BinaryPrimitives.WriteInt64LittleEndian(word,
+                        fields[i].Kind == ActorStateScalarKind.Int64
+                            ? fields[i].Int64Default
+                            : fields[i].BooleanDefault ? 1L : 0L);
+                    actor.Heap.Write(heapTurn, block, i * ActorStateWordBytes, word);
+                }
+                actor.StateBlock = block;
+            }
+            actor.StateKinds = kinds;
             actor.StateLayoutIdentity = layoutIdentity;
         }
     }
 
-    private static ActorStateCell CheckActorStateCell(
+    private static void CheckActorStateCell(
         TenantState tenant, ActorTicket actor, ActorTurnTicket turn,
         ActorStateLoan loan, int index, ActorStateScalarKind kind, bool write)
     {
-        // Both the loan check and the actual cell access take place inside
+        // Both the loan check and the actual heap access take place inside
         // _gate, preventing a cancellation/restart between them.
         CheckStateLoan(tenant, actor, turn, loan, write);
-        var cells = actor.StateCells;
-        if (cells is null || index < 0 || index >= cells.Length)
+        var kinds = actor.StateKinds;
+        if (kinds is null || actor.StateBlock is null || index < 0 || index >= kinds.Length)
             throw new InvalidOperationException("actor state field is not configured");
-        var cell = cells[index];
-        if (cell.Kind != kind)
+        if (kinds[index] != kind)
             throw new InvalidOperationException("actor state field type mismatch");
-        return cell;
     }
 
     public long ReadActorStateInt64(
@@ -127,8 +155,9 @@ public sealed partial class OresVmHost
     {
         lock (_gate) {
             var tenant = Check(handle);
-            return CheckActorStateCell(tenant, actor, turn, loan, index,
-                ActorStateScalarKind.Int64, false).Int64Value;
+            CheckActorStateCell(tenant, actor, turn, loan, index,
+                ActorStateScalarKind.Int64, false);
+            return LoadActorStateWord(actor, index);
         }
     }
 
@@ -139,7 +168,8 @@ public sealed partial class OresVmHost
         lock (_gate) {
             var tenant = Check(handle);
             CheckActorStateCell(tenant, actor, turn, loan, index,
-                ActorStateScalarKind.Int64, true).Int64Value = value;
+                ActorStateScalarKind.Int64, true);
+            StoreActorStateWord(actor, index, value);
         }
     }
 
@@ -150,10 +180,10 @@ public sealed partial class OresVmHost
     {
         lock (_gate) {
             var tenant = Check(handle);
-            var cell = CheckActorStateCell(tenant, actor, turn, loan, index,
+            CheckActorStateCell(tenant, actor, turn, loan, index,
                 ActorStateScalarKind.Int64, true);
-            var next = checked(cell.Int64Value + delta);
-            cell.Int64Value = next;
+            var next = checked(LoadActorStateWord(actor, index) + delta);
+            StoreActorStateWord(actor, index, next);
             return next;
         }
     }
@@ -356,7 +386,7 @@ public sealed partial class OresVmHost
             // Fail before consuming the FIFO control receipt. A registered actor
             // is not runnable by the generated state path until its typed layout
             // is installed; the same receipt may be retried after configuration.
-            if (actor.StateCells is null)
+            if (actor.StateKinds is null)
                 throw new InvalidOperationException("actor state layout is not configured");
             if (!string.Equals(actor.StateLayoutIdentity, expectedLayoutIdentity,
                     StringComparison.Ordinal))
@@ -399,8 +429,9 @@ public sealed partial class OresVmHost
     {
         lock (_gate) {
             var tenant = Check(handle);
-            return CheckActorStateCell(tenant, actor, turn, loan, index,
-                ActorStateScalarKind.Boolean, false).BooleanValue;
+            CheckActorStateCell(tenant, actor, turn, loan, index,
+                ActorStateScalarKind.Boolean, false);
+            return LoadActorStateWord(actor, index) != 0;
         }
     }
 
@@ -411,7 +442,8 @@ public sealed partial class OresVmHost
         lock (_gate) {
             var tenant = Check(handle);
             CheckActorStateCell(tenant, actor, turn, loan, index,
-                ActorStateScalarKind.Boolean, true).BooleanValue = value;
+                ActorStateScalarKind.Boolean, true);
+            StoreActorStateWord(actor, index, value ? 1L : 0L);
         }
     }
 }

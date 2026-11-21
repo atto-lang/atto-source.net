@@ -71,7 +71,25 @@ public static class TaskI64Source
         if (producer.Instructions.Count > 4096)
             throw new FormatException("Task-i64 producer exceeds 4096 verified operations");
         Expect(";"); Expect("}"); Expect(")"); Expect(";");
-        Expect("return"); Expect("await"); Expect(name); Expect(";"); Expect("}");
+        Expect("return");
+        if (Current() == "await")
+        {
+            // Existing direct await path: exactly one checked Future<int>.
+            at++;
+            Expect(name);
+        }
+        else
+        {
+            // The only extra admitted spelling is the *unary* std.await
+            // stage on the same owned Future. It does not create a task,
+            // coerce payloads, or generalize this restricted source profile.
+            Expect(name);
+            Expect("|>");
+            Expect("std");
+            Expect(".");
+            Expect("await");
+        }
+        Expect(";"); Expect("}");
         if (at != tokens.Count) throw new FormatException("Task-i64 root has trailing source");
         return new VerifiedTaskI64Program(producer);
     }
@@ -104,6 +122,12 @@ public static class TaskI64Source
                 continue;
             }
             int start = i++;
+            if (c == '|' && i < source.Length && source[i] == '>')
+            {
+                i++;
+                tokens.Add("|>");
+                continue;
+            }
             if (IdentifierPart(c))
             {
                 while (i < source.Length && IdentifierPart(source[i])) i++;

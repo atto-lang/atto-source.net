@@ -3,7 +3,11 @@ using Mono.Cecil.Cil;
 using Ores.Net.Compiler;
 using Ores.Net.Runtime;
 
+ReadonlyShapeProjectionV1Tests.Run();
+NativeSourceIdentityV1SelfTest.Run();
+ActorTypedReplySlotsSelfTest.Run(); // NativeAOT-safe host ledger, NOT guest request() lowering
 DeclaredActorReceiveSyntaxTests.Run();
+AttoCallableLanguageVersionTests.Run();
 MtdReceiverAdmissionTests.Run();
 ActorForwardNamespaceAdmissionTests.Run();
 
@@ -33,6 +37,33 @@ static void InvalidSend(Action action, string why)
     catch (InvalidOperationException) { return; }
     throw new Exception("Expected mailbox rejection: " + why);
 }
+
+// Typed static select must fail with the select-specific diagnostic in
+// both compiler entry points, even when trivia separates the tokens. It is
+// never silently downgraded to scalar arithmetic or a CPU execution region.
+foreach (string source in new[] {
+    "select<int> over default: -> { return 42; } end",
+    "select /* trivia */ <int> over default: -> { return 42; } end",
+    "nb select<int> over default: -> { return 42; } end",
+    "try select<int> over default: -> { return 42; } end",
+    "do select<int> over default: -> { return 42; } end",
+    "do select over default: -> { return 42; } end",
+    "nb select over default: -> { return 42; } end",
+    "select { default: -> { return 42; } }"
+})
+{
+    RejectDiagnostic(() => OresParser.Parse(source),
+        "Static select requires checked Channel/Future arbitration",
+        "scalar frontend must fail closed on typed select syntax");
+    RejectDiagnostic(() => OresStructuredParser.Parse(source),
+        "Static select requires checked Channel/Future arbitration",
+        "structured frontend must fail closed on typed select syntax");
+}
+Require(OresParser.Parse("fnc main():int{return 42;} /* select<int> over ignored */") is not null,
+    "comment-only typed select must not trigger scalar admission");
+Require(OresStructuredParser.Parse(
+    "fnc main()->int { /* select<int> over ignored */ return 42; }").Body.Count == 1,
+    "comment-only typed select must not trigger structured admission");
 
 // Guarded mutable sharing is not implemented in either .NET bootstrap parser.
 // Enforce the dedicated lexer-owned error and the original source offset.
@@ -563,6 +594,9 @@ Require(OresParser.Parse(
     "fnc main():int{return 1;} /* enum Color /* enum Mode */ end */") is Literal,
     "nested block-comment enum words must not trigger overload admission");
 
+ClosedAggregateSpreadPlanTests.Run(); // closed inferred struct/record spread plans
+PortableScalarV1Tests.Run();
+NativeScalarZeroTests.Run(); // 5 pinned .ores zero assertions: typed IR + emitted CIL, not NativeAOT
 ScalarMacroParityTests.Run(); // stage-0 define macro parity (Java #2049 / LLVM #1026)
 DotnetHostImportTests.Run(); // compiled System.Math.Abs(i64) CIL metadata and fail-closed imports
 VmIsolateHostTests.Run();
@@ -619,6 +653,8 @@ CapabilityIoLifecycleV1SelfTest.Run();
 ActorStateSchemaAdmissionTests.Run();
 ActorStateLayoutIntegrationTests.Run();
 ActorGeneratedCounterTests.Run();
+VmActorStateCellsTests.Run(); // compiled but never executed before 2026-11-20
+VmActorHeapModelTests.Run(); // atto-spec ch. 27 actor heap model for OresVmHost actors
 DeclaredActorCounterV2Tests.Run();
 CounterMainV2Tests.Run();
 SourceByteBudgetTests.Run();
@@ -651,9 +687,13 @@ HeapContainerSourceBoundaryTests.Run(); // actual scalar compiler fail-closed he
 StructuralPatternAdmissionTests.Run();
 QuotedTemplateSourceTests.Run(); // real source lexers and single-quote import graph
 AdtSourceAdmissionTests.Run();
+AdtGuardParityAdmissionTests.Run(); // 24 exact canonical fixtures, not an unsupported-source parity pass
 NumericSeparatorParityTests.Run();
 ExplicitExportSyntaxTests.Run();
 CrossBackendCheckedI64ParityTests.Run();
+Signed64CandidateParityTests.Run(); // ten source-identical i64 candidates 40-49: typed IR + emitted CIL, not NativeAOT
+StrictSigned64ArithmeticSelfTest.Run(); // host reference semantics vs shared Java contract vectors
+StrictSigned64GuestRemTests.Run(); // Integer.rem/mod/pow verified IR + runtime MemberRef CIL, not NativeAOT
 ActorHierarchyMlAdmissionTests.Run();
 AsyncInteropFailClosedTests.Run();
 EtsPgFailClosedTests.Run();
@@ -776,6 +816,7 @@ await TcpPoolPhysicalCloseLoopbackSelfTest.RunAsync(); // host-only real TCP clo
 ActorIoEnvelopeSelfTest.Run();
 ActorRefNoWireSelfTest.Run();
 ActorMailboxBoundsSelfTest.Run();
+ActorMailboxAtomicBatchSelfTest.Run(); // HOST-only single-mailbox turn transaction, not source actor CIL
 SelectContinuationFenceSelfTest.Run();
 ActorMailboxRestartAtomicitySelfTest.Run();
 ActorFinalizationV1SelfTest.Run();
@@ -790,6 +831,7 @@ SelectableI64ChannelSelfTest.Run();
 BoundedDemandI64PortSelfTest.Run(); // host scalar adapter; NOT source Flow<T> or Native AOT guest proof
 SelectableI64FutureSelfTest.Run();
 ActorDispatchDomainsSelfTest.Run();
+ActorDispatchAffinitySelfTest.Run();
 ActorRuntimeSelfTest.Run();
 ActorRuntimeGracefulDrainSelfTest.Run(); // HOST only; not guest pipe lowering
 SupervisorDataFenceParitySelfTest.Run(); // HOST only; stop-vs-send and sibling parity
@@ -798,6 +840,7 @@ ActorPubSubTurnAuthorityTests.Run();
 ActorPubSubByteQuotaTests.Run();
 ActorPubSubSourceAdmissionTests.Run();
 ActorPipeAdmissionTests.Run(); // compiler gate only; no executable actor guest yet
+DirectionalValuePipeStructuredTests.Run(); // real typed scalar CFG/CIL, not Native AOT actor graph
 ActorPipeSourcePlanV1SelfTest.Run(); // checked scalar CIL oracle, not actor delivery
 ActorEmitPipeContractV3SelfTest.Run(); // compiled-type contract ONLY, no source-emitted actor guest
 NativeTraceContinuationV1SelfTest.Run(); // host-owned W3C scopes; not guest CIL instrumentation
@@ -813,6 +856,7 @@ ProjectRootSourceTests.Run(); // host-only resolver, not linked .NET source impo
 ActorNativeArenaSelfTest.Run();
 ActorNativeAggregateStoreTests.Run(); // unmanaged per-actor aggregate values, not compiler guest parity
 NativeAggregateLayoutVerifierTests.Run(); // immutable checked HIR layout and native ABI tag matching
+NativeInvertedF64LayoutPlanV1Tests.Run(); // host-only checked F64 inverted geometry, NOT guest CIL
 
 // Import parity is deliberately not claimed for the .NET scalar compiler.
 // Each form must fail at lexical admission with a specific import diagnostic,
@@ -1005,6 +1049,20 @@ foreach (string real in new[] { "0.125", "1e10", "1E-10", "123.456d", "123d",
         "Floating-point/decimal literal requires typed numeric lowering",
         "real/decimal literal must fail before token splitting: " + real);
 Reject(() => OresParser.Parse("fnc main():int{return (1+2;}"), "unmatched parentheses");
+ 
+// Java defines these as distinct structural contracts. Until .NET has typed
+// shapes/loan checking and ordered match lowering, reject every source form.
+foreach (var (name, source) in new (string Name, string Source)[] {
+    ("callable modifier", "structural fnc main():int {return 1;}"),
+    ("routine modifier", "structural routine main():int {return 1;}"),
+    ("callable annotation", "@structural\nfnc main():int {return 1;}"),
+    ("structural parameter", "fnc main(structural Shape value):int {return 1;}"),
+    ("routine structural parameter", "routine main(structural Shape value):int {return 1;}"),
+    ("canonical pattern arm", "fnc main():int {match 1 over on _ -> {return 1;} end}"),
+    ("shape guard pattern", "fnc main():int {match 1 over on structural {x:int} v when true -> {return 1;} on _ -> {return 0;} end}"),
+    ("value match", "fnc main():int {return match 1 over on _ -> {return 1;} end;}")
+}) Reject(() => OresParser.Parse(source), "structural / match must fail closed: " + name);
+
 
 // Typed OresIR stage-one verification: no forward SSA references,
  // arbitrary opcodes, type confusion, or mutable IR after verification.

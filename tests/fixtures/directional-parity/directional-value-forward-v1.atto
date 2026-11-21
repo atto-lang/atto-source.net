@@ -1,0 +1,4 @@
+// One-value application, never a continuous stream pump.
+fnc increment(int value): int { return value + 1; }
+fnc twice(int value): int { return value * 2; }
+pub fnc main(): int { return 20 |> increment |> twice; }

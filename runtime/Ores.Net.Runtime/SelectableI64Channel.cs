@@ -203,19 +203,66 @@ public sealed class SelectableI64Channel
         }
     }
 
-    public bool TryWrite(long value)
+    /// <summary>
+    /// Attempt one non-suspending write without installing a waiter.
+    /// A full open channel returns WouldBlock; closure always returns Closed,
+    /// even if the closed channel still holds buffered values.
+    /// This host primitive does not enable guest try writech lowering.
+    /// </summary>
+    public WriteStatus TryWriteResult(long value)
     {
         var notifications = CreateNotificationBatch();
         lock (_gate)
         {
-            if (_closed || _count == _values.Length) return false;
+            if (_closed) return WriteStatus.Closed;
+            if (_count == _values.Length) return WriteStatus.WouldBlock;
             Capture(_readers, notifications);
             _values[_tail] = value;
             _tail = (_tail + 1) % _values.Length;
             _count++;
         }
         notifications.Dispatch();
-        return true;
+        return WriteStatus.Written;
+    }
+
+    // Preserve the existing boolean API for host callers.
+    public bool TryWrite(long value) =>
+        TryWriteResult(value) == WriteStatus.Written;
+
+    /// <summary>
+    /// Atomically enqueue a bounded batch in FIFO order, or enqueue nothing.
+    /// This is a NativeAOT-safe host substrate, not guest Channel&lt;T&gt; lowering.
+    /// Empty batches succeed only while the channel is open.
+    /// </summary>
+    public WriteStatus TryWriteBatch(ReadOnlySpan<long> values)
+    {
+        NotificationBatch? notifications = null;
+        lock (_gate)
+        {
+            if (_closed) return WriteStatus.Closed;
+            // Subtraction avoids overflow and rejects oversized batches,
+            // even when values.Length exceeds total channel capacity.
+            if (values.Length > _values.Length - _count)
+                return WriteStatus.WouldBlock;
+            if (values.IsEmpty) return WriteStatus.Written;
+
+            // Fail/empty paths allocate nothing. With no registered readers
+            // successful writes also avoid allocating a callback batch.
+            // Any callback allocations happen before mutating the ring.
+            if (ActiveCount(_readers) != 0)
+            {
+                notifications = CreateNotificationBatch();
+                Capture(_readers, notifications);
+            }
+            foreach (var value in values)
+            {
+                _values[_tail] = value;
+                _tail = (_tail + 1) % _values.Length;
+            }
+            _count += values.Length;
+        }
+        notifications?.Dispatch();
+        return WriteStatus.Written;
     }
 
     public ReadResult TryReadResult()

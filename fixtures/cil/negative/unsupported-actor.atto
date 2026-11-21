@@ -1,0 +1,2 @@
+define actor Foo as end
+fnc main(): int { return 42; }

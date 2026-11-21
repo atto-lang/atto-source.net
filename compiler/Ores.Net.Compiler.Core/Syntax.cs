@@ -8,6 +8,11 @@ public sealed record Unary(char Operator, Expression Value) : Expression;
 public sealed record Binary(char Operator, Expression Left, Expression Right) : Expression;
 // Named intrinsic only. Single '^' is not AttoLang syntax ('^^' is boolean XOR).
 public sealed record NamedBitXor(Expression Left, Expression Right) : Expression;
+// Named signed-64 Integer.rem/mod/pow (Java StrictIntegerArithmetic parity):
+// truncating remainder, Euclidean modulus, checked nonnegative power.
+public sealed record NamedIntegerRem(Expression Left, Expression Right) : Expression;
+public sealed record NamedIntegerMod(Expression Left, Expression Right) : Expression;
+public sealed record NamedIntegerPow(Expression Left, Expression Right) : Expression;
 // Closed-world CLR intrinsic: exact System.Math.Abs(Int64), no dynamic binding.
 public sealed record DotnetMathAbsI64(Expression Value) : Expression;
 public sealed record DotnetMathMaxI64(Expression Left, Expression Right) : Expression;
@@ -21,6 +26,14 @@ internal static class MutableShareAdmission
 
     internal static FormatException Unsupported(int offset) =>
         new(DiagnosticPrefix + offset);
+}
+
+// One fail-closed diagnostic shared by both native source frontends. Static
+// F64 host layout metadata does NOT authorize source inverted-class lowering.
+internal static class InvertedClassNativeAotAdmission
+{
+    internal static FormatException Unsupported(int offset) =>
+        new($"Inverted class requires checked bracket-row and ownership lowering in the .NET backend at offset {offset}");
 }
 
 public static partial class OresParser
@@ -43,10 +56,14 @@ public static partial class OresParser
             "Source must contain a canonical isolated actor state declaration");
     }
 
-    public static Expression Parse(string source, DotnetHostImportPolicy? policy = null)
+    public static Expression Parse(string source, DotnetHostImportPolicy? policy = null,
+                                   int? languageVersion = null)
     {
-        var tokens = StripFileExports(Tokenize(source), source);
+        if (languageVersion.HasValue && languageVersion.Value is not (1 or 2))
+            throw new FormatException("E_LANGUAGE_VERSION: expected language version 1 or 2");
+        var tokens = StripFileExports(Tokenize(source, allowCaretReturn: languageVersion.HasValue), source);
         RejectUnsupportedSourceActors(tokens);
+        RejectUnsupportedInvertedClasses(tokens);
         RejectUnsupportedScalarTokens(tokens);
         for (int i = 0; i + 1 < tokens.Count; i++)
         {
@@ -54,7 +71,7 @@ public static partial class OresParser
                 StaticSelectAdmission.IsStaticSelectFollower(tokens[i + 1].Text))
                 throw StaticSelectAdmission.Unsupported(tokens[i].Offset);
         }
-        return new Reader(tokens, policy ?? DotnetHostImportPolicy.DenyAll).ParseProgram();
+        return new Reader(tokens, policy ?? DotnetHostImportPolicy.DenyAll, source, languageVersion).ParseProgram();
     }
 
     /// Parse file-root exports using the shared explicit-export grammar.
@@ -100,22 +117,30 @@ public static partial class OresParser
         return stripped;
     }
 
-    private static List<Token> Tokenize(string source)
+    private static List<Token> Tokenize(string source, bool allowCaretReturn = false)
     {
         ArgumentNullException.ThrowIfNull(source);
         if (source.Length > 1_048_576)
             throw new FormatException("Source is larger than the 1 MiB bootstrap limit");
+        // Validate original UTF-16 before lexing or comment removal.
+        // Report the first offending code-unit offset, matching the structured
+        // frontend while retaining the scalar admission diagnostic categories.
         for (int i = 0; i < source.Length; i++)
         {
             char c = source[i];
-            if (c == '\0') throw new FormatException("Source contains NUL byte");
+            if (c == '\0')
+                throw new FormatException($"Source contains NUL byte at offset {i}");
+            // Original UTF-16 source must reject raw terminal controls in comments/literals.
+            if (c == (char)0x001b || c == (char)0x007f)
+                throw new FormatException($"Source contains terminal control at offset {i}");
             if (char.IsHighSurrogate(c))
             {
-                if (++i >= source.Length || !char.IsLowSurrogate(source[i]))
-                    throw new FormatException("Source contains invalid UTF-16");
+                if (i + 1 >= source.Length || !char.IsLowSurrogate(source[i + 1]))
+                    throw new FormatException($"Source contains invalid UTF-16 at offset {i}");
+                i++; // Valid supplementary scalar consumes two UTF-16 units.
             }
             else if (char.IsLowSurrogate(c))
-                throw new FormatException("Source contains invalid UTF-16");
+                throw new FormatException($"Source contains invalid UTF-16 at offset {i}");
         }
         // Public parser callers supply UTF-16 strings; the source budget is
         // UTF-8 bytes, matching the disk/CLI boundary, not code-unit count.
@@ -124,7 +149,7 @@ public static partial class OresParser
         ActorPubSubSourceAdmission.RejectUnsupported(source);
         // No structural match lowering or readonly shape metadata in scalar CIL yet.
         StructuralShapeAdmission.RejectUnsupportedPatterns(source);
-        var lexer = new Lexer(source);
+        var lexer = new Lexer(source, allowCaretReturn);
         var tokens = new List<Token>();
         for (;;)
         {
@@ -265,7 +290,7 @@ public static partial class OresParser
                 i > 1 ? tokens[i - 2].Text : "",
                 i > 0 ? tokens[i - 1].Text : "",
                 tokens[i].Text, tokens[i + 1].Text))
-                throw ActorPipeAdmission.Unsupported(tokens[i].Offset);
+                throw ActorPipeAdmission.Unsupported(tokens[i].Offset, tokens[i].Text);
             // Both shipped scalar and structured frontends must reject a
             // nominal supervisor BEFORE source/IR lowering. Check tokens,
             // not substrings: nested comments and lookalike identifiers do
@@ -313,6 +338,24 @@ public static partial class OresParser
             if (word is "suspends" or "await")
                 throw new FormatException(
                     $"E_SUSPENDS_UNSUPPORTED: suspension requires .NET continuation/effect lowering at offset {tokens[i].Offset}");
+        }
+    }
+
+    private static void RejectUnsupportedInvertedClasses(List<Token> tokens)
+    {
+        // Match source declaration tokens, not raw comments or string text.
+        // Both define inverted class and define pub inverted class are denied
+        // until typed source HIR, per-field loans and native CIL exist.
+        for (int i = 1; i + 1 < tokens.Count; ++i)
+        {
+            if (tokens[i].Text != "inverted" ||
+                tokens[i + 1].Text != "class")
+                continue;
+            bool declared = tokens[i - 1].Text == "define" ||
+                (tokens[i - 1].Text == "pub" && i >= 2 &&
+                 tokens[i - 2].Text == "define");
+            if (declared)
+                throw InvertedClassNativeAotAdmission.Unsupported(tokens[i].Offset);
         }
     }
 
@@ -473,7 +516,7 @@ public static partial class OresParser
     }
     private readonly record struct Token(string Text, int Offset);
 
-    private sealed class Lexer(string text)
+    private sealed class Lexer(string text, bool allowCaretReturn)
     {
         private int _i;
         private bool previousWasWith;
@@ -614,6 +657,9 @@ public static partial class OresParser
                     (text[_i] is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_'))
                     _i++;
                 var word = text[start.._i];
+                if (word == "select" &&
+                    StaticSelectAdmission.FollowedByStaticSelect(text, start))
+                    throw StaticSelectAdmission.Unsupported(start);
                 // G0: do not allow unlowered native authority to be spelled as
                 // an ordinary identifier, parameter, member or callable.
                 if (word == "unsafe")
@@ -706,15 +752,23 @@ public static partial class OresParser
             }
             // Recognize the contiguous operator as one token, but never
             // attempt a scalar-only approximation of named-call lowering.
-            if (ch == '|' && _i + 1 < text.Length && text[_i + 1] == '>')
+            if (_i + 1 < text.Length &&
+                ((ch == '|' && text[_i + 1] == '>') ||
+                 (ch == '<' && text[_i + 1] == '|')))
             {
                 _i += 2;
-                return new Token("|>", start);
+                return new Token(text[start.._i], start);
             }
             if (ch == '-' && _i + 1 < text.Length && text[_i + 1] == '>')
             {
                 _i += 2;
                 return new Token("->", start);
+            }
+            // Preserve the explicit free-function header/body separator.
+            if (ch == ':' && _i + 1 < text.Length && text[_i + 1] == ':')
+            {
+                _i += 2;
+                return new Token("::", start);
             }
             // Lex assignment punctuation so unsupported declarations are rejected
             // at their declaration, rather than at a later initializer. The
@@ -728,6 +782,14 @@ public static partial class OresParser
                 throw new FormatException($"noncanonical '%' source operator; use named Integer.rem/mod at offset {start}");
             if (ch == '^')
             {
+                // Explicitly versioned Atto source has caret-return token.
+                // The production parser must still require its use at a
+                // statement-return boundary; never reinterpret it as XOR.
+                if (allowCaretReturn && !(_i + 1 < text.Length && text[_i + 1] == '^'))
+                {
+                    _i++;
+                    return new Token("^", start);
+                }
                 // Rejected after lexical trivia and before any scalar instruction
                 // reaches typed IR or CIL. `^^` is the canonical boolean XOR
                 // (spec ch.16), but this frontend only types int scalars, so any
@@ -743,7 +805,7 @@ public static partial class OresParser
         }
     }
 
-    private sealed class Reader(List<Token> tokens, DotnetHostImportPolicy policy)
+    private sealed class Reader(List<Token> tokens, DotnetHostImportPolicy policy, string source, int? languageVersion)
     {
         // Macro definitions are compiler-only. Neither these declarations nor
         // their arguments appear in OresIR/CIL, and no runtime expansion exists.
@@ -973,6 +1035,12 @@ public static partial class OresParser
                 throw new FormatException($"STATE_CONTAINER_BACKEND_UNSUPPORTED: protected heap region and critical guard lowering required at offset {Current.Offset}");
             if (Current.Text == "virtual" && _index + 1 < tokens.Count && tokens[_index + 1].Text == "actor")
                 throw new FormatException($"VIRTUAL_ACTOR_BACKEND_UNSUPPORTED: logical key and activation fencing required at offset {Current.Offset}");
+            // Scalar NativeAOT has no originating-slot virtual dispatch or
+            // compiler-owned mailbox ingress. Deny before parsing fnc main.
+            if (Current.Text == "abstract")
+                throw new FormatException($"NET_PRIVATE_ABSTRACT_UNSUPPORTED: Private abstract class hooks require typed virtual dispatch; inherited override authority and trusted actor-hook dispatch require typed lowering at offset {Current.Offset}");
+            if (Current.Text is "class" or "actor")
+                throw new FormatException($"NET_NOMINAL_METHODS_UNSUPPORTED: Nominal class/actor entrypoints require runtime-sealed receiver and CIL lowering at offset {Current.Offset}");
             // Scalar CIL and NativeAOT do not lower nominal ModelGraphs.
             // 'model' is contextual, not globally reserved.
             if (Current.Text == "model")
@@ -982,20 +1050,85 @@ public static partial class OresParser
             Expect("main");
             Expect("(");
             Expect(")");
-            if (!Take(":")) Expect("->");
+            bool arrowReturn = !Take(":");
+            if (arrowReturn) Expect("->");
             Expect("int");
-            Expect("{");
+            bool braced = Take("{");
+            bool explicitSeparator = false;
+            if (!braced)
+            {
+                if (!arrowReturn)
+                    throw new FormatException($"End-delimited main requires '-> int' at offset {Current.Offset}");
+                explicitSeparator = Take("::");
+                if (!explicitSeparator)
+                {
+                    var previous = tokens[_index - 1];
+                    int boundaryStart = previous.Offset + previous.Text.Length;
+                    bool hasLineBreak = false;
+                    for (int i = boundaryStart; i < Current.Offset; i++)
+                    {
+                        if (source[i] is '\n' or '\r' or '\u0085' or '\u2028' or '\u2029')
+                        {
+                            hasLineBreak = true;
+                            break;
+                        }
+                    }
+                    if (!hasLineBreak && !languageVersion.HasValue)
+                        throw new FormatException($"Compact end-delimited main requires '::' at offset {Current.Offset}");
+                }
+            }
+            // Explicit v1/v2 mode ONLY; legacy callers keep their current
+            // unversioned admission and diagnostics. The restricted i64
+            // executable slice accepts pure comma expressions, not arbitrary
+            // effectful steps, locals, actor boundaries or implicit casts.
+            if (!braced && languageVersion is 1 or 2 &&
+                (explicitSeparator || languageVersion == 1))
+            {
+                if (Current.Text == "return" || Current.Text == "^")
+                    throw new FormatException("E_SYNTAX: comma body uses expression-tail syntax");
+                Expression last = ParseAdd(0);
+                int steps = 0;
+                while (Take(","))
+                {
+                    if (++steps > 1024)
+                        throw new FormatException("E_SOURCE_LIMIT: comma body exceeds 1024 items");
+                    if (!VersionedPureScalar(last))
+                        throw new FormatException("E_UNSUPPORTED: discarded comma-body value requires effect-safe lowering");
+                    if (Current.Text is "," or "end" or ";" or "")
+                        throw new FormatException("E_SYNTAX: empty comma-body item");
+                    last = ParseAdd(0);
+                }
+                if (Current.Text == ";")
+                    throw new FormatException("E_SYNTAX: comma body requires ',' not ';'");
+                Expect("end");
+                if (Current.Text.Length != 0)
+                    throw new FormatException($"Unexpected token at offset {Current.Offset}");
+                return last;
+            }
+            if (!braced && languageVersion == 2 && Current.Text is not ("return" or "^"))
+                throw new FormatException("E_LANGUAGE_VERSION: v2 unmarked body requires explicit return; comma tails require '::'");
             if (Current.Text == "guard")
                 throw new FormatException(
                     $"GUARD_BACKEND_UNSUPPORTED: early-exit CFG and ownership lowering required at offset {Current.Offset}");
-            Expect("return");
+            if (!(languageVersion.HasValue && Take("^")))
+                Expect("return");
             var expression = ParseAdd(0);
+            if (!braced && languageVersion == 2 && Current.Text == ",")
+                throw new FormatException("E_LANGUAGE_VERSION: v2 comma body requires '::'");
             Expect(";");
-            Expect("}");
+            Expect(braced ? "}" : "end");
             if (Current.Text.Length != 0)
                 throw new FormatException($"Unexpected token at offset {Current.Offset}");
             return expression;
         }
+
+        private static bool VersionedPureScalar(Expression expression) => expression switch
+        {
+            Literal => true,
+            Unary unary => VersionedPureScalar(unary.Value),
+            Binary binary => VersionedPureScalar(binary.Left) && VersionedPureScalar(binary.Right),
+            _ => false
+        };
 
         private Expression ParseAdd(int depth)
         {
@@ -1007,7 +1140,7 @@ public static partial class OresParser
                 _index++;
                 left = new Binary(op, left, ParseMul(depth + 1));
             }
-            if (Current.Text == "|>")
+            if (Current.Text is "|>" or "<|")
                 throw new FormatException(
                     $"Value pipeline requires named callable lowering; unsupported in .NET i64 bootstrap at offset {Current.Offset}");
             if (Current.Text == "?")
@@ -1023,10 +1156,11 @@ public static partial class OresParser
             while (Current.Text is "*" or "/")
             {
                 char op = Current.Text[0];
-                // Reference Oreslang int/int has a float result. This i64-only
-                // frontend must not silently truncate it using CIL div.
+                // int/int is float in Oreslang and remains unsupported in this
+                // i64-only bootstrap; % and ^ are removed at lexical admission.
                 if (op == '/')
-                    throw new FormatException("Division requires float result lowering; unsupported in the i64 source subset");
+                    throw new FormatException(
+                        "Division requires float result lowering; unsupported in the i64 source subset");
                 _index++;
                 var rhs = ParseUnary(depth + 1);
                 left = new Binary(op, left, rhs);
@@ -1056,8 +1190,7 @@ public static partial class OresParser
                     ownership = "mut borrow";
                 if (operation == "borrow" && _index + 1 < tokens.Count &&
                     tokens[_index + 1].Text == "mut")
-                    throw new FormatException(
-                        $"Legacy ownership spelling 'rt borrow mut' is rejected; use 'rt mut borrow' at offset {at}");
+                    ownership = "mut borrow"; // compatible legacy order, same unsupported typed gate
                 if (ownership is "copy" or "share" or "take" or "borrow" or "mut borrow")
                     throw new FormatException(
                         $"Ownership operation 'rt {ownership}' requires typed actor-arena lowering; unsupported in the .NET scalar backend at offset {at}");
@@ -1065,6 +1198,23 @@ public static partial class OresParser
                 throw new FormatException(
                     $"Runtime ownership operation requires typed lowering; unsupported in the .NET scalar backend at offset {at}");
             }
+            // Recognize the new contextual ownership prefix before macro
+            // expansion, but fail closed: this scalar subset has no typed
+            // ownership/actor-arena Native AOT lowering. Only a verb touching
+            // '!' is an ownership operator; 'copy !foo' is not.
+            int verbIndex = Current.Text == "mut" ? _index + 1 : _index;
+            if (verbIndex + 1 < tokens.Count &&
+                (Current.Text != "mut" ||
+                    (tokens[verbIndex].Text == "borrow")) &&
+                (tokens[verbIndex].Text is "copy" or "take" or "borrow" or "share") &&
+                tokens[verbIndex + 1].Text == "!" &&
+                (verbIndex + 2 >= tokens.Count ||
+                    tokens[verbIndex + 2].Text is not ("=" or "eq")) &&
+                tokens[verbIndex + 1].Offset ==
+                    tokens[verbIndex].Offset + tokens[verbIndex].Text.Length)
+                throw new FormatException(
+                    $"OWNERSHIP_BANG_BACKEND_UNSUPPORTED: '{(Current.Text == "mut" ? "mut " : "")}{tokens[verbIndex].Text}!' requires typed ownership and actor-arena Native AOT lowering at offset {Current.Offset}");
+
             // Every token followed by ! is a macro invocation candidate.
             // IsMacroName intentionally rejects reserved identifiers, but using
             // it to *detect* calls would route quote!/eval!/rt!/main! to the
@@ -1185,18 +1335,28 @@ public static partial class OresParser
             if (Current.Text is "Map" or "Array" or "List" or "Vector" or "Set")
                 throw new FormatException(
                     $"E_COLLECTION_FACTORY_UNSUPPORTED: {Current.Text}.of requires owned typed aggregate and NativeAOT CIL lowering at offset {Current.Offset}");
+            // Closed named Integer intrinsics with two eager signed-i64 operands.
+            // No generic method invocation or host interoperability is admitted.
             if (Take("Integer"))
             {
                 Expect(".");
-                if (!Take("bitXor"))
+                string operation = Current.Text;
+                if (operation is not ("bitXor" or "rem" or "mod" or "pow"))
                     throw new FormatException(
                         $"Unsupported Integer intrinsic at offset {Current.Offset}");
+                _index++;
                 Expect("(");
                 var left = ParseAdd(depth + 1);
                 Expect(",");
                 var right = ParseAdd(depth + 1);
                 Expect(")");
-                return new NamedBitXor(left, right);
+                return operation switch
+                {
+                    "bitXor" => new NamedBitXor(left, right),
+                    "rem" => new NamedIntegerRem(left, right),
+                    "mod" => new NamedIntegerMod(left, right),
+                    _ => new NamedIntegerPow(left, right)
+                };
             }
             if (Take("+")) return new Unary('+', ParseUnary(depth + 1));
             if (Take("-"))

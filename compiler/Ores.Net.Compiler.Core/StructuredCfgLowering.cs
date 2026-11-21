@@ -467,6 +467,24 @@ public static class OresStructuredCfgLowering
                     case StructuredLocalTypeDecl localType:
                         throw new FormatException(
                             $"Local {localType.Kind.ToString().ToLowerInvariant()} '{localType.Name}' requires verified value layout and CIL lowering at offset {localType.At}");
+                    case StructuredAggregateRuntimeLet aggregate:
+                    {
+                        // Eagerly evaluate EVERY write exactly once in source
+                        // order. Even an overwritten field can contain an
+                        // observable call/trap and must not be elided.
+                        foreach (var write in aggregate.Writes)
+                        {
+                            if (variables.ContainsKey(write.Place) ||
+                                write.Value.Type != write.Type)
+                                throw new FormatException(
+                                    "Invalid aggregate scalar SSA place or type");
+                            Block writeBlock = current;
+                            int value = Expression(write.Value, ref writeBlock, variables);
+                            current = writeBlock;
+                            variables.Add(write.Place, new Binding(write.Type, value));
+                        }
+                        break;
+                    }
                     case StructuredLet declaration:
                     {
                         if (variables.ContainsKey(declaration.Name))
@@ -662,8 +680,8 @@ public static class OresStructuredCfgLowering
 
             Block conditionBlock = header;
             int condition = Expression(statement.Condition, ref conditionBlock, headerVariables);
-            // Create the exit join before lowering the body: break edges can
-            // jump here with the same typed SSA values as the false-test edge.
+            // Create exit before body: break jumps to the same typed join
+            // as the condition false path, without leaking loop-local values.
             var exitVariables = new Dictionary<string, Binding>(StringComparer.Ordinal);
             Block exit = Join(names, headerVariables, exitVariables);
             Block body = NewBlock();
@@ -675,7 +693,6 @@ public static class OresStructuredCfgLowering
             finally { loopTargets.Pop(); }
             if (bodyEnd is not null)
                 bodyEnd.Terminator = new CfgJump(header.Name, Values(names, bodyVariables));
-
             conditionBlock.Terminator = new CfgBranch(condition, body.Name,
                 Array.Empty<int>(), exit.Name, Values(names, headerVariables));
             foreach (string name in names)

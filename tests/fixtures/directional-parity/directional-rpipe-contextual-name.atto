@@ -1,0 +1,5 @@
+// rpipe is contextual: identifiers retain their original meaning.
+pub fnc main(): int {
+    val int rpipe = 42;
+    return rpipe;
+}
