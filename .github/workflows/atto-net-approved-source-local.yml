@@ -34,6 +34,28 @@ jobs:
       SOURCE_HEAD: 3f32ee7ec6e1e1f30520682cada6122b941ed476
       SOURCE_TREE: 8cab5369d78b185130ef4f51f84f16c7da9b6ece
     steps:
+      - name: Reject unprotected main or stale actor PR source before checkout
+        shell: pwsh
+        env:
+          GH_REPO_READ_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:GH_REPO_READ_TOKEN) { throw 'E_ADMISSION_NO_READ_TOKEN' }
+          $headers = @{
+            Authorization = "Bearer $env:GH_REPO_READ_TOKEN"
+            Accept = 'application/vnd.github+json'
+            'X-GitHub-Api-Version' = '2022-11-28'
+          }
+          $branch = Invoke-RestMethod -Uri 'https://api.github.com/repos/atto-lang/atto-source.net/branches/main' -Headers $headers
+          if ($branch.name -ne 'main' -or $branch.protected -ne $true) {
+            throw 'E_SOURCE_MAIN_NOT_PROTECTED'
+          }
+          $pr = Invoke-RestMethod -Uri 'https://api.github.com/repos/atto-lang/atto-source.net/pulls/33' -Headers $headers
+          if ($pr.number -ne 33 -or $pr.head.sha -ne $env:SOURCE_HEAD -or
+              $pr.head.repo.full_name -ne 'atto-lang/atto-source.net') {
+            throw 'E_ACTOR_PR_SOURCE_DRIFT'
+          }
+          "ATTO_SOURCE_LOCAL_PROTECTED_MAIN_CONFIRMED actor_pr_head=$env:SOURCE_HEAD"
       - name: Checkout immutable actor PR SHA without persisted credentials
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -115,6 +137,39 @@ jobs:
       SOURCE_HEAD: 850e46f2a02d3177c8b2f4a8b55a0be96893d09b
       SOURCE_TREE: 1e81446618fa9f5801b62f8efe8532cff866a74b
     steps:
+      - name: Reject unprotected main or stale compiler PR source before checkout
+        shell: bash
+        env:
+          GH_REPO_READ_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+          token = os.environ.get("GH_REPO_READ_TOKEN", "")
+          assert token, "E_ADMISSION_NO_READ_TOKEN"
+          headers = {
+              "Authorization": "Bearer " + token,
+              "Accept": "application/vnd.github+json",
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+          def read(path):
+              url = "https://api.github.com/repos/atto-lang/atto-source.net/" + path
+              req = urllib.request.Request(url, headers=headers)
+              with urllib.request.urlopen(req, timeout=15) as response:
+                  return json.load(response)
+          main = read("branches/main")
+          assert main.get("name") == "main" and main.get("protected") is True, "E_SOURCE_MAIN_NOT_PROTECTED"
+          pr = read("pulls/194")
+          head = pr.get("head") or {}
+          assert (
+              pr.get("number") == 194
+              and head.get("sha") == os.environ["SOURCE_HEAD"]
+              and (head.get("repo") or {}).get("full_name") == "atto-lang/atto-source.net"
+          ), "E_COMPILER_PR_SOURCE_DRIFT"
+          print("ATTO_SOURCE_LOCAL_PROTECTED_MAIN_CONFIRMED compiler_pr_head=" + os.environ["SOURCE_HEAD"])
+          PY
       - name: Checkout immutable direct-CIL PR SHA without persisted credentials
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
