@@ -97,7 +97,18 @@ internal sealed class Parser
         if (depth > 32) throw new CompilerError("E_LIMIT", "expression nesting limit");
         Expression left;
         if (Eat("(")) { left = ParseExpr(0, depth + 1); Require(")"); }
-        else if (Eat("-")) left = new Binary("-", new Literal(0), ParseExpr(30, depth + 1));
+        else if (Eat("-"))
+        {
+            // The magnitude 2^63 is legal only as the signed minimum literal.
+            // Parsing it as a positive long and then subtracting from zero
+            // incorrectly rejects a valid AttoLang i64 value.
+            if (Peek == "9223372036854775808")
+            {
+                _position++;
+                left = new Literal(long.MinValue);
+            }
+            else left = new Binary("-", new Literal(0), ParseExpr(30, depth + 1));
+        }
         else if (Peek.Length > 0 && Peek[0] is >= '0' and <= '9')
         {
             var raw = Peek; _position++;
