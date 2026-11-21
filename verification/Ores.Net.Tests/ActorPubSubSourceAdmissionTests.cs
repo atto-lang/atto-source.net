@@ -47,6 +47,10 @@ internal static class ActorPubSubSourceAdmissionTests
             "val receipt = topic.try_publish(share!event);",
             "val receipt = topic.try_publish(rt share event);",
             "val receipt = runtime_topic.try_publish(share! event)?;",
+            "val receipt = topic /* nested /* c */ c */ . try_publish(share! event)?;",
+            "val receipt = topic?.try_publish(share! event)?;",
+            "val receipt = other.topic.try_publish(rt share event)?;",
+            "val member = topic.try_publish;",
             "val callable = topic.try_publish;",
             "val rejected = topic.try_publish<String>(share! event);"
         })
@@ -60,7 +64,10 @@ internal static class ActorPubSubSourceAdmissionTests
             "fnc try_publish(event:int):int{return event;}",
             "fnc main():int{return 42;} // topic.try_publish(share! event)?",
             "fnc main():int{return 42;} /* topic.try_publish(rt share event) */",
-            "fnc main():int{return 42;} \"topic.try_publish(share! event)?\""
+            "fnc main():int{return 42;} \"topic.try_publish(share! event)?\"",
+            "fnc main():int{return 42;} /* nested /* topic.try_publish(share! event)? */ end */",
+            "fnc main():int{return 42;} // topic.try_publish(share! event)?\\r\\n",
+            "fnc try_publisher(event:int):int{return event;}"
         })
             ActorPubSubSourceAdmission.RejectUnsupported(inert);
 
