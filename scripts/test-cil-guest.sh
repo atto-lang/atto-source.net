@@ -34,7 +34,7 @@ for case in \
   unknown-parameter:E_SYMBOL \
   no-return:E_PARSE \
   duplicate-parameter:E_DUP_PARAM \
-  bool-unsupported:E_PARSE \
+  bool-unsupported:E_RETURN_TYPE \
   no-main:E_ENTRY \
   int-division-float-required:E_DIVISION_FLOAT_RESULT \
   int-division-in-helper:E_DIVISION_FLOAT_RESULT \
