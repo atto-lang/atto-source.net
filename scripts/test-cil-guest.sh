@@ -38,7 +38,8 @@ for case in \
   no-main:E_ENTRY \
   int-division-float-required:E_DIVISION_FLOAT_RESULT \
   int-division-in-helper:E_DIVISION_FLOAT_RESULT \
-  int-division-nested:E_DIVISION_FLOAT_RESULT; do
+  int-division-nested:E_DIVISION_FLOAT_RESULT \
+  signed-min-underflow:E_LITERAL; do
   name="$(echo "$case" | cut -d: -f1)"
   diagnostic="$(echo "$case" | cut -d: -f2)"
   rm -f artifacts/Rejected.dll
@@ -54,7 +55,7 @@ for case in \
   }
   test ! -e artifacts/Rejected.dll || { echo "NEGATIVE_ARTIFACT_LEAK case=$name"; exit 1; }
 done
-echo "ATTO_DIRECT_CIL_NEGATIVE_PASS checks=15"
+echo "ATTO_DIRECT_CIL_NEGATIVE_PASS checks=16"
 dotnet build "$host" -c Release
 expect_42 CORECLR_GUEST dotnet run --no-build -c Release --project "$host"
 dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true \
@@ -63,9 +64,16 @@ test -x /tmp/atto-cil-nativeaot/Atto.Cil.Guest.Host
 expect_42 NATIVEAOT_GUEST /tmp/atto-cil-nativeaot/Atto.Cil.Guest.Host
 
 # Additional genuine CIL guest executions; neither calculation is in C#.
-for fixture in fixtures/cil/precedence.atto fixtures/cil/forward-call.atto; do
+for fixture in fixtures/cil/precedence.atto fixtures/cil/forward-call.atto fixtures/cil/signed-min-boundary.atto; do
   dotnet run --no-build -c Release --project "$compiler" -- "$fixture" "$guest"
   dotnet build "$host" -c Release
   expect_42 EXTRA_CORECLR_GUEST dotnet run --no-build -c Release --project "$host"
+  if [[ "$fixture" == "fixtures/cil/signed-min-boundary.atto" ]]; then
+    # The valid signed minimum must execute through both real compilation paths.
+    dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true \
+      --self-contained true -o /tmp/atto-cil-signed-min-nativeaot
+    test -x /tmp/atto-cil-signed-min-nativeaot/Atto.Cil.Guest.Host
+    expect_42 SIGNED_MIN_NATIVEAOT_GUEST /tmp/atto-cil-signed-min-nativeaot/Atto.Cil.Guest.Host
+  fi
 done
-echo "ATTO_DIRECT_CIL_POSITIVE_PASS fixtures=3"
+echo "ATTO_DIRECT_CIL_POSITIVE_PASS fixtures=4"
