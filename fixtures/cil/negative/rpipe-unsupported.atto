@@ -1,0 +1,2 @@
+// SPEC TARGET: rpipe direction does not imply reverse-value application.
+pub fnc main(): int { return 2 rpipe 1; }
