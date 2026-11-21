@@ -1,6 +1,6 @@
-pub fnc with_signed_min(int upper): int {
-    return -9223372036854775808 + upper;
+pub fnc add_bounds(int lower, int upper): int {
+    return lower + upper + 43;
 }
 pub fnc main(): int {
-    return with_signed_min(9223372036854775807) + 43;
+    return add_bounds(-9223372036854775808, 9223372036854775807);
 }
