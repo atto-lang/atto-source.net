@@ -30,6 +30,8 @@ internal static class ActorGuestHeap32SelfTest
         ActorGuestHeap32.RequireStorageAbiV1("generation16_slot16");
         ExpectInvalid(() => ActorGuestHeap32.RequireStorageAbiV1("offset8_plus_one"),
             "LLVM offset8+1 must not be decoded as .NET slot/generation");
+        ExpectInvalid(() => ActorGuestHeap32.RequireStorageAbiV1("control_generation12_slot20_v1"),
+            "control-plane generation12/slot20 is not an actor generation16/slot16 handle");
         ExpectInvalid(() => ActorGuestHeap32.RequireStorageAbiV1(""),
             "unknown memory ABI must fail closed");
     }
@@ -75,6 +77,9 @@ internal static class ActorGuestHeap32SelfTest
                 ExpectInvalid(
                     () => context.RequireOwnedGuestStorageAbiV1("offset8_plus_one"),
                     "compiler actor context must reject cross-backend ref32 layout");
+                ExpectInvalid(
+                    () => context.RequireOwnedGuestStorageAbiV1("control_generation12_slot20_v1"),
+                    "actor guest must reject control-plane Ref32 words");
 
                 if (message.Span[0] == 1)
                 {
