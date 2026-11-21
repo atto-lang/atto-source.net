@@ -162,6 +162,12 @@ internal sealed class CIL(List<Function> functions)
                     if (!owner.Args.Contains(a.Name)) throw new CompilerError("E_SYMBOL", a.Name);
                     return;
                 case Binary b:
+                    // Canonical AttoLang int / int yields float. This int64-only
+                    // direct-CIL profile cannot represent that result. Reject
+                    // before writing any guest artifact; never emit CIL div.
+                    if (b.Op == "/")
+                        throw new CompilerError("E_DIVISION_FLOAT_RESULT",
+                            "int / int returns float; this int-only CIL profile cannot lower it");
                     WalkExpr(b.Left, owner); WalkExpr(b.Right, owner);
                     return;
                 case Call c:
@@ -257,7 +263,8 @@ internal sealed class CIL(List<Function> functions)
                     "+" => ILOpCode.Add_ovf,
                     "-" => ILOpCode.Sub_ovf,
                     "*" => ILOpCode.Mul_ovf,
-                    "/" => ILOpCode.Div,
+                    "/" => throw new CompilerError("E_DIVISION_FLOAT_RESULT",
+                        "int / int requires floating-result lowering"),
                     _ => throw new CompilerError("E_PARSE", b.Op)
                 });
                 return;
