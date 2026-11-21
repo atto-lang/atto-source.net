@@ -28,6 +28,9 @@ jobs:
           - id: ifnot-nested-continue
             fixture: do-ifnot-nativeaot.atto
             expected: 2
+          - id: negated-truth-table
+            fixture: negated-truth-table-nativeaot.atto
+            expected: 8
     steps:
       - uses: actions/checkout@v4
         with:
