@@ -19,6 +19,13 @@ internal static class ActorHeapV1CompilerSelfTest
             "real .atto fixture produces checked nominal graph plan");
 
         string generated = ActorHeapV1Compiler.EmitCSharp(source);
+        const string abiGate = "context.RequireOwnedGuestStorageAbiV1(\"generation16_slot16\");";
+        Require(generated.Contains(abiGate, StringComparison.Ordinal) &&
+                generated.IndexOf(abiGate, StringComparison.Ordinal) <
+                generated.IndexOf("AllocateOwnedTypedGuestObject32(layout)",
+                    StringComparison.Ordinal),
+            "compiler-generated actor must authorize exact ref32 layout before allocating");
+
         Require(generated == ActorHeapV1Compiler.EmitCSharp(source),
             "source emission is deterministic");
         Require(generated.Contains("namespace Ores.Net.Generated;", StringComparison.Ordinal) &&
