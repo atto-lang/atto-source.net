@@ -58,7 +58,8 @@ jobs:
           }
           $pr = Invoke-RestMethod -Uri 'https://api.github.com/repos/atto-lang/atto-source.net/pulls/33' -Headers $headers
           # Do not accept stringified PR numbers or case-folded SHA aliases.
-          if (-not ($pr.number -is [int]) -or $pr.number -ne 33 -or
+          if (-not (($pr.number -is [int]) -or ($pr.number -is [long])) -or
+              $pr.number -ne 33 -or
               $pr.head.sha -cne $env:SOURCE_HEAD -or
               $pr.head.repo.full_name -cne 'atto-lang/atto-source.net') {
             throw 'E_ACTOR_PR_SOURCE_DRIFT'
