@@ -7,6 +7,7 @@ on:
       - 'tests/Atto.Cil.Float.Guest.Host/**'
       - 'scripts/test-cil-guest.sh'
       - "scripts/verify-direct-cil-integration.sh"
+      - "scripts/test-direct-cil-integrity-harness.sh"
       - "verification/direct-cil-integration-blobs.tsv"
       - '.github/workflows/direct-cil-float-division-admission.yml'
   workflow_dispatch:
@@ -49,6 +50,9 @@ jobs:
             test "$(git hash-object --no-filters "$file")" = "$(git rev-parse "HEAD:$file")"
           done
           echo "PINNED_HEAD=$EXPECTED_HEAD TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Exercise synthetic exact-Git-blob attack regression suite
+        shell: bash
+        run: bash scripts/test-direct-cil-integrity-harness.sh
       - name: Verify exact-source integration blob manifest before compilation
         shell: bash
         run: bash scripts/verify-direct-cil-integration.sh
