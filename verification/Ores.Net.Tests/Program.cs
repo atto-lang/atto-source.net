@@ -45,14 +45,17 @@ foreach (char terminalControl in new[] { '\u001b', '\u007f' })
 {
     string embedded = "fnc main():int{/*" + terminalControl + "*/return 42;}";
     string trailing = "fnc main():int{return 42;} //" + terminalControl;
+    int embeddedOffset = embedded.IndexOf(terminalControl);
+    int trailingOffset = trailing.IndexOf(terminalControl);
+    Require(embeddedOffset > 0 && trailingOffset > 0, "control offset must exist");
     RejectDiagnostic(() => OresParser.Parse(embedded),
-        "terminal control", "scalar embedded terminal control");
+        $"terminal control at offset {embeddedOffset}", "scalar embedded control offset");
     RejectDiagnostic(() => OresParser.Parse(trailing),
-        "terminal control", "scalar trailing terminal control");
+        $"terminal control at offset {trailingOffset}", "scalar trailing control offset");
     RejectDiagnostic(() => OresStructuredParser.Parse(embedded),
-        "terminal control", "structured embedded terminal control");
+        $"terminal control at offset {embeddedOffset}", "structured embedded control offset");
     RejectDiagnostic(() => OresStructuredParser.Parse(trailing),
-        "terminal control", "structured trailing terminal control");
+        $"terminal control at offset {trailingOffset}", "structured trailing control offset");
 }
 Require(OresParser.Parse("fnc main():int{\r\n\treturn 42;\r\n}") is not null,
     "ordinary scalar CRLF and TAB must remain accepted");
