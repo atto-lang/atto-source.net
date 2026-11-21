@@ -6,6 +6,7 @@ internal static class ActorGuestHeap32SelfTest
     public static void Run()
     {
         RejectIncompatibleRef32StorageAbi();
+        ActorGuestRefEncodingV1SelfTest.Run();
         PerActorReferencesSurviveTurnsAndDenyStaleAccess();
         GenerationExhaustionFailsClosedWithoutWrapping();
         GuestPayloadFastPathDoesNotAllocateClrObjects();
