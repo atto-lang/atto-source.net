@@ -68,14 +68,29 @@ internal sealed unsafe class ControlPlaneArena32 : IDisposable
         }
     }
 
+    /// <summary>
+    /// Reserve at most uint.MaxValue monotone issuer IDs. A synthetic counter
+    /// permits boundary tests without changing the process-global sequence.
+    /// Exhaustion is permanent and never increments toward a future wrap.
+    /// </summary>
+    internal static uint ClaimIssuer(ref long sequence)
+    {
+        while (true)
+        {
+            long seen = Volatile.Read(ref sequence);
+            if (seen < 0 || seen >= uint.MaxValue)
+                throw new InvalidOperationException("control issuer IDs exhausted: no wrap or reuse");
+            long next = seen + 1;
+            if (Interlocked.CompareExchange(ref sequence, next, seen) == seen)
+                return checked((uint)next);
+        }
+    }
+
     public ControlPlaneArena32(int capacity)
     {
         if (capacity <= 0 || capacity > SlotMask)
             throw new ArgumentOutOfRangeException(nameof(capacity), "invalid bounded control Ref32 quota");
-        long issuer = Interlocked.Increment(ref s_nextIssuer);
-        if (issuer <= 0 || issuer > uint.MaxValue)
-            throw new InvalidOperationException("control issuer IDs exhausted: no wrap or reuse");
-        _issuer = checked((uint)issuer);
+        _issuer = ClaimIssuer(ref s_nextIssuer);
         _capacity = capacity;
         if (sizeof(Slot) != SlotBytes)
             throw new InvalidOperationException("control slot ABI layout drift");
