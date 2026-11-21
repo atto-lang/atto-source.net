@@ -46,7 +46,9 @@ internal static class ActorPubSubSourceAdmissionTests
             "val receipt = topic.try_publish(share! event)?;",
             "val receipt = topic.try_publish(share!event);",
             "val receipt = topic.try_publish(rt share event);",
-            "val receipt = runtime_topic.try_publish(share! event)?;"
+            "val receipt = runtime_topic.try_publish(share! event)?;",
+            "val callable = topic.try_publish;",
+            "val rejected = topic.try_publish<String>(share! event);"
         })
         {
             RequireRejected(
