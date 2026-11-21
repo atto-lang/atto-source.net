@@ -48,6 +48,51 @@ source-local CI if its runners become functional.
 
 ---
 
+## 2026-11-21 current actor/compiler heads and source-local audit (review only)
+
+**No export authority is granted or activated by this addendum.** The previously
+commented candidate in this document and both allowlists are stale/inactive.
+
+- **Actor arena [#33](https://github.com/atto-lang/atto-source.net/pull/33):**
+  latest tested-by-static-inspection source head
+  `2f3cc4e2b82b09a0e4c41e48e238d97d123a42ab`, root Git tree
+  `2249d9e019753e34e3ace49b9494fd515e1e4454`. Added positive/negative
+  host assertions for actor-local versus tenant-global logical fuel accounting,
+  tenant fuel exhaustion and terminal snapshot fencing. Linux/Windows workflow
+  now requires **at least 40 host assertions and identical managed/NativeAOT
+  case-count receipts**. Ten source/workflow contract checks inspected
+  statically; no managed or NativeAOT actor test actually ran at this head.
+- **Combined direct-CIL [#194](https://github.com/atto-lang/atto-source.net/pull/194):**
+  latest head `44de47139b77e5b4142bf4324c4bee1b5f320911`, root Git tree
+  `581efa8c533c651f29062db391f9d26361e094c0`. Its two source-local
+  CI workflows now check a SHA-pinned, regular-mode, non-symlink **38-blob**
+  manifest before compiling. All 38 committed Git blob IDs matched exactly
+  against this source head. The verifier script blob
+  `25a2ffbafa444d2e06d4e8e051c8b8d7f30afd54` was independently
+  re-created byte-for-byte in a synthetic local Git repository and passed
+  **8/8 harness tests**, including tampering, duplicate, missing-entry,
+  traversal, symlink, mode and dirty-file denials. These are **not** Atto
+  compiler/CoreCLR/NativeAOT tests. Source Actions returned **0 runner steps**.
+- **Carrier capacity (source-free only):**
+  `scintilla-run-test/atto-ci` private ID `1458349760` passed actual
+  generic .NET 10 managed and NativeAOT smoke execution on Linux and Windows
+  in [run #44860216954](https://github.com/scintilla-run-test/atto-ci/actions/runs/44860216954).
+  It received **zero Atto source Git objects**, no approved private source
+  snapshot, and no permission from this proposal to accept any.
+
+At this review checkpoint `atto-source.net/main` still reports
+`protected=false`; the private rulesets readback requires an unavailable
+plan entitlement; there is no independently authenticated eligible third
+reviewer; the two source-export allowlists have **zero active entries**; and
+`private-ci-independent-reviewer.json` has `enabled=false`. The user's
+request for token-free mirroring alone does not satisfy the separately
+required independent authorization. **Do not mirror** either source tree
+until these gates are independently satisfied and the exact new SHA is
+approved on a protected, reviewed main branch. The existing commented
+candidates below are intentionally retained as historical proposals only.
+
+---
+
 ## Context and exact immutable candidate
 
 - Source: `atto-lang/atto-source.net` (**PRIVATE**, numeric repository ID `1448702222`).
