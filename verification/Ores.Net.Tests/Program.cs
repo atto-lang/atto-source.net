@@ -655,6 +655,7 @@ ActorStateLayoutIntegrationTests.Run();
 ActorGeneratedCounterTests.Run();
 VmActorStateCellsTests.Run(); // compiled but never executed before 2026-11-20
 VmActorHeapModelTests.Run(); // atto-spec ch. 27 actor heap model for OresVmHost actors
+ShiftOperatorTests.Run(); // atto-spec bitwise-and-stream-operators-v1 shifts on the real CLR
 DeclaredActorCounterV2Tests.Run();
 CounterMainV2Tests.Run();
 SourceByteBudgetTests.Run();

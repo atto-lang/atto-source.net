@@ -48,7 +48,9 @@ public sealed record StructuredFunction(string Name,
     StructuredExpr? ReturnValue, IReadOnlyList<StructuredStmt> Body);
 public enum StructuredOperator { Add, Subtract, Multiply, EqualI64, LessThanI64, GreaterThanI64, NotEqualI64,
     LessThanOrEqualI64, GreaterThanOrEqualI64,
-    EqualBool, NotEqualBool, LogicalAnd, LogicalOr, LogicalXor }
+    EqualBool, NotEqualBool, LogicalAnd, LogicalOr, LogicalXor,
+    // atto-spec bitwise-and-stream-operators-v1: <<<, >>> and infix ashr.
+    ShiftLeft, ShiftRightLogical, ShiftRightArithmetic }
 public sealed record StructuredBinary(int At, StructuredOperator Operator,
     StructuredExpr Left, StructuredExpr Right, IrValueType ResultType)
     : StructuredExpr(At, ResultType);
@@ -1938,6 +1940,13 @@ public static partial class OresStructuredParser
                 _ => false
             };
 
+        // Java/Graal and LLVM admit shift distances 0..63 only; a const shift
+        // outside that range fails at compile time rather than masking.
+        private static int ConstantShiftDistance(long distance) =>
+            distance is >= 0 and <= 63 ? (int)distance
+                : throw new FormatException(
+                    $"Shift distance {distance} is outside 0..63");
+
         private static long ConstantValue(StructuredExpr expression)
         {
             switch (expression)
@@ -1962,6 +1971,9 @@ public static partial class OresStructuredParser
                         StructuredOperator.Add => checked(left + right),
                         StructuredOperator.Subtract => checked(left - right),
                         StructuredOperator.Multiply => checked(left * right),
+                        StructuredOperator.ShiftLeft => left << ConstantShiftDistance(right),
+                        StructuredOperator.ShiftRightLogical => (long)((ulong)left >> ConstantShiftDistance(right)),
+                        StructuredOperator.ShiftRightArithmetic => left >> ConstantShiftDistance(right),
                         StructuredOperator.EqualI64 => left == right ? 1L : 0L,
                         StructuredOperator.NotEqualI64 => left != right ? 1L : 0L,
                         StructuredOperator.LessThanI64 => left < right ? 1L : 0L,
@@ -2195,7 +2207,7 @@ public static partial class OresStructuredParser
         }
         private StructuredExpr Compare(int depth)
         {
-            var left = Add(depth + 1);
+            var left = Shift(depth + 1);
             while (true)
             {
                 if (Current.Text == "as")
@@ -2229,10 +2241,52 @@ public static partial class OresStructuredParser
                     _ => throw Error("Unrecognized relational operator")
                 };
                 index++;
-                var right = Add(depth + 1);
+                var right = Shift(depth + 1);
                 Require(left, IrValueType.I64, "Comparison requires int operands");
                 Require(right, IrValueType.I64, "Comparison requires int operands");
                 left = CheckedBinary(at, comparison, left, right, IrValueType.Bool);
+            }
+            return left;
+        }
+        private bool AdjacentTokenAt(int at, string text) =>
+            at < tokens.Count && tokens[at].Text == text &&
+            tokens[at].Offset == tokens[at - 1].Offset + 1;
+
+        // atto-spec bitwise-and-stream-operators-v1: shift binds less tightly
+        // than additive and more tightly than comparison. `<<<` (left), `>>>`
+        // (logical right) and the infix word `ashr` (arithmetic right). The
+        // lexer keeps '<' and '>' single, so arrows must be adjacent tokens.
+        // `<<`/`>>` are typed channel/stream I/O, never shifts, and this
+        // scalar compiler has no channel I/O lowering: they fail closed.
+        private StructuredExpr Shift(int depth)
+        {
+            Budget(depth);
+            var left = Add(depth + 1);
+            while (true)
+            {
+                int at = Current.Offset;
+                StructuredOperator op;
+                if (Current.Text == "ashr")
+                {
+                    index++;
+                    op = StructuredOperator.ShiftRightArithmetic;
+                }
+                else if (Current.Text is "<" or ">" && AdjacentTokenAt(index + 1, Current.Text))
+                {
+                    string arrow = Current.Text;
+                    if (!AdjacentTokenAt(index + 2, arrow))
+                        throw new FormatException(
+                            $"'{arrow}{arrow}' is typed channel/stream I/O, not a bit shift, and this " +
+                            $"backend has no channel I/O lowering; use '<<<', '>>>' or 'ashr' at offset {at}");
+                    index += 3;
+                    op = arrow == "<" ? StructuredOperator.ShiftLeft
+                        : StructuredOperator.ShiftRightLogical;
+                }
+                else break;
+                var right = Add(depth + 1);
+                Require(left, IrValueType.I64, "Shift requires int operands");
+                Require(right, IrValueType.I64, "Shift requires int operands");
+                left = CheckedBinary(at, op, left, right, IrValueType.I64);
             }
             return left;
         }

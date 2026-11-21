@@ -217,6 +217,29 @@ internal static class CfgCilEmitter
                             il.MarkLabel(end);
                             continue;
                         }
+                        case CfgOpcode.ShiftLeftI64:
+                        case CfgOpcode.ShiftRightLogicalI64:
+                        case CfgOpcode.ShiftRightArithmeticI64:
+                            // Distance guard without any MemberRef: 63 - d as
+                            // unsigned overflows exactly when d is outside
+                            // 0..63 (negative d is a huge unsigned value), and
+                            // raises the same checked OverflowException as the
+                            // checked arithmetic opcodes.
+                            il.LoadConstantI8(63);
+                            il.LoadLocal(op.Right!.Value);
+                            il.OpCode(ILOpCode.Sub_ovf_un);
+                            il.OpCode(ILOpCode.Pop);
+                            il.LoadLocal(op.Left!.Value);
+                            il.LoadLocal(op.Right!.Value);
+                            // CIL shift amounts are int32; the guard proved 0..63.
+                            il.OpCode(ILOpCode.Conv_i4);
+                            il.OpCode(op.Opcode switch
+                            {
+                                CfgOpcode.ShiftLeftI64 => ILOpCode.Shl,
+                                CfgOpcode.ShiftRightLogicalI64 => ILOpCode.Shr_un,
+                                _ => ILOpCode.Shr
+                            });
+                            break;
                         case CfgOpcode.CheckedAdd:
                         case CfgOpcode.CheckedSubtract:
                         case CfgOpcode.CheckedMultiply:
