@@ -1,0 +1,192 @@
+name: .NET AttoLang actor heap V1 generated NativeAOT guest
+on:
+  pull_request:
+    paths:
+      - 'compiler/Ores.Net.Compiler.Core/ActorHeapV1Compiler.cs'
+      - 'compiler/Ores.Net.Compiler/Program.cs'
+      - 'verification/Ores.Net.ActorGuestV1Probe/**'
+      - 'verification/Ores.Net.Tests/ActorHeapV1CompilerSelfTest.cs'
+      - 'verification/Ores.Net.Tests/Program.cs'
+      - 'contracts/actor-guest-heap/v1/**'
+      - 'runtime/Ores.Net.Runtime/**'
+      - '.github/workflows/actor-heap-v1-generated-nativeaot.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  generated-guest-nativeaot:
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            rid: linux-x64
+            binary: Ores.Net.ActorGuestV1Probe
+          - os: windows-2022
+            rid: win-x64
+            binary: Ores.Net.ActorGuestV1Probe.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.x'
+      - name: Verify exact source and compile real AttoLang guest source
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          source_tree="$(git rev-parse 'HEAD^{tree}')"
+          printf 'ATTO_ACTOR_HEAP_SOURCE_HEAD=%s\n' "$EXPECTED_HEAD"
+          printf 'ATTO_ACTOR_HEAP_SOURCE_TREE=%s\n' "$source_tree"
+          fixture=contracts/actor-guest-heap/v1/node_graph.atto
+          test -f "$fixture"
+          test ! -L "$fixture"
+          test "$(git ls-files -s -- "$fixture" | awk '{print $1}')" = 100644
+          expected_blob="$(git rev-parse "HEAD:$fixture")"
+          actual_blob="$(git hash-object "$fixture")"
+          [[ "$expected_blob" =~ ^[0-9a-f]{40}$ ]]
+          test "$expected_blob" = "$actual_blob"
+          # Cross-compiler canonical .atto fixture from conformance #461.
+          # Never silently bless a local fixture drift as a new guest contract.
+          test "$actual_blob" = "d472cccb3da24ee8f9fed44f99c1c7742d3240de"
+          printf 'ATTO_ACTOR_HEAP_FIXTURE_BLOB=%s\n' "$actual_blob"
+          # Fail closed if the generated file is already tracked or
+          # masquerading as a historical checked-in guest stub.
+          generated=verification/Ores.Net.ActorGuestV1Probe/ActorHeapV1.g.cs
+          if git ls-files --error-unmatch "$generated" >/dev/null 2>&1; then
+            echo "Generated guest file must never be tracked" >&2
+            exit 1
+          fi
+          test ! -e "$generated"
+          test ! -L "$generated"
+          git check-ignore -q "$generated"
+          dotnet --info
+          dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release |
+            tee "$RUNNER_TEMP/actor-heap-managed-tests.log"
+          grep -Fx 'PASS actor heap v1 .atto checked compiler parser/emitter (source-only; no guest execution)' "$RUNNER_TEMP/actor-heap-managed-tests.log"
+          dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -- \
+            emit-actor-heap-v1 contracts/actor-guest-heap/v1/node_graph.atto \
+            --out verification/Ores.Net.ActorGuestV1Probe/ActorHeapV1.g.cs |
+            tee "$RUNNER_TEMP/actor-heap-emission.log"
+          grep -Fx 'ACTOR_HEAP_V1_SOURCE_GENERATED|NOT_EXECUTED|NOT_CERTIFIED' "$RUNNER_TEMP/actor-heap-emission.log"
+          test -s verification/Ores.Net.ActorGuestV1Probe/ActorHeapV1.g.cs
+          grep -Fq 'ActorGuestOwnedRef32 first = default;' "$generated"
+          grep -Fq 'context.RequireOwnedGuestStorageAbiV1("generation16_slot16")' "$generated"
+          # ABI negotiation must execute before the first guest allocation.
+          gate_line="$(grep -nF 'context.RequireOwnedGuestStorageAbiV1("generation16_slot16")' "$generated" | head -n1 | cut -d: -f1)"
+          alloc_line="$(grep -nF 'AllocateOwnedTypedGuestObject32(layout)' "$generated" | head -n1 | cut -d: -f1)"
+          test -n "$gate_line" && test -n "$alloc_line"
+          test "$gate_line" -lt "$alloc_line"
+          grep -Fq 'AllocateOwnedTypedGuestObject32(layout)' "$generated"
+          grep -Fq 'ReadOwnedGuestReference32(second, 8)' "$generated"
+          grep -Fq 'WriteOwnedGuestReference32(second, 8, first)' "$generated"
+          grep -Fq 'DropOwnedGuestObject32(second)' "$generated"
+          for raw_op in 'AllocateTypedGuestObject32(' 'ReadGuestReference32(' \
+              'WriteGuestReference32(' 'DropGuestObject32('; do
+            if grep -Fq "$raw_op" "$generated"; then
+              echo "Generated guest bypassed actor-bound reference authority: $raw_op" >&2
+              exit 1
+            fi
+          done
+          sha256sum contracts/actor-guest-heap/v1/node_graph.atto |
+            tee "$RUNNER_TEMP/actor-heap-atto-sha256.txt"
+          sha256sum verification/Ores.Net.ActorGuestV1Probe/ActorHeapV1.g.cs |
+            tee "$RUNNER_TEMP/actor-heap-generated-csharp-sha256.txt"
+          # A BOM-prefixed source is different from the signed .atto bytes.
+          # The compiler must reject it without writing an output file.
+          bom_source="$RUNNER_TEMP/actor-heap-with-bom.atto"
+          bom_out="$RUNNER_TEMP/actor-heap-bom-rejected/ActorHeapV1.g.cs"
+          node -e '
+            const fs = require("node:fs");
+            fs.writeFileSync(process.argv[1], Buffer.concat([
+              Buffer.from([0xef, 0xbb, 0xbf]),
+              fs.readFileSync(process.argv[2])
+            ]));
+          ' "$bom_source" "$fixture"
+          if dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj \
+              -c Release -- emit-actor-heap-v1 "$bom_source" --out "$bom_out"; then
+            echo "BOM-prefixed .atto source bypassed exact-byte admission" >&2
+            exit 1
+          fi
+          test ! -e "$bom_out"
+          # Verify the fixture itself was not rewritten by the compiler.
+          test "$(git hash-object "$fixture")" = "$expected_blob"
+          test -z "$(git diff --name-only HEAD --)"
+          # The generated file must be gitignored and may not replace
+          # a committed source blob or other tracked file.
+          test -z "$(git status --porcelain)"
+      - name: Publish and execute compiler-generated native actor guest
+        shell: bash
+        env:
+          RID: ${{ matrix.rid }}
+          BINARY: ${{ matrix.binary }}
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/atto-actor-heap-v1-nativeaot"
+          dotnet publish verification/Ores.Net.ActorGuestV1Probe/Ores.Net.ActorGuestV1Probe.csproj \
+            -c Release -r "$RID" -p:PublishAot=true -p:SelfContained=true -o "$output"
+          test -f "$output/$BINARY"
+          "$output/$BINARY" | tee "$RUNNER_TEMP/actor-heap-nativeaot-guest.log"
+          grep -Fx 'PASS attolang-actor-heap-v1-nativeaot: generated .atto Node graph executed in two independent actor heaps (narrow guest subset)' "$RUNNER_TEMP/actor-heap-nativeaot-guest.log"
+          sha256sum "$output/$BINARY" | tee "$RUNNER_TEMP/actor-heap-native-binary-sha256.txt"
+
+      - name: Compile and execute a negative AttoLang assertion with actor heap cleanup
+        shell: bash
+        env:
+          RID: ${{ matrix.rid }}
+          BINARY: ${{ matrix.binary }}
+        run: |
+          set -euo pipefail
+          fixture=contracts/actor-guest-heap/v1/node_graph.atto
+          before="$(git rev-parse "HEAD:$fixture")"
+          test "$before" = "$(git hash-object "$fixture")"
+          negative_source="$RUNNER_TEMP/actor-heap-expected-assertion-failure.atto"
+          # Derive precisely one mutation of the pinned source, without
+          # altering the tracked fixture or introducing unreviewed guest ops.
+          node -e '
+            const fs = require("node:fs");
+            const [source, output] = process.argv.slice(1);
+            const original = fs.readFileSync(source, "utf8");
+            const before = "assert(second.next?.value == 42)";
+            const after = "assert(second.next?.value == 43)";
+            if (original.split(before).length !== 2) process.exit(2);
+            fs.writeFileSync(output, original.replace(before, after));
+          ' "$fixture" "$negative_source"
+          test -s "$negative_source"
+          sha256sum "$negative_source" |
+            tee "$RUNNER_TEMP/actor-heap-negative-atto-sha256.txt"
+          dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -- \
+            emit-actor-heap-v1 "$negative_source" \
+            --out verification/Ores.Net.ActorGuestV1Probe/ActorHeapV1.g.cs |
+            tee "$RUNNER_TEMP/actor-heap-negative-emission.log"
+          grep -Fx 'ACTOR_HEAP_V1_SOURCE_GENERATED|NOT_EXECUTED|NOT_CERTIFIED' "$RUNNER_TEMP/actor-heap-negative-emission.log"
+          generated=verification/Ores.Net.ActorGuestV1Probe/ActorHeapV1.g.cs
+          grep -F 'ReadInt64LittleEndian(value) != 43L)' "$generated"
+          sha256sum "$generated" |
+            tee "$RUNNER_TEMP/actor-heap-negative-generated-sha256.txt"
+          test "$(git hash-object "$fixture")" = "$before"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          # Force a new native build, never reuse the positive binary.
+          dotnet clean verification/Ores.Net.ActorGuestV1Probe/Ores.Net.ActorGuestV1Probe.csproj \
+            -c Release -r "$RID" -p:PublishAot=true
+          negative_output="$RUNNER_TEMP/atto-actor-heap-v1-negative-nativeaot"
+          dotnet publish verification/Ores.Net.ActorGuestV1Probe/Ores.Net.ActorGuestV1Probe.csproj \
+            -c Release -r "$RID" -p:PublishAot=true -p:SelfContained=true \
+            -o "$negative_output"
+          test -f "$negative_output/$BINARY"
+          "$negative_output/$BINARY" --expect-assert-failure |
+            tee "$RUNNER_TEMP/actor-heap-negative-nativeaot.log"
+          grep -Fx 'PASS attolang-actor-heap-v1-nativeaot-negative: compiled .atto assertion failure retired actor and reclaimed native heap' "$RUNNER_TEMP/actor-heap-negative-nativeaot.log"
+          sha256sum "$negative_output/$BINARY" |
+            tee "$RUNNER_TEMP/actor-heap-negative-binary-sha256.txt"
