@@ -4,6 +4,7 @@ on:
     paths:
       - 'compiler/Atto.Cil.Compiler/Program.cs'
       - 'fixtures/cil/**'
+      - 'tests/Atto.Cil.Float.Guest.Host/**'
       - 'scripts/test-cil-guest.sh'
       - '.github/workflows/direct-cil-float-division-admission.yml'
   workflow_dispatch:
@@ -36,7 +37,13 @@ jobs:
             fixtures/cil/negative/int-division-in-helper.atto \
             fixtures/cil/negative/int-division-nested.atto \
             fixtures/cil/signed-min-boundary.atto \
-            fixtures/cil/negative/signed-min-underflow.atto; do
+            fixtures/cil/negative/signed-min-underflow.atto \
+            fixtures/cil/float-division.atto \
+            fixtures/cil/negative/float-result-in-int-return.atto \
+            fixtures/cil/negative/float-result-as-int-arg.atto \
+            fixtures/cil/negative/unsupported-float-addition.atto \
+            tests/Atto.Cil.Float.Guest.Host/Atto.Cil.Float.Guest.Host.csproj \
+            tests/Atto.Cil.Float.Guest.Host/Program.cs; do
             test "$(git hash-object --no-filters "$file")" = "$(git rev-parse "HEAD:$file")"
           done
           echo "PINNED_HEAD=$EXPECTED_HEAD TREE=$(git rev-parse 'HEAD^{tree}')"
