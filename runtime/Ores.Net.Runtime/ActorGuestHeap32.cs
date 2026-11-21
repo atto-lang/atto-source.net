@@ -21,6 +21,17 @@ namespace Ores.Net.Runtime;
 internal sealed class ActorGuestHeap32
 {
     internal const uint Null = 0;
+    // Versioned storage-layout identity. This 32-bit word is a generation/slot
+    // handle, NOT the offset8_plus_one Ref32 used by LLVM's actor arena.
+    // Negotiation must fail closed rather than decode one format as the other.
+    internal const string StorageAbiV1 = "generation16_slot16";
+    internal static void RequireStorageAbiV1(string requested)
+    {
+        if (!string.Equals(requested, StorageAbiV1, StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                "E_ACTOR_MEMORY_ABI: .NET generation16_slot16 does not implement the requested guest Ref32 encoding");
+    }
+
     internal const int MaxSlots = ushort.MaxValue;
     internal const int MaxNominalLayouts = 256;
     private const uint SlotMask = ushort.MaxValue;
