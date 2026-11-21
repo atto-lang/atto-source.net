@@ -48,6 +48,56 @@ source-local CI if its runners become functional.
 
 ---
 
+## 2026-11-21 source-free alternate runner — executed Linux and Windows NativeAOT (NO SOURCE EXPORT)
+
+This is **runner and synthetic algorithm capability evidence only**, not
+`atto-source.net` CIL compilation or real actor-runtime verification.
+
+- Private carrier: `scintilla-run-test/atto-ci`, numeric GitHub repo ID
+  `1458349760`. Draft [PR #1](https://github.com/scintilla-run-test/atto-ci/pull/1)
+  at head `c01d1fa5ed6bbbb8f19a23a5e74bdda4f2776303`, root tree
+  `20d08857c377cb86e8a175344acbef9427495e72`.
+- New synthetic-only workflow Git blob:
+  `b7393f78451ebd7407742d9210a265fbd931c7c6`,
+  `.github/workflows/atto-net-sourcefree-actor-fuel.yml`. It has
+  **no source checkout**, cross-org request, credentials, or source artifacts.
+  Permissions are **`{}` (no GitHub token scopes)**. It triggers on
+  **one branch push only**, not twice via both PR and push. Runs generated
+  original C# under `RUNNER_TEMP` on Linux and Windows; its budget
+  algorithm is an independent synthetic canary, NOT an Atto implementation.
+- [Latest hardened run #44920081679](https://github.com/scintilla-run-test/atto-ci/actions/runs/44920081679):
+  **2/2 real jobs PASSED**, one Linux x64 and one Windows x64.
+  Both compiled and executed the source-free C# model under CoreCLR **and**
+  published/executed native binaries using .NET 10 NativeAOT.
+  On **each platform**, CoreCLR and NativeAOT printed
+  `SOURCE_FREE_ACTOR_ACCOUNTING_PASS checks=531 source_export=NONE`
+  with exact equal receipts. The 531 count includes 511 iterations of
+  an individual fairness assertion; it is **not 531 independent scenarios**.
+  Each log prints `NO_ATTO_SOURCE_COPIED=true`.
+- Native binary SHA-256 receipts at this exact run:
+  Linux x64 `B73495A8F7B2A298F00E970E96900D9997D66711EA1E8019184BBF11ACEBABE8`;
+  Windows x64 `A41EEB38ACB6B46731D7358C32511A2D16DA9729D4C169D826B62EA78C413ADC`.
+- Two earlier executions of the same synthetic canary also had 2/2
+  stepful Linux/Windows jobs pass at
+  [run #44919868070](https://github.com/scintilla-run-test/atto-ci/actions/runs/44919868070)
+  and [run #44919872998](https://github.com/scintilla-run-test/atto-ci/actions/runs/44919872998).
+  Original source-free .NET10 toolchain run
+  [#44919873018](https://github.com/scintilla-run-test/atto-ci/actions/runs/44919873018)
+  also passed 2/2.
+
+**Private source export stays DENIED:** `atto-lang/atto-source.net/main`
+still reports `protected=false` with zero active destination/snapshot
+approvals, the independent-reviewer setting remains disabled, and the
+private rulesets API denies enforcement under current plan entitlements.
+The user's requested token-free Git-tree mirroring would still transfer
+private source to another GitHub security boundary. Neither this carrier
+run nor this document activates that transfer. Source-local ephemeral
+runners, or a separately reviewed/authorized exact commit+tree export under
+the existing gates, are required to execute the *actual* #33/#194 tests.
+No source org approvals, branch protections, or export allowlists were modified.
+
+---
+
 ## 2026-11-21 source-local runner recovery (NO private source export)
 
 **P0 alternative to cross-organization Git mirroring:** an authorized **ephemeral
