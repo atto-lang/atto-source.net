@@ -67,6 +67,23 @@ SCENARIOS = (
     ("http_denied", False, "HTTP Error 403"),
 )
 
+def require_only_manual_dispatch(source):
+    # Fail closed on *all* automatic event types, not only push/pull_request.
+    # Unlike a substring denylist, this checks the complete top-level on: block.
+    fragments = source.split("\non:\n")
+    if len(fragments) != 2:
+        raise RuntimeError("Missing or ambiguous workflow on: block")
+    event_lines = []
+    for line in fragments[1].splitlines():
+        if line and not line[0].isspace() and not line.startswith("#"):
+            break
+        if line.startswith("  ") and line[2:] and not line[2].isspace() \
+                and not line[2:].startswith("#"):
+            event_lines.append(line[2:].strip())
+    if event_lines != ["workflow_dispatch:"]:
+        raise RuntimeError("Unexpected workflow events: %r" % event_lines)
+
+
 def main():
     source = WORKFLOW.read_text(encoding="utf-8")
     if source.count(MARKER) != 1:
@@ -87,10 +104,21 @@ def main():
             raise RuntimeError("Missing fail-closed diagnostic " + diagnostic)
     if ("permissions:\n  contents: read\n  pull-requests: read\n") not in source:
         raise RuntimeError("Private PR preflight must request read-only PR metadata")
-    if "\non:\n  workflow_dispatch:\n" not in source:
-        raise RuntimeError("Manual source-local admission trigger missing")
-    if "\n  pull_request:\n" in source or "\n  push:\n" in source:
-        raise RuntimeError("Source-local CI must never trigger automatically")
+    require_only_manual_dispatch(source)
+    # Adversarial test: every other event must be rejected if added later.
+    trigger_mutants = ("push", "pull_request", "pull_request_target",
+                       "schedule", "repository_dispatch", "workflow_run")
+    for event in trigger_mutants:
+        altered = source.replace("\non:\n  workflow_dispatch:\n",
+                                 "\non:\n  workflow_dispatch:\n  " + event + ":\n", 1)
+        if altered == source:
+            raise RuntimeError("Manual trigger anchor missing")
+        try:
+            require_only_manual_dispatch(altered)
+        except RuntimeError:
+            pass
+        else:
+            raise RuntimeError("Unsafe event was incorrectly admitted: " + event)
     if "SOURCE_HEAD: " + EXPECTED_CIL_HEAD not in source:
         raise RuntimeError("Compiler source pin drift")
     import tempfile
@@ -115,7 +143,8 @@ def main():
                 cases += 1
     if cases != 18:
         raise RuntimeError("Expected 18 independent mode/scenario checks")
-    print("ATTO_NET_SOURCE_LOCAL_PREFLIGHT_MOCK_PASS cases=18 optimized=true network=NONE")
+    print("ATTO_NET_SOURCE_LOCAL_PREFLIGHT_MOCK_PASS cases=18 optimized=true "
+          "trigger_mutants=6 network=NONE")
 
 if __name__ == "__main__":
     main()
