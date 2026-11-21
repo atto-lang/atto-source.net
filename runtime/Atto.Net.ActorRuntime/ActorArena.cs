@@ -198,16 +198,23 @@ public unsafe sealed class ActorArena : IDisposable
             if (kinds.Length is < 1 or > 256 || blockCount is < 1 or > 128 ||
                 kinds.Length > frame.Length / 8)
                 throw new ArgumentOutOfRangeException(nameof(kinds));
-            foreach (var kind in kinds)
+            // Snapshot ONCE, then validate the exact immutable copy that
+            // will be published. Validating the caller's mutable span before
+            // taking the snapshot allows another thread to change the
+            // enum/tag between validation and the final ToArray().
+            // A concurrent mutation during the copy is also harmless:
+            // only the verified snapshot becomes frame authority.
+            ActorScalarKind[] sealedKinds = kinds.ToArray();
+            foreach (var kind in sealedKinds)
                 if (kind is not (ActorScalarKind.I64 or ActorScalarKind.Bool))
                     throw new ArgumentOutOfRangeException(nameof(kinds));
             // All newly sealed bool slots must already be canonical.
             // Otherwise pre-seal raw writes can smuggle invalid bool bits
             // into a typed continuation and bypass validation until use.
-            for (int slot = 0; slot < kinds.Length; slot++)
-                if (kinds[slot] == ActorScalarKind.Bool)
+            for (int slot = 0; slot < sealedKinds.Length; slot++)
+                if (sealedKinds[slot] == ActorScalarKind.Bool)
                     ValidateCanonicalBool(frame.Offset + slot * 8);
-            frame.SealedKinds = kinds.ToArray();
+            frame.SealedKinds = sealedKinds;
             frame.SealedBlockCount = blockCount;
         }
     }
