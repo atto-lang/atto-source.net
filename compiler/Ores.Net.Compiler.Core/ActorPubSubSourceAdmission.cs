@@ -123,6 +123,15 @@ public static class ActorPubSubSourceAdmission
                     pendingPipeOffset = token.Offset;
             }
 
+            // A typed Topic receiver may be introduced by a local variable or
+            // imported declaration. Until this backend has checked Topic<T>
+            // lowering, never let the canonical try_publish member call reach
+            // scalar CIL/NativeAOT emission. Other identifiers named
+            // try_publish (without '.' member access) are not this API.
+            if (token.Text == "try_publish" && token.IsIdentifier &&
+                previous is { Text: "." })
+                throw Unsupported(previous.Value.Offset);
+
             if (token.Text == "group" && token.IsIdentifier &&
                 previous is { Text: "." } &&
                 beforePrevious is { Text: "actor", IsIdentifier: true })

@@ -39,6 +39,29 @@ internal static class ActorPubSubSourceAdmissionTests
         ActorPubSubSourceAdmission.RejectUnsupported(
             "fnc main():int{return 42;} // nested /* actor.group */ inert\n");
 
+        // Canonical Atto Ensemble publication is NOT yet supported by the
+        // .NET compiler. Bare member syntax must not bypass the actor.group
+        // and Topic<T> gates, including both ownership aliases and postfix ?.
+        foreach (string source in new[] {
+            "val receipt = topic.try_publish(share! event)?;",
+            "val receipt = topic.try_publish(share!event);",
+            "val receipt = topic.try_publish(rt share event);",
+            "val receipt = runtime_topic.try_publish(share! event)?;"
+        })
+        {
+            RequireRejected(
+                () => ActorPubSubSourceAdmission.RejectUnsupported(source),
+                "canonical typed Topic.try_publish preflight " + source);
+        }
+
+        foreach (string inert in new[] {
+            "fnc try_publish(event:int):int{return event;}",
+            "fnc main():int{return 42;} // topic.try_publish(share! event)?",
+            "fnc main():int{return 42;} /* topic.try_publish(rt share event) */",
+            "fnc main():int{return 42;} \"topic.try_publish(share! event)?\""
+        })
+            ActorPubSubSourceAdmission.RejectUnsupported(inert);
+
         // The actor pipe operator is not the eager functional |> operator.
         foreach (string source in new[] {
             "return spawn Source() pipe spawn Sink();",
