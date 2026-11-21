@@ -39,7 +39,12 @@ jobs:
           grep -Fx 'PASS dotnet control i128 coherent concurrent host (NOT compiled Atto)' "$RUNNER_TEMP/control-clr.log"
           grep -Fx 'PASS dotnet control host warmed i128 pair managed-byte delta=0' "$RUNNER_TEMP/control-clr.log"
       - name: Execute real actor scheduler native-control lifecycle on CLR
-        run: dotnet run --project verification/Ores.Net.ControlRuntimeProbe/ControlRuntimeProbe.csproj -c Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet run --project verification/Ores.Net.ControlRuntimeProbe/ControlRuntimeProbe.csproj -c Release | tee "$RUNNER_TEMP/control-runtime-clr.log"
+          grep -Fx 'PASS dotnet actor-runtime native control snapshot managed-byte delta=0 (HOST ONLY)' "$RUNNER_TEMP/control-runtime-clr.log"
+          grep -F 'PASS actor-control-directory integration' "$RUNNER_TEMP/control-runtime-clr.log"
       - name: Compile real Linux native-AOT host executable
         run: |
           sudo apt-get update
@@ -61,6 +66,8 @@ jobs:
           dotnet publish verification/Ores.Net.ControlRuntimeProbe/ControlRuntimeProbe.csproj -c Release -r linux-x64 -p:PublishAot=true -o /tmp/atto-control-runtime-aot
           test -x /tmp/atto-control-runtime-aot/ControlRuntimeProbe
           file /tmp/atto-control-runtime-aot/ControlRuntimeProbe | grep -q ELF
-          /tmp/atto-control-runtime-aot/ControlRuntimeProbe
+          /tmp/atto-control-runtime-aot/ControlRuntimeProbe | tee "$RUNNER_TEMP/control-runtime-aot.log"
+          grep -Fx 'PASS dotnet actor-runtime native control snapshot managed-byte delta=0 (HOST ONLY)' "$RUNNER_TEMP/control-runtime-aot.log"
+          grep -F 'PASS actor-control-directory integration' "$RUNNER_TEMP/control-runtime-aot.log"
       - name: Scope of test
         run: echo 'HOST-ONLY actor scheduler native root counters; managed mailboxes and compiled Atto guest not zero-GC certified'
