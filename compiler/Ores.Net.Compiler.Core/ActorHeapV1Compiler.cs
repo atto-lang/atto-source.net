@@ -25,8 +25,10 @@ public static class ActorHeapV1Compiler
         {
             "define", "pub", "class", "actor", "as", "end", "int", "bool",
             "receive", "let", "val", "const", "new", "none", "assert",
-            "return", "fnc", "method", "self", "true", "false", "null",
+            "return", "fnc", "method", "mtd", "self", "true", "false", "null",
             "if", "then", "else", "fi", "while", "do", "await", "suspends",
+            "begin", "raises", "throws", "trap", "match", "select", "switch",
+            "over", "on", "when", "case",
             "critical", "rt", "borrow", "take", "share", "raise", "throw",
             "panic", "recover"
         }, StringComparer.Ordinal);
