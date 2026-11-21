@@ -42,6 +42,10 @@ static class Program
             .SequenceEqual(mirror.DataEdges.Select(x => x.Source)), "channel parity");
         Ok(mixed.DataEdges.Count == 2, "two DATA edges");
         Ok(mirror.DataEdges[0].SourceIndex == 2, "reverse-written index");
+        Reject("E_PIPE_DIRECTION", () => DirectedPipePlanner.Plan(
+            new[] { p, c }, (DirectedPipeDirection)(-1)));
+        Reject("E_PIPE_DIRECTION", () => DirectedPipePlanner.Plan(
+            new[] { c, p }, (DirectedPipeDirection)2));
         Reject("E_PIPE_MISSING_EMITS", () => DirectedPipePlanner.Plan(
             new[] { A("p", "int", null), c }, DirectedPipeDirection.Pipe));
         Reject("E_PIPE_MISSING_RECEIVES", () => DirectedPipePlanner.Plan(
