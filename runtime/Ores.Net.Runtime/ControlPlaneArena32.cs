@@ -13,7 +13,7 @@ namespace Ores.Net.Runtime;
 /// completed messages; managed scheduling queues/contexts and compiled
 /// Atto guest object-graph lowering are NOT implemented by this class.
 /// </summary>
-public sealed unsafe class ControlPlaneArena32 : IDisposable
+internal sealed unsafe class ControlPlaneArena32 : IDisposable
 {
     // The low 20 bits are slot + 1; the high 12 bits are generation.
     // This control-plane ABI is distinct from actor generation16_slot16 and
