@@ -1,0 +1,5 @@
+// expect-error: E_TYPE
+pub fnc main(): int {
+  stdio.println(1 > 0);
+  return 0;
+}

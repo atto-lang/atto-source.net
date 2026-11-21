@@ -1,0 +1,7 @@
+fnc invalid(): float {
+  return (5 / 2) + 1;
+}
+
+pub fnc main(): int {
+  return 42;
+}

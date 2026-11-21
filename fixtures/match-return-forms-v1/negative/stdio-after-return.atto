@@ -1,0 +1,5 @@
+// expect-error: E_RETURN
+pub fnc main(): int {
+  return 0;
+  stdio.println(1);
+}

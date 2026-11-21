@@ -1,0 +1,7 @@
+fnc quotient(int numerator, int denominator): float {
+  return numerator / denominator;
+}
+
+pub fnc main(): int {
+  return quotient(5, 2);
+}
