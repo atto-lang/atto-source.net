@@ -68,8 +68,23 @@ SCENARIOS = (
 )
 
 def require_only_manual_dispatch(source):
-    # Fail closed on *all* automatic event types, not only push/pull_request.
-    # Unlike a substring denylist, this checks the complete top-level on: block.
+    # Fail closed on extra top-level YAML keys, including a second, quoted,
+    # or inline 'on'. Checking only the first on: block is unsafe because
+    # duplicate YAML mapping keys can override event subscriptions.
+    expected_headers = ("name", "on", "permissions", "concurrency", "jobs")
+    headers = []
+    for line in source.splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if line[0].isspace():
+            continue
+        if ":" not in line:
+            raise RuntimeError("Unexpected top-level workflow syntax: %r" % line)
+        headers.append(line.split(":", 1)[0])
+    if tuple(headers) != expected_headers:
+        raise RuntimeError("Unexpected or duplicate workflow headers: %r" % headers)
+
+    # One on: block, with one manual event and no automatic event.
     fragments = source.split("\non:\n")
     if len(fragments) != 2:
         raise RuntimeError("Missing or ambiguous workflow on: block")
@@ -119,6 +134,21 @@ def main():
             pass
         else:
             raise RuntimeError("Unsafe event was incorrectly admitted: " + event)
+    # A second top-level 'on' entry can defeat a simple first-block regex.
+    header_mutants = (
+        ("duplicate_inline", source + "\non: [push]\n"),
+        ("duplicate_block", source + "\non:\n  push:\n"),
+        ("quoted_on", source + "\n'on':\n  push:\n"),
+        ("spaced_on", source + "\non : [push]\n"),
+        ("unexpected_key", source + "\nworkflow_run:\n  workflows: [unsafe]\n"),
+    )
+    for label, altered in header_mutants:
+        try:
+            require_only_manual_dispatch(altered)
+        except RuntimeError:
+            pass
+        else:
+            raise RuntimeError("Unsafe workflow header admitted: " + label)
     if "SOURCE_HEAD: " + EXPECTED_CIL_HEAD not in source:
         raise RuntimeError("Compiler source pin drift")
     import tempfile
@@ -144,7 +174,7 @@ def main():
     if cases != 18:
         raise RuntimeError("Expected 18 independent mode/scenario checks")
     print("ATTO_NET_SOURCE_LOCAL_PREFLIGHT_MOCK_PASS cases=18 optimized=true "
-          "trigger_mutants=6 network=NONE")
+          "trigger_mutants=6 header_mutants=5 network=NONE")
 
 if __name__ == "__main__":
     main()
