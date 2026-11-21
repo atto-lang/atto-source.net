@@ -48,6 +48,101 @@ source-local CI if its runners become functional.
 
 ---
 
+## 2026-11-21 source-local runner recovery (NO private source export)
+
+**P0 alternative to cross-organization Git mirroring:** an authorized **ephemeral
+repository-scoped self-hosted runner**, registered directly on the PRIVATE
+`atto-lang/atto-source.net` repository, can execute exact source heads
+**without sending its Git tree to another GitHub organization**. This is a
+separate admin decision, not permission to bypass PR governance or trust
+unreviewed code.
+
+### Administrator-only runner registration and isolation
+
+1. Verify a supported GitHub Actions plan, source-repository `Settings →
+   Actions → Runners` access, and self-hosted runner availability. An operator
+   with repository admin authority must register the runner: this assistant's
+   current GitHub connector exposes neither registration tokens nor runner
+   management endpoints. **Never paste a registration token into a PR, issue,
+   workflow, source file, shared artifact, or this chat.**
+2. Use ephemeral, disposable, isolated **Linux x64** and **Windows x64**
+   machines, registered to **only** `atto-lang/atto-source.net`. Avoid a
+   persistent shared workstation and a runner shared with unrelated repos.
+   Use distinct, operator-controlled labels such as
+   `atto-net-reviewed-linux-x64` / `atto-net-reviewed-win-x64` only after
+   registration. The label is a selector, **not** a source authorization.
+3. Do not run arbitrary fork PRs or uncontrolled branches on trusted
+   self-hosted runners. Restrict dispatch to the separately reviewed exact
+   SHA, expected repository identity, expected root Git tree, and approved
+   job matrix. Use an admin-controlled manual dispatch/approved branch
+   workflow with `permissions: {contents: read}`, 
+   `actions/checkout` pinned to the immutable SHA and
+   `persist-credentials: false`. No `pull_request_target`, secrets,
+   hosted cloud credentials, local SSH agents, or reusable caches. Deprovision
+   the VM/runner after one job. Do not silently retarget every PR workflow
+   to untrusted persistent self-hosted runners.
+4. On Linux provide the repository's root `global.json`-compatible
+   **.NET 10 SDK**, **.NET 8 runtime**, Clang, native linker and zlib
+   development packages. On Windows provide the same SDK/runtime plus
+   supported Visual Studio C++/MSVC NativeAOT toolchain. Verify tool versions
+   and actual managed/NativeAOT binary execution; tool installation alone
+   never counts as a passing Atto test.
+5. Check out only the admin-approved source SHA and verify
+   `git rev-parse HEAD`, `HEAD^{tree}`, source Git blobs, working-tree
+   cleanliness and runtime receipt counts. Upload no private compiler
+   source or generated binaries to public or cross-organization artifacts.
+   Collect only source-private logs/receipts needed for review.
+
+### Exact test targets (stale immediately if any head changes)
+
+- [#33](https://github.com/atto-lang/atto-source.net/pull/33):
+  source head `3f32ee7ec6e1e1f30520682cada6122b941ed476`,
+  root tree `8cab5369d78b185130ef4f51f84f16c7da9b6ece`.
+  Compile and run `verification/Atto.Net.ActorRuntime.Tests`
+  on both OSes in managed and NativeAOT modes. Require a nonempty
+  per-OS test receipt, **at least 40 assertions**, exact case-count parity
+  across managed/NativeAOT, actual NativeAOT binary hash and exit status.
+  The workflow currently targets GitHub-hosted runners, so an approved
+  source-local runner dispatch must select new self-hosted labels explicitly
+  without weakening SHA/policy gates.
+- [#194](https://github.com/atto-lang/atto-source.net/pull/194):
+  source head `850e46f2a02d3177c8b2f4a8b55a0be96893d09b`,
+  root tree `1e81446618fa9f5801b62f8efe8532cff866a74b`.
+  Run `bash scripts/test-direct-cil-integrity-harness.sh`,
+  `bash scripts/verify-direct-cil-integration.sh`, and
+  `bash scripts/test-cil-guest.sh`,
+  `bash scripts/test-match-cil-guest.sh`,
+  `bash scripts/test-stdio-cil-guest.sh` on the isolated approved Linux
+  runner; prove negative no-DLL, binary64, guarded-match and precise stdout
+  semantics with actual CoreCLR/NativeAOT guest execution. Windows
+  equivalents must use a reviewed PowerShell harness/Windows-native runner
+  adaptation rather than assuming `bash` or Linux executable paths work
+  unchanged.
+
+### Failed hosted reattempts (NOT compiler errors)
+
+- [Actor Actions run #44917038288](https://github.com/atto-lang/atto-source.net/actions/runs/44917038288)
+  was explicitly retried. Both Linux and Windows attempts finished
+  `conclusion=failure`, `runner_id=null`, `steps=0`. Job log downloads
+  were unavailable; no compiler test ran.
+- [CIL Actions run #44917257988](https://github.com/atto-lang/atto-source.net/actions/runs/44917257988)
+  was explicitly retried; the new job briefly queued before ending with
+  `conclusion=failure`, `runner_id=null`, `steps=0`.
+  No source-local executable proof ran.
+- This readback proves **no runner assignment**; it does not independently
+  identify the administrative/billing error. Inspect repository/org Actions
+  billing and Actions UI diagnostics as an authorized admin.
+
+**Security outcome:** source-local self-hosting needs runner registration and
+admin-approved untrusted-code isolation, but **does not require activating
+the separate cross-organization source-transfer allowlists**. It cannot
+satisfy an otherwise unmet protected-main/reviewer PR merge rule. If
+source-local execution is unavailable, retain the stricter independent
+third-reviewer and protected-main source-export policy before considering
+the `scintilla-run-test` private carrier.
+
+---
+
 ## 2026-11-21 current actor/compiler heads and source-local audit (review only)
 
 **No export authority is granted or activated by this addendum.** The previously
