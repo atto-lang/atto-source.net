@@ -34,7 +34,9 @@ jobs:
             scripts/test-cil-guest.sh \
             fixtures/cil/negative/int-division-float-required.atto \
             fixtures/cil/negative/int-division-in-helper.atto \
-            fixtures/cil/negative/int-division-nested.atto; do
+            fixtures/cil/negative/int-division-nested.atto \
+            fixtures/cil/signed-min-boundary.atto \
+            fixtures/cil/negative/signed-min-underflow.atto; do
             test "$(git hash-object --no-filters "$file")" = "$(git rev-parse "HEAD:$file")"
           done
           echo "PINNED_HEAD=$EXPECTED_HEAD TREE=$(git rev-parse 'HEAD^{tree}')"
