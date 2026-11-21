@@ -3,6 +3,10 @@
     <OutputType>Exe</OutputType>
   </PropertyGroup>
   <ItemGroup>
+    <!-- Rust #477 exact-blob field-loan parity; reject-only in .NET until typed lowering. -->
+    <None Include="../../tests/fixtures/field-place-loan-parity-v1/**/*.atto"
+          Link="field-place-loan-parity-v1/%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../contracts/v1/annotation-admission-v1.cases"
           Link="annotation-admission-v1.cases"
           CopyToOutputDirectory="PreserveNewest" />
