@@ -21,6 +21,11 @@ namespace Ores.Net.Runtime;
 internal sealed class ActorGuestHeap32
 {
     internal const uint Null = 0;
+    // Versioned storage ABI: a generation/slot handle, NOT LLVM's offset Ref32.
+    internal const string StorageAbiV1 = ActorGuestRefEncodingV1.Abi;
+    internal static void RequireStorageAbiV1(string requested) =>
+        ActorGuestRefEncodingV1.RequireAbi(requested);
+
     internal const int MaxSlots = ushort.MaxValue;
     internal const int MaxNominalLayouts = 256;
     private const uint SlotMask = ushort.MaxValue;
@@ -80,7 +85,7 @@ internal sealed class ActorGuestHeap32
             _layouts[slot] = null;
             _generations[slot] = generation;
             _liveCount++;
-            return ((uint)generation << SlotBits) | (uint)(slot + 1);
+            return ActorGuestRefEncodingV1.Encode(slot, generation);
         }
     }
 
@@ -233,13 +238,10 @@ internal sealed class ActorGuestHeap32
 
     private int ValidateSlot(uint reference)
     {
-        uint encodedSlot = reference & SlotMask;
-        uint generation = reference >> SlotBits;
-        if (encodedSlot == 0 || generation == 0 ||
-            encodedSlot > (uint)_nextSlot)
+        if (!ActorGuestRefEncodingV1.TryDecode(reference, out int slot,
+                out ushort generation) || slot >= _nextSlot)
             throw new InvalidOperationException("Null, forged or stale guest reference");
 
-        int slot = checked((int)encodedSlot - 1);
         if (_handles[slot].Generation == 0 || _generations[slot] != generation)
             throw new InvalidOperationException("Foreign, dropped or stale guest reference");
         return slot;
