@@ -18,6 +18,9 @@ public sealed unsafe class ControlPlaneArena32 : IDisposable
     // from LLVM's unsigned offset8_plus_one actor reference representation.
     public const string Abi = "control_generation12_slot20_v1";
     public const int RecordBytes = 32;
+    // sizeof(Slot) == 12; allocate metadata rounded up for aligned_alloc's 8-byte granularity.
+    private const int SlotBytes = 12;
+    private const int NativeAlignment = 8;
     public const int SlotBits = 20;
     public const int GenerationBits = 12;
     private const uint SlotMask = (1u << SlotBits) - 1;
@@ -41,6 +44,19 @@ public sealed unsafe class ControlPlaneArena32 : IDisposable
     private uint _freeHead;
     private bool _closed;
 
+    public static long RequiredNativeBytes(int capacity)
+    {
+        if (capacity <= 0 || capacity > SlotMask)
+            throw new ArgumentOutOfRangeException(nameof(capacity));
+        long records = checked((long)capacity * RecordBytes);
+        long slots = checked((long)capacity * SlotBytes);
+        long paddedSlots = checked((slots + NativeAlignment - 1) & ~(long)(NativeAlignment - 1));
+        return checked(records + paddedSlots);
+    }
+
+    // All backing is unmanaged; this reports actual reserved bytes, including alignment.
+    public long ReservedBytes => RequiredNativeBytes(_capacity);
+
     public ControlPlaneArena32(int capacity)
     {
         if (capacity <= 0 || capacity > SlotMask)
@@ -50,12 +66,16 @@ public sealed unsafe class ControlPlaneArena32 : IDisposable
             throw new InvalidOperationException("control issuer IDs exhausted: no wrap or reuse");
         _issuer = checked((uint)issuer);
         _capacity = capacity;
+        if (sizeof(Slot) != SlotBytes)
+            throw new InvalidOperationException("control slot ABI layout drift");
         // Native allocations are paired with explicit Dispose, not the CLR GC.
-        _records = (byte*)NativeMemory.AlignedAlloc(checked((nuint)(capacity * RecordBytes)), 8);
+        _records = (byte*)NativeMemory.AlignedAlloc(checked((nuint)((long)capacity * RecordBytes)), NativeAlignment);
         if (_records == null) throw new OutOfMemoryException("control records");
         try
         {
-            _slots = (Slot*)NativeMemory.AlignedAlloc(checked((nuint)(capacity * sizeof(Slot))), 8);
+            long metadata = checked((long)capacity * SlotBytes);
+            long paddedMetadata = checked((metadata + NativeAlignment - 1) & ~(long)(NativeAlignment - 1));
+            _slots = (Slot*)NativeMemory.AlignedAlloc(checked((nuint)paddedMetadata), NativeAlignment);
             if (_slots == null) throw new OutOfMemoryException("control metadata");
             new Span<byte>(_records, checked(capacity * RecordBytes)).Clear();
             new Span<byte>((byte*)_slots, checked(capacity * sizeof(Slot))).Clear();
