@@ -481,6 +481,54 @@ internal static class Program
         _cases++;
     }
 
+    private static void ActorAndTenantFuelDenialsAreFailureAtomic()
+    {
+        using var tenant = new TenantVm(maximumActors: 1,
+            maximumNativeBytes: 64, maximumTotalLogicalFuel: 3);
+        using (var actor = tenant.CreateActor(arenaBytes: 64, logicalFuel: 2))
+        {
+            var turn = actor.BeginTurn();
+            var initial = actor.MeterSnapshot(turn);
+            Check(initial.RemainingFuel == 2 && tenant.RemainingLogicalFuel == 3,
+                "fresh actor/tenant hard fuel budgets start independently");
+            actor.ChargeOperation(turn, 2);
+            Check(actor.MeterSnapshot(turn).RemainingFuel == 0 &&
+                  tenant.RemainingLogicalFuel == 1,
+                "valid charge debits actor and tenant exactly once");
+            Expect<ActorResourceExhaustedException>(
+                () => actor.ChargeOperation(turn, 1),
+                "actor-local exhaustion is terminal");
+            Check(tenant.RemainingLogicalFuel == 1,
+                "actor-local exhaustion must not debit surviving tenant fuel");
+            Expect<ActorResourceExhaustedException>(
+                () => actor.EndTurn(turn),
+                "swallowed actor-local quota denial cannot finish turn");
+            Check(tenant.NativeReservedBytes == 0 && tenant.LiveActorCount == 0,
+                "terminal actor refunds its arena but never execution fuel");
+        }
+
+        using (var reincarnated = tenant.CreateActor(
+            arenaBytes: 64, logicalFuel: 10))
+        {
+            var turn = reincarnated.BeginTurn();
+            reincarnated.ChargeBackedge(turn);
+            Check(tenant.RemainingLogicalFuel == 0,
+                "reincarnation consumes last tenant fuel exactly once");
+            Expect<ActorResourceExhaustedException>(
+                () => reincarnated.ChargeBackedge(turn),
+                "spent tenant fuel refuses further charges despite actor fuel");
+            Check(tenant.RemainingLogicalFuel == 0 &&
+                  reincarnated.MeterSnapshot(turn).RemainingFuel == 9,
+                "failed tenant charge does not partially debit actor or tenant");
+            Expect<ActorResourceExhaustedException>(
+                () => reincarnated.EndTurn(turn),
+                "swallowed tenant quota denial cannot finish turn");
+            Check(tenant.NativeReservedBytes == 0 && tenant.LiveActorCount == 0,
+                "terminal tenant-fuel denial releases native bytes once");
+        }
+        _cases++;
+    }
+
     private static void TinyArenaCapsManagedFrameMetadata()
     {
         using var tenant = new TenantVm(maximumActors: 1, maximumNativeBytes: 64);
@@ -626,6 +674,7 @@ internal static class Program
             RacyStopAndTurnExitRefundExactlyOnce();
             TinyArenaCapsManagedFrameMetadata();
             TenantFuelSurvivesActorReincarnation();
+            ActorAndTenantFuelDenialsAreFailureAtomic();
             Console.WriteLine($"ATTO_NET_ACTOR_ARENA_COOPERATION_PASS cases={_cases}");
             return 0;
         }
