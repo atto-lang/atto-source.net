@@ -7,6 +7,47 @@
 > and enforceable protected-main requirements are verified and a later,
 > separately reviewed activation change is approved.
 
+## 2026-11-20 freshness and runner-capacity addendum (still NON-ACTIVATING)
+
+**The original PR #33 snapshot below is stale and MUST NOT be used for a transfer.**
+Current [Atto .NET #33](https://github.com/atto-lang/atto-source.net/pull/33)
+is at source head `a99e6c7ad3de618196f5919e1d771408b05c3cf1`,
+root Git tree `6da910678f764a1c97a1051762d2121b3f2745ff`.
+These are **review inputs**, not an approved private-code snapshot.
+The commented `embedded-alerts-test` destination entries below are inert and stale.
+
+A **different, newly qualified source-free runner-capacity candidate** is
+`scintilla-run-test/atto-ci` (private repository ID `1458349760`).
+Its [no-checkout draft workflow PR #1](https://github.com/scintilla-run-test/atto-ci/pull/1)
+on exact head `fb10390543f930ae05e8d8266c6ddc99aa827ec2` was executed in
+[Actions run #44860216954](https://github.com/scintilla-run-test/atto-ci/actions/runs/44860216954):
+both the Linux and Windows jobs built and ran a **generated, generic** C# program
+on managed CoreCLR and published/executed .NET 10 NativeAOT binaries, using
+SDK 10.0.404. Actual steps and binary hashes were observed in independently
+fetched GitHub job logs:
+
+| Source-free job | Job ID | Result | NativeAOT SHA-256 |
+| --- | --- | --- | --- |
+| Linux x64 | `136711629673` | PASS | `38B6921F2EC5A1580F9942E94161CB3F85D52A30FF6E0BA2078870E7225585A8` |
+| Windows x64 | `136711629421` | PASS | `6F5394C1C0A3C851AA15DC27E284EC1212C36480E35CA4E1996E9A8442C1B4C3` |
+
+This proves **toolchain/runner capacity only**. The no-checkout probe did not
+copy or execute Atto source. The candidate carrier still uses a temporary
+`ci/...` default ref and has no security-approved immutable carrier base;
+its workflow draft is not itself an authorized source destination. In addition,
+the source repository has **zero active destination/snapshot allowlist entries**
+and the independent-reviewer policy is disabled. Nothing in this document is
+authority to change those controls, remove comment markers, mirror a private
+Git tree, infer compiler correctness, or merge PR #33.
+
+Independently verify the third reviewer and protected `main`, approve an
+immutable trusted carrier workflow/base and a narrowly scoped transfer plan,
+then separately approve a **fresh** exact source head/tree in the protected
+policy. Require per-blob read-back before any proposed test execution. Prefer
+source-local CI if its runners become functional.
+
+---
+
 ## Context and exact immutable candidate
 
 - Source: `atto-lang/atto-source.net` (**PRIVATE**, numeric repository ID `1448702222`).
