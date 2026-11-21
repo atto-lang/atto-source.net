@@ -9,7 +9,9 @@ namespace Ores.Net.Runtime;
 /// Bounded native-memory CONTROL-plane prototype; independent of ActorArena.
 /// Its payload and slot metadata are unmanaged. Four-byte ControlRef32 words
 /// inhabit payload fields; host-only 64-bit witnesses bind an issuing domain.
-/// No language object-graph compiler or scheduler integration is claimed.
+/// ActorRuntime may opt in to a native root summary for actor counts and
+/// completed messages; managed scheduling queues/contexts and compiled
+/// Atto guest object-graph lowering are NOT implemented by this class.
 /// </summary>
 public sealed unsafe class ControlPlaneArena32 : IDisposable
 {
