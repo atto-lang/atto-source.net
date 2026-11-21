@@ -1668,6 +1668,16 @@ public static partial class OresStructuredParser
                 // A successful guard falls through; a failed one must exit.
                 var condition = Expr(depth + 1);
                 Require(condition, IrValueType.Bool, "E_GUARD: condition must be bool");
+                // The comma-separated contract is left-to-right and lazy.
+                // The existing LogicalAnd CFG lowers RHS into a guarded
+                // branch; never eagerly evaluate an unproven later test.
+                while (Take(","))
+                {
+                    var next = Expr(depth + 1);
+                    Require(next, IrValueType.Bool, "E_GUARD: each condition must be bool");
+                    condition = CheckedBinary(at, StructuredOperator.LogicalAnd,
+                        condition, next, IrValueType.Bool);
+                }
                 var inverted = CheckedBinary(at, StructuredOperator.EqualBool,
                     condition, new StructuredBool(at, false), IrValueType.Bool);
                 IReadOnlyList<StructuredStmt> failure;
