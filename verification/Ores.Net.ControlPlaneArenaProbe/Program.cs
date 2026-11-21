@@ -17,6 +17,7 @@ Check(ControlPlaneArena32.SlotBits == 20 && ControlPlaneArena32.GenerationBits =
       ControlPlaneArena32.SlotBits + ControlPlaneArena32.GenerationBits == 32,
       "control Ref32 bit partition must not be mislabeled");
 Check(ControlPlaneArena32.RecordBytes == 32, "physical record width");
+Check(ControlPlaneArena32.RequiredNativeBytes(1) == 48, "12-byte slot metadata is padded to 16");
 using (var a = new ControlPlaneArena32(2))
 using (var b = new ControlPlaneArena32(2))
 {
@@ -90,5 +91,6 @@ var stopped = new ControlPlaneArena32(1);
 ulong old = stopped.Allocate();
 stopped.Dispose();
 stopped.Dispose();
+Check(stopped.ReservedBytes == 0, "native reservation disappears on dispose");
 Denied(() => stopped.ReadI64(old, 0));
 Console.WriteLine("PASS control-plane-ref32 dotnet unmanaged host 12 guarded scenarios; NO compiled Atto guest or zero-GC proof");
