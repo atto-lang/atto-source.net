@@ -126,6 +126,20 @@ internal static class ActorHeapV1CompilerSelfTest
             source.Replace("Node? next", "Node next", StringComparison.Ordinal),
             source.Replace("Node? next", "Node? next\nint extra", StringComparison.Ordinal),
             source.Replace("define actor HeapGraphProbe", "define pub actor HeapGraphProbe",
+                StringComparison.Ordinal),
+            // Canonical AttoLang keywords cannot leak into the narrow guest
+            // binder as apparently legal class/actor/field/local identifiers.
+            source.Replace("define class Node", "define class mtd",
+                StringComparison.Ordinal),
+            source.Replace("int value", "int begin",
+                StringComparison.Ordinal),
+            source.Replace("let first =", "let raises =",
+                StringComparison.Ordinal),
+            source.Replace("receive(int message)", "receive(int throws)",
+                StringComparison.Ordinal),
+            source.Replace("define actor HeapGraphProbe", "define actor match",
+                StringComparison.Ordinal),
+            source.Replace("let second =", "let trap =",
                 StringComparison.Ordinal)
         })
             RejectV1(malicious);
