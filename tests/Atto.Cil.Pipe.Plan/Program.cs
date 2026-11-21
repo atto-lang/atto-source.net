@@ -92,6 +92,12 @@ static class Program
         Reject("E_PIPE_PLAN_FORGED", () => DirectedPipePlanner.CheckUnicast(
             new[] { reverse with { FlowIndices =
                 new List<int> { 0, 1 }.AsReadOnly() } }));
+        Reject("E_PIPE_PLAN_FORGED", () => DirectedPipePlanner.CheckUnicast(
+            new[] { forward with { Written = null! } }));
+        Reject("E_PIPE_PLAN_FORGED", () => DirectedPipePlanner.CheckUnicast(
+            new[] { forward with { FlowIndices = null! } }));
+        Reject("E_PIPE_PLAN_FORGED", () => DirectedPipePlanner.CheckUnicast(
+            new[] { forward with { DataEdges = null! } }));
         DirectedPipePlanner.CheckUnicast(new[] { forward, independent });
         Ok(true, "disjoint pipelines");
         Console.WriteLine($"ATTO_NET_DIRECTED_PIPE_HOST_PASS checks={Checks}");
