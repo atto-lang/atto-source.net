@@ -41,7 +41,7 @@ static void InvalidSend(Action action, string why)
 // Reconcile legacy PR #183 onto current main: both .NET source parsers
 // already deny raw ESC/DEL before comment/string parsing. Test the
 // rejection without overwriting the newer main validation logic.
-foreach (char terminalControl in new[] { '\\u001b', '\\u007f' })
+foreach (char terminalControl in new[] { '\u001b', '\u007f' })
 {
     string embedded = "fnc main():int{/*" + terminalControl + "*/return 42;}";
     string trailing = "fnc main():int{return 42;} //" + terminalControl;
@@ -54,9 +54,9 @@ foreach (char terminalControl in new[] { '\\u001b', '\\u007f' })
     RejectDiagnostic(() => OresStructuredParser.Parse(trailing),
         "terminal control", "structured trailing terminal control");
 }
-Require(OresParser.Parse("fnc main():int{\\r\\n\\treturn 42;\\r\\n}") is not null,
+Require(OresParser.Parse("fnc main():int{\r\n\treturn 42;\r\n}") is not null,
     "ordinary scalar CRLF and TAB must remain accepted");
-Require(OresStructuredParser.Parse("fnc main():int{\\r\\n\\treturn 42;\\r\\n}").Body.Count == 1,
+Require(OresStructuredParser.Parse("fnc main():int{\r\n\treturn 42;\r\n}").Body.Count == 1,
     "ordinary structured CRLF and TAB must remain accepted");
 
 // Typed static select must fail with the select-specific diagnostic in
