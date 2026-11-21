@@ -151,7 +151,8 @@ jobs:
           import os
           import urllib.request
           token = os.environ.get("GH_REPO_READ_TOKEN", "")
-          assert token, "E_ADMISSION_NO_READ_TOKEN"
+          if not token:
+              raise SystemExit("E_ADMISSION_NO_READ_TOKEN")
           headers = {
               "Authorization": "Bearer " + token,
               "Accept": "application/vnd.github+json",
@@ -163,14 +164,16 @@ jobs:
               with urllib.request.urlopen(req, timeout=15) as response:
                   return json.load(response)
           main = read("branches/main")
-          assert main.get("name") == "main" and main.get("protected") is True, "E_SOURCE_MAIN_NOT_PROTECTED"
+          if main.get("name") != "main" or main.get("protected") is not True:
+              raise SystemExit("E_SOURCE_MAIN_NOT_PROTECTED")
           pr = read("pulls/194")
           head = pr.get("head") or {}
-          assert (
+          if not (
               pr.get("number") == 194
               and head.get("sha") == os.environ["SOURCE_HEAD"]
               and (head.get("repo") or {}).get("full_name") == "atto-lang/atto-source.net"
-          ), "E_COMPILER_PR_SOURCE_DRIFT"
+          ):
+              raise SystemExit("E_COMPILER_PR_SOURCE_DRIFT")
           print("ATTO_SOURCE_LOCAL_PROTECTED_MAIN_CONFIRMED compiler_pr_head=" + os.environ["SOURCE_HEAD"])
           PY
       - name: Checkout immutable direct-CIL PR SHA without persisted credentials
