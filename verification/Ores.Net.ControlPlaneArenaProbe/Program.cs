@@ -36,6 +36,35 @@ using (var b = new ControlPlaneArena32(2))
     Check(a.ReadI64(parent, 0) == 9_000_000_000L, "i64 data behind Ref32");
     a.WriteI64(parent, 8, long.MinValue);
     Check(a.ReadI64(parent, 8) == long.MinValue, "two i64 limbs as 128-bit payload");
+    const long scalarLow = 0x0123456789abcdefL;
+    const long scalarHigh = unchecked((long)0xfedcba9876543210UL);
+    a.WriteI128(parent, scalarLow, scalarHigh);
+    a.ReadI128(parent, out long actualLow, out long actualHigh);
+    Check(actualLow == scalarLow && actualHigh == scalarHigh, "one coherent i128 payload behind four-byte Ref32");
+    Denied(() => b.ReadI128(parent, out _, out _)); // foreign control domain
+    // Competing carrier may update the pair. Readers must never observe
+    // the first limb from one write and the second from another.
+    a.WriteI128(parent, 0, ~0L);
+    Exception? pairWriterFailure = null;
+    var pairWriter = new System.Threading.Thread(() =>
+    {
+        try
+        {
+            for (int n = 0; n < 32768; n++)
+                a.WriteI128(parent, n, ~((long)n));
+        }
+        catch (Exception error) { pairWriterFailure = error; }
+    });
+    pairWriter.Start();
+    for (int n = 0; n < 32768; n++)
+    {
+        a.ReadI128(parent, out actualLow, out actualHigh);
+        Check(actualHigh == ~actualLow, "torn 128-bit scalar while competing carrier writes");
+    }
+    pairWriter.Join();
+    Check(pairWriterFailure is null, "i128 competing writer completed without failure");
+    a.ReadI128(parent, out actualLow, out actualHigh);
+    Check(actualHigh == ~actualLow, "final i128 value remains coherent");
     a.WriteMaxI64(parent, 8, 18);
     a.WriteMaxI64(parent, 8, 3); // racing old carrier must not regress native count
     Check(a.ReadI64(parent, 8) == 18, "native counter is monotone under reordering");
@@ -58,6 +87,25 @@ using (var b = new ControlPlaneArena32(2))
     long afterBytes = GC.GetAllocatedBytesForCurrentThread();
     Check(afterBytes == beforeBytes, "warmed CLR control hotpath must allocate zero managed bytes");
     Console.WriteLine("PASS dotnet control host warmed i64 read/write managed-byte delta=0");
+    // The pair test uses out stack/value locals rather than an allocated array.
+    for (int i = 0; i < 8192; i++)
+    {
+        a.WriteI128(parent, i, ~((long)i));
+        a.ReadI128(parent, out actualLow, out actualHigh);
+        if (actualLow != i || actualHigh != ~((long)i))
+            throw new Exception("warmed i128 mismatch");
+    }
+    long beforePair = GC.GetAllocatedBytesForCurrentThread();
+    for (int i = 0; i < 8192; i++)
+    {
+        a.WriteI128(parent, i, ~((long)i));
+        a.ReadI128(parent, out actualLow, out actualHigh);
+        if (actualLow != i || actualHigh != ~((long)i))
+            throw new Exception("coherent i128 mismatch");
+    }
+    Check(GC.GetAllocatedBytesForCurrentThread() == beforePair,
+        "warmed i128 control host path must allocate zero CLR bytes");
+    Console.WriteLine("PASS dotnet control host warmed i128 pair managed-byte delta=0");
     Denied(() => a.WriteI64(parent, 16, 1));
     Denied(() => { _ = a.Allocate(); });
     a.Drop(child);
