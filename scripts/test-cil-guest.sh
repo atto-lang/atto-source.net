@@ -39,7 +39,10 @@ for case in \
   int-division-float-required:E_DIVISION_FLOAT_RESULT \
   int-division-in-helper:E_DIVISION_FLOAT_RESULT \
   int-division-nested:E_DIVISION_FLOAT_RESULT \
-  signed-min-underflow:E_LITERAL; do
+  signed-min-underflow:E_LITERAL \
+  float-result-in-int-return:E_DIVISION_FLOAT_RESULT \
+  float-result-as-int-arg:E_TYPE \
+  unsupported-float-addition:E_DIVISION_FLOAT_RESULT; do
   name="$(echo "$case" | cut -d: -f1)"
   diagnostic="$(echo "$case" | cut -d: -f2)"
   rm -f artifacts/Rejected.dll
@@ -55,7 +58,7 @@ for case in \
   }
   test ! -e artifacts/Rejected.dll || { echo "NEGATIVE_ARTIFACT_LEAK case=$name"; exit 1; }
 done
-echo "ATTO_DIRECT_CIL_NEGATIVE_PASS checks=16"
+echo "ATTO_DIRECT_CIL_NEGATIVE_PASS checks=19"
 dotnet build "$host" -c Release
 expect_42 CORECLR_GUEST dotnet run --no-build -c Release --project "$host"
 dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true \
@@ -77,3 +80,19 @@ for fixture in fixtures/cil/precedence.atto fixtures/cil/forward-call.atto fixtu
   fi
 done
 echo "ATTO_DIRECT_CIL_POSITIVE_PASS fixtures=4"
+
+# Actual typed int/int -> float code generation with verified CIL method
+# signatures, checked integer subexpressions and signed operands.
+# The bridge checks generated guest output; it does not perform guest division.
+float_host=tests/Atto.Cil.Float.Guest.Host/Atto.Cil.Float.Guest.Host.csproj
+dotnet run --no-build -c Release --project "$compiler" -- \
+  fixtures/cil/float-division.atto "$guest"
+test -s "$guest"
+dotnet build "$float_host" -c Release
+expect_42 FLOAT_CORECLR_GUEST dotnet run --no-build -c Release --project "$float_host"
+dotnet publish "$float_host" -c Release -r linux-x64 -p:PublishAot=true \
+  --self-contained true -o /tmp/atto-cil-float-nativeaot
+test -x /tmp/atto-cil-float-nativeaot/Atto.Cil.Float.Guest.Host
+expect_42 FLOAT_NATIVEAOT_GUEST /tmp/atto-cil-float-nativeaot/Atto.Cil.Float.Guest.Host
+echo "ATTO_DIRECT_CIL_FLOAT_DIVISION_POSITIVE_PASS fixtures=1"
+
