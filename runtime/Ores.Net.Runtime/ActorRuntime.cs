@@ -794,6 +794,10 @@ public sealed class ActorRuntime : IDisposable
                 }
                 catch
                 {
+                    // If native CONTROL publication fails after pub/sub
+                    // registration, an unadmitted actor must not remain
+                    // addressable as a subscriber or a stale actor identity.
+                    _pubSub.RetireActor(cell.Reference);
                     _actors.Remove(candidateId);
                     throw;
                 }
