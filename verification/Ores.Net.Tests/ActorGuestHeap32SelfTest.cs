@@ -5,6 +5,7 @@ internal static class ActorGuestHeap32SelfTest
 {
     public static void Run()
     {
+        RejectIncompatibleRef32StorageAbi();
         PerActorReferencesSurviveTurnsAndDenyStaleAccess();
         GenerationExhaustionFailsClosedWithoutWrapping();
         GuestPayloadFastPathDoesNotAllocateClrObjects();
@@ -17,6 +18,19 @@ internal static class ActorGuestHeap32SelfTest
         Console.WriteLine("PASS actor-ref32-owned-auth: per-actor handles deny cross-actor aliasing, stale reads and foreign links (host only)");
         Console.WriteLine("PASS actor-ref32-cycle-reclaim: cyclic typed guest links do not retain native arena past final read loan (host only)");
         Console.WriteLine("PASS .NET actor-local 32-bit guest refs (host runtime only; not compiled guest)");
+    }
+
+    private static void RejectIncompatibleRef32StorageAbi()
+    {
+        // The four-byte reference field is a slot+generation handle in .NET,
+        // not LLVM's offset8+1 word. This must never be silently decoded.
+        Require(ActorGuestHeap32.StorageAbiV1 == "generation16_slot16",
+            "advertised .NET actor reference ABI must be exact");
+        ActorGuestHeap32.RequireStorageAbiV1("generation16_slot16");
+        ExpectInvalid(() => ActorGuestHeap32.RequireStorageAbiV1("offset8_plus_one"),
+            "LLVM offset8+1 must not be decoded as .NET slot/generation");
+        ExpectInvalid(() => ActorGuestHeap32.RequireStorageAbiV1(""),
+            "unknown memory ABI must fail closed");
     }
 
     private static ActorRuntimeOptions Options(int slots = 8) => new()
