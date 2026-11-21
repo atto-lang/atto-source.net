@@ -32,7 +32,7 @@ jobs:
             fixture: negated-truth-table-nativeaot.atto
             expected: 8
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -56,9 +56,18 @@ jobs:
               { echo "SOURCE_BLOB_MISMATCH=$path" >&2; exit 1; }
           done
           echo "EXACT_SOURCE_PIN_OK head=$actual tree=$tree"
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: |
+            8.0.x
+            10.0.x
+      - name: Verify source-root SDK selection and target runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet --version | grep -E '^10\\.'
+          dotnet --list-sdks | grep -E '^8\\.'
+          dotnet --list-runtimes | grep -F 'Microsoft.NETCore.App 8.'
       - name: Install NativeAOT linker requirements
         run: sudo apt-get update -qq && sudo apt-get install -y -qq clang zlib1g-dev
       - name: Compile exact .atto through real CFG/CIL, then Linux NativeAOT
