@@ -9,17 +9,18 @@ internal static class DisjointFieldPlaceAdmissionTests
 {
     private const string NominalDiagnostic = "NET_NOMINAL_METHODS_UNSUPPORTED";
 
-    private static void RejectNominal(Action parse, string frontend, string fixture)
+    private static void RejectNominal(
+        Action parse, string frontend, string fixture, int classOffset)
     {
         try { parse(); }
         catch (FormatException ex) when (
             ex.Message.Contains(NominalDiagnostic, StringComparison.Ordinal) &&
-            ex.Message.Contains("offset", StringComparison.Ordinal))
+            ex.Message.Contains("at offset " + classOffset, StringComparison.Ordinal))
         {
             return;
         }
-        throw new Exception("Expected specific nominal feature denial in " +
-            frontend + " for " + fixture);
+        throw new Exception("Expected nominal denial at exact class offset " +
+            classOffset + " in " + frontend + " for " + fixture);
     }
 
     private static string GitBlobSha(byte[] bytes)
@@ -52,10 +53,15 @@ internal static class DisjointFieldPlaceAdmissionTests
             if (GitBlobSha(bytes) != expectedBlob)
                 throw new Exception("Rust exact Git blob mismatch: " + fixtureName);
             string source = new UTF8Encoding(false, true).GetString(bytes);
+            const string declaration = "define class ";
+            int declarationOffset = source.IndexOf(declaration, StringComparison.Ordinal);
+            if (declarationOffset < 0)
+                throw new Exception("Rust class declaration missing: " + fixtureName);
+            int classOffset = declarationOffset + "define ".Length;
             RejectNominal(() => { _ = OresParser.Parse(source); },
-                "scalar", fixtureName);
+                "scalar", fixtureName, classOffset);
             RejectNominal(() => { _ = OresStructuredParser.Parse(source); },
-                "structured", fixtureName);
+                "structured", fixtureName, classOffset);
         }
         Console.WriteLine("ATTO_NET_DISJOINT_FIELD_LOAN_ADMISSION_DENIED blobs=4 frontends=2; GUEST=NOT_EXECUTED");
     }
