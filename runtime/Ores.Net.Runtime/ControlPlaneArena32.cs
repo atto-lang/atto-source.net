@@ -205,6 +205,34 @@ internal sealed unsafe class ControlPlaneArena32 : IDisposable
         }
     }
 
+    /// <summary>
+    /// Coherent native little-endian 128-bit scalar. The two limbs are
+    /// written/read under one arena gate, independent of machine register
+    /// width. Typed compiler lowering must not mix I64 and I128 field access.
+    /// The out parameters are caller-owned stack/value storage, not a CLR array.
+    /// </summary>
+    public void WriteI128(ulong handle, long low, long high)
+    {
+        lock (_gate)
+        {
+            int slot = Validate(handle);
+            var bytes = new Span<byte>(_records + slot * RecordBytes, 16);
+            BinaryPrimitives.WriteInt64LittleEndian(bytes.Slice(0, 8), low);
+            BinaryPrimitives.WriteInt64LittleEndian(bytes.Slice(8, 8), high);
+        }
+    }
+
+    public void ReadI128(ulong handle, out long low, out long high)
+    {
+        lock (_gate)
+        {
+            int slot = Validate(handle);
+            var bytes = new ReadOnlySpan<byte>(_records + slot * RecordBytes, 16);
+            low = BinaryPrimitives.ReadInt64LittleEndian(bytes.Slice(0, 8));
+            high = BinaryPrimitives.ReadInt64LittleEndian(bytes.Slice(8, 8));
+        }
+    }
+
     public void WriteRef32(ulong parent, ulong child)
     {
         lock (_gate)
