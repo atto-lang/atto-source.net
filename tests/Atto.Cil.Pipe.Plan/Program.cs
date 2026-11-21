@@ -82,6 +82,16 @@ static class Program
         }, DirectedPipeDirection.Pipe);
         Reject("E_PIPE_INPUT_OCCUPIED", () =>
             DirectedPipePlanner.CheckUnicast(new[] { forward, sameSink }));
+        Reject("E_PIPE_PLAN_FORGED", () => DirectedPipePlanner.CheckUnicast(
+            new[] { forward with { Tenant = "tenant_b" } }));
+        Reject("E_PIPE_PLAN_FORGED", () => DirectedPipePlanner.CheckUnicast(
+            new[] { forward with { DataEdges =
+                new List<DirectedPipeEdge> {
+                    new(0, 1, "producer", "rogue_sink", "int")
+                }.AsReadOnly() } }));
+        Reject("E_PIPE_PLAN_FORGED", () => DirectedPipePlanner.CheckUnicast(
+            new[] { reverse with { FlowIndices =
+                new List<int> { 0, 1 }.AsReadOnly() } }));
         DirectedPipePlanner.CheckUnicast(new[] { forward, independent });
         Ok(true, "disjoint pipelines");
         Console.WriteLine($"ATTO_NET_DIRECTED_PIPE_HOST_PASS checks={Checks}");
