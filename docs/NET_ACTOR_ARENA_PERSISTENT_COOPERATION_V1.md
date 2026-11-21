@@ -249,3 +249,11 @@ mirrored. A prior green run cannot grant transfer permission.
 
 **No new private Git-object mirror or compiler/NativeAOT passing claim
 was created by this cycle.**
+
+## 2026-11-20 follow-up: immutable schema validation and SDK admission
+
+**Schema snapshot ordering:** Before this fix, `SealScalarSchema` inspected the caller-provided `ReadOnlySpan<ActorScalarKind>` and then copied it into `frame.SealedKinds`. A mutable backing array could change between these operations, allowing stored kind metadata to differ from what the validator approved. The implementation now performs `ToArray()` once **before validation**, verifies every kind and every boolean slot using that private snapshot, and publishes **exactly that verified array** only after all checks succeed. Concurrent modifications to caller storage cannot alter the published metadata; invalid kind enumeration is rejected without sealing the frame. The adversarial managed/NativeAOT probe now checks invalid `ActorScalarKind(255)`, recovery by a subsequent valid seal, and hostile post-seal mutation of the original array.
+
+**SDK admission:** This repository's root `global.json` selects .NET SDK 10.x, while the independent runtime/test projects target `net8.0`. The Linux/Windows PR workflow now installs both the SDK 10.x and the .NET 8 target runtime, and verifies their presence before exact-source checkout/guest tests. Installing .NET 8 alone is insufficient to satisfy the root SDK selector; a zero-step job still proves neither the setup fix nor compiled runtime behavior.
+
+**Evidence:** changes were authored and inspected against their Git blob identities, but the authoring environment still has no `dotnet` executable. These additional checks remain **NOT_EXECUTED** until an admitted runner actually compiles and executes them at the final commit SHA. This PR remains draft and is not approved for source export or production tenant isolation.
