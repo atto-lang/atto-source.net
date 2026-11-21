@@ -17,6 +17,87 @@
 > and enforceable protected-main requirements are verified and a later,
 > separately reviewed activation change is approved.
 
+## 2026-11-21 latest CI administration handoff (NON-ACTIVATING)
+
+**Private-source export remains DENIED.** As of this exact review, source
+`atto-lang/atto-source.net/main` is unprotected, approved private destination
+IDs = 0, approved source snapshots = 0, and the independent export reviewer
+policy remains disabled. The GitHub App connection available to this review
+does **not** provide repository administration, billing, or runner-registration
+writes. Do not claim it can fix those settings or use a no-token Git tree
+mirror to bypass them.
+
+**Fresh source-local executor:** [draft #197](https://github.com/atto-lang/atto-source.net/pull/197)
+has head `612737a590983c72198fac9d7401dec607a08404`,
+root tree `ac3a7306a1bcc04612e5bcefc117de3d8665ec24`,
+workflow blob `e0540ae64c5e735bcaea12d92d78505bce94b4ba`.
+Its actor-side PowerShell GitHub API preflight has a strict JSON Boolean
+`protected=true` requirement and accepts only genuine Int32/Int64 PR
+numbers, never numeric strings; SHA and source-repository comparisons are
+case-sensitive. The compiler-side Python preflight remains explicit
+failure-on-denial and works under optimized Python. The draft continues to
+use manual-only dispatch and pinned same-repository actor #33 and CIL #194
+source commits; it cannot execute from protected `main` until separately
+approved and merged.
+
+**Runner-budget status has changed.** The earlier private carrier
+`scintilla-run-test/atto-ci` had successful source-free Linux/Windows
+CoreCLR/NativeAOT jobs, but its more recent run
+[#44929674190](https://github.com/scintilla-run-test/atto-ci/actions/runs/44929674190)
+failed before any job steps on both platforms. Do not rely on its historic
+success as evidence of *current* private runner admission.
+
+A **different public**, source-free fixture in
+`zed-pkg-test/csharp-app`, Git commit
+`f6e100dc7f60daea91d809a58f1ba0ac6513edbf`, was actually executed in
+[Actions run #44929933062](https://github.com/zed-pkg-test/csharp-app/actions/runs/44929933062).
+Both Windows 2022 and Ubuntu 24.04 jobs succeeded, each running **12/12
+independent synthetic PowerShell JSON admission cases** with receipt
+`SOURCE_FREE_PWSH_JSON_ADMISSION_PASS checks=12 network=NONE source_export=NONE`.
+This independently validates the Boolean/Int32/Int64/case-sensitive comparison
+behavior on real hosted PowerShell 7 runners. The fixture contains **no Atto
+code, source checkout, tokens, or GitHub API request**. The test repository
+is PUBLIC and is **not** an eligible destination for any private Atto Git
+tree without separate appropriate governance and disclosure authorization.
+
+### Required administrator actions
+
+1. Arrange a GitHub plan/repository policy that can **enforce** protected
+   `main` and the designated human/AI review rules. Verify read-back from
+   GitHub's branch/ruleset APIs rather than relying on a requested change
+   or an unavailable-plan setting. Do not pretend the managed connector
+   has administration access.
+2. Nominate and enable a real independent reviewer with required repository
+   permission, outside excluded reviewer IDs; separately approve the exact
+   immutable workflow and source hashes. Keep both private-export allowlists
+   disabled unless the independent cross-org transfer procedure is expressly
+   reviewed and satisfied.
+3. Prefer **private source-local** CI: provision disposable one-shot GitHub
+   self-hosted Linux x64 (at least two concurrent machines) and Windows x64
+   (at least one), repo-scoped to `atto-lang/atto-source.net` with the
+   `atto-net-approved-one-shot` label. Give them Python 3, PowerShell 7,
+   .NET 10 SDK / .NET 8 runtime, and the relevant platform NativeAOT native
+   toolchain. Register with short-lived admin-issued runner registration
+   credentials and destroy the machine and its workspace after each job.
+   Runner labels alone do **not** prove isolation.
+4. Obtain independent PR approvals; only then make #197 ready and merge
+   through an enforceably protected base. A human operator should manually
+   dispatch the workflow from `main`, inspect the exact-SHA admission
+   receipts, require four actor managed/NativeAOT executions across Linux
+   and Windows plus the direct-CIL integration suites, and confirm the
+   matching test-count and hash evidence before any source PR merge.
+5. If private source must instead move between organizations, create a
+   separate governance-approved activation only after verifying exact
+   source-tree hashes, approved destination repo ID, independently approved
+   carrier workflow, and post-copy blob verification. **Do not mirror
+   private Atto source into the public `zed-pkg-test` probe.**
+
+The source-free runner evidence does **not** establish a passing Atto actor,
+CIL compiler, or NativeAOT guest test, and no source transfer or merge
+occurred in this handoff.
+
+---
+
 ## 2026-11-20 freshness and runner-capacity addendum (still NON-ACTIVATING)
 
 **The original PR #33 snapshot below is stale and MUST NOT be used for a transfer.**
