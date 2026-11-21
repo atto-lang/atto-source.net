@@ -72,6 +72,9 @@ check_rejected() {
 check_rejected match-guard-no-fallback E_MATCH fail/
 check_rejected match-guard-block-fallthrough E_RETURN fail/
 check_rejected unsupported-adt-is-pattern E_UNSUPPORTED_TYPE negative/
+# The guarded match path does not own float lowering. This must not silently
+# reintroduce signed-i64 division semantics while PR #191 is separate.
+check_rejected int-division-float-required E_DIVISION_FLOAT_RESULT negative/
 for entry in \
     guard-not-bool:E_TYPE \
     duplicate-unreachable:E_MATCH \
