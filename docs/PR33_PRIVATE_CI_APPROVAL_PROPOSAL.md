@@ -1,5 +1,15 @@
 # PR #33 private-CI authorization proposal — review only
 
+> **Separation of duties — 2026-11-21:** The manual-only,
+> exact-SHA source-local CI executor was moved into its own
+> [draft PR #197](https://github.com/atto-lang/atto-source.net/pull/197)
+> at commit `8548a51d36ce2d4cf429e2074e79b1f3c3c3956e`.
+> This #118 PR retains only review documentation and **commented, inactive**
+> destination/snapshot candidates. PR #197 touches one workflow file, has
+> no automatic triggers and remains inactive pending independent review,
+> protected-main governance and actual ephemeral runner registration.
+> The two PRs are **not** a combined approval to export private source.
+>
 > **NON-ACTIVATING DRAFT.** This document and the adjacent commented policy
 > candidates are NOT permission to export private source. Do not remove
 > comment markers or publish source Git objects on the strength of this PR.
