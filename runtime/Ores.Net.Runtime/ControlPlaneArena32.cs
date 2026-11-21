@@ -1,5 +1,6 @@
 using System;
 using System.Buffers.Binary;
+using System.Security.Cryptography;
 using System.Runtime.InteropServices;
 using System.Threading;
 
@@ -155,7 +156,7 @@ internal sealed unsafe class ControlPlaneArena32 : IDisposable
         lock (_gate)
         {
             int slot = Validate(handle);
-            new Span<byte>(_records + slot * RecordBytes, RecordBytes).Clear();
+            CryptographicOperations.ZeroMemory(new Span<byte>(_records + slot * RecordBytes, RecordBytes));
             _slots[slot].Live = 0;
             if (_slots[slot].Generation == MaxGeneration)
                 _slots[slot].Generation = 0; // retire instead of wrapping to an old identity
@@ -267,9 +268,9 @@ internal sealed unsafe class ControlPlaneArena32 : IDisposable
         {
             if (_closed) return;
             _closed = true;
-            new Span<byte>(_records, checked(_capacity * RecordBytes)).Clear();
+            CryptographicOperations.ZeroMemory(new Span<byte>(_records, checked(_capacity * RecordBytes)));
             // Scrub the entire native allocation, including padded bytes.
-            new Span<byte>((byte*)_slots, _alignedSlotBytes).Clear();
+            CryptographicOperations.ZeroMemory(new Span<byte>((byte*)_slots, _alignedSlotBytes));
             NativeMemory.AlignedFree(_records);
             NativeMemory.AlignedFree(_slots);
             _records = null;
