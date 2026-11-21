@@ -41,6 +41,11 @@ jobs:
           set -euo pipefail
           bash scripts/test-actor-io-host.sh | tee "$RUNNER_TEMP/actor-host-evidence.log"
           grep -Fx 'ACTOR_IO_HOST_EXACT_HEAD_TESTS_EXECUTED_PASS' "$RUNNER_TEMP/actor-host-evidence.log"
+          # These are host/reference tests, NOT compiled Atto actor guests.
+          dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release | tee "$RUNNER_TEMP/actor-guest-host-evidence.log"
+          grep -Fx 'PASS actor-ref32-owned-auth: per-actor handles deny cross-actor aliasing, stale reads and foreign links (host only)' "$RUNNER_TEMP/actor-guest-host-evidence.log"
+          grep -Fx 'PASS actor-heap-java-parity: managed GC, tenant isolation and forged native no-GC claims fail closed (host only)' "$RUNNER_TEMP/actor-guest-host-evidence.log"
+          grep -Fx 'PASS actor-ref32-cycle-reclaim: cyclic typed guest links do not retain native arena past final read loan (host only)' "$RUNNER_TEMP/actor-guest-host-evidence.log"
       - name: Publish and execute actual host actor NativeAOT isolation probe
         shell: bash
         env:
@@ -58,4 +63,9 @@ jobs:
           grep -Fx 'PASS actor-scalar-sealed-schema-native-probe: immutable i64/bool layout, forged tags, block counts and stale receive frames denied; NOT compiled .atto' "$RUNNER_TEMP/actor-memory-native.log"
           grep -Fx 'PASS actor-scalar-nativeaot-parallel-transfer: i64 swap is simultaneous, malformed second destination is failure-atomic; NOT compiled .atto' "$RUNNER_TEMP/actor-memory-native.log"
           grep -Fx 'PASS actor-stack-nativeaot-terminal-quota: depth, aggregate bytes, oversized frame all terminal after catch; sibling survives; no native budget leak; NOT compiled .atto' "$RUNNER_TEMP/actor-memory-native.log"
+          grep -Fx 'PASS actor-ref32-native-probe: four actor-local uint32 guest refs, distinct native payloads, retained-turn denial (host only; not compiled guest)' "$RUNNER_TEMP/actor-memory-native.log"
+          grep -Fx 'PASS actor-ref32-native-no-clr-allocation: 4096 warmed guest payload cycles allocated zero managed bytes (host only)' "$RUNNER_TEMP/actor-memory-native.log"
+          grep -Fx 'PASS actor-ref32-native-typed-nodegraph: four typed native graphs survive actor turns with guarded reference fields (host only; not compiled guest)' "$RUNNER_TEMP/actor-memory-native.log"
+          grep -Fx 'PASS actor-ref32-native-typed-no-clr-allocation: 4096 warmed typed I64/ref32 cycles allocated zero managed bytes (host only)' "$RUNNER_TEMP/actor-memory-native.log"
+          grep -Fx 'PASS actor-heap-java-parity-nativeaot: unsupported GC and tenant isolation rejected before actor admission (host only)' "$RUNNER_TEMP/actor-memory-native.log"
           sha256sum "$output/$BINARY"

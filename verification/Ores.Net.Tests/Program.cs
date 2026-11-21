@@ -823,6 +823,9 @@ ActorFinalizationV1SelfTest.Run();
 ActorMailboxAuthorizationPrioritySelfTest.Run();
 ActorMailboxPrivateDataSelfTest.Run();
 ActorArenaSelfTest.Run();
+ActorHeapAdmissionParitySelfTest.Run(); // native GC/tenant claims must fail closed
+ActorGuestHeap32SelfTest.Run(); // actor-private guest refs: host substrate only
+ActorControlDirectoryIntegrationSelfTest.Run(); // optional native CONTROL root counters
 StateRegionLoanProvenanceSelfTest.Run();
 ActorIsolationAccessV1SelfTest.Run();
 ActorShardColumnsSelfTest.Run();
