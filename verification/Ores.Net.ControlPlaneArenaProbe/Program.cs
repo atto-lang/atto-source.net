@@ -65,6 +65,7 @@ using (var b = new ControlPlaneArena32(2))
     Check(pairWriterFailure is null, "i128 competing writer completed without failure");
     a.ReadI128(parent, out actualLow, out actualHigh);
     Check(actualHigh == ~actualLow, "final i128 value remains coherent");
+    Console.WriteLine("PASS dotnet control i128 coherent concurrent host (NOT compiled Atto)");
     a.WriteMaxI64(parent, 8, 18);
     a.WriteMaxI64(parent, 8, 3); // racing old carrier must not regress native count
     Check(a.ReadI64(parent, 8) == 18, "native counter is monotone under reordering");
