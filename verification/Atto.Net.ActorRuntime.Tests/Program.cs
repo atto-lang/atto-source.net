@@ -167,9 +167,18 @@ internal static class Program
             "only healthy sibling actor remains allocated");
         var goodTurn = sibling.BeginTurn();
         var goodFrame = sibling.PushFrame(goodTurn, 8);
-        sibling.SealScalarSchema(goodTurn, goodFrame, [ActorScalarKind.Bool], 1);
+        Expect<ArgumentOutOfRangeException>(
+            () => sibling.SealScalarSchema(goodTurn, goodFrame,
+                [(ActorScalarKind)255], 1),
+            "unrecognized scalar kind must not enter sealed frame authority");
+        // A rejected schema leaves the frame unsealed and allows a valid
+        // trusted verifier result to be installed without stale metadata.
+        ActorScalarKind[] verifiedKinds = [ActorScalarKind.Bool];
+        sibling.SealScalarSchema(goodTurn, goodFrame, verifiedKinds, 1);
+        verifiedKinds[0] = (ActorScalarKind)255;
         sibling.WriteBool(goodTurn, goodFrame, 0, true);
-        Check(sibling.ReadBool(goodTurn, goodFrame, 0), "healthy sibling survives");
+        Check(sibling.ReadBool(goodTurn, goodFrame, 0),
+            "validated schema snapshot survives caller mutation");
         sibling.PopFrame(goodTurn, goodFrame);
         sibling.EndTurn(goodTurn);
         sibling.Stop();
