@@ -139,7 +139,17 @@ internal sealed class Parser
         if (depth > 32) throw new CompilerError("E_LIMIT", "expression nesting limit");
         Expression left;
         if (Eat("(")) { left = ParseExpr(0, depth + 1); Require(")"); }
-        else if (Eat("-")) left = new Binary("-", new Literal(0), ParseExpr(30, depth + 1));
+        else if (Eat("-"))
+        {
+            // Exactly 2^63 is permitted only as a *negative* signed-i64
+            // literal. Never parse it as an overflowing positive Int64.
+            if (Peek == "9223372036854775808")
+            {
+                _position++;
+                left = new Literal(long.MinValue);
+            }
+            else left = new Binary("-", new Literal(0), ParseExpr(30, depth + 1));
+        }
         else if (Eat("match")) left = ParseValueMatch(depth + 1);
         else if (Peek.Length > 0 && Peek[0] is >= '0' and <= '9')
         {
@@ -305,6 +315,12 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
                         throw new CompilerError("E_SYMBOL", a.Name);
                     return CheckedType.Int;
                 case Binary b:
+                    // The guarded-match profile is i64-only. Atto int/int
+                    // yields float, so integer CIL div would silently truncate.
+                    // Reject before writing an artifact, regardless of context.
+                    if (b.Op == "/")
+                        throw new CompilerError("E_DIVISION_FLOAT_RESULT",
+                            "int / int returns float; typed lowering is not present in this branch");
                     if (WalkExpr(b.Left, owner, bound, depth) != CheckedType.Int ||
                         WalkExpr(b.Right, owner, bound, depth) != CheckedType.Int)
                         throw new CompilerError("E_TYPE", "integer operands required");
@@ -481,7 +497,8 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
                     "+" => ILOpCode.Add_ovf,
                     "-" => ILOpCode.Sub_ovf,
                     "*" => ILOpCode.Mul_ovf,
-                    "/" => ILOpCode.Div,
+                    "/" => throw new CompilerError("E_DIVISION_FLOAT_RESULT",
+                        "int / int requires float-result CIL lowering"),
                     ">" => ILOpCode.Cgt,
                     "eq" or "==" => ILOpCode.Ceq,
                     _ => throw new CompilerError("E_PARSE", b.Op)
