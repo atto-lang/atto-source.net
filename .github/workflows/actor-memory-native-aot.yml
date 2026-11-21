@@ -46,6 +46,7 @@ jobs:
           grep -Fx 'PASS actor-ref32-owned-auth: per-actor handles deny cross-actor aliasing, stale reads and foreign links (host only)' "$RUNNER_TEMP/actor-guest-host-evidence.log"
           grep -Fx 'PASS actor-heap-java-parity: managed GC, tenant isolation and forged native no-GC claims fail closed (host only)' "$RUNNER_TEMP/actor-guest-host-evidence.log"
           grep -Fx 'PASS actor-ref32-cycle-reclaim: cyclic typed guest links do not retain native arena past final read loan (host only)' "$RUNNER_TEMP/actor-guest-host-evidence.log"
+          grep -Fx 'PASS actor-guest-demand-backed-ref32: first guest allocation charges physical native storage and actor stop refunds it (host only)' "$RUNNER_TEMP/actor-guest-host-evidence.log"
       - name: Publish and execute actual host actor NativeAOT isolation probe
         shell: bash
         env:
