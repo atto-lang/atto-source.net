@@ -43,6 +43,10 @@ internal static class DirectedPipePlanner
         IReadOnlyList<DirectedPipeStage> written, DirectedPipeDirection direction)
     {
         ArgumentNullException.ThrowIfNull(written);
+        // Do not silently treat an unknown enum value as reverse flow.
+        if (direction != DirectedPipeDirection.Pipe &&
+            direction != DirectedPipeDirection.Rpipe)
+            throw new ArgumentException("E_PIPE_DIRECTION");
         if (written.Count is < 2 or > 16)
             throw new ArgumentException("E_PIPE_STAGE_LIMIT");
         var copy = new List<DirectedPipeStage>(written.Count);
