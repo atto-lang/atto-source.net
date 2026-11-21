@@ -57,6 +57,9 @@ jobs:
           actual_blob="$(git hash-object "$fixture")"
           [[ "$expected_blob" =~ ^[0-9a-f]{40}$ ]]
           test "$expected_blob" = "$actual_blob"
+          # Cross-compiler canonical .atto fixture from conformance #461.
+          # Never silently bless a local fixture drift as a new guest contract.
+          test "$actual_blob" = "d472cccb3da24ee8f9fed44f99c1c7742d3240de"
           printf 'ATTO_ACTOR_HEAP_FIXTURE_BLOB=%s\n' "$actual_blob"
           # Fail closed if the generated file is already tracked or
           # masquerading as a historical checked-in guest stub.
@@ -79,6 +82,12 @@ jobs:
           grep -Fx 'ACTOR_HEAP_V1_SOURCE_GENERATED|NOT_EXECUTED|NOT_CERTIFIED' "$RUNNER_TEMP/actor-heap-emission.log"
           test -s verification/Ores.Net.ActorGuestV1Probe/ActorHeapV1.g.cs
           grep -Fq 'ActorGuestOwnedRef32 first = default;' "$generated"
+          grep -Fq 'context.RequireOwnedGuestStorageAbiV1("generation16_slot16")' "$generated"
+          # ABI negotiation must execute before the first guest allocation.
+          gate_line="$(grep -nF 'context.RequireOwnedGuestStorageAbiV1("generation16_slot16")' "$generated" | head -n1 | cut -d: -f1)"
+          alloc_line="$(grep -nF 'AllocateOwnedTypedGuestObject32(layout)' "$generated" | head -n1 | cut -d: -f1)"
+          test -n "$gate_line" && test -n "$alloc_line"
+          test "$gate_line" -lt "$alloc_line"
           grep -Fq 'AllocateOwnedTypedGuestObject32(layout)' "$generated"
           grep -Fq 'ReadOwnedGuestReference32(second, 8)' "$generated"
           grep -Fq 'WriteOwnedGuestReference32(second, 8, first)' "$generated"
