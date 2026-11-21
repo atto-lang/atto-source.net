@@ -58,6 +58,27 @@ source-local CI if its runners become functional.
 
 ---
 
+## 2026-11-21 source-local executor independent audit update
+
+The separate, single-workflow [draft PR #197](https://github.com/atto-lang/atto-source.net/pull/197)
+now has current head `6c1d018b36d5c34645ecb390c9968dd8a575945f`,
+root tree `fe7e0a8a71b96a27d1037ab0d847e3a66f122f63`,
+workflow Git blob `e0b67010445825de5a065d2468c2c5d6bc2c5f14`.
+Its **25/25 static trigger, exact-SHA, trust-boundary, test-receipt**
+checks passed; **no source compiler or actor NativeAOT execution occurred**.
+It is manual-only and additionally refuses nonprivate repository events,
+allows at most one in-progress manual execution, and records run/runner
+identity before executing the pinned source. The ephemeral machine must
+still be provisioned/admin-reviewed externally; a self-hosted runner label
+does **not** prove isolation or authorise private code execution.
+
+No changes were made to the private-source export permission allowlists
+or the independent reviewer policy. This review-only PR remains an
+**inert, separate source-export proposal**; it does not approve or merge
+#197 or authorize mirroring the #33/#194 trees to `scintilla-run-test`.
+
+---
+
 ## 2026-11-21 source-free alternate runner — executed Linux and Windows NativeAOT (NO SOURCE EXPORT)
 
 This is **runner and synthetic algorithm capability evidence only**, not
