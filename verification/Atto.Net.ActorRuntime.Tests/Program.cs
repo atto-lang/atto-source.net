@@ -517,9 +517,11 @@ internal static class Program
             Expect<ActorResourceExhaustedException>(
                 () => reincarnated.ChargeBackedge(turn),
                 "spent tenant fuel refuses further charges despite actor fuel");
-            Check(tenant.RemainingLogicalFuel == 0 &&
-                  reincarnated.MeterSnapshot(turn).RemainingFuel == 9,
-                "failed tenant charge does not partially debit actor or tenant");
+            Check(tenant.RemainingLogicalFuel == 0,
+                "failed tenant charge cannot debit tenant fuel twice");
+            Expect<InvalidOperationException>(
+                () => reincarnated.MeterSnapshot(turn),
+                "terminal actor cannot expose a reusable fuel/turn authority");
             Expect<ActorResourceExhaustedException>(
                 () => reincarnated.EndTurn(turn),
                 "swallowed tenant quota denial cannot finish turn");
