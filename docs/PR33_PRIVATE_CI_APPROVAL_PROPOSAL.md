@@ -58,6 +58,35 @@ source-local CI if its runners become functional.
 
 ---
 
+## 2026-11-21 source-local protected-main and current-source preflight
+
+The independently reviewed source-local CI proposal is in **separate draft
+[#197](https://github.com/atto-lang/atto-source.net/pull/197)**, now at
+head `878b07d79f3de03d3a27a2070dd9479489c2d642`, tree
+`5c94e8db7eba65c174383863d9fc094ad2585b2d`.
+Before checking out either private PR source, a new fail-closed GitHub
+read-only API preflight verifies **protected main**, **same-repo PR
+origin**, and **the exact still-current PR head** for actor #33 or CIL
+#194. The preflight uses the implicit source-repository GitHub Actions
+read token only; no cross-org access or source export is involved.
+Source-local runner administrative isolation and independent reviews
+remain necessary.
+
+The latest preflight was reviewed at its exact head: **19/19 workflow
+static assertions passed**. The Python admission logic was exercised
+against **5/5 synthetic mocked responses**, rejecting missing token,
+unprotected main, stale PR head, and fork-origin PR. The Windows
+PowerShell counterpart was statically inspected but **not executed**.
+No source compiler or actor NativeAOT run occurred, and the mock
+checks must not be reported as real Atto test results.
+
+**This #118 authorization proposal remains non-activating.** No source
+export allowlists, branch protection, independent reviewer setting,
+or cross-organization source copy changed. The source branch is still
+unprotected at last verified readback.
+
+---
+
 ## 2026-11-21 source-local executor independent audit update
 
 The separate, single-workflow [draft PR #197](https://github.com/atto-lang/atto-source.net/pull/197)
