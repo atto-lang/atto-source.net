@@ -9,6 +9,10 @@ internal static class ActorPipeAdmissionTests
         var rejected = new (string Expression, string Operator)[]
         {
             ("p pipe c", "pipe"),
+            ("writable rpipe readable", "rpipe"),
+            ("spawn Consumer() rpipe spawn Producer()", "rpipe"),
+            ("writable rpipe transform rpipe readable", "rpipe"),
+            ("writable /* gap */ rpipe /* gap */ readable", "rpipe"),
             ("spawn Producer() pipe spawn Consumer()", "pipe"),
             ("Producer() pipe Consumer()", "pipe"),
             ("(1+2) pipe (3+4)", "pipe"),
@@ -52,6 +56,13 @@ internal static class ActorPipeAdmissionTests
             "fnc pipe():int{return 41;}fnc main():int{return pipe()+1;}");
         _ = OresStructuredParser.Parse(
             "fnc main():int{let int pipe=41;return pipe+1;}");
+        _ = OresStructuredParser.Parse(
+            "fnc rpipe():int{return 41;}fnc main():int{return rpipe()+1;}");
+        _ = OresStructuredParser.Parse(
+            "fnc main():int{let int rpipe=41;return rpipe+1;}");
+        _ = OresStructuredParser.Parse(
+            "fnc main():int{return 42;} // readable rpipe writable");
+        _ = OresParser.Parse("fnc main():int{return 42;} /* x rpipe y */");
 
         // The full guest fixture is a future implementation target, not a
         // passing pipeline. Both .NET source compiler entry points deny it.

@@ -1,0 +1,299 @@
+{
+  "schema_version": "1.0.0",
+  "status": "reference-only-not-guest-execution",
+  "notes": "Golden vectors for cross-backend numeric conformance. Binary64 and complex128 operands/results use raw IEEE-754 bits and decimal matrices use exact base-10 strings; no backend may claim success simply by parsing this file.",
+  "binary64_comparisons": [
+    {
+      "id": "nan-eq-self",
+      "lhs": {
+        "kind": "bits",
+        "hex": "7ff8000000000000"
+      },
+      "rhs": {
+        "kind": "bits",
+        "hex": "7ff8000000000000"
+      },
+      "eq": false,
+      "lt": false,
+      "le": false,
+      "gt": false,
+      "ge": false
+    },
+    {
+      "id": "nan-left",
+      "lhs": {
+        "kind": "bits",
+        "hex": "7ff8000000000000"
+      },
+      "rhs": {
+        "kind": "bits",
+        "hex": "3ff0000000000000"
+      },
+      "eq": false,
+      "lt": false,
+      "le": false,
+      "gt": false,
+      "ge": false
+    },
+    {
+      "id": "signed-zero",
+      "lhs": {
+        "kind": "bits",
+        "hex": "8000000000000000"
+      },
+      "rhs": {
+        "kind": "bits",
+        "hex": "0000000000000000"
+      },
+      "eq": true,
+      "lt": false,
+      "le": true,
+      "gt": false,
+      "ge": true
+    },
+    {
+      "id": "int64-above-exact-float",
+      "lhs": {
+        "kind": "int64",
+        "decimal": "9007199254740993"
+      },
+      "rhs": {
+        "kind": "bits",
+        "hex": "4340000000000000"
+      },
+      "eq": false,
+      "lt": false,
+      "le": false,
+      "gt": true,
+      "ge": true
+    },
+    {
+      "id": "int64-at-2pow63",
+      "lhs": {
+        "kind": "int64",
+        "decimal": "9223372036854775807"
+      },
+      "rhs": {
+        "kind": "bits",
+        "hex": "43e0000000000000"
+      },
+      "eq": false,
+      "lt": true,
+      "le": true,
+      "gt": false,
+      "ge": false
+    },
+    {
+      "id": "infinity-vs-finite",
+      "lhs": {
+        "kind": "bits",
+        "hex": "7ff0000000000000"
+      },
+      "rhs": {
+        "kind": "bits",
+        "hex": "7fefffffffffffff"
+      },
+      "eq": false,
+      "lt": false,
+      "le": false,
+      "gt": true,
+      "ge": true
+    }
+  ],
+  "decimal_matrices": [
+    {
+      "id": "fractional-rectangular-2x2",
+      "lhs": [
+        [
+          "0.1",
+          "0.2"
+        ],
+        [
+          "1e30",
+          "-1e30"
+        ]
+      ],
+      "rhs": [
+        [
+          "0.3",
+          "2"
+        ],
+        [
+          "0.4",
+          "2"
+        ]
+      ],
+      "expected": [
+        [
+          "0.11",
+          "0.6"
+        ],
+        [
+          "-1e29",
+          "0"
+        ]
+      ]
+    },
+    {
+      "id": "catastrophic-cancellation-1x3-by-3x1",
+      "lhs": [
+        [
+          "1e80",
+          "1",
+          "-1e80"
+        ]
+      ],
+      "rhs": [
+        [
+          "1"
+        ],
+        [
+          "1"
+        ],
+        [
+          "1"
+        ]
+      ],
+      "expected": [
+        [
+          "1"
+        ]
+      ]
+    },
+    {
+      "id": "zero-rows-0x3-by-3x2",
+      "lhs": [],
+      "lhs_shape": [
+        0,
+        3
+      ],
+      "rhs": [
+        [
+          "1",
+          "2"
+        ],
+        [
+          "3",
+          "4"
+        ],
+        [
+          "5",
+          "6"
+        ]
+      ],
+      "expected": [],
+      "expected_shape": [
+        0,
+        2
+      ]
+    },
+    {
+      "id": "empty-inner-2x0-by-0x3",
+      "lhs": [
+        [],
+        []
+      ],
+      "rhs": [],
+      "rhs_shape": [
+        0,
+        3
+      ],
+      "expected": [
+        [
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "0",
+          "0",
+          "0"
+        ]
+      ]
+    },
+    {
+      "id": "dimension-mismatch",
+      "lhs": [
+        [
+          "1",
+          "2"
+        ]
+      ],
+      "rhs": [
+        [
+          "3",
+          "4"
+        ]
+      ],
+      "error": "shape_mismatch"
+    }
+  ],
+  "complex128_division": [
+    {
+      "id": "wide-exponent-representable-imaginary",
+      "lhs": {
+        "real_hex": "ef993d7798ff88f6",
+        "imag_hex": "a998ed03995a509d"
+      },
+      "rhs": {
+        "real_hex": "6964e3be344bb334",
+        "imag_hex": "25ec534b07bf02e7"
+      },
+      "expected": {
+        "real_hex": "c623550912a2da11",
+        "imag_hex": "02aa36a9fdaa506a"
+      }
+    },
+    {
+      "id": "opposite-tiny-imaginary-cancellation",
+      "lhs": {
+        "real_hex": "6974e718d7d7625a",
+        "imag_hex": "2b2bff2ee48e0530"
+      },
+      "rhs": {
+        "real_hex": "6974e718d7d7625a",
+        "imag_hex": "ab2bff2ee48e0530"
+      },
+      "expected": {
+        "real_hex": "3ff0000000000000",
+        "imag_hex": "01b56e1fc2f8f359"
+      }
+    },
+    {
+      "id": "identical-extreme-components",
+      "lhs": {
+        "real_hex": "6974e718d7d7625a",
+        "imag_hex": "2b2bff2ee48e0530"
+      },
+      "rhs": {
+        "real_hex": "6974e718d7d7625a",
+        "imag_hex": "2b2bff2ee48e0530"
+      },
+      "expected": {
+        "real_hex": "3ff0000000000000",
+        "imag_hex": "0000000000000000"
+      }
+    },
+    {
+      "id": "minimum-subnormal-self-quotient",
+      "lhs": {
+        "real_hex": "0000000000000001",
+        "imag_hex": "0000000000000001"
+      },
+      "rhs": {
+        "real_hex": "0000000000000001",
+        "imag_hex": "0000000000000001"
+      },
+      "expected": {
+        "real_hex": "3ff0000000000000",
+        "imag_hex": "0000000000000000"
+      }
+    }
+  ],
+  "complex128_policy": {
+    "finite_division_reference": "Treat each finite binary64 component as its exact rational value, evaluate (ac+bd)/(c^2+d^2) and (bc-ad)/(c^2+d^2), then round each final component once to nearest-even binary64.",
+    "fast_path": "May use bounded nonallocating binary64 arithmetic when it produces the same result.",
+    "fallback": "Extended-precision fallback must be resource-bounded and only used for exceptional finite cases.",
+    "special_values": "NaN, infinity, zero-divisor, and signed-zero propagation remain a separate policy surface and are not certified by these finite vectors."
+  }
+}

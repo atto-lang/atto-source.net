@@ -8,6 +8,7 @@ internal static class ActorFrameStackSelfTest
         InvalidConfigurationFailsBeforeCarrierAdmission();
         IndependentInvocationStacksRejectForeignAndStaleHandles();
         InvalidArgumentsAndLifoDenialsAreFailureNeutral();
+        RepeatedAlignmentAndReissuedFrameCapabilities();
         TerminalQuotaFaultsAndSiblingSurvival();
         RetirementAllowsInFlightFrameCleanupButRejectsPush();
         Console.WriteLine(
@@ -149,6 +150,14 @@ internal static class ActorFrameStackSelfTest
         }, "actor frame authority cannot be deserialized from JSON");
         RejectNoWire(() =>
         {
+            _ = System.Text.Json.JsonSerializer.Serialize<object>(saved!);
+        }, "object-erased frame capability must not escape the JSON boundary");
+        RejectNoWire(() =>
+        {
+            _ = System.Text.Json.JsonSerializer.Serialize(new[] { saved! });
+        }, "frame capability nested in a collection must not escape JSON");
+        RejectNoWire(() =>
+        {
             _ = System.Text.Json.JsonSerializer.Serialize(previousTurn!.Execution);
         }, "actor execution authority cannot be serialized as JSON");
         RejectNoWire(() =>
@@ -215,6 +224,61 @@ internal static class ActorFrameStackSelfTest
         Require(WaitUntil(() =>
             runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0),
             "bounded logical stack retires without native memory leak");
+    }
+
+    private static void RepeatedAlignmentAndReissuedFrameCapabilities()
+    {
+        using var runtime = new ActorRuntime(Options(stackBytes: 256, maxFrames: 3));
+        int verified = 0;
+        var actor = runtime.Spawn(ActorKind.Private, (context, _) =>
+        {
+            for (int iteration = 0; iteration < 128; ++iteration)
+            {
+                int alignment = 1 << (iteration % 7);
+                var root = context.PushStackFrame(8, alignment);
+                var child = context.PushStackFrame(8, alignment: 1);
+                byte stamp = checked((byte)(iteration + 1));
+                context.WriteStackFrame(root, 0, new byte[] { stamp });
+                context.WriteStackFrame(child, 0,
+                    new byte[] { (byte)(stamp ^ 0x5A) });
+
+                // The current main-line contract is failure-neutral for
+                // rejected bounds/alignment; it must not mutate live frames.
+                RejectRange(() => context.WriteStackFrame(child, 7,
+                    new byte[] { 1, 2 }),
+                    "out-of-bounds write cannot consume an adjacent frame");
+                RejectRange(() => context.PushStackFrame(8, alignment: 3),
+                    "non-power-of-two alignment cannot consume frame credit");
+                var actual = new byte[1];
+                context.ReadStackFrame(root, 0, actual);
+                Require(actual[0] == stamp,
+                    "failed child bounds operation corrupted parent frame");
+                context.ReadStackFrame(child, 0, actual);
+                Require(actual[0] == (byte)(stamp ^ 0x5A),
+                    "invalid alignment or bounds operation mutated child frame");
+
+                context.PopStackFrame(child);
+                RejectInvalid(() => context.ReadStackFrame(child, 0,
+                    new byte[1]), "retired child issuance accepted stale read");
+                var reissued = context.PushStackFrame(8, alignment: 1);
+                context.ReadStackFrame(reissued, 0, actual);
+                Require(actual[0] == 0,
+                    "reissued frame retained bytes from previous capability");
+                context.PopStackFrame(reissued);
+                context.PopStackFrame(root);
+                verified++;
+            }
+        });
+
+        runtime.Send(actor, new byte[] { 1 });
+        Require(WaitUntil(() => runtime.CompletedMessages == 1),
+            "128 bounded frame reissuance rounds complete on native actor arena");
+        Require(verified == 128 && runtime.FaultedTurns == 0,
+            "frame bounds and capability recycling preserve live actor progress");
+        runtime.Stop(actor);
+        Require(WaitUntil(() => runtime.LiveActors == 0 &&
+            runtime.NativeReservedBytes == 0),
+            "repeated frame reissuance does not strand actor native credits");
     }
 
     private static void TerminalQuotaFaultsAndSiblingSurvival()
@@ -358,8 +422,17 @@ internal static class ActorFrameStackSelfTest
     private static void RejectNoWire(Action action, string scenario)
     {
         try { action(); }
-        catch (NotSupportedException) { return; }
-        throw new Exception("Expected actor frame JSON denial: " + scenario);
+        catch (NotSupportedException denied)
+            when (denied.Message.Contains(
+                      "Actor logical frame authority cannot be", StringComparison.Ordinal) ||
+                  denied.Message.Contains(
+                      "Actor execution authority cannot be", StringComparison.Ordinal))
+        {
+            // A generic NativeAOT serializer-metadata failure is NOT evidence
+            // that the actor handle's deliberate no-wire converter ran.
+            return;
+        }
+        throw new Exception("Expected explicit actor frame JSON denial: " + scenario);
     }
 
     private static void RejectRange(Action action, string scenario)

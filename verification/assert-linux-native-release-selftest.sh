@@ -17,6 +17,32 @@ if bash "$verifier" "$work/native"; then
   exit 1
 fi
 rm -- "$work/unexpected.dll"
+# A symlink to a managed assembly (including a dangling link) must not
+# escape the release layout gate; Linux find -type f misses symlinks.
+ln -s /tmp/not-a-real-managed-assembly "$work/OresGenerated.dll"
+if bash "$verifier" "$work/native"; then
+  echo 'Accepted symlinked managed DLL sidecar' >&2
+  exit 1
+fi
+rm -- "$work/OresGenerated.dll"
+printf 'MZ' > "$work/OresGenerated.DLL"
+if bash "$verifier" "$work/native"; then
+  echo 'Accepted mixed-case managed DLL sidecar' >&2
+  exit 1
+fi
+rm -- "$work/OresGenerated.DLL"
+ln -s missing-deps "$work/oreslang-app.deps.json"
+if bash "$verifier" "$work/native"; then
+  echo 'Accepted symlinked runtime deps sidecar' >&2
+  exit 1
+fi
+rm -- "$work/oreslang-app.deps.json"
+printf '{}' > "$work/oreslang-app.runtimeconfig.json"
+if bash "$verifier" "$work/native"; then
+  echo 'Accepted managed runtime configuration sidecar' >&2
+  exit 1
+fi
+rm -- "$work/oreslang-app.runtimeconfig.json"
 ln -s native "$work/link"
 if bash "$verifier" "$work/link"; then
   echo 'Accepted a symlinked executable' >&2

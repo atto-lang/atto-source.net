@@ -1,0 +1,4 @@
+pub fnc main():int {
+  val Array<int> numbers = Array.of(21);
+  return numbers.get(-1).unwrap_or(42);
+}

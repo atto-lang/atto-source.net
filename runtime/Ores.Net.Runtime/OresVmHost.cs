@@ -5,7 +5,7 @@ namespace Ores.Net.Runtime;
 /// Logical tenant separation only. This is NOT a CLR AppDomain, collectible
 /// AssemblyLoadContext, heap security sandbox, or process isolation.
 /// </summary>
-public sealed class OresVmHost
+public sealed partial class OresVmHost
 {
     public enum Phase { Created, Running, Quiescing, Stopped }
 
@@ -28,15 +28,61 @@ public sealed class OresVmHost
     public sealed class ActorTicket
     {
         internal ActorTicket(IsolateHandle isolate, ulong id, ulong epoch,
-            ActorMailbox mailbox) {
-            Isolate = isolate; Id = id; Epoch = epoch; Mailbox = mailbox;
+            ActorMailbox mailbox, ActorArena heap) {
+            Isolate = isolate; Id = id; Epoch = epoch; Mailbox = mailbox; Heap = heap;
         }
+        /// <summary>
+        /// The one actor heap of this incarnation (atto-spec ch. 27 section 1):
+        /// unmanaged arena bytes, actor-relative offsets, owner-turn access only,
+        /// charged to the host's actor-heap budget, scrubbed at retirement.
+        /// </summary>
+        internal ActorArena Heap { get; }
         internal IsolateHandle Isolate { get; }
         public ulong Id { get; }
         internal ulong Epoch { get; }
         internal ActorMailbox Mailbox { get; }
         // Bytes queued in this mailbox, charged to the tenant and host quotas.
         internal long QueuedBytes;
+        // Read-only actor-local observations; never expose the mutable mailbox.
+        // The caller must still hold the host-issued ActorTicket/IsolateHandle
+        // for SendActor admission; retirement closes this capability.
+        public ActorRef CurrentRef => Mailbox.CurrentRef;
+        public int QueuedMessages => Mailbox.QueuedMessages;
+        internal ulong NextTurnGeneration { get; set; } = 1;
+        internal ActorTurnTicket? ActiveTurn { get; set; }
+        // Compiler-owned typed state layout, installed once before any turn.
+        // The values live in Heap (StateBlock); only the kinds are managed.
+        internal ActorStateScalarKind[]? StateKinds { get; set; }
+        internal ActorArenaHandle? StateBlock { get; set; }
+        internal string? StateLayoutIdentity { get; set; }
+    }
+
+    public sealed class ActorTurnTicket
+    {
+        internal ActorTurnTicket(ActorTicket actor, ulong generation) {
+            Actor = actor; Generation = generation;
+        }
+        internal ActorTicket Actor { get; }
+        public ulong Generation { get; }
+        internal bool Suspended { get; set; }
+        internal bool Completed { get; set; }
+        internal ulong NextStateLoanGeneration { get; set; } = 1;
+        internal int StateLoanDepth { get; set; }
+        internal ActorStateLoan? ActiveStateLoan { get; set; }
+    }
+
+    /// <summary>Ephemeral host-owned actor state access, not a reference to state storage.</summary>
+    public sealed class ActorStateLoan
+    {
+        internal ActorStateLoan(ActorTurnTicket turn, ulong generation,
+            ActorStateLoan? parent, bool writable) {
+            Turn = turn; Generation = generation; Parent = parent; Writable = writable;
+        }
+        internal ActorTurnTicket Turn { get; }
+        public ulong Generation { get; }
+        internal ActorStateLoan? Parent { get; }
+        public bool Writable { get; }
+        internal bool Released { get; set; }
     }
 
     public sealed class ResourcePin
@@ -54,6 +100,7 @@ public sealed class OresVmHost
         internal required IsolateHandle Handle { get; init; }
         internal required int ActorLimit { get; init; }
         internal required int PinLimit { get; init; }
+        internal required DurableLockQueues Durable { get; init; }
         internal Phase Phase;
         internal ulong NextActorEpoch = 1;
         internal readonly Dictionary<ulong, ActorTicket> Actors = new();
@@ -77,14 +124,30 @@ public sealed class OresVmHost
     private static readonly TimeSpan QueuedTurnRecheck = TimeSpan.FromMilliseconds(5);
     [ThreadStatic] private static bool _inGuestTurn;
 
-    public OresVmHost(int maxTenants = 32, long maxQueuedMailBytes = 256L * 1024 * 1024)
+    // Per-actor heap quota (logical; demand-backed, so native bytes and the
+    // budget charge follow actual allocation) and the host's aggregate budget.
+    // The arena also charges the process-wide ActorArenaBudget.Process cap.
+    internal const int ActorHeapPersistentBytes = 64 * 1024;
+    internal const int ActorHeapScratchBytes = 4 * 1024;
+    private const int ActorHeapMaxAllocations = 64;
+    private const int ActorHeapMaxLoans = 16;
+    private readonly ActorArenaBudget _actorHeapBudget;
+
+    public OresVmHost(int maxTenants = 32, long maxQueuedMailBytes = 256L * 1024 * 1024,
+        long maxActorHeapBytes = 256L * 1024 * 1024)
     {
         if (maxTenants is < 1 or > 1024) throw new ArgumentOutOfRangeException(nameof(maxTenants));
         if (maxQueuedMailBytes is < 1 or > 64L * 1024 * 1024 * 1024)
             throw new ArgumentOutOfRangeException(nameof(maxQueuedMailBytes));
+        if (maxActorHeapBytes < 1)
+            throw new ArgumentOutOfRangeException(nameof(maxActorHeapBytes));
         _maxTenants = maxTenants;
         _maxQueuedMailBytes = maxQueuedMailBytes;
+        _actorHeapBudget = new ActorArenaBudget(maxActorHeapBytes);
     }
+
+    /// <summary>Native actor-heap bytes currently charged to this host.</summary>
+    public long ActorHeapReservedBytes => _actorHeapBudget.ReservedBytes;
 
     private TenantState Check(IsolateHandle handle)
     {
@@ -135,7 +198,8 @@ public sealed class OresVmHost
             var handle = new IsolateHandle(tenantId, _nextGeneration++);
             _tenants.Add(tenantId, new TenantState {
                 Handle = handle, ActorLimit = maxActors, PinLimit = maxResourcePins,
-                MailLimit = maxQueuedMailBytes
+                MailLimit = maxQueuedMailBytes,
+                Durable = new DurableLockQueues(handle.Generation)
             });
             return handle;
         }
@@ -159,8 +223,21 @@ public sealed class OresVmHost
                 throw new InvalidOperationException("actor admission denied");
             if (s.NextActorEpoch == ulong.MaxValue)
                 throw new InvalidOperationException("actor epoch exhausted");
-            // Existing byte-copy mailbox enforces ActorRef capability and queue caps.
-            var actor = new ActorTicket(handle, id, s.NextActorEpoch++, new ActorMailbox(id));
+            // Every actor incarnation owns exactly one heap, opened here, bound
+            // to (id, epoch) and retired with the actor (atto-spec ch. 27 s. 1).
+            ulong epoch = s.NextActorEpoch;
+            var heap = new ActorArena(id, epoch, ActorHeapPersistentBytes,
+                ActorHeapScratchBytes, ActorHeapMaxAllocations, ActorHeapMaxLoans,
+                ActorHeapMaxLoans, _actorHeapBudget, demandBacked: true);
+            ActorTicket actor;
+            try {
+                // Existing byte-copy mailbox enforces ActorRef capability and queue caps.
+                actor = new ActorTicket(handle, id, epoch, new ActorMailbox(id), heap);
+            } catch {
+                heap.Dispose();
+                throw;
+            }
+            s.NextActorEpoch++;
             s.Actors.Add(id, actor);
             s.PinsByActor.Add(actor, 0);
             return actor;
@@ -217,6 +294,167 @@ public sealed class OresVmHost
         lock (_gate) return Check(handle).EndReason;
     }
 
+    private static void CheckTurn(
+        TenantState state, ActorTicket actor, ActorTurnTicket turn)
+    {
+        CheckActor(state, actor);
+        if (turn is null || turn.Completed || !ReferenceEquals(turn.Actor, actor) ||
+            !ReferenceEquals(actor.ActiveTurn, turn))
+            throw new InvalidOperationException("stale or foreign actor logical turn");
+    }
+
+    /// <summary>
+    /// Admit one actor-local user turn. Suspension never clears ActiveTurn:
+    /// it releases only the physical carrier and later user turns stay denied.
+    /// </summary>
+    public ActorTurnTicket BeginActorTurn(IsolateHandle handle, ActorTicket actor)
+    {
+        lock (_gate) {
+            var s = Check(handle); CheckActor(s, actor);
+            if (s.Phase != Phase.Running)
+                throw new InvalidOperationException("tenant actor admission closed");
+            if (actor.ActiveTurn is not null)
+                throw new InvalidOperationException("actor logical turn already active");
+            if (actor.NextTurnGeneration == ulong.MaxValue)
+                throw new InvalidOperationException("actor logical turn generation exhausted");
+            var turn = new ActorTurnTicket(actor, actor.NextTurnGeneration++);
+            actor.ActiveTurn = turn;
+            return turn;
+        }
+    }
+
+    /// <summary>
+    /// A state loan can only be minted for an active unsuspended actor turn.
+    /// Nested scopes fence the parent loan until the child is returned.
+    /// </summary>
+    public ActorStateLoan BeginActorStateLoan(
+        IsolateHandle handle, ActorTicket actor, ActorTurnTicket turn,
+        bool writable = false)
+    {
+        lock (_gate) {
+            var s = Check(handle); CheckTurn(s, actor, turn);
+            if (turn.Suspended)
+                throw new InvalidOperationException("actor state access while suspended");
+            if (turn.StateLoanDepth >= 32)
+                throw new InvalidOperationException("bounded actor state loan nesting exceeded");
+            if (turn.NextStateLoanGeneration == ulong.MaxValue)
+                throw new InvalidOperationException("actor state loan generation exhausted");
+            var loan = new ActorStateLoan(turn, turn.NextStateLoanGeneration++,
+                turn.ActiveStateLoan, writable);
+            turn.ActiveStateLoan = loan;
+            ++turn.StateLoanDepth;
+            return loan;
+        }
+    }
+
+    private static void CheckStateLoan(
+        TenantState state, ActorTicket actor, ActorTurnTicket turn,
+        ActorStateLoan loan, bool requireWrite)
+    {
+        CheckTurn(state, actor, turn);
+        if (turn.Suspended || loan is null || loan.Released ||
+            !ReferenceEquals(loan.Turn, turn) ||
+            !ReferenceEquals(turn.ActiveStateLoan, loan))
+            throw new InvalidOperationException("stale, nested-fenced or foreign actor state loan");
+        if (requireWrite && !loan.Writable)
+            throw new InvalidOperationException("read-only actor state loan cannot write");
+    }
+
+    /// <summary>Generated state operations must enforce this validation.</summary>
+    public void ValidateActorStateLoan(
+        IsolateHandle handle, ActorTicket actor, ActorTurnTicket turn,
+        ActorStateLoan loan, bool requireWrite = false)
+    {
+        lock (_gate) {
+            var s = Check(handle);
+            CheckStateLoan(s, actor, turn, loan, requireWrite);
+        }
+    }
+
+    public void EndActorStateLoan(
+        IsolateHandle handle, ActorTicket actor, ActorTurnTicket turn,
+        ActorStateLoan loan)
+    {
+        lock (_gate) {
+            var s = Check(handle);
+            CheckStateLoan(s, actor, turn, loan, false);
+            loan.Released = true;
+            turn.ActiveStateLoan = loan.Parent;
+            --turn.StateLoanDepth;
+        }
+    }
+
+    public void SuspendActorTurn(
+        IsolateHandle handle, ActorTicket actor, ActorTurnTicket turn)
+    {
+        lock (_gate) {
+            var s = Check(handle); CheckTurn(s, actor, turn);
+            if (turn.Suspended)
+                throw new InvalidOperationException("actor logical turn already suspended");
+            if (turn.ActiveStateLoan is not null)
+                throw new InvalidOperationException("state loan must retire before suspension");
+            turn.Suspended = true;
+        }
+    }
+
+    public void ResumeActorTurn(
+        IsolateHandle handle, ActorTicket actor, ActorTurnTicket turn)
+    {
+        lock (_gate) {
+            var s = Check(handle); CheckTurn(s, actor, turn);
+            if (!turn.Suspended)
+                throw new InvalidOperationException("actor logical turn is not suspended");
+            turn.Suspended = false;
+        }
+    }
+
+    public void CompleteActorTurn(
+        IsolateHandle handle, ActorTicket actor, ActorTurnTicket turn)
+    {
+        lock (_gate) {
+            var s = Check(handle); CheckTurn(s, actor, turn);
+            if (turn.ActiveStateLoan is not null)
+                throw new InvalidOperationException("state loan must retire before completion");
+            turn.Completed = true;
+            turn.Suspended = false;
+            actor.ActiveTurn = null;
+        }
+    }
+
+    /// <summary>
+    /// Cancellation owns the same terminal transition as successful completion:
+    /// it fences the exact active turn, clears actor admission once, and makes
+    /// every later resume/complete/cancel attempt stale.
+    /// </summary>
+    public void CancelActorTurn(
+        IsolateHandle handle, ActorTicket actor, ActorTurnTicket turn)
+    {
+        lock (_gate) {
+            var s = Check(handle); CheckTurn(s, actor, turn);
+            // Terminal cancellation revokes all bounded nested scopes.
+            while (turn.ActiveStateLoan is { } loan) {
+                loan.Released = true;
+                turn.ActiveStateLoan = loan.Parent;
+            }
+            turn.StateLoanDepth = 0;
+            turn.Completed = true;
+            turn.Suspended = false;
+            actor.ActiveTurn = null;
+        }
+    }
+
+    public (bool Active, bool Suspended, ulong Generation) ActorTurnSnapshot(
+        IsolateHandle handle, ActorTicket actor)
+    {
+        lock (_gate) {
+            var s = Check(handle); CheckActor(s, actor);
+            var turn = actor.ActiveTurn;
+            return turn is null
+                ? (false, false, 0UL)
+                : (true, turn.Suspended, turn.Generation);
+        }
+    }
+
     public ResourcePin PinResource(IsolateHandle handle, ActorTicket actor)
     {
         lock (_gate) {
@@ -247,12 +485,23 @@ public sealed class OresVmHost
     {
         lock (_gate) {
             var s = Check(handle); CheckActor(s, actor);
-            if (s.PinsByActor[actor] != 0)
+            if (s.PinsByActor[actor] != 0 ||
+                s.Durable.HasActor(new DurableLockQueues.ActorKey(actor.Id, actor.Epoch)))
                 throw new InvalidOperationException("actor has outstanding resources");
+            if (actor.ActiveTurn is not null)
+                throw new InvalidOperationException("actor has active logical turn");
             actor.Mailbox.Stop(); // Erase pending private queued copies.
             s.QueuedMailBytes -= actor.QueuedBytes;
             _queuedMailBytes -= actor.QueuedBytes;
             actor.QueuedBytes = 0;
+            // Physical retirement of the actor heap: the arena scrubs and frees
+            // its bytes and refunds the budget. An outstanding read loan or
+            // lifetime pin keeps it retired-but-unreclaimed (quarantined) until
+            // released; pinned memory is never freed.
+            actor.StateKinds = null;
+            actor.StateBlock = null;
+            actor.StateLayoutIdentity = null;
+            actor.Heap.Retire();
             s.PinsByActor.Remove(actor);
             s.Actors.Remove(actor.Id);
         }
@@ -312,7 +561,12 @@ public sealed class OresVmHost
                         // memory corruption; OS process mode remains denied.
                         lock (_gate) {
                             if (tenant.Phase == Phase.Running)
+                            {
+                                // Every entry into Quiescing stops durable-queue
+                                // admission, so CompleteShutdown can observe Drained.
+                                tenant.Durable.Quiesce();
                                 tenant.Phase = Phase.Quiescing;
+                            }
                             // The faulted incarnation's state is not trusted
                             // and is never read back.
                             tenant.EndReason ??= "guest-fault";
@@ -344,12 +598,66 @@ public sealed class OresVmHost
         }
     }
 
+    // Host-only API; trusted caller must pass a live actor-issued capability.
+    public DurableLockQueues.Admission EnqueueDurable(IsolateHandle handle, ActorTicket actor,
+        ulong lockId, ulong operationId, long payloadBytes)
+    {
+        lock (_gate) {
+            var s = Check(handle); CheckActor(s, actor);
+            if (s.Phase != Phase.Running) throw new InvalidOperationException("durable admission closed");
+            return s.Durable.Enqueue(new DurableLockQueues.ActorKey(actor.Id, actor.Epoch),
+                lockId, operationId, payloadBytes);
+        }
+    }
+
+    public bool ClaimDurable(IsolateHandle handle, DurableLockQueues.Ticket ticket)
+    {
+        lock (_gate) {
+            var s = Check(handle);
+            if (s.Phase != Phase.Running) throw new InvalidOperationException("durable claims closed");
+            return s.Durable.Claim(ticket);
+        }
+    }
+    public DurableLockQueues.Ticket? FinishDurable(IsolateHandle handle, DurableLockQueues.Ticket ticket)
+    {
+        lock (_gate) {
+            var s = Check(handle);
+            if (s.Phase is not (Phase.Running or Phase.Quiescing))
+                throw new InvalidOperationException("durable finish phase");
+            return s.Durable.Finish(ticket);
+        }
+    }
+    public DurableLockQueues.Ticket? CancelDurableHead(IsolateHandle handle,
+        DurableLockQueues.Ticket ticket)
+    {
+        lock (_gate) {
+            var s = Check(handle);
+            if (s.Phase is not (Phase.Running or Phase.Quiescing))
+                throw new InvalidOperationException("durable cancel phase");
+            return s.Durable.CancelHead(ticket);
+        }
+    }
+    public void CancelDurableWaiter(IsolateHandle handle, DurableLockQueues.Ticket ticket)
+    {
+        lock (_gate) {
+            var s = Check(handle);
+            if (s.Phase is not (Phase.Running or Phase.Quiescing))
+                throw new InvalidOperationException("durable cancel phase");
+            s.Durable.CancelWaiter(ticket);
+        }
+    }
+    public DurableLockQueues.Snapshot DurableSnapshot(IsolateHandle handle)
+    {
+        lock (_gate) return Check(handle).Durable.GetSnapshot();
+    }
+
     public void BeginShutdown(IsolateHandle handle)
     {
         lock (_gate) {
             var s = Check(handle);
             if (s.Phase is not (Phase.Running or Phase.Created))
                 throw new InvalidOperationException("shutdown phase");
+            s.Durable.Quiesce();
             s.Phase = Phase.Quiescing;
         }
     }
@@ -358,7 +666,7 @@ public sealed class OresVmHost
     {
         lock (_gate) {
             var s = Check(handle);
-            if (s.Phase != Phase.Quiescing || s.Actors.Count != 0 || s.ActivePins != 0 || s.ActiveGuestCalls != 0)
+            if (s.Phase != Phase.Quiescing || s.Actors.Count != 0 || s.ActivePins != 0 || s.ActiveGuestCalls != 0 || !s.Durable.Drained)
                 throw new InvalidOperationException("actor or resource still active");
             s.Phase = Phase.Stopped;
         }

@@ -50,10 +50,17 @@ public sealed class ActorMailbox : IDisposable
     public const int MaxMailboxBytes = 16 * MaxMessageBytes;
 
     private readonly object _gate = new();
-    private readonly Queue<byte[]> _messages = new();
+    // Control ticks must never be confused with user-supplied zero-byte
+    // messages. The envelope kind is runtime-owned and not on the wire.
+    // Native backing is never exposed to retainable ReadOnlyMemory handlers.
+    private sealed record Envelope(byte[]? Payload,
+        NativeFixedBufferPoolV1.Lease? NativeLease, int Length, bool IsControl);
+    private readonly Queue<Envelope> _messages = new();
     private readonly ulong _id;
     private readonly int _maxMessages;
     private readonly int _maxQueuedBytes;
+    private readonly NativeFixedBufferPoolV1? _nativePool;
+    private readonly FixedBufferActorIdentity _nativeIdentity;
     private ulong _generation = 1;
     private Guid _nonce;
     private Func<Guid> _nextNonce = Guid.NewGuid;
@@ -82,6 +89,22 @@ public sealed class ActorMailbox : IDisposable
         if (_nonce == Guid.Empty)
             throw new InvalidOperationException("Actor mailbox capability must not be empty");
     }
+
+    // Trusted ActorRuntime-only mode; no shared native pool across mailboxes.
+    internal ActorMailbox(ulong id, int maxMessages, int maxQueuedBytes,
+        int nativeSlotBytes, ActorArenaBudget nativeBudget)
+        : this(id, maxMessages, maxQueuedBytes)
+    {
+        if (nativeSlotBytes <= 0 || nativeSlotBytes > 4096 ||
+            nativeSlotBytes > maxQueuedBytes)
+            throw new ArgumentOutOfRangeException(nameof(nativeSlotBytes));
+        ArgumentNullException.ThrowIfNull(nativeBudget);
+        _nativePool = new NativeFixedBufferPoolV1(
+            maxMessages, nativeSlotBytes, nativeBudget);
+        _nativeIdentity = new FixedBufferActorIdentity(1, id, _generation);
+    }
+
+    internal bool HasNativeBacking => _nativePool is not null;
 
     public ActorRef CurrentRef
     {
@@ -145,9 +168,43 @@ public sealed class ActorMailbox : IDisposable
         lock (_gate)
         {
             ValidateSendLocked(destination, data.Length);
-            var ownedCopy = data.ToArray();
-            _messages.Enqueue(ownedCopy);
-            _queuedBytes += ownedCopy.Length;
+            if (_nativePool is null)
+            {
+                byte[] ownedCopy = data.ToArray();
+                _messages.Enqueue(new Envelope(ownedCopy, null,
+                    ownedCopy.Length, IsControl: false));
+            }
+            else
+            {
+                var lease = _nativePool.TryAcquire(_nativeIdentity) ??
+                    throw new InvalidOperationException("Native mailbox capacity exhausted");
+                try
+                {
+                    using (var write = _nativePool.BorrowWrite(lease, _nativeIdentity))
+                        _nativePool.WriteBytes(write, 0, data);
+                    _messages.Enqueue(new Envelope(null, lease, data.Length, IsControl: false));
+                }
+                catch
+                {
+                    _nativePool.Release(lease, _nativeIdentity);
+                    throw;
+                }
+            }
+            _queuedBytes += data.Length;
+        }
+    }
+
+    /// <summary>
+    /// Only the trusted in-assembly scheduler may enqueue dispatch control.
+    /// An empty user Send is always USER DATA, never scheduler authority.
+    /// Control tokens participate in the same bounded FIFO message quota.
+    /// </summary>
+    internal void EnqueueTrustedDispatch(ActorRef destination)
+    {
+        lock (_gate)
+        {
+            ValidateSendLocked(destination, 0);
+            _messages.Enqueue(new Envelope(Array.Empty<byte>(), null, 0, IsControl: true));
         }
     }
 
@@ -162,9 +219,99 @@ public sealed class ActorMailbox : IDisposable
             throw new ArgumentOutOfRangeException("data", "Message exceeds 1 MiB");
         if (length < 0)
             throw new ArgumentOutOfRangeException(nameof(length));
+        if (_nativePool is not null && length > _nativePool.SlotSize)
+            throw new ArgumentOutOfRangeException(nameof(length),
+                "Native mailbox message exceeds its fixed native slot");
         if (_messages.Count >= _maxMessages || _queuedBytes > _maxQueuedBytes ||
             length > _maxQueuedBytes - _queuedBytes)
             throw new InvalidOperationException("Mailbox capacity exceeded");
+    }
+
+    /// <summary>
+    /// Host-only transactional admission for one actor receive turn. All
+    /// emitted DATA frames reach this *single* target mailbox together, or
+    /// none do. A batch acknowledgement means mailbox admission, not remote
+    /// processing or exactly-once execution.
+    ///
+    /// This is NOT forward_all across separate mailboxes: fan-out requires
+    /// per-edge partial-success receipts unless a higher-level coordinator
+    /// explicitly implements cross-mailbox transactions.
+    /// </summary>
+    public void SendBatchAtomic(
+        ActorRef destination, IReadOnlyList<ReadOnlyMemory<byte>> messages)
+    {
+        ArgumentNullException.ThrowIfNull(messages);
+        lock (_gate)
+        {
+            // Authorize before inspecting untrusted payload sizes. The
+            // generation and nonce are checked under the very same lock
+            // that publishes all envelopes and serializes Stop/Restart.
+            ValidateSendLocked(destination, 0);
+            if (messages.Count == 0) return;
+            if (messages.Count > _maxMessages - _messages.Count)
+                throw new InvalidOperationException("Mailbox capacity exceeded");
+
+            var total = 0;
+            foreach (var message in messages)
+            {
+                if (message.Length > MaxMessageBytes)
+                    throw new ArgumentOutOfRangeException(nameof(messages),
+                        "Message exceeds 1 MiB");
+                // Subtraction avoids signed arithmetic wraparound and
+                // rejects the whole receive turn without partial publication.
+                if (message.Length > _maxQueuedBytes - _queuedBytes - total)
+                    throw new InvalidOperationException("Mailbox capacity exceeded");
+                total += message.Length;
+            }
+
+            // Pre-size all storage and snapshot borrowed sender memory
+            // before the first queue mutation. Copy failures leave the
+            // mailbox, generation and counters exactly as they were.
+            // Envelopes use the same runtime-owned storage as Send: managed
+            // copies, or fixed native leases when this mailbox has a pool.
+            var staged = new Envelope[messages.Count];
+            try
+            {
+                for (var i = 0; i < messages.Count; ++i)
+                {
+                    if (_nativePool is null)
+                    {
+                        byte[] ownedCopy = messages[i].ToArray();
+                        staged[i] = new Envelope(ownedCopy, null,
+                            ownedCopy.Length, IsControl: false);
+                    }
+                    else
+                    {
+                        var lease = _nativePool.TryAcquire(_nativeIdentity) ??
+                            throw new InvalidOperationException("Native mailbox capacity exhausted");
+                        staged[i] = new Envelope(null, lease, messages[i].Length, IsControl: false);
+                        using (var write = _nativePool.BorrowWrite(lease, _nativeIdentity))
+                            _nativePool.WriteBytes(write, 0, messages[i].Span);
+                    }
+                }
+                _messages.EnsureCapacity(checked(_messages.Count + staged.Length));
+            }
+            catch
+            {
+                // Some payloads may already be staged when allocation fails.
+                // Never leave copies of rejected actor DATA in managed heap,
+                // and return every acquired native lease to the pool.
+                foreach (var envelope in staged)
+                {
+                    if (envelope is null) continue;
+                    if (envelope.Payload is not null)
+                        CryptographicOperations.ZeroMemory(envelope.Payload);
+                    if (envelope.NativeLease is not null)
+                        _nativePool!.Release(envelope.NativeLease, _nativeIdentity);
+                }
+                throw;
+            }
+            // Queue.Enqueue cannot grow after EnsureCapacity. Under our
+            // exclusive lock, Stop and readers cannot observe a prefix.
+            foreach (var envelope in staged)
+                _messages.Enqueue(envelope);
+            _queuedBytes += total;
+        }
     }
 
     public bool TryReceive(out byte[]? payload)
@@ -176,8 +323,27 @@ public sealed class ActorMailbox : IDisposable
                 payload = null;
                 return false;
             }
-            payload = _messages.Dequeue();
-            _queuedBytes -= payload.Length;
+            if (_messages.Peek().IsControl)
+            {
+                // Generic receive cannot steal an internal scheduler receipt.
+                payload = null;
+                return false;
+            }
+            Envelope front = _messages.Peek();
+            if (front.NativeLease is not null)
+            {
+                // The guest callback can retain ReadOnlyMemory. A dedicated
+                // managed array is mandatory until a borrow-only Span ABI.
+                byte[] delivered = new byte[front.Length];
+                using (var read = _nativePool!.BorrowRead(front.NativeLease, _nativeIdentity))
+                    _nativePool.ReadBytes(read, 0, delivered);
+                _nativePool.Release(front.NativeLease, _nativeIdentity);
+                payload = delivered;
+            }
+            else
+                payload = front.Payload!;
+            _ = _messages.Dequeue();
+            _queuedBytes -= front.Length;
             return true;
         }
     }
@@ -198,10 +364,29 @@ public sealed class ActorMailbox : IDisposable
             _closed = true;
             DiscardPending();
             _queuedBytes = 0;
+            _nativePool?.Retire();
             callbacks = DetachIoRetireCallbacksLocked();
         }
         RetireIo(callbacks);
         return true; // Repeated stop of this incarnation is idempotent.
+    }
+
+    /// <summary>
+    /// One FIFO-backed synchronous actor tick. Only an admitted empty
+    /// control envelope can schedule the narrow generated Counter method.
+    /// A nonempty user message is never removed, consumed or reclassified
+    /// as an actor tick. Called only under the owning host admission lock.
+    /// </summary>
+    internal bool TryReceiveEmptyDispatch()
+    {
+        lock (_gate)
+        {
+            if (_closed || _messages.Count == 0 ||
+                !_messages.Peek().IsControl)
+                return false;
+            _ = _messages.Dequeue(); // Empty envelope: no user bytes to leak.
+            return true;
+        }
     }
 
     public void Stop()
@@ -212,6 +397,7 @@ public sealed class ActorMailbox : IDisposable
             _closed = true;
             DiscardPending();
             _queuedBytes = 0;
+            _nativePool?.Retire();
             callbacks = DetachIoRetireCallbacksLocked();
         }
         RetireIo(callbacks);
@@ -223,7 +409,12 @@ public sealed class ActorMailbox : IDisposable
     private void DiscardPending()
     {
         foreach (var envelope in _messages)
-            CryptographicOperations.ZeroMemory(envelope);
+        {
+            if (envelope.NativeLease is not null)
+                _nativePool!.Release(envelope.NativeLease, _nativeIdentity);
+            else if (envelope.Payload is not null)
+                CryptographicOperations.ZeroMemory(envelope.Payload);
+        }
         _messages.Clear();
     }
 
@@ -241,6 +432,7 @@ public sealed class ActorMailbox : IDisposable
             _closed = true;
             DiscardPending();
             _queuedBytes = 0;
+            _nativePool?.Retire();
             callbacks = DetachIoRetireCallbacksLocked();
         }
         RetireIo(callbacks);
@@ -256,6 +448,9 @@ public sealed class ActorMailbox : IDisposable
             if (_disposed)
                 throw new ObjectDisposedException(nameof(ActorMailbox),
                     "Disposed mailbox authority cannot be restarted");
+            if (_nativePool is not null)
+                throw new InvalidOperationException(
+                    "Native pool restart requires a newly constructed actor incarnation");
             if (_generation == ulong.MaxValue)
                 throw new OverflowException("Actor generation exhausted");
             var nextNonce = _nextNonce();
@@ -266,6 +461,7 @@ public sealed class ActorMailbox : IDisposable
             _closed = false;
             DiscardPending();
             _queuedBytes = 0;
+            _nativePool?.Retire();
             callbacks = DetachIoRetireCallbacksLocked();
             fresh = new ActorRef(_id, _generation, _nonce);
         }

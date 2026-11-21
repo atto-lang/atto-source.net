@@ -4,6 +4,7 @@ internal static class ActorShardColumnsSelfTest
 {
     public static void Run()
     {
+        ActorShardLayoutAdvisorV1SelfTest.Run();
         foreach (ActorDataLayout layout in Enum.GetValues<ActorDataLayout>())
             ExerciseLayout(layout);
 

@@ -1,0 +1,9 @@
+// ATTO-TRAP-V1-07: exit 42, stdout "once" exactly once.
+fnc checked(): int {
+  stdio.stdout.write("once");
+  return 42;
+}
+pub fnc main(): int {
+  val Result<int, Error> value = trap checked();
+  return value.unwrap();
+}
