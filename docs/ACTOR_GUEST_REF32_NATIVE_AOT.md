@@ -195,3 +195,11 @@ another organization; runner capacity alone is not authorization.
 Do not transfer source files to an unapproved CI carrier. Keep this PR draft,
 verify source-side runner admission or obtain separately approved private CI
 transfer authorization, then execute the tests on the exact PR head.
+
+## 2026-11-21: opt-in native root CONTROL counters in the real ActorRuntime
+
+`ActorRuntimeOptions.UseNativeControlCounters` defaults to `false` for backwards compatibility. When opted in, the runtime owns a separate one-slot `ControlPlaneArena32` root with `control_generation12_slot20_v1` (high 12 generation, low 20 slot+1 bits). The root reserves **48 actual unmanaged bytes**, including 32 data bytes and a 12-byte slot descriptor rounded to 16 for 8-byte aligned `NativeMemory.AlignedAlloc`. The root is charged against `NativeBudgetBytes` **before** actor arenas; insufficient budget fails before dispatcher startup. Allocator constructor failures deterministically free native backing.
+
+Actual `ActorRuntime.Spawn` admission/rollback and `FinalizeCell` retirement update the native root's live-actor count under the runtime registry lock. Completed-message counts are published with `WriteMaxI64` to prevent a late carrier from regressing a newer completion total. The root is erased and freed **after dispatcher quiescence**; external stop/finalizer updates are synchronized by the registry lock and skip freed control backing. Root access after shutdown fails closed, and `ReservedBytes` becomes zero.
+
+`ActorControlDirectoryIntegrationSelfTest` exercises real managed-host spawn, message dispatch, actor STOP, quota denial, legacy disabled mode and shutdown. `verification/Ores.Net.ControlRuntimeProbe` is a separately publishable CLR/NativeAOT *host runtime* test; the source GitHub workflow invokes both. These tests are **SOURCE_AUTHORED_NOT_EXECUTED** until actual steps pass on the pinned PR head. The current managed `Dictionary`, actor cells, mailbox `byte[]`, contexts, dispatch delegates and CLR runtime persist: neither this work nor an off-heap scalar probe proves all actor messages allocate zero managed bytes, compiled `.atto` guest support, or host-process zero GC.
