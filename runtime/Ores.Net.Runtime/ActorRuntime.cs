@@ -721,7 +721,7 @@ public sealed class ActorRuntime : IDisposable
                         // No per-message CLR wrapper; the control arena stores
                         // only a native i64 counter. Other mailbox/context
                         // allocations are still managed and NOT zero-GC proof.
-                        _controlPlane?.WriteI64(_controlRoot, 8, completed);
+                        _controlPlane?.WriteMaxI64(_controlRoot, 8, completed);
                     }
                 }
 
