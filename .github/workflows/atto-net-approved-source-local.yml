@@ -176,6 +176,29 @@ jobs:
               raise SystemExit("E_COMPILER_PR_SOURCE_DRIFT")
           print("ATTO_SOURCE_LOCAL_PROTECTED_MAIN_CONFIRMED compiler_pr_head=" + os.environ["SOURCE_HEAD"])
           PY
+      # The workflow and its offline test are in protected main, not in
+      # the unmerged compiler PR. Run the test from this exact workflow
+      # revision before switching to the separately pinned compiler SHA.
+      - name: Checkout reviewed source-local workflow and regression suite
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Execute committed admission regression before compiler source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.workflow_sha }}"
+          test -z "$(git status --porcelain)"
+          test -f scripts/test-net-source-local-preflight.py
+          receipt="$(python3 scripts/test-net-source-local-preflight.py)"
+          expected='ATTO_NET_SOURCE_LOCAL_PREFLIGHT_MOCK_PASS cases=18 optimized=true trigger_mutants=6 header_mutants=5 network=NONE'
+          test "$receipt" = "$expected" || {
+            printf 'E_SOURCE_LOCAL_ADMISSION_REGRESSION: %s\n' "$receipt" >&2
+            exit 1
+          }
+          printf '%s\n' "$receipt"
       - name: Checkout immutable direct-CIL PR SHA without persisted credentials
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
