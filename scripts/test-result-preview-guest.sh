@@ -48,7 +48,10 @@ for entry in \
   unsupported_question:E_LEX \
   overflow:E_LITERAL \
   injection:E_STRING \
-  host_keyword:E_NAME; do
+  host_keyword:E_NAME \
+  unsupported_raise:E_PARSE \
+  unsupported_panic:E_PARSE \
+  unsupported_trap_bang:E_LEX; do
   case_name="${entry%%:*}"
   expected="${entry#*:}"
   output="$work/$case_name/Program.cs"
@@ -65,7 +68,7 @@ for entry in \
     echo "UNSAFE_OUTPUT_ARTIFACT=$case_name" >&2; exit 1;
   }
 done
-echo 'ATTO_RESULT_PREVIEW_NEGATIVE_NO_ARTIFACT=PASS'
+echo 'ATTO_RESULT_PREVIEW_NEGATIVE_NO_ARTIFACT=PASS checks=10'
 if [[ "${ATTO_RESULT_CLR_ONLY:-0}" == 0 ]]; then
   echo 'ATTO_RESULT_PREVIEW_COMPILED_CLR_NATIVEAOT=PASS'
 else
