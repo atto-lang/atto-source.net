@@ -164,6 +164,13 @@ jobs:
             fs.writeFileSync(output, original.replace(before, after));
           ' "$fixture" "$negative_source"
           test -s "$negative_source"
+          test ! -L "$negative_source"
+          # Pin the negative input to the shared 11-backend conformance corpus.
+          # A merely nonzero compiler exit or an arbitrary mutated source
+          # cannot be counted as the required faulty Node graph.
+          negative_blob="$(git hash-object "$negative_source")"
+          test "$negative_blob" = "7544665f302167451fdc47ce11f5f108f703b7ed"
+          printf 'ATTO_ACTOR_HEAP_NEGATIVE_FIXTURE_BLOB=%s\n' "$negative_blob"
           sha256sum "$negative_source" |
             tee "$RUNNER_TEMP/actor-heap-negative-atto-sha256.txt"
           dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -- \
@@ -190,3 +197,11 @@ jobs:
           grep -Fx 'PASS attolang-actor-heap-v1-nativeaot-negative: compiled .atto assertion failure retired actor and reclaimed native heap' "$RUNNER_TEMP/actor-heap-negative-nativeaot.log"
           sha256sum "$negative_output/$BINARY" |
             tee "$RUNNER_TEMP/actor-heap-negative-binary-sha256.txt"
+          # A stale or reused positive executable is not a valid negative
+          # source-to-native receipt, even if a host-side flag claims success.
+          positive_binary_sha="$(cut -d ' ' -f1 "$RUNNER_TEMP/actor-heap-native-binary-sha256.txt")"
+          negative_binary_sha="$(cut -d ' ' -f1 "$RUNNER_TEMP/actor-heap-negative-binary-sha256.txt")"
+          [[ "$positive_binary_sha" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$negative_binary_sha" =~ ^[0-9a-f]{64}$ ]]
+          test "$positive_binary_sha" != "$negative_binary_sha"
+          printf 'ATTO_ACTOR_HEAP_POSITIVE_NEGATIVE_NATIVE_BINARIES_DISTINCT=PASS\n'
