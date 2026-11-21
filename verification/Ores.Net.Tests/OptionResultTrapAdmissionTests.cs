@@ -117,7 +117,8 @@ internal static class OptionResultTrapAdmissionTests
     }
 
     public static void Run()
-    {        VerifyCanonicalBangLexicalBoundaries();
+    {
+        VerifyCanonicalBangLexicalBoundaries();
 
         VerifyCanonicalSourceIsStillFailClosed();
         // Bang exceptional control is reserved and must never reach scalar
