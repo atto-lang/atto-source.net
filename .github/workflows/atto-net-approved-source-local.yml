@@ -11,7 +11,7 @@ jobs:
   actor-managed-native:
     # The default-branch workflow is manually dispatched by an approved operator.
     if: ${{ github.repository == 'atto-lang/atto-source.net' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
-    runs-on: ${{ matrix.runner_labels }}
+    runs-on: ${{ fromJSON(matrix.runner_labels) }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
