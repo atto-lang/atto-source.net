@@ -35,6 +35,27 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Pin exact PR head, root tree and compiler sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$expected" || { echo "WRONG_HEAD=$actual expected=$expected" >&2; exit 1; }
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          test "${#tree}" -eq 40
+          for path in \
+            compiler/Ores.Net.Compiler.Core/StructuredSource.cs \
+            compiler/Ores.Net.Compiler.Core/StructuredCfgLowering.cs \
+            verification/IfnotNativeAot/Emitter/Program.cs \
+            verification/IfnotNativeAot/Host/Program.cs \
+            .github/workflows/atto-ifnot-nativeaot-scalar.yml; do
+            test -f "$path"
+            test "$(git hash-object "$path")" = "$(git rev-parse "HEAD:$path")" ||
+              { echo "SOURCE_BLOB_MISMATCH=$path" >&2; exit 1; }
+          done
+          echo "EXACT_SOURCE_PIN_OK head=$actual tree=$tree"
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
@@ -49,7 +70,10 @@ jobs:
           test "$(git hash-object "$source")" = "$(git rev-parse HEAD:tests/fixtures/conditional/${{ matrix.fixture }})"
           dotnet run -c Release --project verification/IfnotNativeAot/Emitter/Emitter.csproj -- "$source" "$generated"
           test -s "$generated"
+          echo "COMPILED_CIL_SHA256=$(sha256sum "$generated" | awk '{print $1}')"
           dotnet publish verification/IfnotNativeAot/Host/Host.csproj -c Release -r linux-x64 -p:PublishAot=true -o "$RUNNER_TEMP/atto-ifnot-nativeaot"
+          test -s "$RUNNER_TEMP/atto-ifnot-nativeaot/Host"
+          echo "NATIVE_AOT_SHA256=$(sha256sum "$RUNNER_TEMP/atto-ifnot-nativeaot/Host" | awk '{print $1}')"
           set +e
           timeout --signal=TERM --kill-after=1s 5s "$RUNNER_TEMP/atto-ifnot-nativeaot/Host"
           result=$?
