@@ -13,11 +13,15 @@ namespace Ores.Net.Runtime;
 /// </summary>
 public sealed unsafe class ControlPlaneArena32 : IDisposable
 {
-    public const string Abi = "control_generation20_slot12_v1";
+    // The low 20 bits are slot + 1; the high 12 bits are generation.
+    // This control-plane ABI is distinct from actor generation16_slot16 and
+    // from LLVM's unsigned offset8_plus_one actor reference representation.
+    public const string Abi = "control_generation12_slot20_v1";
     public const int RecordBytes = 32;
-    private const uint SlotBits = 20;
-    private const uint SlotMask = (1u << (int)SlotBits) - 1;
-    private const uint MaxGeneration = (1u << 12) - 1;
+    public const int SlotBits = 20;
+    public const int GenerationBits = 12;
+    private const uint SlotMask = (1u << SlotBits) - 1;
+    private const uint MaxGeneration = (1u << GenerationBits) - 1;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct Slot
