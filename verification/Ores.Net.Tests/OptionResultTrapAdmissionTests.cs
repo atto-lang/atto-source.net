@@ -61,8 +61,64 @@ internal static class OptionResultTrapAdmissionTests
         }
     }
 
-    public static void Run()
+
+    private static void VerifyCanonicalBangLexicalBoundaries()
     {
+        // Source-only 18-case Atto spec #146 corpus. NativeAOT exception
+        // guest behavior is NOT implemented; valid effects must fail closed.
+        string[] canonical =
+        [
+            "trap! parse_id(\"42\")", "trap!parse_id(\"42\")",
+            "throw! Error(\"bad\")", "raise! Error(\"bad\")",
+            "panic! Error(\"bad\")", "throw!Error(\"bad\")"
+        ];
+        foreach (string expression in canonical)
+        {
+            string source = "fnc main():int{return " + expression + ";}";
+            try { _ = OresParser.Parse(source); }
+            catch (FormatException error) when (
+                error.Message.Contains("EXCEPTION_BANG_BACKEND_UNSUPPORTED", StringComparison.Ordinal))
+            {
+                continue;
+            }
+            throw new Exception("Unverified bang guest was accepted: " + expression);
+        }
+        string[] notExceptionBang =
+        [
+            "trap parse_id(\"42\")", "throw Error(\"bad\")",
+            "raise Error(\"bad\")", "panic Error(\"bad\")",
+            "trap !ready", "trap!=next", "trap!eq next",
+            "trapped! parse_id()", "copy! owned"
+        ];
+        foreach (string expression in notExceptionBang)
+        {
+            try { _ = OresParser.Parse("fnc main():int{return " + expression + ";}"); }
+            catch (FormatException error)
+            {
+                if (error.Message.Contains("EXCEPTION_BANG_BACKEND_UNSUPPORTED", StringComparison.Ordinal))
+                    throw new Exception("False exceptional-bang detection: " + expression, error);
+            }
+        }
+        string[] trivia =
+        [
+            "fnc main():int{return 7;} // trap! throw! raise! panic!",
+            "fnc main():int{/* trap! throw! raise! panic! */return 7;}",
+            "fnc main():int{return \"trap! throw! raise! panic!\";}"
+        ];
+        foreach (string source in trivia)
+        {
+            try { _ = OresParser.Parse(source); }
+            catch (FormatException error)
+            {
+                if (error.Message.Contains("EXCEPTION_BANG_BACKEND_UNSUPPORTED", StringComparison.Ordinal))
+                    throw new Exception("Comment or string was reclassified as guest control", error);
+            }
+        }
+    }
+
+    public static void Run()
+    {        VerifyCanonicalBangLexicalBoundaries();
+
         VerifyCanonicalSourceIsStillFailClosed();
         // Bang exceptional control is reserved and must never reach scalar
         // NativeAOT lowering via a renamed identifier or host exception.
