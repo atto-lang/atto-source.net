@@ -35,6 +35,10 @@ using (var b = new ControlPlaneArena32(2))
     Check(a.ReadI64(parent, 0) == 9_000_000_000L, "i64 data behind Ref32");
     a.WriteI64(parent, 8, long.MinValue);
     Check(a.ReadI64(parent, 8) == long.MinValue, "two i64 limbs as 128-bit payload");
+    a.WriteMaxI64(parent, 8, 18);
+    a.WriteMaxI64(parent, 8, 3); // racing old carrier must not regress native count
+    Check(a.ReadI64(parent, 8) == 18, "native counter is monotone under reordering");
+    Denied(() => a.WriteMaxI64(parent, 0, 22));
     a.WriteRef32(parent, child);
     Check(a.ReadRef32(parent) == child, "typed four-byte child ref");
     // Host-only proof: warmed synchronous unmanaged i64 operations should
