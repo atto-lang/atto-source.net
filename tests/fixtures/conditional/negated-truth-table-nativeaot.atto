@@ -1,0 +1,21 @@
+// Exercise both boolean polarities and else arms in the real CFG/CIL guest.
+// NativeAOT must exit 8: the true ifnot arm must never execute.
+fnc main(): int {
+    let int total = 0;
+    do ifnot true then
+        total = 99;
+    else
+        total = 1;
+    fi
+    do unless false then
+        total = total + 2;
+    else
+        total = 99;
+    fi
+    do ifnot total eq 3 then
+        total = 99;
+    else
+        total = total + 5;
+    fi
+    return total;
+}
