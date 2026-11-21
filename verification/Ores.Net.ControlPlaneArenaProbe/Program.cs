@@ -12,7 +12,10 @@ static void Denied(Action action)
     if (!rejected) throw new Exception("control ref must fail closed");
 }
 
-Check(ControlPlaneArena32.Abi == "control_generation20_slot12_v1", "explicit control ABI");
+Check(ControlPlaneArena32.Abi == "control_generation12_slot20_v1", "actual 12-bit generation / 20-bit slot control ABI");
+Check(ControlPlaneArena32.SlotBits == 20 && ControlPlaneArena32.GenerationBits == 12 &&
+      ControlPlaneArena32.SlotBits + ControlPlaneArena32.GenerationBits == 32,
+      "control Ref32 bit partition must not be mislabeled");
 Check(ControlPlaneArena32.RecordBytes == 32, "physical record width");
 using (var a = new ControlPlaneArena32(2))
 using (var b = new ControlPlaneArena32(2))
@@ -21,6 +24,11 @@ using (var b = new ControlPlaneArena32(2))
     ulong child = a.Allocate();
     ulong foreign = b.Allocate();
     Check((uint)parent == (uint)foreign, "different heaps have equal numeric 32-bit tokens");
+    Check(((uint)parent & ((1u << ControlPlaneArena32.SlotBits) - 1)) == 1,
+        "first control Ref32 word encodes slot 0 as low20=1");
+    Check(((uint)parent >> ControlPlaneArena32.SlotBits) == 1,
+        "first control Ref32 word encodes generation 1 in high12");
+
     Denied(() => b.ReadI64(parent, 0));
     Denied(() => a.WriteRef32(parent, foreign));
     a.WriteI64(parent, 0, 9_000_000_000L);
@@ -66,6 +74,11 @@ using (var exhausted = new ControlPlaneArena32(1))
         exhausted.Drop(current);
         current = exhausted.Allocate();
     }
+    uint generation = (uint)current >> ControlPlaneArena32.SlotBits;
+    Check(generation == (1u << ControlPlaneArena32.GenerationBits) - 1,
+        "generation reaches 12-bit max before permanent retirement");
+    Check(((uint)current & 0x80000000u) != 0,
+        "high-bit control Ref32 word must remain unsigned");
     exhausted.Drop(current);
     Denied(() => { _ = exhausted.Allocate(); });
 }
