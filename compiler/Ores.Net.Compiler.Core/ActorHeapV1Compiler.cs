@@ -148,6 +148,7 @@ public static class ActorHeapV1Compiler
         output.AppendLine("    public static void receive(ActorContext context, int message)");
         output.AppendLine("    {");
         output.AppendLine("        ArgumentNullException.ThrowIfNull(context);");
+        output.AppendLine("        context.RequireOwnedGuestStorageAbiV1(\"generation16_slot16\");");
         output.AppendLine("        ActorGuestOwnedRef32 first = default;");
         output.AppendLine("        ActorGuestOwnedRef32 second = default;");
         output.AppendLine("        try");
