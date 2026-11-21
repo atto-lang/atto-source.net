@@ -6,6 +6,9 @@ on:
       - "tests/Atto.Cil.Guest.Host/**"
       - "fixtures/cil/**"
       - "scripts/test-cil-guest.sh"
+      - "scripts/test-match-cil-guest.sh"
+      - "scripts/test-stdio-cil-guest.sh"
+      - "fixtures/match-return-forms-v1/**"
       - ".github/workflows/atto-direct-cil-guest.yml"
   push:
     branches: [main]
@@ -20,16 +23,38 @@ jobs:
       - name: Checkout without persisted credentials
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-      - name: Print exact source head and Git tree
+      - name: Verify exact head and source tree
         shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          git rev-parse HEAD
-          git rev-parse HEAD^{tree}
-      - name: Install .NET 8
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[a-f0-9]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet HEAD --
+          test -z "$(git ls-files --others --exclude-standard)"
+          git rev-parse 'HEAD^{tree}'
+      - name: Install root-pinned .NET 10 SDK and .NET 8 target runtime
         uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
         with:
-          dotnet-version: "8.0.x"
+          dotnet-version: |
+            8.0.x
+            10.0.x
+      - name: Verify selected SDK and runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet --version | grep -E '^10\.'
+          dotnet --list-runtimes | grep -F 'Microsoft.NETCore.App 8.'
+          dotnet --list-runtimes | grep -F 'Microsoft.NETCore.App 10.'
       - name: Compile and execute real Atto CIL/NativeAOT guest and negatives
         shell: bash
         run: bash scripts/test-cil-guest.sh
+      - name: Compile and execute guarded match direct CIL, CoreCLR, NativeAOT guests
+        shell: bash
+        run: bash scripts/test-match-cil-guest.sh
+      - name: Compile and execute original Atto stdout match programs (CoreCLR and NativeAOT)
+        shell: bash
+        run: bash scripts/test-stdio-cil-guest.sh
