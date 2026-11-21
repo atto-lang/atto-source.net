@@ -29,8 +29,20 @@ jobs:
         env:
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[a-f0-9]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
-          test -z "$(git status --porcelain)"
+          git diff --quiet HEAD --
+          test -z "$(git ls-files --others --exclude-standard)"
+          for file in \
+            compiler/Atto.Cil.ResultPreview/Program.cs \
+            scripts/test-result-preview-guest.sh \
+            fixtures/result_preview/negative/unsupported_raise.atto \
+            fixtures/result_preview/negative/unsupported_panic.atto \
+            fixtures/result_preview/negative/unsupported_trap_bang.atto; do
+            test "$(git hash-object --no-filters "$file")" = "$(git rev-parse "HEAD:$file")"
+          done
+          echo "PINNED_HEAD=$EXPECTED_HEAD TREE=$(git rev-parse 'HEAD^{tree}')"
       - name: Execute strict CLR guest matrix (NativeAOT not claimed)
         env:
           ATTO_RESULT_CLR_ONLY: '1'
@@ -52,7 +64,19 @@ jobs:
         env:
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[a-f0-9]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
-          test -z "$(git status --porcelain)"
+          git diff --quiet HEAD --
+          test -z "$(git ls-files --others --exclude-standard)"
+          for file in \
+            compiler/Atto.Cil.ResultPreview/Program.cs \
+            scripts/test-result-preview-guest.sh \
+            fixtures/result_preview/negative/unsupported_raise.atto \
+            fixtures/result_preview/negative/unsupported_panic.atto \
+            fixtures/result_preview/negative/unsupported_trap_bang.atto; do
+            test "$(git hash-object --no-filters "$file")" = "$(git rev-parse "HEAD:$file")"
+          done
+          echo "PINNED_HEAD=$EXPECTED_HEAD TREE=$(git rev-parse 'HEAD^{tree}')"
       - name: Execute CLR and NativeAOT compiled guest matrix
         run: bash scripts/test-result-preview-guest.sh
