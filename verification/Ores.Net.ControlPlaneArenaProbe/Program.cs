@@ -8,7 +8,7 @@ static void Denied(Action action)
 {
     bool rejected = false;
     try { action(); }
-    catch (InvalidOperationException or ArgumentOutOfRangeException) { rejected = true; }
+    catch (Exception ex) when (ex is InvalidOperationException or ArgumentOutOfRangeException) { rejected = true; }
     if (!rejected) throw new Exception("control ref must fail closed");
 }
 
