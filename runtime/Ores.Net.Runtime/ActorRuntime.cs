@@ -133,6 +133,16 @@ public sealed class ActorContext
     public uint AllocateTypedGuestObject32(ActorGuestLayout32 layout) =>
         GuestHeapForActiveTurn().AllocateTyped(_turn, layout);
 
+    // Compiler-generated guests must negotiate the *storage representation*
+    // before allocating a single object. A 32-bit generation/slot handle must
+    // never be silently interpreted as another backend's offset8+1 Ref32.
+    // This checks actor-turn admission without allocating a guest handle table.
+    public void RequireOwnedGuestStorageAbiV1(string requestedAbi)
+    {
+        _arena.ValidateActiveTurn(_turn);
+        ActorGuestHeap32.RequireStorageAbiV1(requestedAbi);
+    }
+
     // Compiler-facing API: bind native four-byte fields to the physical actor
     // owner's identity in host metadata, never in the guest object payload.
     public ActorGuestOwnedRef32 AllocateOwnedTypedGuestObject32(
