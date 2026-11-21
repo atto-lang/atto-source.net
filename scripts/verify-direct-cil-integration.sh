@@ -34,8 +34,8 @@ while IFS=$'\t' read -r expected path || [[ -n "$expected$path" ]]; do
   fi
   count=$((count + 1))
 done < "$manifest"
-if [[ "$count" -ne 35 ]]; then
-  echo "E_INTEGRATION_MANIFEST_COUNT=$count expected=35" >&2
+if [[ "$count" -ne 38 ]]; then
+  echo "E_INTEGRATION_MANIFEST_COUNT=$count expected=38" >&2
   exit 1
 fi
 for path in \
