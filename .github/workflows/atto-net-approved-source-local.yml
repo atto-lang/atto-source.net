@@ -4,8 +4,11 @@
 name: Atto .NET approved one-shot source-local exact SHA
 on:
   workflow_dispatch:
+# Private checkout and private Pull Request metadata preflight require separate
+# read-only permission scopes; unspecified scopes remain disabled.
 permissions:
   contents: read
+  pull-requests: read
 # Serialize manual attestations: never allow a new dispatch to interrupt a
 # currently running exact-SHA isolated one-shot source verification.
 concurrency:
