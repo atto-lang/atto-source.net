@@ -114,6 +114,11 @@ internal static class DirectedPipePlanner
         foreach (var p in plans)
         {
             ArgumentNullException.ThrowIfNull(p);
+            // Record constructors/with-copies can supply null for a
+            // non-nullable descriptor: never let a NullReferenceException
+            // obscure an invalid compiler plan's stable admission error.
+            if (p.Written is null || p.FlowIndices is null || p.DataEdges is null)
+                throw new ArgumentException("E_PIPE_PLAN_FORGED");
             // Plans are immutable descriptions, not capabilities. Even an internal
             // caller can construct a forged record/with-copy: rederive its
             // authenticated DATA edges from the written stage sequence before
