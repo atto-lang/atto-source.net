@@ -29,6 +29,22 @@ using (var b = new ControlPlaneArena32(2))
     Check(a.ReadI64(parent, 8) == long.MinValue, "two i64 limbs as 128-bit payload");
     a.WriteRef32(parent, child);
     Check(a.ReadRef32(parent) == child, "typed four-byte child ref");
+    // Host-only proof: warmed synchronous unmanaged i64 operations should
+    // allocate no CLR managed bytes on the current executing thread.
+    for (int i = 0; i < 16_384; i++)
+    {
+        a.WriteI64(parent, 0, i);
+        Check(a.ReadI64(parent, 0) == i, "warmup scalar parity");
+    }
+    long beforeBytes = GC.GetAllocatedBytesForCurrentThread();
+    for (int i = 0; i < 16_384; i++)
+    {
+        a.WriteI64(parent, 0, i);
+        if (a.ReadI64(parent, 0) != i) throw new Exception("hotpath scalar mismatch");
+    }
+    long afterBytes = GC.GetAllocatedBytesForCurrentThread();
+    Check(afterBytes == beforeBytes, "warmed CLR control hotpath must allocate zero managed bytes");
+    Console.WriteLine("PASS dotnet control host warmed i64 read/write managed-byte delta=0");
     Denied(() => a.WriteI64(parent, 16, 1));
     Denied(() => { _ = a.Allocate(); });
     a.Drop(child);
