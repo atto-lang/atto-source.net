@@ -71,6 +71,11 @@ internal static class ActorGuestHeap32SelfTest
             try
             {
                 Require(message.Length == 1, "fixture message length");
+                context.RequireOwnedGuestStorageAbiV1("generation16_slot16");
+                ExpectInvalid(
+                    () => context.RequireOwnedGuestStorageAbiV1("offset8_plus_one"),
+                    "compiler actor context must reject cross-backend ref32 layout");
+
                 if (message.Span[0] == 1)
                 {
                     uint root = context.AllocateGuestObject32(16);
