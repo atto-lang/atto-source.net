@@ -87,6 +87,33 @@ internal static class ActorGuestDemandBackedIntegrationSelfTest
             runtime.LiveActors == 0 && runtime.NativeReservedBytes == 0,
             TimeSpan.FromSeconds(15)),
             "actor retirement must release demand-backed native slabs");
+        // A quota smaller than the first committed native page must fail
+        // BEFORE allocating a guest slot, publishing a Ref32 or charging the
+        // runtime or process-wide physical budget.
+        var tiny = new ActorArenaBudget(1);
+        using (var arena = new ActorArena(31, 1, 512, 256,
+                   maxAllocations: 4, maxLifetimePins: 4, maxReadLoans: 4,
+                   budget: tiny, demandBacked: true))
+        {
+            Require(arena.ReservedNativeBytes == 0 && tiny.ReservedBytes == 0,
+                "demand-backed arena must start with no physical native charge");
+            using (ActorArenaTurn turn = arena.EnterTurn(31, 1))
+            {
+                bool denied = false;
+                try { _ = arena.AllocateNativeGuest(turn, 16); }
+                catch (InvalidOperationException) { denied = true; }
+                Require(denied, "insufficient native budget must deny guest publication");
+                Require(arena.LiveAllocations == 0 && arena.ReservedNativeBytes == 0 &&
+                        tiny.ReservedBytes == 0,
+                    "failed actor guest admission must not publish a slot or reserve native bytes");
+            }
+            arena.Retire();
+            arena.TryReclaim();
+        }
+        Require(tiny.ReservedBytes == 0,
+            "failed guest allocation must not charge later native cleanup");
+        Console.WriteLine(
+            "PASS actor-guest-demand-backed-budget: native allocation failure leaves zero live refs and no physical reservation (host only)");
         Console.WriteLine(
             "PASS actor-guest-demand-backed-ref32: first guest allocation charges physical native storage and actor stop refunds it (host only)");
     }
