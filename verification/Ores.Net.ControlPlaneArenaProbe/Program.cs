@@ -20,6 +20,26 @@ Check(ControlPlaneArena32.RecordBytes == 32, "physical record width");
 Check(ControlPlaneArena32.RequiredNativeBytes(1) == 48, "12-byte slot metadata is padded to 16");
 Check(ControlPlaneArena32.RequiredNativeBytes(2) == 88, "two 12-byte slots require 24 native metadata bytes");
 Check(ControlPlaneArena32.RequiredNativeBytes(3) == 136, "three slots pad 36 metadata bytes to 40");
+long syntheticIssuer = 0;
+Check(ControlPlaneArena32.ClaimIssuer(ref syntheticIssuer) == 1 && syntheticIssuer == 1,
+      "first issuer reservation is monotone");
+syntheticIssuer = (long)uint.MaxValue - 1;
+Check(ControlPlaneArena32.ClaimIssuer(ref syntheticIssuer) == uint.MaxValue &&
+      syntheticIssuer == uint.MaxValue, "last issuer issued exactly once");
+Denied(() => {
+    long atLimit = uint.MaxValue;
+    _ = ControlPlaneArena32.ClaimIssuer(ref atLimit);
+});
+Denied(() => {
+    long beyondLimit = long.MaxValue;
+    _ = ControlPlaneArena32.ClaimIssuer(ref beyondLimit);
+});
+Denied(() => {
+    long negative = long.MinValue;
+    _ = ControlPlaneArena32.ClaimIssuer(ref negative);
+});
+Check(syntheticIssuer == uint.MaxValue,
+      "issuer reservation must saturate and not consume global state");
 using (var a = new ControlPlaneArena32(2))
 using (var b = new ControlPlaneArena32(2))
 {
