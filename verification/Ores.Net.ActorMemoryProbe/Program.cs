@@ -26,6 +26,26 @@ static void VerifyReceiveFrame(ActorContext context, ActorStackFrameHandle previ
     context.PopStackFrame(frame);
 }
 
+// Java ActorHeapAdmission parity must hold inside an actual NativeAOT host
+// process as well as the managed test runner. Do not treat actor-local native
+// bytes or a full set of user-constructible proof flags as a GC/isolate proof.
+ActorHeapAdmissionV1.RequireSupportedManagedMode("hybrid");
+ActorHeapAdmissionV1.RequireSupportedManagedMode("ownership-first");
+ActorHeapAdmissionV1.RequireSupportedTenantIsolationMode("trusted-inprocess");
+Deny(() => ActorHeapAdmissionV1.RequireSupportedManagedMode("zero-gc"));
+Deny(() => ActorHeapAdmissionV1.RequireSupportedTenantIsolationMode(
+    "sandboxed-process"));
+Deny(() => _ = new ActorRuntime(new ActorRuntimeOptions { GcMode = "strict-no-gc" }));
+Deny(() => _ = new ActorRuntime(new ActorRuntimeOptions
+{
+    TenantIsolationMode = "vm-isolate"
+}));
+var forgedProof = new ActorHeapAdmissionV1.OwnershipProof(
+    true, true, true, true, true, true, true, true);
+Require(forgedProof.Complete, "all-true proof must still be non-authoritative");
+Deny(() => ActorHeapAdmissionV1.RequireZeroGuestTracing(
+    ActorHeapAdmissionV1.Backing.ExplicitNativeRegion, forgedProof));
+
 // Keep all probe actor cardinalities and dispatcher admission capacity in lockstep.
 const int actorCount = 4;
 var options = new ActorRuntimeOptions
@@ -48,6 +68,11 @@ using var verified = new CountdownEvent(actorCount);
 using var survivorVerified = new AutoResetEvent(false);
 var errors = new ConcurrentQueue<Exception>();
 var handles = new ActorArenaHandle?[actorCount];
+var compressed = new uint[actorCount];
+var typedRoots = new uint[actorCount];
+var typedNode = new ActorGuestLayout32(0xA701, 16,
+    new[] { new ActorGuestField32(0, ActorGuestFieldKind32.I64),
+            new ActorGuestField32(8, ActorGuestFieldKind32.Ref32, 0xA701) });
 var frames = new ActorStackFrameHandle?[actorCount];
 var executions = new ActorExecutionContext?[actorCount];
 var references = new ActorRef[actorCount];
@@ -78,6 +103,84 @@ for (int i = 0; i < actorCount; ++i)
                 handles[index] = context.AllocatePersistent(8);
                 context.Write(handles[index]!, 0,
                     new byte[] { (byte)(11 + index), 0, 0, 0, 0, 0, 0, 0 });
+                compressed[index] = context.AllocateGuestObject32(8);
+                context.WriteGuestObject32(compressed[index], 0,
+                    new byte[] { (byte)(41 + index) });
+                if (index == 0)
+                {
+                    // Measured inside a real NativeAOT actor turn, after the
+                    // one-time lazy metadata/locking paths have been warmed.
+                    Span<byte> value = stackalloc byte[8];
+                    for (int warm = 0; warm < 128; warm++)
+                    {
+                        uint temporary = context.AllocateGuestObject32(8);
+                        value[0] = (byte)warm;
+                        context.WriteGuestObject32(temporary, 0, value);
+                        context.ReadGuestObject32(temporary, 0, value);
+                        context.DropGuestObject32(temporary);
+                    }
+                    bool correct = true;
+                    long before = GC.GetAllocatedBytesForCurrentThread();
+                    for (int cycle = 0; cycle < 4096; cycle++)
+                    {
+                        uint temporary = context.AllocateGuestObject32(8);
+                        value[0] = (byte)cycle;
+                        context.WriteGuestObject32(temporary, 0, value);
+                        value[0] = 0;
+                        context.ReadGuestObject32(temporary, 0, value);
+                        if (value[0] != (byte)cycle) correct = false;
+                        context.DropGuestObject32(temporary);
+                        if (!correct) break;
+                    }
+                    long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+                    Require(correct && allocated == 0,
+                        "NativeAOT actor guest payload steady-state must allocate zero CLR bytes");
+
+                    // Warm the nominal type-ID registry separately: that
+                    // first metadata admission may allocate managed memory.
+                    for (int warm = 0; warm < 128; warm++)
+                    {
+                        uint temporary = context.AllocateTypedGuestObject32(typedNode);
+                        System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(
+                            value, warm);
+                        context.WriteGuestObject32(temporary, 0, value);
+                        context.WriteGuestReference32(temporary, 8, 0);
+                        context.DropGuestObject32(temporary);
+                    }
+
+                    bool typedCorrect = true;
+                    long typedBefore = GC.GetAllocatedBytesForCurrentThread();
+                    for (int cycle = 0; cycle < 4096; cycle++)
+                    {
+                        uint temporary = context.AllocateTypedGuestObject32(typedNode);
+                        System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(
+                            value, cycle);
+                        context.WriteGuestObject32(temporary, 0, value);
+                        value.Clear();
+                        context.ReadGuestObject32(temporary, 0, value);
+                        if (System.Buffers.Binary.BinaryPrimitives.ReadInt64LittleEndian(
+                                value) != cycle)
+                            typedCorrect = false;
+                        context.WriteGuestReference32(temporary, 8, 0);
+                        context.DropGuestObject32(temporary);
+                        if (!typedCorrect) break;
+                    }
+                    long typedAllocated =
+                        GC.GetAllocatedBytesForCurrentThread() - typedBefore;
+                    Require(typedCorrect && typedAllocated == 0,
+                        "NativeAOT warmed typed actor object path must allocate zero CLR bytes");
+                }
+                typedRoots[index] = context.AllocateTypedGuestObject32(typedNode);
+                uint typedChild = context.AllocateTypedGuestObject32(typedNode);
+                context.WriteGuestObject32(typedChild, 0,
+                    new byte[8] { (byte)(51 + index), 0, 0, 0, 0, 0, 0, 0 });
+                Deny(() => context.WriteGuestObject32(typedChild, 0,
+                    new byte[] { 0xFF }));
+                Deny(() => context.ReadGuestObject32(typedChild, 0,
+                    new byte[1]));
+                context.WriteGuestReference32(typedRoots[index], 8, typedChild);
+                Deny(() => context.WriteGuestObject32(typedRoots[index], 8,
+                    new byte[] { 0, 0, 0, 0 }));
                 frames[index] = context.PushStackFrame(8);
                 context.WriteStackFrame(frames[index]!, 0,
                     new byte[] { (byte)(31 + index) });
@@ -86,6 +189,15 @@ for (int i = 0; i < actorCount; ++i)
             {
                 Require(index == 2 && (phase == 2 || phase == 3),
                     "unexpected survivor probe phase or actor");
+                var guestValue = new byte[1];
+                context.ReadGuestObject32(compressed[index], 0, guestValue);
+                Require(guestValue[0] == 41 + index,
+                    "survivor compressed ref lost private guest payload");
+                uint child = context.ReadGuestReference32(typedRoots[index], 8);
+                var typedValue = new byte[8];
+                context.ReadGuestObject32(child, 0, typedValue);
+                Require(typedValue[0] == 51 + index,
+                    "survivor typed guest child reference lost private payload");
                 var output = new byte[8];
                 context.Read(handles[index]!, 0, output);
                 Require(output[0] == (phase == 2 ? 13 : 14),
@@ -105,6 +217,15 @@ for (int i = 0; i < actorCount; ++i)
                 var output = new byte[8];
                 context.Read(handles[index]!, 0, output);
                 Require(output[0] == 11 + index, "persistent actor value changed");
+                var guestValue = new byte[1];
+                context.ReadGuestObject32(compressed[index], 0, guestValue);
+                Require(guestValue[0] == 41 + index,
+                    "compressed actor-local ref must survive turn rollover");
+                uint typedChild = context.ReadGuestReference32(typedRoots[index], 8);
+                var typedValue = new byte[8];
+                context.ReadGuestObject32(typedChild, 0, typedValue);
+                Require(typedValue[0] == 51 + index,
+                    "typed guest reference graph survives physical actor turn");
                 var frameValue = new byte[1];
                 VerifyReceiveFrame(context, frames[index]!, (byte)(31 + index));
                 for (int j = 0; j < actorCount; ++j)
@@ -145,6 +266,7 @@ Require(SpinWait.SpinUntil(() => runtime.CompletedMessages == 2 * actorCount,
 Require(errors.IsEmpty, "actor isolation check failed");
 Require(runtime.StartedCarrierThreads == 3, "carrier pools exceeded configured bounds");
 Deny(() => retained!.AllocateScratch(8));
+Deny(() => retained!.AllocateGuestObject32(8));
 // Retire one SHARED actor while its same-pool peer continues taking turns.
 long allReserved = runtime.NativeReservedBytes;
 Require(allReserved > 0 && allReserved % actorCount == 0,
@@ -399,3 +521,8 @@ using (var foreignActor = new ActorNativeAggregateStore(256, 8))
         "native allocations quiescent");
 }
 Console.WriteLine("PASS actor-aggregate-host-nativeaot: five tagged owned scalar shapes, foreign/stale denial and deterministic cleanup (NOT compiled AttoLang guest)");
+Console.WriteLine("PASS actor-ref32-native-probe: four actor-local uint32 guest refs, distinct native payloads, retained-turn denial (host only; not compiled guest)");
+Console.WriteLine("PASS actor-ref32-native-no-clr-allocation: 4096 warmed guest payload cycles allocated zero managed bytes (host only)");
+Console.WriteLine("PASS actor-ref32-native-typed-nodegraph: four typed native graphs survive actor turns with guarded reference fields (host only; not compiled guest)");
+Console.WriteLine("PASS actor-ref32-native-typed-no-clr-allocation: 4096 warmed typed I64/ref32 cycles allocated zero managed bytes (host only)");
+Console.WriteLine("PASS actor-heap-java-parity-nativeaot: unsupported GC and tenant isolation rejected before actor admission (host only)");

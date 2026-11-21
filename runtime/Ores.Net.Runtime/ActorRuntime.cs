@@ -42,12 +42,18 @@ public sealed class ActorRuntimeOptions
     public int ActorMaxLifetimePins { get; init; } = 4096;
     public int ActorMaxReadLoans { get; init; } = 4096;
     public long NativeBudgetBytes { get; init; } = 512L * 1024 * 1024;
+    // Opt-in unmanaged CONTROL summary; not evidence of process-wide zero GC.
+    public bool UseNativeControlCounters { get; init; } = false;
+    public string GcMode { get; init; } = "hybrid";
+    public string TenantIsolationMode { get; init; } = "trusted-inprocess";
     public int MaxIoQueuedBytes { get; init; } = 64 * 1024 * 1024;
     public int MaxIoQueuedRecords { get; init; } = 65_536;
     public ActorDispatcherOptions Dispatcher { get; init; } = new();
 
     internal void Validate()
     {
+        ActorHeapAdmissionV1.RequireSupportedManagedMode(GcMode);
+        ActorHeapAdmissionV1.RequireSupportedTenantIsolationMode(TenantIsolationMode);
         if (MaxActors <= 0 || MaxActors > 65_536)
             throw new ArgumentOutOfRangeException(nameof(MaxActors));
         if (MessagesPerDispatch <= 0 || MessagesPerDispatch > 4096)
@@ -102,6 +108,7 @@ public sealed class ActorContext
 {
     private readonly ActorArena _arena;
     private readonly ActorArenaTurn _turn;
+    private readonly Lazy<ActorGuestHeap32> _guestHeap;
     private readonly ActorExecutionStack _stack;
     private readonly object _guestFrameGate = new();
     private readonly List<ActorStackFrameHandle> _guestFrames = new();
@@ -113,7 +120,8 @@ public sealed class ActorContext
 
     internal ActorContext(ActorRef self, ActorKind kind,
         ActorArena arena, ActorArenaTurn turn,
-        ActorExecutionContext execution, ActorIoEnvelope io)
+        ActorExecutionContext execution, ActorIoEnvelope io,
+        Lazy<ActorGuestHeap32> guestHeap)
     {
         Self = self;
         Kind = kind;
@@ -122,6 +130,7 @@ public sealed class ActorContext
         _stack = execution.Stack;
         Execution = execution;
         _io = io;
+        _guestHeap = guestHeap;
     }
 
     public ActorRef Self { get; }
@@ -164,6 +173,124 @@ public sealed class ActorContext
     // Host capability providers must enforce the same physical-turn authority
     // as actor memory access. A retained context is not a reusable credential.
     internal void ValidateActiveTurn() => _arena.ValidateActiveTurn(_turn);
+
+    // NativeAOT guest-object substrate: one uint32 generation/slot word per
+    // reference; payloads stay in this actor's existing native arena.
+    // These words must never cross an actor/mailbox/FFI boundary as authority.
+    private ActorGuestHeap32 GuestHeapForActiveTurn()
+    {
+        // Lazy backing tables must not be initialized by an expired/retired
+        // actor turn that no longer has allocation or loan authority.
+        _arena.ValidateActiveTurn(_turn);
+        return _guestHeap.Value;
+    }
+
+    private ActorGuestHeap32 GuestHeapForPhysicalTurn()
+    {
+        // A currently admitted carrier may finish memory cleanup after STOP
+        // begins. Do not require fresh admission to drop/read/write.
+        _arena.ValidatePhysicalTurn(_turn);
+        return _guestHeap.Value;
+    }
+
+    // Trusted low-level ABI only: a uint32 word is NOT a cross-actor reference.
+    public uint AllocateGuestObject32(int bytes, int alignment = 8) =>
+        GuestHeapForActiveTurn().Allocate(_turn, bytes, alignment);
+
+    public uint AllocateTypedGuestObject32(ActorGuestLayout32 layout) =>
+        GuestHeapForActiveTurn().AllocateTyped(_turn, layout);
+
+    // Compiler-generated guests must negotiate the *storage representation*
+    // before allocating a single object. A 32-bit generation/slot handle must
+    // never be silently interpreted as another backend's offset8+1 Ref32.
+    // This checks actor-turn admission without allocating a guest handle table.
+    public void RequireOwnedGuestStorageAbiV1(string requestedAbi)
+    {
+        _arena.ValidateActiveTurn(_turn);
+        ActorGuestHeap32.RequireStorageAbiV1(requestedAbi);
+    }
+
+    // Compiler-facing API: bind native four-byte fields to the physical actor
+    // owner's identity in host metadata, never in the guest object payload.
+    public ActorGuestOwnedRef32 AllocateOwnedTypedGuestObject32(
+        ActorGuestLayout32 layout) =>
+        new(_arena, GuestHeapForActiveTurn().AllocateTyped(_turn, layout));
+
+    private uint RequireOwnedGuestRef32(ActorGuestOwnedRef32 reference)
+    {
+        // Validate the physical execution lease, then the actor owner,
+        // *before* the lazy guest table can allocate any managed metadata.
+        _arena.ValidatePhysicalTurn(_turn);
+        if (!reference.BelongsTo(_arena))
+            throw new InvalidOperationException(
+                "Null or foreign actor-owned guest reference");
+        return reference.Word;
+    }
+
+    public void DropOwnedGuestObject32(ActorGuestOwnedRef32 reference)
+    {
+        uint word = RequireOwnedGuestRef32(reference);
+        GuestHeapForPhysicalTurn().Drop(_turn, word);
+    }
+
+    public ActorArenaReadLoan BorrowOwnedGuestObjectRead32(
+        ActorGuestOwnedRef32 reference)
+    {
+        uint word = RequireOwnedGuestRef32(reference);
+        return GuestHeapForActiveTurn().BorrowRead(_turn, word);
+    }
+
+    public void ReadOwnedGuestObject32(ActorGuestOwnedRef32 reference,
+        int offset, Span<byte> destination)
+    {
+        uint word = RequireOwnedGuestRef32(reference);
+        GuestHeapForPhysicalTurn().Read(_turn, word, offset, destination);
+    }
+
+    public void WriteOwnedGuestObject32(ActorGuestOwnedRef32 reference,
+        int offset, ReadOnlySpan<byte> source)
+    {
+        uint word = RequireOwnedGuestRef32(reference);
+        GuestHeapForPhysicalTurn().Write(_turn, word, offset, source);
+    }
+
+    public ActorGuestOwnedRef32 ReadOwnedGuestReference32(
+        ActorGuestOwnedRef32 owner, int offset)
+    {
+        uint word = RequireOwnedGuestRef32(owner);
+        uint target = GuestHeapForPhysicalTurn().ReadReference(_turn,
+            word, offset);
+        return target == 0 ? default : new ActorGuestOwnedRef32(_arena, target);
+    }
+
+    public void WriteOwnedGuestReference32(ActorGuestOwnedRef32 owner,
+        int offset, ActorGuestOwnedRef32 target)
+    {
+        uint ownerWord = RequireOwnedGuestRef32(owner);
+        uint targetWord = target.IsNull ? 0 : RequireOwnedGuestRef32(target);
+        GuestHeapForPhysicalTurn().WriteReference(
+            _turn, ownerWord, offset, targetWord);
+    }
+
+    public void DropGuestObject32(uint reference) =>
+        GuestHeapForPhysicalTurn().Drop(_turn, reference);
+
+    public ActorArenaReadLoan BorrowGuestObjectRead32(uint reference) =>
+        GuestHeapForActiveTurn().BorrowRead(_turn, reference);
+
+    public void ReadGuestObject32(uint reference, int offset,
+        Span<byte> destination) =>
+        GuestHeapForPhysicalTurn().Read(_turn, reference, offset, destination);
+
+    public void WriteGuestObject32(uint reference, int offset,
+        ReadOnlySpan<byte> source) =>
+        GuestHeapForPhysicalTurn().Write(_turn, reference, offset, source);
+
+    public uint ReadGuestReference32(uint owner, int offset) =>
+        GuestHeapForPhysicalTurn().ReadReference(_turn, owner, offset);
+
+    public void WriteGuestReference32(uint owner, int offset, uint target) =>
+        GuestHeapForPhysicalTurn().WriteReference(_turn, owner, offset, target);
 
     public ActorArenaHandle AllocatePersistent(int bytes, int alignment = 8) =>
         _arena.AllocatePersistent(_turn, bytes, alignment);
@@ -421,6 +548,9 @@ public sealed class ActorRuntime : IDisposable
     private readonly ActorIoBudget _ioBudget;
     private readonly ActorDispatchDomains _domains;
     private readonly ActorPubSub _pubSub;
+    private readonly ControlPlaneArena32? _controlPlane;
+    private readonly ulong _controlRoot;
+    private bool _controlPlaneClosed;
 
     private ulong _nextActorId;
     private bool _closed;
@@ -435,13 +565,16 @@ public sealed class ActorRuntime : IDisposable
         internal ActorCell(ActorRuntime owner, ActorKind kind,
             ActorMailbox mailbox, ActorArena arena, ActorMessageHandler handler,
             int stackBytes, int maxStackFrames, ActorIoBudget ioBudget,
-            ActorIoReadyHandler? ioReadyHandler)
+            ActorIoReadyHandler? ioReadyHandler, int guestSlots)
         {
             _owner = owner;
             Kind = kind;
             Mailbox = mailbox;
             Arena = arena;
             FrameStorage = new ActorFrameStorage(arena, stackBytes, maxStackFrames);
+            GuestHeap = new Lazy<ActorGuestHeap32>(
+                () => new ActorGuestHeap32(arena, Math.Min(guestSlots, ActorGuestHeap32.MaxSlots)),
+                LazyThreadSafetyMode.ExecutionAndPublication);
             Handler = handler;
             IoReadyHandler = ioReadyHandler;
             Reference = mailbox.CurrentRef;
@@ -456,6 +589,7 @@ public sealed class ActorRuntime : IDisposable
         internal ActorMailbox Mailbox { get; }
         internal ActorArena Arena { get; }
         internal ActorFrameStorage FrameStorage { get; }
+        internal Lazy<ActorGuestHeap32> GuestHeap { get; }
         internal ulong NextExecutionSequence;
         internal ActorIoEnvelope Io { get; }
         internal ActorIoHostPort HostIo { get; }
@@ -496,16 +630,44 @@ public sealed class ActorRuntime : IDisposable
         options ??= new ActorRuntimeOptions();
         options.Validate();
         _options = options;
-        _nativeBudget = new ActorArenaBudget(options.NativeBudgetBytes);
-        _ioBudget = new ActorIoBudget(options.MaxIoQueuedBytes, options.MaxIoQueuedRecords);
-        _domains = new ActorDispatchDomains(options.Dispatcher);
-        _pubSub = new ActorPubSub(
-            maxGroups: Math.Min(options.MaxActors, 4096),
-            maxGroupsPerActor: 64,
-            maxTopics: 4096,
-            // Shared ActorGroup admission quota is 64 per actor, matching
-            // the Java/Graal bounded cooperation contract.
-            maxSubscriptionsPerActor: 64);
+        ControlPlaneArena32? control = null;
+        ActorDispatchDomains? domains = null;
+        try
+        {
+            long remainingBudget = options.NativeBudgetBytes;
+            if (options.UseNativeControlCounters)
+            {
+                long reserved = ControlPlaneArena32.RequiredNativeBytes(1);
+                if (remainingBudget <= reserved)
+                    throw new ArgumentOutOfRangeException(
+                        nameof(options.NativeBudgetBytes),
+                        "native control root exhausts actor arena budget");
+                control = new ControlPlaneArena32(1);
+                _controlRoot = control.Allocate();
+                control.WriteI64(_controlRoot, 0, 0);
+                control.WriteI64(_controlRoot, 8, 0);
+                remainingBudget -= reserved;
+            }
+            var budget = new ActorArenaBudget(remainingBudget);
+            var ioBudget = new ActorIoBudget(options.MaxIoQueuedBytes, options.MaxIoQueuedRecords);
+            domains = new ActorDispatchDomains(options.Dispatcher);
+            var pubSub = new ActorPubSub(
+                maxGroups: Math.Min(options.MaxActors, 4096),
+                maxGroupsPerActor: 64,
+                maxTopics: 4096,
+                maxSubscriptionsPerActor: 64);
+            _nativeBudget = budget;
+            _ioBudget = ioBudget;
+            _domains = domains;
+            _pubSub = pubSub;
+            _controlPlane = control;
+        }
+        catch
+        {
+            domains?.Dispose();
+            control?.Dispose();
+            throw;
+        }
     }
 
     public ActorPubSub PubSub => _pubSub;
@@ -516,8 +678,52 @@ public sealed class ActorRuntime : IDisposable
     }
 
     public long NativeReservedBytes => _nativeBudget.ReservedBytes;
+    public long NativeControlReservedBytes
+    {
+        get { lock (_gate) return _controlPlaneClosed ? 0 : _controlPlane?.ReservedBytes ?? 0; }
+    }
+    public long NativeControlLiveActors
+    {
+        get
+        {
+            lock (_gate)
+            {
+                if (_controlPlane is null || _controlPlaneClosed)
+                    throw new InvalidOperationException("native control counters not admitted");
+                return _controlPlane.ReadI64(_controlRoot, 0);
+            }
+        }
+    }
+    public long NativeControlCompletedMessages
+    {
+        get
+        {
+            lock (_gate)
+            {
+                if (_controlPlane is null || _controlPlaneClosed)
+                    throw new InvalidOperationException("native control counters not admitted");
+                return _controlPlane.ReadI64(_controlRoot, 8);
+            }
+        }
+    }
     public int IoQueuedBytes => _ioBudget.QueuedBytes;
     public int IoQueuedRecords => _ioBudget.QueuedRecords;
+    /// <summary>
+    /// Atomically read both native CONTROL counters as one coherent host snapshot.
+    /// The value-type tuple does not export a raw actor or control handle.
+    /// This is not compiler-generated i128 guest code.
+    /// </summary>
+    public (long LiveActors, long CompletedMessages) ReadNativeControlSnapshot()
+    {
+        lock (_gate)
+        {
+            if (_controlPlane is null || _controlPlaneClosed)
+                throw new InvalidOperationException("native control counters not admitted");
+            _controlPlane.ReadI128(_controlRoot, out long actors, out long completed);
+            return (actors, completed);
+        }
+    }
+
     public long CompletedMessages => Interlocked.Read(ref _completedMessages);
     public long CompletedIoTurns => Interlocked.Read(ref _completedIoTurns);
     public long FaultedTurns => Interlocked.Read(ref _faultedTurns);
@@ -578,14 +784,20 @@ public sealed class ActorRuntime : IDisposable
                     ? Math.Min(64 * 1024, Math.Max(1, _options.ActorPersistentBytes / 4))
                     : _options.ActorStackBytes;
                 var cell = new ActorCell(this, kind, mailbox, arena, handler,
-                    stackBytes, _options.ActorMaxStackFrames, _ioBudget, ioReadyHandler);
+                    stackBytes, _options.ActorMaxStackFrames, _ioBudget,
+                    ioReadyHandler, _options.ActorMaxAllocations);
                 _actors.Add(candidateId, cell);
                 try
                 {
                     _pubSub.RegisterActor(cell.Reference, kind);
+                    _controlPlane?.WriteI64(_controlRoot, 0, _actors.Count);
                 }
                 catch
                 {
+                    // If native CONTROL publication fails after pub/sub
+                    // registration, an unadmitted actor must not remain
+                    // addressable as a subscriber or a stale actor identity.
+                    _pubSub.RetireActor(cell.Reference);
                     _actors.Remove(candidateId);
                     throw;
                 }
@@ -834,6 +1046,16 @@ public sealed class ActorRuntime : IDisposable
                 FinalizeCell(cell);
 
             _pubSub.Close();
+            lock (_gate)
+            {
+                // All physical actor turns have joined before native root retirement.
+                _controlPlaneClosed = true;
+                if (_controlPlane is not null)
+                {
+                    _controlPlane.Drop(_controlRoot);
+                    _controlPlane.Dispose();
+                }
+            }
         }
     }
 
@@ -978,7 +1200,7 @@ public sealed class ActorRuntime : IDisposable
                         execution.Stack.Begin(turn);
                         var context = new ActorContext(
                             cell.Reference, cell.Kind, cell.Arena, turn, execution,
-                            cell.Io);
+                            cell.Io, cell.GuestHeap);
                         try
                         {
                             if (ioReadyTurn)
@@ -1017,7 +1239,17 @@ public sealed class ActorRuntime : IDisposable
                         if (ioReadyTurn)
                             Interlocked.Increment(ref _completedIoTurns);
                         else
-                            Interlocked.Increment(ref _completedMessages);
+                        {
+                            long completed = Interlocked.Increment(ref _completedMessages);
+                            if (_controlPlane is not null)
+                            {
+                                lock (_gate)
+                                {
+                                    if (!_controlPlaneClosed)
+                                        _controlPlane.WriteMaxI64(_controlRoot, 8, completed);
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -1125,6 +1357,8 @@ public sealed class ActorRuntime : IDisposable
             if (_actors.TryGetValue(cell.Reference.Id, out ActorCell? current) &&
                 ReferenceEquals(current, cell))
                 _actors.Remove(cell.Reference.Id);
+            if (!_controlPlaneClosed)
+                _controlPlane?.WriteI64(_controlRoot, 0, _actors.Count);
         }
         // The observer capability is a terminal *outcome*, not just a
         // physical-retirement notification. Do not retain or expose a
