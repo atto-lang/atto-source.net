@@ -114,6 +114,15 @@ internal static class DirectedPipePlanner
         foreach (var p in plans)
         {
             ArgumentNullException.ThrowIfNull(p);
+            // Plans are immutable descriptions, not capabilities. Even an internal
+            // caller can construct a forged record/with-copy: rederive its
+            // authenticated DATA edges from the written stage sequence before
+            // checking unicast resource conflicts.
+            var checkedPlan = Plan(p.Written, p.Direction);
+            if (p.Tenant != checkedPlan.Tenant ||
+                !p.FlowIndices.SequenceEqual(checkedPlan.FlowIndices) ||
+                !p.DataEdges.SequenceEqual(checkedPlan.DataEdges))
+                throw new ArgumentException("E_PIPE_PLAN_FORGED");
             foreach (var edge in p.DataEdges)
             {
                 var source = p.Tenant + "\0" + edge.Source;
