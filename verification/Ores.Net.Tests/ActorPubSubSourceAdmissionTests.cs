@@ -15,6 +15,28 @@ internal static class ActorPubSubSourceAdmissionTests
 
     public static void Run()
     {
+        // Pin the identical .atto negative corpus used by LLVM, Wasm, JS,
+        // HDL and platform conformance. This is a source-only rejection,
+        // not a compiled guest or an advertised Topic<T> implementation.
+        var fixturePath = Path.Combine(AppContext.BaseDirectory,
+            "contracts", "atto-ensemble-v1",
+            "canonical-unlowered-try-publish.atto");
+        byte[] fixtureBytes = File.ReadAllBytes(fixturePath);
+        byte[] header = System.Text.Encoding.ASCII.GetBytes(
+            "blob " + fixtureBytes.Length.ToString(
+                System.Globalization.CultureInfo.InvariantCulture) + "\0");
+        byte[] gitBlobInput = new byte[header.Length + fixtureBytes.Length];
+        Buffer.BlockCopy(header, 0, gitBlobInput, 0, header.Length);
+        Buffer.BlockCopy(fixtureBytes, 0, gitBlobInput, header.Length, fixtureBytes.Length);
+        string gitBlob = Convert.ToHexString(
+            System.Security.Cryptography.SHA1.HashData(gitBlobInput)).ToLowerInvariant();
+        if (gitBlob != "c562ad380bb283da9ffa26160653c1186ab63462")
+            throw new Exception("Ensemble source fixture Git blob identity mismatch");
+        string canonicalSource = new System.Text.UTF8Encoding(false, true)
+            .GetString(fixtureBytes);
+        RequireRejected(
+            () => ActorPubSubSourceAdmission.RejectUnsupported(canonicalSource),
+            "exact cross-backend alias-only share! try_publish fixture");
         foreach (string fixture in Fixtures)
         {
             string source = File.ReadAllText(
