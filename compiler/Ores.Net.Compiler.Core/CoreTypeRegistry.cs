@@ -34,7 +34,7 @@ public static class CoreTypeRegistry
         Allocation Allocation,
         DropPolicy DropPolicy,
         SendPolicy SendPolicy,
-        Lowering Lowering)
+        Lowering BackendLowering)
     {
         public bool AcceptsArity(int arity) =>
             arity >= MinGenericArity && arity <= MaxGenericArity;
