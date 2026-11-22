@@ -264,4 +264,72 @@ define module path as
     return is_canonical_relative(value, false) &&
            is_canonical_relative(value, true);
   }
+
+  // Immutable lexical Path value. The object is NOT a filesystem handle,
+  // cannot authorize I/O, and never resolves symlinks/mounts.
+  // The original spelling is retained for zero-copy scalar component views.
+  define pub class Path as
+    let String spelling;
+    let bool windows;
+
+    pub constructor(String spelling, bool windows) {
+      if normalized_depth(spelling, windows) < 0; do
+        rt fail("std/path: invalid relative path");
+      fi
+      self.spelling = spelling;
+      self.windows = windows;
+    }
+
+    pub fnc component_count(): int {
+      return normalized_depth(self.spelling, self.windows);
+    }
+
+    pub fnc component_start(int index): int {
+      return normalized_component_start(self.spelling, self.windows, index);
+    }
+
+    pub fnc component_length(int index): int {
+      return normalized_component_length(self.spelling, self.windows, index);
+    }
+
+    pub fnc component_scalar(int index, int offset): int {
+      return normalized_component_scalar(self.spelling, self.windows, index, offset);
+    }
+
+    pub fnc file_name_start(): int {
+      return file_name_start(self.spelling, self.windows);
+    }
+
+    pub fnc file_name_length(): int {
+      return file_name_length(self.spelling, self.windows);
+    }
+
+    pub fnc extension_start(): int {
+      return extension_start(self.spelling, self.windows);
+    }
+
+    pub fnc file_stem_length(): int {
+      return file_stem_length(self.spelling, self.windows);
+    }
+
+    pub fnc parent_depth(): int {
+      return parent_depth(self.spelling, self.windows);
+    }
+
+    pub fnc is_canonical(): bool {
+      return is_canonical_relative(self.spelling, self.windows);
+    }
+
+    pub fnc is_portable(): bool {
+      return is_portable_relative(self.spelling);
+    }
+
+    pub fnc can_join(String child): bool {
+      return join_admissible(self.spelling, child, self.windows);
+    }
+  end
+
+  pub fnc relative_path(String spelling, bool windows): Path {
+    return new Path(spelling, windows);
+  }
 end
