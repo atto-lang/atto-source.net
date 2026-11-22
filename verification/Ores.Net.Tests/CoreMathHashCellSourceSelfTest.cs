@@ -224,6 +224,39 @@ internal static class CoreMathHashCellSourceSelfTest
                 if (!failure.Message.Contains("Core namespace requires authenticated",
                     StringComparison.Ordinal)) throw;
             }
+            // The pinned Core Cell policy does NOT authorize ownership
+            // operations. The production structured compiler must reject the
+            // canonical bang and legacy rt syntax before CIL emission.
+            string deniedCellDll = Path.Combine(root, "ForbiddenCoreCellLoan.dll");
+            foreach (var denied in new (string expression, string witness)[] {
+                ("borrow!owner", "OWNERSHIP_BANG_BACKEND_UNSUPPORTED"),
+                ("take!owner", "OWNERSHIP_BANG_BACKEND_UNSUPPORTED"),
+                ("share!owner", "OWNERSHIP_BANG_BACKEND_UNSUPPORTED"),
+                ("copy!owner", "OWNERSHIP_BANG_BACKEND_UNSUPPORTED"),
+                ("mut borrow!owner", "OWNERSHIP_BANG_BACKEND_UNSUPPORTED"),
+                ("rt borrow owner", "Ownership operation 'rt borrow'"),
+                ("rt mut borrow owner", "Ownership operation 'rt mut borrow'"),
+                ("rt take owner", "Ownership operation 'rt take'")
+            }) {
+                File.WriteAllText(guest,
+                    "import module cell from \"atto.core/cell\"; " +
+                    "pub fnc main():int{val int owner=42;return " + denied.expression + ";}");
+                try {
+                    var invalidLoan = OresSourceModuleCompiler.Compile(guest, new[] { root });
+                    // Never allow an unauthorized ownership expression to
+                    // produce a supposedly validated CIL artifact.
+                    CilEmitter.EmitLibrary(invalidLoan.Module, deniedCellDll);
+                    throw new InvalidOperationException(
+                        "Unproven Core Cell ownership operation compiled: " + denied.expression);
+                }
+                catch (FormatException failure) {
+                    if (!failure.Message.Contains(denied.witness, StringComparison.Ordinal))
+                        throw;
+                }
+                if (File.Exists(deniedCellDll))
+                    throw new InvalidOperationException("Rejected Core Cell source emitted a CIL DLL");
+            }
+
             // Out-of-range signed i64 literals must not reach CIL emission.
             File.WriteAllText(guest,
                 "import module math from \"atto.core/math\"; " +
