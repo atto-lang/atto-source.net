@@ -238,7 +238,7 @@ public static class CoreTypeRegistry
         Entries.TryGetValue(name, out var info) &&
         info.Scope == Scope.Core && info.Kind == Kind.Type &&
         info.Ownership == Ownership.PayloadDependent &&
-        info.AcceptsArity(arity) && name is "Option" or "Result";
+        info.AcceptsArity(arity) && (name is "Option" or "Result");
 
     public static TypeInfo RequireProfile(string name, Profile profile)
     {
