@@ -1940,9 +1940,8 @@ public static partial class OresStructuredParser
                 if (!Take("int"))
                     throw Error("E_ARRAY_I64_ONLY: fixed arrays support only Array<int>");
                 if (Current.Text == ",")
-                    throw CoreTypeRegistry.Require("Array", 2) is not null
-                        ? Error("E_CORE_TYPE_ARITY: .NET Array<int> subset accepts one type argument")
-                        : Error("E_CORE_TYPE_ARITY");
+                    throw new FormatException(
+                        $"E_CORE_TYPE_ARITY: {CoreTypeRegistry.Lookup("Array")!.CanonicalIdentity} expects one type argument at offset {Current.Offset}");
                 Expect(">");
                 return IrValueType.FixedArrayI64;
             }
@@ -1951,9 +1950,8 @@ public static partial class OresStructuredParser
                 CoreTypeRegistry.RequireExecutableStructuredNet("Option", 1);
                 Expect("<");
                 if (Current.Text == ">")
-                    throw CoreTypeRegistry.Require("Option", 0) is not null
-                        ? Error("E_CORE_TYPE_ARITY: Option requires one type argument")
-                        : Error("E_CORE_TYPE_ARITY");
+                    throw new FormatException(
+                        $"E_CORE_TYPE_ARITY: {CoreTypeRegistry.Lookup("Option")!.CanonicalIdentity} requires one type argument at offset {Current.Offset}");
                 if (!Take("int"))
                     throw Error("E_OPTION_I64_ONLY: this NativeAOT slice admits only Option<int>; no nested or erased generic Option");
                 if (Current.Text == ",")
