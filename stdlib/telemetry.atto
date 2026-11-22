@@ -101,8 +101,8 @@ define module Telemetry as
     if points.get(0) != 48 || points.get(1) != 48 then return false; fi
     if points.get(2) != 45 || points.get(35) != 45 ||
        points.get(52) != 45 then return false; fi
-    let bool trace_nonzero = false;
-    let bool parent_nonzero = false;
+    let mut bool trace_nonzero = false;
+    let mut bool parent_nonzero = false;
     for (let int i = 3; i <= 54; i = i + 1) {
       if i != 35 && i != 52; do
         let int scalar = points.get(i);
