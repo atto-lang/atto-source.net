@@ -133,8 +133,8 @@ test("five negative mutants cannot receive a source-model PASS",()=>{
     "return flags % 2 == 1;",
     "return flags % 2 == 0;")),"sampling bit inversion");
   assert.throws(()=>verify(mutated("telemetry",
-    "pub fnc drop_increment(int count)",
-    "java:host_call\npub fnc drop_increment(int count)")),"forbidden host injection");
+    "if count < 0 then return -1; fi",
+    "if count < 0 then return java:host_call; fi")),"forbidden host injection");
 });
 test("guest fixture remains exact contract derivation, not guest evidence",()=>{
   const guest = strictSource("tests/fixtures/atto_std_pure_policy_guest_v1.atto").text;
