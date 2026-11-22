@@ -49,6 +49,9 @@ internal static class StdEnvHostSnapshotV1SelfTest
         var bad = new Dictionary<string, string> { ["ATTO_NAME"] = "é".PadLeft(16385, 'x') };
         Invalid(() => StdEnvHostSnapshotV1.Create(bad, new[] { "*" },
             Array.Empty<string>(), true), "UTF8 byte quota");
+        bad["ATTO_NAME"] = "not" + ((char)0) + "allowed";
+        Invalid(() => StdEnvHostSnapshotV1.Create(bad, new[] { "*" },
+            Array.Empty<string>(), true), "NUL environment value");
         bad["ATTO_NAME"] = new string((char)0xD800, 1);
         Invalid(() => StdEnvHostSnapshotV1.Create(bad, new[] { "*" },
             Array.Empty<string>(), true), "lone surrogate");
