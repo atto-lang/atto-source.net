@@ -54,5 +54,24 @@ pub fnc main(): int {
   if path.is_portable_relative("ñ") != false then return 47; fi
   if path.normalized_component_scalar("ñ/café", false, 1, 3) != 233 then return 48; fi
   if path.normalized_component_length("ñ/café", false, 1) != 4 then return 49; fi
+  // Fully native Atto Path value; no ambient .NET filesystem access.
+  val item = path.relative_path("a/./b/../c", false);
+  if item.component_count() != 2 then return 50; fi
+  if item.component_start(1) != 9 then return 51; fi
+  if item.component_length(1) != 1 then return 52; fi
+  if item.component_scalar(1, 0) != 99 then return 53; fi
+  if item.file_name_offset() != 9 then return 54; fi
+  if item.file_name_size() != 1 then return 55; fi
+  if item.extension_offset() != -1 then return 56; fi
+  if item.stem_length() != 1 then return 57; fi
+  if item.parent_component_count() != 1 then return 58; fi
+  if item.is_canonical() != false then return 59; fi
+  if item.is_portable() != false then return 60; fi
+  if item.can_join("deep/file.txt") != false then return 61; fi
+  val clean = path.relative_path("archive.tar.gz", true);
+  if clean.extension_offset() != 12 then return 62; fi
+  if clean.stem_length() != 11 then return 63; fi
+  if clean.is_canonical() != true then return 64; fi
+  if clean.can_join("parts") != true then return 65; fi
   return 0;
 }
