@@ -53,7 +53,7 @@ public static class OresSourceModuleCompiler
     private const string NumericSha256 = "3d1d7b77068dd02b3d60b30b72f29a4537a933134ca79e1e81df096dc56f5f33";
     private const string MathSha256 = "d4363bc341067dc2830b7d3477f435afb0c3c61a08240f785fb8660dec0f5945";
     private const string HashSha256 = "de35f6da5d9b8793f23212150c1280c280fffd0ec0cee01758a6d455b9f880d1";
-    private const string CellSha256 = "6f58169db15411419bacbea6ceacb94236c767c0b2d3a023a2a8a0c028e90cb0";
+    private const string CellSha256 = "ad876ea26e04754e1a62cc85245860876dc8ed512645e30d5150a144e6b96ce3";
 
     private sealed record Unit(string PhysicalPath, string Identity, string Source,
         SourceUnitIdentity Witness, IReadOnlyList<SourceImport> Imports);
