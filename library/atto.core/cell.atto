@@ -3,7 +3,7 @@
 // Unsupported interior mutability MUST be rejected by compiler/runtime.
 use namespace atto.core.cell;
   pub fnc can_borrow_read(int readers, bool writer_active): bool {
-    return readers >= 0 && readers <= 65535 && !writer_active;
+    return readers >= 0 && readers < 65535 && !writer_active;
   }
   pub fnc can_borrow_write(int readers, bool writer_active): bool {
     return readers == 0 && !writer_active;
