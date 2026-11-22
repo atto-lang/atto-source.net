@@ -69,11 +69,18 @@ internal sealed class UdpLoopbackHost : IDisposable
     {
         get
         {
-            lock (_gate)
+            // Ephemeral-port observation is itself a scoped NETWORK action.
+            // Authorize the original bind endpoint (port zero remains zero)
+            // before reading socket metadata. A guest actor must not park
+            // behind another operation's permission callback.
+            Enter();
+            try
             {
                 RequireOpen();
+                _authorize(_requestedPort, Action.Local);
                 return ((IPEndPoint)_socket.LocalEndPoint!).Port;
             }
+            finally { Monitor.Exit(_gate); }
         }
     }
 
