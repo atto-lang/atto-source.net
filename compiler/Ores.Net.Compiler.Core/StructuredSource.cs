@@ -167,9 +167,11 @@ public static partial class OresStructuredParser
     internal static StructuredLinkedUnit ParseLinked(string source, LinkedModuleContext linking)
         => ParseCore(source, linking);
 
-    internal static IReadOnlyList<SourceImport> ReadLinkedImports(string source)
+    internal static IReadOnlyList<SourceImport> ReadLinkedImports(string source,
+        bool compilerOwnedCoreNamespace = false)
     {
-        var reader = new Reader(LexLinked(source));
+        var reader = new Reader(LexLinked(source),
+            allowCoreNamespace: compilerOwnedCoreNamespace);
         return reader.ReadImports();
     }
 
@@ -361,9 +363,11 @@ public static partial class OresStructuredParser
                   tokens[i - 2].Text == "declare")))
                 throw new FormatException(
                     $"ACTOR_FORWARD_NATIVEAOT_UNSUPPORTED: actor forward requires nominal actor identity, ownership and executable CIL lowering at offset {token.Offset}");
-            if (token.Text == "namespace" && i > 0 && tokens[i - 1].Text == "use")
+            if (token.Text == "namespace" && i > 0 && tokens[i - 1].Text == "use" &&
+                !(linking is not null &&
+                  linking.UnitIdentity.StartsWith("@atto.core/", StringComparison.Ordinal)))
                 throw new FormatException(
-                    $"NAMESPACE_RUNTIME_NATIVEAOT_UNSUPPORTED: file namespace requires verified nominal actor/linker identity at offset {token.Offset}");
+                    $"NAMESPACE_RUNTIME_NATIVEAOT_UNSUPPORTED: file namespace requires authenticated compiler-owned Core source or verified package linker at offset {token.Offset}");
             // Reject as soon as the typed receiver header completes: later
             // body syntax may be outside this limited scalar lexer entirely.
             // Waiting for EOF could report an unrelated invalid character
@@ -994,7 +998,8 @@ public static partial class OresStructuredParser
         }
     }
 
-    private sealed class Reader(List<Token> tokens, LinkedModuleContext? linking = null)
+    private sealed class Reader(List<Token> tokens, LinkedModuleContext? linking = null,
+        bool allowCoreNamespace = false)
     {
         private sealed record LocalBinding(IrValueType Type, StructuredBindingKind Kind,
             long? ConstantValue);
@@ -1020,6 +1025,7 @@ public static partial class OresStructuredParser
         private readonly Dictionary<string, StructuredFunction> exports = new(StringComparer.Ordinal);
         private readonly List<string> functionOrder = linking is null ? new() : new(linking.MethodOrder);
         private string? declaredModule;
+        private bool namespaceHeader;
         private int index, statements, loopDepth;
         private IrValueType activeReturnType = IrValueType.I64;
         // Only the scalar binding clause of an explicit -> Type :: body
@@ -1082,6 +1088,31 @@ public static partial class OresStructuredParser
 
         internal IReadOnlyList<SourceImport> ReadImports()
         {
+            // File-level namespace metadata is not a runtime object or an
+            // ambient import. It is admitted here only for SHA-pinned Core
+            // source identities; all other namespaces remain fail-closed.
+            if (Take("use"))
+            {
+                Expect("namespace");
+                if (Name() != "atto") throw Error("Core namespace root must be atto");
+                Expect(".");
+                if (Name() != "core") throw Error("Core namespace tier must be core");
+                Expect(".");
+                string leaf = Name();
+                if (leaf is not ("math" or "hash" or "cell"))
+                    throw Error("Unregistered compiler-owned Core namespace");
+                Expect(";");
+                if (linking is null && !allowCoreNamespace)
+                    throw Error("Core namespace requires authenticated Core import provenance");
+                if (linking is not null)
+                {
+                    if (!string.Equals(linking.UnitIdentity, "@atto.core/" + leaf + ".atto",
+                        StringComparison.Ordinal))
+                        throw Error("Core namespace does not match compiler-owned unit identity");
+                    declaredModule = leaf; // export adapter for legacy import module consumers
+                    namespaceHeader = true;
+                }
+            }
             var imports = new List<SourceImport>();
             while (Take("import"))
             {
@@ -1143,7 +1174,7 @@ public static partial class OresStructuredParser
 
         private StructuredProgram Finish(string name, IReadOnlyList<StructuredStmt> body)
         {
-            if (declaredModule is not null) Expect("end");
+            if (declaredModule is not null && !namespaceHeader) Expect("end");
             if (Current.Text.Length != 0) throw Error("Unexpected trailing token");
             return new StructuredProgram(name, body,
                 new System.Collections.ObjectModel.ReadOnlyDictionary<string, StructuredFunction>(
