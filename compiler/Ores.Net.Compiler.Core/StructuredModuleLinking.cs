@@ -241,7 +241,8 @@ public static class OresSourceModuleCompiler
                 cursor = Path.Combine(cursor, component);
                 RejectReparse(cursor);
                 if (Directory.Exists(cursor) &&
-                    (ProjectRootSourceResolver.MarkerExistsNoFollow(Path.Combine(cursor, ".ores.pkg.toml")) ||
+                    (ProjectRootSourceResolver.MarkerExistsNoFollow(Path.Combine(cursor, ".atto.pkg.toml")) ||
+                     ProjectRootSourceResolver.MarkerExistsNoFollow(Path.Combine(cursor, ".ores.pkg.toml")) ||
                      ProjectRootSourceResolver.MarkerExistsNoFollow(Path.Combine(cursor, ".oreslangc.cfg.toml"))))
                     throw new FormatException("Nested package requires an explicit dependency source root");
             }
