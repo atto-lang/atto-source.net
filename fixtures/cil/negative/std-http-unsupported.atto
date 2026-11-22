@@ -1,0 +1,4 @@
+// Frontend has not implemented compiler-owned std.http import linking.
+// Fail closed before output/artifact emission, never fall back to host C#.
+import * as http from "std.http";
+pub fnc main(): int { return 42; }
