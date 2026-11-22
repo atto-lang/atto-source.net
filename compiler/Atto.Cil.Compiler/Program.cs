@@ -16,10 +16,11 @@ internal abstract record Expression;
 internal sealed record Literal(long Number) : Expression;
 internal sealed record BoolLiteral(bool Value) : Expression;
 internal sealed record Arg(string Name) : Expression;
+internal sealed record Parameter(string Name, string Type);
 internal sealed record Binary(string Op, Expression Left, Expression Right) : Expression;
 internal sealed record Call(string Name, List<Expression> Args) : Expression;
 internal sealed record Guard(Expression Condition, Expression Return);
-internal sealed record Function(string Name, List<string> Args, string ReturnType,
+internal sealed record Function(string Name, List<Parameter> Args, string ReturnType,
     List<Guard> Guards, Expression Return);
 
 internal sealed class Parser
@@ -78,13 +79,17 @@ internal sealed class Parser
             Eat("pub"); Require("fnc");
             string name = Name();
             Require("(");
-            List<string> args = [];
+            List<Parameter> args = [];
             if (Peek != ")") do
             {
-                Require("int");
+                string parameterType = Peek;
+                if (parameterType is not ("int" or "bool"))
+                    throw new CompilerError("E_PARSE", "parameter type must be int or bool");
+                _position++;
                 var arg = Name();
-                if (args.Contains(arg)) throw new CompilerError("E_DUP_PARAM", arg);
-                args.Add(arg);
+                if (args.Any(existing => existing.Name == arg))
+                    throw new CompilerError("E_DUP_PARAM", arg);
+                args.Add(new Parameter(arg, parameterType));
                 if (args.Count > 8) throw new CompilerError("E_LIMIT", "8 parameter limit");
             } while (Eat(","));
             Require(")");
@@ -201,9 +206,9 @@ internal sealed class CIL(List<Function> functions)
                 case Literal: return "int";
                 case BoolLiteral: return "bool";
                 case Arg a:
-                    if (!owner.Args.Contains(a.Name))
-                        throw new CompilerError("E_SYMBOL", a.Name);
-                    return "int";
+                    var parameter = owner.Args.FirstOrDefault(p => p.Name == a.Name);
+                    if (parameter is null) throw new CompilerError("E_SYMBOL", a.Name);
+                    return parameter.Type;
                 case Binary b:
                     var left = TypeOf(b.Left, owner);
                     var right = TypeOf(b.Right, owner);
@@ -226,7 +231,8 @@ internal sealed class CIL(List<Function> functions)
                     var called = _functions[target];
                     if (called.Args.Count != c.Args.Count)
                         throw new CompilerError("E_ARITY", c.Name);
-                    foreach (var arg in c.Args) Expect(TypeOf(arg, owner), "int");
+                    for (int i = 0; i < c.Args.Count; i++)
+                        Expect(TypeOf(c.Args[i], owner), called.Args[i].Type);
                     WalkFunction(target);
                     return called.ReturnType;
                 default: throw new CompilerError("E_TYPE", "unsupported expression");
@@ -283,14 +289,19 @@ internal sealed class CIL(List<Function> functions)
                     if (f.ReturnType == "bool") r.Type().Boolean();
                     else r.Type().Int64();
                 },
-                p => { foreach (var arg in f.Args) p.AddParameter().Type().Int64(); });
+                p => { foreach (var arg in f.Args)
+                 {
+                     var parameter = p.AddParameter();
+                     if (arg.Type == "bool") parameter.Type().Boolean();
+                     else parameter.Type().Int64();
+                 } });
             metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.HideBySig,
                 MethodImplAttributes.IL, metadata.GetOrAddString(f.Name),
                 metadata.GetOrAddBlob(signature), bodyOffsets[i],
                 MetadataTokens.ParameterHandle(nextParameter));
             for (int j = 0; j < f.Args.Count; j++)
             {
-                metadata.AddParameter(ParameterAttributes.None, metadata.GetOrAddString(f.Args[j]), j + 1);
+                metadata.AddParameter(ParameterAttributes.None, metadata.GetOrAddString(f.Args[j].Name), j + 1);
                 nextParameter++;
             }
         }
@@ -324,7 +335,7 @@ internal sealed class CIL(List<Function> functions)
         {
             case Literal c: il.LoadConstantI8(c.Number); return;
             case BoolLiteral b: il.LoadConstantI4(b.Value ? 1 : 0); return;
-            case Arg a: il.LoadArgument(f.Args.IndexOf(a.Name)); return;
+            case Arg a: il.LoadArgument(f.Args.FindIndex(p => p.Name == a.Name)); return;
             case Binary b:
                 Generate(b.Left, f, il);
                 Generate(b.Right, f, il);
