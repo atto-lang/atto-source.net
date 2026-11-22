@@ -1,0 +1,4 @@
+// Current CIL scalar frontend admits int parameters only.
+// Never mis-compile bool parameters as an untyped int guest ABI.
+pub fnc bool_parameter(bool allowed): bool { return allowed; }
+pub fnc main(): int { return 42; }
