@@ -61,3 +61,8 @@ The shared *data-only* contract is pinned by exact Git blob `3d9e9d5308a4cd0a99d
 `.github/workflows/atto-std-134-source-model.yml` requires the exact checkout SHA, source blob identities, pinned contract hash, source model tests and a negative check that `ATTO_REQUIRE_NATIVE_GUEST=1` must fail. The previously existing backend-specific guest fixture and tests remain unchanged. .NET NativeAOT native linking/execution (JDK 25/GraalVM Native Image or .NET CIL/NativeAOT, respectively) remains **NOT_EXECUTED** and is not implied by this source-model alignment.
 
 No private source was copied into another GitHub organization. Source-local CI admission and independently approved private carrier remain release blockers. Keep PR draft.
+
+
+## Real compiler-owned namespace denial and CIL positive control
+
+The focused `verification/Atto.Std.Policy.CompilerAdmission` C# host invokes the actual .NET structured source-module compiler. It requires nine reserved `std/*` or alias imports to fail despite local shadow files, then builds an explicitly relative `./safe_math` source graph and **emits an actual CIL library** using `CilEmitter.EmitLibrary`. The source-only CI workflow requires its `NET_STD_COMPILER_IMPORT_DENIAL=EXECUTED|reserved=9|local_module_graph=CIL_EMITTED` marker on a real runner. This proves neither compiler-owned std linking nor a native `.atto` guest; the complete 134-case guest and NativeAOT execution remain **NOT_EXECUTED**.
