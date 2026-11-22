@@ -1,29 +1,29 @@
 // .NET NativeAOT guest behavior candidate. Must be compiled and executed,
 // not counted as passing from source-only inspection.
-import Path from "../../stdlib/path.atto";
-import Sync from "../../stdlib/sync.atto";
+import path from "../../stdlib/path.atto";
+import sync from "../../stdlib/sync.atto";
 import Telemetry from "../../stdlib/telemetry.atto";
 
 pub fnc main(): int {
-  if Path.normalized_windows_depth("a/./b/../c") != 2 then return 1; fi
-  if Path.normalized_windows_depth("a/../../b") != -1 then return 2; fi
-  if Path.normalized_windows_depth("CON.txt") != -1 then return 3; fi
-  if Path.normalized_windows_depth("NUL") != -1 then return 4; fi
-  if Path.normalized_windows_depth("C:/a") != -1 then return 5; fi
-  if Path.is_canonical_windows_relative("a/../b") then return 6; fi
-  if !Path.is_portable_relative("data/jobs_01") then return 7; fi
-  if Sync.mutex_acquire_admissible(false, false, 1, 10) then return 8; fi
-  if !Sync.mutex_acquire_admissible(false, false, 0, 10) then return 9; fi
-  if Sync.rw_read_admissible(0, false, 1, 8) then return 10; fi
-  if !Sync.rw_write_admissible(0, false) then return 11; fi
-  if Sync.semaphore_release_admissible(4, 2, 5, false) then return 12; fi
-  if !Sync.semaphore_release_admissible(3, 2, 5, false) then return 13; fi
-  if Sync.generation_successor_admissible(2147483647, 0) then return 14; fi
+  if path.normalized_windows_depth("a/./b/../c") != 2 then return 1; fi
+  if path.normalized_windows_depth("a/../../b") != -1 then return 2; fi
+  if path.normalized_windows_depth("CON.txt") != -1 then return 3; fi
+  if path.normalized_windows_depth("NUL") != -1 then return 4; fi
+  if path.normalized_windows_depth("C:/a") != -1 then return 5; fi
+  if path.is_canonical_windows_relative("a/../b") then return 6; fi
+  if !path.is_portable_relative("data/jobs_01") then return 7; fi
+  if sync.mutex_acquire_admissible(false, false, 1, 10) then return 8; fi
+  if !sync.mutex_acquire_admissible(false, false, 0, 10) then return 9; fi
+  if sync.rw_read_admissible(0, false, 1, 8) then return 10; fi
+  if !sync.rw_write_admissible(0, false) then return 11; fi
+  if sync.semaphore_release_admissible(4, 2, 5, false) then return 12; fi
+  if !sync.semaphore_release_admissible(3, 2, 5, false) then return 13; fi
+  if sync.generation_successor_admissible(2147483647, 0) then return 14; fi
   if !Telemetry.traceparent_v00_header_valid("00-0123456789abcdef0123456789abcdef-0123456789abcdef-01") then return 15; fi
   if Telemetry.traceparent_v00_header_valid("00-0123456789abcdef0123456789abcdef-0000000000000000-01") then return 16; fi
   if Telemetry.traceparent_v00_header_valid("00-0123456789abcdef0123456789abcdef-0123456789ABCDEF-01") then return 17; fi
   if Telemetry.traceparent_v00_header_valid("ff-0123456789abcdef0123456789abcdef-0123456789abcdef-01") then return 18; fi
-  if Path.is_portable_relative("safe\\\\child") then return 19; fi
-  if !Sync.semaphore_release_admissible(3, 2, 5, true) then return 20; fi
+  if path.is_portable_relative("safe\\\\child") then return 19; fi
+  if !sync.semaphore_release_admissible(3, 2, 5, true) then return 20; fi
   return 0;
 }
