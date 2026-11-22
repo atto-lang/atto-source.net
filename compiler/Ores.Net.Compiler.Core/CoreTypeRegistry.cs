@@ -40,7 +40,7 @@ public static class CoreTypeRegistry
             arity >= MinGenericArity && arity <= MaxGenericArity;
 
         public bool IsExecutableInStructuredNet =>
-            Lowering is Lowering.NetScalar or Lowering.NetOptionI64Subset
+            BackendLowering is Lowering.NetScalar or Lowering.NetOptionI64Subset
                 or Lowering.NetFixedArrayI64Subset;
     }
 
