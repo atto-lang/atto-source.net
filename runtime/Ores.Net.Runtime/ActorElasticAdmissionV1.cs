@@ -70,7 +70,7 @@ public sealed class ActorElasticAdmissionV1 : IDisposable
             throw new ArgumentOutOfRangeException(nameof(affinity), "E_ACTOR_AFFINITY");
         if (serialActor && maxParallelism != 1)
             throw new ArgumentException("E_SERIAL_PARALLELISM", nameof(maxParallelism));
-        if (affinity is ActorElasticAffinityV1.Pinned or ActorElasticAffinityV1.Dedicated
+        if ((affinity is ActorElasticAffinityV1.Pinned or ActorElasticAffinityV1.Dedicated)
             && maxParallelism != 1)
             throw new ArgumentException("E_AFFINITY_REQUIRES_ONE", nameof(maxParallelism));
 
@@ -161,7 +161,7 @@ public sealed class ActorElasticAdmissionV1 : IDisposable
                 return null;
             if (_affinity == ActorElasticAffinityV1.Dedicated && !_dedicatedReservation)
                 return null;
-            if (_affinity is ActorElasticAffinityV1.Pinned or ActorElasticAffinityV1.Dedicated
+            if ((_affinity is ActorElasticAffinityV1.Pinned or ActorElasticAffinityV1.Dedicated)
                 && _homeLane >= 0 &&
                 (_homeLane != lane || _homeWorkerGeneration != workerGeneration) &&
                 (_live.Count != 0 || _healthy.TryGetValue(_homeLane, out long homeGeneration) &&
@@ -174,8 +174,8 @@ public sealed class ActorElasticAdmissionV1 : IDisposable
             if (!_busyLanes.Add(lane) || !_live.Add(lease))
                 throw new InvalidOperationException("E_DOUBLE_ADMISSION");
             _peak = Math.Max(_peak, _live.Count);
-            if (_homeLane < 0 || _affinity is ActorElasticAffinityV1.Pinned
-                    or ActorElasticAffinityV1.Dedicated)
+            if (_homeLane < 0 ||
+                (_affinity is ActorElasticAffinityV1.Pinned or ActorElasticAffinityV1.Dedicated))
             {
                 _homeLane = lane;
                 _homeWorkerGeneration = workerGeneration;
