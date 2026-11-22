@@ -41,14 +41,19 @@ internal sealed class StdEnvHostSnapshotV1
         string[] denies = CopyRules(deny);
         if (trustedValues.Count > 512) throw new ArgumentException("ENV_INVALID_SNAPSHOT");
         var snapshot = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (string name in trustedValues.Keys)
+        // A missing coarse grant must not even enumerate host key names.
+        // For authorized grants, filter the key before accessing the value.
+        if (coarseEnvironmentCapability)
         {
-            if (!ValidName(name) || !coarseEnvironmentCapability || !Granted(name, grants, denies))
-                continue;
-            if (!trustedValues.TryGetValue(name, out string? value) ||
-                value is null || !ValidValue(value))
-                throw new ArgumentException("ENV_INVALID_SNAPSHOT");
-            snapshot.Add(name, value);
+            foreach (string name in trustedValues.Keys)
+            {
+                if (!ValidName(name) || !Granted(name, grants, denies))
+                    continue;
+                if (!trustedValues.TryGetValue(name, out string? value) ||
+                    value is null || !ValidValue(value))
+                    throw new ArgumentException("ENV_INVALID_SNAPSHOT");
+                snapshot.Add(name, value);
+            }
         }
         return new StdEnvHostSnapshotV1(snapshot, grants, denies, coarseEnvironmentCapability);
     }
