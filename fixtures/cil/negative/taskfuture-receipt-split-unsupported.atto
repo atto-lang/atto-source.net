@@ -1,0 +1,6 @@
+pub fnc main(): int {
+  val TaskFuture<int> t = task<int> { return 42; };
+  val Future<int> receipt = t.get_ready();
+  t.cancel_task();
+  return await receipt;
+}
