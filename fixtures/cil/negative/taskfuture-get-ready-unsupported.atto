@@ -1,0 +1,4 @@
+pub fnc main(): int {
+  val TaskFuture<int> t = task<int> { return 42; };
+  return await t.get_ready();
+}
