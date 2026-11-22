@@ -24,6 +24,8 @@ internal static class CoreMathHashCellSourceSelfTest
                   if math.min_int(7, 2) != 2; do return 1; fi
                   if math.max_int(4, 9) != 9; do return 2; fi
                   if math.signum_int(-19) != -1; do return 3; fi
+                  if math.signum_int(-9223372036854775808) != -1; do return 13; fi
+                  if math.signum_int(9223372036854775807) != 1; do return 14; fi
                   if math.contains_closed_int(5, 10, 2); do return 4; fi
                   if hash.step_byte(17, 42) != 569; do return 5; fi
                   if hash.two_bytes(42, 7) != 17646; do return 6; fi
@@ -51,6 +53,54 @@ internal static class CoreMathHashCellSourceSelfTest
                 if (CfgCilTestInterpreter.Evaluate(run) != 42)
                     throw new InvalidOperationException("Compiled .atto Core guest did not return 42");
             }
+            // Canonical and legacy import spellings must resolve the SAME
+            // authenticated pinned Core unit, not two executable copies.
+            File.WriteAllText(guest,
+                "import module math from \"ores.core/math\"; " +
+                "pub fnc main():int{return math.signum_int(-1)+43;}");
+            var legacy = OresSourceModuleCompiler.Compile(guest, new[] { root });
+            if (legacy.Sources.Count != 2 ||
+                legacy.Sources.Count(x => x.Path == "@atto.core/math.atto") != 1)
+                throw new InvalidOperationException("Alias changed compiler-owned Core identity");
+            string legacyDll = Path.Combine(root, "CoreLegacy.dll");
+            CilEmitter.EmitLibrary(legacy.Module, legacyDll);
+            using (var legacyAssembly = AssemblyDefinition.ReadAssembly(legacyDll))
+            {
+                var program = legacyAssembly.MainModule.Types.Single(t => t.Name == "OresProgram");
+                if (CfgCilTestInterpreter.Evaluate(program.Methods.Single(m => m.Name == "Run")) != 42)
+                    throw new InvalidOperationException("Compiled legacy Core import did not return 42");
+            }
+            // A source-relative import may not shadow a compiler-owned Core
+            // namespace merely by declaring the same logical name.
+            File.WriteAllText(Path.Combine(root, "math.atto"),
+                "use namespace atto.core.math; pub fnc min_int(int a,int b):int{return a;}");
+            File.WriteAllText(guest,
+                "import module math from \"./math.atto\"; pub fnc main():int{return math.min_int(2,4);}");
+            try
+            {
+                OresSourceModuleCompiler.Compile(guest, new[] { root });
+                throw new InvalidOperationException("Namespace-spoofed project file admitted");
+            }
+            catch (FormatException failure)
+            {
+                if (!failure.Message.Contains("Core namespace requires authenticated",
+                    StringComparison.Ordinal)) throw;
+            }
+            // Out-of-range signed i64 literals must not reach CIL emission.
+            File.WriteAllText(guest,
+                "import module math from \"atto.core/math\"; " +
+                "pub fnc main():int{return math.signum_int(9223372036854775808);}");
+            try
+            {
+                OresSourceModuleCompiler.Compile(guest, new[] { root });
+                throw new InvalidOperationException("Out-of-range i64 literal admitted");
+            }
+            catch (FormatException)
+            {
+                // Any parser-specific checked literal diagnostic is acceptable;
+                // never interpret it as a successful generated guest.
+            }
+
             // A project-local namespace must never be able to impersonate a
             // compiler-owned Core module, regardless of its declared name.
             File.WriteAllText(guest,
