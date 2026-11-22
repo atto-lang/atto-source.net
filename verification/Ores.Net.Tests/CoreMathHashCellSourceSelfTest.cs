@@ -35,6 +35,18 @@ internal static class CoreMathHashCellSourceSelfTest
                   if cell.can_borrow_write(3, false); do return 10; fi
                   if cell.readers_after_acquire(65535, false) != -1; do return 11; fi
                   if cell.readers_after_release(1, false) != 0; do return 12; fi
+                  // The new operations are policy only; loan issuance and
+                  // owner identity must still be checked by the compiler.
+                  if cell.valid_loan_state(1, true); do return 15; fi
+                  if !cell.valid_loan_state(0, true); do return 16; fi
+                  if !cell.can_owner_read(1, false); do return 17; fi
+                  if cell.can_owner_read(0, true); do return 18; fi
+                  if cell.can_owner_write(1, false); do return 19; fi
+                  if !cell.can_owner_write(0, false); do return 20; fi
+                  if cell.can_move_owner(0, true) || cell.can_move_owner(1, false); do return 21; fi
+                  if !cell.can_move_owner(0, false); do return 22; fi
+                  if cell.can_suspend_unpinned(1, false) || cell.can_suspend_unpinned(0, true); do return 23; fi
+                  if !cell.can_suspend_unpinned(0, false); do return 24; fi
                   return 42;
                 }
                 """);
@@ -63,6 +75,8 @@ internal static class CoreMathHashCellSourceSelfTest
                   if m.min_int(3,9) != 3; do return 1; fi
                   if h.step_byte(17,42) != 569; do return 2; fi
                   if !c.can_borrow_read(3,false); do return 3; fi
+                  if c.can_move_owner(3,false); do return 4; fi
+                  if !c.can_suspend_unpinned(0,false); do return 5; fi
                   return 42;
                 }
                 """);
