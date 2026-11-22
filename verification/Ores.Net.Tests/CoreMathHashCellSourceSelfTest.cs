@@ -112,7 +112,7 @@ internal static class CoreMathHashCellSourceSelfTest
             }
             catch (FormatException failure)
             {
-                if (!failure.Message.Contains("NAMESPACE_RUNTIME_NATIVEAOT_UNSUPPORTED",
+                if (!failure.Message.Contains("Core namespace requires authenticated Core import provenance",
                     StringComparison.Ordinal)) throw;
             }
             foreach (string invalid in new[] { "atto.core/../hash", "atto.core/hash.atto.ores", "atto.core/missing" })
