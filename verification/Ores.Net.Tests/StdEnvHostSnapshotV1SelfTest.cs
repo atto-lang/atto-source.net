@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections;
 using Ores.Net.Runtime;
 
 internal static class StdEnvHostSnapshotV1SelfTest
@@ -35,6 +36,12 @@ internal static class StdEnvHostSnapshotV1SelfTest
         Denied(() => hosted.Get("ATTO_NAME"), "revoked read");
         Denied(() => hosted.Has("ATTO_NAME"), "revoked has");
 
+        // Absence of coarse authority cannot trigger enumeration, even when
+        // the trusted host map throws if key metadata is observed.
+        var silent = StdEnvHostSnapshotV1.Create(
+            new NoEnumerationDictionary(), new[] { "*" }, Array.Empty<string>(), false);
+        Denied(() => silent.Get("ATTO_NAME"), "no coarse key enumeration");
+
         var noCoarse = StdEnvHostSnapshotV1.Create(source, new[] { "*" },
             Array.Empty<string>(), false);
         Denied(() => noCoarse.Get("ATTO_NAME"), "coarse capability omitted");
@@ -58,6 +65,23 @@ internal static class StdEnvHostSnapshotV1SelfTest
         bad["ATTO_NAME"] = new string('x', 16384);
         Require(StdEnvHostSnapshotV1.Create(bad, new[] { "*" },
             Array.Empty<string>(), true).Has("ATTO_NAME"), "exact byte limit");
+    }
+
+    private sealed class NoEnumerationDictionary : IReadOnlyDictionary<string, string>
+    {
+        public int Count => 1;
+        public IEnumerable<string> Keys => throw new Exception("UNAUTHORIZED_KEY_ENUMERATION");
+        public IEnumerable<string> Values => throw new Exception("UNAUTHORIZED_VALUE_ENUMERATION");
+        public string this[string key] => throw new Exception("UNAUTHORIZED_VALUE_READ");
+        public bool ContainsKey(string key) => throw new Exception("UNAUTHORIZED_EXISTS_PROBE");
+        public bool TryGetValue(string key, out string value)
+        {
+            value = null!;
+            throw new Exception("UNAUTHORIZED_VALUE_READ");
+        }
+        public IEnumerator<KeyValuePair<string, string>> GetEnumerator() =>
+            throw new Exception("UNAUTHORIZED_ENUMERATION");
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
     private static void Require(bool value, string failure)
