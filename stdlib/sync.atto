@@ -47,7 +47,9 @@ define module sync as
   // Use subtraction to avoid overflowing available + released.
   pub fnc semaphore_release_admissible(int available, int released,
                                        int capacity, bool closed): bool {
-    if closed || capacity < 1 || available < 0 then return false; fi
+    // Return of a previously acquired permit remains valid during close.
+    // Only the trusted runtime can attest that the caller owns the permit.
+    if capacity < 1 || available < 0 then return false; fi
     if available > capacity || released < 1 then return false; fi
     return released <= capacity - available;
   }
