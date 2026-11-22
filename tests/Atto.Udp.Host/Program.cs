@@ -125,6 +125,29 @@ static class Program
         Require(rejected, "revoked receive permitted");
         enabled = true;
 
+        // C# Monitor.TryEnter is reentrant, so policy callback recursion
+        // must be independently fenced, not mistaken for a new operation.
+        UdpLoopbackHost? recursiveSocket = null;
+        bool rejectedReentrancy = false;
+        UdpLoopbackHost.Authorize reentrantGate = (port, action) =>
+        {
+            if (action == UdpLoopbackHost.Action.Send)
+            {
+                try { _ = recursiveSocket!.LocalPort; }
+                catch (InvalidOperationException) { rejectedReentrancy = true; }
+            }
+        };
+        using (var reentrant = UdpLoopbackHost.Bind(0, reentrantGate))
+        {
+            recursiveSocket = reentrant;
+            Require(reentrant.TrySendTo(second.LocalPort, new byte[]{ 39 }),
+                "reentrant guard send must remain usable");
+            Require(rejectedReentrancy,
+                "nested UDP accessor must not pass the same-thread monitor");
+            Require(AwaitPacket(second, 4).CopyBytes()[0] == 39,
+                "rejected reentrant call altered valid datagram");
+        }
+
         first.Dispose();
         first.Dispose();
         rejected = false;
