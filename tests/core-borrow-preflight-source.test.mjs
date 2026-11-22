@@ -8,8 +8,7 @@ import { fileURLToPath } from 'node:url';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const read=p=>readFileSync(path.join(root,p),'utf8');
 const policy=JSON.parse(read('contracts/core-borrow-preflight-v1.json'));
-const paths=['src/main/resources/dev/oreslang/core/borrow_admission.atto',
-  'stdlib/core/borrow_admission.atto'];
+const paths=['library/atto.core/borrow_admission.atto'];
 const sourcePath=paths.find(p=>existsSync(path.join(root,p)));
 const source=sourcePath?read(sourcePath):'';
 const valid=(readers,writer,live)=>Number.isInteger(readers)&&readers>=0&&
@@ -17,6 +16,9 @@ const valid=(readers,writer,live)=>Number.isInteger(readers)&&readers>=0&&
   (live||(readers===0&&!writer));
 test('core source has explicit bounded loan preflight but no authority minted',()=>{
   assert.ok(sourcePath,'missing backend-owned core/borrow_admission.atto');
+  assert.equal(sourcePath,'library/atto.core/borrow_admission.atto');
+  assert.equal(existsSync(path.join(root,'stdlib/core/borrow_admission.atto')),false,
+    'obsolete staging duplicate may not shadow the compiler library module');
   assert.match(source,/define module borrow_admission as/);
   for(const fn of ['valid_state','may_read','may_write','quiescent_owner',
     'may_finish_read','may_finish_write','quiescent_boundary']) {
