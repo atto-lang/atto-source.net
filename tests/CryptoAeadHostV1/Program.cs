@@ -49,8 +49,35 @@ static class Program
         Check(closedRejected, "closed key reuse accepted");
     }
 
+    private static void CheckKnownAnswerVectors()
+    {
+        byte[] zeroKey = new byte[32];
+        byte[] zeroNonce = new byte[12];
+        Span<byte> zeroOutput = Span<byte>.Empty;
+        byte[] tag = new byte[16];
+        using (var aes = new AesGcm(zeroKey, 16))
+        {
+            aes.Encrypt(zeroNonce, ReadOnlySpan<byte>.Empty, zeroOutput, tag);
+        }
+        Check(Convert.ToHexString(tag) == "530F8AFBC74536B9A963B4F1C4CB738B",
+            "NIST AES-256-GCM zero-key vector mismatch");
+
+        if (!ChaCha20Poly1305.IsSupported)
+            throw new PlatformNotSupportedException("ChaCha20-Poly1305 required for full parity");
+        tag.AsSpan().Clear();
+        using (var chacha = new ChaCha20Poly1305(zeroKey))
+        {
+            chacha.Encrypt(zeroNonce, ReadOnlySpan<byte>.Empty, zeroOutput, tag);
+        }
+        Check(Convert.ToHexString(tag) == "4EB972C9A8FB3A1B382BB4D36F5FFAD1",
+            "IETF ChaCha20-Poly1305 zero-key vector mismatch");
+        CryptographicOperations.ZeroMemory(zeroKey);
+        CryptographicOperations.ZeroMemory(tag);
+    }
+
     private static int Main()
     {
+        CheckKnownAnswerVectors();
         int executed = 0;
         foreach (var algorithm in new[] {
             CryptoAeadHostV1.Algorithm.Aes256Gcm,
