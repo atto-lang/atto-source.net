@@ -99,8 +99,15 @@ public static class OresSourceModuleCompiler
                 }
                 else
                 {
-                    if (target.ModuleName != import.Name)
+                    // Legacy 'import module' requires identical exported module
+                    // name. A canonical builtin 'import * as alias' may choose
+                    // a local alias but can only target the authenticated pinned
+                    // Core namespace identities resolved below.
+                    if (import.Kind != "builtin_namespace" && target.ModuleName != import.Name)
                         throw new FormatException($"Module import '{import.Name}' does not match declared module in {units[targetPath].Identity}");
+                    if (import.Kind == "builtin_namespace" &&
+                        targetPath is not (CoreMath or CoreHash or CoreCell))
+                        throw new FormatException("Core namespace wildcard importer lost canonical builtin identity");
                     foreach (var exported in target.Exports)
                         if (!bindings.TryAdd(import.Name + "." + exported.Key, exported.Value))
                             throw new FormatException("Duplicate qualified imported callable");
@@ -167,6 +174,12 @@ public static class OresSourceModuleCompiler
                 "atto.core/numeric.ores" or "ores.core/numeric" or
                 "ores.core/numeric.atto" or "ores.core/numeric.ores")
                 return CoreNumeric;
+            if (specifier == "core.math") return CoreMath;
+            if (specifier == "core.hash") return CoreHash;
+            if (specifier == "core.cell") return CoreCell;
+            if (specifier.StartsWith("core.", StringComparison.Ordinal) ||
+                specifier == "core")
+                throw new FormatException("unknown compiler-owned Core namespace");
             if (specifier is "atto.core/math" or "atto.core/math.atto" or
                 "atto.core/math.ores" or "ores.core/math" or
                 "ores.core/math.atto" or "ores.core/math.ores") return CoreMath;
