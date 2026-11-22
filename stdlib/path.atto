@@ -6,7 +6,7 @@
 // This v1 exposes a checked lexical normalization DEPTH; it does not create
 // native paths, return a normalized string, or perform I/O.
 define module path as
-  fnc is_ascii_letter(int scalar): bool {
+  pub fnc is_ascii_letter(int scalar): bool {
     return (scalar >= 65 && scalar <= 90) || (scalar >= 97 && scalar <= 122);
   }
 
@@ -50,7 +50,7 @@ define module path as
   }
 
   // 0=ordinary, 1='.', 2='..', -1=invalid segment.
-  fnc component_kind(Array<int> points, int begin, int end, bool windows): int {
+  fnc checked_component_kind_points(Array<int> points, int begin, int end, bool windows): int {
     let int size = end - begin;
     if size < 1 || size > 255 then return -1; fi
     if size == 1 && points.get(begin) == 46 then return 1; fi
@@ -90,7 +90,7 @@ define module path as
         if ch == 0 || ch < 32 || ch == 127 then return -1; fi
       fi
       if i == count || (i < count && is_separator(points.get(i), windows)); do
-        let int kind = component_kind(points, start, i, windows);
+        let int kind = checked_component_kind_points(points, start, i, windows);
         if kind < 0 then return -1; fi
         components = components + 1;
         if components > 256 then return -1; fi
@@ -119,7 +119,7 @@ define module path as
     let mut int start = 0;
     for (let int i = 0; i <= count; i = i + 1) {
       if i == count || (i < count && is_separator(points.get(i), windows)); do
-        if component_kind(points, start, i, windows) != 0 then return false; fi
+        if checked_component_kind_points(points, start, i, windows) != 0 then return false; fi
         start = i + 1;
       fi
     }
@@ -148,7 +148,7 @@ define module path as
     let mut int surviving_from_end = 0;
     for (let int i = points.size; i >= 0; i = i - 1) {
       if i == 0 || is_separator(points.get(i - 1), windows); do
-        let int kind = component_kind(points, i, end, windows);
+        let int kind = checked_component_kind_points(points, i, end, windows);
         if kind == 2; do
           canceled = canceled + 1;
         else
@@ -331,5 +331,55 @@ define module path as
 
   pub fnc relative_path(String spelling, bool windows): Path {
     return new Path(spelling, windows);
+  }
+
+  // Conformance-v1 lexical scalar ABI. This is NOT an OS path authority.
+  // The existing array/string path API remains backend-owned and unchanged.
+  pub fnc is_safe_scalar(int scalar, bool windows): bool {
+    if scalar < 32 || scalar == 127 || scalar > 1114111 then return false; fi
+    if scalar >= 55296 && scalar <= 57343 then return false; fi
+    if is_separator(scalar, windows) then return false; fi
+    if windows && !(is_ascii_letter(scalar) ||
+                    (scalar >= 48 && scalar <= 57) ||
+                    scalar == 46 || scalar == 45 || scalar == 95)
+       then return false; fi
+    return true;
+  }
+
+  // 0 = ordinary, 1 = ".", 2 = ".."; -1 = invalid length.
+  // Character validation is a separate, strict lexical check.
+  pub fnc component_kind(int length, int first, int second): int {
+    if length < 1 || length > 255 then return -1; fi
+    if length == 1 && first == 46 then return 1; fi
+    if length == 2 && first == 46 && second == 46 then return 2; fi
+    return 0;
+  }
+
+  pub fnc advance_relative_depth(int depth, int component): int {
+    if depth < 0 || depth > 256 then return -1; fi
+    if component == 1 then return depth; fi
+    if component == 2 && depth == 0 then return -1; fi
+    if component == 2 then return depth - 1; fi
+    if component != 0 || depth == 256 then return -1; fi
+    return depth + 1;
+  }
+
+  pub fnc is_windows_drive_prefix(int first, int second): bool {
+    return is_ascii_letter(first) && second == 58;
+  }
+
+  pub fnc relative_join_budget_admissible(int left_scalars, int right_scalars,
+                                         int left_components, int right_components): bool {
+    if left_scalars < 1 || left_scalars > 4096 then return false; fi
+    if right_scalars < 1 || right_scalars > 4096 then return false; fi
+    if left_components < 0 || right_components < 0 then return false; fi
+    if left_components > 256 || right_components > 256 then return false; fi
+    if left_scalars > 4095 - right_scalars then return false; fi
+    return left_components <= 256 - right_components;
+  }
+
+  pub fnc extension_offset_admissible(int filename_scalars, int dot_index): bool {
+    if filename_scalars < 3 || filename_scalars > 255 then return false; fi
+    return dot_index >= 1 && dot_index < filename_scalars - 1;
   }
 end
