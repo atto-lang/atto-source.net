@@ -45,19 +45,24 @@ const requiredByWorkflow = {
       "Adversarial scalar runner self-tests (Windows)",
       "Shared scalar source admission on the released Native AOT compiler",
       "Execute real Windows Native AOT binary",
+      "Execute authorized CLR Abs and Max through Windows Native AOT",
       "Confirm strict Native AOT PE and reject managed assembly",
       "Reject corrupted Native AOT PE headers",
       "Execute Native AOT checked-arithmetic error cases",
       "Reject managed sidecar next to an otherwise native executable",
       "Compile verified CFG into a real Windows Native AOT executable",
       "Prove experimental structured source in real Windows Native AOT",
+      "Execute canonical .atto signed relational source in Windows Native AOT",
       "Execute typed source helper calls in real Windows Native AOT",
       "Execute typed statement-bodied helpers in real Windows Native AOT",
       "Verify typed bindings in executed Windows Native AOT",
       "Execute shared five-backend native.add source in real Windows Native AOT",
       "Execute shared native.precedence in Windows Native AOT",
+      "Execute typed Integer.rem guest in Windows Native AOT",
+      "Execute checked Integer.pow and bitXor in Windows Native AOT",
       "Emit exact-head Windows Native AOT run receipt",
       "Upload exact-head Windows Native AOT receipt",
+      "Upload signed64 remainder native executables",
       "Upload native executable"
     ],
     "linux-aot-diagnostic": [
@@ -83,6 +88,7 @@ const requiredByWorkflow = {
       "Confirm checked-out exact PR head",
       "Check installed Windows Native AOT toolchain",
       "Run .NET compiler and runtime regression harness",
+      "Compile verified C# and F# source on trusted exact-head runner",
       "Verify real scalar and experimental structured static facts",
       "Publish and verify released Native AOT compiler",
       "Execute real published Windows Native AOT application",
@@ -110,6 +116,12 @@ const requiredWorkflowIdByWorkflow = {
   "Windows Native AOT": 384715065,
   "Integration declaration integrity": 388530125
 };
+// Reject ambiguous/invisible names in independently acquired CI metadata.
+const evidenceLabel = value => typeof value === "string" &&
+  value.length > 0 && value.length <= 250 && value === value.trim() &&
+  value.normalize("NFKC") === value &&
+  !/[\p{C}\p{M}]/u.test(value);
+
 export function verifyEvidence(run, response, expected) {
   const errors = [];
   const fail = (condition, explanation) => { if (!condition) errors.push(explanation); };
@@ -164,6 +176,11 @@ export function verifyEvidence(run, response, expected) {
     fail(job.run_id === expected.runId, `job ${job.name} belongs to different run`);
     fail(job.run_attempt === expected.attempt, `job ${job.name} belongs to different attempt`);
     fail(job.head_sha === expected.head, `job ${job.name} has different source head`);
+    // Every successful job must have an assigned runner, not only strict Linux.
+    if (job.status === "completed" && job.conclusion === "success")
+      fail(Number.isSafeInteger(job.runner_id) && job.runner_id > 0 &&
+        evidenceLabel(job.runner_name),
+        `job ${job.name} has no allocated runner`);
   }
   for (const [name, stepsRequired] of Object.entries(requirements)) {
     const matches=jobs.filter(job=>job && job.name===name);
@@ -208,6 +225,33 @@ export function verifyEvidence(run, response, expected) {
       if (disabledOptional(job)) continue;
       fail(job.status==="completed" && job.conclusion==="success",
         `extra job ${job.name} is not successful`);
+      // One successful step cannot conceal failed, skipped, malformed or
+      // duplicated siblings; inspect all steps even in unrecognized jobs.
+      if (!Array.isArray(job.steps) || job.steps.length === 0) {
+        errors.push(`extra job ${job.name} has no completed executable step`);
+        continue;
+      }
+      const numbers = new Set(), names = new Set();
+      let executed = 0;
+      for (const step of job.steps) {
+        if (!step || typeof step !== "object" || Array.isArray(step) ||
+            !Number.isSafeInteger(step.number) || step.number <= 0 ||
+            !evidenceLabel(step.name)) {
+          errors.push(`extra job ${job.name} has malformed step`);
+          continue;
+        }
+        fail(!numbers.has(step.number), `extra job ${job.name} has duplicate step number`);
+        fail(!names.has(step.name), `extra job ${job.name} has duplicate step name`);
+        numbers.add(step.number); names.add(step.name);
+        const passed = step.status === "completed" && step.conclusion === "success";
+        fail(passed, `extra job ${job.name} has non-successful step: ${step.name}`);
+        const name = step.name.replace(/\s+/g, " ").toLowerCase();
+        if (passed &&
+            !["set up job", "complete job", "initialize containers",
+              "start containers", "stop containers"].includes(name) &&
+            !/^(?:pre|post) /.test(name)) executed++;
+      }
+      fail(executed > 0, `extra job ${job.name} has no completed executable step`);
     }
   }
   return errors;

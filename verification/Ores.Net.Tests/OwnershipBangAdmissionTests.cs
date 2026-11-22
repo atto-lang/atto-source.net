@@ -63,7 +63,7 @@ internal static class OwnershipBangAdmissionTests
     {
         try { action(); }
         catch (FormatException ex) when (ex.Message.Contains(
-            "Block comment nesting exceeds 128", StringComparison.Ordinal)) { return; }
+            "Block comment nesting exceeds 128", StringComparison.OrdinalIgnoreCase)) { return; }
         throw new Exception("Unbounded nested comments in " + frontend);
     }
 

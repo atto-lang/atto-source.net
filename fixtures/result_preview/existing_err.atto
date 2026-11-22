@@ -1,0 +1,2 @@
+fnc existing(): Result<int,Error> { return Err(Error("existing error")); }
+pub fnc main(): Result<int,Error> { return trap existing(); }

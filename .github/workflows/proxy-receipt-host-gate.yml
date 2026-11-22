@@ -1,0 +1,25 @@
+name: Proxy receipt trusted-host gate (.NET, NOT Atto guest)
+on:
+  pull_request:
+    paths: [ 'runtime/ProxyReceiptGateV1.cs', 'tests/Atto.ProxyReceiptGate.HostModel/**', '.github/workflows/proxy-receipt-host-gate.yml' ]
+  push:
+    paths: [ 'runtime/ProxyReceiptGateV1.cs', 'tests/Atto.ProxyReceiptGate.HostModel/**', '.github/workflows/proxy-receipt-host-gate.yml' ]
+permissions:
+  contents: read
+jobs:
+  host-receipt-gate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Exact head
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED"
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '8.0.x'
+      - run: dotnet run -c Release --project tests/Atto.ProxyReceiptGate.HostModel/Atto.ProxyReceiptGate.HostModel.csproj
+      - run: echo 'SOURCE_ONLY_HOST_MODEL; no real .atto IPC, peer authentication or NativeAOT guest proof'

@@ -62,8 +62,46 @@ internal static class StructuredSourceTests
         throw new Exception("Scalar compiler admitted unsupported state injection");
     }
 
+    private static void NegatedDoIfSyntax()
+    {
+        const string accepted = """
+            fnc main(): int {
+                let int i = 0;
+                loop {
+                    i = i + 1;
+                    do ifnot true then break; fi
+                    do unless true then break; fi
+                    do ifnot i < 3 then break; fi
+                }
+                return ifnot false then i else 0 fi;
+            }
+            """;
+        Require(OresStructuredParser.Parse(accepted).Body.Count == 3,
+            "canonical negated do-if and value-if parsing");
+        Require(OresStructuredParser.Parse("""
+            fnc main():int {
+                let int i = 0;
+                loop { i = i + 1; do unless i < 3 then continue; else break; fi }
+                return i;
+            }
+            """).Body.Count == 3, "unless/continue/else must retain loop scope");
+        RejectFeature("fnc main():int{do ifnot true then break; fi return 0;}",
+            "break requires an enclosing loop");
+        RejectFeature("fnc main():int{do unless false then continue; fi return 0;}",
+            "continue requires an enclosing loop");
+        RejectFeature("fnc main():int{loop{if true then break; fi}return 0;}",
+            "use 'do if'");
+        RejectFeature("fnc main():int{return ifnot false then break; else 3 fi;}",
+            "must produce a value");
+        RejectFeature("fnc main():int{return unless true then 3 fi;}",
+            "Expected 'else'");
+        Reject("fnc main():int{return ifnot 3 then 3 else 4 fi;}",
+            "non-boolean value-if condition");
+    }
+
     public static void Run()
     {
+        NegatedDoIfSyntax();
         // Native AOT has no actor hierarchy, trait/interface witness ABI,
         // runtime-owned receive slot or actor state loan lowering yet. Every
         // source spelling must fail at the dedicated capability boundary.
@@ -270,19 +308,19 @@ pub async routine main(): void {
             RejectFeature(validButNotExecutable,
                 "Nominal class/actor methods require receiver-erased method slots");
 
-        // AST identity and constant provenance must stay independent: a
-        // default readonly typed binding has distinct source provenance.
+        // Type-first scalar locals are explicit const equivalents, with identical
+        // compile-time evaluation and fixed-binding behavior.
         var immutableDefaults = OresStructuredParser.Parse(
             "fnc main():int{int x=7;bool good=true;const int c=7;val int v=7;let int m=7;return x;}");
         Require(immutableDefaults.Body[0] is StructuredLet {
-            Name: "x", Kind: StructuredBindingKind.Readonly, ValueType: IrValueType.I64
-        }, "int x must be a readonly non-rebindable binding");
+            Name: "x", Kind: StructuredBindingKind.Const, ValueType: IrValueType.I64
+        }, "int x must be compile-time const");
         Require(immutableDefaults.Body[1] is StructuredLet {
-            Name: "good", Kind: StructuredBindingKind.Readonly, ValueType: IrValueType.Bool
-        }, "bool x must be a readonly non-constexpr binding");
+            Name: "good", Kind: StructuredBindingKind.Const, ValueType: IrValueType.Bool
+        }, "bool x must be compile-time const");
         Require(immutableDefaults.Body[2] is StructuredLet {
             Name: "c", Kind: StructuredBindingKind.Const
-        }, "explicit const retains source kind independently of constant folding");
+        }, "explicit const retains its constexpr identity");
         Require(immutableDefaults.Body[3] is StructuredLet {
             Name: "v", Kind: StructuredBindingKind.Val
         }, "val remains an independent single-assignment spelling");
@@ -291,37 +329,74 @@ pub async routine main(): void {
         }, "let remains the only rebindable local");
         Reject("fnc main():int{int x=7;x=8;return x;}",
             "readonly type-first rebinding is forbidden");
-        // A runtime-valued const remains a legal immutable *binding*:
-        // lexical one-time evaluation and readonly do not imply constexpr.
-        var runtimeConstAndReadonly = OresStructuredParser.Parse(
+        // Type-right and type-first const are the same compile-time binding.
+        var typeRight = OresStructuredParser.Parse(
+            "fnc main():int{int x=10;const y:int=20;const int z=12;return x+y+z;}");
+        Require(typeRight.Body[1] is StructuredLet {
+            Name: "y", Kind: StructuredBindingKind.Const, ValueType: IrValueType.I64,
+            Initializer: StructuredInt { Value: 20 }
+        }, "type-right const must be folded and fixed like type-first const");
+        RejectFeature("fnc main():int{const x:int=10;x=42;return x;}",
+            "E_IMMUTABLE_REBIND");
+        RejectFeature("fnc main():int{mut int x=10;return x;}",
+            "E_MUT_QUALIFIER");
+        // Keep the newer helper/capture test coverage while migrating runtime
+        // binding semantics to val. No runtime call may bypass constexpr checks.
+        var runtimeVals = OresStructuredParser.Parse(
             "fnc inc(int p):int{return p+1;}" +
-            "fnc main():int{int typed=inc(40);const inferred=inc(41);" +
-            "const int annotated=inc(42);val int snap=typed;" +
+            "fnc main():int{val int typed=inc(40);val inferred=inc(41);" +
+            "val int annotated=inc(42);val int snap=typed;" +
             "let int mutable=7;mutable=8;return inferred;}");
-        Require(runtimeConstAndReadonly.Body[0] is StructuredLet {
-            Name: "typed", Kind: StructuredBindingKind.Readonly,
+        Require(runtimeVals.Body[0] is StructuredLet {
+            Name: "typed", Kind: StructuredBindingKind.Val,
             Initializer: StructuredCall { Name: "inc" }
-        }, "type-first runtime helper retains readonly binding with call");
-        Require(runtimeConstAndReadonly.Body[1] is StructuredLet {
-            Name: "inferred", Kind: StructuredBindingKind.Const,
+        }, "typed val must retain runtime helper call");
+        Require(runtimeVals.Body[1] is StructuredLet {
+            Name: "inferred", Kind: StructuredBindingKind.Val,
             Initializer: StructuredCall { Name: "inc" }
-        }, "const from runtime helper must remain a call, not folded or rejected");
-        Require(runtimeConstAndReadonly.Body[2] is StructuredLet {
-            Name: "annotated", Kind: StructuredBindingKind.Const,
+        }, "inferred val must retain runtime helper call");
+        Require(runtimeVals.Body[2] is StructuredLet {
+            Name: "annotated", Kind: StructuredBindingKind.Val,
             Initializer: StructuredCall { Name: "inc" }
-        }, "annotated const from runtime helper remains a call");
-        Require(runtimeConstAndReadonly.Body[3] is StructuredLet {
+        }, "annotated runtime val remains a call");
+        Require(runtimeVals.Body[3] is StructuredLet {
             Name: "snap", Kind: StructuredBindingKind.Val,
             Initializer: StructuredRead { Name: "typed" }
-        }, "val may capture readonly runtime referent without rebinding it");
-        Require(runtimeConstAndReadonly.Body[5] is StructuredSet { Name: "mutable" },
-            "explicit let rebinding remains a separate permission");
+        }, "val can capture a runtime value without rebinding");
+        Require(runtimeVals.Body[5] is StructuredSet { Name: "mutable" },
+            "explicit let remains the only rebindable local");
+        // Untyped const keeps java's stage-one readonly-binding meaning: a
+        // runtime initializer stays a call; only typed scalar const is constexpr.
+        var untypedRuntimeConst = OresStructuredParser.Parse(
+            "fnc inc(int p):int{return p+1;}fnc main():int{const inferred=inc(41);return inferred;}");
+        Require(untypedRuntimeConst.Body[0] is StructuredLet {
+            Name: "inferred", Kind: StructuredBindingKind.Const,
+            Initializer: StructuredCall { Name: "inc" }
+        }, "untyped const from runtime helper remains a readonly call (java parity)");
         Reject("fnc inc(int p):int{return p+1;}" +
-               "fnc main():int{const int x=inc(41);x=0;return x;}",
-            "runtime-initialized const must still deny assignment");
-        Reject("fnc inc(int p):int{return p+1;}" +
-               "fnc main():int{int x=inc(41);x=0;return x;}",
-            "runtime-initialized type-first must still deny assignment");
+               "fnc main():int{const x=inc(41);x=0;return x;}",
+            "runtime-initialized untyped const must still deny assignment");
+        foreach (var source in new[] {
+            "fnc inc(int p):int{return p+1;}fnc main():int{int x=inc(41);return x;}",
+            "fnc inc(int p):int{return p+1;}fnc main():int{const int x=inc(41);return x;}"
+        })
+            RejectFeature(source, "E_NON_CONST_INITIALIZER");
+
+        // Both spellings must be rejected for the same targeted semantic reason.
+        RejectFeature("fnc runtime_value():int{return 42;}fnc main():int{int x=runtime_value();return x;}",
+            "E_NON_CONST_INITIALIZER");
+        RejectFeature("fnc runtime_value():int{return 42;}fnc main():int{const int x=runtime_value();return x;}",
+            "E_NON_CONST_INITIALIZER");
+        RejectFeature("fnc runtime_value():int{return 42;}fnc main():int{const x:int=runtime_value();return x;}",
+            "E_NON_CONST_INITIALIZER");
+        RejectFeature("fnc main():int{const mut int x=42;return x;}",
+            "E_CONST_MUT_UNSUPPORTED");
+        var shorthandConstant = OresStructuredParser.Parse(
+            "fnc main():int{int answer=6*7;return answer;}");
+        Require(shorthandConstant.Body[0] is StructuredLet {
+            Name: "answer", Kind: StructuredBindingKind.Const,
+            Initializer: StructuredInt { Value: 42 }
+        }, "implicit const must be folded like explicit const");
 
 
         // Injected mutable containers are not the current scalar backend's
@@ -666,7 +741,9 @@ pub async routine main(): void {
             "const x=true;return x+1;",
             "let x=true;x=7;return 42;",
             "const x=missing;return 42;",
-            "const x=x;return 42;"
+            "const x=x;return 42;",
+            "val x=42;const int y=x as int;return y;",
+            "val bool x=true;const bool y=x as bool;return 42;"
         }) Reject("fnc main():int{" + invalid + "}", "scalar cast/inference fail-closed " + invalid);
 
         var runtimeBool = OresStructuredParser.Parse("""
@@ -685,18 +762,24 @@ pub async routine main(): void {
             "const is immutable");
         Reject("fnc main():int{val bool v=true;if v {v=false;}return 1;}",
             "nested blocks cannot mutate outer val");
-        // Unlike a compile-time constant-expression requirement, Oreslang
-        // const is an immutable *binding* and may be initialized at runtime.
+        // Runtime bindings use val, not const: every const scalar requires
+        // deterministic static evaluation before CFG/CIL emission.
         foreach (var source in new[] {
             "fnc main():int{let int x=2;const int c=x;return c;}",
-            "fnc main():int{val int x=2;const int c=x;return c;}"
+            "fnc main():int{val int x=2;const int c=x;return c;}",
+            "fnc main():int{let int x=2;int c=x;return c;}"
+        })
+            RejectFeature(source, "E_NON_CONST_INITIALIZER");
+        foreach (var source in new[] {
+            "fnc main():int{let int x=2;val int c=x;return c;}",
+            "fnc main():int{val int x=2;val int c=x;return c;}"
         })
         {
-            var runtimeConst = OresStructuredParser.Parse(source);
-            Require(runtimeConst.Body[1] is StructuredLet {
-                Name: "c", Kind: StructuredBindingKind.Const,
+            var runtimeVal = OresStructuredParser.Parse(source);
+            Require(runtimeVal.Body[1] is StructuredLet {
+                Name: "c", Kind: StructuredBindingKind.Val,
                 Initializer: StructuredRead { Type: IrValueType.I64 }
-            }, "runtime-initialized const must not acquire fake compile-time value");
+            }, "runtime-initialized fixed binding must be val");
         }
         Reject("fnc main():int{const int x=9223372036854775807+1;return x;}",
             "const arithmetic must trap during admission");
