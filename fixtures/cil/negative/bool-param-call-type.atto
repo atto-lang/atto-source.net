@@ -1,0 +1,6 @@
+// An int expression cannot be passed to a bool parameter.
+pub fnc bool_identity(bool allowed): bool { return allowed; }
+pub fnc main(): int {
+  if bool_identity(1) then return 42; fi
+  return 1;
+}
