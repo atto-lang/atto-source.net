@@ -116,4 +116,18 @@ define module Telemetry as
     return trace_nonzero && parent_nonzero;
   }
 
+
+  // Pure bounded-export decisions. Network transport, ownership, clocks,
+  // trace IDs and actual span dispatch remain trusted runtime obligations.
+  pub fnc queue_admissible(int queued, int capacity, int batch_bytes,
+                          int available_bytes): bool {
+    if capacity < 1 || capacity > 65536 then return false; fi
+    return export_queue_admissible(queued, capacity, batch_bytes, available_bytes);
+  }
+
+  pub fnc drop_increment(int count): int {
+    if count < 0 then return -1; fi
+    if count >= 2147483647 then return 2147483647; fi
+    return count + 1;
+  }
 end
