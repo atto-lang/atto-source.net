@@ -134,6 +134,7 @@ internal sealed class StdEnvHostSnapshotV1
         for (int i = 0; i < value.Length; i++)
         {
             int scalar = value[i];
+            if (scalar == 0) return false; // OS environment values cannot contain NUL.
             if (char.IsHighSurrogate(value[i]))
             {
                 if (i + 1 >= value.Length || !char.IsLowSurrogate(value[i + 1])) return false;
