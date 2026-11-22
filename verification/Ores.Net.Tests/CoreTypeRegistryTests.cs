@@ -60,6 +60,8 @@ internal static class CoreTypeRegistryTests
         var option = CoreTypeRegistry.Lookup("Option")!;
         Require(option.CanonicalIdentity == "core/option/Option", "Option canonical identity");
         Require(option.MinGenericArity == 1 && option.MaxGenericArity == 1, "Option generic arity");
+        Require(CoreTypeRegistry.Lookup("Array")!.MinGenericArity == 1 &&
+            CoreTypeRegistry.Lookup("Array")!.MaxGenericArity == 1, "Array fixed generic arity");
         Require(option.Ownership == CoreTypeRegistry.Ownership.PayloadDependent, "Option payload ownership");
         Require(option.DropPolicy == CoreTypeRegistry.DropPolicy.ActivePayloadOnce, "Option active drop");
         Require(option.BackendLowering == CoreTypeRegistry.Lowering.NetOptionI64Subset, "Option lowering subset");
