@@ -79,14 +79,14 @@ internal static class SourceModuleLinkingSelfTest
             // including a locally planted, same-named shadow module.
             Directory.CreateDirectory(Path.Combine(root, "std"));
             Write("std/env.atto", "define module std_env as " +
-                "pub fnc get(String name):Option<String>{return Some(\\"SHADOWED\\");} end");
+                "pub fnc get(String name):Option<String>{return Some(\"SHADOWED\");} end");
             foreach (string alias in new[] {
                 "std/env", "std/env.atto", "std/env.ores",
                 "ores.std/env", "atto.std/env", "atto.std/env.atto"
             })
             {
-                Write("main.ores", "import module std_env from \\"" + alias +
-                    "\\"; pub fnc main():int{return 42;}");
+                Write("main.ores", "import module std_env from \"" + alias +
+                    "\"; pub fnc main():int{return 42;}");
                 Reject(Compile, "compiler-owned std/env must fail closed before .NET linker admission",
                     "unsupported compiler-owned AttoLang library namespace");
             }
