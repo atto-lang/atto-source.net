@@ -46,6 +46,12 @@ The second command builds an artifact; it is not by itself evidence that
 a published native executable passed tests. Execute the resulting binary
 and record exact-head logs separately.
 
+The .NET key generator now wipes partially generated key and nonce-prefix
+arrays if either CSPRNG request or key construction throws. The platform's
+internal crypto provider buffers cannot be fully audited from this layer.
+This fix and the .NET 10 host test project remain **NOT_EXECUTED** because
+the current environment has no `dotnet` SDK. No Native AOT claim is made.
+
 ## Portable Atto source envelope helpers
 
 The additional `stdlib/std/crypto_envelope.atto` file is implemented
