@@ -44,3 +44,10 @@ Added an immutable `define pub class Path` and `relative_path()` factory using A
 
 ### Exact-head source-only admission workflow
 `verification/atto-std-path-sync-telemetry-source-audit.mjs` statically checks the full 65 sequential guest failure codes, exported native `.atto` calls, 12 invoked Path members, source size/UTF-8/regular-file constraints, exact Git source blobs, and four nontrivial mutation-negative cases. `.github/workflows/atto-std-path-sync-telemetry-source-audit.yml` runs it source-local and explicitly requires a `--require-executed-guest` request to fail. This does **not** establish .NET guest compilation or NativeAOT executable proof; those remain blocked on typed linker support and stepful CI.
+
+
+## Source audit mutation hardening (2026-11-22)
+
+The `Path` value now follows the existing `pub define class` syntax and the source-only audit checks this declaration. The Node source audit was exercised against the latest connector-retrieved inputs with **65/65** sequential checked exits, 51 resolved native Atto module calls and 12 invoked instance methods. Five negative mutations were rejected, including an injected early `return 0;` that previously could bypass the 65 assertions without changing their count. This is **source-only validation, not Atto execution**.
+
+A source-free GitHub probe in `honeypot-r-us-test/hnpt-e2e` (run 44859823076) reported zero executed Linux and Windows steps. The source-org tests also lack stepful NativeAOT evidence. Its carrier remains explicitly inactive pending the independent reviewed source-transfer allowlist.
