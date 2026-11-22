@@ -9,6 +9,43 @@ A module path of `"std.crypto"` is the intended core import (never
 need implementation and an executed compiler-backed test**. Do not promote
 the fixture or this PR as proof of functioning encryption.
 
+## .NET trusted-host AEAD prototype in this branch
+
+`runtime/Ores.Net.Runtime/CryptoAeadHostV1.cs` now provides managed,
+full-AOT-compatible **host-only** AES-256-GCM and IETF ChaCha20-Poly1305
+using `System.Security.Cryptography`. It uses fresh 32-byte CSPRNG keys,
+per-key random 4-byte prefix plus 64-bit nonce counter (max **2^32**
+encryptions/key), 96-bit nonces, full 128-bit tags, defensive ciphertext
+clones, and deterministic `Dispose()` key zeroization. Decrypt reports
+`false` with no plaintext on malformed input or failed authentication.
+An unsupported algorithm fails closed via `IsSupported`; there is no
+silent fallback to a weaker or custom cipher.
+
+`tests/CryptoAeadHostV1` is a source-owned executable test project
+with host round trips, nonces, tampering, wrong key/AAD/nonce, empty
+messages and key disposal checks. It explicitly exits nonzero if either
+algorithm is unavailable; a skipped algorithm is **not** parity.
+
+**Status:** .NET host primitive is not yet guest-callable. Its caller must
+authenticate context and actor generation, enforce a `CRYPTO` capability,
+preserve move-only `AeadKey` and zeroizing `SecretBytes` types, and
+enforce per-tenant/actor memory limits. Unlike the Java branch, there is
+not yet an actor-owned key registry or `Result<T,CryptoError>` guest
+binding here. `dotnet` is not present in the current isolated test
+environment; **no .NET compilation, test execution, NativeAOT, or
+cross-backend guest interoperability was verified.** Keep this PR Draft.
+
+To test on a trustworthy admitted .NET 10 runner:
+
+```sh
+dotnet run --project tests/CryptoAeadHostV1/CryptoAeadHostV1.csproj -c Release
+dotnet publish tests/CryptoAeadHostV1/CryptoAeadHostV1.csproj -c Release -r linux-x64
+```
+
+The second command builds an artifact; it is not by itself evidence that
+a published native executable passed tests. Execute the resulting binary
+and record exact-head logs separately.
+
 ## Public API to implement
 
 - `hash.sha256(bytes) -> Bytes` and `mac.hmac_sha256(secret, bytes) -> Bytes`.
