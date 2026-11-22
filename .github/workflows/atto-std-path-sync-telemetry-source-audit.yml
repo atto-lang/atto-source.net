@@ -7,6 +7,7 @@ on:
       - 'stdlib/telemetry.atto'
       - 'tests/fixtures/path_sync_telemetry_policy_v1.atto'
       - 'verification/atto-std-path-sync-telemetry-source-audit.mjs'
+      - 'verification/Atto.Std.Policy.CompilerAdmission/**'
       - '.github/workflows/atto-std-path-sync-telemetry-source-audit.yml'
   workflow_dispatch:
 permissions:
@@ -36,10 +37,24 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
-      - name: Execute 65-case fixture coverage and four mutation negatives
+      - name: Execute 65-case fixture coverage and five mutation negatives
         run: |
           set -euo pipefail
           node verification/atto-std-path-sync-telemetry-source-audit.mjs --self-test
+      - name: Provision .NET 10 for real structured compiler import-denial test
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.x'
+      - name: Execute real .NET structured module compiler and forbid std shadowing
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet run -c Release --project \
+            verification/Atto.Std.Policy.CompilerAdmission \
+            | tee "$RUNNER_TEMP/atto-std-cil-import-denial.log"
+          grep -Fxq \
+            'NET_STD_COMPILER_IMPORT_DENIAL=EXECUTED|reserved=9|local_module_graph=COMPILED|std_guest=NOT_EXECUTED|native_aot=NOT_EXECUTED' \
+            "$RUNNER_TEMP/atto-std-cil-import-denial.log"
       - name: Require source-only check to reject guest execution claims
         shell: bash
         run: |
