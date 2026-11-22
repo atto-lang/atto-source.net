@@ -36,3 +36,13 @@ This is still **not** a guest language builtin: `std/env` import resolution, `en
 The existing `OresSourceModuleCompiler` explicitly rejects reserved `std/`, `atto.std/`, and `ores.std/` namespaces until compiler-owned import support is implemented. `verification/Ores.Net.Tests/SourceModuleLinkingSelfTest.cs` now creates a project-local fake `std/env.atto` and asserts six canonical/legacy aliases fail with the reserved compiler-owned namespace diagnostic **before** the file could be linked or shadow the standard library. This guard is deliberately **not successful `std/env` import support**.
 
 The host snapshot test also rejects embedded NUL values in addition to malformed UTF-16 and oversized UTF-8. .NET verification and NativeAOT CI remain **NOT_EXECUTED** here because no admitted dotnet runner or local dotnet SDK was available.
+
+## Coarse ENV metadata guard (2026-11-22)
+
+`StdEnvHostSnapshotV1.Create` now checks the coarse capability before
+calling `trustedValues.Count` or enumerating `trustedValues.Keys`. A
+`NoEnumerationDictionary` test has getters/iterators that throw if
+invoked without the coarse capability. Denial remains independent of
+scoped allow wildcard. This is source-authored .NET host hardening,
+**NOT_EXECUTED** until dotnet stepful CI; it does not implement the missing
+compiler-owned `std/env` guest import/linker.
