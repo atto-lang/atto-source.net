@@ -49,3 +49,13 @@ One actor owns a mutable `UdpSocket` handle. A datagram's `OwnedBytes` may be mo
 `runtime/Ores.Net.Runtime/Net/UdpLoopbackHost.cs` contains an internal-only UDP host primitive using nonblocking `System.Net.Sockets.Socket`, numeric IPv4 loopback, rechecked trusted authorization callbacks and an independently copied received payload. The separate `tests/Atto.Udp.Host` project compiles the actual host file into a standalone physical UDP loopback executable with authority, zero-byte, truncation and idempotent-close cases.
 
 **Not executed:** this environment lacks the .NET SDK, and the source GitHub Actions runner failed before any steps; do not claim CIL compilation, test execution or NativeAOT success. The project still needs the host capability broker wired into the compiler's guest lowering and actor physical-retirement path.
+
+## Stage-3 broader compiler parity and regression tests
+
+The backend-owned `stdlib/net/udp.atto` now includes `udp_stream_can_enqueue`, `udp_stream_can_release`, `udp_dropped_next`, and `udp_send_to_admissible`, with packet-count+byte-budget checking and safe saturating drops. Additional `tests/fixtures/udp-boundary-adversarial.atto` covers 41 independent high/low boundary cases, including i64 near-maximum queue values. Combined with the original 41-case fixture, there are **82 positive/negative pure-policy assertions** per backend.
+
+`tests/udp-policy-source-model.test.mjs` contains a retained, runnable Node 22 BigInt source-model harness: `node --test tests/udp-policy-source-model.test.mjs`. It also checks 2,048 independently generated argument sets against a separately implemented mathematical reference for five methods, and checks that mutating queue-bound logic changes behavior. The test is source-translated via Node VM, NOT a compiler, linker, AOT binary, or .atto guest execution receipt. The `udp_stream_budget.atto` stateful class fixture still awaits real compiler parse/typecheck.
+
+An initial source-model evaluation returned 42 on both 41-assertion fixtures for each of nine independently owned `atto-source.*` repositories; the differential oracle also reported 10,240/10,240 checks against the Java branch's concrete UDP policy source. This is not evidence that the nine backends have executable guest parity. In particular `atto-source.hdl` does NOT offer real UDP sockets.
+
+Java, LLVM and .NET host-specific tests cover physical socket pathways in their own source trees; JS/Node and Wasm/Node host adapters also have additional negative tests for close cancellation, receive permission revocation and denied-destination ordering before inspecting untrusted data. All new host tests need exact-head executed runner receipts before being called passed.
