@@ -1,6 +1,12 @@
-// Bool parameter ABI is now represented as CLI BOOLEAN in both metadata and calls.
+// Bool parameters retain CLI BOOLEAN metadata through cross-function calls.
 pub fnc bool_identity(bool allowed): bool { return allowed; }
+pub fnc typed_gate(int count, bool allowed): bool {
+  if allowed then return count > 0; fi
+  return false;
+}
 pub fnc main(): int {
-  if bool_identity(true) then return 42; fi
+  if bool_identity(true) then
+    if typed_gate(1, true) then return 42; fi
+  fi
   return 1;
 }
