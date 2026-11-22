@@ -51,6 +51,20 @@ internal static class CoreMathHashCellSourceSelfTest
                 if (CfgCilTestInterpreter.Evaluate(run) != 42)
                     throw new InvalidOperationException("Compiled .atto Core guest did not return 42");
             }
+            // A project-local namespace must never be able to impersonate a
+            // compiler-owned Core module, regardless of its declared name.
+            File.WriteAllText(guest,
+                "use namespace atto.core.math; pub fnc main():int{return 42;}");
+            try
+            {
+                OresSourceModuleCompiler.Compile(guest, new[] { root });
+                throw new InvalidOperationException("Project-local Core namespace spoofed compiler authority");
+            }
+            catch (FormatException failure)
+            {
+                if (!failure.Message.Contains("NAMESPACE_RUNTIME_NATIVEAOT_UNSUPPORTED",
+                    StringComparison.Ordinal)) throw;
+            }
             foreach (string invalid in new[] { "atto.core/../hash", "atto.core/hash.atto.ores", "atto.core/missing" })
             {
                 File.WriteAllText(guest, "import module hash from \"" + invalid + "\"; pub fnc main():int{return 42;}");
