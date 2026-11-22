@@ -11,3 +11,7 @@ Conformance target: compile and execute `tests/fixtures/core-types-v1/edge-posit
 ## Namespace-only source layout
 
 The canonical Atto `.atto` file uses the file-level `use namespace types;` declaration and public top-level functions, **not** `define module types`. Namespace is source identity, not a dependency import: consumers must use an explicit static import. This changes no runtime allocation or intrinsic guarantee. Parsing, linked guest execution and negative fixture rejection are distinct gates and remain NOT_EXECUTED until the compiler actually runs.
+
+## Exact-head executable compiler admission gate
+
+The `core-types-native-compiler-admission` Actions job attempts to consume the unchanged `core/types.atto` with this repository's **real** compiler. The source-only oracle is insufficient. The job fails if the compiler rejects any required syntax; no host-model fallback or skip is permitted. This backend currently has an independently diagnosed namespace/boolean/type-lowering gap, so a green compiled-parity result is **not** claimed. The initial test proves CIL compilation only; full guest execution and NativeAOT require separate gates if it genuinely executes and succeeds, and deeper runtime and 8 compiler-negative fixture tests remain separate work. Do not merge until the real compiled positive/negative and target-appropriate execution gates pass on this exact PR head.
