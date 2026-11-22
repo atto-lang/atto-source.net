@@ -39,3 +39,33 @@ The namespace grammar is a constrained first milestone only. The
 unified static-imports design; neither general import form is implemented
 by this CIL source linker. Arbitrary user-defined file namespaces remain
 fail-closed until authenticated package-graph support exists.
+
+## Canonical built-in namespace import (restricted CIL slice)
+
+In addition to the legacy `import module math from "atto.core/math";`,
+the compiler now recognizes the canonical static namespace selector:
+
+```atto
+import * as math from "core.math";
+import * as hash from "core.hash";
+import * as cell from "core.cell";
+
+pub fnc main(): int {
+  return math.signum_int(-19) + hash.initial_state() + 26;
+}
+```
+
+Only these three exact compiler-owned names are admitted in the `import *`
+form. The names after `as` are local aliases; they may not shadow each
+other. Multiple local aliases of the same built-in resolve to the **same
+pinned source identity**; exported symbols are checked by the typed linker.
+The compiler still rejects wildcard `./`, unknown `core.*`, `std.*`,
+`alloc.*`, and `pkg` imports, and never scans user filesystem directories
+for a builtin. The legacy `import module` spelling remains compatible.
+
+The associated CIL tests compile canonical and legacy entrypoints and compare
+the immutable imported-unit SHA-256 identity, execute generated CIL with the
+existing test interpreter, check alias de-duplication and deny wildcard
+specifier traversal. **These checks remain unexecuted until admitted by
+stepful CI on the exact PR head**; they are committed candidate tests, not
+a claim that the compiled guest succeeded.
