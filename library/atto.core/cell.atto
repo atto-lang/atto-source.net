@@ -1,7 +1,7 @@
 // Pure .NET-owned Cell borrow-policy helpers, NOT Cell<T> storage or tokens.
 // Cannot provide atomic admission, actor ownership or lifetime enforcement.
 // Unsupported interior mutability MUST be rejected by compiler/runtime.
-define module cell as
+use namespace atto.core.cell;
   pub fnc can_borrow_read(int readers, bool writer_active): bool {
     return readers >= 0 && readers <= 65535 && !writer_active;
   }
@@ -17,4 +17,3 @@ define module cell as
     if readers <= 0 || readers > 65535 || writer_active; do return -1; fi
     return readers - 1;
   }
-end
