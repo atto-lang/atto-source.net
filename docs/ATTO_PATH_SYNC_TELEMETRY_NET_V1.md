@@ -41,3 +41,6 @@ A new source audit verified that every fixture method exists in its backend-owne
 
 ### Native Path value and remaining .NET backend gap
 Added an immutable `define pub class Path` and `relative_path()` factory using Atto source. It exposes lexical component views and filename/extension/parent/join admission; it does not create trusted .NET `System.IO.Path` or an opened handle. The source guest fixture now has 65 checks. The current .NET typed module linker is still a scalar int/bool slice and does **not** certify compilation of this String/class-bearing Path module: keep the guest and NativeAOT verdict NOT_EXECUTED. A closed trusted std registry and native heap/ownership lowering remain prerequisites.
+
+### Exact-head source-only admission workflow
+`verification/atto-std-path-sync-telemetry-source-audit.mjs` statically checks the full 65 sequential guest failure codes, exported native `.atto` calls, 12 invoked Path members, source size/UTF-8/regular-file constraints, exact Git source blobs, and four nontrivial mutation-negative cases. `.github/workflows/atto-std-path-sync-telemetry-source-audit.yml` runs it source-local and explicitly requires a `--require-executed-guest` request to fail. This does **not** establish .NET guest compilation or NativeAOT executable proof; those remain blocked on typed linker support and stepful CI.
