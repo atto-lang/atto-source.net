@@ -52,3 +52,23 @@ either branch without semantic reconciliation and fresh exact-head tests.
 **CI:** `.github/workflows/atto-direct-cil-guest.yml` triggers the script for
 compiler, fixture and script changes. Zero-step Actions runs are
 `NOT_EXECUTED`; they do not mean parser, IL or NativeAOT tests failed.
+
+## Native namespace import parity gap and fail-closed admission (2026-11-22)
+
+The present CIL scalar frontend still supports `int` parameters only
+even though it supports `bool` results and expressions. It also has no
+registered compiler-owned `std.http` namespace import loader. To avoid a
+false feature claim, the negative gate now contains:
+
+- `fixtures/cil/negative/std-http-unsupported.atto`: an attempted
+  `import * as http from "std.http";` must be rejected (currently `E_LEX`)
+  without leaving `artifacts/Rejected.dll`.
+- `fixtures/cil/negative/bool-param-unsupported.atto`: a `bool`
+  parameter must be rejected (currently `E_PARSE`) instead of being
+  silently lowered into an incompatible int ABI.
+
+`scripts/test-cil-guest.sh` expects **18** negative cases, up from 16.
+These tests are staged, **NOT_EXECUTED** on the current head. This is
+explicit missing parity, **not** implementation of typed bool arguments,
+`define pub module`, `std.http` imports, or guest HTTP networking.
+See atto-platform-conformance#101 and atto-source.java#1754.
