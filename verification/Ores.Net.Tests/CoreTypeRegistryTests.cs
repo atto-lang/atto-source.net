@@ -75,7 +75,7 @@ internal static class CoreTypeRegistryTests
             "None constructor identity");
         Require(CoreTypeRegistry.Lookup("None")!.DropPolicy == CoreTypeRegistry.DropPolicy.None,
             "None carries no payload");
-        Require(CoreTypeRegistry.Lookup("Ok")!.Lowering == CoreTypeRegistry.Lowering.ContractOnly,
+        Require(CoreTypeRegistry.Lookup("Ok")!.BackendLowering == CoreTypeRegistry.Lowering.ContractOnly,
             "Ok must not claim .NET lowering");
         Require(CoreTypeRegistry.Lookup("Err")!.Lowering == CoreTypeRegistry.Lowering.ContractOnly,
             "Err must not claim .NET lowering");
