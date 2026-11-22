@@ -1,0 +1,79 @@
+// Native Atto std/sync source-level state transition policies (.NET NativeAOT).
+// NOT a mutex/rwlock/semaphore implementation: policy booleans cannot ensure
+// atomic admission, fairness, cross-actor Sendable, wakeups or cancellation.
+// The trusted scheduler must own actual handles, queues and release receipts.
+// All counts and generation identifiers are nonnegative and bounded.
+define module sync as
+  pub fnc mutex_acquire_admissible(bool locked, bool closed,
+                                   int waiting, int max_waiting): bool {
+    if locked || closed then return false; fi
+    // Do not let a newcomer bypass an already queued waiter.
+    return waiting == 0 && max_waiting >= 0;
+  }
+
+  // A queued waiter prohibits fast-path acquisition, regardless of thread.
+  pub fnc mutex_queue_admissible(bool closed, int waiting,
+                                 int max_waiting): bool {
+    if closed || waiting < 0 || max_waiting < 1 then return false; fi
+    return waiting < max_waiting;
+  }
+
+  // Writer preference prevents a continuous reader stream from starving
+  // an already queued writer. Actual queue ordering belongs to the runtime.
+  pub fnc rw_read_admissible(int readers, bool writer_held,
+                             int queued_writers, int max_readers): bool {
+    if writer_held || readers < 0 || queued_writers != 0 then return false; fi
+    if max_readers < 1 || readers >= max_readers then return false; fi
+    return true;
+  }
+
+  pub fnc rw_write_admissible(int readers, bool writer_held): bool {
+    return readers == 0 && !writer_held;
+  }
+
+  pub fnc rw_release_read_admissible(int readers): bool {
+    return readers > 0;
+  }
+
+  // Permits and requested must be in [0, capacity]. A zero-permit take
+  // succeeds but cannot be used to bypass queue ownership.
+  pub fnc semaphore_acquire_admissible(int available, int requested,
+                                       int capacity, bool closed): bool {
+    if closed || capacity < 1 || available < 0 then return false; fi
+    if available > capacity || requested < 1 then return false; fi
+    return requested <= available;
+  }
+
+  // Use subtraction to avoid overflowing available + released.
+  pub fnc semaphore_release_admissible(int available, int released,
+                                       int capacity, bool closed): bool {
+    if closed || capacity < 1 || available < 0 then return false; fi
+    if available > capacity || released < 1 then return false; fi
+    return released <= capacity - available;
+  }
+
+  // parties is fixed during a barrier generation. The last arrival is
+  // responsible for publishing the next generation through trusted runtime.
+  pub fnc barrier_arrival_admissible(int arrived, int parties,
+                                     bool broken): bool {
+    if broken || parties < 1 || parties > 65536 then return false; fi
+    return arrived >= 0 && arrived < parties;
+  }
+
+  pub fnc barrier_is_last(int arrived, int parties, bool broken): bool {
+    if !barrier_arrival_admissible(arrived, parties, broken) then return false; fi
+    return arrived == parties - 1;
+  }
+
+  pub fnc generation_successor_admissible(int current, int next): bool {
+    if current < 0 || current >= 2147483647 then return false; fi
+    return next == current + 1;
+  }
+
+  pub fnc waiter_cancel_admissible(int waiting, int granted,
+                                   int canceled): bool {
+    if waiting < 0 || granted < 0 || canceled < 1 then return false; fi
+    if granted > waiting then return false; fi
+    return canceled <= waiting - granted;
+  }
+end
