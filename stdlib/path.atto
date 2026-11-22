@@ -131,6 +131,12 @@ define module path as
   }
 
   pub fnc is_portable_relative(String value): bool {
+    // A backslash denotes an ordinary POSIX character but a Windows
+    // separator. Never call an ambiguous spelling portable.
+    let points = value.codepoints();
+    for (let int i = 0; i < points.size; i = i + 1) {
+      if points.get(i) == 92 then return false; fi
+    }
     return is_canonical_relative(value, false) &&
            is_canonical_relative(value, true);
   }
