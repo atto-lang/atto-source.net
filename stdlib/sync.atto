@@ -72,6 +72,26 @@ define module sync as
     return next == current + 1;
   }
 
+  // These checks are NOT ownership verification. The trusted scheduler
+  // must authenticate both owner and generation from a sealed receipt.
+  // A consumed receipt must never release the lock twice.
+  pub fnc mutex_release_receipt_admissible(bool held, int active_owner,
+                                           int caller, int active_generation,
+                                           int receipt_generation, bool consumed): bool {
+    if !held || consumed || active_owner <= 0 then return false; fi
+    if caller != active_owner then return false; fi
+    if active_generation < 0 || receipt_generation < 0 then return false; fi
+    return active_generation == receipt_generation;
+  }
+
+  // Writer-preference upgrade; exact ownership of the single read lease and
+  // non-reentrant atomic transition remain runtime proof obligations.
+  pub fnc rw_upgrade_admissible(int readers, bool writer_held,
+                                int queued_writers, bool caller_has_read_lease): bool {
+    if !caller_has_read_lease || writer_held then return false; fi
+    return readers == 1 && queued_writers == 0;
+  }
+
   pub fnc waiter_cancel_admissible(int waiting, int granted,
                                    int canceled): bool {
     if waiting < 0 || granted < 0 || canceled < 1 then return false; fi
