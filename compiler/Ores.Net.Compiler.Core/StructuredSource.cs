@@ -987,9 +987,11 @@ public static partial class OresStructuredParser
             // tagged family is still unsupported, even when reached via
             // linked-unit discovery, and must fail before typed SSA/CIL.
             // This is a complete-token check after skipping source trivia.
-            if (tokenText is "Result" or "Ok" or "Err")
+            if (CoreTypeRegistry.Lookup(tokenText) is { } registryEntry &&
+                !registryEntry.IsExecutableInStructuredNet &&
+                registryEntry.Kind is CoreTypeRegistry.Kind.Type or CoreTypeRegistry.Kind.Constructor)
                 throw new FormatException(
-                    $"Option/Result/trap requires verified tagged-sum CIL and NativeAOT guest-control lowering at offset {offset}");
+                    $"E_CORE_TYPE_LOWERING_UNSUPPORTED: {registryEntry.CanonicalIdentity} has no verified .NET structured/NativeAOT lowering at offset {offset}");
             return new Token(tokenText, offset);
         }
     }
@@ -1914,11 +1916,11 @@ public static partial class OresStructuredParser
         }
         private IrValueType Type()
         {
-            // Type-position '?' is solely Option<T> sugar, not a default
-            // or omittable parameter. This closed NativeAOT slice currently
-            // represents only Option<int> (tag + full-width i64 payload).
+            // Every builtin type lookup is checked against the canonical
+            // registry before backend-specific AST/SSA admission.
             if (Take("int"))
             {
+                CoreTypeRegistry.RequireExecutableStructuredNet("int", 0);
                 if (!Take("?")) return IrValueType.I64;
                 if (Current.Text == "?")
                     throw Error("E_OPTION_NESTED_UNSUPPORTED: int?? requires verified nested Option ABI");
@@ -1926,23 +1928,37 @@ public static partial class OresStructuredParser
             }
             if (Take("bool"))
             {
+                CoreTypeRegistry.RequireExecutableStructuredNet("bool", 0);
                 if (Take("?"))
                     throw Error("E_OPTION_I64_ONLY: bool? requires Option<bool> lowering");
                 return IrValueType.Bool;
             }
             if (Take("Array"))
             {
+                CoreTypeRegistry.RequireExecutableStructuredNet("Array", 1);
                 Expect("<");
                 if (!Take("int"))
                     throw Error("E_ARRAY_I64_ONLY: fixed arrays support only Array<int>");
+                if (Current.Text == ",")
+                    throw CoreTypeRegistry.Require("Array", 2) is not null
+                        ? Error("E_CORE_TYPE_ARITY: .NET Array<int> subset accepts one type argument")
+                        : Error("E_CORE_TYPE_ARITY");
                 Expect(">");
                 return IrValueType.FixedArrayI64;
             }
             if (Take("Option"))
             {
+                CoreTypeRegistry.RequireExecutableStructuredNet("Option", 1);
                 Expect("<");
+                if (Current.Text == ">")
+                    throw CoreTypeRegistry.Require("Option", 0) is not null
+                        ? Error("E_CORE_TYPE_ARITY: Option requires one type argument")
+                        : Error("E_CORE_TYPE_ARITY");
                 if (!Take("int"))
                     throw Error("E_OPTION_I64_ONLY: this NativeAOT slice admits only Option<int>; no nested or erased generic Option");
+                if (Current.Text == ",")
+                    throw new FormatException(
+                        $"E_CORE_TYPE_ARITY: {CoreTypeRegistry.Lookup("Option")!.CanonicalIdentity} requires one type argument at offset {Current.Offset}");
                 Expect(">");
                 if (Take("?"))
                     throw Error("E_OPTION_NESTED_UNSUPPORTED: Option<int>? requires nested Option ABI");
@@ -1957,6 +1973,7 @@ public static partial class OresStructuredParser
             if (name.Length is < 1 or > MaxIdentifier ||
                 !(Alpha(name[0]) || name[0] == '_') ||
                 !name.Skip(1).All(c => Alpha(c) || Digit(c) || c == '_') ||
+                CoreTypeRegistry.IsProtectedIdentity(name) ||
                 name is "if" or "ifnot" or "unless" or "else" or "while" or "loop" or "break" or "continue" or "return" or "let"
                     or "int" or "bool" or "true" or "false" or "and" or "or" or "xor"
                     or "define" or "pub" or "fnc" or "const" or "val" or "final"
