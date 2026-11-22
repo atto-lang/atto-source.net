@@ -124,3 +124,18 @@ dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true \
 test -x /tmp/atto-cil-fs-io-policy-nativeaot/Atto.Cil.Guest.Host
 expect_42 FS_IO_POLICY_NATIVEAOT /tmp/atto-cil-fs-io-policy-nativeaot/Atto.Cil.Guest.Host
 echo "ATTO_FS_IO_POLICY_31_VECTORS_PASS scope=pure-atto-policy-only"
+
+# Compile independently owned pure .atto fs API admission predicates.
+# This is real generated CoreCLR/NativeAOT execution, NOT actual host file I/O.
+cat stdlib/std/fs_api_policy.atto \
+    fixtures/cil/fs-api-policy-main.atto > artifacts/fs-api-policy-linked.atto
+dotnet run --no-build -c Release --project "$compiler" -- \
+  artifacts/fs-api-policy-linked.atto "$guest"
+test -s "$guest"
+dotnet build "$host" -c Release
+expect_42 FS_API_POLICY_CORECLR dotnet run --no-build -c Release --project "$host"
+dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true \
+  --self-contained true -o /tmp/atto-cil-fs-api-policy-nativeaot
+test -x /tmp/atto-cil-fs-api-policy-nativeaot/Atto.Cil.Guest.Host
+expect_42 FS_API_POLICY_NATIVEAOT /tmp/atto-cil-fs-api-policy-nativeaot/Atto.Cil.Guest.Host
+echo "ATTO_FS_API_POLICY_32_VECTORS_PASS scope=pure-atto-policy-only"
