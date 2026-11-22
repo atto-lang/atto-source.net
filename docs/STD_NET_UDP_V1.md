@@ -1,6 +1,6 @@
 # std.net.udp — datagram module, stage 1
 
-**Status:** native `.atto` policy implementation and guest regression fixture; **socket API not linked or claimed executable**. Keep this repository's implementation independently owned. There is no requirement to import the module source from `atto-common-source` or match another compiler byte-for-byte.
+**Status:** native `.atto` admission and queue-budget sources; a backend-specific host socket candidate exists, but **guest `std.net.udp` binding is still unlinked and unverified**. Keep this repository's implementation independently owned. There is no requirement to import the module source from `atto-common-source` or match another compiler byte-for-byte.
 
 ## Public application API target
 
@@ -43,3 +43,9 @@ One actor owns a mutable `UdpSocket` handle. A datagram's `OwnedBytes` may be mo
 2. Execute genuine `.atto` IPv4/IPv6 loopback send/receive, zero-length payload, back-to-back message framing, truncation and timeout; negative tests for permission, invalid endpoints, close/cancel races, buffer/queue exhaustion.
 3. Verify native AOT and target-specific support independently. For browser Wasm, raw UDP is **unsupported** unless an explicit authorized host bridge exists. Node and WASI capabilities must be tested separately; do not simulate UDP with WebSocket/WebRTC.
 4. Capture exact head/tree/compiler artifact and stepful CI evidence before claiming conformance. Do not mirror private source across organizations without independent authorization.
+
+## Stage-2 .NET NativeAOT host candidate (2026-11-22)
+
+`runtime/Ores.Net.Runtime/Net/UdpLoopbackHost.cs` contains an internal-only UDP host primitive using nonblocking `System.Net.Sockets.Socket`, numeric IPv4 loopback, rechecked trusted authorization callbacks and an independently copied received payload. The separate `tests/Atto.Udp.Host` project compiles the actual host file into a standalone physical UDP loopback executable with authority, zero-byte, truncation and idempotent-close cases.
+
+**Not executed:** this environment lacks the .NET SDK, and the source GitHub Actions runner failed before any steps; do not claim CIL compilation, test execution or NativeAOT success. The project still needs the host capability broker wired into the compiler's guest lowering and actor physical-retirement path.
