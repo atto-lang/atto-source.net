@@ -874,6 +874,7 @@ SelectableI64FutureSelfTest.Run();
 ActorDispatchDomainsSelfTest.Run();
 ActorDispatchAffinitySelfTest.Run();
 ActorRuntimeSelfTest.Run();
+GuestCooperationBudgetSelfTest.Run(); // host-only fuel seam, no source lowering
 ActorRuntimeGracefulDrainSelfTest.Run(); // HOST only; not guest pipe lowering
 SupervisorDataFenceParitySelfTest.Run(); // HOST only; stop-vs-send and sibling parity
 ActorPubSubSelfTest.Run();
