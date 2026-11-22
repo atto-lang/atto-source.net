@@ -62,7 +62,7 @@ internal static class CoreTypeRegistryTests
         Require(option.MinGenericArity == 1 && option.MaxGenericArity == 1, "Option generic arity");
         Require(option.Ownership == CoreTypeRegistry.Ownership.PayloadDependent, "Option payload ownership");
         Require(option.DropPolicy == CoreTypeRegistry.DropPolicy.ActivePayloadOnce, "Option active drop");
-        Require(option.Lowering == CoreTypeRegistry.Lowering.NetOptionI64Subset, "Option lowering subset");
+        Require(option.BackendLowering == CoreTypeRegistry.Lowering.NetOptionI64Subset, "Option lowering subset");
         var result = CoreTypeRegistry.Lookup("Result")!;
         Require(result.CanonicalIdentity == "core/result/Result", "Result canonical identity");
         Require(result.MinGenericArity == 2 && result.MaxGenericArity == 2, "Result generic arity");
