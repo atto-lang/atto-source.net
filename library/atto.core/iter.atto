@@ -1,0 +1,37 @@
+// Scalar cursor calculations only: no allocation, dangling loans or Array<T>.
+// Exhaustion is represented by -1 because valid indices are nonnegative.
+define module iter as
+  pub fnc valid_range(int start, int count, int total): bool {
+    if start < 0; do return false; fi
+    if count < 0; do return false; fi
+    if total < 0; do return false; fi
+    if start > total; do return false; fi
+    return count <= total - start;
+  }
+
+  pub fnc next_index_or_negative_one(int start, int count,
+                                     int consumed, int total): int {
+    if !valid_range(start, count, total); do return -1; fi
+    if consumed < 0; do return -1; fi
+    if consumed >= count; do return -1; fi
+    return start + consumed;
+  }
+
+  pub fnc next_back_index_or_negative_one(int start, int count,
+                                          int consumed, int total): int {
+    if !valid_range(start, count, total); do return -1; fi
+    if consumed < 0; do return -1; fi
+    if consumed >= count; do return -1; fi
+    return start + (count - 1 - consumed);
+  }
+
+  pub fnc advance_cursor_or_negative_one(int length, int cursor,
+                                          int steps): int {
+    if length < 0; do return -1; fi
+    if cursor < 0; do return -1; fi
+    if steps < 0; do return -1; fi
+    if cursor > length; do return -1; fi
+    if steps > length - cursor; do return -1; fi
+    return cursor + steps;
+  }
+end

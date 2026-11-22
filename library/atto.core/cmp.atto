@@ -1,0 +1,28 @@
+// Total scalar comparisons without subtraction overflow.
+define module cmp as
+  pub fnc compare_int(int left, int right): int {
+    if left < right; do return -1; fi
+    if left > right; do return 1; fi
+    return 0;
+  }
+
+  pub fnc compare_bool(bool left, bool right): int {
+    if left == right; do return 0; fi
+    if left; do return 1; fi
+    return -1;
+  }
+
+  pub fnc min_int(int left, int right): int {
+    if left <= right; do return left; fi
+    return right;
+  }
+
+  pub fnc max_int(int left, int right): int {
+    if left >= right; do return left; fi
+    return right;
+  }
+
+  pub fnc valid_bounds(int lower, int upper): bool {
+    return lower <= upper;
+  }
+end

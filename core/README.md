@@ -1,14 +1,20 @@
-# Atto core slice, iter, cmp (first source-owned increment)
+# Core slice, iter and cmp — .NET Native AOT compiler tier
 
-These are implementation files, not declarations of a runtime-provided safe Slice<T> or Iterator<T> ABI.
+Compiler-owned, SHA-256-pinned `atto.core/{slice,iter,cmp}` resource identities
+resolve from `library/atto.core/*.atto`; each file matches the backend-owned
+`core/*.atto` source. Exact `ores.core/*` and `atto.core/*.atto` aliases
+resolve to the same module; unrecognized or traversal paths fail closed.
 
-* `slice.atto`: allocation-free bounds-safe logical windows and integer element operations on pre-existing `Array<int>`.
-* `iter.atto`: allocation-free cursor arithmetic and callback-based fold/any/all/find/count on pre-existing arrays.
-* `cmp.atto`: int/bool total ordering, min/max/clamp, lexicographic array ordering and sortedness checks.
+The .NET typed source/CIL linker currently admits only a **scalar**
+`int`/`bool` contract. Exposed methods are checked index/range predicates,
+cursor calculations with explicitly named -1 exhaustion sentinel, min/max and
+ordering. These are arithmetic policies, **not** validated memory borrows,
+owned arrays, `Slice<T>`, `Iterator<T>`, `Ord` or allocation-free runtime
+proofs.
 
-All functions use signed `int` bounds; bounds are validated with subtraction after comparisons to avoid overflow. Invalid reads return `Option` rather than a sentinel, while invalid boolean predicates return false. Empty valid ranges are admitted and do not read elements. The `*_int` functions operate on copyable scalar elements only. Comparators produce -1/0/1 without subtraction overflow.
-
-## Explicitly not yet implemented
-A general `Slice<T>`/`SliceMut<T>` borrowed view and lifetime/generation enforcement, generic `Iterator<T>`/`IntoIterator<T>` and lazy adapters, zero-copy mutable chunk/split operations, an `Ordering` algebraic data type, and arbitrary `Ord` generic dispatch require type-checker/runtime support. A function accepting an `Array<int>` is not sufficient proof of memory safety or absence of underlying array allocation.
-
-The proposed import fixture is in `tests/slice_iter_cmp_smoke.atto`. It must only be counted as passing after each compiler wires `atto.core` package resolution and executes the fixture at the exact PR head. Do not report source presence as executed conformance. Independent backend implementations are permitted; match public semantics and negative bounds behavior.
+The unmodified full array/callback source programs are kept separately in
+`core/experimental/*_array.atto` and the prior high-level sample fixtures
+are intentionally not compiled by this scalar linker. Module import/source
+identity and typed CIL guest execution are tested in
+`verification/Ores.Net.Tests/SourceModuleLinkingSelfTest.cs`. Check the
+exact-head workflow output; source presence alone is not parity evidence.

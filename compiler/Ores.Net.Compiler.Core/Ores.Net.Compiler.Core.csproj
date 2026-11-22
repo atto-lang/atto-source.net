@@ -9,6 +9,12 @@
                       LogicalName="Atto.Core.Identity" />
     <EmbeddedResource Include="../../contracts/atto-core-v1/numeric.atto"
                       LogicalName="Atto.Core.Numeric" />
+    <EmbeddedResource Include="../../library/atto.core/slice.atto"
+                      LogicalName="Atto.Core.Slice" />
+    <EmbeddedResource Include="../../library/atto.core/iter.atto"
+                      LogicalName="Atto.Core.Iter" />
+    <EmbeddedResource Include="../../library/atto.core/cmp.atto"
+                      LogicalName="Atto.Core.Cmp" />
   </ItemGroup>
   <!-- The production Native AOT compiler uses System.Reflection.Metadata only.
        Mono.Cecil remains a verification-only dependency, not a published runtime. -->
