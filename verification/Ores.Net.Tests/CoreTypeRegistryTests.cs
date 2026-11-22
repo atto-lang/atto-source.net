@@ -112,10 +112,21 @@ internal static class CoreTypeRegistryTests
             "explicit-only types are not automatically reserved");
         Require(CoreTypeRegistry.Require("Option", 1).CanonicalIdentity == option.CanonicalIdentity,
             "canonical Require");
+        bool optionArityRejected = false;
         try { _ = CoreTypeRegistry.Require("Option", 2); }
-        catch (FormatException error) when (error.Message.Contains("E_CORE_TYPE_ARITY", StringComparison.Ordinal)) { goto ValidOptionArity; }
-        throw new Exception("CoreTypeRegistry.Require must reject malformed Option arity");
-        ValidOptionArity:
+        catch (FormatException error) when
+            (error.Message.Contains("E_CORE_TYPE_ARITY", StringComparison.Ordinal))
+        { optionArityRejected = true; }
+        Require(optionArityRejected,
+            "CoreTypeRegistry.Require must reject malformed Option arity");
+        bool coreAllocRejected = false;
+        try { _ = CoreTypeRegistry.RequireProfile("List", CoreTypeRegistry.Profile.Core); }
+        catch (FormatException error) when
+            (error.Message.Contains("E_ALLOC_PROFILE_REQUIRED", StringComparison.Ordinal))
+        { coreAllocRejected = true; }
+        Require(coreAllocRejected, "core-only profile must not admit List");
+        Require(CoreTypeRegistry.RequireProfile("List", CoreTypeRegistry.Profile.Alloc).Name == "List",
+            "alloc profile exposes registry List name without claiming lowering");
 
         Require(OresStructuredParser.Parse(
             "fnc main():int{return Some(42).unwrap_or(0);}") is not null,
@@ -128,6 +139,8 @@ internal static class CoreTypeRegistryTests
             "E_CORE_TYPE_ARITY", "Option generic arity is registry-backed");
         Reject("fnc main():int{val Option<> value=None;return 42;}",
             "E_CORE_TYPE_ARITY", "Option requires an explicit type argument");
+        Reject("fnc main():int{val Option<Box> value=None;return 42;}",
+            "E_OPTION_I64_ONLY", "affine payload Option is fail-closed until typed drop/borrow lowering");
         Reject("fnc main():int{val Result<int, int> value=Ok(42);return 42;}",
             "E_CORE_TYPE_LOWERING_UNSUPPORTED", "Result is catalogued but not lowered");
         Reject("fnc main():int{return Ok(42);}",
