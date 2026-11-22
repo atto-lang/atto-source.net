@@ -69,3 +69,17 @@ existing test interpreter, check alias de-duplication and deny wildcard
 specifier traversal. **These checks remain unexecuted until admitted by
 stepful CI on the exact PR head**; they are committed candidate tests, not
 a claim that the compiled guest succeeded.
+
+## 2026-11-22 owner/borrow parity follow-up
+
+The pinned `atto.core/cell.atto` now provides conservative
+`valid_loan_state`, `can_owner_read`, `can_owner_write`,
+`can_move_owner`, and `can_suspend_unpinned` predicates using
+(reader count, writer-active) policy state, independently from Java/LLVM's
+signed counter. `StructuredModuleLinking.cs` pins the updated exact bytes
+with SHA-256 `6f58169db15411419bacbea6ceacb94236c767c0b2d3a023a2a8a0c028e90cb0`.
+The existing CIL-emitter test gained policy edge vectors for both legacy and
+authenticated namespace imports. It is still CIL/test-interpreter execution
+when run, **not** verified NativeAOT, true owned-cell mutation, or a compiled
+borrow checker. Real owner/loan escape/take admission and exact-head run
+remain outstanding.
