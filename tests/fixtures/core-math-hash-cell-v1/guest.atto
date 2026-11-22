@@ -13,6 +13,8 @@ pub fnc main(): int {
   if !cell.can_borrow_read(3, false); do return 9; fi
   if cell.can_borrow_write(3, false); do return 10; fi
   if cell.readers_after_acquire(65535, false) != -1; do return 11; fi
+  if cell.can_borrow_read(65535, false); do return 13; fi
+  if !cell.can_owner_read(65535, false); do return 14; fi
   if cell.readers_after_release(1, false) != 0; do return 12; fi
   return 42;
 }
