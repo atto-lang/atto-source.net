@@ -76,7 +76,16 @@ static class Program
         try { first.TrySendTo(second.LocalPort, new byte[] { 1 }); }
         catch (UnauthorizedAccessException) { rejected = true; }
         Require(rejected, "peer port deny bypass");
+        byte[] oversizedDenied = new byte[UdpLoopbackHost.MaxPayload + 1];
+        rejected = false;
+        try { first.TrySendTo(second.LocalPort, oversizedDenied); }
+        catch (UnauthorizedAccessException) { rejected = true; }
+        Require(rejected, "denied destination must win before oversized payload inspection");
         deniedPort = -1;
+        rejected = false;
+        try { first.TrySendTo(second.LocalPort, oversizedDenied); }
+        catch (ArgumentOutOfRangeException) { rejected = true; }
+        Require(rejected, "authorized oversized datagram must be rejected");
 
         byte[] data = { 1, 0, 255, 42 };
         Require(first.TrySendTo(second.LocalPort, data), "UDP host send would-block");
