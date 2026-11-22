@@ -121,10 +121,22 @@ internal static class CoreTypeRegistryTests
             "fnc main():int{return Some(42).unwrap_or(0);}") is not null,
             "verified Option<int> subset remains admitted");
         Require(OresStructuredParser.Parse(
-            "fnc main():int{val Array<int> values=[40,2];return values.get_copy(0).unwrap_or(0)+2;}") is not null,
+            "fnc main():int{val Array<int> values=Array.of(40,2);return values.get_copy(0).unwrap_or(0)+2;}") is not null,
             "verified fixed Array<int> Option lookup remains admitted");
 
-        Reject("fnc main():int{val Option<int> value=None;return 42;}",
-            "E_CORE_TYPE_LOWERING_UNSUPPORTED", "lexical prelude anti-spoofing conflict? no, Option is supported");
+        Reject("fnc main():int{val Option<int, bool> value=None;return 42;}",
+            "E_CORE_TYPE_ARITY", "Option generic arity is registry-backed");
+        Reject("fnc main():int{val Option<> value=None;return 42;}",
+            "E_CORE_TYPE_ARITY", "Option requires an explicit type argument");
+        Reject("fnc main():int{val Result<int, int> value=Ok(42);return 42;}",
+            "E_CORE_TYPE_LOWERING_UNSUPPORTED", "Result is catalogued but not lowered");
+        Reject("fnc main():int{return Ok(42);}",
+            "E_CORE_TYPE_LOWERING_UNSUPPORTED", "Ok constructor is not lowered");
+        Reject("fnc main():int{return Err(42);}",
+            "E_CORE_TYPE_LOWERING_UNSUPPORTED", "Err constructor is not lowered");
+        Reject("fnc Option():int{return 42;}",
+            "E_PRELUDE_SPOOF", "compiler-owned core identity cannot be forged");
+        Reject("fnc main():int{val List<int> values=List();return 42;}",
+            "E_CORE_TYPE_LOWERING_UNSUPPORTED", "allocator collections stay fail closed");
     }
 }
