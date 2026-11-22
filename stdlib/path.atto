@@ -267,8 +267,8 @@ define module path as
 
   // Immutable lexical Path value. The object is NOT a filesystem handle,
   // cannot authorize I/O, and never resolves symlinks/mounts.
-  // The original spelling is retained for zero-copy scalar component views.
-  define pub class Path as
+  // The original spelling is retained for bounded scalar component views.
+  pub define class Path as
     let String spelling;
     let bool windows;
 
