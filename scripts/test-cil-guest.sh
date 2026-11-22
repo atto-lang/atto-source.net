@@ -36,10 +36,11 @@ for case in \
   duplicate-parameter:E_DUP_PARAM \
   bool-unsupported:E_PARSE \
   no-main:E_ENTRY \
-  taskfuture-get-ready-unsupported:E_TASK_UNSUPPORTED \
-  taskfuture-cancel-task-unsupported:E_TASK_UNSUPPORTED \
-  taskfuture-cooperate-unsupported:E_TASK_UNSUPPORTED \
-  taskfuture-receipt-split-unsupported:E_TASK_UNSUPPORTED \
+  taskfuture-typed-constructor-unsupported:E_TASK_UNSUPPORTED \
+  taskfuture-get-ready-unsupported:E_LEX \
+  taskfuture-cancel-task-unsupported:E_LEX \
+  taskfuture-cooperate-unsupported:E_LEX \
+  taskfuture-receipt-split-unsupported:E_LEX \
   typed-task-unsupported:E_TASK_UNSUPPORTED \
   do-task-unsupported:E_TASK_UNSUPPORTED \
   do-sync-task-nonvoid:E_TASK_RETURN_TYPE \
@@ -71,7 +72,7 @@ for case in \
   }
   test ! -e artifacts/Rejected.dll || { echo "NEGATIVE_ARTIFACT_LEAK case=$name"; exit 1; }
 done
-echo "ATTO_DIRECT_CIL_NEGATIVE_PASS checks=32"
+echo "ATTO_DIRECT_CIL_NEGATIVE_PASS checks=33"
 dotnet build "$host" -c Release
 expect_42 CORECLR_GUEST dotnet run --no-build -c Release --project "$host"
 dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true \
