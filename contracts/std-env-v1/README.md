@@ -24,3 +24,9 @@ A trusted host interface must validate key names, check both coarse isolate ENV 
 ## Controlled positive guest fixture
 
 `positive_get.atto` requires a deterministic trusted host injection of `ATTO_ENV_EMPTY=""` and `ATTO_ENV_FLAG="true"`, with `ATTO_ENV_ABSENT` explicitly unset. Grant only scoped `ATTO_ENV_*` keys and explicitly deny `ATTO_ENV_SECRET_KEY`. The target is exit code 42, checking present-empty versus missing, nonempty filtering, required-key errors, strict boolean parsing and fallback. Do not use ambient process environment to synthesize a passing result; the compiler must execute the actual .atto guest. **NOT_EXECUTED.**
+
+## New .NET host-side admission scaffold
+
+`runtime/Ores.Net.Runtime/StdEnvHostSnapshotV1.cs` is a NativeAOT-compatible, **host-only** explicit snapshot adapter. The trusted embedder supplies values plus independent coarse ENV authority and key-scoped grants. Denies override allow rules; only granted values are copied; values are limited to 16 KiB of well-formed UTF-8 and secrets never appear in errors. `Revoke()` retires and clears retained values. `verification/Ores.Net.Tests/StdEnvHostSnapshotV1SelfTest.cs` runs from the existing verification test executable.
+
+This is still **not** a guest language builtin: `std/env` import resolution, `env.get/env.has` IR lowering and compiler-backed guest/NativeAOT tests are outstanding, and no real guest effects may be claimed from this host-only test.
