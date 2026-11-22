@@ -109,3 +109,18 @@ dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true \
 test -x /tmp/atto-cil-hosted-policy-vectors-nativeaot/Atto.Cil.Guest.Host
 expect_42 HOSTED_POLICY_56_VECTORS_NATIVEAOT /tmp/atto-cil-hosted-policy-vectors-nativeaot/Atto.Cil.Guest.Host
 echo "ATTO_HOSTED_POLICY_VECTOR_PARITY_PASS signed_i64_cases=56"
+
+# Compile the compiler-local .atto fs byte-I/O policy through the real
+# Atto CIL frontend. This is NOT a filesystem syscall or std.fs import test.
+cat stdlib/std/fs_io_policy.atto \
+    fixtures/cil/fs-io-policy-main.atto > artifacts/fs-io-policy-linked.atto
+dotnet run --no-build -c Release --project "$compiler" -- \
+  artifacts/fs-io-policy-linked.atto "$guest"
+test -s "$guest"
+dotnet build "$host" -c Release
+expect_42 FS_IO_POLICY_CORECLR dotnet run --no-build -c Release --project "$host"
+dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true \
+  --self-contained true -o /tmp/atto-cil-fs-io-policy-nativeaot
+test -x /tmp/atto-cil-fs-io-policy-nativeaot/Atto.Cil.Guest.Host
+expect_42 FS_IO_POLICY_NATIVEAOT /tmp/atto-cil-fs-io-policy-nativeaot/Atto.Cil.Guest.Host
+echo "ATTO_FS_IO_POLICY_31_VECTORS_PASS scope=pure-atto-policy-only"
