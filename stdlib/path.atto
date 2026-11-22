@@ -296,23 +296,23 @@ define module path as
       return normalized_component_scalar(self.spelling, self.windows, index, offset);
     }
 
-    pub fnc file_name_start(): int {
+    pub fnc file_name_offset(): int {
       return file_name_start(self.spelling, self.windows);
     }
 
-    pub fnc file_name_length(): int {
+    pub fnc file_name_size(): int {
       return file_name_length(self.spelling, self.windows);
     }
 
-    pub fnc extension_start(): int {
+    pub fnc extension_offset(): int {
       return extension_start(self.spelling, self.windows);
     }
 
-    pub fnc file_stem_length(): int {
+    pub fnc stem_length(): int {
       return file_stem_length(self.spelling, self.windows);
     }
 
-    pub fnc parent_depth(): int {
+    pub fnc parent_component_count(): int {
       return parent_depth(self.spelling, self.windows);
     }
 
