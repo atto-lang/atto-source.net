@@ -84,12 +84,11 @@ public static class OresSourceModuleCompiler
             unit.All(c => c is >= 'a' and <= 'z' or >= '0' and <= '9' or '_');
         string key = layer + "/" + unit;
         if (valid && V1Units.ContainsKey(key)) return "@atto." + key + ".atto";
+        // Hosted std keeps its historical diagnostic phrase on every root.
+        string legacy = layer == "std" ? " (unsupported compiler-owned AttoLang library namespace)" : "";
         if (valid && V1Catalog.Contains(key))
-            throw new FormatException($"compiler-owned {layer} module '{specifier}' is not implemented by the .NET backend yet");
-        // Legacy std/ spellings keep their historical diagnostic.
-        if (root == "std/")
-            throw new FormatException($"unknown compiler-owned std module '{specifier}' (unsupported compiler-owned AttoLang library namespace)");
-        throw new FormatException($"unknown compiler-owned {layer} module '{specifier}'");
+            throw new FormatException($"compiler-owned {layer} module '{specifier}' is not implemented by the .NET backend yet{legacy}");
+        throw new FormatException($"unknown compiler-owned {layer} module '{specifier}'{legacy}");
     }
 
     private sealed record Unit(string PhysicalPath, string Identity, string Source,
