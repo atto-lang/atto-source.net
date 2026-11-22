@@ -77,7 +77,7 @@ internal static class CoreTypeRegistryTests
             "None carries no payload");
         Require(CoreTypeRegistry.Lookup("Ok")!.BackendLowering == CoreTypeRegistry.Lowering.ContractOnly,
             "Ok must not claim .NET lowering");
-        Require(CoreTypeRegistry.Lookup("Err")!.Lowering == CoreTypeRegistry.Lowering.ContractOnly,
+        Require(CoreTypeRegistry.Lookup("Err")!.BackendLowering == CoreTypeRegistry.Lowering.ContractOnly,
             "Err must not claim .NET lowering");
 
         foreach (var name in new[] { "Array", "FixedArray", "Tuple", "Pair", "Entry" })
