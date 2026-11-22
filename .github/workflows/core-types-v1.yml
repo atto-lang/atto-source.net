@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - 'core/types.atto'
+      - 'compiler/Atto.Cil.Compiler/Program.cs'
       - 'tests/core-types-source.test.mjs'
       - 'tests/core-types-matrix-source.test.mjs'
       - 'tests/fixtures/core-types-v1/**'
@@ -61,6 +62,22 @@ jobs:
           set -euo pipefail
           dotnet build compiler/Atto.Cil.Compiler/Atto.Cil.Compiler.csproj -c Release --nologo
           mkdir -p artifacts
+          dotnet run --no-build -c Release --project compiler/Atto.Cil.Compiler/Atto.Cil.Compiler.csproj -- tests/fixtures/core-types-v1/net-namespace-positive.atto artifacts/CoreTypesNamespace.dll
+          test -s artifacts/CoreTypesNamespace.dll
+          for case in net-namespace-duplicate-negative net-namespace-late-negative; do
+            rm -f artifacts/rejected.dll
+            if dotnet run --no-build -c Release --project compiler/Atto.Cil.Compiler/Atto.Cil.Compiler.csproj -- "tests/fixtures/core-types-v1/$case.atto" artifacts/rejected.dll >"$RUNNER_TEMP/$case.stdout" 2>"$RUNNER_TEMP/$case.stderr"; then
+              echo "$case unexpectedly compiled" >&2
+              exit 1
+            fi
+            test ! -f artifacts/rejected.dll
+            case "$case" in
+              *duplicate*) grep -Fq E_NAMESPACE_DUPLICATE "$RUNNER_TEMP/$case.stderr";;
+              *late*) grep -Fq E_NAMESPACE_HEADER_ORDER "$RUNNER_TEMP/$case.stderr";;
+            esac
+          done
+          echo 'CORE_TYPES_NET_NAMESPACE_FRAGMENT=COMPILED'
+          # Full core/types still requires bool return and expression parity.
           dotnet run --no-build -c Release --project compiler/Atto.Cil.Compiler/Atto.Cil.Compiler.csproj -- core/types.atto artifacts/CoreTypes.dll
           test -s artifacts/CoreTypes.dll
           echo 'CORE_TYPES_NET_CIL_COMPILED=YES'
