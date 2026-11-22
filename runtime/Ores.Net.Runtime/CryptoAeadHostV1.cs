@@ -48,9 +48,18 @@ public static class CryptoAeadHostV1
             throw new PlatformNotSupportedException("AEAD algorithm unavailable on this platform");
         byte[] bytes = new byte[KeyBytes];
         byte[] prefix = new byte[4];
-        RandomNumberGenerator.Fill(bytes);
-        RandomNumberGenerator.Fill(prefix);
-        return new Key(algorithm, bytes, prefix);
+        try
+        {
+            RandomNumberGenerator.Fill(bytes);
+            RandomNumberGenerator.Fill(prefix);
+            return new Key(algorithm, bytes, prefix);
+        }
+        catch
+        {
+            CryptographicOperations.ZeroMemory(bytes);
+            CryptographicOperations.ZeroMemory(prefix);
+            throw;
+        }
     }
 
     /// <summary>Non-copyable at the guest boundary; host seal/open is serialized.</summary>
