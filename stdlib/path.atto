@@ -58,7 +58,8 @@ define module path as
 
     for (let int i = begin; i < end; i = i + 1) {
       let int scalar = points.get(i);
-      if scalar == 0 || scalar < 32 || scalar == 127 then return -1; fi
+      if scalar < 32 || scalar == 127 || scalar > 1114111 ||
+         (scalar >= 55296 && scalar <= 57343) then return -1; fi
       if windows; do
         // Restrict to an unambiguous portable Windows filename subset.
         if !(is_ascii_letter(scalar) || (scalar >= 48 && scalar <= 57) ||
