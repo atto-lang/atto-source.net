@@ -22,7 +22,7 @@ delimiters and nonzero trace/parent IDs; it neither authenticates nor
 installs a runtime trace context. NativeAOT only permits toggling already
 compiled probe sites. OTLP egress is not part of these files.
 
-`tests/fixtures/path_sync_telemetry_policy_v1.atto` contains 18 sequential
+`tests/fixtures/path_sync_telemetry_policy_v1.atto` contains 20 sequential
 failure codes; it is a candidate, **not a compiled/guest-executed receipt**.
 The linked Atto guest test, NativeAOT result, cancellation/lock race test and
 OTLP integration are unverified. Unsupported host features must fail closed.
