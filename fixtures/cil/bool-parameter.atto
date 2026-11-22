@@ -1,0 +1,6 @@
+// Bool parameter ABI is now represented as CLI BOOLEAN in both metadata and calls.
+pub fnc bool_identity(bool allowed): bool { return allowed; }
+pub fnc main(): int {
+  if bool_identity(true) then return 42; fi
+  return 1;
+}
