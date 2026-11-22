@@ -1917,7 +1917,13 @@ public static partial class OresStructuredParser
         private IrValueType Type()
         {
             // Every builtin type lookup is checked against the canonical
-            // registry before backend-specific AST/SSA admission.
+            // registry before backend-specific AST/SSA admission. A catalog
+            // entry alone never grants a backend lowering.
+            if (Current.Text is { Length: > 0 } typeName &&
+                CoreTypeRegistry.Lookup(typeName) is { Kind: CoreTypeRegistry.Kind.Type } typeInfo &&
+                !typeInfo.IsExecutableInStructuredNet)
+                throw new FormatException(
+                    $"E_CORE_TYPE_LOWERING_UNSUPPORTED: {typeInfo.CanonicalIdentity} has no verified .NET structured/NativeAOT lowering at offset {Current.Offset}");
             if (Take("int"))
             {
                 CoreTypeRegistry.RequireExecutableStructuredNet("int", 0);
@@ -1941,7 +1947,7 @@ public static partial class OresStructuredParser
                     throw Error("E_ARRAY_I64_ONLY: fixed arrays support only Array<int>");
                 if (Current.Text == ",")
                     throw new FormatException(
-                        $"E_CORE_TYPE_ARITY: {CoreTypeRegistry.Lookup("Array")!.CanonicalIdentity} expects one type argument at offset {Current.Offset}");
+                        $"E_CORE_TYPE_ARITY: {CoreTypeRegistry.Lookup("Array")!.CanonicalIdentity} expects {CoreTypeRegistry.Lookup("Array")!.MinGenericArity} type argument at offset {Current.Offset}");
                 Expect(">");
                 return IrValueType.FixedArrayI64;
             }
@@ -1968,6 +1974,8 @@ public static partial class OresStructuredParser
         {
             string name = Current.Text;
             int at = Current.Offset;
+            if (CoreTypeRegistry.IsProtectedIdentity(name))
+                throw new FormatException($"E_PRELUDE_SPOOF: {name} is a compiler-owned type/constructor identity at offset {at}");
             if (name.Length is < 1 or > MaxIdentifier ||
                 !(Alpha(name[0]) || name[0] == '_') ||
                 !name.Skip(1).All(c => Alpha(c) || Digit(c) || c == '_') ||
