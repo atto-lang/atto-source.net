@@ -9,6 +9,9 @@ internal static class SourceModuleLinkingSelfTest
     {
         string root = Path.Combine(Path.GetTempPath(), "ores-modules-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
+        string outside = root + "-outside.ores";
+        try
+        {
         // Compile and execute the actual .atto compiler-owned modules through CIL.
         // Native AOT runs the same embedded source and identity-pinned linker.
         string coreSicFixture = File.ReadAllText(Path.Combine("core", "tests", "slice_iter_cmp_smoke.atto"));
@@ -46,9 +49,6 @@ internal static class SourceModuleLinkingSelfTest
                 "unknown/traversal compiler-owned core paths must fail closed: " + badPath);
         }
 
-        string outside = root + "-outside.ores";
-        try
-        {
             Write("main.ores", "import module left from \"./left\"; import module right from \"./right\"; pub fnc main():int { return left.value(10) + right.value(11); }");
             Write("left.ores", "import fnc twice from \"./base\"; define module left as pub fnc value(int n) -> int { return twice(n); } end");
             Write("right.ores", "define module right as pub fnc value(int n):int { return n * 2; } fnc hidden():int { return 99; } end");
