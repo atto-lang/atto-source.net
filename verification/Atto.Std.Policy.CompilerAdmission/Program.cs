@@ -72,7 +72,7 @@ internal static class Program
                     "Positive relative-source module failed to emit real CIL");
 
             Console.WriteLine("NET_STD_COMPILER_IMPORT_DENIAL=EXECUTED" +
-                "|reserved=9|local_module_graph=COMPILED" +
+                "|reserved=9|local_module_graph=CIL_EMITTED" +
                 "|std_guest=NOT_EXECUTED|native_aot=NOT_EXECUTED");
             return 0;
         }
