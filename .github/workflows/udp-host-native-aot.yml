@@ -1,0 +1,44 @@
+name: UDP host and NativeAOT exact-head
+on:
+  pull_request:
+    paths:
+      - 'runtime/Ores.Net.Runtime/Net/UdpLoopbackHost.cs'
+      - 'tests/Atto.Udp.Host/**'
+      - '.github/workflows/udp-host-native-aot.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  udp-host-native-aot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact PR HEAD (not synthetic merge)
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Exact SHA admission
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          echo "UDP_SOURCE_HEAD=$EXPECTED"
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install NativeAOT toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang zlib1g-dev
+      - name: Execute real UDP host and NativeAOT
+        shell: bash
+        run: bash tests/Atto.Udp.Host/run-native-aot.sh
+      - name: Explicit execution boundary
+        shell: bash
+        run: |
+          echo 'UDP_NATIVEAOT_HOST_STEPS_EXECUTED=true'
+          echo 'This does NOT certify compiled Atto guest UDP parity.'
