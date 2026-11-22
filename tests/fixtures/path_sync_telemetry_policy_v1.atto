@@ -25,5 +25,9 @@ pub fnc main(): int {
   if Telemetry.traceparent_v00_header_valid("ff-0123456789abcdef0123456789abcdef-0123456789abcdef-01") then return 18; fi
   if path.is_portable_relative("safe\\\\child") then return 19; fi
   if !sync.semaphore_release_admissible(3, 2, 5, true) then return 20; fi
+  if path.normalized_component_start("a/./b/../c", true, 1) != 9 then return 21; fi
+  if path.normalized_component_length("a/./b/../c", true, 1) != 1 then return 22; fi
+  if path.normalized_component_scalar("a/./b/../c", true, 1, 0) != 99 then return 23; fi
+  if path.normalized_component_start("a/..", true, 0) != -1 then return 24; fi
   return 0;
 }
