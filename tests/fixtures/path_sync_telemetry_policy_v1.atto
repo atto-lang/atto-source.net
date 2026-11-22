@@ -29,5 +29,19 @@ pub fnc main(): int {
   if path.normalized_component_length("a/./b/../c", true, 1) != 1 then return 22; fi
   if path.normalized_component_scalar("a/./b/../c", true, 1, 0) != 99 then return 23; fi
   if path.normalized_component_start("a/..", true, 0) != -1 then return 24; fi
+  if path.file_name_start("a/./b/../c", true) != 9 then return 25; fi
+  if path.file_name_length("archive.tar.gz", true) != 14 then return 26; fi
+  if path.extension_start("archive.tar.gz", true) != 12 then return 27; fi
+  if path.file_stem_length("archive.tar.gz", true) != 11 then return 28; fi
+  if path.extension_start("files/.env", true) != -1 then return 29; fi
+  if path.file_stem_length("files/.env", true) != 4 then return 30; fi
+  if path.parent_depth("a/./b/../c", true) != 1 then return 31; fi
+  if path.file_name_start("a/..", true) != -1 then return 32; fi
+  if !path.join_admissible("logs", "2026/events.json", true) then return 33; fi
+  if path.join_admissible("logs", "../escape", true) then return 34; fi
+  if path.join_admissible("CON", "file", true) then return 35; fi
+  if path.normalized_component_scalar("a/./b/../c", true, 1, 1) != -1 then return 36; fi
+  if path.is_portable_relative("a/..") then return 37; fi
+  if !path.join_admissible("a", "b", true) then return 38; fi
   return 0;
 }
