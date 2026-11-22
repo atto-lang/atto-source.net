@@ -51,9 +51,9 @@ public static class OresSourceModuleCompiler
     private const string CellResourceName = "Atto.Core.Cell";
     private const string IdentitySha256 = "d381ecd95c7df1b4efc1a2fb7bb7cd87e050f0a88f72690070feb465930a915a";
     private const string NumericSha256 = "3d1d7b77068dd02b3d60b30b72f29a4537a933134ca79e1e81df096dc56f5f33";
-    private const string MathSha256 = "6878f602b0e9037421cca3f173b496a3becf7728b0ccfae402a8e4d1cc1fd39a";
-    private const string HashSha256 = "b916150155f5481ae928be21e327a6fdde2a95bc8a9e9eae918b6805d5140ed9";
-    private const string CellSha256 = "8bc1ab6a6571de674988b2eb0a8b486322158bdda46d00786c48a6ef772c355a";
+    private const string MathSha256 = "d4363bc341067dc2830b7d3477f435afb0c3c61a08240f785fb8660dec0f5945";
+    private const string HashSha256 = "de35f6da5d9b8793f23212150c1280c280fffd0ec0cee01758a6d455b9f880d1";
+    private const string CellSha256 = "7098b8a9c9c6e87a3b839b7fb0775ab3c9992a11affdea931a4d3fac6d0a76b1";
 
     private sealed record Unit(string PhysicalPath, string Identity, string Source,
         SourceUnitIdentity Witness, IReadOnlyList<SourceImport> Imports);
@@ -148,7 +148,8 @@ public static class OresSourceModuleCompiler
                 : Identity(path);
             var unit = new Unit(path, identity, source,
                 new SourceUnitIdentity(identity, Convert.ToHexStringLower(SHA256.HashData(bytes)), bytes.Length),
-                OresStructuredParser.ReadLinkedImports(source));
+                OresStructuredParser.ReadLinkedImports(source,
+                    path is CoreMath or CoreHash or CoreCell));
             units.Add(path, unit);
             states.Add(path, 1);
             foreach (var import in unit.Imports) Visit(Resolve(path, import.Specifier), depth + 1);
