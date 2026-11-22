@@ -50,11 +50,11 @@ internal static class Program
             // A local module is a different, explicitly relative namespace.
             // Preserve functioning native CIL graph compilation while
             // denying "std/path" project-owned shadow modules.
-            File.WriteAllText(Path.Combine(root, "local.atto"),
-                "define module local as pub fnc value(int n):int{return n;} end");
+            File.WriteAllText(Path.Combine(root, "safe_math.atto"),
+                "define module safe_math as pub fnc value(int n):int{return n;} end");
             File.WriteAllText(main,
-                "import module local from \"./local\";" +
-                " pub fnc main():int{return local.value(42);}");
+                "import module safe_math from \"./safe_math\";" +
+                " pub fnc main():int{return safe_math.value(42);}");
             var localGraph = OresSourceModuleCompiler.Compile(main, [root]);
             if (localGraph.Sources.Count != 2 ||
                 string.IsNullOrWhiteSpace(localGraph.GraphSha256))
@@ -62,6 +62,14 @@ internal static class Program
                 throw new InvalidOperationException(
                     "Ordinary native structured CIL module graph did not compile");
             }
+
+            // This positive control must reach actual CIL emission, not merely
+            // a read/import graph syntax check.
+            string localCil = Path.Combine(root, "safe-math-compiled.dll");
+            CilEmitter.EmitLibrary(localGraph.Module, localCil);
+            if (!File.Exists(localCil) || new FileInfo(localCil).Length == 0)
+                throw new InvalidOperationException(
+                    "Positive relative-source module failed to emit real CIL");
 
             Console.WriteLine("NET_STD_COMPILER_IMPORT_DENIAL=EXECUTED" +
                 "|reserved=9|local_module_graph=COMPILED" +
