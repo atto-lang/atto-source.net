@@ -36,6 +36,10 @@ internal sealed class UdpLoopbackHost : IDisposable
     private readonly int _requestedPort;
     private readonly object _gate = new();
     private bool _closed;
+    // Monitor.TryEnter is reentrant on the SAME thread: a trusted policy
+    // callback must not recursively operate on its active UDP descriptor.
+    // This flag is protected by _gate and fences nested ingress explicitly.
+    private bool _inOperation;
 
     private UdpLoopbackHost(Socket socket, int requestedPort, Authorize authorize)
     {
@@ -80,7 +84,7 @@ internal sealed class UdpLoopbackHost : IDisposable
                 _authorize(_requestedPort, Action.Local);
                 return ((IPEndPoint)_socket.LocalEndPoint!).Port;
             }
-            finally { Monitor.Exit(_gate); }
+            finally { Exit(); }
         }
     }
 
@@ -93,7 +97,20 @@ internal sealed class UdpLoopbackHost : IDisposable
     // park on a monitor held by a different thread.
     private void Enter()
     {
-        if (!Monitor.TryEnter(_gate)) throw new InvalidOperationException("concurrent UDP operation");
+        if (!Monitor.TryEnter(_gate))
+            throw new InvalidOperationException("concurrent UDP operation");
+        if (_inOperation)
+        {
+            Monitor.Exit(_gate);
+            throw new InvalidOperationException("reentrant UDP operation");
+        }
+        _inOperation = true;
+    }
+
+    private void Exit()
+    {
+        _inOperation = false;
+        Monitor.Exit(_gate);
     }
 
     internal bool TrySendTo(int destinationPort, ReadOnlySpan<byte> payload)
@@ -121,7 +138,7 @@ internal sealed class UdpLoopbackHost : IDisposable
                 return false;
             }
         }
-        finally { Monitor.Exit(_gate); }
+        finally { Exit(); }
     }
 
     /// <summary>
@@ -162,7 +179,7 @@ internal sealed class UdpLoopbackHost : IDisposable
                 throw new InvalidDataException("UDP datagram truncated and discarded");
             return new Packet(scratch.AsSpan(0, size).ToArray(), peer.Port);
         }
-        finally { Monitor.Exit(_gate); }
+        finally { Exit(); }
     }
 
     // Teardown worker, not a guest actor carrier, owns synchronous dispose.
