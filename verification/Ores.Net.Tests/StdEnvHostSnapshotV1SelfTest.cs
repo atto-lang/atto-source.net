@@ -69,7 +69,7 @@ internal static class StdEnvHostSnapshotV1SelfTest
 
     private sealed class NoEnumerationDictionary : IReadOnlyDictionary<string, string>
     {
-        public int Count => 1;
+        public int Count => throw new Exception("UNAUTHORIZED_KEY_COUNT");
         public IEnumerable<string> Keys => throw new Exception("UNAUTHORIZED_KEY_ENUMERATION");
         public IEnumerable<string> Values => throw new Exception("UNAUTHORIZED_VALUE_ENUMERATION");
         public string this[string key] => throw new Exception("UNAUTHORIZED_VALUE_READ");
