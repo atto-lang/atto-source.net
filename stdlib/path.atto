@@ -21,7 +21,7 @@ define module path as
 
   // Windows reserved devices are special even with an extension: CON.txt.
   fnc is_windows_device(Array<int> points, int begin, int end): bool {
-    let int stem_end = begin;
+    let mut int stem_end = begin;
     for (let int i = begin; i < end; i = i + 1) {
       if points.get(i) == 46 then break; fi
       stem_end = i + 1;
@@ -81,9 +81,9 @@ define module path as
     if count < 1 || count > 4096 then return -1; fi
     if is_separator(points.get(0), windows) then return -1; fi
     if windows && count >= 2 && points.get(1) == 58 then return -1; fi
-    let int depth = 0;
-    let int components = 0;
-    let int start = 0;
+    let mut int depth = 0;
+    let mut int components = 0;
+    let mut int start = 0;
     for (let int i = 0; i <= count; i = i + 1) {
       if i < count; do
         let int ch = points.get(i);
@@ -112,7 +112,7 @@ define module path as
     let int count = points.size;
     if normalized_depth(value, windows) < 0 then return false; fi
     if count == 1 && points.get(0) == 46 then return true; fi
-    let int start = 0;
+    let mut int start = 0;
     for (let int i = 0; i <= count; i = i + 1) {
       if i == count || (i < count && is_separator(points.get(i), windows)); do
         if component_kind(points, start, i, windows) != 0 then return false; fi
@@ -134,42 +134,39 @@ define module path as
   // Unicode scalar offsets into the ORIGINAL input; it is not a native path
   // or a serialized normalized string. Dot segments are ignored and each
   // dot-dot cancels its nearest surviving predecessor. All access is bounded.
+  // Scan in reverse. A pending ".." cancels the next ordinary component.
+  // Only one scalar snapshot is allocated; no temporary component stacks.
+  // The input is always validated fully before any offset is returned.
   pub fnc normalized_component_start(String value, bool windows, int requested): int {
-    let int depth = normalized_depth(value, windows);
+    let mut int depth = normalized_depth(value, windows);
     if requested < 0 || requested >= depth then return -1; fi
     let points = value.codepoints();
-    let mut Array<int> starts = new Array<int>();
-    let mut Array<int> kinds = new Array<int>();
-    let int start = 0;
-    for (let int i = 0; i <= points.size; i = i + 1) {
-      if i == points.size || (i < points.size && is_separator(points.get(i), windows)); do
-        let int kind = component_kind(points, start, i, windows);
-        if kind != 1; do
-          starts.add(start);
-          kinds.add(kind);
-        fi
-        start = i + 1;
-      fi
-    }
-    let int canceled = 0;
-    let int from_end = 0;
-    for (let int i = kinds.size - 1; i >= 0; i = i - 1) {
-      let int kind = kinds.get(i);
-      if kind == 2 then canceled = canceled + 1; fi
-      if kind == 0; do
-        if canceled > 0; do
-          canceled = canceled - 1;
+    let mut int end = points.size;
+    let mut int canceled = 0;
+    let mut int surviving_from_end = 0;
+    for (let int i = points.size; i >= 0; i = i - 1) {
+      if i == 0 || is_separator(points.get(i - 1), windows); do
+        let int kind = component_kind(points, i, end, windows);
+        if kind == 2; do
+          canceled = canceled + 1;
         else
-          if depth - from_end - 1 == requested then return starts.get(i); fi
-          from_end = from_end + 1;
+          if kind == 0; do
+            if canceled > 0; do
+              canceled = canceled - 1;
+            else
+              if depth - surviving_from_end - 1 == requested then return i; fi
+              surviving_from_end = surviving_from_end + 1;
+            fi
+          fi
         fi
+        end = i - 1;
       fi
     }
     return -1;
   }
 
   pub fnc normalized_component_length(String value, bool windows, int requested): int {
-    let int start = normalized_component_start(value, windows, requested);
+    let mut int start = normalized_component_start(value, windows, requested);
     if start < 0 then return -1; fi
     let points = value.codepoints();
     for (let int i = start; i < points.size; i = i + 1) {
@@ -180,7 +177,7 @@ define module path as
 
   // -1 is reserved for an invalid component/offset; no valid scalar is -1.
   pub fnc normalized_component_scalar(String value, bool windows, int requested, int offset): int {
-    let int start = normalized_component_start(value, windows, requested);
+    let mut int start = normalized_component_start(value, windows, requested);
     let int length = normalized_component_length(value, windows, requested);
     if start < 0 || offset < 0 || offset >= length then return -1; fi
     let points = value.codepoints();
