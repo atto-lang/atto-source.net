@@ -90,6 +90,9 @@ public sealed record StructuredIf(int At, StructuredExpr Condition,
     : StructuredStmt(At);
 public sealed record StructuredWhile(int At, StructuredExpr Condition,
     IReadOnlyList<StructuredStmt> Body) : StructuredStmt(At);
+// Lexical loop transfers share the same typed CFG/SSA environment.
+public sealed record StructuredBreak(int At) : StructuredStmt(At);
+public sealed record StructuredContinue(int At) : StructuredStmt(At);
 public sealed record StructuredProgram(string Name, IReadOnlyList<StructuredStmt> Body,
     IReadOnlyDictionary<string, StructuredFunction>? Functions = null,
     IReadOnlyList<string>? FunctionOrder = null);
@@ -1017,7 +1020,7 @@ public static partial class OresStructuredParser
         private readonly Dictionary<string, StructuredFunction> exports = new(StringComparer.Ordinal);
         private readonly List<string> functionOrder = linking is null ? new() : new(linking.MethodOrder);
         private string? declaredModule;
-        private int index, statements;
+        private int index, statements, loopDepth;
         private IrValueType activeReturnType = IrValueType.I64;
         // Only the scalar binding clause of an explicit -> Type :: body
         // admits comma as a statement boundary. Nested ordinary blocks do not.
@@ -1807,6 +1810,7 @@ public static partial class OresStructuredParser
                 scopes[^1].Add(name, new LocalBinding(type, kind, constantValue));
                 return (new StructuredLet(at, name, type, initializer, kind), false);
             }
+            bool explicitDo = Take("do");
             if (Current.Text is "if" or "ifnot" or "unless")
             {
                 // All three forms use the same typed CFG. Negation is checked
@@ -1822,6 +1826,11 @@ public static partial class OresStructuredParser
                 // canonical 'then ... fi' may omit its optional semicolon.
                 bool semicolon = Take(";");
                 bool delimited = Take("then");
+                if (explicitDo && !delimited)
+                    throw Error("do if/ifnot/unless requires 'then'");
+                // Preserve modern-main legacy if/ifnot/unless ... then ...
+                // imperative acceptance; a separate spec migration must not
+                // silently break older compiled source.
                 if (semicolon && !delimited)
                 {
                     Expect("do");
@@ -1843,11 +1852,34 @@ public static partial class OresStructuredParser
                 return (new StructuredIf(at, condition, yes, no),
                     yesReturns && noReturns);
             }
-            if (Take("while"))
+            if (explicitDo)
+                throw Error("Expected if, ifnot or unless after 'do'");
+            if (Take("break"))
             {
-                var condition = Expr(depth + 1);
-                Require(condition, IrValueType.Bool, "While condition must be bool");
-                var (body, _) = Block(depth + 1);
+                if (loopDepth == 0) throw Error("break requires an enclosing loop");
+                Expect(";");
+                return (new StructuredBreak(at), true);
+            }
+            if (Take("continue"))
+            {
+                if (loopDepth == 0) throw Error("continue requires an enclosing loop");
+                Expect(";");
+                return (new StructuredContinue(at), true);
+            }
+            if (Take("while") || Take("loop"))
+            {
+                bool unconditional = tokens[index - 1].Text == "loop";
+                StructuredExpr condition = new StructuredBool(at, true);
+                if (!unconditional)
+                {
+                    condition = Expr(depth + 1);
+                    Require(condition, IrValueType.Bool, "While condition must be bool");
+                }
+                if (loopDepth >= MaxDepth) throw Error("Loop nesting limit exceeded");
+                loopDepth++;
+                IReadOnlyList<StructuredStmt> body;
+                try { (body, _) = Block(depth + 1); }
+                finally { loopDepth--; }
                 // Even a constant-true loop is not accepted as a return proof.
                 return (new StructuredWhile(at, condition, body), false);
             }
@@ -1908,7 +1940,7 @@ public static partial class OresStructuredParser
             if (name.Length is < 1 or > MaxIdentifier ||
                 !(Alpha(name[0]) || name[0] == '_') ||
                 !name.Skip(1).All(c => Alpha(c) || Digit(c) || c == '_') ||
-                name is "if" or "ifnot" or "unless" or "else" or "while" or "return" or "let"
+                name is "if" or "ifnot" or "unless" or "else" or "while" or "loop" or "break" or "continue" or "return" or "let"
                     or "int" or "bool" or "true" or "false" or "and" or "or" or "xor"
                     or "define" or "pub" or "fnc" or "const" or "val" or "final"
                     or "struct" or "record" or "class" or "actor"
@@ -2088,6 +2120,29 @@ public static partial class OresStructuredParser
         private StructuredExpr Conditional(int depth)
         {
             Budget(depth);
+            if (Current.Text is "if" or "ifnot" or "unless")
+            {
+                int valueIfAt = Current.Offset;
+                bool inverted = Current.Text is "ifnot" or "unless";
+                index++;
+                var predicate = Expr(depth + 1);
+                Require(predicate, IrValueType.Bool, "Value if condition requires bool");
+                if (inverted)
+                    predicate = CheckedBinary(valueIfAt, StructuredOperator.EqualBool,
+                        predicate, new StructuredBool(valueIfAt, false), IrValueType.Bool);
+                Expect("then");
+                if (Current.Text is "break" or "continue" or "return")
+                    throw Error("Value if branch must produce a value; control transfers require 'do if'");
+                var whenTrue = Expr(depth + 1);
+                Expect("else");
+                if (Current.Text is "break" or "continue" or "return")
+                    throw Error("Value if branch must produce a value; control transfers require 'do if'");
+                var whenFalse = Expr(depth + 1);
+                Expect("fi");
+                if (whenTrue.Type != whenFalse.Type)
+                    throw Error("Value if result types differ");
+                return CheckedConditional(valueIfAt, predicate, whenTrue, whenFalse);
+            }
             var test = LogicalOr(depth + 1);
             if (Current.Text != "?") return test;
             int at = Current.Offset;

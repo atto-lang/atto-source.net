@@ -62,8 +62,46 @@ internal static class StructuredSourceTests
         throw new Exception("Scalar compiler admitted unsupported state injection");
     }
 
+    private static void NegatedDoIfSyntax()
+    {
+        const string accepted = """
+            fnc main(): int {
+                let int i = 0;
+                loop {
+                    i = i + 1;
+                    do ifnot true then break; fi
+                    do unless true then break; fi
+                    do ifnot i < 3 then break; fi
+                }
+                return ifnot false then i else 0 fi;
+            }
+            """;
+        Require(OresStructuredParser.Parse(accepted).Body.Count == 3,
+            "canonical negated do-if and value-if parsing");
+        Require(OresStructuredParser.Parse("""
+            fnc main():int {
+                let int i = 0;
+                loop { i = i + 1; do unless i < 3 then continue; else break; fi }
+                return i;
+            }
+            """).Body.Count == 3, "unless/continue/else must retain loop scope");
+        RejectFeature("fnc main():int{do ifnot true then break; fi return 0;}",
+            "break requires an enclosing loop");
+        RejectFeature("fnc main():int{do unless false then continue; fi return 0;}",
+            "continue requires an enclosing loop");
+        RejectFeature("fnc main():int{loop{if true then break; fi}return 0;}",
+            "use 'do if'");
+        RejectFeature("fnc main():int{return ifnot false then break; else 3 fi;}",
+            "must produce a value");
+        RejectFeature("fnc main():int{return unless true then 3 fi;}",
+            "Expected 'else'");
+        Reject("fnc main():int{return ifnot 3 then 3 else 4 fi;}",
+            "non-boolean value-if condition");
+    }
+
     public static void Run()
     {
+        NegatedDoIfSyntax();
         // Native AOT has no actor hierarchy, trait/interface witness ABI,
         // runtime-owned receive slot or actor state loan lowering yet. Every
         // source spelling must fail at the dedicated capability boundary.
