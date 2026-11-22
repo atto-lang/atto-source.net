@@ -9,6 +9,43 @@ internal static class SourceModuleLinkingSelfTest
     {
         string root = Path.Combine(Path.GetTempPath(), "ores-modules-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
+        // Compile and execute the actual .atto compiler-owned modules through CIL.
+        // Native AOT runs the same embedded source and identity-pinned linker.
+        string coreSicFixture = File.ReadAllText(Path.Combine("core", "tests", "slice_iter_cmp_smoke.atto"));
+        File.WriteAllText(Path.Combine(root, "core-sic-main.atto"), coreSicFixture);
+        var sic = OresSourceModuleCompiler.Compile(
+            Path.Combine(root, "core-sic-main.atto"), new[] { root });
+        Require(sic.Sources.Count == 4, "core slice/iter/cmp are exactly three source-owned imports");
+        foreach (string name in new[] { "slice", "iter", "cmp" })
+        {
+            string identity = "@atto.core/" + name + ".atto";
+            Require(sic.Sources.Count(unit => unit.Path == identity) == 1,
+                "core slice/iter/cmp module identity is canonical and unique: " + identity);
+            byte[] sourceBytes = File.ReadAllBytes(Path.Combine("core", name + ".atto"));
+            string expectedHash = Convert.ToHexStringLower(
+                System.Security.Cryptography.SHA256.HashData(sourceBytes));
+            Require(sic.Sources.Single(unit => unit.Path == identity).Sha256 == expectedHash,
+                "runtime linker source digest matches compiler-owned .atto source for " + identity);
+        }
+        string sicDll = Path.Combine(root, "AttoCoreSliceIterCmp.dll");
+        CilEmitter.EmitLibrary(sic.Module, sicDll);
+        using (var sicImage = AssemblyDefinition.ReadAssembly(sicDll))
+        {
+            var sicProgram = sicImage.MainModule.Types.Single(t => t.Name == "OresProgram");
+            Require(CfgCilTestInterpreter.Evaluate(
+                sicProgram.Methods.Single(m => m.Name == "Run")) == 42,
+                "real compiler-owned core slice/iter/cmp CIL executes to 42");
+        }
+        foreach (string badPath in new[] { "atto.core/../slice", "atto.core/slice.ores",
+                     "atto.core/missing", "atto.core//iter" })
+        {
+            string negative = coreSicFixture.Replace("atto.core/slice", badPath);
+            File.WriteAllText(Path.Combine(root, "core-sic-negative.atto"), negative);
+            Reject(() => OresSourceModuleCompiler.Compile(
+                Path.Combine(root, "core-sic-negative.atto"), new[] { root }),
+                "unknown/traversal compiler-owned core paths must fail closed: " + badPath);
+        }
+
         string outside = root + "-outside.ores";
         try
         {

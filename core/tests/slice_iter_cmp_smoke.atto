@@ -1,40 +1,18 @@
-// Proposed cross-compiler source admission. Until package resolution maps
-// atto.core/* to core/*.atto this is a specification fixture, not a CI pass.
+// expect-exit: 42
+// Real typed CIL source-graph compiler smoke: no Array<T> or borrowed slice ABI.
 import module slice from "atto.core/slice";
 import module iter from "atto.core/iter";
 import module cmp from "atto.core/cmp";
-
-pub fnc main(): int {
-  let mut Array<int> values = new Array<int>();
-  values.add(2);
-  values.add(3);
-  values.add(5);
-  if !slice.valid_range(1, 2, values.size); do
-    return 1;
-  fi
-  if slice.valid_range(1, 3, values.size); do
-    return 2;
-  fi
-  if slice.get_int(values, 1, 2, 1).unwrap_or(-1) != 5; do
-    return 3;
-  fi
-  if !slice.get_int(values, 3, 0, 0).is_none(); do
-    return 4;
-  fi
-  if iter.next_index(1, 2, 1, values.size).unwrap_or(-1) != 2; do
-    return 5;
-  fi
-  if !iter.next_index(1, 2, 2, values.size).is_none(); do
-    return 6;
-  fi
-  if cmp.compare_int(-9223372036854775807, 9223372036854775807) != -1; do
-    return 7;
-  fi
-  if cmp.lex_compare_int(values, 0, 2, values, 0, 3).unwrap_or(9) != -1; do
-    return 8;
-  fi
-  if !cmp.is_sorted_int(values, 0, values.size, false); do
-    return 9;
-  fi
-  return 0;
+pub fnc main():int {
+  if !slice.valid_range(1, 2, 3); do return 1; fi
+  if slice.valid_range(2, 2, 3); do return 2; fi
+  if slice.valid_range(-1, 0, 3); do return 3; fi
+  if !slice.can_split_at(3, 3); do return 4; fi
+  if iter.next_index_or_negative_one(1, 2, 1, 3) != 2; do return 5; fi
+  if iter.next_back_index_or_negative_one(1, 2, 0, 3) != 2; do return 6; fi
+  if iter.advance_cursor_or_negative_one(3, 2, 2) != -1; do return 7; fi
+  if cmp.compare_int(-9223372036854775807, 9223372036854775807) != -1; do return 8; fi
+  if cmp.compare_bool(false, true) != -1; do return 9; fi
+  if cmp.max_int(3, 9) != 9; do return 10; fi
+  return cmp.min_int(42, 50);
 }
