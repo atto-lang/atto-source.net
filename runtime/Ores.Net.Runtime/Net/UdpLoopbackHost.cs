@@ -117,14 +117,17 @@ internal sealed class UdpLoopbackHost : IDisposable
     {
         if (destinationPort is < 1 or > 65535)
             throw new ArgumentOutOfRangeException(nameof(destinationPort));
-        if (payload.Length > MaxPayload)
-            throw new ArgumentOutOfRangeException(nameof(payload));
         Enter();
         try
         {
             RequireOpen();
             _authorize(_requestedPort, Action.Local);
             _authorize(destinationPort, Action.Send);
+            // A denied destination takes precedence over observation or
+            // copying of guest-supplied bytes. The span is a borrowed view,
+            // so retain an owned snapshot only after peer authorization.
+            if (payload.Length > MaxPayload)
+                throw new ArgumentOutOfRangeException(nameof(payload));
             byte[] owned = payload.ToArray();
             try
             {
