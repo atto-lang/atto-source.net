@@ -33,6 +33,9 @@ imports, runtime objects, package rights, or filesystem access. User-supplied
 `use namespace atto.core.math;` source remains rejected until the general
 package-verified linker is complete.
 
-The namespace grammar is a constrained first milestone only. Canonical
-`import * as math from pkg "atto.core.math";` and arbitrary file namespaces
-are specified separately and remain unimplemented in this CIL backend.
+The namespace grammar is a constrained first milestone only. The
+`import * as math from "core.math";` built-in selector and the distinct
+`import ... from pkg "third.party";` package selector follow the
+unified static-imports design; neither general import form is implemented
+by this CIL source linker. Arbitrary user-defined file namespaces remain
+fail-closed until authenticated package-graph support exists.
