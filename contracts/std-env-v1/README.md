@@ -30,3 +30,9 @@ A trusted host interface must validate key names, check both coarse isolate ENV 
 `runtime/Ores.Net.Runtime/StdEnvHostSnapshotV1.cs` is a NativeAOT-compatible, **host-only** explicit snapshot adapter. The trusted embedder supplies values plus independent coarse ENV authority and key-scoped grants. Denies override allow rules; only granted values are copied; values are limited to 16 KiB of well-formed UTF-8 and secrets never appear in errors. `Revoke()` retires and clears retained values. `verification/Ores.Net.Tests/StdEnvHostSnapshotV1SelfTest.cs` runs from the existing verification test executable.
 
 This is still **not** a guest language builtin: `std/env` import resolution, `env.get/env.has` IR lowering and compiler-backed guest/NativeAOT tests are outstanding, and no real guest effects may be claimed from this host-only test.
+
+## Compiler import fail-closed regression
+
+The existing `OresSourceModuleCompiler` explicitly rejects reserved `std/`, `atto.std/`, and `ores.std/` namespaces until compiler-owned import support is implemented. `verification/Ores.Net.Tests/SourceModuleLinkingSelfTest.cs` now creates a project-local fake `std/env.atto` and asserts six canonical/legacy aliases fail with the reserved compiler-owned namespace diagnostic **before** the file could be linked or shadow the standard library. This guard is deliberately **not successful `std/env` import support**.
+
+The host snapshot test also rejects embedded NUL values in addition to malformed UTF-16 and oversized UTF-8. .NET verification and NativeAOT CI remain **NOT_EXECUTED** here because no admitted dotnet runner or local dotnet SDK was available.
