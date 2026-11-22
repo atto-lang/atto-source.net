@@ -600,6 +600,12 @@ internal static class Program
         {
             if (File.Exists(args[1])) File.Delete(args[1]);
             string source = File.ReadAllText(args[0], new UTF8Encoding(false, true));
+            // Actor state attachments have a checked target grammar but no
+            // verified CIL state layout, startup guard or actor mailbox ABI.
+            // Refuse before any generated guest bytes are written.
+            if (ActorStateAdmission.Inspect(source) is not null)
+                throw new CompilerError("E_UNSUPPORTED_ACTOR_STATE",
+                    "attached actor state parsed, but guarded CIL lowering and actor lifecycle are unavailable");
             var fns = new Parser(source).Parse();
             new CIL(fns, allowStdio: args.Length == 3).Emit(args[1], source);
             Console.WriteLine($"ATTO_DIRECT_CIL_PASS functions={fns.Count}");
