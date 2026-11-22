@@ -41,10 +41,19 @@ public static class OresSourceModuleCompiler
     // Compiler-owned authority, never a path under --root or ORESLANG_PATH.
     private const string CoreIdentity = "@atto.core/identity.atto";
     private const string CoreNumeric = "@atto.core/numeric.atto";
+    private const string CoreMath = "@atto.core/math.atto";
+    private const string CoreHash = "@atto.core/hash.atto";
+    private const string CoreCell = "@atto.core/cell.atto";
     private const string CoreResourceName = "Atto.Core.Identity";
     private const string NumericResourceName = "Atto.Core.Numeric";
+    private const string MathResourceName = "Atto.Core.Math";
+    private const string HashResourceName = "Atto.Core.Hash";
+    private const string CellResourceName = "Atto.Core.Cell";
     private const string IdentitySha256 = "d381ecd95c7df1b4efc1a2fb7bb7cd87e050f0a88f72690070feb465930a915a";
     private const string NumericSha256 = "3d1d7b77068dd02b3d60b30b72f29a4537a933134ca79e1e81df096dc56f5f33";
+    private const string MathSha256 = "6878f602b0e9037421cca3f173b496a3becf7728b0ccfae402a8e4d1cc1fd39a";
+    private const string HashSha256 = "b916150155f5481ae928be21e327a6fdde2a95bc8a9e9eae918b6805d5140ed9";
+    private const string CellSha256 = "8bc1ab6a6571de674988b2eb0a8b486322158bdda46d00786c48a6ef772c355a";
 
     private sealed record Unit(string PhysicalPath, string Identity, string Source,
         SourceUnitIdentity Witness, IReadOnlyList<SourceImport> Imports);
@@ -125,7 +134,7 @@ public static class OresSourceModuleCompiler
                 return;
             }
             if (units.Count >= MaxUnits) throw new FormatException("Source graph exceeds 64 units");
-            byte[] bytes = path is CoreIdentity or CoreNumeric
+            byte[] bytes = path is CoreIdentity or CoreNumeric or CoreMath or CoreHash or CoreCell or CoreMath or CoreHash or CoreCell
                 ? ReadBundledCore(path)
                 : ReadBounded(path);
             totalBytes = checked(totalBytes + bytes.Length);
@@ -157,6 +166,15 @@ public static class OresSourceModuleCompiler
                 "atto.core/numeric.ores" or "ores.core/numeric" or
                 "ores.core/numeric.atto" or "ores.core/numeric.ores")
                 return CoreNumeric;
+            if (specifier is "atto.core/math" or "atto.core/math.atto" or
+                "atto.core/math.ores" or "ores.core/math" or
+                "ores.core/math.atto" or "ores.core/math.ores") return CoreMath;
+            if (specifier is "atto.core/hash" or "atto.core/hash.atto" or
+                "atto.core/hash.ores" or "ores.core/hash" or
+                "ores.core/hash.atto" or "ores.core/hash.ores") return CoreHash;
+            if (specifier is "atto.core/cell" or "atto.core/cell.atto" or
+                "atto.core/cell.ores" or "ores.core/cell" or
+                "ores.core/cell.atto" or "ores.core/cell.ores") return CoreCell;
             if (specifier is "atto.core" or "ores.core" ||
                 specifier.StartsWith("atto.core/", StringComparison.Ordinal) ||
                 specifier.StartsWith("ores.core/", StringComparison.Ordinal))
@@ -168,7 +186,7 @@ public static class OresSourceModuleCompiler
                 specifier.StartsWith("ores.std/", StringComparison.Ordinal) ||
                 specifier.StartsWith("std/", StringComparison.Ordinal))
                 throw new FormatException("unsupported compiler-owned AttoLang library namespace");
-            if (importer is CoreIdentity or CoreNumeric)
+            if (importer is CoreIdentity or CoreNumeric or CoreMath or CoreHash or CoreCell)
                 throw new FormatException("compiler-owned Core module cannot import ambient source files");
             if (!(specifier.StartsWith("./", StringComparison.Ordinal) || specifier.StartsWith("../", StringComparison.Ordinal)) ||
                 specifier.Length > 4096 || specifier.EndsWith('/') || specifier.Contains("//", StringComparison.Ordinal) ||
@@ -245,6 +263,9 @@ public static class OresSourceModuleCompiler
         {
             CoreIdentity => CoreResourceName,
             CoreNumeric => NumericResourceName,
+            CoreMath => MathResourceName,
+            CoreHash => HashResourceName,
+            CoreCell => CellResourceName,
             _ => throw new FormatException("unknown compiler-owned Core resource")
         };
         using var stream = typeof(OresSourceModuleCompiler).Assembly
@@ -269,6 +290,9 @@ public static class OresSourceModuleCompiler
         {
             CoreIdentity => IdentitySha256,
             CoreNumeric => NumericSha256,
+            CoreMath => MathSha256,
+            CoreHash => HashSha256,
+            CoreCell => CellSha256,
             _ => throw new FormatException("unknown compiler-owned Core resource")
         };
         if (!string.Equals(Convert.ToHexStringLower(SHA256.HashData(bytes)), expected, StringComparison.Ordinal))
