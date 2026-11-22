@@ -70,7 +70,8 @@ function check(inputs, guest) {
     .map(match => Number(match[1]));
   if (codes.length !== 65 || codes.some((value, index) => value !== index + 1))
     fail("65 sequential nonzero guest failure exits are required");
-  if (!/\breturn 0;\s*}\s*$/.test(guest))
+  if (!/\breturn 0;\s*}\s*$/.test(guest) ||
+      [...guest.matchAll(/\breturn\s+0\s*;/g)].length !== 1)
     fail("guest must reach exactly one terminal zero status");
   return { caseCount: codes.length, nativeCalls: calls, nativePathMethods: required.length };
 }
@@ -102,6 +103,8 @@ rejectMutation("host island",
   { ...sources, path: sources.path + "\njava:untrusted\n" }, guest);
 rejectMutation("case count",
   sources, guest.replace("then return 1; fi", "then return 999; fi"));
+rejectMutation("early success bypass",
+  sources, guest.replace("pub fnc main(): int {", "pub fnc main(): int { return 0; "));
 
 for (const file of sourceFiles) {
   const workingSha = execFileSync("git", ["hash-object", "--no-filters", "--", file],
@@ -110,6 +113,6 @@ for (const file of sourceFiles) {
     { encoding: "utf8" }).trim();
   if (workingSha !== treeSha) fail("working file differs from exact Git tree: " + file);
 }
-console.log(`ATTO_STDLIB_NET_SOURCE_AUDIT=CHECKED cases=${valid.caseCount} calls=${valid.nativeCalls} path_methods=${valid.nativePathMethods} mutation_negatives=4`);
+console.log(`ATTO_STDLIB_NET_SOURCE_AUDIT=CHECKED cases=${valid.caseCount} calls=${valid.nativeCalls} path_methods=${valid.nativePathMethods} mutation_negatives=5`);
 console.log("ATTO_STDLIB_NET_LINKED_GUEST=NOT_EXECUTED");
 console.log("ATTO_STDLIB_NET_NATIVE_AOT=NOT_EXECUTED");
