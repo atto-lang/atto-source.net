@@ -32,13 +32,31 @@ static class Program
         throw new TimeoutException("oversize datagram not observed");
     }
 
+    private static void AssertDeniedSource(UdpLoopbackHost receiver)
+    {
+        for (int i = 0; i < 1000; i++)
+        {
+            try
+            {
+                if (receiver.TryReceiveFrom(4) is not null)
+                    throw new Exception("denied source packet escaped authorization");
+            }
+            catch (UnauthorizedAccessException) { return; }
+            Thread.Sleep(1); // Host test harness only.
+        }
+        throw new TimeoutException("denied source packet was not received");
+    }
+
     private static int Main()
     {
         bool enabled = true;
         int deniedPort = -1;
+        int deniedSourcePort = -1;
         UdpLoopbackHost.Authorize gate = (port, op) =>
         {
-            if (!enabled || (op == UdpLoopbackHost.Action.Send && port == deniedPort))
+            if (!enabled
+                || (op == UdpLoopbackHost.Action.Send && port == deniedPort)
+                || (op == UdpLoopbackHost.Action.Source && port == deniedSourcePort))
                 throw new UnauthorizedAccessException("UDP permission denied");
         };
         enabled = false;
@@ -69,6 +87,25 @@ static class Program
         Require(copy[0] == 1 && copy[2] == 255, "UDP bytes modified");
         copy[0] = 77;
         Require(received.CopyBytes()[0] == 1, "UDP ownership alias escaped");
+
+        // An accepted bind grant is not permission to observe the selected
+        // ephemeral port forever. Assert the 0-port grant is rechecked.
+        enabled = false;
+        rejected = false;
+        try { _ = first.LocalPort; }
+        catch (UnauthorizedAccessException) { rejected = true; }
+        Require(rejected, "revoked local_port permitted");
+        enabled = true;
+
+        // Receive permission is scoped to the actual sender, not just the
+        // bound local socket. A rejected source must not publish packet bytes.
+        deniedSourcePort = first.LocalPort;
+        Require(first.TrySendTo(second.LocalPort, new byte[]{ 17 }), "denied-source send failed");
+        AssertDeniedSource(second);
+        deniedSourcePort = -1;
+        Require(first.TrySendTo(second.LocalPort, new byte[]{ 18 }), "post-revocation recovery send failed");
+        Require(AwaitPacket(second, 4).CopyBytes()[0] == 18,
+            "denied source poisoned future datagrams");
 
         Require(first.TrySendTo(second.LocalPort, Array.Empty<byte>()), "empty UDP send would-block");
         Require(AwaitPacket(second, 4).Length == 0, "empty datagram lost");
