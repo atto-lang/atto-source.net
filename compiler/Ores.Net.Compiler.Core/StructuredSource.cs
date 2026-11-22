@@ -1117,15 +1117,29 @@ public static partial class OresStructuredParser
             while (Take("import"))
             {
                 int offset = Current.Offset;
-                string kind = Current.Text;
-                // Until the NativeAOT linker has pinned manifest-defined
-                // PackageInstanceId routing, never interpret namespace imports
-                // as a source-file wildcard or ambient search path.
-                if (kind == "namespace")
-                    throw Error("import namespace requires manifest-verified multi-file package linker");
-                if (kind is not ("fnc" or "module")) throw Error("Linked source supports fnc and module imports");
-                index++;
-                string name = Name();
+                string kind;
+                string name;
+                if (Take("*"))
+                {
+                    // Narrow canonical builtin import selector:
+                    // import * as math from "core.math";
+                    // Explicit 'pkg', local-file wildcards and third-party
+                    // package namespaces require a separate verified linker.
+                    Expect("as");
+                    name = Name();
+                    kind = "builtin_namespace";
+                }
+                else
+                {
+                    kind = Current.Text;
+                    // 'import namespace' is NOT file's 'use namespace' header.
+                    if (kind == "namespace")
+                        throw Error("import namespace requires manifest-verified multi-file package linker");
+                    if (kind is not ("fnc" or "module"))
+                        throw Error("Linked source supports fnc, module and authenticated Core wildcard imports");
+                    index++;
+                    name = Name();
+                }
                 Expect("from");
                 string quoted = Current.Text;
                 if (quoted.Length < 3 ||
@@ -1135,6 +1149,9 @@ public static partial class OresStructuredParser
                 // Reject before physical lookup and graph linking, independently
                 // of the standalone scalar parser's generic import denial.
                 UnsafeStdlibImportAdmission.RequireGuestSafe(quoted[1..^1]);
+                if (kind == "builtin_namespace" &&
+                    quoted[1..^1] is not ("core.math" or "core.hash" or "core.cell"))
+                    throw Error("E_CORE_NAMESPACE_IMPORT_AUTHORITY: wildcard imports require a compiler-owned Core namespace");
                 index++;
                 Expect(";");
                 if (imports.Count >= 64) throw Error("Import declaration budget exceeded");
