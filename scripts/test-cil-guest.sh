@@ -40,7 +40,7 @@ for case in \
   mixed-equality:E_TYPE \
   unimplemented-host-io:E_SYMBOL \
   std-http-unsupported:E_LEX \
-  bool-param-unsupported:E_PARSE \
+  bool-param-call-type:E_TYPE \
   no-main:E_ENTRY; do
   name="$(echo "$case" | cut -d: -f1)"
   diagnostic="$(echo "$case" | cut -d: -f2)"
@@ -64,6 +64,18 @@ dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true \
   --self-contained true -o /tmp/atto-cil-nativeaot
 test -x /tmp/atto-cil-nativeaot/Atto.Cil.Guest.Host
 expect_42 NATIVEAOT_GUEST /tmp/atto-cil-nativeaot/Atto.Cil.Guest.Host
+
+# Typed bool parameter ABI: compile a real Atto guest, then run the
+# generated CIL under CoreCLR and NativeAOT. The host does not implement logic.
+dotnet run --no-build -c Release --project "$compiler" -- \
+  fixtures/cil/bool-parameter.atto "$guest"
+test -s "$guest"
+dotnet build "$host" -c Release
+expect_42 BOOL_PARAMETER_CORECLR_GUEST dotnet run --no-build -c Release --project "$host"
+dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true \
+  --self-contained true -o /tmp/atto-cil-bool-parameter-nativeaot
+test -x /tmp/atto-cil-bool-parameter-nativeaot/Atto.Cil.Guest.Host
+expect_42 BOOL_PARAMETER_NATIVEAOT_GUEST /tmp/atto-cil-bool-parameter-nativeaot/Atto.Cil.Guest.Host
 
 # Additional genuine CIL guest executions; neither calculation is in C#.
 for fixture in fixtures/cil/precedence.atto fixtures/cil/forward-call.atto; do
