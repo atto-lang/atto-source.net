@@ -1298,7 +1298,7 @@ public static partial class OresParser
             // The scalar subset admits only this one typed Integer intrinsic.
             // Parser-owned name resolution rejects arbitrary Integer.* calls.
             // A first native, escaping-free product construction slice:
-            // Tuple.of(<i64 literals...>)[constant_slot] / ~tuple(...)[slot].
+            // Tuple.of(<i64 literals...>)[constant_slot] only; ~ is structural shorthand.
             // All operands are pure checked constants, so projecting the
             // selected SSA scalar preserves the exact source evaluation
             // behavior without allocating a host tuple or losing an effect.
@@ -1306,14 +1306,8 @@ public static partial class OresParser
             {
                 int at = Current.Offset;
                 if (Take("~"))
-                {
-                    if (Take("tuple")) return ParseScalarizedTupleFactory(depth + 1, at);
-                    if (Take("record")) return ParseScalarizedRecordFactory(depth + 1, at);
-                    if (Take("entry")) return ParseScalarizedBinaryProductFactory(depth + 1, at, isEntry: true);
-                    if (Take("pair")) return ParseScalarizedBinaryProductFactory(depth + 1, at, isEntry: false);
                     throw new FormatException(
-                        $"E_COLLECTION_FACTORY_UNSUPPORTED: ~kind requires verified owned collection lowering at offset {at}");
-                }
+                        $"E_COLLECTION_FACTORY_REMOVED: '~' denotes structural typing, not a collection constructor; use Type.of(...) at offset {at}");
                 if (Take("Tuple"))
                 {
                     Expect(".");
