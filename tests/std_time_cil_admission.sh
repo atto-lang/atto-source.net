@@ -7,8 +7,10 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
+dotnet restore compiler/Atto.Cil.Compiler/Atto.Cil.Compiler.csproj \
+  -p:TargetFramework=net10.0 -p:TargetFrameworks=net10.0 --force -v:q
 dotnet build compiler/Atto.Cil.Compiler/Atto.Cil.Compiler.csproj \
-  -c Release -p:TargetFramework=net10.0 -v:q
+  -c Release -p:TargetFramework=net10.0 -p:TargetFrameworks=net10.0 --no-restore -v:q
 compiler="$PWD/compiler/Atto.Cil.Compiler/bin/Release/net10.0/Atto.Cil.Compiler.dll"
 test -s "$compiler"
 printf 'pub fnc main(): int { return 42; }\n' > "$work/scalar.atto"
@@ -17,8 +19,10 @@ grep -q '^ATTO_DIRECT_CIL_PASS functions=1$' "$work/positive.log"
 test -s "$work/ScalarGuest.dll"
 mkdir -p artifacts
 cp "$work/ScalarGuest.dll" artifacts/AttoGuest.dll
+dotnet restore tests/Atto.Cil.Guest.Host/Atto.Cil.Guest.Host.csproj \
+  -p:TargetFramework=net10.0 -p:TargetFrameworks=net10.0 --force -v:q
 dotnet build tests/Atto.Cil.Guest.Host/Atto.Cil.Guest.Host.csproj \
-  -c Release -p:TargetFramework=net10.0 -v:q
+  -c Release -p:TargetFramework=net10.0 -p:TargetFrameworks=net10.0 --no-restore -v:q
 set +e
 dotnet "$PWD/tests/Atto.Cil.Guest.Host/bin/Release/net10.0/Atto.Cil.Guest.Host.dll"
 status=$?
