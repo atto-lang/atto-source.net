@@ -66,7 +66,7 @@ internal static class CoreTypeRegistryTests
         var result = CoreTypeRegistry.Lookup("Result")!;
         Require(result.CanonicalIdentity == "core/result/Result", "Result canonical identity");
         Require(result.MinGenericArity == 2 && result.MaxGenericArity == 2, "Result generic arity");
-        Require(result.Lowering == CoreTypeRegistry.Lowering.ContractOnly, "Result must stay unlowered");
+        Require(result.BackendLowering == CoreTypeRegistry.Lowering.ContractOnly, "Result must stay unlowered");
         Require(result.DropPolicy == CoreTypeRegistry.DropPolicy.ActivePayloadOnce, "Result future active drop");
 
         Require(CoreTypeRegistry.Lookup("Some")!.Kind == CoreTypeRegistry.Kind.Constructor,
