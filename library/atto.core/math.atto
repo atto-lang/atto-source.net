@@ -1,6 +1,6 @@
 // .NET NativeAOT backend-owned freestanding Atto math; no OS or host interop.
 // Narrow checked-i64 profile; no float intrinsics or abs(minimum) shortcut.
-define module math as
+use namespace atto.core.math;
   pub fnc min_int(int left, int right): int {
     if left < right; do return left; fi
     return right;
@@ -18,4 +18,3 @@ define module math as
     if lower > upper; do return false; fi
     return value >= lower && value <= upper;
   }
-end
