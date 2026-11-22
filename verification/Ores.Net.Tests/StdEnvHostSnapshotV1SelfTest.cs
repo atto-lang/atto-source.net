@@ -65,6 +65,21 @@ internal static class StdEnvHostSnapshotV1SelfTest
         bad["ATTO_NAME"] = new string('x', 16384);
         Require(StdEnvHostSnapshotV1.Create(bad, new[] { "*" },
             Array.Empty<string>(), true).Has("ATTO_NAME"), "exact byte limit");
+
+        // Aggregate limit is 1 MiB, even when each individual key is valid.
+        var ceiling = new Dictionary<string, string>(StringComparer.Ordinal);
+        for (int i = 0; i < 64; i++)
+            ceiling["ATTO_BUDGET_" + i] = new string('x', 16384);
+        Require(StdEnvHostSnapshotV1.Create(ceiling, new[] { "ATTO_BUDGET_*" },
+            Array.Empty<string>(), true).Has("ATTO_BUDGET_63"), "exact 1MiB cap");
+        ceiling["ATTO_BUDGET_OVER"] = "x";
+        Invalid(() => StdEnvHostSnapshotV1.Create(ceiling,
+            new[] { "ATTO_BUDGET_*" }, Array.Empty<string>(), true),
+            "aggregate 1MiB cap");
+        // A denied value must not contribute bytes or be fetched.
+        Require(StdEnvHostSnapshotV1.Create(ceiling, new[] { "ATTO_BUDGET_*" },
+            new[] { "ATTO_BUDGET_OVER" }, true).Has("ATTO_BUDGET_63"),
+            "denied key excluded from aggregate budget");
     }
 
     private sealed class NoEnumerationDictionary : IReadOnlyDictionary<string, string>
