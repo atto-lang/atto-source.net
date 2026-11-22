@@ -1,0 +1,7 @@
+// FAIL-CLOSED: match results remain i64; never truncate float division.
+pub fnc main(): int {
+  return match 5 over
+    on 5 -> 5 / 2,
+    on _ -> 0,
+  end
+}

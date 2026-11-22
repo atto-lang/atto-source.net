@@ -1,0 +1,11 @@
+// Scalar-only Atto conditional source. NativeAOT must return 4.
+fnc main(): int {
+    let int i = 0;
+    loop {
+        i = i + 1;
+        do unless i < 4 then
+            break;
+        fi
+    }
+    return i;
+}

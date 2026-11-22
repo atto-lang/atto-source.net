@@ -1,0 +1,7 @@
+fnc failure(): int panics Error {
+  panic Error("supervisor only");
+}
+
+pub fnc main(): Result<int,Error> {
+  return trap failure();
+}

@@ -1,4 +1,4 @@
-// Native AttoLang tilde projections, not C# host tuples/dictionaries.
+// Removed tilde collection constructors must fail with E_COLLECTION_FACTORY_REMOVED.
 pub fnc main():int {
     return ~tuple(1, 2)[1] + ~record(left: 40, right: 5).left;
 }
