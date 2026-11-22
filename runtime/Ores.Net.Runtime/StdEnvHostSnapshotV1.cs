@@ -42,6 +42,7 @@ internal sealed class StdEnvHostSnapshotV1
         if (coarseEnvironmentCapability && trustedValues.Count > 512)
             throw new ArgumentException("ENV_INVALID_SNAPSHOT");
         var snapshot = new Dictionary<string, string>(StringComparer.Ordinal);
+        long aggregateBytes = 0;
         // A missing coarse grant must not even enumerate host key names.
         // For authorized grants, filter the key before accessing the value.
         if (coarseEnvironmentCapability)
@@ -53,6 +54,11 @@ internal sealed class StdEnvHostSnapshotV1
                 if (!trustedValues.TryGetValue(name, out string? value) ||
                     value is null || !ValidValue(value))
                     throw new ArgumentException("ENV_INVALID_SNAPSHOT");
+                // Validate and count only permitted values, never denied secrets.
+                int utf8Bytes = System.Text.Encoding.UTF8.GetByteCount(value);
+                if (utf8Bytes > 1048576L - aggregateBytes)
+                    throw new ArgumentException("ENV_INVALID_SNAPSHOT");
+                aggregateBytes += utf8Bytes;
                 snapshot.Add(name, value);
             }
         }
