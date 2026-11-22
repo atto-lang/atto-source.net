@@ -98,4 +98,41 @@ define module sync as
     if granted > waiting then return false; fi
     return canceled <= waiting - granted;
   }
+
+  // Public conformance-v1 names adapt to this backend's existing scheduler
+  // admission policy; none of these functions can acquire a real lock.
+  pub fnc mutex_take_admissible(bool held, bool closed, int queued): bool {
+    return mutex_acquire_admissible(held, closed, queued, 0);
+  }
+
+  pub fnc mutex_enqueue_admissible(bool closed, int queued, int capacity): bool {
+    return mutex_queue_admissible(closed, queued, capacity);
+  }
+
+  pub fnc read_take_admissible(int readers, bool writer_held,
+                              int pending_writers, int reader_limit): bool {
+    return rw_read_admissible(readers, writer_held, pending_writers, reader_limit);
+  }
+
+  pub fnc write_take_admissible(int readers, bool writer_held): bool {
+    return rw_write_admissible(readers, writer_held);
+  }
+
+  pub fnc sem_take_admissible(int available, int requested, int capacity,
+                             bool closed): bool {
+    return semaphore_acquire_admissible(available, requested, capacity, closed);
+  }
+
+  pub fnc sem_return_admissible(int available, int released, int capacity,
+                               bool closed): bool {
+    return semaphore_release_admissible(available, released, capacity, closed);
+  }
+
+  pub fnc barrier_last_arrival(int arrived, int parties, bool broken): bool {
+    return barrier_is_last(arrived, parties, broken);
+  }
+
+  pub fnc next_epoch_admissible(int current, int proposed): bool {
+    return generation_successor_admissible(current, proposed);
+  }
 end
