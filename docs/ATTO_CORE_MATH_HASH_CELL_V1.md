@@ -19,3 +19,20 @@ Successful interpreter verification is *not* NativeAOT execution or general
 linked guest parity. All tests currently NOT_EXECUTED pending exact-head
 stepful CI and separately authenticated export approval if mirroring.
 See Java #1770, LLVM #869, conformance #570 for sibling candidates.
+
+## File namespaces instead of module wrappers
+
+The three compiler-owned `.atto` libraries now begin with
+`use namespace atto.core.math;`, `use namespace atto.core.hash;`, and
+`use namespace atto.core.cell;` respectively. Their exported `pub fnc`
+declarations are top-level; there is no `define module ... as ... end` wrapper.
+The existing authenticated `import module math from "atto.core/math";`
+compatibility form still resolves one compiler-owned source unit and applies
+an internal export adapter, but does not interpret namespaces as ambient
+imports, runtime objects, package rights, or filesystem access. User-supplied
+`use namespace atto.core.math;` source remains rejected until the general
+package-verified linker is complete.
+
+The namespace grammar is a constrained first milestone only. Canonical
+`import * as math from pkg "atto.core.math";` and arbitrary file namespaces
+are specified separately and remain unimplemented in this CIL backend.
