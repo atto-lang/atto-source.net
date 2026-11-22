@@ -65,6 +65,8 @@ dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true \
 test -x /tmp/atto-cil-nativeaot/Atto.Cil.Guest.Host
 expect_42 NATIVEAOT_GUEST /tmp/atto-cil-nativeaot/Atto.Cil.Guest.Host
 
+# Pin the positive bool-parameter guest source, including mixed parameter order.
+test "$(git hash-object fixtures/cil/bool-parameter.atto)" = 884cf04cee38a343733d91e37b06f8232f5deb92
 # Typed bool parameter ABI: compile a real Atto guest, then run the
 # generated CIL under CoreCLR and NativeAOT. The host does not implement logic.
 dotnet run --no-build -c Release --project "$compiler" -- \
