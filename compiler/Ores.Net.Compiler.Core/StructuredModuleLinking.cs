@@ -50,7 +50,7 @@ public static class OresSourceModuleCompiler
     private const string SliceSha256 = "89fef2a3b11542deac9460b129553d5ee7f0d2b74b7f09d69777ed36a14cdaf5";
     private const string CoreIter = "@atto.core/iter.atto";
     private const string IterResourceName = "Atto.Core.Iter";
-    private const string IterSha256 = "75baa6e6a4b6d8a228f75170c5cb4160b7576a05ce567ab7f846a252afe77fbf";
+    private const string IterSha256 = "366d4c5ab75a08290e2063080749e24ad347fdbd0b9dd73b7765f2e50aca02a6";
     private const string CoreCmp = "@atto.core/cmp.atto";
     private const string CmpResourceName = "Atto.Core.Cmp";
     private const string CmpSha256 = "6b0123508ef4f89ecd2b03f196ad0710d84f5096a3bd409e860d27f4c9abdc20";

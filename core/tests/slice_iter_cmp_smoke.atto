@@ -4,10 +4,10 @@ import module slice from "atto.core/slice";
 import module iter from "atto.core/iter";
 import module cmp from "atto.core/cmp";
 pub fnc main():int {
-  if !slice.valid_range(1, 2, 3); do return 1; fi
+  if slice.valid_range(1, 2, 3) == false; do return 1; fi
   if slice.valid_range(2, 2, 3); do return 2; fi
   if slice.valid_range(-1, 0, 3); do return 3; fi
-  if !slice.can_split_at(3, 3); do return 4; fi
+  if slice.can_split_at(3, 3) == false; do return 4; fi
   if iter.next_index_or_negative_one(1, 2, 1, 3) != 2; do return 5; fi
   if iter.next_back_index_or_negative_one(1, 2, 0, 3) != 2; do return 6; fi
   if iter.advance_cursor_or_negative_one(3, 2, 2) != -1; do return 7; fi

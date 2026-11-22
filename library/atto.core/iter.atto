@@ -11,7 +11,7 @@ define module iter as
 
   pub fnc next_index_or_negative_one(int start, int count,
                                      int consumed, int total): int {
-    if !valid_range(start, count, total); do return -1; fi
+    if valid_range(start, count, total) == false; do return -1; fi
     if consumed < 0; do return -1; fi
     if consumed >= count; do return -1; fi
     return start + consumed;
@@ -19,7 +19,7 @@ define module iter as
 
   pub fnc next_back_index_or_negative_one(int start, int count,
                                           int consumed, int total): int {
-    if !valid_range(start, count, total); do return -1; fi
+    if valid_range(start, count, total) == false; do return -1; fi
     if consumed < 0; do return -1; fi
     if consumed >= count; do return -1; fi
     return start + (count - 1 - consumed);
