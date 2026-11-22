@@ -1,7 +1,7 @@
 // .NET-owned Atto polynomial octet fold, not cryptographic or hash-flood safe.
 // Valid state [0,1000000007); octet [0,255]; -1 means invalid.
 // Avoid machine-dependent wrapping, modulo, native hash or signed overflow.
-define module hash as
+use namespace atto.core.hash;
   pub fnc initial_state(): int { return 17; }
   pub fnc step_byte(int state, int octet): int {
     if state < 0 || state >= 1000000007; do return -1; fi
@@ -21,4 +21,3 @@ define module hash as
     if value; do return step_byte(initial_state(), 1); fi
     return step_byte(initial_state(), 0);
   }
-end
