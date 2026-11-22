@@ -79,6 +79,9 @@ before parity may be reported as `PASS`.
 
 ## Core loan-safety preflight and compiler borrow boundary
 
+- `library/atto.core/borrow_admission.atto` is the compiler-owned core library location. Its
+  module source is staged, but compiler import/borrow admission execution
+  remains NOT_EXECUTED. The canonical module API is `core/borrow_admission`.
 - `core/borrow_admission.atto` is a bounded unique-owner loan-state
   **diagnostic/runtime preflight** with a 65,535-reader quota, not the
   compiler borrow checker and not an owner/borrow capability.
