@@ -73,6 +73,24 @@ internal static class SourceModuleLinkingSelfTest
             Reject(Compile, "local does not silently become an imported namespace");
             Write("main.ores", "import fnc twice from \"./base\"; fnc main():int { return twice(true); }");
             Reject(Compile, "cross-file argument types are checked");
+
+            // std/env is staged but is NOT yet compiler-linked on .NET.
+            // Reserved library roots MUST fail before consulting project files,
+            // including a locally planted, same-named shadow module.
+            Directory.CreateDirectory(Path.Combine(root, "std"));
+            Write("std/env.atto", "define module std_env as " +
+                "pub fnc get(String name):Option<String>{return Some(\\"SHADOWED\\");} end");
+            foreach (string alias in new[] {
+                "std/env", "std/env.atto", "std/env.ores",
+                "ores.std/env", "atto.std/env", "atto.std/env.atto"
+            })
+            {
+                Write("main.ores", "import module std_env from \\"" + alias +
+                    "\\"; pub fnc main():int{return 42;}");
+                Reject(Compile, "compiler-owned std/env must fail closed before .NET linker admission",
+                    "unsupported compiler-owned AttoLang library namespace");
+            }
+
             // A source actor graph must be denied before even attempting to
             // resolve a missing module dependency or emitting linked CIL.
             Write("main.ores", "import fnc not_found from \"./missing\"; fnc main():int { return 1 pipe 2; }");
