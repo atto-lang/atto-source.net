@@ -55,20 +55,22 @@ compiler, fixture and script changes. Zero-step Actions runs are
 
 ## Native namespace import parity gap and fail-closed admission (2026-11-22)
 
-The present CIL scalar frontend still supports `int` parameters only
-even though it supports `bool` results and expressions. It also has no
-registered compiler-owned `std.http` namespace import loader. To avoid a
-false feature claim, the negative gate now contains:
+The current CIL frontend still has no registered compiler-owned
+`std.http` namespace import loader, but the earlier int-only parameter
+restriction has been removed. Function parameters now retain an explicit
+`int` or `bool` type through parsing, type checking, call argument
+validation, ECMA-335 method signatures, and argument loads.
 
-- `fixtures/cil/negative/std-http-unsupported.atto`: an attempted
-  `import * as http from "std.http";` must be rejected (currently `E_LEX`)
-  without leaving `artifacts/Rejected.dll`.
-- `fixtures/cil/negative/bool-param-unsupported.atto`: a `bool`
-  parameter must be rejected (currently `E_PARSE`) instead of being
-  silently lowered into an incompatible int ABI.
+- `fixtures/cil/bool-parameter.atto` compiles a real Atto bool-parameter
+  function and calls it from `main`; the script executes the generated
+  guest under CoreCLR and NativeAOT, expecting exit 42.
+- `fixtures/cil/negative/bool-param-call-type.atto` passes an integer to a
+  bool parameter and must fail with `E_TYPE` before a DLL is emitted.
+- `fixtures/cil/negative/std-http-unsupported.atto` still rejects the
+  unimplemented `import * as http from "std.http";` form with `E_LEX`.
 
-`scripts/test-cil-guest.sh` expects **18** negative cases, up from 16.
-These tests are staged, **NOT_EXECUTED** on the current head. This is
-explicit missing parity, **not** implementation of typed bool arguments,
-`define pub module`, `std.http` imports, or guest HTTP networking.
-See atto-platform-conformance#101 and atto-source.java#1754.
+The native-CIL script retains **18 negative cases**, replacing the obsolete
+"bool parameter unsupported" diagnostic with a genuine call-site type
+mismatch. These are staged, **NOT_EXECUTED** until exact-head CI has
+nonzero executed steps. This does not claim `std.http` imports,
+`define pub module`, or network I/O parity.
