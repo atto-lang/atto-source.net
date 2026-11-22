@@ -134,7 +134,7 @@ public static class OresSourceModuleCompiler
                 return;
             }
             if (units.Count >= MaxUnits) throw new FormatException("Source graph exceeds 64 units");
-            byte[] bytes = path is CoreIdentity or CoreNumeric or CoreMath or CoreHash or CoreCell or CoreMath or CoreHash or CoreCell
+            byte[] bytes = path is CoreIdentity or CoreNumeric or CoreMath or CoreHash or CoreCell
                 ? ReadBundledCore(path)
                 : ReadBounded(path);
             totalBytes = checked(totalBytes + bytes.Length);
@@ -143,7 +143,7 @@ public static class OresSourceModuleCompiler
             try { source = Utf8.GetString(bytes); }
             catch (DecoderFallbackException failure) { throw new FormatException("Source is not strict UTF-8", failure); }
             if (source.Contains('\0') || source.StartsWith('\uFEFF')) throw new FormatException("Source NUL/BOM is not admitted");
-            string identity = path is CoreIdentity or CoreNumeric
+            string identity = path is CoreIdentity or CoreNumeric or CoreMath or CoreHash or CoreCell
                 ? path
                 : Identity(path);
             var unit = new Unit(path, identity, source,
