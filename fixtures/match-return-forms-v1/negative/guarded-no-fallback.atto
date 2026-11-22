@@ -1,0 +1,6 @@
+// expect-error: E_MATCH
+pub fnc main(): int {
+  ^ match 7 over
+    on n when n > 1 -> 2,
+  end
+}

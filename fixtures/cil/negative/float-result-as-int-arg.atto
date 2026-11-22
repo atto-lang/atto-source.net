@@ -1,0 +1,7 @@
+fnc quotient(int numerator, int denominator): float {
+  return numerator / denominator;
+}
+fnc identity(int value): int { return value; }
+pub fnc main(): int {
+  return identity(quotient(5, 2));
+}
