@@ -1,0 +1,70 @@
+name: .NET Atto std/path telemetry sync SOURCE audit (not NativeAOT guest)
+on:
+  pull_request:
+    paths:
+      - 'stdlib/path.atto'
+      - 'stdlib/sync.atto'
+      - 'stdlib/telemetry.atto'
+      - 'tests/fixtures/path_sync_telemetry_policy_v1.atto'
+      - 'verification/atto-std-path-sync-telemetry-source-audit.mjs'
+      - 'verification/Atto.Std.Policy.CompilerAdmission/**'
+      - '.github/workflows/atto-std-path-sync-telemetry-source-audit.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  atto-stdlib-policy-source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Checkout exact originating branch commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify unmodified Git source and tree
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          echo "ATTO_NET_STDLIB_HEAD=$EXPECTED_HEAD"
+          echo "ATTO_NET_STDLIB_TREE=$(git rev-parse 'HEAD^{tree}')"
+      - name: Use controlled Node 22 for native Atto source policy checks
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - name: Execute 65-case fixture coverage and five mutation negatives
+        run: |
+          set -euo pipefail
+          node verification/atto-std-path-sync-telemetry-source-audit.mjs --self-test
+      - name: Provision .NET 10 for real structured compiler import-denial test
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.x'
+      - name: Execute real .NET structured module compiler and forbid std shadowing
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet run -c Release --project \
+            verification/Atto.Std.Policy.CompilerAdmission \
+            | tee "$RUNNER_TEMP/atto-std-cil-import-denial.log"
+          grep -Fxq \
+            'NET_STD_COMPILER_IMPORT_DENIAL=EXECUTED|reserved=9|local_module_graph=CIL_EMITTED|std_guest=NOT_EXECUTED|native_aot=NOT_EXECUTED' \
+            "$RUNNER_TEMP/atto-std-cil-import-denial.log"
+      - name: Require source-only check to reject guest execution claims
+        shell: bash
+        run: |
+          set -euo pipefail
+          if node verification/atto-std-path-sync-telemetry-source-audit.mjs \
+            --require-executed-guest > "$RUNNER_TEMP/std-audit-out" \
+            2> "$RUNNER_TEMP/std-audit-err"; then
+            echo "::error::Source audit falsely certified NativeAOT guest" >&2
+            exit 1
+          fi
+          grep -Fq 'SOURCE_ONLY: this checker cannot certify linked guest or NativeAOT execution' \
+            "$RUNNER_TEMP/std-audit-err"
+          echo 'ATTO_NET_STDLIB_GUEST=NOT_EXECUTED'
