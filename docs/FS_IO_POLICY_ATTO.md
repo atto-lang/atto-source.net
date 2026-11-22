@@ -6,6 +6,10 @@ The compiler-local `stdlib/std/fs_io_policy.atto` implements five pure functions
 
 ## Security and implementation boundary
 
-A pure admissibility result does not grant file authority. The host must independently enforce tenant READ/WRITE grants, descriptor-root path confinement, symlink/rename race safety, actor restart generation, bounded async execution, cancellation, resource release, and quota rechecking. No host filesystem primitive or fake `std.fs` export is introduced here. The `import * as fs from pkg "std.fs";` runtime remains unsupported until typed host ABI, package linking, `susp` continuation and actual compiled guest I/O are integrated.
+A pure admissibility result does not grant file authority. The host must independently enforce tenant READ/WRITE grants, descriptor-root path confinement, symlink/rename race safety, actor restart generation, bounded async execution, cancellation, resource release, and quota rechecking. No host filesystem primitive or fake `std.fs` export is introduced here. The `import * as fs from "std.fs";` runtime remains unsupported until typed host ABI, built-in module linking, `susp` continuation and actual compiled guest I/O are integrated.
 
 This work complements [spec #117](https://github.com/atto-lang/atto-spec/pull/117) and [common ABI #29](https://github.com/atto-lang/atto-common-source/pull/29), and keeps the compiler implementation independent from the other `atto-source.*` repositories.
+
+## Import selector
+
+The canonical built-in import is `import * as fs from "std.fs";`, **without** `pkg`. The compiler must select its own registered std.fs implementation; it may not reinterpret the name as a project file or third-party package, nor grant filesystem capabilities merely because a module imports it. Relative source files still use `"./path.atto"` and external dependencies use explicit `pkg`. This is a proposed resolver contract: the present source candidate and 31-vector fixture do not prove built-in import linking or physical I/O.
