@@ -90,7 +90,7 @@ internal static class CoreTypeRegistryTests
         var list = CoreTypeRegistry.Lookup("List")!;
         Require(list.Scope == CoreTypeRegistry.Scope.Alloc, "List alloc scope");
         Require(list.Allocation == CoreTypeRegistry.Allocation.AllocatorRequired, "List allocator");
-        Require(list.Lowering == CoreTypeRegistry.Lowering.ContractOnly, "List not lowered");
+        Require(list.BackendLowering == CoreTypeRegistry.Lowering.ContractOnly, "List not lowered");
         Require(CoreTypeRegistry.Lookup("HashMap")!.Scope == CoreTypeRegistry.Scope.Explicit,
             "HashMap explicit import");
         Require(CoreTypeRegistry.Lookup("String")!.Scope == CoreTypeRegistry.Scope.Alloc,
