@@ -30,3 +30,9 @@ The operator authorized token-free private exact-tree mirroring into an alternat
 - Verify .NET native host test and native AOT on a real .NET toolchain, Java JDK 25 + Truffle, native LLVM AOT, and Wasm guest runtime separately.
 - Re-test the **whole exact PR head/tree**, not only verified individual Git blobs, on a carrier with real runner jobs and nonzero steps.
 - Keep PRs Draft and do not promote from a source-only, host-only or zero-step result.
+
+## Follow-up 2026-11-22 — local-port revocation, nested admission, NativeAOT gate
+
+The trusted native UDP host `runtime/Ores.Net.Runtime/Net/UdpLoopbackHost.cs` now reauthorizes `Action.Local` on every local-port observation **before** exposing the assigned ephemeral port. The original requested bind port (including port 0) is the authority scope. `Monitor.TryEnter` is not sufficient to prevent **same-thread** callback recursion, so a separate monitor-protected `_inOperation` lease now rejects reentrant socket calls. These changes are in the backend's own host implementation; no shared canonical socket source is imposed.
+
+`tests/Atto.Udp.Host/Program.cs` now covers local-port revocation, rejection of a scoped source before packet publication, recovery on the next permitted datagram, and a nested policy-callback access attempt. `tests/Atto.Udp.Host/run-native-aot.sh` invokes a real .NET 10 host loopback then publishes and **executes** a self-contained NativeAOT binary; the new `.github/workflows/udp-host-native-aot.yml` checks exact PR head and runs those steps, failing if NativeAOT is absent. **Not yet executed** on .NET 10 or GitHub Actions as of this update: local `dotnet` is unavailable. Do not interpret `IsAotCompatible` metadata or queued/zero-step Actions as a pass. This is host-level, not compiled Atto guest UDP. Remaining: guest CIL lowering, actor ownership/cancellation, NativeAOT execution.
