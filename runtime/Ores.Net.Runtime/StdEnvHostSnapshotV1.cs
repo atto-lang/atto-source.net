@@ -39,7 +39,8 @@ internal sealed class StdEnvHostSnapshotV1
         ArgumentNullException.ThrowIfNull(trustedValues);
         string[] grants = CopyRules(allow);
         string[] denies = CopyRules(deny);
-        if (trustedValues.Count > 512) throw new ArgumentException("ENV_INVALID_SNAPSHOT");
+        if (coarseEnvironmentCapability && trustedValues.Count > 512)
+            throw new ArgumentException("ENV_INVALID_SNAPSHOT");
         var snapshot = new Dictionary<string, string>(StringComparer.Ordinal);
         // A missing coarse grant must not even enumerate host key names.
         // For authorized grants, filter the key before accessing the value.
