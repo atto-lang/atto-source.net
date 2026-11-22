@@ -137,6 +137,46 @@ internal static class CoreMathHashCellSourceSelfTest
                     StringComparison.Ordinal)) throw;
             }
 
+            // Canonical .atto.pkg.toml is a real package boundary; a
+            // manifest under an importer-selected root needs its own source
+            // root authority before even reading the target source bytes.
+            var child = Path.Combine(root, "nested");
+            Directory.CreateDirectory(child);
+            File.WriteAllText(Path.Combine(child, "foreign.atto"),
+                "define pub module foreign as pub fnc answer():int{return 42;} end");
+            string nestedManifest = Path.Combine(child, ".atto.pkg.toml");
+            File.WriteAllText(nestedManifest, "[package]\nname='foreign'\nversion='1.0.0'");
+            File.WriteAllText(guest,
+                "import module foreign from \"./nested/foreign.atto\"; " +
+                "pub fnc main():int{return foreign.answer();}");
+            try
+            {
+                OresSourceModuleCompiler.Compile(guest, new[] { root });
+                throw new InvalidOperationException("Canonical nested package boundary bypassed");
+            }
+            catch (FormatException failure)
+            {
+                if (!failure.Message.Contains("Nested package requires an explicit dependency source root",
+                    StringComparison.Ordinal)) throw;
+            }
+            if (!OperatingSystem.IsWindows())
+            {
+                File.Delete(nestedManifest);
+                File.CreateSymbolicLink(nestedManifest,
+                    Path.Combine(root, "nonexistent-canonical-pkg.toml"));
+                try
+                {
+                    OresSourceModuleCompiler.Compile(guest, new[] { root });
+                    throw new InvalidOperationException("Dangling canonical manifest symlink bypassed boundary");
+                }
+                catch (FormatException failure)
+                {
+                    if (!failure.Message.Contains("Nested package requires an explicit dependency source root",
+                        StringComparison.Ordinal)) throw;
+                }
+                File.Delete(nestedManifest);
+            }
+
             // Canonical and legacy import spellings must resolve the SAME
             // authenticated pinned Core unit, not two executable copies.
             File.WriteAllText(guest,
