@@ -989,7 +989,7 @@ public static partial class OresStructuredParser
             // This is a complete-token check after skipping source trivia.
             if (CoreTypeRegistry.Lookup(tokenText) is { } registryEntry &&
                 !registryEntry.IsExecutableInStructuredNet &&
-                registryEntry.Kind is CoreTypeRegistry.Kind.Type or CoreTypeRegistry.Kind.Constructor)
+                (registryEntry.Kind is CoreTypeRegistry.Kind.Type or CoreTypeRegistry.Kind.Constructor))
                 throw new FormatException(
                     $"E_CORE_TYPE_LOWERING_UNSUPPORTED: {registryEntry.CanonicalIdentity} has no verified .NET structured/NativeAOT lowering at offset {offset}");
             return new Token(tokenText, offset);
@@ -1979,7 +1979,6 @@ public static partial class OresStructuredParser
             if (name.Length is < 1 or > MaxIdentifier ||
                 !(Alpha(name[0]) || name[0] == '_') ||
                 !name.Skip(1).All(c => Alpha(c) || Digit(c) || c == '_') ||
-                CoreTypeRegistry.IsProtectedIdentity(name) ||
                 name is "if" or "ifnot" or "unless" or "else" or "while" or "loop" or "break" or "continue" or "return" or "let"
                     or "int" or "bool" or "true" or "false" or "and" or "or" or "xor"
                     or "define" or "pub" or "fnc" or "const" or "val" or "final"
