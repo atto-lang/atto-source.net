@@ -1,0 +1,60 @@
+name: Atto std/path sync telemetry 134-policy SOURCE-only gate
+on:
+  pull_request:
+    paths:
+      - 'stdlib/path.atto'
+      - 'stdlib/sync.atto'
+      - 'stdlib/telemetry.atto'
+      - 'contracts/atto-std-pure-policy-parity-v1.json'
+      - 'verification/atto-std-134-source-model.test.mjs'
+      - 'tests/fixtures/atto_std_pure_policy_guest_v1.atto'
+      - '.github/workflows/atto-std-134-source-model.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-only-no-native-guest-claim:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact head without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Provision Node 22 source model
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Verify head SHA, all component blobs and pinned shared contract
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          for path in \
+            stdlib/path.atto stdlib/sync.atto stdlib/telemetry.atto \
+            contracts/atto-std-pure-policy-parity-v1.json \
+            tests/fixtures/atto_std_pure_policy_guest_v1.atto; do
+            test -f "$path"
+            test ! -L "$path"
+            git_blob="$(git hash-object --no-filters -- "$path")"
+            test "$git_blob" = "$(git rev-parse "HEAD:$path")"
+            echo "ATTO_STD_SOURCE_BLOB=$path:$git_blob"
+          done
+          test "$(git rev-parse HEAD:contracts/atto-std-pure-policy-parity-v1.json)" = \
+            3d9e9d5308a4cd0a99d811570f8c80e77b7219b7
+      - name: Run backend-owned 134-vector restricted Atto source checker
+        run: node --test verification/atto-std-134-source-model.test.mjs
+      - name: Reject any attempted native guest self-attestation
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ATTO_REQUIRE_NATIVE_GUEST=1 node --test \
+            verification/atto-std-134-source-model.test.mjs >/dev/null 2>&1; then
+            echo "::error::source-only checker faked native guest execution" >&2
+            exit 1
+          fi
+          echo "ATTO_STD_134_NATIVE_GUEST=NOT_EXECUTED"

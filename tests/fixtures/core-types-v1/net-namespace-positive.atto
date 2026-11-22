@@ -1,0 +1,3 @@
+// Compiler-backed CIL namespace admission, not the full core/types library.
+use namespace types;
+pub fnc main() -> int { return 64; }
