@@ -47,6 +47,14 @@ internal static class CoreMathHashCellSourceSelfTest
                   if !cell.can_move_owner(0, false); do return 22; fi
                   if cell.can_suspend_unpinned(1, false) || cell.can_suspend_unpinned(0, true); do return 23; fi
                   if !cell.can_suspend_unpinned(0, false); do return 24; fi
+                  // At shared-loan saturation an existing owner may read,
+                  // but no new shared loan may be admitted.
+                  if cell.can_borrow_read(65535, false); do return 25; fi
+                  if !cell.can_owner_read(65535, false); do return 26; fi
+                  if !cell.valid_loan_state(65535, false); do return 27; fi
+                  if cell.can_borrow_read(65536, false); do return 28; fi
+                  if !cell.can_borrow_read(65534, false); do return 29; fi
+                  if cell.readers_after_acquire(65534, false) != 65535; do return 30; fi
                   return 42;
                 }
                 """);
@@ -77,6 +85,8 @@ internal static class CoreMathHashCellSourceSelfTest
                   if !c.can_borrow_read(3,false); do return 3; fi
                   if c.can_move_owner(3,false); do return 4; fi
                   if !c.can_suspend_unpinned(0,false); do return 5; fi
+                  if c.can_borrow_read(65535,false); do return 6; fi
+                  if !c.can_owner_read(65535,false); do return 7; fi
                   return 42;
                 }
                 """);
