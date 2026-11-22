@@ -38,7 +38,7 @@ function check(inputs, guest) {
       [...src.matchAll(/\bpub\s+fnc\s+([a-z][a-z0-9_]*)\s*\(/g)]
         .map(match => match[1]));
   }
-  if (!inputs.path.includes("define pub class Path as"))
+  if (!inputs.path.includes("pub define class Path as"))
     fail("native Path value class not exposed");
   if (!inputs.path.includes("normalized_component_start_points") ||
       !inputs.sync.includes("mutex_release_receipt_admissible") ||
@@ -55,7 +55,7 @@ function check(inputs, guest) {
     calls++;
   }
   if (calls < 40) fail("fixture public-function coverage unexpectedly low");
-  const pathBlock = inputs.path.slice(inputs.path.indexOf("define pub class Path as"));
+  const pathBlock = inputs.path.slice(inputs.path.indexOf("pub define class Path as"));
   const methods = new Set([...pathBlock.matchAll(/\bpub\s+fnc\s+([a-z][a-z0-9_]*)\s*\(/g)]
     .map(match => match[1]));
   const required = ["component_count", "component_start", "component_length",
@@ -97,7 +97,7 @@ if (!process.argv.includes("--self-test")) fail("use --self-test for source-only
 rejectMutation("nonpublic .atto method",
   { ...sources, path: sources.path.replace("pub fnc normalized_windows_depth", "fnc normalized_windows_depth") }, guest);
 rejectMutation("nonpublic Path class",
-  { ...sources, path: sources.path.replace("define pub class Path as", "define class Path as") }, guest);
+  { ...sources, path: sources.path.replace("pub define class Path as", "define class Path as") }, guest);
 rejectMutation("host island",
   { ...sources, path: sources.path + "\njava:untrusted\n" }, guest);
 rejectMutation("case count",
