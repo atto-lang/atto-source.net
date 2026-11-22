@@ -43,5 +43,11 @@ pub fnc main(): int {
   if path.normalized_component_scalar("a/./b/../c", true, 1, 1) != -1 then return 36; fi
   if path.is_portable_relative("a/..") then return 37; fi
   if !path.join_admissible("a", "b", true) then return 38; fi
+  if !sync.mutex_release_receipt_admissible(true, 8, 8, 3, 3, false) then return 39; fi
+  if sync.mutex_release_receipt_admissible(true, 8, 9, 3, 3, false) then return 40; fi
+  if sync.mutex_release_receipt_admissible(true, 8, 8, 3, 2, false) then return 41; fi
+  if sync.mutex_release_receipt_admissible(true, 8, 8, 3, 3, true) then return 42; fi
+  if !sync.rw_upgrade_admissible(1, false, 0, true) then return 43; fi
+  if sync.rw_upgrade_admissible(2, false, 0, true) then return 44; fi
   return 0;
 }
