@@ -75,8 +75,7 @@ define module path as
   // Returns -1 for invalid, absolute, empty or root-escaping paths.
   // A zero result is a normalized "." (e.g. "a/.." or ".").
   // No string concatenation, platform I/O or allocator-owned output.
-  pub fnc normalized_depth(String value, bool windows): int {
-    let points = value.codepoints();
+  fnc normalized_depth_points(Array<int> points, bool windows): int {
     let int count = points.size;
     if count < 1 || count > 4096 then return -1; fi
     if is_separator(points.get(0), windows) then return -1; fi
@@ -105,12 +104,16 @@ define module path as
     return depth;
   }
 
+  pub fnc normalized_depth(String value, bool windows): int {
+    return normalized_depth_points(value.codepoints(), windows);
+  }
+
   // Reject dot, dot-dot, repeated separators, trailing separators and root.
   // This indicates lexical canonicality, NOT confinement under a real root.
   pub fnc is_canonical_relative(String value, bool windows): bool {
     let points = value.codepoints();
     let int count = points.size;
-    if normalized_depth(value, windows) < 0 then return false; fi
+    if normalized_depth_points(points, windows) < 0 then return false; fi
     if count == 1 && points.get(0) == 46 then return true; fi
     let mut int start = 0;
     for (let int i = 0; i <= count; i = i + 1) {
@@ -134,13 +137,11 @@ define module path as
   // Unicode scalar offsets into the ORIGINAL input; it is not a native path
   // or a serialized normalized string. Dot segments are ignored and each
   // dot-dot cancels its nearest surviving predecessor. All access is bounded.
-  // Scan in reverse. A pending ".." cancels the next ordinary component.
-  // Only one scalar snapshot is allocated; no temporary component stacks.
-  // The input is always validated fully before any offset is returned.
-  pub fnc normalized_component_start(String value, bool windows, int requested): int {
-    let mut int depth = normalized_depth(value, windows);
+  // Reverse scan preserves the surviving components without stack arrays.
+  // Each view call validates and scans one bounded scalar snapshot.
+  fnc normalized_component_start_points(Array<int> points, bool windows, int requested): int {
+    let int depth = normalized_depth_points(points, windows);
     if requested < 0 || requested >= depth then return -1; fi
-    let points = value.codepoints();
     let mut int end = points.size;
     let mut int canceled = 0;
     let mut int surviving_from_end = 0;
@@ -165,22 +166,30 @@ define module path as
     return -1;
   }
 
-  pub fnc normalized_component_length(String value, bool windows, int requested): int {
-    let mut int start = normalized_component_start(value, windows, requested);
+  pub fnc normalized_component_start(String value, bool windows, int requested): int {
+    return normalized_component_start_points(value.codepoints(), windows, requested);
+  }
+
+  fnc component_length_points(Array<int> points, bool windows, int start): int {
     if start < 0 then return -1; fi
-    let points = value.codepoints();
     for (let int i = start; i < points.size; i = i + 1) {
       if is_separator(points.get(i), windows) then return i - start; fi
     }
     return points.size - start;
   }
 
+  pub fnc normalized_component_length(String value, bool windows, int requested): int {
+    let points = value.codepoints();
+    let int start = normalized_component_start_points(points, windows, requested);
+    return component_length_points(points, windows, start);
+  }
+
   // -1 is reserved for an invalid component/offset; no valid scalar is -1.
   pub fnc normalized_component_scalar(String value, bool windows, int requested, int offset): int {
-    let mut int start = normalized_component_start(value, windows, requested);
-    let int length = normalized_component_length(value, windows, requested);
-    if start < 0 || offset < 0 || offset >= length then return -1; fi
     let points = value.codepoints();
+    let int start = normalized_component_start_points(points, windows, requested);
+    let int length = component_length_points(points, windows, start);
+    if start < 0 || offset < 0 || offset >= length then return -1; fi
     return points.get(start + offset);
   }
 
