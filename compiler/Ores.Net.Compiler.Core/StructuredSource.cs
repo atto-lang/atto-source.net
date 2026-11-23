@@ -991,11 +991,13 @@ public static partial class OresStructuredParser
             // tagged family is still unsupported, even when reached via
             // linked-unit discovery, and must fail before typed SSA/CIL.
             // This is a complete-token check after skipping source trivia.
-            if (CoreTypeRegistry.Lookup(tokenText) is { } registryEntry &&
-                !registryEntry.IsExecutableInStructuredNet &&
-                (registryEntry.Kind is CoreTypeRegistry.Kind.Type or CoreTypeRegistry.Kind.Constructor))
+            // Prelude names are auto-imported, not reserved words: a user
+            // declaration such as `class Box` must still lex. Only the tagged
+            // Result family is rejected here; type positions consult the
+            // CoreTypeRegistry in Type() and fail closed there.
+            if (tokenText is "Result" or "Ok" or "Err")
                 throw new FormatException(
-                    $"E_CORE_TYPE_LOWERING_UNSUPPORTED: {registryEntry.CanonicalIdentity} has no verified .NET structured/NativeAOT lowering at offset {offset}");
+                    $"Option/Result/trap requires verified tagged-sum CIL and NativeAOT guest-control lowering (E_CORE_TYPE_LOWERING_UNSUPPORTED: {CoreTypeRegistry.Lookup(tokenText)?.CanonicalIdentity} has no verified .NET structured/NativeAOT lowering) at offset {offset}");
             return new Token(tokenText, offset);
         }
     }
@@ -2023,6 +2025,13 @@ public static partial class OresStructuredParser
         {
             string name = Current.Text;
             int at = Current.Offset;
+            // A catalogued prelude type this backend cannot lower fails as
+            // unsupported (it is a use, not a forgery); lowered identities such
+            // as Option/Some/None/int cannot be redeclared.
+            if (CoreTypeRegistry.Lookup(name) is { Kind: CoreTypeRegistry.Kind.Type } unlowered &&
+                !unlowered.IsExecutableInStructuredNet)
+                throw new FormatException(
+                    $"E_CORE_TYPE_LOWERING_UNSUPPORTED: {unlowered.CanonicalIdentity} has no verified .NET structured/NativeAOT lowering at offset {at}");
             if (CoreTypeRegistry.IsProtectedIdentity(name))
                 throw new FormatException($"E_PRELUDE_SPOOF: {name} is a compiler-owned type/constructor identity at offset {at}");
             if (name.Length is < 1 or > MaxIdentifier ||
