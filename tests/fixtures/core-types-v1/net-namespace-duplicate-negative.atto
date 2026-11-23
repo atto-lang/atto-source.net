@@ -1,0 +1,3 @@
+use namespace types;
+use namespace wrong;
+pub fnc main() -> int { return 64; }

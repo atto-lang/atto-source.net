@@ -1,0 +1,27 @@
+// Compiler-owned Atto core: scalar checked span metadata.
+// This is NOT a borrowed Slice<T> value or memory-access grant.
+define module slice as
+  pub fnc valid_range(int offset, int count, int total): bool {
+    if offset < 0; do return false; fi
+    if count < 0; do return false; fi
+    if total < 0; do return false; fi
+    if offset > total; do return false; fi
+    return count <= total - offset;
+  }
+
+  pub fnc valid_index(int index, int length): bool {
+    if index < 0; do return false; fi
+    if length < 0; do return false; fi
+    return index < length;
+  }
+
+  pub fnc is_empty(int count): bool {
+    return count == 0;
+  }
+
+  pub fnc can_split_at(int length, int middle): bool {
+    if length < 0; do return false; fi
+    if middle < 0; do return false; fi
+    return middle <= length;
+  }
+end

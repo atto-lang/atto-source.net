@@ -81,9 +81,23 @@ internal sealed class Parser
     }
     internal List<Function> Parse()
     {
+        // File-scoped namespace metadata is distinct from a module/import.
+        // It may occur exactly once, and only before any declarations.
+        bool hasNamespace = false;
+        if (Eat("use"))
+        {
+            Require("namespace");
+            _ = Name();
+            Require(";");
+            hasNamespace = true;
+        }
         List<Function> result = [];
         while (Peek != "<eof>")
         {
+            if (Peek == "use" || Peek == "namespace")
+                throw new CompilerError(
+                    hasNamespace ? "E_NAMESPACE_DUPLICATE" : "E_NAMESPACE_HEADER_ORDER",
+                    "namespace headers must occur exactly once at the start of the source file");
             Eat("pub"); Require("fnc");
             string name = Name();
             Require("(");

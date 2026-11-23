@@ -1,0 +1,36 @@
+// Pure .NET-owned Cell borrow-policy helpers, NOT Cell<T> storage or tokens.
+// Cannot provide atomic admission, actor ownership or lifetime enforcement.
+// Unsupported interior mutability MUST be rejected by compiler/runtime.
+use namespace atto.core.cell;
+  pub fnc can_borrow_read(int readers, bool writer_active): bool {
+    return readers >= 0 && readers < 65535 && !writer_active;
+  }
+  pub fnc can_borrow_write(int readers, bool writer_active): bool {
+    return readers == 0 && !writer_active;
+  }
+  pub fnc readers_after_acquire(int readers, bool writer_active): int {
+    if !can_borrow_read(readers, writer_active); do return -1; fi
+    if readers == 65535; do return -1; fi
+    return readers + 1;
+  }
+  pub fnc readers_after_release(int readers, bool writer_active): int {
+    if readers <= 0 || readers > 65535 || writer_active; do return -1; fi
+    return readers - 1;
+  }
+  // No references are returned: these predicates are NON-CAPABILITIES.
+  // The compiler must still check aliasing, owner generation, escape and take.
+  pub fnc valid_loan_state(int readers, bool writer_active): bool {
+    return readers >= 0 && readers <= 65535 && (!writer_active || readers == 0);
+  }
+  pub fnc can_owner_read(int readers, bool writer_active): bool {
+    return readers >= 0 && readers <= 65535 && !writer_active;
+  }
+  pub fnc can_owner_write(int readers, bool writer_active): bool {
+    return readers == 0 && !writer_active;
+  }
+  pub fnc can_move_owner(int readers, bool writer_active): bool {
+    return readers == 0 && !writer_active;
+  }
+  pub fnc can_suspend_unpinned(int readers, bool writer_active): bool {
+    return readers == 0 && !writer_active;
+  }

@@ -1,0 +1,24 @@
+// Source .atto end-to-end actor/ActorFuture target; NOT_EXECUTED here.
+// An actual runtime must provide spawn, ActorRef, get_ready, outputs and get_done.
+// expect-exit: 0
+use namespace std.actor.lifecycle_test;
+
+define actor Echo as
+  receive(ActorMail<int> mail): void {
+    self.send(mail.value + 2);
+    self.end();
+    return;
+  }
+end
+
+pub async routine main(): void {
+  val child = spawn Echo();
+  await child.get_ready();
+  child.send(40);
+  val reply = (await child.outputs.next()).value.unwrap();
+  if reply.value != 42 then
+    rt fail("std.actor guest response mismatch");
+  fi
+  await child.get_done();
+  return;
+}
