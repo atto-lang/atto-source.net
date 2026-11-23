@@ -41,10 +41,19 @@ public static class OresSourceModuleCompiler
     // Compiler-owned authority, never a path under --root or ORESLANG_PATH.
     private const string CoreIdentity = "@atto.core/identity.atto";
     private const string CoreNumeric = "@atto.core/numeric.atto";
+    private const string CoreMath = "@atto.core/math.atto";
+    private const string CoreHash = "@atto.core/hash.atto";
+    private const string CoreCell = "@atto.core/cell.atto";
     private const string CoreResourceName = "Atto.Core.Identity";
     private const string NumericResourceName = "Atto.Core.Numeric";
+    private const string MathResourceName = "Atto.Core.Math";
+    private const string HashResourceName = "Atto.Core.Hash";
+    private const string CellResourceName = "Atto.Core.Cell";
     private const string IdentitySha256 = "d381ecd95c7df1b4efc1a2fb7bb7cd87e050f0a88f72690070feb465930a915a";
     private const string NumericSha256 = "3d1d7b77068dd02b3d60b30b72f29a4537a933134ca79e1e81df096dc56f5f33";
+    private const string MathSha256 = "d4363bc341067dc2830b7d3477f435afb0c3c61a08240f785fb8660dec0f5945";
+    private const string HashSha256 = "de35f6da5d9b8793f23212150c1280c280fffd0ec0cee01758a6d455b9f880d1";
+    private const string CellSha256 = "ad876ea26e04754e1a62cc85245860876dc8ed512645e30d5150a144e6b96ce3";
 
     // Layered core/alloc/std v1 units (atto-spec core-alloc-std-libraries-v1).
     // Canonical selector "<layer>/<unit>"; "atto.<layer>/" and ".atto" are
@@ -135,8 +144,15 @@ public static class OresSourceModuleCompiler
                 }
                 else
                 {
-                    if (target.ModuleName != import.Name)
+                    // Legacy 'import module' requires identical exported module
+                    // name. A canonical builtin 'import * as alias' may choose
+                    // a local alias but can only target the authenticated pinned
+                    // Core namespace identities resolved below.
+                    if (import.Kind != "builtin_namespace" && target.ModuleName != import.Name)
                         throw new FormatException($"Module import '{import.Name}' does not match declared module in {units[targetPath].Identity}");
+                    if (import.Kind == "builtin_namespace" &&
+                        targetPath is not (CoreMath or CoreHash or CoreCell))
+                        throw new FormatException("Core namespace wildcard importer lost canonical builtin identity");
                     foreach (var exported in target.Exports)
                         if (!bindings.TryAdd(import.Name + "." + exported.Key, exported.Value))
                             throw new FormatException("Duplicate qualified imported callable");
@@ -170,7 +186,7 @@ public static class OresSourceModuleCompiler
                 return;
             }
             if (units.Count >= MaxUnits) throw new FormatException("Source graph exceeds 64 units");
-            byte[] bytes = path is CoreIdentity or CoreNumeric
+            byte[] bytes = path is CoreIdentity or CoreNumeric or CoreMath or CoreHash or CoreCell
                 ? ReadBundledCore(path)
                 : IsBundled(path) ? ReadBundledLibrary(path) : ReadBounded(path);
             totalBytes = checked(totalBytes + bytes.Length);
@@ -179,12 +195,13 @@ public static class OresSourceModuleCompiler
             try { source = Utf8.GetString(bytes); }
             catch (DecoderFallbackException failure) { throw new FormatException("Source is not strict UTF-8", failure); }
             if (source.Contains('\0') || source.StartsWith('\uFEFF')) throw new FormatException("Source NUL/BOM is not admitted");
-            string identity = path is CoreIdentity or CoreNumeric || IsBundled(path)
+            string identity = path is CoreIdentity or CoreNumeric or CoreMath or CoreHash or CoreCell || IsBundled(path)
                 ? path
                 : Identity(path);
             var unit = new Unit(path, identity, source,
                 new SourceUnitIdentity(identity, Convert.ToHexStringLower(SHA256.HashData(bytes)), bytes.Length),
-                OresStructuredParser.ReadLinkedImports(source));
+                OresStructuredParser.ReadLinkedImports(source,
+                    path is CoreMath or CoreHash or CoreCell));
             units.Add(path, unit);
             states.Add(path, 1);
             foreach (var import in unit.Imports) Visit(Resolve(path, import.Specifier), depth + 1);
@@ -202,6 +219,10 @@ public static class OresSourceModuleCompiler
                 "atto.core/numeric.ores" or "ores.core/numeric" or
                 "ores.core/numeric.atto" or "ores.core/numeric.ores")
                 return CoreNumeric;
+            // SHA-pinned core units (atto.core/<unit> or core/<unit>; never ores.* or dotted).
+            if (specifier is "atto.core/math" or "atto.core/math.atto" or "core/math" or "core/math.atto") return CoreMath;
+            if (specifier is "atto.core/hash" or "atto.core/hash.atto" or "core/hash" or "core/hash.atto") return CoreHash;
+            if (specifier is "atto.core/cell" or "atto.core/cell.atto" or "core/cell" or "core/cell.atto") return CoreCell;
             if (ResolveLayered(specifier) is string layered)
             {
                 if (IsBundled(importer) && LayerRank(LayerOfIdentity(layered)) > LayerRank(LayerOfIdentity(importer)))
@@ -219,7 +240,7 @@ public static class OresSourceModuleCompiler
                 specifier.StartsWith("ores.std/", StringComparison.Ordinal) ||
                 specifier.StartsWith("std/", StringComparison.Ordinal))
                 throw new FormatException("unsupported compiler-owned AttoLang library namespace");
-            if (importer is CoreIdentity or CoreNumeric || IsBundled(importer))
+            if (importer is CoreIdentity or CoreNumeric or CoreMath or CoreHash or CoreCell || IsBundled(importer))
                 throw new FormatException("compiler-owned Core module cannot import ambient source files");
             if (!(specifier.StartsWith("./", StringComparison.Ordinal) || specifier.StartsWith("../", StringComparison.Ordinal)) ||
                 specifier.Length > 4096 || specifier.EndsWith('/') || specifier.Contains("//", StringComparison.Ordinal) ||
@@ -260,7 +281,8 @@ public static class OresSourceModuleCompiler
                 cursor = Path.Combine(cursor, component);
                 RejectReparse(cursor);
                 if (Directory.Exists(cursor) &&
-                    (ProjectRootSourceResolver.MarkerExistsNoFollow(Path.Combine(cursor, ".ores.pkg.toml")) ||
+                    (ProjectRootSourceResolver.MarkerExistsNoFollow(Path.Combine(cursor, ".atto.pkg.toml")) ||
+                     ProjectRootSourceResolver.MarkerExistsNoFollow(Path.Combine(cursor, ".ores.pkg.toml")) ||
                      ProjectRootSourceResolver.MarkerExistsNoFollow(Path.Combine(cursor, ".oreslangc.cfg.toml"))))
                     throw new FormatException("Nested package requires an explicit dependency source root");
             }
@@ -296,6 +318,9 @@ public static class OresSourceModuleCompiler
         {
             CoreIdentity => CoreResourceName,
             CoreNumeric => NumericResourceName,
+            CoreMath => MathResourceName,
+            CoreHash => HashResourceName,
+            CoreCell => CellResourceName,
             _ => throw new FormatException("unknown compiler-owned Core resource")
         };
         using var stream = typeof(OresSourceModuleCompiler).Assembly
@@ -320,6 +345,9 @@ public static class OresSourceModuleCompiler
         {
             CoreIdentity => IdentitySha256,
             CoreNumeric => NumericSha256,
+            CoreMath => MathSha256,
+            CoreHash => HashSha256,
+            CoreCell => CellSha256,
             _ => throw new FormatException("unknown compiler-owned Core resource")
         };
         if (!string.Equals(Convert.ToHexStringLower(SHA256.HashData(bytes)), expected, StringComparison.Ordinal))
