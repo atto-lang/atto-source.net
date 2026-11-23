@@ -9,6 +9,10 @@
                       LogicalName="Atto.Core.Identity" />
     <EmbeddedResource Include="../../contracts/atto-core-v1/numeric.atto"
                       LogicalName="Atto.Core.Numeric" />
+    <EmbeddedResource Include="../../library/atto.core/slice.atto"
+                      LogicalName="Atto.Core.Slice" />
+    <EmbeddedResource Include="../../library/atto.core/iter.atto"
+                      LogicalName="Atto.Core.Iter" />
     <EmbeddedResource Include="../../library/atto.core/math.atto" LogicalName="Atto.Core.Math" />
     <EmbeddedResource Include="../../library/atto.core/hash.atto" LogicalName="Atto.Core.Hash" />
     <EmbeddedResource Include="../../library/atto.core/cell.atto" LogicalName="Atto.Core.Cell" />

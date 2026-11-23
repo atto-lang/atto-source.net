@@ -20,4 +20,26 @@ define module cmp as
     if c > m then m = c; fi
     return m;
   }
+  // Merged from atto-source.net#219 (total scalar comparisons).
+  pub fnc compare_int(int left, int right): int {
+    if left < right then return 0 - 1; fi
+    if left > right then return 1; fi
+    return 0;
+  }
+  pub fnc compare_bool(bool left, bool right): int {
+    if left == right then return 0; fi
+    if left then return 1; fi
+    return 0 - 1;
+  }
+  pub fnc min_int(int left, int right): int {
+    if left <= right then return left; fi
+    return right;
+  }
+  pub fnc max_int(int left, int right): int {
+    if left >= right then return left; fi
+    return right;
+  }
+  pub fnc valid_bounds(int lower, int upper): bool {
+    return lower <= upper;
+  }
 end
