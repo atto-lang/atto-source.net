@@ -1,27 +1,44 @@
-// Total scalar comparisons without subtraction overflow.
+// core/cmp (atto-source.net): three-way comparison and ordering helpers.
 define module cmp as
-  pub fnc compare_int(int left, int right): int {
-    if left < right; do return -1; fi
-    if left > right; do return 1; fi
+  pub fnc compare(int a, int b): int {
+    if a < b then return 0 - 1; fi
+    if a > b then return 1; fi
     return 0;
   }
-
+  pub fnc between(int value, int lower, int upper): bool {
+    return value >= lower && value <= upper;
+  }
+  pub fnc min3(int a, int b, int c): int {
+    let int m = a;
+    if b < m then m = b; fi
+    if c < m then m = c; fi
+    return m;
+  }
+  pub fnc max3(int a, int b, int c): int {
+    let int m = a;
+    if b > m then m = b; fi
+    if c > m then m = c; fi
+    return m;
+  }
+  // Merged from atto-source.net#219 (total scalar comparisons).
+  pub fnc compare_int(int left, int right): int {
+    if left < right then return 0 - 1; fi
+    if left > right then return 1; fi
+    return 0;
+  }
   pub fnc compare_bool(bool left, bool right): int {
-    if left == right; do return 0; fi
-    if left; do return 1; fi
-    return -1;
+    if left == right then return 0; fi
+    if left then return 1; fi
+    return 0 - 1;
   }
-
   pub fnc min_int(int left, int right): int {
-    if left <= right; do return left; fi
+    if left <= right then return left; fi
     return right;
   }
-
   pub fnc max_int(int left, int right): int {
-    if left >= right; do return left; fi
+    if left >= right then return left; fi
     return right;
   }
-
   pub fnc valid_bounds(int lower, int upper): bool {
     return lower <= upper;
   }
