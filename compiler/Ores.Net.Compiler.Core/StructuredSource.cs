@@ -1122,7 +1122,7 @@ public static partial class OresStructuredParser
                 if (Take("*"))
                 {
                     // Narrow canonical builtin import selector:
-                    // import * as math from "core.math";
+                    // import * as math from "atto.core/math";
                     // Explicit 'pkg', local-file wildcards and third-party
                     // package namespaces require a separate verified linker.
                     Expect("as");
@@ -1150,7 +1150,8 @@ public static partial class OresStructuredParser
                 // of the standalone scalar parser's generic import denial.
                 UnsafeStdlibImportAdmission.RequireGuestSafe(quoted[1..^1]);
                 if (kind == "builtin_namespace" &&
-                    quoted[1..^1] is not ("core.math" or "core.hash" or "core.cell"))
+                    quoted[1..^1] is not ("atto.core/math" or "atto.core/hash" or "atto.core/cell"
+                        or "core/math" or "core/hash" or "core/cell"))
                     throw Error("E_CORE_NAMESPACE_IMPORT_AUTHORITY: wildcard imports require a compiler-owned Core namespace");
                 index++;
                 Expect(";");
@@ -2487,6 +2488,17 @@ public static partial class OresStructuredParser
                 var operand = Unary(depth + 1);
                 Require(operand, IrValueType.I64, "Unary plus requires int");
                 return operand;
+            }
+            // Prefix logical not on a bool operand. Lowered as a typed
+            // conditional (operand ? false : true) over the existing bool CFG.
+            if (Current.Text == "!")
+            {
+                int at = Current.Offset;
+                index++;
+                var operand = Unary(depth + 1);
+                Require(operand, IrValueType.Bool, "Logical not requires bool");
+                return new StructuredConditional(at, operand,
+                    new StructuredBool(at, false), new StructuredBool(at, true), IrValueType.Bool);
             }
             if (Current.Text == "-")
             {
