@@ -87,8 +87,8 @@ public static class OresSourceModuleCompiler
         // Hosted std keeps its historical diagnostic phrase on every root.
         string legacy = layer == "std" ? " (unsupported compiler-owned AttoLang library namespace)" : "";
         if (valid && V1Catalog.Contains(key))
-            throw new FormatException($"compiler-owned {layer} module '{specifier}' is not implemented by the .NET backend yet{legacy}");
-        throw new FormatException($"unknown compiler-owned {layer} module '{specifier}'{legacy}");
+            throw new FormatException($"compiler-owned atto.{layer} module '{specifier}' is not implemented by the .NET backend yet{legacy}");
+        throw new FormatException($"unknown compiler-owned atto.{layer} module '{specifier}'{legacy}");
     }
 
     private sealed record Unit(string PhysicalPath, string Identity, string Source,
@@ -205,7 +205,7 @@ public static class OresSourceModuleCompiler
             if (ResolveLayered(specifier) is string layered)
             {
                 if (IsBundled(importer) && LayerRank(LayerOfIdentity(layered)) > LayerRank(LayerOfIdentity(importer)))
-                    throw new FormatException($"compiler-owned {LayerOfIdentity(importer)} modules may not depend on {LayerOfIdentity(layered)}/*");
+                    throw new FormatException($"compiler-owned atto.{LayerOfIdentity(importer)} modules may not depend on atto.{LayerOfIdentity(layered)}/*");
                 return layered;
             }
             if (specifier is "atto.core" or "ores.core" ||
