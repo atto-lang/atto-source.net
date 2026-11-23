@@ -3,7 +3,7 @@
 Layered `core`/`alloc`/`std` units per
 [atto-spec core-alloc-std-libraries-v1](https://github.com/atto-lang/atto-spec/blob/main/language/core-alloc-std-libraries-v1.md),
 embedded in `Ores.Net.Compiler.Core` and imported with
-`import module num from "core/num";` (`atto.core/` and `.atto` are aliases).
+`import module num from "atto.core/num";` (`atto.core/` and `.atto` are aliases).
 
 | Unit | .NET status |
 | ---- | ----------- |
