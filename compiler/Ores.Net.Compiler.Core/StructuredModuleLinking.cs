@@ -55,6 +55,51 @@ public static class OresSourceModuleCompiler
     private const string HashSha256 = "de35f6da5d9b8793f23212150c1280c280fffd0ec0cee01758a6d455b9f880d1";
     private const string CellSha256 = "ad876ea26e04754e1a62cc85245860876dc8ed512645e30d5150a144e6b96ce3";
 
+    // Layered core/alloc/std v1 units (atto-spec core-alloc-std-libraries-v1).
+    // Canonical selector "<layer>/<unit>"; "atto.<layer>/" and ".atto" are
+    // aliases. Only units this backend lowers today are registered; the rest
+    // of the catalog fails closed with an explicit "not implemented" error.
+    private static readonly IReadOnlyDictionary<string, (string Layer, string Resource)> V1Units =
+        new Dictionary<string, (string, string)>(StringComparer.Ordinal)
+        {
+            ["core/num"] = ("core", "Atto.Lib.Core.Num"),
+            ["core/cmp"] = ("core", "Atto.Lib.Core.Cmp"),
+            ["core/mem"] = ("core", "Atto.Lib.Core.Mem"),
+        };
+    private static readonly HashSet<string> V1Catalog = new(StringComparer.Ordinal)
+    {
+        "core/num", "core/cmp", "core/option", "core/result", "core/mem",
+        "alloc/arena", "alloc/vec", "std/io", "std/path",
+    };
+
+    private static bool IsBundled(string path) => path.StartsWith("@atto.", StringComparison.Ordinal);
+
+    private static int LayerRank(string layer) => layer switch { "core" => 0, "alloc" => 1, _ => 2 };
+
+    private static string LayerOfIdentity(string identity) =>
+        identity.StartsWith("@atto.alloc/", StringComparison.Ordinal) ? "alloc"
+        : identity.StartsWith("@atto.std/", StringComparison.Ordinal) ? "std" : "core";
+
+    /// <summary>Resolve a layered selector to a bundled identity, or null when not layered.</summary>
+    internal static string? ResolveLayered(string specifier)
+    {
+        string[] v1Roots = { "core/", "alloc/", "atto.core/", "atto.alloc/", "atto.std/", "std/" };
+        string? root = v1Roots.FirstOrDefault(r => specifier.StartsWith(r, StringComparison.Ordinal));
+        if (root is null) return null;
+        string layer = root.Replace("atto.", "", StringComparison.Ordinal).TrimEnd('/');
+        string unit = specifier[root.Length..];
+        if (unit.EndsWith(".atto", StringComparison.Ordinal)) unit = unit[..^5];
+        bool valid = unit.Length is > 0 and <= 64 && unit[0] is >= 'a' and <= 'z' &&
+            unit.All(c => c is >= 'a' and <= 'z' or >= '0' and <= '9' or '_');
+        string key = layer + "/" + unit;
+        if (valid && V1Units.ContainsKey(key)) return "@atto." + key + ".atto";
+        // Hosted std keeps its historical diagnostic phrase on every root.
+        string legacy = layer == "std" ? " (unsupported compiler-owned AttoLang library namespace)" : "";
+        if (valid && V1Catalog.Contains(key))
+            throw new FormatException($"compiler-owned atto.{layer} module '{specifier}' is not implemented by the .NET backend yet{legacy}");
+        throw new FormatException($"unknown compiler-owned atto.{layer} module '{specifier}'{legacy}");
+    }
+
     private sealed record Unit(string PhysicalPath, string Identity, string Source,
         SourceUnitIdentity Witness, IReadOnlyList<SourceImport> Imports);
 
@@ -143,14 +188,14 @@ public static class OresSourceModuleCompiler
             if (units.Count >= MaxUnits) throw new FormatException("Source graph exceeds 64 units");
             byte[] bytes = path is CoreIdentity or CoreNumeric or CoreMath or CoreHash or CoreCell
                 ? ReadBundledCore(path)
-                : ReadBounded(path);
+                : IsBundled(path) ? ReadBundledLibrary(path) : ReadBounded(path);
             totalBytes = checked(totalBytes + bytes.Length);
             if (totalBytes > MaxGraphBytes) throw new FormatException("Source graph exceeds 8 MiB");
             string source;
             try { source = Utf8.GetString(bytes); }
             catch (DecoderFallbackException failure) { throw new FormatException("Source is not strict UTF-8", failure); }
             if (source.Contains('\0') || source.StartsWith('\uFEFF')) throw new FormatException("Source NUL/BOM is not admitted");
-            string identity = path is CoreIdentity or CoreNumeric or CoreMath or CoreHash or CoreCell
+            string identity = path is CoreIdentity or CoreNumeric or CoreMath or CoreHash or CoreCell || IsBundled(path)
                 ? path
                 : Identity(path);
             var unit = new Unit(path, identity, source,
@@ -174,21 +219,16 @@ public static class OresSourceModuleCompiler
                 "atto.core/numeric.ores" or "ores.core/numeric" or
                 "ores.core/numeric.atto" or "ores.core/numeric.ores")
                 return CoreNumeric;
-            if (specifier == "core.math") return CoreMath;
-            if (specifier == "core.hash") return CoreHash;
-            if (specifier == "core.cell") return CoreCell;
-            if (specifier.StartsWith("core.", StringComparison.Ordinal) ||
-                specifier == "core")
-                throw new FormatException("unknown compiler-owned Core namespace");
-            if (specifier is "atto.core/math" or "atto.core/math.atto" or
-                "atto.core/math.ores" or "ores.core/math" or
-                "ores.core/math.atto" or "ores.core/math.ores") return CoreMath;
-            if (specifier is "atto.core/hash" or "atto.core/hash.atto" or
-                "atto.core/hash.ores" or "ores.core/hash" or
-                "ores.core/hash.atto" or "ores.core/hash.ores") return CoreHash;
-            if (specifier is "atto.core/cell" or "atto.core/cell.atto" or
-                "atto.core/cell.ores" or "ores.core/cell" or
-                "ores.core/cell.atto" or "ores.core/cell.ores") return CoreCell;
+            // SHA-pinned core units (atto.core/<unit> or core/<unit>; never ores.* or dotted).
+            if (specifier is "atto.core/math" or "atto.core/math.atto" or "core/math" or "core/math.atto") return CoreMath;
+            if (specifier is "atto.core/hash" or "atto.core/hash.atto" or "core/hash" or "core/hash.atto") return CoreHash;
+            if (specifier is "atto.core/cell" or "atto.core/cell.atto" or "core/cell" or "core/cell.atto") return CoreCell;
+            if (ResolveLayered(specifier) is string layered)
+            {
+                if (IsBundled(importer) && LayerRank(LayerOfIdentity(layered)) > LayerRank(LayerOfIdentity(importer)))
+                    throw new FormatException($"compiler-owned atto.{LayerOfIdentity(importer)} modules may not depend on atto.{LayerOfIdentity(layered)}/*");
+                return layered;
+            }
             if (specifier is "atto.core" or "ores.core" ||
                 specifier.StartsWith("atto.core/", StringComparison.Ordinal) ||
                 specifier.StartsWith("ores.core/", StringComparison.Ordinal))
@@ -200,7 +240,7 @@ public static class OresSourceModuleCompiler
                 specifier.StartsWith("ores.std/", StringComparison.Ordinal) ||
                 specifier.StartsWith("std/", StringComparison.Ordinal))
                 throw new FormatException("unsupported compiler-owned AttoLang library namespace");
-            if (importer is CoreIdentity or CoreNumeric or CoreMath or CoreHash or CoreCell)
+            if (importer is CoreIdentity or CoreNumeric or CoreMath or CoreHash or CoreCell || IsBundled(importer))
                 throw new FormatException("compiler-owned Core module cannot import ambient source files");
             if (!(specifier.StartsWith("./", StringComparison.Ordinal) || specifier.StartsWith("../", StringComparison.Ordinal)) ||
                 specifier.Length > 4096 || specifier.EndsWith('/') || specifier.Contains("//", StringComparison.Ordinal) ||
@@ -313,6 +353,20 @@ public static class OresSourceModuleCompiler
         if (!string.Equals(Convert.ToHexStringLower(SHA256.HashData(bytes)), expected, StringComparison.Ordinal))
             throw new FormatException("compiler-owned atto.core module source digest mismatch");
         return bytes;
+    }
+
+    // Layered v1 units are compiler-embedded resources; never project files.
+    private static byte[] ReadBundledLibrary(string identity)
+    {
+        string key = identity["@atto.".Length..^".atto".Length];
+        if (!V1Units.TryGetValue(key, out var entry))
+            throw new FormatException("unknown compiler-owned library resource");
+        using var stream = typeof(OresSourceModuleCompiler).Assembly.GetManifestResourceStream(entry.Resource)
+            ?? throw new FormatException("compiler-owned library module source resource is missing");
+        using var buffer = new MemoryStream();
+        stream.CopyTo(buffer);
+        if (buffer.Length > MaxFileBytes) throw new FormatException("compiler-owned library resource exceeds 1 MiB");
+        return buffer.ToArray();
     }
 
     private static void RejectReparse(string path)

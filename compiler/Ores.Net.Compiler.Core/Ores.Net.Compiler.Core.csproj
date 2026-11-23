@@ -12,6 +12,9 @@
     <EmbeddedResource Include="../../library/atto.core/math.atto" LogicalName="Atto.Core.Math" />
     <EmbeddedResource Include="../../library/atto.core/hash.atto" LogicalName="Atto.Core.Hash" />
     <EmbeddedResource Include="../../library/atto.core/cell.atto" LogicalName="Atto.Core.Cell" />
+    <EmbeddedResource Include="../../library/core/num.atto" LogicalName="Atto.Lib.Core.Num" />
+    <EmbeddedResource Include="../../library/core/cmp.atto" LogicalName="Atto.Lib.Core.Cmp" />
+    <EmbeddedResource Include="../../library/core/mem.atto" LogicalName="Atto.Lib.Core.Mem" />
   </ItemGroup>
   <!-- The production Native AOT compiler uses System.Reflection.Metadata only.
        Mono.Cecil remains a verification-only dependency, not a published runtime. -->

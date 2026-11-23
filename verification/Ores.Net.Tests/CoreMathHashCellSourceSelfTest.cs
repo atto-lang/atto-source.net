@@ -76,9 +76,9 @@ internal static class CoreMathHashCellSourceSelfTest
             // Canonical static namespace import spelling is explicitly
             // whitelisted for Core builtins and still compiles REAL CIL.
             File.WriteAllText(guest, """
-                import * as m from "core.math";
-                import * as h from "core.hash";
-                import * as c from "core.cell";
+                import * as m from "atto.core/math";
+                import * as h from "atto.core/hash";
+                import * as c from "atto.core/cell";
                 pub fnc main():int {
                   if m.min_int(3,9) != 3; do return 1; fi
                   if h.step_byte(17,42) != 569; do return 2; fi
@@ -113,7 +113,7 @@ internal static class CoreMathHashCellSourceSelfTest
             // Two aliases of one canonical Core library must not double-link
             // the compiler-owned source, or permit a shadowed helper slot.
             File.WriteAllText(guest,
-                "import * as a from \"core.math\"; import * as b from \"core.math\"; " +
+                "import * as a from \"atto.core/math\"; import * as b from \"atto.core/math\"; " +
                 "pub fnc main():int{return a.signum_int(42)-b.signum_int(42)+42;}");
             var duplicateAliases = OresSourceModuleCompiler.Compile(guest, new[] { root });
             if (duplicateAliases.Sources.Count != 2 ||
@@ -131,7 +131,7 @@ internal static class CoreMathHashCellSourceSelfTest
             // network, or unsupported std/alloc namespace roots.
             foreach (string denied in new[] {
                 "./math.atto", "std.fs", "alloc.heap", "core.missing",
-                "core.math/../hash", "core.math.atto", "pkg.core.math"
+                "core.math/../hash", "core.math.atto", "pkg.core.math", "core.math", "ores.core/math"
             })
             {
                 File.WriteAllText(guest,
@@ -148,7 +148,7 @@ internal static class CoreMathHashCellSourceSelfTest
                 }
             }
             File.WriteAllText(guest,
-                "import * as a from \"core.math\"; import * as a from \"core.hash\"; " +
+                "import * as a from \"atto.core/math\"; import * as a from \"atto.core/hash\"; " +
                 "pub fnc main():int{return 42;}");
             try
             {
@@ -201,10 +201,10 @@ internal static class CoreMathHashCellSourceSelfTest
                 File.Delete(nestedManifest);
             }
 
-            // Canonical and legacy import spellings must resolve the SAME
+            // Canonical and shorthand import spellings must resolve the SAME
             // authenticated pinned Core unit, not two executable copies.
             File.WriteAllText(guest,
-                "import module math from \"ores.core/math\"; " +
+                "import module math from \"core/math\"; " +
                 "pub fnc main():int{return math.signum_int(-1)+43;}");
             var legacy = OresSourceModuleCompiler.Compile(guest, new[] { root });
             if (legacy.Sources.Count != 2 ||

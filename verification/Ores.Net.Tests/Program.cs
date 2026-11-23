@@ -691,6 +691,7 @@ CriticalSuspendsBoundaryTests.Run(); // compiler-owned scalar admission, not run
 AttoSemanticNegativeGateTests.Run(); // canonical .atto negatives + IR/CIL positive controls (not NativeAOT)
 AsyncOnlyIoPolicyTests.Run();
 CapabilityIoLifecycleV1SelfTest.Run();
+StdEnvHostSnapshotV1SelfTest.Run(); // host-only, no std/env guest link
 ActorStateSchemaAdmissionTests.Run();
 ActorStateLayoutIntegrationTests.Run();
 ActorGeneratedCounterTests.Run();
