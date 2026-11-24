@@ -35,7 +35,7 @@ public sealed partial class OresVmHost
         lock (_gate) {
             var tenant = Check(handle);
             CheckActor(tenant, actor);
-            if (tenant.Phase != Phase.Running || actor.ActiveTurn is not null ||
+            if (tenant.Phase != Phase.Running || actor.LiveTurns.Count != 0 ||
                 actor.NextTurnGeneration != 1 || actor.StateCells is not null)
                 throw new InvalidOperationException("actor state layout admission closed");
             if (fields.Length is < 1 or > 16)

@@ -9,9 +9,48 @@ internal static class VmIsolateHostTests
         throw new Exception("IsolateVM gate failed: " + label);
     }
 
+    private static void CheckExplicitInterleaving()
+    {
+        var host = new OresVmHost(maxTenants: 1);
+        var tenant = host.CreateIsolate("interleaving", maxActors: 1);
+        host.Start(tenant);
+        var actor = host.RegisterActor(tenant, 3, maxLiveTurns: 2);
+        var first = host.BeginActorTurn(tenant, actor);
+        ExpectFailure(() => host.BeginActorTurn(tenant, actor), "one running actor turn");
+        host.SuspendActorTurn(tenant, actor, first);
+
+        var second = host.BeginActorTurn(tenant, actor);
+        if (first.Generation >= second.Generation)
+            throw new Exception("interleaved turns must have independent generations");
+        ExpectFailure(() => host.ResumeActorTurn(tenant, actor, first), "no simultaneous running turns");
+        ExpectFailure(() => host.BeginActorStateLoan(tenant, actor, first), "suspended turn has no state authority");
+        host.SuspendActorTurn(tenant, actor, second);
+        ExpectFailure(() => host.BeginActorTurn(tenant, actor), "two suspended turns consume the live limit");
+        ExpectFailure(() => host.RetireActor(tenant, actor), "suspended turns still own actor lifetime");
+
+        host.ResumeActorTurn(tenant, actor, first);
+        var loan = host.BeginActorStateLoan(tenant, actor, first, writable: true);
+        host.CancelActorTurn(tenant, actor, second);
+        host.ValidateActorStateLoan(tenant, actor, first, loan, requireWrite: true);
+        ExpectFailure(() => host.ResumeActorTurn(tenant, actor, second), "canceled sibling cannot resume");
+        host.EndActorStateLoan(tenant, actor, first, loan);
+        host.CompleteActorTurn(tenant, actor, first);
+
+        var next = host.BeginActorTurn(tenant, actor);
+        if (next.Generation <= second.Generation)
+            throw new Exception("interleaved logical turn generation reused after cleanup");
+        host.CompleteActorTurn(tenant, actor, next);
+        host.RetireActor(tenant, actor);
+        host.BeginShutdown(tenant);
+        host.CompleteShutdown(tenant);
+        host.Destroy(tenant);
+        Console.WriteLine("NET_ISOLATE_OPT_IN_LOGICAL_INTERLEAVING_PASS");
+    }
+
     public static void Run()
     {
         VmActorStateCellsTests.Run();
+        CheckExplicitInterleaving();
         var host = new OresVmHost(maxTenants: 2);
         // Fail closed: NativeAOT and separate host dictionaries do not imply
         // OS sandboxing or a separate GC-managed heap for hostile tenants.

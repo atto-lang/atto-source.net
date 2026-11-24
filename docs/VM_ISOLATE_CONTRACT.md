@@ -72,23 +72,20 @@ execute this in CI. No local dotnet SDK execution was available in this pass.
 
 ### Actor-local logical turn admission
 
-`ActorTicket` now owns at most one generation-fenced `ActorTurnTicket`.
-`BeginActorTurn` admits one user handler; `SuspendActorTurn` keeps that
-logical turn active while releasing any physical carrier outside this host
-bookkeeping API. A later user turn is rejected until the exact same ticket is
-resumed and completed. Cancellation is also a terminal, exact-ticket
-transition: it clears actor admission once, fences that generation, and makes
-later resume/complete/cancel replay fail closed before a fresh generation may
-start. Foreign actor/tenant tickets, stale completed/cancelled tickets,
-generation replay and actor retirement with an active turn fail closed.
+Trusted registration defaults to one live `ActorTurnTicket` per actor. A host
+may explicitly configure up to 64 live turns. Each ticket has its own generation
+and retains a logical slot while suspended. The existing state gate allows one
+running turn at a time. Suspension releases the running slot, so an actor with
+an explicit limit above one can admit a later turn. A suspended turn must
+reacquire that slot before accessing state.
 
-This is intentionally a host substrate, not source-language actor lowering.
-It does not hold a CLR monitor across guest suspension, does not make
-`Task`/delegate behavior Oreslang semantics, and does not yet connect
-`handle_state`, source `await`, cancellation cleanup or generated
-continuation frames. Those future paths must preserve the same rule: suspension
-may free a carrier to execute **other actors**, but it cannot admit a different
-user continuation into this actor.
+Completion and cancellation retire only the specified ticket. Canceling a
+suspended turn leaves a running turn and its state loans intact. Foreign,
+completed and canceled tickets fail validation. An actor can retire after all
+live tickets have retired.
+
+This host substrate releases the monitor between calls and awaits compiler
+wiring for `handle_state`, source `await`, cleanup, and generated continuations.
 
 
 ## Native AOT compiled CIL tenant execution (follow-up)

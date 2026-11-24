@@ -26,15 +26,18 @@ public sealed partial class OresVmHost
     public sealed class ActorTicket
     {
         internal ActorTicket(IsolateHandle isolate, ulong id, ulong epoch,
-            ActorMailbox mailbox) {
+            ActorMailbox mailbox, int maxLiveTurns) {
             Isolate = isolate; Id = id; Epoch = epoch; Mailbox = mailbox;
+            MaxLiveTurns = maxLiveTurns;
         }
         internal IsolateHandle Isolate { get; }
         public ulong Id { get; }
         internal ulong Epoch { get; }
         internal ActorMailbox Mailbox { get; }
         internal ulong NextTurnGeneration { get; set; } = 1;
-        internal ActorTurnTicket? ActiveTurn { get; set; }
+        internal int MaxLiveTurns { get; }
+        internal HashSet<ActorTurnTicket> LiveTurns { get; } = new();
+        internal ActorTurnTicket? RunningTurn { get; set; }
         // Compiler-owned, typed actor-local cells. Installed once before any turn.
         internal ActorStateCell[]? StateCells { get; set; }
     }
@@ -152,8 +155,18 @@ public sealed partial class OresVmHost
         }
     }
 
-    public ActorTicket RegisterActor(IsolateHandle handle, ulong id)
+    public ActorTicket RegisterActor(IsolateHandle handle, ulong id) =>
+        RegisterActor(handle, id, maxLiveTurns: 1);
+
+    /// <summary>
+    /// Trusted host registration with a bounded logical turn limit. A value
+    /// above one permits explicit interleaving when a prior turn suspends.
+    /// State access still has one running turn.
+    /// </summary>
+    public ActorTicket RegisterActor(IsolateHandle handle, ulong id, int maxLiveTurns)
     {
+        if (maxLiveTurns is < 1 or > 64)
+            throw new ArgumentOutOfRangeException(nameof(maxLiveTurns));
         lock (_gate) {
             var s = Check(handle);
             if (s.Phase != Phase.Running || id == 0 || s.Actors.ContainsKey(id) ||
@@ -162,7 +175,7 @@ public sealed partial class OresVmHost
             if (s.NextActorEpoch == ulong.MaxValue)
                 throw new InvalidOperationException("actor epoch exhausted");
             // Existing byte-copy mailbox enforces ActorRef capability and queue caps.
-            var actor = new ActorTicket(handle, id, s.NextActorEpoch++, new ActorMailbox(id));
+            var actor = new ActorTicket(handle, id, s.NextActorEpoch++, new ActorMailbox(id), maxLiveTurns);
             s.Actors.Add(id, actor);
             s.PinsByActor.Add(actor, 0);
             return actor;
@@ -187,13 +200,13 @@ public sealed partial class OresVmHost
     {
         CheckActor(state, actor);
         if (turn is null || turn.Completed || !ReferenceEquals(turn.Actor, actor) ||
-            !ReferenceEquals(actor.ActiveTurn, turn))
+            !actor.LiveTurns.Contains(turn))
             throw new InvalidOperationException("stale or foreign actor logical turn");
     }
 
     /// <summary>
-    /// Admit one actor-local user turn. Suspension never clears ActiveTurn:
-    /// it releases only the physical carrier and later user turns stay denied.
+    /// Admit one of the configured live turns and claim its running slot.
+    /// Suspension releases the running slot and retains the live turn ticket.
     /// </summary>
     public ActorTurnTicket BeginActorTurn(IsolateHandle handle, ActorTicket actor)
     {
@@ -201,12 +214,13 @@ public sealed partial class OresVmHost
             var s = Check(handle); CheckActor(s, actor);
             if (s.Phase != Phase.Running)
                 throw new InvalidOperationException("tenant actor admission closed");
-            if (actor.ActiveTurn is not null)
+            if (actor.RunningTurn is not null || actor.LiveTurns.Count >= actor.MaxLiveTurns)
                 throw new InvalidOperationException("actor logical turn already active");
             if (actor.NextTurnGeneration == ulong.MaxValue)
                 throw new InvalidOperationException("actor logical turn generation exhausted");
             var turn = new ActorTurnTicket(actor, actor.NextTurnGeneration++);
-            actor.ActiveTurn = turn;
+            actor.LiveTurns.Add(turn);
+            actor.RunningTurn = turn;
             return turn;
         }
     }
@@ -221,7 +235,7 @@ public sealed partial class OresVmHost
     {
         lock (_gate) {
             var s = Check(handle); CheckTurn(s, actor, turn);
-            if (turn.Suspended)
+            if (!ReferenceEquals(actor.RunningTurn, turn))
                 throw new InvalidOperationException("actor state access while suspended");
             if (turn.StateLoanDepth >= 32)
                 throw new InvalidOperationException("bounded actor state loan nesting exceeded");
@@ -240,7 +254,7 @@ public sealed partial class OresVmHost
         ActorStateLoan loan, bool requireWrite)
     {
         CheckTurn(state, actor, turn);
-        if (turn.Suspended || loan is null || loan.Released ||
+        if (!ReferenceEquals(actor.RunningTurn, turn) || loan is null || loan.Released ||
             !ReferenceEquals(loan.Turn, turn) ||
             !ReferenceEquals(turn.ActiveStateLoan, loan))
             throw new InvalidOperationException("stale, nested-fenced or foreign actor state loan");
@@ -277,11 +291,12 @@ public sealed partial class OresVmHost
     {
         lock (_gate) {
             var s = Check(handle); CheckTurn(s, actor, turn);
-            if (turn.Suspended)
+            if (!ReferenceEquals(actor.RunningTurn, turn))
                 throw new InvalidOperationException("actor logical turn already suspended");
             if (turn.ActiveStateLoan is not null)
                 throw new InvalidOperationException("state loan must retire before suspension");
             turn.Suspended = true;
+            actor.RunningTurn = null;
         }
     }
 
@@ -292,7 +307,10 @@ public sealed partial class OresVmHost
             var s = Check(handle); CheckTurn(s, actor, turn);
             if (!turn.Suspended)
                 throw new InvalidOperationException("actor logical turn is not suspended");
+            if (actor.RunningTurn is not null)
+                throw new InvalidOperationException("actor logical turn already active");
             turn.Suspended = false;
+            actor.RunningTurn = turn;
         }
     }
 
@@ -303,9 +321,7 @@ public sealed partial class OresVmHost
             var s = Check(handle); CheckTurn(s, actor, turn);
             if (turn.ActiveStateLoan is not null)
                 throw new InvalidOperationException("state loan must retire before completion");
-            turn.Completed = true;
-            turn.Suspended = false;
-            actor.ActiveTurn = null;
+            FinishTurn(actor, turn);
         }
     }
 
@@ -325,10 +341,16 @@ public sealed partial class OresVmHost
                 turn.ActiveStateLoan = loan.Parent;
             }
             turn.StateLoanDepth = 0;
-            turn.Completed = true;
-            turn.Suspended = false;
-            actor.ActiveTurn = null;
+            FinishTurn(actor, turn);
         }
+    }
+
+    private static void FinishTurn(ActorTicket actor, ActorTurnTicket turn)
+    {
+        turn.Completed = true;
+        turn.Suspended = false;
+        actor.LiveTurns.Remove(turn);
+        if (ReferenceEquals(actor.RunningTurn, turn)) actor.RunningTurn = null;
     }
 
     public (bool Active, bool Suspended, ulong Generation) ActorTurnSnapshot(
@@ -336,7 +358,11 @@ public sealed partial class OresVmHost
     {
         lock (_gate) {
             var s = Check(handle); CheckActor(s, actor);
-            var turn = actor.ActiveTurn;
+            var turn = actor.RunningTurn;
+            if (turn is null) {
+                foreach (var suspended in actor.LiveTurns)
+                    if (turn is null || suspended.Generation < turn.Generation) turn = suspended;
+            }
             return turn is null
                 ? (false, false, 0UL)
                 : (true, turn.Suspended, turn.Generation);
@@ -375,7 +401,7 @@ public sealed partial class OresVmHost
             var s = Check(handle); CheckActor(s, actor);
             if (s.PinsByActor[actor] != 0)
                 throw new InvalidOperationException("actor has outstanding resources");
-            if (actor.ActiveTurn is not null)
+            if (actor.LiveTurns.Count != 0)
                 throw new InvalidOperationException("actor has active logical turn");
             actor.Mailbox.Stop(); // Erase pending private queued copies.
             // Clear bounded actor-local cells before removing host ownership.
