@@ -97,6 +97,10 @@ jobs:
             run_id = '${{ github.run_id }}'
             run_attempt = '${{ github.run_attempt }}'
           } | ConvertTo-Json | Set-Content artifacts/interop-probe/receipt.json
+      - name: Execute closed Task-i64 source through native compiler and NativeAOT host
+        shell: pwsh
+        run: |
+          ./verification/assert-task-i64-source.ps1 -Compiler './artifacts/interop-compiler/${{ matrix.compiler }}' -Rid '${{ matrix.rid }}'
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: net-i01-host-subset-${{ matrix.rid }}-${{ github.run_attempt }}
@@ -104,4 +108,5 @@ jobs:
             artifacts/interop-probe/trace.txt
             artifacts/interop-probe/receipt.json
             artifacts/interop-compiler/admission-trace.txt
+            artifacts/task-i64-source/receipt.json
           if-no-files-found: error

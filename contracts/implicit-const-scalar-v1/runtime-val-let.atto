@@ -1,0 +1,2 @@
+fnc runtime_value(): int { return 40; }
+pub fnc main(): int { val int forty = runtime_value(); let int two = 2; return forty + two; }

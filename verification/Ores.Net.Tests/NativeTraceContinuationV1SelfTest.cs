@@ -41,6 +41,33 @@ internal static class NativeTraceContinuationV1SelfTest
             "00-0123456789abcdef0123456789abcdef-0123456789abcdef-03",
             "W3C format roundtrip");
 
+        // A malformed incoming traceparent is an untrusted, frequent case.
+        // Verify the entire negative parser path stays on the managed-heap
+        // allocation-free path after warmup, not merely the disabled tracer.
+        string[] malformed = {
+            "01-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+            "00-00000000000000000000000000000000-0123456789abcdef-01",
+            "00-0123456789abcdef0123456789abcdef-0000000000000000-01",
+            "00-0123456789ABCDEF0123456789abcdef-0123456789abcdef-01",
+            "00-0123456789abcdef0123456789abcdef-0123456789abcdef-0g",
+            "00-0123456789abcdef0123456789abcdef-0123456789abcdef-",
+            "wrong"
+        };
+        for (int i = 0; i < 256; i++)
+            foreach (string candidate in malformed)
+                if (NativeTraceParentV1.TryParse(candidate, out _))
+                    throw new Exception("invalid warmup traceparent was accepted");
+        long rejectedBefore = GC.GetAllocatedBytesForCurrentThread();
+        bool rejectedAll = true;
+        for (int i = 0; i < 10_000; i++)
+            foreach (string candidate in malformed)
+                if (NativeTraceParentV1.TryParse(candidate, out _))
+                    rejectedAll = false;
+        long rejectedBytes = GC.GetAllocatedBytesForCurrentThread() - rejectedBefore;
+        Require(rejectedAll, "all malformed W3C headers rejected");
+        Require(rejectedBytes == 0,
+            "70,000 rejected W3C headers must allocate zero CLR bytes on this carrier");
+
         var off = new NativeTraceContinuationV1();
         var offOwner = off.MintOwner(1);
         Require(off.Begin(offOwner, 1, 2) is null && off.Active == 0,
@@ -52,6 +79,17 @@ internal static class NativeTraceContinuationV1SelfTest
             maxActive: 2, maxReceipts: 2);
         var owner = tracer.MintOwner(7);
         var unrelated = tracer.MintOwner(7);
+        // Public value types may be constructed without using TryParse;
+        // invalid parent identities must fail before scope reservation.
+        var forgedParent = new NativeTraceParentV1(
+            "00000000000000000000000000000000", "0123456789abcdef", 1);
+        Reject<FormatException>(() => tracer.Begin(owner, 7, 10, forgedParent),
+            "zero-identity constructed parent rejected");
+        Reject<FormatException>(() => tracer.Begin(owner, 7, 10,
+            new NativeTraceParentV1("0123456789abcdef0123456789abcdef", "ABCDEF0123456789", 1)),
+            "uppercase constructed parent rejected");
+        Require(tracer.Active == 0 && tracer.Completed == 0 && tracer.Dropped == 0,
+            "invalid constructed parents never reserve a trace scope");
         var scope = tracer.Begin(owner, 7, 10, input)!;
         Require(scope.Parent == input, "same exact immutable parent");
         Require(scope.Context.TraceId == input.TraceId &&

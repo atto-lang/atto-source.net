@@ -5,6 +5,28 @@ import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const requiredByWorkflow = {
+  "Strict .NET Linux x64 Native AOT": {
+    "linux-x64-compiler-and-app": [
+      "Verify exact source checkout",
+      "Install Native AOT toolchain",
+      "Check source scripts and managed compiler regressions",
+      "Compile native compiler and first native application",
+      "Fail closed on unimplemented dispatch source before Native AOT CIL emission",
+      "Prove second generated source gets its own Native AOT executable",
+      "Execute flags2env client ABI scalar through Linux Native AOT",
+      "Execute shared native.precedence and prove three-source isolation",
+      "Execute opt-in structured CFG as linked Linux Native AOT",
+      "Execute Linux Native AOT checked-arithmetic negatives",
+      "Execute exact Java/LLVM logical .atto fixture in real Linux Native AOT",
+      "Execute canonical .atto signed relational source in Linux Native AOT",
+      "Execute explicitly authorized CLR Abs and Max guests in Native AOT",
+      "Negative test for managed sidecar rejection",
+      "Execute compiled guest Integer.rem in Linux Native AOT",
+      "Execute compiled guest Integer.pow and bitXor in Linux Native AOT",
+      "Record exact-head Native AOT execution receipt",
+      "Upload Linux native executables and evidence"
+    ]
+  },
   "Windows Native AOT": {
     "windows-x64": [
       "Assert exact originating-source checkout (Windows)",
@@ -23,19 +45,24 @@ const requiredByWorkflow = {
       "Adversarial scalar runner self-tests (Windows)",
       "Shared scalar source admission on the released Native AOT compiler",
       "Execute real Windows Native AOT binary",
+      "Execute authorized CLR Abs and Max through Windows Native AOT",
       "Confirm strict Native AOT PE and reject managed assembly",
       "Reject corrupted Native AOT PE headers",
       "Execute Native AOT checked-arithmetic error cases",
       "Reject managed sidecar next to an otherwise native executable",
       "Compile verified CFG into a real Windows Native AOT executable",
       "Prove experimental structured source in real Windows Native AOT",
+      "Execute canonical .atto signed relational source in Windows Native AOT",
       "Execute typed source helper calls in real Windows Native AOT",
       "Execute typed statement-bodied helpers in real Windows Native AOT",
       "Verify typed bindings in executed Windows Native AOT",
       "Execute shared five-backend native.add source in real Windows Native AOT",
       "Execute shared native.precedence in Windows Native AOT",
+      "Execute typed Integer.rem guest in Windows Native AOT",
+      "Execute checked Integer.pow and bitXor in Windows Native AOT",
       "Emit exact-head Windows Native AOT run receipt",
       "Upload exact-head Windows Native AOT receipt",
+      "Upload signed64 remainder native executables",
       "Upload native executable"
     ],
     "linux-aot-diagnostic": [
@@ -61,6 +88,7 @@ const requiredByWorkflow = {
       "Confirm checked-out exact PR head",
       "Check installed Windows Native AOT toolchain",
       "Run .NET compiler and runtime regression harness",
+      "Compile verified C# and F# source on trusted exact-head runner",
       "Verify real scalar and experimental structured static facts",
       "Publish and verify released Native AOT compiler",
       "Execute real published Windows Native AOT application",
@@ -77,21 +105,34 @@ const requiredByWorkflow = {
 };
 
 const requiredPathByWorkflow = {
+  "Strict .NET Linux x64 Native AOT": ".github/workflows/strict-linux-native-aot.yml",
   "Windows Native AOT": ".github/workflows/windows-native-aot.yml",
   "Integration declaration integrity": ".github/workflows/integration-declarations.yml"
 };
 // Stable IDs verified against the source repository's actual Actions runs.
 // A same-name or same-path spoof cannot replace the originating workflow.
 const requiredWorkflowIdByWorkflow = {
+  "Strict .NET Linux x64 Native AOT": 398765873,
   "Windows Native AOT": 384715065,
   "Integration declaration integrity": 388530125
 };
+// Reject ambiguous/invisible names in independently acquired CI metadata.
+const evidenceLabel = value => typeof value === "string" &&
+  value.length > 0 && value.length <= 250 && value === value.trim() &&
+  value.normalize("NFKC") === value &&
+  !/[\p{C}\p{M}]/u.test(value);
+
 export function verifyEvidence(run, response, expected) {
   const errors = [];
   const fail = (condition, explanation) => { if (!condition) errors.push(explanation); };
   const hex = /^[a-f0-9]{40}$/i;
   fail(hex.test(expected.head), "expected head must be a full 40-digit SHA");
   fail(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(expected.repo), "invalid expected repository");
+  // All supported workflows are originating-source .NET checks. Matching
+  // caller-provided expected.repo and run.repository is insufficient to
+  // authorize a private-code transfer or qualify an alternate-org canary.
+  fail(expected.repo === "ores-truffle-oreslang/oreslang-source.net",
+    "native parity evidence requires the originating source repository");
   fail(Number.isSafeInteger(expected.runId) && expected.runId > 0, "expected run ID required");
   fail(Number.isSafeInteger(expected.attempt) && expected.attempt > 0, "expected attempt required");
   fail(Object.hasOwn(requiredByWorkflow,expected.workflow),"unrecognized workflow");
@@ -135,6 +176,11 @@ export function verifyEvidence(run, response, expected) {
     fail(job.run_id === expected.runId, `job ${job.name} belongs to different run`);
     fail(job.run_attempt === expected.attempt, `job ${job.name} belongs to different attempt`);
     fail(job.head_sha === expected.head, `job ${job.name} has different source head`);
+    // Every successful job must have an assigned runner, not only strict Linux.
+    if (job.status === "completed" && job.conclusion === "success")
+      fail(Number.isSafeInteger(job.runner_id) && job.runner_id > 0 &&
+        evidenceLabel(job.runner_name),
+        `job ${job.name} has no allocated runner`);
   }
   for (const [name, stepsRequired] of Object.entries(requirements)) {
     const matches=jobs.filter(job=>job && job.name===name);
@@ -143,6 +189,8 @@ export function verifyEvidence(run, response, expected) {
     if (matches.length!==1) continue;
     const job=matches[0];
     if (disabledOptional(job)) continue;
+    if (expected.workflow === "Strict .NET Linux x64 Native AOT")
+      fail(Number.isSafeInteger(job.runner_id) && job.runner_id > 0, "strict Linux runner was not allocated");
     fail(job.status==="completed" && job.conclusion==="success", `job ${name} not successful`);
     const steps=job.steps;
     if (!Array.isArray(steps) || steps.length===0) {
@@ -177,6 +225,33 @@ export function verifyEvidence(run, response, expected) {
       if (disabledOptional(job)) continue;
       fail(job.status==="completed" && job.conclusion==="success",
         `extra job ${job.name} is not successful`);
+      // One successful step cannot conceal failed, skipped, malformed or
+      // duplicated siblings; inspect all steps even in unrecognized jobs.
+      if (!Array.isArray(job.steps) || job.steps.length === 0) {
+        errors.push(`extra job ${job.name} has no completed executable step`);
+        continue;
+      }
+      const numbers = new Set(), names = new Set();
+      let executed = 0;
+      for (const step of job.steps) {
+        if (!step || typeof step !== "object" || Array.isArray(step) ||
+            !Number.isSafeInteger(step.number) || step.number <= 0 ||
+            !evidenceLabel(step.name)) {
+          errors.push(`extra job ${job.name} has malformed step`);
+          continue;
+        }
+        fail(!numbers.has(step.number), `extra job ${job.name} has duplicate step number`);
+        fail(!names.has(step.name), `extra job ${job.name} has duplicate step name`);
+        numbers.add(step.number); names.add(step.name);
+        const passed = step.status === "completed" && step.conclusion === "success";
+        fail(passed, `extra job ${job.name} has non-successful step: ${step.name}`);
+        const name = step.name.replace(/\s+/g, " ").toLowerCase();
+        if (passed &&
+            !["set up job", "complete job", "initialize containers",
+              "start containers", "stop containers"].includes(name) &&
+            !/^(?:pre|post) /.test(name)) executed++;
+      }
+      fail(executed > 0, `extra job ${job.name} has no completed executable step`);
     }
   }
   return errors;

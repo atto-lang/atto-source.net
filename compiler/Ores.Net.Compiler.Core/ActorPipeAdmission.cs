@@ -22,6 +22,7 @@ internal static class ActorPipeAdmission
             bool staticNamespace = threeBack == "Actor" ||
                                    (threeBack == "ActorUtils" && current == "pipe");
             bool actorFactory = (left == "." && actorNamespace) ||
+                                (left == "::" && actorNamespace) || // "::" lexed as one token
                                 (left == ":" && twoBack == ":" && staticNamespace);
             if (actorFactory && (right is "(" or "<"))
                 return true;
@@ -30,11 +31,14 @@ internal static class ActorPipeAdmission
         // Distinct from functional '|>': this is the infix actor-link keyword.
         // A syntactically expression-like pair must not become a scalar call
         // or an implicitly unbounded host-only pipeline.
-        return current == "pipe" && EndsExpression(left) && StartsExpression(right);
+        bool stageOnLeft = EndsExpression(left) || left == "transform";
+        bool stageOnRight = StartsExpression(right) || right == "transform";
+        return (current is "pipe" or "rpipe") &&
+            stageOnLeft && stageOnRight;
     }
 
-    internal static FormatException Unsupported(int offset) => new(
-        $"{Diagnostic}: actor 'pipe' requires a typed ActorGraph, owned ActorRefs, " +
+    internal static FormatException Unsupported(int offset, string direction = "pipe") => new(
+        $"{Diagnostic}: actor '{direction}' requires a typed ActorGraph, owned ActorRefs, " +
         "supervisor-bound startup, bounded mailbox admission, atomic link " +
         $"publication and Native AOT guest lowering at offset {offset}");
 

@@ -1,0 +1,8 @@
+// FAIL-CLOSED: stdout integer overload cannot accept binary64 without type check.
+fnc quotient(int a, int b): float {
+  return a / b;
+}
+pub fnc main(): int {
+  stdio.println(quotient(5, 2));
+  return 0;
+}

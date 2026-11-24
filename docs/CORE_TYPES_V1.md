@@ -1,0 +1,21 @@
+# core/types v1 — .NET CIL/NativeAOT
+
+This backend owns its own `core/types.atto`; it imports no other backend's standard library source.
+
+`int` is signed i64. The module supplies logical scalar value widths, signed 64-bit extrema, and `fits_i8/i16/i32/i64/u8/u16/u32/u64(int)` range checks. These predicates do **not** create narrowed values, prove sized integer compiler enforcement, reveal object/ABI layouts, or perform allocations/host reflection. `fits_u64` only admits nonnegative signed-int inputs.
+
+`void` is a valueless return marker, not an inhabited `Unit`. A future `Unit` singleton, opaque compiler-minted `TypeId`, and static `TypeInfo<T>` metadata require separately verified backend compiler support; user strings/numbers must not substitute for nominal identity.
+
+Conformance target: compile and execute `tests/fixtures/core-types-v1/edge-positive.atto` linked to this source (exit 0); compiler-reject `void-value-negative.atto` with no artifact. Record exact-head, target/toolchain, actual runner steps and failures. **NOT_EXECUTED**: no compiler/guest evidence has been established for this PR. Do not infer AOT or cross-compiler parity from staged source or source-free checks.
+
+## Namespace-only source layout
+
+The canonical Atto `.atto` file uses the file-level `use namespace types;` declaration and public top-level functions, **not** `define module types`. Namespace is source identity, not a dependency import: consumers must use an explicit static import. This changes no runtime allocation or intrinsic guarantee. Parsing, linked guest execution and negative fixture rejection are distinct gates and remain NOT_EXECUTED until the compiler actually runs.
+
+## Exact-head executable compiler admission gate
+
+The `core-types-native-compiler-admission` Actions job attempts to consume the unchanged `core/types.atto` with this repository's **real** compiler. The source-only oracle is insufficient. The job fails if the compiler rejects any required syntax; no host-model fallback or skip is permitted. This backend currently has an independently diagnosed namespace/boolean/type-lowering gap, so a green compiled-parity result is **not** claimed. The initial test proves CIL compilation only; full guest execution and NativeAOT require separate gates if it genuinely executes and succeeds, and deeper runtime and 8 compiler-negative fixture tests remain separate work. Do not merge until the real compiled positive/negative and target-appropriate execution gates pass on this exact PR head.
+
+## CIL namespace header validation and remaining scalar work
+
+The native .NET CIL parser now recognizes `use namespace types;` as file header metadata, once and before declarations. A real compiler CIL positive case `net-namespace-positive.atto` must emit a nonempty managed DLL, while duplicate/late headers must fail with `E_NAMESPACE_DUPLICATE` or `E_NAMESPACE_HEADER_ORDER` and leave no DLL. The workflow still attempts to compile the **unchanged full `core/types.atto`** and fails rather than treating this header-only subset as semantic parity; boolean function returns, comparisons and predicate conjunction lowering remain required. Native AOT and execution of the full library remain `NOT_EXECUTED` until proven separately.

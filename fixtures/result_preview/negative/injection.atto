@@ -1,0 +1,1 @@
+pub fnc main(): Result<int,Error> { return Err(Error("bad\");evil()")); }

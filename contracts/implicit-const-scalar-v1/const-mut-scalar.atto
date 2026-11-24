@@ -1,0 +1,1 @@
+pub fnc main(): int { const mut int x = 42; return x; }

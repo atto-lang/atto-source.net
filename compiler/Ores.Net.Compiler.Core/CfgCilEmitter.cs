@@ -36,7 +36,8 @@ internal static class CfgCilEmitter
             var blocks = graph.Blocks;
             int valueCount = blocks.Sum(b => b.Parameters.Count + b.Instructions.Count);
             int scratchCount = blocks.Sum(b => b.Parameters.Count);
-            if (valueCount is <= 0 or > OresCfgVerifier.MaxValues ||
+            if ((valueCount == 0 && graph.ResultType != IrValueType.Void) ||
+                valueCount > OresCfgVerifier.MaxValues ||
                 scratchCount > OresCfgVerifier.MaxValues)
                 throw new FormatException("CFG CIL local slot budget exceeded");
 
@@ -139,6 +140,28 @@ internal static class CfgCilEmitter
                         case CfgOpcode.ConstantBool:
                             il.LoadConstantI4(op.BoolConstant!.Value ? 1 : 0);
                             break;
+                        case CfgOpcode.ArrayIndexValidI64:
+                        {
+                            // Exactly 0 <= signed index < fixed length, with
+                            // no unchecked address calculation or arithmetic
+                            // overflow. Both branches have empty IL stacks.
+                            var invalid = il.DefineLabel();
+                            var finish = il.DefineLabel();
+                            il.LoadLocal(op.Left!.Value);
+                            il.LoadConstantI8(0);
+                            il.OpCode(ILOpCode.Clt);
+                            il.Branch(ILOpCode.Brtrue, invalid);
+                            il.LoadLocal(op.Left.Value);
+                            il.LoadConstantI8(op.I64Constant!.Value);
+                            il.OpCode(ILOpCode.Clt);
+                            il.StoreLocal(op.ResultId);
+                            il.Branch(ILOpCode.Br, finish);
+                            il.MarkLabel(invalid);
+                            il.LoadConstantI4(0);
+                            il.StoreLocal(op.ResultId);
+                            il.MarkLabel(finish);
+                            continue;
+                        }
                         case CfgOpcode.OptionEqualI64:
                         {
                             // Short circuit on tags. Never inspect a None's
@@ -194,6 +217,29 @@ internal static class CfgCilEmitter
                             il.MarkLabel(end);
                             continue;
                         }
+                        case CfgOpcode.ShiftLeftI64:
+                        case CfgOpcode.ShiftRightLogicalI64:
+                        case CfgOpcode.ShiftRightArithmeticI64:
+                            // Distance guard without any MemberRef: 63 - d as
+                            // unsigned overflows exactly when d is outside
+                            // 0..63 (negative d is a huge unsigned value), and
+                            // raises the same checked OverflowException as the
+                            // checked arithmetic opcodes.
+                            il.LoadConstantI8(63);
+                            il.LoadLocal(op.Right!.Value);
+                            il.OpCode(ILOpCode.Sub_ovf_un);
+                            il.OpCode(ILOpCode.Pop);
+                            il.LoadLocal(op.Left!.Value);
+                            il.LoadLocal(op.Right!.Value);
+                            // CIL shift amounts are int32; the guard proved 0..63.
+                            il.OpCode(ILOpCode.Conv_i4);
+                            il.OpCode(op.Opcode switch
+                            {
+                                CfgOpcode.ShiftLeftI64 => ILOpCode.Shl,
+                                CfgOpcode.ShiftRightLogicalI64 => ILOpCode.Shr_un,
+                                _ => ILOpCode.Shr
+                            });
+                            break;
                         case CfgOpcode.CheckedAdd:
                         case CfgOpcode.CheckedSubtract:
                         case CfgOpcode.CheckedMultiply:
@@ -247,6 +293,10 @@ internal static class CfgCilEmitter
                 {
                     case CfgReturn returned:
                         il.LoadLocal(returned.ValueId);
+                        il.OpCode(ILOpCode.Ret);
+                        break;
+                    case CfgReturnVoid:
+                        // Void MethodDef signature and empty evaluation stack.
                         il.OpCode(ILOpCode.Ret);
                         break;
                     case CfgJump jump:

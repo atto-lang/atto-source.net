@@ -1,0 +1,7 @@
+pub fnc main(): int {
+    let int seed = 20;
+    val base = infer struct{x: seed, active: true};
+    val next = infer record{...base, y: 22};
+    seed = 99;
+    return next.x + next.y;
+}
