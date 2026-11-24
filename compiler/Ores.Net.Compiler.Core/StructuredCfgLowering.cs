@@ -244,11 +244,64 @@ public static class OresStructuredCfgLowering
                         throw new FormatException("Unbound or unverified Option<int> local");
                     return (value.ValueId, value.PayloadId.Value);
                 }
+                case StructuredCall call when call.Type == IrValueType.OptionI64:
+                {
+                    var (function, parameters, slots) = PrepareCall(call, ref block, variables);
+                    if (!emitCalls)
+                        return OptionParts(InlineReturn(function), ref block, parameters);
+
+                    int result = Emit(block, CfgOpcode.Call, call.Type,
+                        target: call.Name, arguments: slots);
+                    int tag = Emit(block, CfgOpcode.ReadOptionI64Tag, IrValueType.Bool, left: result);
+                    int payload = Emit(block, CfgOpcode.ReadOptionI64Payload, IrValueType.I64, left: result);
+                    return (tag, payload);
+                }
                 default:
                     throw new FormatException(
                         "E_OPTION_I64_ONLY: unverified Option<int> expression");
             }
         }
+
+        private (StructuredFunction Function, Dictionary<string, Binding> Bindings, int[] Slots)
+            PrepareCall(StructuredCall call, ref Block block, Dictionary<string, Binding> variables)
+        {
+            if (!functions.TryGetValue(call.Name, out var function) ||
+                function.ResultType != call.Type || function.Parameters.Count != call.Arguments.Count ||
+                (emitCalls && (callSignatures is null || !callSignatures.ContainsKey(call.Name))))
+                throw new FormatException("Unverified structured helper call");
+
+            var bindings = new Dictionary<string, Binding>(StringComparer.Ordinal);
+            var slots = new List<int>();
+            // Evaluate each source operand once before starting the next one.
+            for (int i = 0; i < call.Arguments.Count; i++)
+            {
+                var parameter = function.Parameters[i];
+                var argument = call.Arguments[i];
+                if (parameter.Type != argument.Type)
+                    throw new FormatException("Unverified structured call argument type");
+                Binding binding;
+                if (argument.Type == IrValueType.OptionI64)
+                {
+                    var parts = OptionParts(argument, ref block, variables);
+                    binding = new Binding(argument.Type, parts.Tag, parts.Payload);
+                }
+                else
+                    binding = new Binding(argument.Type, Expression(argument, ref block, variables));
+
+                if (emitCalls)
+                {
+                    slots.Add(binding.ValueId);
+                    if (binding.PayloadId is int payload) slots.Add(payload);
+                }
+                else bindings.Add(parameter.Name, binding);
+            }
+            return (function, bindings, slots.ToArray());
+        }
+
+        private static StructuredExpr InlineReturn(StructuredFunction function) =>
+            function.ReturnValue ?? throw new FormatException(
+                "Statement-bodied helper requires the independent MethodDef ABI");
+
         private int Expression(StructuredExpr expression, ref Block block,
             Dictionary<string, Binding> variables)
         {
@@ -298,46 +351,13 @@ public static class OresStructuredCfgLowering
                 }
                 case StructuredCall call:
                 {
-                    if (!functions.TryGetValue(call.Name, out var function) ||
-                        function.ResultType != call.Type ||
-                        function.Parameters.Count != call.Arguments.Count ||
-                        (emitCalls && (callSignatures is null || !callSignatures.ContainsKey(call.Name))))
-                        throw new FormatException("Unverified structured helper call");
-
-                    // Evaluate source arguments exactly once in source order.
-                    // Option slots are private tag and payload values, never a
-                    // lossy sentinel or a managed object crossing a guest call.
-                    var parameters = new Dictionary<string, Binding>(StringComparer.Ordinal);
-                    var slots = new List<int>();
-                    for (int i = 0; i < call.Arguments.Count; i++)
-                    {
-                        var parameter = function.Parameters[i];
-                        var argument = call.Arguments[i];
-                        if (parameter.Type != argument.Type)
-                            throw new FormatException("Unverified structured call argument type");
-                        Binding binding;
-                        if (argument.Type == IrValueType.OptionI64)
-                        {
-                            var parts = OptionParts(argument, ref block, variables);
-                            binding = new Binding(argument.Type, parts.Tag, parts.Payload);
-                        }
-                        else
-                            binding = new Binding(argument.Type, Expression(argument, ref block, variables));
-                        if (emitCalls)
-                        {
-                            slots.Add(binding.ValueId);
-                            if (binding.PayloadId is int payload) slots.Add(payload);
-                        }
-                        else parameters.Add(parameter.Name, binding);
-                    }
+                    if (call.Type == IrValueType.OptionI64)
+                        throw new FormatException("Option<int> helper result requires a tagged consumer");
+                    var (function, parameters, slots) = PrepareCall(call, ref block, variables);
                     if (emitCalls)
                         return Emit(block, CfgOpcode.Call, call.Type,
-                            target: call.Name, arguments: slots.ToArray());
-
-                    if (function.ReturnValue is null)
-                        throw new FormatException(
-                            "Statement-bodied helper requires the independent MethodDef ABI");
-                    return Expression(function.ReturnValue, ref block, parameters);
+                            target: call.Name, arguments: slots);
+                    return Expression(InlineReturn(function), ref block, parameters);
                 }
                 case StructuredNegate negate:
                 {
@@ -554,7 +574,14 @@ public static class OresStructuredCfgLowering
                     case StructuredReturn returned:
                     {
                         Block evalBlock = current;
-                        int result = Expression(returned.Value, ref evalBlock, variables);
+                        int result;
+                        if (returned.Value.Type == IrValueType.OptionI64)
+                        {
+                            var parts = OptionParts(returned.Value, ref evalBlock, variables);
+                            result = Emit(evalBlock, CfgOpcode.PackOptionI64, IrValueType.OptionI64,
+                                left: parts.Tag, right: parts.Payload);
+                        }
+                        else result = Expression(returned.Value, ref evalBlock, variables);
                         evalBlock.Terminator = new CfgReturn(result);
                         current = null;
                         break;

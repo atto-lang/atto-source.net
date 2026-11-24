@@ -1249,8 +1249,6 @@ public static partial class OresStructuredParser
                 if (Current.Text == "(")
                     throw Error("Tuple-v2 shorthand return requires typed tuple ownership/ABI lowering");
                 IrValueType resultType = Take("void") ? IrValueType.Void : Type();
-                if (resultType == IrValueType.OptionI64)
-                    throw Error("E_OPTION_ABI_UNSUPPORTED: Option<int> method results need verified two-word ABI");
                 if (resultType == IrValueType.FixedArrayI64)
                     throw Error("E_ARRAY_ABI_UNSUPPORTED: fixed array method results need verified scalar layout ABI");
                 if (name == "main" && entry)
@@ -2526,7 +2524,7 @@ public static partial class OresStructuredParser
                 var node = new StructuredCall(offset, target.Name,
                     Array.AsReadOnly(args.ToArray()), target.ResultType);
                 expressionHeights.Add(node, height);
-                return node;
+                return OptionPostfix(node, depth);
             }
             var binding = Lookup(name, offset);
             if (binding.Kind == StructuredBindingKind.Const && binding.ConstantValue.HasValue)

@@ -14,7 +14,8 @@ oresnet() {
 }
 
 for case in brace-continue:42 keyword-continue:42 keyword-failure:0 short-circuit:42 option-parameter:42 \
-            guard-brace-nested-outer-else:42 keyword-nested-outer-else:42; do
+            guard-brace-nested-outer-else:42 keyword-nested-outer-else:42 \
+            option-result-brace:42 option-result-keyword:42; do
   fixture="${case%%:*}"
   expected="${case#*:}"
   output="$tmp/$fixture"
@@ -36,6 +37,7 @@ done
 
 for case in reject-fallthrough:E_GUARD reject-mixed:E_GUARD reject-nonbool:E_GUARD \
             "reject-option-argument:Typed helper argument type mismatch" \
+            "reject-option-result:Return value does not match function result type" \
             "reject-infix-caret:Reserved AttoLang operator '^'"; do
   fixture="${case%%:*}"
   diagnostic="${case#*:}"

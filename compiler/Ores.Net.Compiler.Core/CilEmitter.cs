@@ -397,6 +397,8 @@ public static class CilEmitter
                     if (method.ResultType == IrValueType.I64) returnType.Type().Int64();
                     else if (method.ResultType == IrValueType.Bool) returnType.Type().Boolean();
                     else if (method.ResultType == IrValueType.Void) returnType.Void();
+                    else if (method.ResultType == IrValueType.OptionI64)
+                        returnType.Type().Type(CfgCilEmitter.OptionResultType, isValueType: true);
                     else throw new FormatException("Unsupported CIL method result");
                 },
                 parameters =>
@@ -470,6 +472,8 @@ public static class CilEmitter
             metadata.GetOrAddString("Oreslang.Generated"),
             metadata.GetOrAddString("OresProgram"), systemObject,
             MetadataTokens.FieldDefinitionHandle(1), run);
+        if (methods.Any(CfgCilEmitter.UsesOptionResult))
+            CfgCilEmitter.DefineOptionResult(metadata, runtime, methods.Length);
         var pe = new ManagedPEBuilder(
             new PEHeaderBuilder(imageCharacteristics:
                 Characteristics.ExecutableImage | Characteristics.Dll),

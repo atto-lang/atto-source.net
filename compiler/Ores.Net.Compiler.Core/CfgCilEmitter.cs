@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
 
@@ -9,12 +10,42 @@ namespace Ores.Net.Compiler;
 /// </summary>
 internal static class CfgCilEmitter
 {
+    internal static readonly TypeDefinitionHandle OptionResultType = MetadataTokens.TypeDefinitionHandle(3);
+    private static readonly FieldDefinitionHandle OptionTag = MetadataTokens.FieldDefinitionHandle(1);
+    private static readonly FieldDefinitionHandle OptionPayload = MetadataTokens.FieldDefinitionHandle(2);
+
+    internal static bool UsesOptionResult(VerifiedCfgFunction graph) =>
+        graph.ResultType == IrValueType.OptionI64 || graph.Blocks.Any(block =>
+            block.Instructions.Any(op => op.Type == IrValueType.OptionI64));
+
+    internal static void DefineOptionResult(MetadataBuilder metadata, AssemblyReferenceHandle runtime,
+        int methodCount)
+    {
+        var valueType = metadata.AddTypeReference(runtime, metadata.GetOrAddString("System"),
+            metadata.GetOrAddString("ValueType"));
+        var tag = new BlobBuilder();
+        new BlobEncoder(tag).FieldSignature().Boolean();
+        var payload = new BlobBuilder();
+        new BlobEncoder(payload).FieldSignature().Int64();
+        if (metadata.AddFieldDefinition(FieldAttributes.Assembly, metadata.GetOrAddString("HasValue"),
+                metadata.GetOrAddBlob(tag)) != OptionTag ||
+            metadata.AddFieldDefinition(FieldAttributes.Assembly, metadata.GetOrAddString("Value"),
+                metadata.GetOrAddBlob(payload)) != OptionPayload ||
+            metadata.AddTypeDefinition(TypeAttributes.NotPublic | TypeAttributes.SequentialLayout |
+                    TypeAttributes.Sealed | TypeAttributes.BeforeFieldInit,
+                metadata.GetOrAddString("Oreslang.Generated"), metadata.GetOrAddString("OptionI64Result"),
+                valueType, OptionTag, MetadataTokens.MethodDefinitionHandle(methodCount + 1)) != OptionResultType)
+            throw new FormatException("CFG Option<int> ABI metadata mismatch");
+    }
+
     public static void EmitLibrary(VerifiedCfgFunction graph, string outputFile)
     {
         ArgumentNullException.ThrowIfNull(graph);
         ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
         if (graph.Parameters.Count != 0 || graph.ResultType != IrValueType.I64)
             throw new FormatException("Standalone CFG CIL requires parameterless i64 Run entry");
+        if (UsesOptionResult(graph))
+            throw new FormatException("Tagged callable results require module CIL emission");
         CilEmitter.EmitLibraryCore(outputFile, (metadata, bodies) =>
             WriteMethod(graph, metadata, bodies, null));
     }
@@ -78,6 +109,7 @@ internal static class CfgCilEmitter
                 {
                     case IrValueType.I64: encoded.Int64(); break;
                     case IrValueType.Bool: encoded.Boolean(); break;
+                    case IrValueType.OptionI64: encoded.Type(OptionResultType, isValueType: true); break;
                     default: throw new FormatException("Unsupported CFG local type");
                 }
             }
@@ -139,6 +171,22 @@ internal static class CfgCilEmitter
                             break;
                         case CfgOpcode.ConstantBool:
                             il.LoadConstantI4(op.BoolConstant!.Value ? 1 : 0);
+                            break;
+                        case CfgOpcode.PackOptionI64:
+                            il.LoadLocalAddress(op.ResultId);
+                            il.LoadLocal(op.Left!.Value);
+                            il.OpCode(ILOpCode.Stfld);
+                            il.Token(OptionTag);
+                            il.LoadLocalAddress(op.ResultId);
+                            il.LoadLocal(op.Right!.Value);
+                            il.OpCode(ILOpCode.Stfld);
+                            il.Token(OptionPayload);
+                            continue;
+                        case CfgOpcode.ReadOptionI64Tag:
+                        case CfgOpcode.ReadOptionI64Payload:
+                            il.LoadLocalAddress(op.Left!.Value);
+                            il.OpCode(ILOpCode.Ldfld);
+                            il.Token(op.Opcode == CfgOpcode.ReadOptionI64Tag ? OptionTag : OptionPayload);
                             break;
                         case CfgOpcode.ArrayIndexValidI64:
                         {

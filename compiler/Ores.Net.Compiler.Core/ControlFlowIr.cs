@@ -32,7 +32,10 @@ public enum CfgOpcode
     BoolNot,
     // Closed Option<int> equality: tags (Bool) and active payloads (I64).
     // All four operands must be verified SSA values in evaluation order.
-    OptionEqualI64
+    OptionEqualI64,
+    PackOptionI64,
+    ReadOptionI64Tag,
+    ReadOptionI64Payload
 }
 
 public readonly record struct CfgParameter(int Id, IrValueType Type);
@@ -125,7 +128,8 @@ public static class OresCfgVerifier
     {
         ArgumentNullException.ThrowIfNull(function);
         if (!Identifier(function.Name) ||
-            function.ResultType is not (IrValueType.I64 or IrValueType.Bool or IrValueType.Void) ||
+            function.ResultType is not (IrValueType.I64 or IrValueType.Bool or IrValueType.Void or
+                IrValueType.OptionI64) ||
             !Identifier(function.Entry))
             throw new FormatException("Invalid CFG function signature");
 
@@ -384,6 +388,25 @@ public static class OresCfgVerifier
                             Use(i, opIndex, op.Arguments[arg], callee.ParameterTypes[arg]);
                         break;
                     }
+                    case CfgOpcode.PackOptionI64:
+                        RequireType(op.Type, IrValueType.OptionI64);
+                        if (op.Left is not int tag || op.Right is not int payload ||
+                            op.I64Constant is not null || op.BoolConstant is not null ||
+                            op.Target is not null || op.Arguments is not null)
+                            throw new FormatException("Malformed CFG Option<int> result");
+                        Use(i, opIndex, tag, IrValueType.Bool);
+                        Use(i, opIndex, payload, IrValueType.I64);
+                        break;
+                    case CfgOpcode.ReadOptionI64Tag:
+                    case CfgOpcode.ReadOptionI64Payload:
+                        RequireType(op.Type, op.Opcode == CfgOpcode.ReadOptionI64Tag
+                            ? IrValueType.Bool : IrValueType.I64);
+                        if (op.Left is not int option || op.Right is not null ||
+                            op.I64Constant is not null || op.BoolConstant is not null ||
+                            op.Target is not null || op.Arguments is not null)
+                            throw new FormatException("Malformed CFG Option<int> result projection");
+                        Use(i, opIndex, option, IrValueType.OptionI64);
+                        break;
                     case CfgOpcode.ArrayIndexValidI64:
                     {
                         RequireType(op.Type, IrValueType.Bool);
@@ -513,7 +536,8 @@ public static class OresCfgVerifier
 
         void AddDefinition(int id, IrValueType type, int block, int instruction)
         {
-            if (id < 0 || type is not (IrValueType.I64 or IrValueType.Bool) ||
+            if (id < 0 || (type is not (IrValueType.I64 or IrValueType.Bool) &&
+                           (type != IrValueType.OptionI64 || instruction < 0)) ||
                 !definitions.TryAdd(id, new Definition(block, instruction, type)))
                 throw new FormatException("Invalid or duplicate CFG SSA definition");
             if (definitions.Count > MaxValues)
