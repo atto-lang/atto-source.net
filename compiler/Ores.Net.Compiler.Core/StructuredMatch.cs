@@ -1,9 +1,11 @@
+using System.Globalization;
+
 namespace Ores.Net.Compiler;
 
 [Flags]
 internal enum MatchTags { Negative = 1, Positive = 2, Any = Negative | Positive }
 
-internal sealed record StructuredMatchArm(MatchTags Tags, string? Binding, IrValueType? BindingType,
+internal sealed record StructuredMatchArm(MatchTags Tags, long? Literal, string? Binding, IrValueType? BindingType,
     StructuredExpr? Guard, IReadOnlyList<StructuredStmt>? Body, StructuredExpr? Value);
 internal sealed record StructuredMatch(StructuredExpr Subject, IReadOnlyList<StructuredMatchArm> Arms,
     IrValueType Type, bool Completes);
@@ -46,18 +48,21 @@ public static partial class OresStructuredParser
             try
             {
                 var subject = Expr(depth + 1);
-                if (subject.Type is not (IrValueType.Bool or IrValueType.OptionI64) && !subject.Type.IsResult())
-                    throw Error("MATCH_DEFAULT_BACKEND_UNSUPPORTED: match requires bool, Option<int> or a closed Result");
+                if (subject.Type is not (IrValueType.I64 or IrValueType.Bool or IrValueType.OptionI64) && !subject.Type.IsResult())
+                    throw Error("MATCH_TYPE_UNSUPPORTED: match requires int, bool, Option<int> or a closed Result");
                 Expect("over");
                 string end = Take("{") ? "}" : "end";
                 var arms = new List<StructuredMatchArm>();
                 MatchTags uncovered = MatchTags.Any;
+                var coveredLiterals = new HashSet<long>();
                 bool completes = !imperative;
                 while (Take("on"))
                 {
                     if (++statements > MaxStatements) throw Error("Structured match statement budget exceeded");
-                    var (tags, binding, bindingType) = ReadMatchPattern(subject.Type);
-                    if ((tags & uncovered) == 0)
+                    var literal = subject.Type == IrValueType.I64 ? ReadMatchLiteral() : null;
+                    var (tags, binding, bindingType) = literal is null
+                        ? ReadMatchPattern(subject.Type) : ((MatchTags)0, null, null);
+                    if (literal is long n ? uncovered == 0 || coveredLiterals.Contains(n) : (tags & uncovered) == 0)
                         throw Error("MATCH_UNREACHABLE_ARM: prior unguarded arms already cover this pattern");
 
                     var scope = new Dictionary<string, LocalBinding>(StringComparer.Ordinal);
@@ -72,6 +77,7 @@ public static partial class OresStructuredParser
                     {
                         var guard = Take("when") ? Expr(depth + 1) : null;
                         if (guard is not null) Require(guard, IrValueType.Bool, "Match guard must be bool");
+                        else if (literal is long covered) coveredLiterals.Add(covered);
                         else uncovered &= ~tags;
                         bool arrow = Take("->");
                         if (imperative)
@@ -81,7 +87,7 @@ public static partial class OresStructuredParser
                             {
                                 var (body, terminal) = Block(depth + 1);
                                 completes |= !terminal || HasArmExit(body);
-                                arms.Add(new StructuredMatchArm(tags, binding, bindingType, guard, body, null));
+                                arms.Add(new StructuredMatchArm(tags, literal, binding, bindingType, guard, body, null));
                             }
                             finally { doMatchDepth--; }
                         }
@@ -103,14 +109,16 @@ public static partial class OresStructuredParser
                                 Expect("}");
                             }
                             else Take(";");
-                            arms.Add(new StructuredMatchArm(tags, binding, bindingType, guard, null, value));
+                            arms.Add(new StructuredMatchArm(tags, literal, binding, bindingType, guard, null, value));
                         }
                     }
                     finally { scopes.RemoveAt(scopes.Count - 1); }
+                    Take(",");
                 }
+                if (Current.Text == "default") throw MatchDefaultError();
+                if (!Take(end)) throw Error("MATCH_SYNTAX: expected 'on' or the end of match");
                 if (uncovered != 0)
                     throw Error("MATCH_NON_EXHAUSTIVE: cover all tags with unguarded arms or add 'on _'");
-                Expect(end);
                 return new StructuredMatch(subject, arms.AsReadOnly(), result!.Value, completes);
             }
             finally { expectedExpressionType = context; }
@@ -126,8 +134,25 @@ public static partial class OresStructuredParser
                 _ => false
             });
 
+        private long? ReadMatchLiteral()
+        {
+            bool negative = Take("-");
+            var token = Current;
+            if (!negative && (token.Text.Length == 0 || !Digit(token.Text[0]))) return null;
+            string digits = token.Text.Replace("_", "", StringComparison.Ordinal);
+            string literal = negative ? "-" + digits : digits;
+            if (!long.TryParse(literal, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out long value))
+                throw Error("Match literal is outside signed int range");
+            index++;
+            return value;
+        }
+
+        private FormatException MatchDefaultError() =>
+            Error("MATCH_DEFAULT_BACKEND_UNSUPPORTED: use 'on _' for a fallback arm");
+
         private (MatchTags Tags, string? Binding, IrValueType? BindingType) ReadMatchPattern(IrValueType subject)
         {
+            if (Current.Text == "default") throw MatchDefaultError();
             if (Take("_")) return (MatchTags.Any, null, null);
             if (subject == IrValueType.Bool)
             {

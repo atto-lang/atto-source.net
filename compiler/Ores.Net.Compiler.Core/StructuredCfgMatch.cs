@@ -27,7 +27,7 @@ public static partial class OresStructuredCfgLowering
             {
                 int value = Expression(match.Subject, ref block, variables);
                 subject = new Binding(match.Subject.Type, value);
-                tag = subject.Type == IrValueType.Bool ? value
+                tag = !subject.Type.IsResult() ? value
                     : Emit(block, CfgOpcode.ResultIsOk, IrValueType.Bool, left: value);
             }
 
@@ -53,15 +53,21 @@ public static partial class OresStructuredCfgLowering
             MatchTags remaining = MatchTags.Any;
             foreach (var arm in match.Arms)
             {
-                bool testsTag = (arm.Tags & remaining) != remaining;
-                Block? next = testsTag || arm.Guard is not null ? NewBlock() : null;
+                bool testsPattern = arm.Literal is not null || (arm.Tags & remaining) != remaining;
+                Block? next = testsPattern || arm.Guard is not null ? NewBlock() : null;
                 Block selected = block;
-                if (testsTag)
+                if (testsPattern)
                 {
                     selected = NewBlock();
-                    bool positive = arm.Tags == MatchTags.Positive;
-                    block.Terminator = new CfgBranch(tag, positive ? selected.Name : next!.Name, [],
-                        positive ? next!.Name : selected.Name, []);
+                    int condition = tag;
+                    if (arm.Literal is long literal)
+                    {
+                        int constant = Emit(block, CfgOpcode.ConstantI64, IrValueType.I64, value: literal);
+                        condition = Emit(block, CfgOpcode.EqualI64, IrValueType.Bool, left: subject.ValueId, right: constant);
+                    }
+                    bool inverted = arm.Tags == MatchTags.Negative;
+                    block.Terminator = new CfgBranch(condition, inverted ? next!.Name : selected.Name, [],
+                        inverted ? selected.Name : next!.Name, []);
                 }
 
                 var environment = new Dictionary<string, Binding>(variables, StringComparer.Ordinal);

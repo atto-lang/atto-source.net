@@ -6,7 +6,7 @@ fnc choose(bool enabled): int {
         on None -> { return; }
         on Some(n) -> { count = n; ^ void; }
       end
-      if count > 0 { count = count + 1; return void; }
+      if count > 0 { count = count + 1; return void; } fi
       count = 99;
     }
     on false { count = 1; }

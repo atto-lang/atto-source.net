@@ -12,7 +12,7 @@ dotnet build "$compiler" -c Release
 oresnet() { dotnet run --project "$compiler" -c Release --no-build -- "$@"; }
 
 for case in arithmetic:0:42 throw-identity:0:42 option-payload:0:42 callable-and-text-error:0:42 \
-    match-error:0:7 match-guarded:0:42 match-void:0:42 \
+    match-error:0:7 match-guarded:0:42 match-void:0:42 match-i64:0:42 \
     'panic-bypasses-trap:70:Oreslang panic' 'raise-bypasses-trap:70:raise bypasses trap' \
     'unhandled-division:70:Oreslang division by zero' 'unhandled-remainder:70:Oreslang division by zero'; do
   IFS=: read -r name expected_status expected_text <<< "$case"

@@ -1,0 +1,14 @@
+fnc choose(int n, bool first): int {
+  val int branch = match<int> n over
+    on -9223372036854775808 when first -> { return 40; }
+    on -9223372036854775808 -> { ^ 20; }
+    on 1 -> { return 1; }
+    on unexpected -> { return unexpected; }
+  end;
+  return branch + 1;
+}
+
+pub fnc main(): int {
+  return choose(-9223372036854775808, true) + choose(-9223372036854775808, false)
+    + choose(1, false) + choose(7, false) - 30;
+}

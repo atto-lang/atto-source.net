@@ -1,17 +1,17 @@
 fnc option(bool present): Option<int> {
-  if present { return Some(40); }
+  if present { return Some(40); } fi
   return None;
 }
 
-fnc select(bool present, int delta): int {
+fnc score(bool present, int delta): int {
   val Result<int, Error> captured = trap! (match<int> option(present) over
-    on Some(n) when n < 0 -> { return 1 / 0; }
-    on Some(n) -> { ^ n + delta; }
+    on Some(n) when 40 / n > 1 -> { return 999; }
+    on Some(n) -> { return n + delta; }
     on None -> { return delta; }
   end);
   return captured.unwrap() + 1;
 }
 
 pub fnc main(): int {
-  return select(true, 1) + select(false, 1) - 2;
+  return score(true, 1) + score(false, 1) - 2;
 }
