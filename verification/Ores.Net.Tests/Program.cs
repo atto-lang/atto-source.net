@@ -945,7 +945,8 @@ try
     throw new Exception("Legacy rt borrow mut spelling was admitted");
 }
 catch (FormatException ex) when
-    (ex.Message.Contains("use 'rt mut borrow'", StringComparison.Ordinal)) { }
+    (ex.Message.Contains("'rt mut borrow' requires typed actor-arena lowering",
+        StringComparison.Ordinal)) { }
 
 
 foreach (var forbiddenSource in new[] {

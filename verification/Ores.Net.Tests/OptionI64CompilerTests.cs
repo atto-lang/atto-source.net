@@ -293,6 +293,12 @@ internal static class OptionI64CompilerTests
             42, "name-first scalar helper MethodDef / emitted CIL");
         CheckModuleHelper("fnc sum(int x,y:int):int{return x+y;}fnc main():int{return sum(20,22);}",
             42, "mixed declaration order helper MethodDef / emitted CIL");
+        CheckModuleHelper("fnc get(Option<int> x):int{return x.unwrap_or(0);}fnc main():int{return get(Some(42));}",
+            42, "required named Option type parameter with a present payload");
+        CheckModuleHelper("fnc get(int? x):int{return x.unwrap_or(42);}fnc main():int{return get(None);}",
+            42, "required suffix Option type parameter with an absent payload");
+        CheckModuleHelper("fnc get(x:int?,bias:int):int{return x.unwrap_or(0)+bias;}fnc main():int{return get(Some(40),2);}",
+            42, "name-first Option parameter followed by an independent scalar slot");
         CheckEagerFallbackOverflow();
         CheckTrapOverflowBypassesOption();
         CheckOptionEqualityBoundary(false, 42, false, 7, true,
@@ -327,7 +333,6 @@ internal static class OptionI64CompilerTests
             ("no bool? layout alias", "fnc main():int{val bool? x=None;return 0;}"),
             ("no int?? unproved nesting", "fnc main():int{val int?? x=None;return 0;}"),
             ("no Option<int>? implicit flatten", "fnc main():int{val Option<int>? x=None;return 0;}"),
-            ("no int? helper parameter ABI", "fnc get(int? x):int{return 42;}fnc main():int{return 42;}"),
             ("no int? helper result ABI", "fnc get():int?{return Some(42);}fnc main():int{return 42;}"),
             ("no bare scalar omission", "fnc get(int x?):int{return x;}fnc main():int{return 42;}"),
             ("no unlowered parameter default", "fnc get(int x?=42):int{return x;}fnc main():int{return 42;}"),
@@ -348,9 +353,9 @@ internal static class OptionI64CompilerTests
             ("trap unary precedence is explicit", "fnc main():int{return (trap 7)+2;}"),
             ("no nested Some coercion", "fnc main():int{return Some(None).unwrap_or(0);}"),
             ("no Option<bool> erasure", "fnc main():int{val Option<bool> x=None;return 0;}"),
-            ("no Option helper argument ABI", "fnc get(Option<int> x):int{return 42;}fnc main():int{return 42;}"),
+            ("no omitted required Option argument", "fnc get(Option<int> x):int{return 42;}fnc main():int{return get();}"),
+            ("no implicit scalar argument promotion", "fnc get(Option<int> x):int{return 42;}fnc main():int{return get(42);}"),
             ("no Option helper result ABI", "fnc get():Option<int>{return Some(42);}fnc main():int{return 42;}"),
-            ("no name-first required Option helper ABI", "fnc get(x:int?):int{return 42;}fnc main():int{return 42;}"),
             ("no name-first omittable scalar", "fnc get(x?:int):int{return 42;}fnc main():int{return 42;}"),
             ("no name-first omittable Option", "fnc get(x?:int?):int{return 42;}fnc main():int{return 42;}"),
             ("no name-first scalar default", "fnc get(x?:int=42):int{return x;}fnc main():int{return 42;}"),
