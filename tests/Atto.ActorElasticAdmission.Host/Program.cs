@@ -171,10 +171,36 @@ static class ActorElasticHostProbeV1
         Check(active is not null, "exact generation permitted");
         gate.Stop();
         Check(gate.TryEnter(51, 501, 3, 0, 9) is null, "STOP fences guest entry");
+        Check(gate.CurrentCapacity == 0 && gate.Running == 1, "STOP seals capacity while old lease drains");
         Reject<InvalidOperationException>(gate.Dispose, "cannot retire while physical lease held");
         active!.Dispose();
         gate.Dispose();
         Check(gate.Running == 0, "physical lease retired");
+        Check(gate.HomeLane == -1, "retired worker is no longer a placement hint");
+        _checks++;
+    }
+
+    private static void ReplacementCannotResurrectAnOlderWorkerGeneration()
+    {
+        using var gate = NewGate(71, ActorElasticAdmissionV1.PoolSize);
+        gate.ReplaceHealthyWorkers(new Dictionary<int, long> { [0] = 7 });
+        using (var retiring = gate.TryEnter(71, 501, 3, 0, 7))
+        {
+            Check(retiring is not null, "old worker entered");
+            gate.ReplaceHealthyWorkers(new Dictionary<int, long> { [0] = 8 });
+            Check(gate.TryEnter(71, 501, 3, 0, 8) is null, "replacement waits for the physical slot");
+            gate.ReplaceHealthyWorkers(new Dictionary<int, long>());
+            Reject<ArgumentException>(() => gate.ReplaceHealthyWorkers(
+                new Dictionary<int, long> { [0] = 7, [1] = 10 }), "stale snapshot must be rejected");
+            Check(gate.CurrentCapacity == 0 && gate.Running == 1, "failed update leaves inventory and lease intact");
+            // The rejected snapshot must not advance lane 1 either.
+            gate.ReplaceHealthyWorkers(new Dictionary<int, long> { [0] = 8, [1] = 9 });
+            Check(gate.CurrentCapacity == 2, "both current workers remain available");
+        }
+        Check(gate.TryEnter(71, 501, 3, 0, 7) is null, "old generation still denied");
+        using (var replacement = gate.TryEnter(71, 501, 3, 0, 8))
+            Check(replacement?.WorkerGeneration == 8, "replacement admits only the current generation");
+        Console.WriteLine("ACTOR_WORKER_REPLACEMENT_V1 stale-denied,old-drained,new-admitted");
         _checks++;
     }
 
@@ -209,6 +235,7 @@ static class ActorElasticHostProbeV1
         SerialSuspensionAndMethod();
         PinnedWorkerRetirement();
         WorkerEpochStopAndSecurity();
+        ReplacementCannotResurrectAnOlderWorkerGeneration();
         InvalidPoliciesAndDedicatedDenial();
         Console.WriteLine("HOST_NATIVEAOT_ELASTIC_ADMISSION_PASS checks=" + _checks +
             " assertions=" + _assertions);

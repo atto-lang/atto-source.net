@@ -41,6 +41,7 @@ public sealed class ActorElasticAdmissionV1 : IDisposable
     private readonly ActorElasticAffinityV1 _affinity;
     private readonly bool _dedicatedReservation;
     private readonly Dictionary<int, long> _healthy = new();
+    private readonly long[] _highestWorkerGeneration = new long[MaxWorkerSlots];
     private readonly HashSet<int> _busyLanes = new();
     private readonly HashSet<Lease> _live = new();
     private long _lastTicket;
@@ -106,9 +107,15 @@ public sealed class ActorElasticAdmissionV1 : IDisposable
         lock (_sync)
         {
             if (_stopped) throw new InvalidOperationException("E_ACTOR_STOPPED");
+            foreach (var worker in replacement)
+                if (worker.Value < _highestWorkerGeneration[worker.Key])
+                    throw new ArgumentException("E_STALE_WORKER_INVENTORY", nameof(workers));
             _healthy.Clear();
             foreach (var worker in replacement)
+            {
                 _healthy.Add(worker.Key, worker.Value);
+                _highestWorkerGeneration[worker.Key] = worker.Value;
+            }
             ResetRetiredHomeIfQuiescent();
         }
     }
@@ -241,17 +248,23 @@ public sealed class ActorElasticAdmissionV1 : IDisposable
     /// </summary>
     public void Stop()
     {
-        lock (_sync) _stopped = true;
+        lock (_sync) StopLocked();
+    }
+
+    private void StopLocked()
+    {
+        _stopped = true;
+        _healthy.Clear();
+        ResetRetiredHomeIfQuiescent();
     }
 
     public void Dispose()
     {
         lock (_sync)
         {
-            _stopped = true;
+            StopLocked();
             if (_live.Count != 0)
                 throw new InvalidOperationException("E_PHYSICAL_LEASES_OUTSTANDING");
-            _healthy.Clear();
         }
     }
 }
