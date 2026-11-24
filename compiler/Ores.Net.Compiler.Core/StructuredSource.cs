@@ -159,6 +159,26 @@ public static partial class OresStructuredParser
     public static StructuredProgram Parse(string source)
         => ParseCore(source, null).Program;
 
+    internal static StructuredProgram ParseGuarded(string source)
+        => ParseCore(source, null, productionGuard: true).Program;
+
+    internal static bool HasGuardToken(string source)
+    {
+        if (!source.Contains("guard", StringComparison.Ordinal)) return false;
+        var lexer = new Lexer(source, moduleMode: false);
+        try
+        {
+            while (lexer.Read() is { Text.Length: > 0 } token)
+                if (token.Text == "guard") return true;
+        }
+        catch (FormatException)
+        {
+            // An input outside the CFG lexer before any guard token belongs
+            // to the ordinary frontend and its existing diagnostics.
+        }
+        return false;
+    }
+
     internal static StructuredLinkedUnit ParseLinked(string source, LinkedModuleContext linking)
         => ParseCore(source, linking);
 
@@ -225,7 +245,8 @@ public static partial class OresStructuredParser
         }
     }
 
-    private static StructuredLinkedUnit ParseCore(string source, LinkedModuleContext? linking)
+    private static StructuredLinkedUnit ParseCore(string source, LinkedModuleContext? linking,
+        bool productionGuard = false)
     {
         ValidateSourceInput(source);
         ActorPubSubSourceAdmission.RejectUnsupported(source);
@@ -524,7 +545,7 @@ public static partial class OresStructuredParser
                     $"Tuple-v2 explicit spread requires single-evaluation checked lowering at offset {tokens[i].Offset}");
         }
         RejectUnsupportedMacros(tokens);
-        var reader = new Reader(tokens, linking);
+        var reader = new Reader(tokens, linking, productionGuard);
         return linking is null
             ? new StructuredLinkedUnit(reader.ReadProgram(), null, new Dictionary<string, StructuredFunction>())
             : reader.ReadLinkedUnit();
@@ -984,8 +1005,10 @@ public static partial class OresStructuredParser
         }
     }
 
-    private sealed class Reader(List<Token> tokens, LinkedModuleContext? linking = null)
+    private sealed class Reader(List<Token> tokens, LinkedModuleContext? linking = null,
+        bool productionGuard = false)
     {
+        private bool sawGuard;
         private sealed record LocalBinding(IrValueType Type, StructuredBindingKind Kind,
             long? ConstantValue);
         private readonly List<Dictionary<string, LocalBinding>> scopes = new();
@@ -1135,6 +1158,8 @@ public static partial class OresStructuredParser
         {
             if (declaredModule is not null) Expect("end");
             if (Current.Text.Length != 0) throw Error("Unexpected trailing token");
+            if (productionGuard && !sawGuard)
+                throw Error("E_GUARD: expected a guard statement in the production CFG lane");
             return new StructuredProgram(name, body,
                 new System.Collections.ObjectModel.ReadOnlyDictionary<string, StructuredFunction>(
                     new Dictionary<string, StructuredFunction>(functions, StringComparer.Ordinal)),
@@ -1203,10 +1228,6 @@ public static partial class OresStructuredParser
                             Expect(":");
                         }
                         IrValueType type = Type();
-                        // The two-word tagged Option ABI is not exposed
-                        // across calls until checked signatures exist.
-                        if (type == IrValueType.OptionI64)
-                            throw Error("E_OPTION_ABI_UNSUPPORTED: Option<int> method parameters need verified two-word ABI");
                         if (type == IrValueType.FixedArrayI64)
                             throw Error("E_ARRAY_ABI_UNSUPPORTED: fixed array parameters need verified scalar layout ABI");
                         string parameter = nameFirst ?? Name();
@@ -1220,6 +1241,9 @@ public static partial class OresStructuredParser
                     while (Take(","));
                 }
                 Expect(")");
+                if (parameters.Sum(p => p.Type == IrValueType.OptionI64 ? 2 : 1)
+                    > OresCfgVerifier.MaxMethodParameters)
+                    throw Error("E_OPTION_ABI_BUDGET: flattened parameters exceed the verified method slot limit");
                 bool arrowReturn = Take("->");
                 if (!arrowReturn) Expect(":");
                 if (Current.Text == "(")
@@ -1283,6 +1307,8 @@ public static partial class OresStructuredParser
         private (IReadOnlyList<StructuredStmt> Body, bool Returns) CommaBody(int depth)
         {
             Budget(depth);
+            if (productionGuard)
+                throw Error("RETURN_EXPLICIT_REQUIRED: production guard declarations require a block with an explicit value return");
             Expect("::");
             scopes.Add(new Dictionary<string, LocalBinding>(StringComparer.Ordinal));
             localTypeScopes.Add(new HashSet<string>(StringComparer.Ordinal));
@@ -1384,7 +1410,7 @@ public static partial class OresStructuredParser
         // The existing bracketed CFG path remains available. Canonical ores.core
         // also uses 'if predicate; do ... [else ...] fi' without braces.
         // Close lexical scopes at each arm; never turn source into rewritten C#.
-        private (IReadOnlyList<StructuredStmt> Body, bool Returns) DelimitedArm(int depth)
+        private (IReadOnlyList<StructuredStmt> Body, bool Returns) DelimitedArm(int depth, bool outerElse = false)
         {
             Budget(depth);
             scopes.Add(new Dictionary<string, LocalBinding>(StringComparer.Ordinal));
@@ -1398,7 +1424,7 @@ public static partial class OresStructuredParser
                 if (terminated) throw Error("Unreachable statement");
                 if (++statements > MaxStatements)
                     throw Error("Structured statement budget exceeded");
-                var (statement, returns) = Statement(depth + 1);
+                var (statement, returns) = Statement(depth + 1, outerElse);
                 body.Add(statement);
                 terminated = returns;
             }
@@ -1442,7 +1468,7 @@ public static partial class OresStructuredParser
             }
         }
 
-        private (StructuredStmt Statement, bool Returns) Statement(int depth)
+        private (StructuredStmt Statement, bool Returns) Statement(int depth, bool outerElse = false)
         {
             Budget(depth);
             int at = Current.Offset;
@@ -1661,6 +1687,7 @@ public static partial class OresStructuredParser
             }
             if (Take("guard"))
             {
+                sawGuard = true;
                 // Both forms use the exact same checked CFG and type rules.
                 // A successful guard falls through; a failed one must exit.
                 var condition = Expr(depth + 1);
@@ -1682,7 +1709,9 @@ public static partial class OresStructuredParser
                 if (Current.Text == "{")
                 {
                     (failure, returns) = Block(depth + 1);
-                    if (Current.Text == "else")
+                    // A keyword-delimited enclosing if owns the following
+                    // else when this brace guard is its last statement.
+                    if (!outerElse && Current.Text == "else")
                         throw Error("E_GUARD: a brace guard cannot also have an else/end arm");
                 }
                 else if (Take("else"))
@@ -1889,7 +1918,7 @@ public static partial class OresStructuredParser
                 }
                 IReadOnlyList<StructuredStmt> yes;
                 bool yesReturns;
-                if (delimited) (yes, yesReturns) = DelimitedArm(depth + 1);
+                if (delimited) (yes, yesReturns) = DelimitedArm(depth + 1, outerElse: true);
                 else (yes, yesReturns) = Block(depth + 1);
                 IReadOnlyList<StructuredStmt>? no = null;
                 bool noReturns = false;

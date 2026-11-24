@@ -110,6 +110,7 @@ public sealed record CfgCallSignature(IrValueType ResultType,
 public static class OresCfgVerifier
 {
     public const int MaxBlocks = 128;
+    internal const int MaxMethodParameters = 16;
     public const int MaxValues = OresIrVerifier.MaxInstructions;
     // Edge payloads are not SSA definitions, so they need a separate global
     // bound before copying any untrusted list into the immutable proof.
@@ -130,7 +131,7 @@ public static class OresCfgVerifier
 
         var parameters = function.Parameters ?? Array.Empty<IrValueType>();
         int methodParameterCount = parameters.Count;
-        if (methodParameterCount < 0 || methodParameterCount > 16)
+        if (methodParameterCount < 0 || methodParameterCount > MaxMethodParameters)
             throw new FormatException("Invalid CFG method signature");
         // Never enumerate an untrusted IReadOnlyList supplied to a verifier:
         // its Count can be bounded while its iterator is infinite.
