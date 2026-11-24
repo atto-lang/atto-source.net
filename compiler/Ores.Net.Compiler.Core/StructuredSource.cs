@@ -99,7 +99,10 @@ public sealed record StructuredBreak(int At) : StructuredStmt(At);
 public sealed record StructuredContinue(int At) : StructuredStmt(At);
 public sealed record StructuredProgram(string Name, IReadOnlyList<StructuredStmt> Body,
     IReadOnlyDictionary<string, StructuredFunction>? Functions = null,
-    IReadOnlyList<string>? FunctionOrder = null);
+    IReadOnlyList<string>? FunctionOrder = null)
+{
+    internal IReadOnlyList<VerifiedProtocol> Protocols { get; init; } = Array.Empty<VerifiedProtocol>();
+}
 
 /// <summary>
 /// Narrow checked parser for a single int-returning main, initialized locals,

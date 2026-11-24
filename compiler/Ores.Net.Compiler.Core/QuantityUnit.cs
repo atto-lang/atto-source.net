@@ -38,6 +38,8 @@ internal sealed class QuantityUnit
         : new(dimensions, numerator * factor, denominator);
 
     internal bool HasDimension(QuantityUnit other) => dimensions.SequenceEqual(other.dimensions);
+    internal bool SameUnit(QuantityUnit other) =>
+        numerator == other.numerator && denominator == other.denominator && HasDimension(other);
 
     internal void RequireCompatible(QuantityUnit other)
     {

@@ -30,8 +30,10 @@ public static partial class OresParser
                 if (first.Text == "type")
                     return Reader.IsVerifiedIdentifier(lexer.Read().Text) && lexer.Read().Text == "="
                         && lexer.Read().Text is ("int" or "i32") && lexer.Read().Text == "where";
-                if (first.Text != "define" || lexer.Read().Text is not ("dimension" or "unit"))
-                    return false;
+                if (first.Text != "define") return false;
+                Token kind = lexer.Read();
+                if (kind.Text == "protocol") return true;
+                if (kind.Text is not ("dimension" or "unit")) return false;
                 Token next;
                 do
                 {
@@ -177,6 +179,9 @@ public static partial class OresParser
         {
             ParseQuantityDeclarations();
             while (AtRefinedQuantityAlias()) ParseRefinementAlias();
+            var protocols = new List<VerifiedProtocol>();
+            var protocolNames = new HashSet<string>(StringComparer.Ordinal);
+            while (AtProtocolDeclaration()) protocols.Add(ParseProtocolDeclaration(protocolNames));
             var functions = new Dictionary<string, StructuredFunction>(StringComparer.Ordinal);
             var order = new List<string>();
             while (Current.Text.Length != 0)
@@ -289,7 +294,10 @@ public static partial class OresParser
                 {
                     if (Current.Text.Length != 0)
                         throw new FormatException("E_REFINEMENT_SCOPE: main must be the final verified function");
-                    return new StructuredProgram(name, body, functions, order);
+                    return new StructuredProgram(name, body, functions, order)
+                    {
+                        Protocols = protocols.AsReadOnly(),
+                    };
                 }
                 functions.Add(name, new StructuredFunction(name, parameters, IrValueType.I64,
                     ReturnValue: null, Body: body));
