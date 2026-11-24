@@ -657,6 +657,7 @@ public static partial class OresParser
                     (text[_i] is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_'))
                     _i++;
                 var word = text[start.._i];
+                _i = ActorPipeAdmission.ReadBang(text, word, _i);
                 if (word == "select" &&
                     StaticSelectAdmission.FollowedByStaticSelect(text, start))
                     throw StaticSelectAdmission.Unsupported(start);
@@ -742,7 +743,7 @@ public static partial class OresParser
                 if (word is "gen" or "generator")
                     throw new FormatException(
                         $"generator declarations require iterator-frame and continuation lowering in .NET Native AOT backend at offset {start}");
-                return new Token(word, start);
+                return new Token(text[start.._i], start);
             }
             if (ch == '"')
             {

@@ -6,7 +6,24 @@ internal static class ActorPipeAdmission
 {
     internal const string Diagnostic = "E_ACTOR_PIPE_BACKEND_UNSUPPORTED";
 
-    // 'pipe' is contextual in AttoLang: a user function, local or field named
+    internal static bool IsForward(string text) => text is "pipe" or "pipe!";
+    internal static bool IsReverse(string text) => text is "rpipe" or "rpipe!";
+
+    internal static int ReadBang(string source, string word, int end)
+    {
+        if (word is not ("pipe" or "rpipe") ||
+            end == source.Length || source[end] != '!')
+            return end;
+
+        int after = end + 1;
+        if (after < source.Length &&
+            (char.IsLetterOrDigit(source[after]) || source[after] is '_' or '!'))
+            throw new FormatException(
+                $"E_PIPE_BANG_BOUNDARY: '{word}!' requires a token boundary at offset {end - word.Length}");
+        return after;
+    }
+
+    // 'pipe' and 'rpipe' are contextual in AttoLang: a user function, local or field named
     // pipe is not itself an actor graph. Inputs are already lexed (including
     // nested-comment removal), so no raw-source scans or regexes are needed.
     internal static bool IsReservedForm(
@@ -33,7 +50,7 @@ internal static class ActorPipeAdmission
         // or an implicitly unbounded host-only pipeline.
         bool stageOnLeft = EndsExpression(left) || left == "transform";
         bool stageOnRight = StartsExpression(right) || right == "transform";
-        return (current is "pipe" or "rpipe") &&
+        return (IsForward(current) || IsReverse(current)) &&
             stageOnLeft && stageOnRight;
     }
 
@@ -51,7 +68,7 @@ internal static class ActorPipeAdmission
          text is not ("define" or "pub" or "fnc" or "let" or "val" or "const" or
                       "final" or "return" or "if" or "else" or "then" or "fi" or
                       "while" or "for" or "do" or "as" or "end" or "spawn" or
-                      "actor" or "class" or "transform" or "pipe" or "connect"));
+                      "actor" or "class" or "transform" or "pipe" or "pipe!" or "rpipe" or "rpipe!" or "connect"));
 
     private static bool StartsExpression(string text) =>
         text == "(" ||
@@ -59,5 +76,5 @@ internal static class ActorPipeAdmission
          text is not ("define" or "pub" or "fnc" or "let" or "val" or "const" or
                       "final" or "return" or "if" or "else" or "then" or "fi" or
                       "while" or "for" or "do" or "as" or "end" or "actor" or
-                      "class" or "transform" or "pipe" or "connect"));
+                      "class" or "transform" or "pipe" or "pipe!" or "rpipe" or "rpipe!" or "connect"));
 }

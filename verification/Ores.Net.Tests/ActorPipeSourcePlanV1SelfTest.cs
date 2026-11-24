@@ -24,6 +24,16 @@ internal static class ActorPipeSourcePlanV1SelfTest
                 plan.InputMessage == 2, "owned edge and literal admission");
         Require(plan.Edges.Count == 1 && plan.Edges[0] == plan.Edge,
             "legacy two-stage edge must also appear in ordered edge list");
+        // Reversing the written chain with rpipe must preserve DATA edge
+        // direction, scalar CIL and the source-only checked ingress.
+        string reversed = guest.Replace("producer pipe consumer;",
+            "consumer rpipe producer;", StringComparison.Ordinal);
+        var reversePlan = OresStructuredParser.PlanActorPipeV1(reversed);
+        Require(reversePlan.Edges.Select(edge => (edge.ProducerBinding, edge.ConsumerBinding))
+                .SequenceEqual(plan.Edges.Select(edge => (edge.ProducerBinding, edge.ConsumerBinding))) &&
+                reversePlan.ScalarOracleSource == plan.ScalarOracleSource &&
+                reversePlan.InputMessage == plan.InputMessage,
+            "rpipe must preserve typed source-to-sink graph and checked CIL oracle");
         Require(ActorPipeGraphV1.Evidence == "TYPED_SCALAR_ORACLE_ONLY_NOT_ACTOR_EXECUTION",
             "must never certify actor execution via scalar oracle");
 
@@ -58,6 +68,10 @@ internal static class ActorPipeSourcePlanV1SelfTest
         {
             (guest.Replace("producer pipe consumer;", "consumer pipe producer;",
                 StringComparison.Ordinal), "reverse pipe edge"),
+            (guest.Replace("producer pipe consumer;", "producer rpipe consumer;",
+                StringComparison.Ordinal), "reversed direction without reverse order"),
+            (guest.Replace("producer pipe consumer;", "consumer rpipe consumer;",
+                StringComparison.Ordinal), "reverse duplicate endpoint"),
             (guest.Replace("producer pipe consumer;", "producer pipe producer;",
                 StringComparison.Ordinal), "self-cycle"),
             (guest.Replace("producer pipe consumer;", "producer pipe consumer; producer pipe consumer;",
@@ -103,6 +117,14 @@ internal static class ActorPipeSourcePlanV1SelfTest
         var threePlan = OresStructuredParser.PlanActorPipeV1(three);
         Require(threePlan.Stages.Count == 3 && threePlan.Edges.Count == 2,
             "three-stage source plan must preserve two ordered edges");
+        string threeReverse = three.Replace("source pipe middle pipe sink;",
+            "sink rpipe middle rpipe source;", StringComparison.Ordinal);
+        var reverseThree = OresStructuredParser.PlanActorPipeV1(threeReverse);
+        Require(reverseThree.Edges.Select(edge => (edge.ProducerBinding, edge.ConsumerBinding))
+                .SequenceEqual(threePlan.Edges.Select(edge => (edge.ProducerBinding, edge.ConsumerBinding))) &&
+                reverseThree.ScalarOracleSource == threePlan.ScalarOracleSource &&
+                reverseThree.InputMessage == threePlan.InputMessage,
+            "three-stage rpipe must keep source→middle→sink typed CIL graph");
         Require(threePlan.Edges[0].ProducerBinding == "source" &&
                 threePlan.Edges[0].ConsumerBinding == "middle" &&
                 threePlan.Edges[1].ProducerBinding == "middle" &&
@@ -163,18 +185,32 @@ internal static class ActorPipeSourcePlanV1SelfTest
         finally { if (File.Exists(thirdAssembly)) File.Delete(thirdAssembly); }
 
         foreach (string alias in new[] { "source | middle pipe sink;",
-                                         "source pipe middle | sink;" })
+                                         "source pipe middle | sink;",
+                                         "source pipe! middle pipe sink;",
+                                         "source pipe middle pipe! sink;",
+                                         "sink rpipe! middle rpipe source;",
+                                         "sink rpipe middle rpipe! source;" })
         {
             string altered = three.Replace("source pipe middle pipe sink;",
                 alias, StringComparison.Ordinal);
+            var aliasPlan = OresStructuredParser.PlanActorPipeV1(altered);
             Require(altered != three &&
-                    OresStructuredParser.PlanActorPipeV1(altered).Edges.Count == 2,
-                "contextual | and pipe alias share typed ordered graph plan");
+                    aliasPlan.Edges.Select(edge => (edge.ProducerBinding, edge.ConsumerBinding))
+                        .SequenceEqual(threePlan.Edges.Select(edge =>
+                            (edge.ProducerBinding, edge.ConsumerBinding))) &&
+                    aliasPlan.ScalarOracleSource == threePlan.ScalarOracleSource,
+                "aliases share typed ordered graph plan and handlers");
         }
         foreach (var (wrong, reason) in new[] {
             (three.Replace("source pipe middle pipe sink;",
                 "source pipe sink pipe middle;", StringComparison.Ordinal),
                 "out-of-order pipeline"),
+            (three.Replace("source pipe middle pipe sink;",
+                "sink rpipe source rpipe middle;", StringComparison.Ordinal),
+                "out-of-order reverse pipeline"),
+            (three.Replace("source pipe middle pipe sink;",
+                "sink rpipe! middle pipe! source;", StringComparison.Ordinal),
+                "mixed direction pipeline"),
             (three.Replace("source pipe middle pipe sink;",
                 "source pipe middle pipe middle;", StringComparison.Ordinal),
                 "duplicated downstream stage"),

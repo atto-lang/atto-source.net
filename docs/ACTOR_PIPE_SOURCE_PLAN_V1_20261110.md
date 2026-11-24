@@ -1,19 +1,15 @@
-# NativeAOT actor pipe: typed source-plan V1 checkpoint (2026-11-10)
+# Bounded actor pipe source plan and compilation
 
-**Status: DRAFT, NOT_EXECUTED, NOT_CERTIFIED for actor execution.**
-Parent: [#440](https://github.com/ores-truffle-oreslang/oreslang-source.net/pull/440)
-at `385147895dd8dc547f7481daf156de6033b1b016`.
-
-## What this branch implements
+## Source profile
 
 - Adds a deliberately opt-in `oresnet plan-actor-pipe INPUT.atto` subcommand.
 - Uses the existing production structured lexer and UTF-8/NUL/UTF-16/token budgets.
-- Parses exactly two source-defined actors with nominal `int` / `bool`
-  `on_message` inputs and outputs; rejects unknown/reused actor names.
+- Parses up to sixteen independently owned actor instances with nominal `int` / `bool`
+  `on_message` inputs and outputs; rejects unknown types and reused bindings.
 - Reuses the verified structured CFG to check the actual source handler
   bodies (checked i64 operations, static type matching, no unchecked host
   effects).
-- Validates two owned spawn bindings, a single ordered typed edge, one
+- Validates owned spawn bindings, one ordered chain of typed edges, one
   checked i64 input send, no direct consumer send, and the restricted
   producer-before-consumer terminal sequence.
 - Preserves source offsets and produces a read-only graph plan.
@@ -25,66 +21,36 @@ at `385147895dd8dc547f7481daf156de6033b1b016`.
   multiple ingress sends, invalid stop order, malformed handler types,
   accidental `|>` conflation and comment handling.
 
-## Strict separation of verification classes
+## Compiler entrypoints
 
-| Evidence | State |
-| --- | --- |
-| Parser/checked CFG and scalar handler CIL tests | AUTHORED, NOT_EXECUTED |
-| Source actor AST/graph preview command | AUTHORED, NOT_EXECUTED |
-| NativeAOT compiler-generated actor dispatch | MISSING |
-| Per-actor private heap and owned mailbox binding | HOST INFRASTRUCTURE ONLY |
-| DATA send/forward and bounded backpressure | NOT_IMPLEMENTED for guest `pipe` |
-| Supervisor CONTROL, panic and cleanup | NOT_IMPLEMENTED for guest `pipe` |
-| Exact-head Linux/Windows NativeAOT compiled actor guests | NOT_EXECUTED |
-| Java/LLVM/.NET parity | NOT_CERTIFIED |
+`plan-actor-pipe` reports `TYPED_SCALAR_ORACLE_ONLY_NOT_ACTOR_EXECUTION` with
+`executable_actor_guest=false` and `native_aot_verified=false`. Use it to inspect
+direction, message ports and source offsets. `pipe!` and `rpipe!` are aliases
+for `pipe` and `rpipe` in this plan. Same-direction edges may use either
+spelling. Mixed directions and malformed adjacent suffixes are rejected.
 
-The opt-in command intentionally reports
-`TYPED_SCALAR_ORACLE_ONLY_NOT_ACTOR_EXECUTION`, with
-`executable_actor_guest=false` and `native_aot_verified=false`.
-Ordinary `oresnet check`, `compile`, `check-structured` and
-`compile-structured` **still reject** actor `pipe` source.
-Do not make a positive guest execution claim from plan/host tests.
+`compile-actor-pipe INPUT.atto --out /absolute/path/OresGenerated.dll` emits
+checked CIL for each guest handler and a statically linked stage dispatch ABI.
+`Ores.Net.ActorPipeNativeHost` links the artifact and registers one private
+actor per stage. Each stage forwards its computed value through the next
+actor's single-message mailbox. The host drains from source to sink and
+reports the final value after every actor and native arena has retired. A
+stage fault fails the run without emitting a value. The compiler rejects
+cyclic handler control flow so an admitted turn can settle.
 
-### Commands for an authorized source-local .NET runner
+The opt-in compiler profile covers a fixed owned chain, one input, synchronous
+`on_message` handlers and generation-bound graceful retirement. Its ABI
+represents int and bool ports as checked 64-bit values. The CLR host uses
+managed scheduler objects and delegates, so this profile carries no
+zero-GC claim. General actor source, suspendable handlers, multi-message
+backpressure, streams, and supervisor CONTROL are outside this profile.
+Functional `|>` and `<|` use separate admission rules.
+
+Run the CoreCLR verification and the standalone NativeAOT verification for
+your native target. The script checks guest results, actual turn counts,
+retirement, fault settlement, compilation failures and native artifact layout.
 
 ```bash
-dotnet run --project verification/Ores.Net.Tests -c Release
-dotnet run --project compiler/Ores.Net.Compiler -c Release -- \
-  plan-actor-pipe tests/fixtures/actor-pipe-two-stage.atto
+bash verification/assert-actor-pipe-guest.sh
+bash verification/assert-actor-pipe-guest.sh osx-arm64
 ```
-
-The plan command is an opt-in diagnostic preview, **not the production
-`compile` path**. Preserve source SHA, PR head SHA, job/run IDs,
-toolchain, platform, stepful logs and emitted CIL receipt.
-
-## Why this does not yet complete actor parity
-
-`ActorRuntime` hosts real per-actor native arenas and authenticated
-`ActorMailbox` queues, but `ActorRuntime.Stop()` presently stops
-a cell and `ActorMailbox.Stop()` discards pending data. It cannot
-provide the LLVM-style "accepted upstream work drains into downstream
-then close" contract. The compiler also does not generate actor
-allocation, entry handlers, mailbox forwarding, cancellation or
-supervisor bindings into static NativeAOT CIL.
-
-Never "fix" this by executing the scalar oracle directly as the source
-`pipe` guest. This would skip actor scheduling and private heaps.
-
-## Smallest next executable slice
-
-1. Implement explicit **drain-and-close** for a *single generation-fenced
-   pipeline*, separate from unconditional abort/stop. Maintain admission
-   closure, accepted vs completed credits, FIFO and scrub-on-abort.
-2. Add graph-owned transactional actor allocation, edge precharge and
-   rollback. Only an authenticated scheduler may forward DATA to the
-   destination mailbox.
-3. Emit static NativeAOT actor callbacks from the checked source
-   handlers; tie each callback to one private arena and minted ActorRef.
-4. Make one producer send `2`, wait for authenticated consumer completion
-   `6` (not just the existing `main() = 0`), drain, and retire.
-5. Run exact-head Linux and Windows native guests with negative
-   capacity, stale-reference, wrong-type, duplicate-edge, aborted-
-   startup, panic-to-supervisor and stop-race cases.
-
-No unapproved cross-org private-source Git-object copying is authorized.
-A zero-step Actions failure is **runner admission failure**, not test execution.

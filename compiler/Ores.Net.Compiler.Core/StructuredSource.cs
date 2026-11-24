@@ -869,6 +869,7 @@ public static partial class OresStructuredParser
                 do { index++; } while (index < source.Length &&
                     (Alpha(source[index]) || Digit(source[index]) || source[index] == '_'));
                 string word = source[offset..index];
+                index = ActorPipeAdmission.ReadBang(source, word, index);
                 if (word == "select" &&
                     StaticSelectAdmission.FollowedByStaticSelect(source, offset))
                     throw StaticSelectAdmission.Unsupported(offset);
