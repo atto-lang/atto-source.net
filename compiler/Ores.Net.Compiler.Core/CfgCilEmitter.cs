@@ -240,6 +240,11 @@ internal static class CfgCilEmitter
                                 _ => ILOpCode.Shr
                             });
                             break;
+                        case CfgOpcode.CheckedI32:
+                            il.LoadLocal(op.Left!.Value);
+                            il.OpCode(ILOpCode.Conv_ovf_i4);
+                            il.OpCode(ILOpCode.Conv_i8);
+                            break;
                         case CfgOpcode.CheckedAdd:
                         case CfgOpcode.CheckedSubtract:
                         case CfgOpcode.CheckedMultiply:

@@ -38,7 +38,9 @@ public enum CfgOpcode
     // shift instruction runs (CIL shifts by >= 64 are unspecified).
     ShiftLeftI64,
     ShiftRightLogicalI64,
-    ShiftRightArithmeticI64
+    ShiftRightArithmeticI64,
+    // Checked signed-i32 range boundary with an i64 SSA representation.
+    CheckedI32
 }
 
 public readonly record struct CfgParameter(int Id, IrValueType Type);
@@ -303,6 +305,7 @@ public static class OresCfgVerifier
                     op.Opcode is CfgOpcode.CheckedAdd or
                         CfgOpcode.CheckedSubtract or
                         CfgOpcode.CheckedMultiply or
+                        CfgOpcode.CheckedI32 or
                         CfgOpcode.ShiftLeftI64 or
                         CfgOpcode.ShiftRightLogicalI64 or
                         CfgOpcode.ShiftRightArithmeticI64 or
@@ -454,6 +457,13 @@ public static class OresCfgVerifier
                             op.Left is not null || op.Right is not null ||
                             op.Target is not null || op.Arguments is not null)
                             throw new FormatException("Malformed CFG bool constant");
+                        break;
+                    case CfgOpcode.CheckedI32:
+                        RequireType(op.Type, IrValueType.I64);
+                        if (op.Left is null || op.Right is not null || op.I64Constant is not null ||
+                            op.BoolConstant is not null || op.Target is not null || op.Arguments is not null)
+                            throw new FormatException("Malformed CFG checked i32 boundary");
+                        Use(i, opIndex, op.Left.Value, IrValueType.I64);
                         break;
                     case CfgOpcode.CheckedAdd:
                     case CfgOpcode.CheckedSubtract:

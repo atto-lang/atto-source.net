@@ -324,6 +324,11 @@ public static class OresStructuredCfgLowering
                             "Statement-bodied helper requires the independent MethodDef ABI");
                     return Expression(function.ReturnValue, ref block, parameters);
                 }
+                case StructuredCheckedI32 check:
+                {
+                    int operand = Expression(check.Value, ref block, variables);
+                    return Emit(block, CfgOpcode.CheckedI32, IrValueType.I64, left: operand);
+                }
                 case StructuredNegate negate:
                 {
                     int zero = Emit(block, CfgOpcode.ConstantI64, IrValueType.I64, value: 0);

@@ -24,6 +24,15 @@ internal readonly record struct VerifiedI64Range
     internal bool Nonpositive => high <= 0;
     internal bool AtMost(VerifiedI64Range right) => high <= right.low;
 
+    internal static VerifiedI64Range SignedI32 => new(int.MinValue, int.MaxValue);
+
+    internal VerifiedI64Range OnNormalResultWithin(VerifiedI64Range carrier)
+    {
+        long first = Math.Max(low, carrier.low);
+        long last = Math.Min(high, carrier.high);
+        return first <= last ? new(first, last) : carrier;
+    }
+
     internal VerifiedI64Range Constrain(string op, long value) => op switch
     {
         "eq" => new(Math.Max(low, value), Math.Min(high, value)),

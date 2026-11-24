@@ -29,7 +29,7 @@ public static partial class OresParser
             {
                 if (first.Text == "type")
                     return Reader.IsVerifiedIdentifier(lexer.Read().Text) && lexer.Read().Text == "="
-                        && lexer.Read().Text == "int" && lexer.Read().Text == "where";
+                        && lexer.Read().Text is ("int" or "i32") && lexer.Read().Text == "where";
                 if (first.Text != "define" || lexer.Read().Text is not ("dimension" or "unit"))
                     return false;
                 Token next;
@@ -51,9 +51,10 @@ public static partial class OresParser
 
     private sealed partial class Reader
     {
-        private sealed record RefinedQuantity(QuantityUnit Unit, VerifiedI64Range Range)
+        private sealed record RefinedQuantity(QuantityUnit Unit, VerifiedI64Range Range, bool I32 = false)
         {
             public static RefinedQuantity Scalar { get; } = new(QuantityUnit.Scalar, VerifiedI64Range.Full);
+            public static RefinedQuantity ScalarI32 { get; } = new(QuantityUnit.Scalar, VerifiedI64Range.SignedI32, true);
 
             public void Require(RefinedQuantity actual, string category, string operation)
             {
@@ -84,19 +85,20 @@ public static partial class OresParser
         {
             var token = Current;
             if (!IsSourceIdentifier(token.Text) || token.Text is
-                "int" or "type" or "fnc" or "val" or "let" or "return" or "pub" or "private" or "self")
+                "int" or "i32" or "type" or "fnc" or "val" or "let" or "return" or "pub" or "private" or "self")
                 throw new FormatException($"E_REFINEMENT_NAME: expected a name at offset {token.Offset}");
             _index++;
             return token.Text;
         }
 
         private bool AtRefinedQuantityAlias() => Current.Text == "type" && _index + 4 < tokens.Count
-            && tokens[_index + 2].Text == "=" && tokens[_index + 3].Text == "int"
+            && tokens[_index + 2].Text == "=" && tokens[_index + 3].Text is ("int" or "i32")
             && tokens[_index + 4].Text == "where";
 
         private RefinedQuantity ReadRefinedType()
         {
             if (Take("int")) return RefinedQuantity.Scalar;
+            if (Take("i32")) return RefinedQuantity.ScalarI32;
             string name = ReadVerifiedName();
             if (!refinementAliases.TryGetValue(name, out var type))
                 throw new FormatException($"E_REFINEMENT_NAME: unknown verified scalar type '{name}'");
@@ -128,12 +130,15 @@ public static partial class OresParser
         private void ParseRefinementAlias()
         {
             Expect("type");
+            if (Current.Text is "int" or "i32")
+                throw new FormatException($"E_REFINEMENT_DUPLICATE: reserved refinement carrier '{Current.Text}'");
             string name = ReadVerifiedName();
             Expect("=");
-            Expect("int");
+            bool i32 = Take("i32");
+            if (!i32) Expect("int");
             Expect("where");
             QuantityUnit? unit = null;
-            var range = VerifiedI64Range.Full;
+            var range = i32 ? VerifiedI64Range.SignedI32 : VerifiedI64Range.Full;
             do
             {
                 if (Take("units"))
@@ -151,7 +156,7 @@ public static partial class OresParser
             } while (Take("and"));
             Expect(";");
             if (refinementAliases.Count >= 128) throw new FormatException("E_REFINEMENT_LIMIT: too many aliases");
-            if (!refinementAliases.TryAdd(name, new(unit ?? QuantityUnit.Scalar, range)))
+            if (!refinementAliases.TryAdd(name, new(unit ?? QuantityUnit.Scalar, range, i32)))
                 throw new FormatException($"E_REFINEMENT_DUPLICATE: duplicate refinement alias '{name}'");
         }
 
@@ -260,7 +265,7 @@ public static partial class OresParser
                     var value = VerifiedSum(0);
                     type.Require(value.Type, "E_REFINEMENT_BINDING", "binding " + local);
                     Expect(";");
-                    if (!verifiedLocals.TryAdd(local, value.Type))
+                    if (!verifiedLocals.TryAdd(local, type with { Range = value.Type.Range }))
                         throw new FormatException("E_REFINEMENT_DUPLICATE: duplicate verified binding");
                     verifiedUpperBounds.Add(local, value.UpperBounds);
                     body.Add(new StructuredLet(at, local, IrValueType.I64, value.Expression, StructuredBindingKind.Val));
@@ -320,7 +325,8 @@ public static partial class OresParser
                 _index++;
                 var right = VerifiedAtom(depth);
                 bool divide = op.Text == "/";
-                if (divide && left.Type.Unit.IsScalar && right.Type.Unit.IsScalar)
+                if (divide && !left.Type.I32 && !right.Type.I32
+                        && left.Type.Unit.IsScalar && right.Type.Unit.IsScalar)
                     throw new FormatException("E_UNIT_SCALAR_DIVISION: two plain int operands use ordinary division");
                 var unit = left.Type.Unit.Combine(right.Type.Unit, divide);
                 var range = divide ? left.Type.Range.Divide(right.Type.Range) : left.Type.Range.Multiply(right.Type.Range);
@@ -333,7 +339,11 @@ public static partial class OresParser
         private static QuantityTerm VerifiedBinary(int at, StructuredOperator op,
             QuantityTerm left, QuantityTerm right, RefinedQuantity type)
         {
-            int height = Math.Max(left.Height, right.Height) + 1;
+            bool i32 = left.Type.I32 || right.Type.I32;
+            var carrier = VerifiedI64Range.SignedI32;
+            if (i32 && (!carrier.Includes(left.Type.Range) || !carrier.Includes(right.Type.Range)))
+                throw new FormatException("E_I32_RANGE: checked i32 arithmetic requires both operands to fit i32");
+            int height = Math.Max(left.Height, right.Height) + (i32 ? 2 : 1);
             if (height >= MaxDepth) throw new FormatException("E_UNIT_LIMIT: quantity expression is too deep");
             bool boundedByLeft = op switch
             {
@@ -343,8 +353,13 @@ public static partial class OresParser
                     && right.Type.Range.Positive && right.Type.Unit.IsScalar,
                 _ => false,
             };
-            return new QuantityTerm(new StructuredBinary(at, op, left.Expression, right.Expression, IrValueType.I64),
-                type, height, boundedByLeft ? left.UpperBounds : null);
+            StructuredExpr value = new StructuredBinary(at, op, left.Expression, right.Expression, IrValueType.I64);
+            if (i32)
+            {
+                value = new StructuredCheckedI32(at, value);
+                type = type with { I32 = true, Range = type.Range.OnNormalResultWithin(carrier) };
+            }
+            return new QuantityTerm(value, type, height, boundedByLeft ? left.UpperBounds : null);
         }
 
         private QuantityTerm VerifiedAtom(int depth)
@@ -363,8 +378,12 @@ public static partial class OresParser
                 if (Current.Text.Replace("_", "", StringComparison.Ordinal).TrimStart('0') == "9223372036854775808")
                     return VerifiedLiteral(negative: true);
                 var term = VerifiedAtom(depth + 1);
-                return new QuantityTerm(new StructuredNegate(at, term.Expression),
-                    term.Type with { Range = VerifiedI64Range.Point(0).Subtract(term.Type.Range) }, term.Height + 1);
+                if (!term.Type.I32)
+                    return new QuantityTerm(new StructuredNegate(at, term.Expression),
+                        term.Type with { Range = VerifiedI64Range.Point(0).Subtract(term.Type.Range) }, term.Height + 1);
+                var zero = new QuantityTerm(new StructuredInt(at, 0), new(term.Type.Unit, VerifiedI64Range.Point(0)));
+                return VerifiedBinary(at, StructuredOperator.Subtract, zero, term,
+                    new(term.Type.Unit, zero.Type.Range.Subtract(term.Type.Range)));
             }
             if (IsSourceIdentifier(Current.Text)) return VerifiedReference(depth);
             return VerifiedLiteral(negative: false);
