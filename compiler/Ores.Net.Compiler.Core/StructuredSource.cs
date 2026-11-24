@@ -892,11 +892,10 @@ public static partial class OresStructuredParser
                 if (word == "unsafe")
                     throw new FormatException(
                         $"unsafe boundary requires checked effects, native grants and Native AOT lowering at offset {offset}");
-                // Reject before the condition is lexed: `guard 1>0` contains
-                // characters this lexer refuses outside module mode.
-                if (word == "guard")
-                    throw new FormatException(
-                        $"GUARD_BACKEND_UNSUPPORTED: early-exit CFG and ownership lowering required at offset {offset}");
+                // The structured CFG frontend admits statically terminal
+                // boolean guards. Its lexer must preserve the real token so
+                // the typed Statement path validates and lowers it below.
+                // The separate shipping scalar lexer remains fail-closed.
                 // Match/default is a true expression grammar extension, not a
                 // valid scalar identifier or CIL fallthrough. This lexer skips
                 // comments before this check; no source-substring blacklist.
@@ -928,11 +927,8 @@ public static partial class OresStructuredParser
                     $"noncanonical '%' source operator; use named Integer.rem/mod at offset {offset}");
             else if (ch == '^')
             {
-                // `^^` is the canonical eager boolean XOR (spec ch.16); single `^`
-                // stays out of the grammar (integer XOR is Integer.bitXor).
-                if (index + 1 < source.Length && source[index + 1] == '^') index += 2;
-                else throw new FormatException(
-                    $"Reserved AttoLang operator '^'; use Integer.bitXor(a, b) at offset {offset}");
+                // The reader admits single caret only in return position.
+                index += index + 1 < source.Length && source[index + 1] == '^' ? 2 : 1;
             }
             else if (ch == '!' && index + 2 < source.Length &&
                      source[index + 1] == 'e' && source[index + 2] == 'q' &&
@@ -1470,6 +1466,41 @@ public static partial class OresStructuredParser
             return (Array.AsReadOnly(body.ToArray()), terminated);
         }
 
+        // Guard's else/end failure arm has its own lexical scope, exactly
+        // like Block({ ... }). It cannot capture or leak local bindings into
+        // the continuation, and all reachable paths must be terminal.
+        private (IReadOnlyList<StructuredStmt> Body, bool Returns) GuardKeywordArm(int depth)
+        {
+            Budget(depth);
+            scopes.Add(new Dictionary<string, LocalBinding>(StringComparer.Ordinal));
+            localTypeScopes.Add(new HashSet<string>(StringComparer.Ordinal));
+            aggregateScopes.Add(new Dictionary<string, StaticAggregate>(StringComparer.Ordinal));
+            try
+            {
+                var body = new List<StructuredStmt>();
+                bool terminated = false;
+                while (Current.Text != "end")
+                {
+                    if (Current.Text.Length == 0 || Current.Text is "}" or "fi")
+                        throw Error("E_GUARD: expected 'end' to close keyword guard");
+                    if (terminated) throw Error("E_GUARD: unreachable statement after terminal failure");
+                    if (++statements > MaxStatements)
+                        throw Error("Structured guard statement budget exceeded");
+                    var (statement, returns) = Statement(depth + 1);
+                    body.Add(statement);
+                    terminated = returns;
+                }
+                Expect("end");
+                return (Array.AsReadOnly(body.ToArray()), terminated);
+            }
+            finally
+            {
+                scopes.RemoveAt(scopes.Count - 1);
+                localTypeScopes.RemoveAt(localTypeScopes.Count - 1);
+                aggregateScopes.RemoveAt(aggregateScopes.Count - 1);
+            }
+        }
+
         private (StructuredStmt Statement, bool Returns) Statement(int depth)
         {
             Budget(depth);
@@ -1687,13 +1718,45 @@ public static partial class OresStructuredParser
                 return (new StructuredLet(at, placeholder, IrValueType.I64,
                     new StructuredInt(at, 0), StructuredBindingKind.Const), false);
             }
-            if (Current.Text == "guard")
-                throw new FormatException(
-                    $"GUARD_BACKEND_UNSUPPORTED: early-exit CFG and ownership lowering required at offset {at}");
-            if (Take("return"))
+            if (Take("guard"))
+            {
+                // Both forms use the exact same checked CFG and type rules.
+                // A successful guard falls through; a failed one must exit.
+                var condition = Expr(depth + 1);
+                Require(condition, IrValueType.Bool, "E_GUARD: condition must be bool");
+                // The comma-separated contract is left-to-right and lazy.
+                // The existing LogicalAnd CFG lowers RHS into a guarded
+                // branch; never eagerly evaluate an unproven later test.
+                while (Take(","))
+                {
+                    var next = Expr(depth + 1);
+                    Require(next, IrValueType.Bool, "E_GUARD: each condition must be bool");
+                    condition = CheckedBinary(at, StructuredOperator.LogicalAnd,
+                        condition, next, IrValueType.Bool);
+                }
+                var inverted = CheckedBinary(at, StructuredOperator.EqualBool,
+                    condition, new StructuredBool(at, false), IrValueType.Bool);
+                IReadOnlyList<StructuredStmt> failure;
+                bool returns;
+                if (Current.Text == "{")
+                {
+                    (failure, returns) = Block(depth + 1);
+                    if (Current.Text == "else")
+                        throw Error("E_GUARD: a brace guard cannot also have an else/end arm");
+                }
+                else if (Take("else"))
+                    (failure, returns) = GuardKeywordArm(depth + 1);
+                else
+                    throw Error("E_GUARD: expected '{ ... }' or 'else ... end'");
+                if (!returns) throw Error("E_GUARD: failure block must return on every path");
+                // A guard does not itself terminate the success continuation.
+                return (new StructuredIf(at, inverted, failure, null), false);
+            }
+            if (Take("return") || Take("^"))
             {
                 if (activeReturnType == IrValueType.Void)
                 {
+                    Take("void");
                     if (Current.Text != ";")
                         throw Error("RETURN_VOID_VALUE: void function cannot return a value");
                     Expect(";");
@@ -2192,6 +2255,8 @@ public static partial class OresStructuredParser
             }
             if (Current.Text == "<|")
                 throw Error("E_VALUE_PIPE_DIRECTION: parenthesize mixed |> and <| applications");
+            if (Current.Text == "^")
+                throw Error("Reserved AttoLang operator '^' in expressions; use Integer.bitXor(a, b)");
             return value;
         }
 
