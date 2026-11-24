@@ -1,0 +1,20 @@
+fnc increment(Option<int> input): Option<int> {
+  return Some(input? + 1);
+}
+
+fnc from_option(Option<int> input): Result<Option<int>, Error> {
+  return trap! increment(input);
+}
+
+fnc forward(Option<int> input): Result<Option<int>, Error> {
+  val result = trap! from_option(input);
+  val Option<int> payload = result?;
+  return Ok(payload);
+}
+
+pub fnc main(): int {
+  val missing = forward(None);
+  guard missing.is_ok() { return 1; }
+  guard missing.unwrap().is_none() { return 2; }
+  return forward(Some(41)).unwrap().unwrap();
+}

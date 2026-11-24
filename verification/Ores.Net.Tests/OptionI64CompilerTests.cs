@@ -130,33 +130,36 @@ internal static class OptionI64CompilerTests
         finally { Directory.Delete(temp, recursive: true); }
     }
 
-    private static void CheckTrapOverflowBypassesOption()
+    private static void CheckTrapUsesTypedResultAndNarrowHandlers()
     {
-        // trap yields Result<int, Error> (spec ch. 7). This backend has no
-        // verified Result/Error lowering, so every trap spelling fails closed
-        // with E_TRAP_RESULT_UNSUPPORTED. It never falls back to the retired
-        // Option<int> slice, which would also swallow nothing but give the
-        // program a type the Java and LLVM backends reject.
-        foreach (var (label, source) in new (string, string)[]
-        {
-            ("checked overflow", "fnc main():int{val Result<int, Error> x=trap (9223372036854775807+1);return x.unwrap_or(0);}"),
-            ("Result int literal", "pub fnc main():int{val Result<int, Error> wrapped=trap 42;return wrapped.unwrap_or(0);}"),
-            ("Result parenthesized", "fnc main():int{val Result<int, Error> wrapped=trap (40+2);return wrapped.unwrap();}"),
-            ("retired Option literal", "pub fnc main():int{val Option<int> wrapped=trap 42;return wrapped.unwrap_or(0);}"),
-            ("retired Option overflow", "fnc main():int{val Option<int> x=trap (9223372036854775807+1);return x.unwrap_or(0);}"),
-            ("retired is_some probe", "fnc main():int{if (trap 0).is_some(){return 42;}return 0;}"),
-            ("typed helper", "fnc add_one(int x):int{return x+1;}fnc main():int{val Result<int, Error> wrapped=trap add_one(41);return wrapped.unwrap_or(0);}"),
-        })
-        {
-            try { _ = OresStructuredCfgLowering.LowerModule(source); }
-            catch (FormatException e) when (
-                e.Message.Contains("E_TRAP_RESULT_UNSUPPORTED", StringComparison.Ordinal)
-                || e.Message.Contains("Option/Result/trap", StringComparison.Ordinal))
-            {
-                continue;
+        const string source = """
+            fnc checked_division(int divisor): int { return 7 / divisor; }
+            fnc main(): int {
+              val Result<int, Error> result = trap! checked_division(0);
+              return result.is_err() ? 42 : 0;
             }
-            throw new Exception("trap reached CFG without Result<int, Error> lowering: " + label);
+            """;
+        var cfg = OresStructuredCfgLowering.LowerModule(source);
+        var trap = cfg.Main.Blocks.SelectMany(block => block.Instructions)
+            .Single(op => op.Opcode == CfgOpcode.TrapCall);
+        if (trap.Type != IrValueType.ResultI64 || cfg.Helpers.Single(helper =>
+                helper.Name == trap.Target).ResultType != IrValueType.ResultI64)
+            throw new Exception("trap must use the same verified Result type at both call boundaries");
+        var directory = Path.Combine(Path.GetTempPath(), "atto-result-cil-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var file = Path.Combine(directory, "OresGenerated.dll");
+            CilEmitter.EmitLibrary(cfg, file);
+            using var assembly = AssemblyDefinition.ReadAssembly(file);
+            var run = assembly.MainModule.Types.Single(type => type.Name == "OresProgram")
+                .Methods.Single(method => method.Name == "Run");
+            var catches = run.Body.ExceptionHandlers.Select(handler => handler.CatchType.FullName);
+            if (!catches.SequenceEqual(new[] { "System.OverflowException", "System.DivideByZeroException",
+                    "Ores.Net.Runtime.GuestThrowSignal" }))
+                throw new Exception("Trap must catch only ordinary guest throws and checked arithmetic faults");
         }
+        finally { Directory.Delete(directory, recursive: true); }
     }
 
     private static void Reject(string source, string label)
@@ -337,7 +340,7 @@ internal static class OptionI64CompilerTests
             42, "name-first Option parameter followed by an independent scalar slot");
         CheckResultAbi();
         CheckEagerFallbackOverflow();
-        CheckTrapOverflowBypassesOption();
+        CheckTrapUsesTypedResultAndNarrowHandlers();
         CheckOptionEqualityBoundary(false, 42, false, 7, true,
             "None equals None even with different inactive payloads");
         CheckOptionEqualityBoundary(false, long.MinValue, false, long.MaxValue, true,
@@ -375,7 +378,6 @@ internal static class OptionI64CompilerTests
             ("no unlowered parameter default", "fnc get(int x?=42):int{return x;}fnc main():int{return 42;}"),
             ("no tagged/untagged assignment", "fnc main():int{let Option<int> x=None;x=42;return 0;}"),
             ("no wrong fallback", "fnc main():int{return Some(42).unwrap_or(false);}"),
-            ("no unsafe unwrap", "fnc main():int{return Some(42).unwrap();}"),
             ("no unknown Option method", "fnc main():int{return None.flatten();}"),
             ("is_none rejects arguments", "fnc main():int{if None.is_none(42){return 1;}return 0;}"),
             ("is_none is bool, not i64", "fnc main():int{return None.is_none();}"),
