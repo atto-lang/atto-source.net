@@ -11,14 +11,11 @@ internal sealed record StructuredMatch(StructuredExpr Subject, IReadOnlyList<Str
     IrValueType Type, bool Completes);
 internal sealed record StructuredDoMatch(int At, StructuredMatch Match) : StructuredStmt(At);
 internal sealed record StructuredMatchValue(int At, StructuredMatch Match) : StructuredExpr(At, Match.Type);
-internal sealed record StructuredMatchExit(int At) : StructuredStmt(At);
 
 public static partial class OresStructuredParser
 {
     private sealed partial class Reader
     {
-        private int doMatchDepth;
-
         private StructuredExpr ReadMatchValue(int offset, int depth)
         {
             var match = ReadMatch(depth + 1, imperative: false);
@@ -82,14 +79,16 @@ public static partial class OresStructuredParser
                         bool arrow = Take("->");
                         if (imperative)
                         {
-                            doMatchDepth++;
+                            var previousReturn = localReturn;
+                            var scopeReturn = new LocalReturnScope("MATCH_VOID_ARM", IrValueType.Void);
+                            localReturn = scopeReturn;
                             try
                             {
                                 var (body, terminal) = Block(depth + 1);
-                                completes |= !terminal || HasArmExit(body);
+                                completes |= !terminal || scopeReturn.HasExit;
                                 arms.Add(new StructuredMatchArm(tags, literal, binding, bindingType, guard, body, null));
                             }
-                            finally { doMatchDepth--; }
+                            finally { localReturn = previousReturn; }
                         }
                         else
                         {
@@ -123,16 +122,6 @@ public static partial class OresStructuredParser
             }
             finally { expectedExpressionType = context; }
         }
-
-        private static bool HasArmExit(IReadOnlyList<StructuredStmt> body) => body.Any(statement =>
-            statement switch
-            {
-                StructuredMatchExit => true,
-                StructuredIf conditional => HasArmExit(conditional.Then) ||
-                    conditional.Else is { } otherwise && HasArmExit(otherwise),
-                StructuredWhile loop => HasArmExit(loop.Body),
-                _ => false
-            });
 
         private long? ReadMatchLiteral()
         {

@@ -131,6 +131,7 @@ internal static class CfgCilEmitter
             var flow = new ControlFlowBuilder();
             var il = new InstructionEncoder(code, flow);
             var labels = new Dictionary<string, LabelHandle>(StringComparer.Ordinal);
+            MemberReferenceHandle cooperate = default;
             foreach (var block in blocks)
                 labels.Add(block.Name, il.DefineLabel());
 
@@ -190,6 +191,21 @@ internal static class CfgCilEmitter
                             break;
                         case CfgOpcode.ConstantBool:
                             il.LoadConstantI4(op.BoolConstant!.Value ? 1 : 0);
+                            break;
+                        case CfgOpcode.InlineCooperate:
+                            if (cooperate.IsNil)
+                            {
+                                var runtime = metadata.AddAssemblyReference(metadata.GetOrAddString("Ores.Net.Runtime"),
+                                    new Version(1, 0, 0, 0), default, default, default, default);
+                                var owner = metadata.AddTypeReference(runtime, metadata.GetOrAddString("Ores.Net.Runtime"),
+                                    metadata.GetOrAddString("RootInlineCooperation"));
+                                var cooperateSignature = new BlobBuilder();
+                                new BlobEncoder(cooperateSignature).MethodSignature().Parameters(0,
+                                    result => result.Type().Boolean(), _ => { });
+                                cooperate = metadata.AddMemberReference(owner, metadata.GetOrAddString("Yield"),
+                                    metadata.GetOrAddBlob(cooperateSignature));
+                            }
+                            il.Call(cooperate);
                             break;
                         case CfgOpcode.PackOptionI64:
                             il.LoadLocalAddress(op.ResultId);
