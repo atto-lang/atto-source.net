@@ -9,12 +9,13 @@ internal static class VmIsolateHostTests
         throw new Exception("IsolateVM gate failed: " + label);
     }
 
-    private static void CheckExplicitInterleaving()
+    private static void CheckOrdinaryInterleaving(bool boundedToTwo)
     {
         var host = new OresVmHost(maxTenants: 1);
         var tenant = host.CreateIsolate("interleaving", maxActors: 1);
         host.Start(tenant);
-        var actor = host.RegisterActor(tenant, 3, maxLiveTurns: 2);
+        var actor = boundedToTwo ? host.RegisterActor(tenant, 3, maxLiveTurns: 2)
+            : host.RegisterActor(tenant, 3);
         var first = host.BeginActorTurn(tenant, actor);
         ExpectFailure(() => host.BeginActorTurn(tenant, actor), "one running actor turn");
         host.SuspendActorTurn(tenant, actor, first);
@@ -25,7 +26,8 @@ internal static class VmIsolateHostTests
         ExpectFailure(() => host.ResumeActorTurn(tenant, actor, first), "no simultaneous running turns");
         ExpectFailure(() => host.BeginActorStateLoan(tenant, actor, first), "suspended turn has no state authority");
         host.SuspendActorTurn(tenant, actor, second);
-        ExpectFailure(() => host.BeginActorTurn(tenant, actor), "two suspended turns consume the live limit");
+        if (boundedToTwo)
+            ExpectFailure(() => host.BeginActorTurn(tenant, actor), "two suspended turns consume the live limit");
         ExpectFailure(() => host.RetireActor(tenant, actor), "suspended turns still own actor lifetime");
 
         host.ResumeActorTurn(tenant, actor, first);
@@ -44,13 +46,15 @@ internal static class VmIsolateHostTests
         host.BeginShutdown(tenant);
         host.CompleteShutdown(tenant);
         host.Destroy(tenant);
-        Console.WriteLine("NET_ISOLATE_OPT_IN_LOGICAL_INTERLEAVING_PASS");
+        Console.WriteLine(boundedToTwo ? "NET_ISOLATE_BOUNDED_INTERLEAVING_PASS"
+            : "NET_ISOLATE_DEFAULT_ORDINARY_INTERLEAVING_PASS");
     }
 
     public static void Run()
     {
         VmActorStateCellsTests.Run();
-        CheckExplicitInterleaving();
+        CheckOrdinaryInterleaving(boundedToTwo: false);
+        CheckOrdinaryInterleaving(boundedToTwo: true);
         var host = new OresVmHost(maxTenants: 2);
         // Fail closed: NativeAOT and separate host dictionaries do not imply
         // OS sandboxing or a separate GC-managed heap for hostile tenants.
@@ -103,7 +107,7 @@ internal static class VmIsolateHostTests
         faultHost.Destroy(recovered);
         if (host.GuestSnapshot(a).Scalar != -3)
             throw new Exception("foreign tenant fault changed tenant-a");
-        var actorA = host.RegisterActor(a, 3);
+        var actorA = host.RegisterActor(a, 3, serial: true);
         var actorB = host.RegisterActor(b, 3);
         var refA = actorA.Mailbox.CurrentRef;
         host.SendActor(a, actorA, refA, new byte[] { 1, 2, 3 });
@@ -124,8 +128,7 @@ internal static class VmIsolateHostTests
             host.EndActorStateLoan(b, actorB, depthTurn, depthLoans[i]);
         host.CompleteActorTurn(b, actorB, depthTurn);
 
-        // Suspension releases no logical actor admission. The exact same turn
-        // must resume; later user turns remain blocked until completion.
+        // Serial actor suspension retains its only logical receive permit.
         var turn = host.BeginActorTurn(a, actorA);
         var turnSnapshot = host.ActorTurnSnapshot(a, actorA);
         if (!turnSnapshot.Active || turnSnapshot.Suspended ||
@@ -200,6 +203,7 @@ internal static class VmIsolateHostTests
         host.CompleteActorTurn(a, actorA, postCancelTurn);
         if (host.ActorTurnSnapshot(a, actorA).Active)
             throw new Exception("completed actor logical turn remained active");
+        Console.WriteLine("NET_ISOLATE_SERIAL_RECEIVE_FENCE_PASS");
 
         var pin = host.PinResource(a, actorA);
         ExpectFailure(() => host.PinResource(a, actorA), "pin quota");

@@ -21,7 +21,7 @@ internal static class VmActorStateCellsTests
         var tenantB = host.CreateIsolate("b", maxActors: 1);
         host.Start(tenantA);
         host.Start(tenantB);
-        var a1 = host.RegisterActor(tenantA, 11);
+        var a1 = host.RegisterActor(tenantA, 11, serial: true);
         var a2 = host.RegisterActor(tenantA, 12);
         var b1 = host.RegisterActor(tenantB, 11);
 

@@ -72,12 +72,13 @@ execute this in CI. No local dotnet SDK execution was available in this pass.
 
 ### Actor-local logical turn admission
 
-Trusted registration defaults to one live `ActorTurnTicket` per actor. A host
-may explicitly configure up to 64 live turns. Each ticket has its own generation
-and retains a logical slot while suspended. The existing state gate allows one
-running turn at a time. Suspension releases the running slot, so an actor with
-an explicit limit above one can admit a later turn. A suspended turn must
-reacquire that slot before accessing state.
+Ordinary actor registration permits up to 64 live `ActorTurnTicket` objects by
+default in this host profile. Trusted registration can choose a smaller cap.
+Registration with `serial: true` keeps one live DATA receive across suspension.
+Each ticket has its own generation and retains a logical slot while suspended.
+The existing state gate allows one running turn at a time. An ordinary actor can
+admit a later turn when suspension releases its running slot. A resumed turn
+must reacquire that slot before accessing state.
 
 Completion and cancellation retire only the specified ticket. Canceling a
 suspended turn leaves a running turn and its state loans intact. Foreign,

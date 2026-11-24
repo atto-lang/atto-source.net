@@ -155,17 +155,22 @@ public sealed partial class OresVmHost
         }
     }
 
+    private const int HostLiveTurnLimit = 64;
+
     public ActorTicket RegisterActor(IsolateHandle handle, ulong id) =>
-        RegisterActor(handle, id, maxLiveTurns: 1);
+        RegisterActor(handle, id, maxLiveTurns: HostLiveTurnLimit);
+
+    public ActorTicket RegisterActor(IsolateHandle handle, ulong id, bool serial) =>
+        RegisterActor(handle, id, maxLiveTurns: serial ? 1 : HostLiveTurnLimit);
 
     /// <summary>
-    /// Trusted host registration with a bounded logical turn limit. A value
-    /// above one permits explicit interleaving when a prior turn suspends.
+    /// Trusted host registration with a bounded logical turn limit. An ordinary
+    /// actor can interleave turns when a prior turn suspends.
     /// State access still has one running turn.
     /// </summary>
     public ActorTicket RegisterActor(IsolateHandle handle, ulong id, int maxLiveTurns)
     {
-        if (maxLiveTurns is < 1 or > 64)
+        if (maxLiveTurns is < 1 or > HostLiveTurnLimit)
             throw new ArgumentOutOfRangeException(nameof(maxLiveTurns));
         lock (_gate) {
             var s = Check(handle);
