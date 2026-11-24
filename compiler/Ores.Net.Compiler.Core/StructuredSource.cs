@@ -917,11 +917,8 @@ public static partial class OresStructuredParser
                     $"noncanonical '%' source operator; use named Integer.rem/mod at offset {offset}");
             else if (ch == '^')
             {
-                // `^^` is the canonical eager boolean XOR (spec ch.16); single `^`
-                // stays out of the grammar (integer XOR is Integer.bitXor).
-                if (index + 1 < source.Length && source[index + 1] == '^') index += 2;
-                else throw new FormatException(
-                    $"Reserved AttoLang operator '^'; use Integer.bitXor(a, b) at offset {offset}");
+                // The reader admits single caret only in return position.
+                index += index + 1 < source.Length && source[index + 1] == '^' ? 2 : 1;
             }
             else if (ch == '!' && index + 2 < source.Length &&
                      source[index + 1] == 'e' && source[index + 2] == 'q' &&
@@ -1683,7 +1680,11 @@ public static partial class OresStructuredParser
                 IReadOnlyList<StructuredStmt> failure;
                 bool returns;
                 if (Current.Text == "{")
+                {
                     (failure, returns) = Block(depth + 1);
+                    if (Current.Text == "else")
+                        throw Error("E_GUARD: a brace guard cannot also have an else/end arm");
+                }
                 else if (Take("else"))
                     (failure, returns) = GuardKeywordArm(depth + 1);
                 else
@@ -1692,10 +1693,11 @@ public static partial class OresStructuredParser
                 // A guard does not itself terminate the success continuation.
                 return (new StructuredIf(at, inverted, failure, null), false);
             }
-            if (Take("return"))
+            if (Take("return") || Take("^"))
             {
                 if (activeReturnType == IrValueType.Void)
                 {
+                    Take("void");
                     if (Current.Text != ";")
                         throw Error("RETURN_VOID_VALUE: void function cannot return a value");
                     Expect(";");
@@ -2110,6 +2112,8 @@ public static partial class OresStructuredParser
             }
             if (Current.Text == "<|")
                 throw Error("E_VALUE_PIPE_DIRECTION: parenthesize mixed |> and <| applications");
+            if (Current.Text == "^")
+                throw Error("Reserved AttoLang operator '^' in expressions; use Integer.bitXor(a, b)");
             return value;
         }
 

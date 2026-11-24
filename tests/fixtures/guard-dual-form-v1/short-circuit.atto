@@ -1,0 +1,10 @@
+// The checked overflowing helper must remain unevaluated.
+fnc must_skip(): bool {
+  return 9223372036854775807 + 1 > 0;
+}
+pub fnc main(): int {
+  guard false, must_skip() else
+    ^ 42;
+  end
+  return 1;
+}
