@@ -815,7 +815,7 @@ public static partial class OresParser
         }
     }
 
-    private sealed class Reader(List<Token> tokens, DotnetHostImportPolicy policy, string source, int? languageVersion)
+    private sealed partial class Reader(List<Token> tokens, DotnetHostImportPolicy policy, string source, int? languageVersion)
     {
         // Macro definitions are compiler-only. Neither these declarations nor
         // their arguments appear in OresIR/CIL, and no runtime expansion exists.

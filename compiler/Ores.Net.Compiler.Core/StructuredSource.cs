@@ -50,7 +50,7 @@ public enum StructuredOperator { Add, Subtract, Multiply, EqualI64, LessThanI64,
     LessThanOrEqualI64, GreaterThanOrEqualI64,
     EqualBool, NotEqualBool, LogicalAnd, LogicalOr, LogicalXor,
     // atto-spec bitwise-and-stream-operators-v1: <<<, >>> and infix ashr.
-    ShiftLeft, ShiftRightLogical, ShiftRightArithmetic }
+    ShiftLeft, ShiftRightLogical, ShiftRightArithmetic, DivideQuantity }
 public sealed record StructuredBinary(int At, StructuredOperator Operator,
     StructuredExpr Left, StructuredExpr Right, IrValueType ResultType)
     : StructuredExpr(At, ResultType);

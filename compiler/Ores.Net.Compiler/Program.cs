@@ -296,12 +296,13 @@ try
         Console.WriteLine($"Emitted experimental static actor C# from verified increment IR: {Path.GetFullPath(args[3])}");
         return 0;
     }
-    if (validStructuredCheck || validStructuredCompile)
+    var verifiedRefinement = validCheck || validCompile || validStructuredCheck || validStructuredCompile
+        ? OresParser.TryLowerVerifiedRefinementModule(source) : null;
+    if (validStructuredCheck || validStructuredCompile || verifiedRefinement is not null)
     {
-        // Experimental typed source -> verified CFG -> deterministic CIL.
-        // Never enter the shipping scalar path or accept unsupported effects.
-        var verifiedCfg = OresStructuredCfgLowering.LowerModule(source);
-        if (validStructuredCompile)
+        // Both source profiles use the verified CFG and deterministic CIL emitter.
+        var verifiedCfg = verifiedRefinement ?? OresStructuredCfgLowering.LowerModule(source);
+        if (validStructuredCompile || validCompile)
         {
             if (!string.Equals(Path.GetFileName(args[3]), "OresGenerated.dll",
                 StringComparison.OrdinalIgnoreCase))

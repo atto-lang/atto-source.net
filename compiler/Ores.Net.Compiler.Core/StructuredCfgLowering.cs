@@ -379,6 +379,7 @@ public static class OresStructuredCfgLowering
                         StructuredOperator.Add => CfgOpcode.CheckedAdd,
                         StructuredOperator.Subtract => CfgOpcode.CheckedSubtract,
                         StructuredOperator.Multiply => CfgOpcode.CheckedMultiply,
+                        StructuredOperator.DivideQuantity => CfgOpcode.CheckedDivide,
                         StructuredOperator.ShiftLeft => CfgOpcode.ShiftLeftI64,
                         StructuredOperator.ShiftRightLogical => CfgOpcode.ShiftRightLogicalI64,
                         StructuredOperator.ShiftRightArithmetic => CfgOpcode.ShiftRightArithmeticI64,
