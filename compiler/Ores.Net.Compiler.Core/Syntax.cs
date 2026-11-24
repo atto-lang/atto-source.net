@@ -222,7 +222,8 @@ public static partial class OresParser
         return tokens;
     }
 
-    private static void RejectUnsupportedScalarTokens(List<Token> tokens)
+    private static void RejectUnsupportedScalarTokens(List<Token> tokens,
+        IReadOnlySet<int>? protocolActorOffsets = null)
     {
         // The scalar i64 parser is an independent public compiler entrypoint.
         // A Kestrel host HTTP provider does not authorize guest HTTP actors.
@@ -255,7 +256,7 @@ public static partial class OresParser
         // keep them: 'define virtual actor' and 'define supervisor ...'.
         for (int i = 0; i < tokens.Count; i++)
         {
-            if (tokens[i].Text != "define")
+            if (tokens[i].Text != "define" || protocolActorOffsets?.Contains(tokens[i].Offset) == true)
                 continue;
             int limit = Math.Min(tokens.Count, i + 5);
             for (int j = i + 1; j < limit; j++)
@@ -359,16 +360,18 @@ public static partial class OresParser
         }
     }
 
-    private static void RejectUnsupportedSourceActors(List<Token> tokens)
+    private static void RejectUnsupportedSourceActors(List<Token> tokens,
+        IReadOnlySet<int>? protocolActorOffsets = null)
     {
-        var schema = FindActorStateSchema(tokens);
+        var schema = FindActorStateSchema(tokens, protocolActorOffsets);
         if (schema is not null)
             throw new FormatException(
                 $"Source actor state schema parsed; sealed handle_state and " +
                 $"generation-fenced logical-turn lowering is unavailable at offset {schema.StateOffset}");
     }
 
-    private static ActorStateSchemaMetadata? FindActorStateSchema(List<Token> tokens)
+    private static ActorStateSchemaMetadata? FindActorStateSchema(List<Token> tokens,
+        IReadOnlySet<int>? protocolActorOffsets = null)
     {
         static bool IsIdentifier(Token token)
         {
@@ -392,7 +395,7 @@ public static partial class OresParser
         ActorStateSchemaMetadata? discovered = null;
         for (int i = 0; i < tokens.Count; i++)
         {
-            if (tokens[i].Text != "define")
+            if (tokens[i].Text != "define" || protocolActorOffsets?.Contains(tokens[i].Offset) == true)
                 continue;
 
             int j = i + 1;

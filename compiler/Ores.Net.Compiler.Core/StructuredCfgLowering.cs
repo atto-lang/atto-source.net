@@ -43,7 +43,7 @@ public static class OresStructuredCfgLowering
                 Array.AsReadOnly(helper.Parameters.Select(p => p.Type).ToArray())));
         }
         var main = new Builder(emitCalls: true).Lower(program, helperSignatures);
-        return new VerifiedCfgModule(main, methods.AsReadOnly(), program.Protocols);
+        return new VerifiedCfgModule(main, methods.AsReadOnly(), program.Protocols, program.ProtocolActors);
     }
 
     // A closed Option<int> is represented by two separately verified SSA IDs.

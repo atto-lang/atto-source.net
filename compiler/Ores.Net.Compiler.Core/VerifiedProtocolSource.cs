@@ -17,6 +17,12 @@ internal sealed record ProtocolScalar(bool I32, VerifiedI64Range Range, Quantity
         I32 == other.I32 && Range == other.Range && Unit.SameUnit(other.Unit);
 }
 
+internal sealed record VerifiedProtocolActor(string Name, VerifiedProtocol Protocol,
+    IReadOnlyList<ProtocolHandler> Handlers, int Offset);
+
+internal sealed record ProtocolHandler(string Message, IReadOnlyList<ProtocolField> Parameters,
+    string Destination);
+
 public static partial class OresParser
 {
     private sealed partial class Reader
@@ -24,10 +30,10 @@ public static partial class OresParser
         private bool AtProtocolDeclaration() => Current.Text == "define" &&
             _index + 1 < tokens.Count && tokens[_index + 1].Text == "protocol";
 
-        private void ExpectProtocol(string token)
+        private void ExpectProtocol(string token, string category = "E_PROTOCOL_SYNTAX")
         {
             if (!Take(token)) throw new FormatException(
-                $"E_PROTOCOL_SYNTAX: expected '{token}' at offset {Current.Offset}");
+                $"{category}: expected '{token}' at offset {Current.Offset}");
         }
 
         private string ReadProtocolName()
@@ -36,6 +42,10 @@ public static partial class OresParser
                 throw new FormatException($"E_PROTOCOL_SYNTAX: expected a protocol identifier at offset {Current.Offset}");
             return ReadVerifiedName();
         }
+
+        private static bool SameProtocolPayload(IReadOnlyList<ProtocolField> left,
+            IReadOnlyList<ProtocolField> right) => left.Count == right.Count &&
+            left.Zip(right).All(pair => pair.First.Type.SameType(pair.Second.Type));
 
         private VerifiedProtocol ParseProtocolDeclaration(HashSet<string> protocolNames)
         {
@@ -87,8 +97,7 @@ public static partial class OresParser
                     var payload = ParseProtocolPayload();
                     if (signatures.TryGetValue(message, out var signature))
                     {
-                        if (signature.Count != payload.Count ||
-                            !signature.Zip(payload).All(pair => pair.First.Type.SameType(pair.Second.Type)))
+                        if (!SameProtocolPayload(signature, payload))
                             throw new FormatException("E_PROTOCOL_PAYLOAD: inconsistent message payload type");
                     }
                     else signatures.Add(message, payload);
@@ -122,6 +131,64 @@ public static partial class OresParser
             } while (Take(","));
             if (!Take(")")) throw new FormatException("E_PROTOCOL_PAYLOAD: expected ')' after protocol payload");
             return payload.AsReadOnly();
+        }
+
+        private bool AtProtocolActor() => Current.Text == "define" && _index + 3 < tokens.Count &&
+            tokens[_index + 1].Text == "actor" && tokens[_index + 3].Text == "implements";
+
+        private VerifiedProtocolActor ParseProtocolActor(IReadOnlyList<VerifiedProtocol> protocols,
+            HashSet<string> actorNames)
+        {
+            int offset = Current.Offset;
+            ExpectProtocol("define");
+            ExpectProtocol("actor");
+            if (actorNames.Count >= 64) throw new FormatException("E_PROTOCOL_LIMIT: too many protocol actors");
+            string name = ReadProtocolName();
+            if (refinementAliases.ContainsKey(name) || protocols.Any(protocol => protocol.Name == name) ||
+                !actorNames.Add(name))
+                throw new FormatException($"E_PROTOCOL_ACTOR: duplicate actor '{name}'");
+            ExpectProtocol("implements", "E_PROTOCOL_ACTOR");
+            string target = ReadProtocolName();
+            var protocol = protocols.FirstOrDefault(candidate => candidate.Name == target) ??
+                throw new FormatException($"E_PROTOCOL_ACTOR: unknown local protocol '{target}'");
+            ExpectProtocol("as", "E_PROTOCOL_ACTOR");
+
+            var messages = new Dictionary<string, ProtocolEdge>(StringComparer.Ordinal);
+            var stateDependentDestinations = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var edge in protocol.Edges)
+            {
+                if (!messages.TryAdd(edge.Message, edge) && messages[edge.Message].Target != edge.Target)
+                    stateDependentDestinations.Add(edge.Message);
+            }
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var handlers = new List<ProtocolHandler>();
+            while (!Take("end"))
+            {
+                if (Current.Text.Length == 0)
+                    throw new FormatException("E_PROTOCOL_HANDLER: expected a protocol handler or 'end'");
+                string message = ReadProtocolName();
+                if (!messages.TryGetValue(message, out var edge))
+                    throw new FormatException("E_PROTOCOL_HANDLER: actor handles an undeclared message");
+                if (!seen.Add(message))
+                    throw new FormatException("E_PROTOCOL_HANDLER: duplicate protocol handler");
+                if (Current.Text != "(")
+                    throw new FormatException("E_PROTOCOL_HANDLER: expected a parameter list");
+                var parameters = ParseProtocolPayload();
+                if (!SameProtocolPayload(edge.Payload, parameters))
+                    throw new FormatException("E_PROTOCOL_PAYLOAD: handler parameter types differ from the message");
+                ExpectProtocol("->", "E_PROTOCOL_HANDLER");
+                ExpectProtocol("void", "E_PROTOCOL_HANDLER");
+                ExpectProtocol("{", "E_PROTOCOL_HANDLER");
+                ExpectProtocol("transition", "E_PROTOCOL_TRANSITION");
+                string destination = ReadProtocolName();
+                if (stateDependentDestinations.Contains(message) || edge.Target != destination)
+                    throw new FormatException("E_PROTOCOL_TRANSITION: handler destination must match every edge for its message");
+                ExpectProtocol(";", "E_PROTOCOL_TRANSITION");
+                ExpectProtocol("}", "E_PROTOCOL_TRANSITION");
+                handlers.Add(new ProtocolHandler(message, parameters, destination));
+            }
+            if (seen.Count != messages.Count) throw new FormatException("E_PROTOCOL_HANDLER: missing protocol handler");
+            return new VerifiedProtocolActor(name, protocol, handlers.AsReadOnly(), offset);
         }
     }
 }

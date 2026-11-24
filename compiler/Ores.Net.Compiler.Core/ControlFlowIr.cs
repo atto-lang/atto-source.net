@@ -105,15 +105,18 @@ public sealed class VerifiedCfgFunction
 public sealed class VerifiedCfgModule
 {
     internal VerifiedCfgModule(VerifiedCfgFunction main,
-        IReadOnlyList<VerifiedCfgFunction> helpers, IReadOnlyList<VerifiedProtocol> protocols)
+        IReadOnlyList<VerifiedCfgFunction> helpers, IReadOnlyList<VerifiedProtocol> protocols,
+        IReadOnlyList<VerifiedProtocolActor> protocolActors)
     {
         Main = main;
         Helpers = helpers;
         Protocols = protocols;
+        ProtocolActors = protocolActors;
     }
     public VerifiedCfgFunction Main { get; }
     public IReadOnlyList<VerifiedCfgFunction> Helpers { get; }
     internal IReadOnlyList<VerifiedProtocol> Protocols { get; }
+    internal IReadOnlyList<VerifiedProtocolActor> ProtocolActors { get; }
 }
 
 public sealed record CfgCallSignature(IrValueType ResultType,

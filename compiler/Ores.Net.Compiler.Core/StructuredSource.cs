@@ -102,6 +102,7 @@ public sealed record StructuredProgram(string Name, IReadOnlyList<StructuredStmt
     IReadOnlyList<string>? FunctionOrder = null)
 {
     internal IReadOnlyList<VerifiedProtocol> Protocols { get; init; } = Array.Empty<VerifiedProtocol>();
+    internal IReadOnlyList<VerifiedProtocolActor> ProtocolActors { get; init; } = Array.Empty<VerifiedProtocolActor>();
 }
 
 /// <summary>

@@ -10,11 +10,16 @@ public static partial class OresParser
         ArgumentNullException.ThrowIfNull(source);
         if (source.Length > 1_048_576 || !HasVerifiedRefinementPrefix(source)) return null;
         var tokens = Tokenize(source);
-        RejectUnsupportedSourceActors(tokens);
         RejectUnsupportedInvertedClasses(tokens);
-        RejectUnsupportedScalarTokens(tokens);
         var reader = new Reader(tokens, DotnetHostImportPolicy.DenyAll, source, null);
-        return OresStructuredCfgLowering.LowerModule(reader.ParseVerifiedFunctions());
+        var program = reader.ParseVerifiedFunctions();
+        // These exact source declarations were validated as checked protocol
+        // bindings. No legacy actor declaration or executable call bypasses
+        // the ordinary Native AOT admission gates.
+        var protocolActorOffsets = program.ProtocolActors.Select(actor => actor.Offset).ToHashSet();
+        RejectUnsupportedSourceActors(tokens, protocolActorOffsets);
+        RejectUnsupportedScalarTokens(tokens, protocolActorOffsets);
+        return OresStructuredCfgLowering.LowerModule(program);
     }
 
     private static bool HasVerifiedRefinementPrefix(string source)
@@ -182,6 +187,9 @@ public static partial class OresParser
             var protocols = new List<VerifiedProtocol>();
             var protocolNames = new HashSet<string>(StringComparer.Ordinal);
             while (AtProtocolDeclaration()) protocols.Add(ParseProtocolDeclaration(protocolNames));
+            var protocolActors = new List<VerifiedProtocolActor>();
+            var actorNames = new HashSet<string>(StringComparer.Ordinal);
+            while (AtProtocolActor()) protocolActors.Add(ParseProtocolActor(protocols, actorNames));
             var functions = new Dictionary<string, StructuredFunction>(StringComparer.Ordinal);
             var order = new List<string>();
             while (Current.Text.Length != 0)
@@ -297,6 +305,7 @@ public static partial class OresParser
                     return new StructuredProgram(name, body, functions, order)
                     {
                         Protocols = protocols.AsReadOnly(),
+                        ProtocolActors = protocolActors.AsReadOnly(),
                     };
                 }
                 functions.Add(name, new StructuredFunction(name, parameters, IrValueType.I64,
