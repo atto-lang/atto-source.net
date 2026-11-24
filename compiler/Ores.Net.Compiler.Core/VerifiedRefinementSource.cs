@@ -35,6 +35,20 @@ public static partial class OresParser
         return ProtocolActorSourceEmitter.Emit(prelude.Actors);
     }
 
+    public static string? TryEmitVerifiedProtocolGuest(string source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (source.Length > 1_048_576 || !HasVerifiedRefinementPrefix(source)) return null;
+        var tokens = Tokenize(source);
+        RejectUnsupportedInvertedClasses(tokens);
+        var reader = new Reader(tokens, DotnetHostImportPolicy.DenyAll, source, null);
+        var prelude = reader.ParseVerifiedPrelude();
+        var guest = reader.TryParseProtocolGuest(prelude);
+        if (guest is null) return null;
+        ValidateVerifiedSourceTokens(tokens, prelude.Actors);
+        return ProtocolActorSourceEmitter.Emit(prelude.Actors, guest);
+    }
+
     private static void ValidateVerifiedSourceTokens(List<Token> tokens, IReadOnlyList<VerifiedProtocolActor> actors)
     {
         // These exact source declarations were validated as checked protocol

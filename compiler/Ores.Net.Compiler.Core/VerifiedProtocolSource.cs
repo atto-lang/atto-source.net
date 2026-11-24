@@ -18,10 +18,16 @@ internal sealed record ProtocolScalar(bool I32, VerifiedI64Range Range, Quantity
 }
 
 internal sealed record VerifiedProtocolActor(string Name, VerifiedProtocol Protocol,
-    IReadOnlyList<ProtocolHandler> Handlers, int Offset);
+    IReadOnlyList<ProtocolHandler> Handlers, int Offset, ProtocolStateField? Field);
+
+internal sealed record ProtocolStateField(string Name, ProtocolScalar Type, long Initial);
 
 internal sealed record ProtocolHandler(string Message, IReadOnlyList<ProtocolField> Parameters,
-    string Destination);
+    string Destination, int IncrementParameter);
+
+internal sealed record ProtocolGuest(VerifiedProtocolActor Actor,
+    IReadOnlyList<ProtocolGuestTurn> Turns, int Result);
+internal sealed record ProtocolGuestTurn(ProtocolHandler Handler, IReadOnlyList<long> Payload);
 
 public static partial class OresParser
 {
@@ -133,6 +139,81 @@ public static partial class OresParser
             return payload.AsReadOnly();
         }
 
+        private static readonly string[] ProtocolGuestPrefix =
+            ["pub", "fnc", "main", "(", ")", "->", "int", "{", "val"];
+
+        public ProtocolGuest? TryParseProtocolGuest(VerifiedPrelude prelude)
+        {
+            if (prelude.Actors.Count == 0 || _index + 11 >= tokens.Count ||
+                !ProtocolGuestPrefix.Select((word, index) => tokens[_index + index].Text == word).All(value => value) ||
+                tokens[_index + 10].Text != "=" || tokens[_index + 11].Text != "spawn")
+                return null;
+            _index += ProtocolGuestPrefix.Length;
+            string local = ReadVerifiedName();
+            ExpectProtocol("=", "E_PROTOCOL_GUEST");
+            ExpectProtocol("spawn", "E_PROTOCOL_GUEST");
+            string actorName = ReadProtocolName();
+            var actor = prelude.Actors.FirstOrDefault(candidate => candidate.Name == actorName)
+                ?? throw new FormatException("E_PROTOCOL_GUEST: unknown actor type");
+            ExpectProtocol("(", "E_PROTOCOL_GUEST");
+            ExpectProtocol(")", "E_PROTOCOL_GUEST");
+            ExpectProtocol(";", "E_PROTOCOL_GUEST");
+
+            var turns = new List<ProtocolGuestTurn>();
+            var receipts = new Dictionary<string, int>(StringComparer.Ordinal);
+            while (true)
+            {
+                ExpectProtocol(local, "E_PROTOCOL_GUEST");
+                ExpectProtocol(".", "E_PROTOCOL_GUEST");
+                if (Take("stop"))
+                {
+                    ExpectProtocol("(", "E_PROTOCOL_GUEST");
+                    ExpectProtocol(")", "E_PROTOCOL_GUEST");
+                    ExpectProtocol(";", "E_PROTOCOL_GUEST");
+                    break;
+                }
+                if (turns.Count >= 64) throw new FormatException("E_PROTOCOL_LIMIT: too many guest protocol turns");
+                ExpectProtocol("send", "E_PROTOCOL_GUEST");
+                ExpectProtocol("(", "E_PROTOCOL_GUEST");
+                string tag = ReadProtocolName();
+                var handler = actor.Handlers.FirstOrDefault(candidate => candidate.Message == tag)
+                    ?? throw new FormatException("E_PROTOCOL_GUEST: unknown message tag");
+                ExpectProtocol("(", "E_PROTOCOL_GUEST");
+                var payload = new List<long>();
+                foreach (var parameter in handler.Parameters)
+                {
+                    if (payload.Count != 0) ExpectProtocol(",", "E_PROTOCOL_PAYLOAD");
+                    var actual = VerifiedLiteral(Take("-"));
+                    var type = new RefinedQuantity(parameter.Type.Unit, parameter.Type.Range, parameter.Type.I32);
+                    type.Require(actual.Type, "E_PROTOCOL_PAYLOAD", "the typed send argument");
+                    payload.Add(actual.Type.Range.Minimum);
+                }
+                ExpectProtocol(")", "E_PROTOCOL_PAYLOAD");
+                ExpectProtocol(")", "E_PROTOCOL_GUEST");
+                ExpectProtocol(";", "E_PROTOCOL_GUEST");
+                ExpectProtocol("val", "E_PROTOCOL_GUEST");
+                string receipt = ReadVerifiedName();
+                if (receipt == local || !receipts.TryAdd(receipt, turns.Count))
+                    throw new FormatException("E_PROTOCOL_GUEST: duplicate local binding");
+                ExpectProtocol("=", "E_PROTOCOL_GUEST");
+                ExpectProtocol(local, "E_PROTOCOL_GUEST");
+                ExpectProtocol(".", "E_PROTOCOL_GUEST");
+                ExpectProtocol("get_receipt", "E_PROTOCOL_GUEST");
+                ExpectProtocol("(", "E_PROTOCOL_GUEST");
+                ExpectProtocol(")", "E_PROTOCOL_GUEST");
+                ExpectProtocol(";", "E_PROTOCOL_GUEST");
+                turns.Add(new(handler, payload.AsReadOnly()));
+            }
+            ExpectProtocol("return", "E_PROTOCOL_GUEST");
+            if (!receipts.TryGetValue(ReadVerifiedName(), out int result))
+                throw new FormatException("E_PROTOCOL_GUEST: return requires a known receipt status");
+            ExpectProtocol(";", "E_PROTOCOL_GUEST");
+            ExpectProtocol("}", "E_PROTOCOL_GUEST");
+            if (!AtEndOfVerifiedSource)
+                throw new FormatException("E_PROTOCOL_GUEST: main must be the last declaration");
+            return new(actor, turns.AsReadOnly(), result);
+        }
+
         private bool AtProtocolActor() => Current.Text == "define" && _index + 3 < tokens.Count &&
             tokens[_index + 1].Text == "actor" && tokens[_index + 3].Text == "implements";
 
@@ -152,6 +233,20 @@ public static partial class OresParser
             var protocol = protocols.FirstOrDefault(candidate => candidate.Name == target) ??
                 throw new FormatException($"E_PROTOCOL_ACTOR: unknown local protocol '{target}'");
             ExpectProtocol("as", "E_PROTOCOL_ACTOR");
+            ProtocolStateField? field = null;
+            if (Current.Text == "state" && _index + 1 < tokens.Count && tokens[_index + 1].Text == "{")
+            {
+                _index += 2;
+                var fieldType = ReadRefinedType();
+                string fieldName = ReadProtocolName();
+                ExpectProtocol("=", "E_PROTOCOL_STATE");
+                var initial = VerifiedLiteral(Take("-"));
+                fieldType.Require(initial.Type, "E_PROTOCOL_INVARIANT", "the initial actor field value");
+                field = new(fieldName, new(fieldType.I32, fieldType.Range, fieldType.Unit),
+                    initial.Type.Range.Minimum);
+                ExpectProtocol(";", "E_PROTOCOL_STATE");
+                ExpectProtocol("}", "E_PROTOCOL_STATE");
+            }
 
             var messages = new Dictionary<string, ProtocolEdge>(StringComparer.Ordinal);
             var stateDependentDestinations = new HashSet<string>(StringComparer.Ordinal);
@@ -179,16 +274,42 @@ public static partial class OresParser
                 ExpectProtocol("->", "E_PROTOCOL_HANDLER");
                 ExpectProtocol("void", "E_PROTOCOL_HANDLER");
                 ExpectProtocol("{", "E_PROTOCOL_HANDLER");
+                int incrementParameter = -1;
+                if (field is not null)
+                {
+                    if (parameters.Any(parameter => parameter.Name == field.Name))
+                        throw new FormatException("E_PROTOCOL_STATE: handler parameter shadows the actor field");
+                    if (Take(field.Name))
+                    {
+                        ExpectProtocol("=", "E_PROTOCOL_STATE");
+                        ExpectProtocol(field.Name, "E_PROTOCOL_STATE");
+                        ExpectProtocol("+", "E_PROTOCOL_STATE");
+                        string operand = ReadProtocolName();
+                        for (int i = 0; i < parameters.Count; ++i)
+                        {
+                            if (parameters[i].Name != operand) continue;
+                            incrementParameter = i;
+                            break;
+                        }
+                        if (incrementParameter < 0)
+                            throw new FormatException("E_PROTOCOL_STATE: increment must name a handler parameter");
+                        var type = parameters[incrementParameter].Type;
+                        if (type.I32 != field.Type.I32)
+                            throw new FormatException("E_PROTOCOL_STATE: increment carrier differs from the actor field");
+                        field.Type.Unit.RequireCompatible(type.Unit);
+                        ExpectProtocol(";", "E_PROTOCOL_STATE");
+                    }
+                }
                 ExpectProtocol("transition", "E_PROTOCOL_TRANSITION");
                 string destination = ReadProtocolName();
                 if (stateDependentDestinations.Contains(message) || edge.Target != destination)
                     throw new FormatException("E_PROTOCOL_TRANSITION: handler destination must match every edge for its message");
                 ExpectProtocol(";", "E_PROTOCOL_TRANSITION");
                 ExpectProtocol("}", "E_PROTOCOL_TRANSITION");
-                handlers.Add(new ProtocolHandler(message, parameters, destination));
+                handlers.Add(new ProtocolHandler(message, parameters, destination, incrementParameter));
             }
             if (seen.Count != messages.Count) throw new FormatException("E_PROTOCOL_HANDLER: missing protocol handler");
-            return new VerifiedProtocolActor(name, protocol, handlers.AsReadOnly(), offset);
+            return new VerifiedProtocolActor(name, protocol, handlers.AsReadOnly(), offset, field);
         }
     }
 }

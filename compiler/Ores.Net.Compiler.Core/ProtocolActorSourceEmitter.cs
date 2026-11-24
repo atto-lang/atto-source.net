@@ -7,14 +7,67 @@ namespace Ores.Net.Compiler;
 /// <summary>Static C# lowering for checked protocol actor bindings.</summary>
 internal static class ProtocolActorSourceEmitter
 {
-    internal static string Emit(IReadOnlyList<VerifiedProtocolActor> actors)
+    internal static string Emit(IReadOnlyList<VerifiedProtocolActor> actors, ProtocolGuest? guest = null)
     {
         var code = new StringBuilder();
         code.AppendLine("// Generated from verified Atto protocol actor bindings.");
         code.AppendLine("using Ores.Net.Runtime;");
         code.AppendLine("namespace Oreslang.Generated;");
         foreach (var actor in actors) WriteActor(code, actor);
+        if (guest is not null) WriteGuest(code, guest);
         return code.ToString().Replace("\r\n", "\n", StringComparison.Ordinal);
+    }
+
+    private static void WriteGuest(StringBuilder code, ProtocolGuest guest)
+    {
+        code.AppendLine("public static class ProtocolGuestMain");
+        code.AppendLine("{");
+        code.AppendLine("    public static int Main()");
+        code.AppendLine("    {");
+        code.AppendLine("        using var runtime = new ActorRuntime(new ActorRuntimeOptions());");
+        code.AppendLine("        var receipts = System.Threading.Channels.Channel.CreateBounded<ProtocolTurnReceipt>(1);");
+        code.AppendLine("        var replies = runtime.Spawn(ActorKind.Shared, (_, bytes) =>");
+        code.AppendLine("        {");
+        code.AppendLine("            if (!receipts.Writer.TryWrite(ProtocolTurnReceipt.Decode(bytes.Span)))");
+        code.AppendLine("                throw new System.InvalidOperationException(\"Duplicate protocol guest receipt\");");
+        code.AppendLine("        });");
+        code.Append("        var actor = Actor_").Append(guest.Actor.Name).AppendLine(".SpawnRuntime(runtime, replies);");
+        code.AppendLine("        var done = runtime.ObserveTermination(actor);");
+        code.AppendLine("        int status = 0;");
+        code.AppendLine("        var timeout = System.TimeSpan.FromSeconds(15);");
+        code.AppendLine("        try");
+        code.AppendLine("        {");
+        for (int i = 0; i < guest.Turns.Count; i++)
+        {
+            var turn = guest.Turns[i];
+            code.Append("            Actor_").Append(guest.Actor.Name).Append(".Send_")
+                .Append(turn.Handler.Message).Append("(runtime, actor");
+            for (int j = 0; j < turn.Payload.Count; j++)
+            {
+                long value = turn.Payload[j];
+                code.Append(", ").Append(turn.Handler.Parameters[j].Type.I32
+                    ? value.ToString(CultureInfo.InvariantCulture) : LongLiteral(value));
+            }
+            code.AppendLine(");");
+            string index = i.ToString(CultureInfo.InvariantCulture);
+            code.Append("            var receipt").Append(index)
+                .AppendLine(" = receipts.Reader.ReadAsync().AsTask().WaitAsync(timeout).GetAwaiter().GetResult();");
+            code.Append("            if (receipt").Append(index).Append(".ActorId != actor.Id || receipt")
+                .Append(index).Append(".Generation != actor.Generation || receipt").Append(index)
+                .Append(".Turn != ").Append((i + 1).ToString(CultureInfo.InvariantCulture)).AppendLine(")");
+            code.AppendLine("                throw new System.InvalidOperationException(\"Unexpected protocol guest receipt\");");
+            if (i == guest.Result)
+                code.Append("            status = (int)receipt").Append(index).AppendLine(".Status;");
+        }
+        code.AppendLine("            return status;");
+        code.AppendLine("        }");
+        code.AppendLine("        finally");
+        code.AppendLine("        {");
+        code.AppendLine("            runtime.Stop(actor);");
+        code.AppendLine("            done.WaitAsync(timeout).GetAwaiter().GetResult();");
+        code.AppendLine("        }");
+        code.AppendLine("    }");
+        code.AppendLine("}");
     }
 
     private static void WriteActor(StringBuilder code, VerifiedProtocolActor actor)
@@ -56,7 +109,16 @@ internal static class ProtocolActorSourceEmitter
                 .Append(tags[edge.Message].ToString(CultureInfo.InvariantCulture)).Append(", State_")
                 .Append(edge.Target).AppendLine("),");
         }
-        code.AppendLine("        });");
+        code.Append("        }");
+        if (actor.Field is { } field)
+        {
+            code.Append(", new ProtocolStateField(").Append(LongLiteral(field.Initial)).Append(", ")
+                .Append(LongLiteral(field.Type.Range.Minimum)).Append(", ")
+                .Append(LongLiteral(field.Type.Range.Maximum)).Append("), [")
+                .AppendJoin(", ", messages.Select(handler =>
+                    handler.IncrementParameter.ToString(CultureInfo.InvariantCulture))).Append(']');
+        }
+        code.AppendLine(");");
         code.AppendLine("    public static ActorRef SpawnRuntime(ActorRuntime runtime, ActorRef replyTo) =>");
         code.AppendLine("        Plan.Spawn(runtime, replyTo);");
         foreach (var handler in messages)

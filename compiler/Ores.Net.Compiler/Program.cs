@@ -298,6 +298,21 @@ try
         Console.WriteLine($"Emitted experimental static actor C# from verified {actorProfile}: {Path.GetFullPath(args[3])}");
         return 0;
     }
+    if ((validEmitSource && args[0] == "emit-csharp") || validCheck || validStructuredCheck)
+    {
+        var guest = OresParser.TryEmitVerifiedProtocolGuest(source);
+        if (guest is not null)
+        {
+            if (validEmitSource)
+            {
+                if (!string.Equals(Path.GetExtension(args[3]), ".cs", StringComparison.OrdinalIgnoreCase))
+                    throw new ArgumentException("Protocol guest source output requires .cs extension");
+                WriteAtomicSource(args[3], guest);
+            }
+            Console.WriteLine("Verified protocol guest: OK");
+            return 0;
+        }
+    }
     var verifiedRefinement = validCheck || validCompile || validStructuredCheck || validStructuredCompile
         ? OresParser.TryLowerVerifiedRefinementModule(source) : null;
     if (validStructuredCheck || validStructuredCompile || verifiedRefinement is not null)

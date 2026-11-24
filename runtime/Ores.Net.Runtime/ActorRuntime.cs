@@ -795,7 +795,8 @@ public sealed class ActorRuntime : IDisposable
 
     // The state write and Stop use the same cell gate. Only a physical turn
     // carrying this cell's exact context may publish a protocol transition.
-    internal bool TryPublishProtocolState(ActorContext context, ref ushort state, ushort destination)
+    internal bool TryPublishProtocolState(ActorContext context,
+        ref ProtocolPublishedState state, ProtocolPublishedState staged)
     {
         ActorCell? cell;
         lock (_gate)
@@ -809,7 +810,7 @@ public sealed class ActorRuntime : IDisposable
             if (cell.Stopping || !cell.Mailbox.Authorizes(context.Self))
                 return false;
             context.ValidateActiveTurn();
-            state = destination;
+            state = staged;
             return true;
         }
     }
