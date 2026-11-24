@@ -285,6 +285,12 @@ public static partial class OresStructuredCfgLowering
                     int payload = Emit(block, CfgOpcode.ReadOptionI64Payload, IrValueType.I64, left: result);
                     return (tag, payload);
                 }
+                case StructuredMatchValue match when match.Type == IrValueType.OptionI64:
+                {
+                    int value = MatchValue(match, ref block, variables);
+                    return (Emit(block, CfgOpcode.ReadOptionI64Tag, IrValueType.Bool, left: value),
+                        Emit(block, CfgOpcode.ReadOptionI64Payload, IrValueType.I64, left: value));
+                }
                 case StructuredResultInspect result when result.ValueType == IrValueType.OptionI64:
                     return UnwrapResultOption(Expression(result.Result, ref block, variables), block);
                 case StructuredPropagate propagation when propagation.Type == IrValueType.OptionI64:
@@ -389,6 +395,8 @@ public static partial class OresStructuredCfgLowering
                         variable.Type != read.Type || variable.Type == IrValueType.OptionI64)
                         throw new FormatException("Unbound or unverified scalar CFG local");
                     return variable.ValueId;
+                case StructuredMatchValue match:
+                    return MatchValue(match, ref block, variables);
                 // Operands may short-circuit into new CFG blocks (ref block), so
                 // evaluate them fully before emitting into the current block.
                 case StructuredOptionPresent present:
@@ -568,7 +576,8 @@ public static partial class OresStructuredCfgLowering
         }
 
         private Block? EmitStatements(IReadOnlyList<StructuredStmt> statements,
-            Block start, Dictionary<string, Binding> variables)
+            Block start, Dictionary<string, Binding> variables,
+            Action<Block, Dictionary<string, Binding>>? exitMatch = null)
         {
             Block? current = start;
             foreach (var stmt in statements)
@@ -680,10 +689,18 @@ public static partial class OresStructuredCfgLowering
                         current = OverflowCatch(caught, current, variables);
                         break;
                     case StructuredIf conditional:
-                        current = If(conditional, current, variables);
+                        current = If(conditional, current, variables, exitMatch);
                         break;
                     case StructuredWhile loop:
-                        current = While(loop, current, variables);
+                        current = While(loop, current, variables, exitMatch);
+                        break;
+                    case StructuredDoMatch match:
+                        current = LowerMatch(match.Match, current, variables).Join;
+                        break;
+                    case StructuredMatchExit:
+                        if (exitMatch is null) throw new FormatException("Unscoped do match return");
+                        exitMatch(current, variables);
+                        current = null;
                         break;
                     default:
                         throw new FormatException("Unsupported structured CFG statement");
@@ -732,7 +749,7 @@ public static partial class OresStructuredCfgLowering
         }
 
         private Block? If(StructuredIf statement, Block origin,
-            Dictionary<string, Binding> variables)
+            Dictionary<string, Binding> variables, Action<Block, Dictionary<string, Binding>>? exitMatch)
         {
             Block conditionBlock = origin;
             int condition = Expression(statement.Condition, ref conditionBlock, variables);
@@ -740,7 +757,7 @@ public static partial class OresStructuredCfgLowering
             var thenBlock = NewBlock();
             var thenEnvironment = new Dictionary<string, Binding>(
                 variables, StringComparer.Ordinal);
-            Block? thenEnd = EmitStatements(statement.Then, thenBlock, thenEnvironment);
+            Block? thenEnd = EmitStatements(statement.Then, thenBlock, thenEnvironment, exitMatch);
 
             Block? elseBlock = null;
             Block? elseEnd = null;
@@ -749,7 +766,7 @@ public static partial class OresStructuredCfgLowering
             if (statement.Else is not null)
             {
                 elseBlock = NewBlock();
-                elseEnd = EmitStatements(statement.Else, elseBlock, elseEnvironment);
+                elseEnd = EmitStatements(statement.Else, elseBlock, elseEnvironment, exitMatch);
             }
 
             if (thenEnd is null && statement.Else is not null && elseEnd is null)
@@ -779,7 +796,7 @@ public static partial class OresStructuredCfgLowering
         }
 
         private Block While(StructuredWhile statement, Block origin,
-            Dictionary<string, Binding> variables)
+            Dictionary<string, Binding> variables, Action<Block, Dictionary<string, Binding>>? exitMatch)
         {
             var names = Names(variables);
             var headerVariables = new Dictionary<string, Binding>(StringComparer.Ordinal);
@@ -791,7 +808,7 @@ public static partial class OresStructuredCfgLowering
             Block body = NewBlock();
             var bodyVariables = new Dictionary<string, Binding>(
                 headerVariables, StringComparer.Ordinal);
-            Block? bodyEnd = EmitStatements(statement.Body, body, bodyVariables);
+            Block? bodyEnd = EmitStatements(statement.Body, body, bodyVariables, exitMatch);
             if (bodyEnd is not null)
                 bodyEnd.Terminator = new CfgJump(header.Name, Values(names, bodyVariables));
 

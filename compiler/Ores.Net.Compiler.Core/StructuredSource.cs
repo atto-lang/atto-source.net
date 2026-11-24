@@ -178,7 +178,7 @@ public static partial class OresStructuredParser
                 if (token.Text == "guard") return true;
                 if (guardOnly) continue;
                 if (token.Text is "/" or "Option" or "Some" or "None" or "Result" or "trap" or "trap!" or "throw" or "throw!" or
-                    "panic" or "panic!" or "raise" or "raise!" ||
+                    "panic" or "panic!" or "raise" or "raise!" or "match" ||
                     (beforePrevious == "Integer" && previous == "." && token.Text is "rem" or "mod"))
                     return true;
                 beforePrevious = previous;
@@ -930,12 +930,6 @@ public static partial class OresStructuredParser
                 // boolean guards. Its lexer must preserve the real token so
                 // the typed Statement path validates and lowers it below.
                 // The separate shipping scalar lexer remains fail-closed.
-                // Match/default is a true expression grammar extension, not a
-                // valid scalar identifier or CIL fallthrough. This lexer skips
-                // comments before this check; no source-substring blacklist.
-                if (word == "match")
-                    throw new FormatException(
-                        $"MATCH_DEFAULT_BACKEND_UNSUPPORTED: typed match requires real pattern admission, ordered CFG fallback and exhaustiveness before CIL emission at offset {offset}");
                 if (word is "cpu" or "gpu" or "quantum" ||
                     (word == "nb" && !StaticSelectAdmission.FollowedByStaticSelect(source, index)))
                     throw new FormatException(
@@ -1741,6 +1735,12 @@ public static partial class OresStructuredParser
             }
             if (Take("return") || Take("^"))
             {
+                if (doMatchDepth != 0)
+                {
+                    Take("void");
+                    if (!Take(";")) throw Error("MATCH_VOID_ARM: do match arms cannot return a value");
+                    return (new StructuredMatchExit(at), true);
+                }
                 if (activeReturnType == IrValueType.Void)
                 {
                     Take("void");
@@ -1977,6 +1977,14 @@ public static partial class OresStructuredParser
                 // Even a constant-true loop is not accepted as a return proof.
                 return (new StructuredWhile(at, condition, body), false);
             }
+            if (Take("do"))
+            {
+                Expect("match");
+                var match = ReadMatch(depth + 1, imperative: true);
+                return (new StructuredDoMatch(at, match), !match.Completes);
+            }
+            if (Current.Text == "match")
+                throw Error("MATCH_VALUE_REQUIRED: use match as a value or do match as a statement");
             int variableAt = Current.Offset;
             string variable = Name();
             var binding = Lookup(variable, variableAt);
@@ -2071,7 +2079,7 @@ public static partial class OresStructuredParser
                     or "is" or "type"
                     or "routine" or "async" or "isoactor" or "guard"
                     or "Some" or "None" or "Option" or "Array" or "trap" or "Result" or "Error"
-                    or "Ok" or "Err" or "throw" or "raise" or "panic" or "new")
+                    or "Ok" or "Err" or "throw" or "raise" or "panic" or "new" or "match")
                 throw new FormatException($"Invalid identifier at offset {at}");
             index++;
             return name;
@@ -2459,6 +2467,7 @@ public static partial class OresStructuredParser
         {
             Budget(depth);
             int offset = Current.Offset;
+            if (Take("match")) return ReadMatchValue(offset, depth);
             if (Take("trap") || Take("trap!")) return TrapOperand(offset, depth);
             if (Take("Ok")) return TaggedPostfix(NewResult(offset, success: true, depth), depth);
             if (Take("Err")) return TaggedPostfix(NewResult(offset, success: false, depth), depth);

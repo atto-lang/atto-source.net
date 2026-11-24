@@ -53,6 +53,19 @@ public static partial class OresStructuredCfgLowering
                 captures.Add(read.Name);
                 return;
             }
+            if (expression is StructuredMatchValue valueMatch)
+            {
+                CollectReads(valueMatch.Match.Subject, captures);
+                foreach (var arm in valueMatch.Match.Arms)
+                {
+                    var reads = new HashSet<string>(StringComparer.Ordinal);
+                    if (arm.Guard is { } guard) CollectReads(guard, reads);
+                    CollectReads(arm.Value!, reads);
+                    if (arm.Binding is { } binder) reads.Remove(binder);
+                    foreach (var name in reads) captures.Add(name);
+                }
+                return;
+            }
             IEnumerable<StructuredExpr> children = expression switch
             {
                 StructuredBinary binary => [binary.Left, binary.Right],

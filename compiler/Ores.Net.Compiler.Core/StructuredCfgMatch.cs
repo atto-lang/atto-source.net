@@ -1,0 +1,122 @@
+namespace Ores.Net.Compiler;
+
+public static partial class OresStructuredCfgLowering
+{
+    private sealed partial class Builder
+    {
+        private int MatchValue(StructuredMatchValue expression, ref Block block,
+            Dictionary<string, Binding> variables)
+        {
+            var (join, value) = LowerMatch(expression.Match, block, variables);
+            block = join ?? throw new FormatException("Value match has no continuation");
+            return value;
+        }
+
+        private (Block? Join, int Value) LowerMatch(StructuredMatch match, Block block,
+            Dictionary<string, Binding> variables)
+        {
+            Binding subject;
+            int tag;
+            if (match.Subject.Type == IrValueType.OptionI64)
+            {
+                var parts = OptionParts(match.Subject, ref block, variables);
+                subject = new Binding(IrValueType.OptionI64, parts.Tag, parts.Payload);
+                tag = parts.Tag;
+            }
+            else
+            {
+                int value = Expression(match.Subject, ref block, variables);
+                subject = new Binding(match.Subject.Type, value);
+                tag = subject.Type == IrValueType.Bool ? value
+                    : Emit(block, CfgOpcode.ResultIsOk, IrValueType.Bool, left: value);
+            }
+
+            string[] names = Names(variables);
+            Block? join = null;
+            int result = -1;
+            var joined = new Dictionary<string, Binding>(StringComparer.Ordinal);
+            void Finish(Block end, Dictionary<string, Binding> environment, int? value = null)
+            {
+                if (join is null)
+                {
+                    join = Join(names, variables, joined);
+                    if (match.Type != IrValueType.Void)
+                    {
+                        result = NextValue();
+                        join.Parameters.Add(new CfgParameter(result, match.Type));
+                    }
+                }
+                var arguments = Values(names, environment);
+                end.Terminator = new CfgJump(join.Name, value is int id ? [..arguments, id] : arguments);
+            }
+
+            MatchTags remaining = MatchTags.Any;
+            foreach (var arm in match.Arms)
+            {
+                bool testsTag = (arm.Tags & remaining) != remaining;
+                Block? next = testsTag || arm.Guard is not null ? NewBlock() : null;
+                Block selected = block;
+                if (testsTag)
+                {
+                    selected = NewBlock();
+                    bool positive = arm.Tags == MatchTags.Positive;
+                    block.Terminator = new CfgBranch(tag, positive ? selected.Name : next!.Name, [],
+                        positive ? next!.Name : selected.Name, []);
+                }
+
+                var environment = new Dictionary<string, Binding>(variables, StringComparer.Ordinal);
+                if (arm.Binding is { } binder)
+                    environment.Add(binder, MatchBinding(arm, subject, selected));
+
+                if (arm.Guard is { } guard)
+                {
+                    int success = Expression(guard, ref selected, environment);
+                    var guardedBody = NewBlock();
+                    selected.Terminator = new CfgBranch(success, guardedBody.Name, [], next!.Name, []);
+                    selected = guardedBody;
+                }
+                else remaining &= ~arm.Tags;
+
+                if (arm.Value is { } expression)
+                {
+                    int value;
+                    if (expression.Type == IrValueType.OptionI64)
+                    {
+                        var parts = OptionParts(expression, ref selected, environment);
+                        value = Emit(selected, CfgOpcode.PackOptionI64, IrValueType.OptionI64,
+                            left: parts.Tag, right: parts.Payload);
+                    }
+                    else value = Expression(expression, ref selected, environment);
+                    Finish(selected, environment, value);
+                }
+                else
+                {
+                    var end = EmitStatements(arm.Body!, selected, environment,
+                        (exit, locals) => Finish(exit, locals));
+                    if (end is not null) Finish(end, environment);
+                }
+
+                if (next is not null) block = next;
+            }
+            if (remaining != 0) throw new FormatException("Missing verified exhaustive match witness");
+            foreach (var (name, binding) in joined) variables[name] = binding;
+            return (join, result);
+        }
+
+        private Binding MatchBinding(StructuredMatchArm arm, Binding subject, Block block)
+        {
+            if (arm.Tags == MatchTags.Any) return subject;
+            if (subject.Type == IrValueType.OptionI64)
+                return new Binding(IrValueType.I64, subject.PayloadId!.Value);
+            if (arm.BindingType == IrValueType.OptionI64)
+            {
+                var (tag, payload) = UnwrapResultOption(subject.ValueId, block);
+                return new Binding(IrValueType.OptionI64, tag, payload);
+            }
+            var operation = arm.Tags == MatchTags.Positive ? CfgOpcode.ResultUnwrap
+                : arm.BindingType == IrValueType.GuestText ? CfgOpcode.ResultUnwrapTextErr : CfgOpcode.ResultUnwrapErr;
+            IrValueType type = arm.BindingType!.Value;
+            return new Binding(type, Emit(block, operation, type, left: subject.ValueId));
+        }
+    }
+}
