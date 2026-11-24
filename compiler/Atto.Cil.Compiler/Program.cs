@@ -26,9 +26,8 @@ internal sealed record ValueMatch(Expression Subject, List<ValueArm> Arms) : Exp
 internal abstract record Statement;
 internal sealed record PrintLine(Expression Value) : Statement;
 internal sealed record ReturnStmt(Expression Value) : Statement;
-// A closed scalar profile: bool is internal to guards; source methods return
-// only signed int64 or binary64 floating results.
-internal enum CheckedType { Int, Bool, Float }
+// Signed i64 guest results; bool is internal to guards.
+internal enum CheckedType { Int, Bool }
 internal sealed record Function(string Name, List<string> Args,
     CheckedType ReturnType, List<Statement> Body);
 
@@ -112,11 +111,9 @@ internal sealed class Parser
             } while (Eat(","));
             Require(")");
             if (!Eat(":")) Require("->");
-            CheckedType returnType;
-            if (Eat("int")) returnType = CheckedType.Int;
-            else if (Eat("float")) returnType = CheckedType.Float;
-            else throw new CompilerError("E_RETURN_TYPE",
-                "only int and float return types are supported");
+            if (!Eat("int"))
+                throw new CompilerError("E_RETURN_TYPE", "direct CIL requires an int return type");
+            const CheckedType returnType = CheckedType.Int;
             Require("{");
             List<Statement> statements = [];
             while (Peek != "}" && Peek != "<eof>")
@@ -322,9 +319,7 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
                             new HashSet<string>(StringComparer.Ordinal), 0);
                         CheckedType declared = _functions[id].ReturnType;
                         if (resultType != declared)
-                            throw new CompilerError(
-                                resultType == CheckedType.Float && declared == CheckedType.Int
-                                    ? "E_DIVISION_FLOAT_RESULT" : "E_RETURN_TYPE",
+                            throw new CompilerError("E_RETURN_TYPE",
                                 "return expression does not match declared function type");
                         break;
                     }
@@ -347,23 +342,12 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
                     return CheckedType.Int;
                 case Binary b:
                 {
-                    // Resolve both operand types before emitting a method. No
-                    // implicit float-to-int truncation, float+int, float guards,
-                    // or float matches are admitted without typed lowering.
                     CheckedType lhs = WalkExpr(b.Left, owner, bound, depth);
                     CheckedType rhs = WalkExpr(b.Right, owner, bound, depth);
-                    if (b.Op == "/")
-                    {
-                        if (lhs != CheckedType.Int || rhs != CheckedType.Int)
-                            throw new CompilerError("E_FLOAT_OPERATION_UNSUPPORTED",
-                                "only int / int -> float is lowered");
-                        return CheckedType.Float;
-                    }
                     if (lhs != CheckedType.Int || rhs != CheckedType.Int)
-                        throw new CompilerError(
-                            lhs == CheckedType.Float || rhs == CheckedType.Float
-                                ? "E_DIVISION_FLOAT_RESULT" : "E_TYPE",
+                        throw new CompilerError("E_TYPE",
                             "integer operator requires two signed int64 operands");
+                    if (b.Op == "/") CheckIntegerDivision(b);
                     return b.Op is ">" or "eq" or "==" ? CheckedType.Bool : CheckedType.Int;
                 }
                 case Call c:
@@ -405,6 +389,34 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
             }
         }
     }
+
+    // The direct CIL profile has no typed guest unwind for hardware division
+    // faults. Admit signed div only when neither fault can occur.
+    private static void CheckIntegerDivision(Binary expression)
+    {
+        long? divisor = SignedLiteral(expression.Right);
+        if (divisor is null)
+            throw new CompilerError("E_I64_DIVISION_UNVERIFIED",
+                "nonliteral divisor requires typed guest division errors");
+        if (divisor == 0)
+            throw new CompilerError("E_I64_DIVISION_BY_ZERO", "integer divisor is zero");
+        if (divisor != -1) return;
+
+        long? dividend = SignedLiteral(expression.Left);
+        if (dividend == long.MinValue)
+            throw new CompilerError("E_I64_DIVISION_OVERFLOW", "minimum signed int divided by -1");
+        if (dividend is null)
+            throw new CompilerError("E_I64_DIVISION_UNVERIFIED",
+                "divisor -1 requires proof that the dividend cannot be signed minimum");
+    }
+
+    private static long? SignedLiteral(Expression expression) => expression switch
+    {
+        Literal value => value.Number,
+        Binary("-", Literal { Number: 0 }, Literal { Number: >= 0 } magnitude)
+            => -magnitude.Number,
+        _ => null
+    };
 
     internal void Emit(string destination, string source)
     {
@@ -485,10 +497,7 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
             var signature = new BlobBuilder();
             new BlobEncoder(signature).MethodSignature().Parameters(
                 f.Args.Count,
-                r => {
-                    if (f.ReturnType == CheckedType.Float) r.Type().Double();
-                    else r.Type().Int64();
-                },
+                r => r.Type().Int64(),
                 p => { foreach (var arg in f.Args) p.AddParameter().Type().Int64(); });
             metadata.AddMethodDefinition(MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.HideBySig,
                 MethodImplAttributes.IL, metadata.GetOrAddString(f.Name),
@@ -535,17 +544,7 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
                 else il.LoadArgument(f.Args.IndexOf(a.Name));
                 return;
             case Binary b:
-                if (b.Op == "/")
-                {
-                    // Checker established int64/int64. Convert both operands
-                    // independently before div; never integer-truncate first.
-                    Generate(b.Left, f, il, bindings, matchDepth);
-                    il.OpCode(ILOpCode.Conv_r8);
-                    Generate(b.Right, f, il, bindings, matchDepth);
-                    il.OpCode(ILOpCode.Conv_r8);
-                    il.OpCode(ILOpCode.Div);
-                    return;
-                }
+                if (b.Op == "/") CheckIntegerDivision(b);
                 Generate(b.Left, f, il, bindings, matchDepth);
                 Generate(b.Right, f, il, bindings, matchDepth);
                 il.OpCode(b.Op switch
@@ -553,6 +552,7 @@ internal sealed class CIL(List<Function> functions, bool allowStdio)
                     "+" => ILOpCode.Add_ovf,
                     "-" => ILOpCode.Sub_ovf,
                     "*" => ILOpCode.Mul_ovf,
+                    "/" => ILOpCode.Div,
                     ">" => ILOpCode.Cgt,
                     "eq" or "==" => ILOpCode.Ceq,
                     _ => throw new CompilerError("E_PARSE", b.Op)

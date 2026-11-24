@@ -72,13 +72,8 @@ check_rejected() {
 check_rejected match-guard-no-fallback E_MATCH fail/
 check_rejected match-guard-block-fallthrough E_RETURN fail/
 check_rejected unsupported-adt-is-pattern E_UNSUPPORTED_TYPE negative/
-# Float helpers are now supported, but an int-returning match arm must not
-# silently truncate int/int -> float into integer match results.
-check_rejected int-division-float-required E_DIVISION_FLOAT_RESULT negative/
-# Intersect the two compiler changes: scalar-only match arms and subjects
-# cannot leak an unboxed float into i64 pattern comparison/result CIL.
-check_rejected float-match-result E_TYPE negative/
-check_rejected float-match-subject E_TYPE negative/
+# Signed i64 division in a match is covered by checked-i64-division.atto
+# in test-cil-guest.sh. The old widening probes remain historical fixtures.
 for entry in \
     guard-not-bool:E_TYPE \
     duplicate-unreachable:E_MATCH \

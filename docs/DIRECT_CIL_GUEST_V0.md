@@ -68,3 +68,14 @@ This branch's guarded-return matcher is **integer-only**. The accepted AttoLang 
 This is **not** floating-point execution support in the guarded-match branch. [PR #191](https://github.com/atto-lang/atto-source.net/pull/191) owns bounded binary64 lowering; its type checker and guest fixtures must be integrated into this branch's match/stdio parser before either line of work is released together. Do not merge this draft in a way that restores integer div semantics or discards the other PR's tests.
 
 The direct-CIL workflow installs the root-required .NET 10 SDK alongside the net8 runtime and verifies the exact checkout head. CoreCLR/NativeAOT tests are **NOT_EXECUTED** at this changed head until a real runner performs the jobs. Existing source-export security holds remain in force.
+
+## Checked signed division reconciliation (2026-11-23)
+
+The older floating-result section records the previous compiler contract.
+The [reconciled language target](https://github.com/atto-lang/atto-spec/pull/151)
+requires signed `int / int` to truncate toward zero with an integer result.
+The direct CIL lane admits signed division with a known nonzero literal
+divisor. Dividing by `-1` additionally requires a known dividend other than
+the signed minimum. Static zero and overflow have distinct diagnostics.
+Unproven divisors and potential signed-minimum overflow fail before writing
+a DLL until the backend can emit the typed guest Error paths.
