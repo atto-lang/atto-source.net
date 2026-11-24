@@ -1701,6 +1701,11 @@ public static partial class OresStructuredParser
             }
             if (Take("guard"))
             {
+                // The language requires a callable return on every guard failure.
+                // A lexical task or match return would instead join a local scope.
+                // Fail closed until nonlocal exits and their cleanup are lowered.
+                if (localReturn is not null)
+                    throw Error("E_GUARD_LOCAL_RETURN_UNSUPPORTED: guard requires an enclosing callable return, not a lexical scope exit");
                 // Both forms use the exact same checked CFG and type rules.
                 // A successful guard falls through; a failed one must exit.
                 var condition = Expr(depth + 1);
