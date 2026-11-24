@@ -45,6 +45,7 @@ jobs:
             exit 1
           }
           grep -F 'NET_FIXED_ARRAY_OPTION_GET_TESTS_EXECUTED|positive=31|negative=32|ssa_mutants=11' array-tests.log
+          grep -F 'NET_FIXED_ARRAY_COPY_BOUNDARY_TESTS_EXECUTED|positive=2|negative=1' array-tests.log
           project=compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj
           for fixture in contracts/collections/v1/array-inline-{some42,none42,empty42}.atto contracts/collections/v1/array-get-copy-immutable42.atto; do
             dotnet run --project "$project" -c Release -- check-structured "$fixture"
@@ -134,8 +135,13 @@ jobs:
       - name: Execute Windows compiler/CIL regression suite
         shell: pwsh
         run: |
-          dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
-          if ($LASTEXITCODE -ne 0) { throw 'Managed compiler/CFG/CIL regression failed' }
+          $arrayTests = & dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release
+          $result = $LASTEXITCODE
+          $arrayTests | Write-Host
+          if ($result -ne 0) { throw 'Managed compiler/CFG/CIL regression failed' }
+          if (($arrayTests -join "`n") -notmatch 'NET_FIXED_ARRAY_COPY_BOUNDARY_TESTS_EXECUTED\|positive=2\|negative=1') {
+            throw 'Missing signed copy boundary test receipt'
+          }
           foreach ($source in @('contracts/collections/v1/array-inline-some42.atto', 'contracts/collections/v1/array-get-copy-immutable42.atto')) {
             dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -- check-structured $source
             if ($LASTEXITCODE -ne 0) { throw "Experimental checked array source rejected: $source" }
