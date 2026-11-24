@@ -43,7 +43,7 @@ public static class OresStructuredCfgLowering
                 Array.AsReadOnly(helper.Parameters.Select(p => p.Type).ToArray())));
         }
         var main = new Builder(emitCalls: true).Lower(program, helperSignatures);
-        return new VerifiedCfgModule(main, methods.AsReadOnly());
+        return new VerifiedCfgModule(main, methods.AsReadOnly(), program.Protocols, program.ProtocolActors);
     }
 
     // A closed Option<int> is represented by two separately verified SSA IDs.
@@ -324,6 +324,19 @@ public static class OresStructuredCfgLowering
                             "Statement-bodied helper requires the independent MethodDef ABI");
                     return Expression(function.ReturnValue, ref block, parameters);
                 }
+                case StructuredCheckedI32 check:
+                {
+                    int operand = Expression(check.Value, ref block, variables);
+                    return Emit(block, CfgOpcode.CheckedI32, IrValueType.I64, left: operand);
+                }
+                case StructuredCheckRefinement cast:
+                {
+                    int operand = Expression(cast.Value, ref block, variables);
+                    int minimum = Emit(block, CfgOpcode.ConstantI64, IrValueType.I64, value: cast.Minimum);
+                    int maximum = Emit(block, CfgOpcode.ConstantI64, IrValueType.I64, value: cast.Maximum);
+                    return Emit(block, CfgOpcode.CheckRefinement, IrValueType.I64, left: operand,
+                        arguments: [minimum, maximum]);
+                }
                 case StructuredNegate negate:
                 {
                     int zero = Emit(block, CfgOpcode.ConstantI64, IrValueType.I64, value: 0);
@@ -379,6 +392,7 @@ public static class OresStructuredCfgLowering
                         StructuredOperator.Add => CfgOpcode.CheckedAdd,
                         StructuredOperator.Subtract => CfgOpcode.CheckedSubtract,
                         StructuredOperator.Multiply => CfgOpcode.CheckedMultiply,
+                        StructuredOperator.DivideQuantity => CfgOpcode.CheckedDivide,
                         StructuredOperator.ShiftLeft => CfgOpcode.ShiftLeftI64,
                         StructuredOperator.ShiftRightLogical => CfgOpcode.ShiftRightLogicalI64,
                         StructuredOperator.ShiftRightArithmetic => CfgOpcode.ShiftRightArithmeticI64,

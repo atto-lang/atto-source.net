@@ -290,18 +290,36 @@ try
         if (!string.Equals(Path.GetExtension(args[3]), ".cs",
             StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Actor C# source output requires a .cs file");
-        var actorMethod = OresParser.InspectSynchronousActorIncrement(source);
-        var generated = ActorIncrementSourceEmitter.EmitCSharp(actorMethod);
+        var protocolActorSource = OresParser.TryEmitVerifiedProtocolActors(source);
+        var generated = protocolActorSource ?? ActorIncrementSourceEmitter.EmitCSharp(
+            OresParser.InspectSynchronousActorIncrement(source));
         WriteAtomicSource(args[3], generated);
-        Console.WriteLine($"Emitted experimental static actor C# from verified increment IR: {Path.GetFullPath(args[3])}");
+        string actorProfile = protocolActorSource is null ? "increment IR" : "protocol bindings";
+        Console.WriteLine($"Emitted experimental static actor C# from verified {actorProfile}: {Path.GetFullPath(args[3])}");
         return 0;
     }
-    if (validStructuredCheck || validStructuredCompile)
+    if ((validEmitSource && args[0] == "emit-csharp") || validCheck || validStructuredCheck)
     {
-        // Experimental typed source -> verified CFG -> deterministic CIL.
-        // Never enter the shipping scalar path or accept unsupported effects.
-        var verifiedCfg = OresStructuredCfgLowering.LowerModule(source);
-        if (validStructuredCompile)
+        var guest = OresParser.TryEmitVerifiedProtocolGuest(source);
+        if (guest is not null)
+        {
+            if (validEmitSource)
+            {
+                if (!string.Equals(Path.GetExtension(args[3]), ".cs", StringComparison.OrdinalIgnoreCase))
+                    throw new ArgumentException("Protocol guest source output requires .cs extension");
+                WriteAtomicSource(args[3], guest);
+            }
+            Console.WriteLine("Verified protocol guest: OK");
+            return 0;
+        }
+    }
+    var verifiedRefinement = validCheck || validCompile || validStructuredCheck || validStructuredCompile
+        ? OresParser.TryLowerVerifiedRefinementModule(source) : null;
+    if (validStructuredCheck || validStructuredCompile || verifiedRefinement is not null)
+    {
+        // Both source profiles use the verified CFG and deterministic CIL emitter.
+        var verifiedCfg = verifiedRefinement ?? OresStructuredCfgLowering.LowerModule(source);
+        if (validStructuredCompile || validCompile)
         {
             if (!string.Equals(Path.GetFileName(args[3]), "OresGenerated.dll",
                 StringComparison.OrdinalIgnoreCase))

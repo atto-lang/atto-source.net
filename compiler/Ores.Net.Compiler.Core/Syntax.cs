@@ -222,7 +222,8 @@ public static partial class OresParser
         return tokens;
     }
 
-    private static void RejectUnsupportedScalarTokens(List<Token> tokens)
+    private static void RejectUnsupportedScalarTokens(List<Token> tokens,
+        IReadOnlySet<int>? protocolActorOffsets = null)
     {
         // The scalar i64 parser is an independent public compiler entrypoint.
         // A Kestrel host HTTP provider does not authorize guest HTTP actors.
@@ -255,7 +256,7 @@ public static partial class OresParser
         // keep them: 'define virtual actor' and 'define supervisor ...'.
         for (int i = 0; i < tokens.Count; i++)
         {
-            if (tokens[i].Text != "define")
+            if (tokens[i].Text != "define" || protocolActorOffsets?.Contains(tokens[i].Offset) == true)
                 continue;
             int limit = Math.Min(tokens.Count, i + 5);
             for (int j = i + 1; j < limit; j++)
@@ -359,16 +360,18 @@ public static partial class OresParser
         }
     }
 
-    private static void RejectUnsupportedSourceActors(List<Token> tokens)
+    private static void RejectUnsupportedSourceActors(List<Token> tokens,
+        IReadOnlySet<int>? protocolActorOffsets = null)
     {
-        var schema = FindActorStateSchema(tokens);
+        var schema = FindActorStateSchema(tokens, protocolActorOffsets);
         if (schema is not null)
             throw new FormatException(
                 $"Source actor state schema parsed; sealed handle_state and " +
                 $"generation-fenced logical-turn lowering is unavailable at offset {schema.StateOffset}");
     }
 
-    private static ActorStateSchemaMetadata? FindActorStateSchema(List<Token> tokens)
+    private static ActorStateSchemaMetadata? FindActorStateSchema(List<Token> tokens,
+        IReadOnlySet<int>? protocolActorOffsets = null)
     {
         static bool IsIdentifier(Token token)
         {
@@ -392,7 +395,7 @@ public static partial class OresParser
         ActorStateSchemaMetadata? discovered = null;
         for (int i = 0; i < tokens.Count; i++)
         {
-            if (tokens[i].Text != "define")
+            if (tokens[i].Text != "define" || protocolActorOffsets?.Contains(tokens[i].Offset) == true)
                 continue;
 
             int j = i + 1;
@@ -815,13 +818,16 @@ public static partial class OresParser
         }
     }
 
-    private sealed class Reader(List<Token> tokens, DotnetHostImportPolicy policy, string source, int? languageVersion)
+    private sealed partial class Reader(List<Token> tokens, DotnetHostImportPolicy policy, string source, int? languageVersion)
     {
         // Macro definitions are compiler-only. Neither these declarations nor
         // their arguments appear in OresIR/CIL, and no runtime expansion exists.
         private enum MacroKind { ConstIntQuote, SyntaxExprIdentity, SyntaxExprLiteralTwice }
         private sealed record ScalarMacro(string Name, string Parameter, MacroKind Kind);
         private readonly Dictionary<string, ScalarMacro> _macros = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, QuantityUnit> _dimensions = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, QuantityUnit> _units = new(StringComparer.Ordinal);
+        private readonly HashSet<string> _canonicalUnitDimensions = new(StringComparer.Ordinal);
         private int _index;
         private int _macroExpansions;
 
@@ -829,17 +835,20 @@ public static partial class OresParser
             new($"NET_MACRO_EXPANDER_REQUIRED: {reason} at offset {at}; " +
                 "macro expansion must finish before OresIR/CIL; runtime fallback is forbidden");
 
-        private static bool IsMacroName(string word)
+        private static bool IsSourceIdentifier(string word)
         {
             if (word.Length is 0 or > 128 || !(word[0] is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or '_'))
                 return false;
             foreach (char ch in word)
                 if (!(ch is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_'))
                     return false;
-            return word is not ("define" or "pub" or "macro" or "return" or "fnc" or "main" or
+            return true;
+        }
+
+        private static bool IsMacroName(string word) =>
+            IsSourceIdentifier(word) && word is not ("define" or "pub" or "macro" or "return" or "fnc" or "main" or
                 "quote" or "unquote" or "eval" or "const" or "syntax" or "expr" or
                 "Const" or "Syntax" or "Expr" or "int" or "rt");
-        }
 
         // Closed scalar stage-0 subset also accepted by LLVM #1026:
         //   define macro literal(Const<int> x) -> Syntax<Expr> { return quote(x); }
@@ -1002,6 +1011,104 @@ public static partial class OresParser
                 throw new FormatException($"Expected '{value}' at offset {Current.Offset}");
         }
 
+        private string ReadQuantityName()
+        {
+            var token = Current;
+            if (!IsSourceIdentifier(token.Text))
+                throw new FormatException($"E_UNIT_NAME: expected a quantity name at offset {token.Offset}");
+            _index++;
+            return token.Text;
+        }
+
+        private QuantityUnit ReadUnit()
+        {
+            int offset = Current.Offset;
+            string name = ReadQuantityName();
+            if (!_units.TryGetValue(name, out var unit))
+                throw new FormatException($"E_UNIT_NAME: unknown unit '{name}' at offset {offset}");
+            return unit;
+        }
+
+        private long ReadQuantityFactor()
+        {
+            var token = Current;
+            if (!long.TryParse(token.Text.Replace("_", "", StringComparison.Ordinal),
+                    NumberStyles.None, CultureInfo.InvariantCulture, out long factor) || factor <= 0)
+                throw new FormatException($"E_UNIT_SCALE: expected a positive signed i64 factor at offset {token.Offset}");
+            _index++;
+            return factor;
+        }
+
+        private void ParseQuantityDeclarations()
+        {
+            while (Current.Text == "define" && tokens[_index + 1].Text is ("dimension" or "unit"))
+            {
+                _index++;
+                if (_dimensions.Count + _units.Count >= 128)
+                    throw new FormatException("E_UNIT_LIMIT: more than 128 quantity declarations");
+                bool dimension = Take("dimension");
+                if (!dimension) Expect("unit");
+                string name = ReadQuantityName();
+                if (_dimensions.ContainsKey(name) || _units.ContainsKey(name))
+                    throw new FormatException($"E_UNIT_DUPLICATE: quantity name '{name}' is already declared");
+                if (dimension)
+                {
+                    Expect(";");
+                    _dimensions.Add(name, QuantityUnit.Base(name));
+                    continue;
+                }
+
+                Expect(":");
+                string dimensionName = ReadQuantityName();
+                if (!_dimensions.TryGetValue(dimensionName, out var declared))
+                    throw new FormatException($"E_UNIT_NAME: unknown dimension '{dimensionName}'");
+                var unit = declared;
+                if (Take("="))
+                {
+                    if (Current.Text.Length != 0 && char.IsAsciiDigit(Current.Text[0]))
+                    {
+                        long factor = ReadQuantityFactor();
+                        Expect("*");
+                        unit = ReadUnit().Scale(factor, divide: false);
+                    }
+                    else
+                    {
+                        unit = ReadUnit();
+                        if (Take("/")) unit = unit.Scale(ReadQuantityFactor(), divide: true);
+                        else if (Take("*")) unit = unit.Scale(ReadQuantityFactor(), divide: false);
+                    }
+                    if (!unit.HasDimension(declared))
+                        throw new FormatException($"E_UNIT_DIMENSION: unit '{name}' has the wrong declared dimension");
+                }
+                else if (!_canonicalUnitDimensions.Add(dimensionName))
+                    throw new FormatException($"E_UNIT_DUPLICATE: dimension '{dimensionName}' already has a canonical unit");
+                Expect(";");
+                _units.Add(name, unit);
+            }
+        }
+
+        private Expression ParseNumericSuffix(Token token, long value)
+        {
+            if (_dimensions.Count == 0 || Current.Text != "<"
+                    || Current.Offset != token.Offset + token.Text.Length)
+                return new Literal(value);
+            Expect("<");
+            var unit = ReadUnit();
+            Expect(">");
+            if (Take("."))
+            {
+                Expect("to_unit");
+                Expect("<");
+                var target = ReadUnit();
+                Expect(">");
+                Expect("(");
+                Expect(")");
+                value = unit.ConvertExact(value, target);
+                unit = target;
+            }
+            return new QuantityLiteral(value, unit);
+        }
+
         public Expression ParseProgram()
         {
             if (Take("import"))
@@ -1025,6 +1132,7 @@ public static partial class OresParser
                 _dotnetMathAlias = alias;
                 Expect(";");
             }
+            ParseQuantityDeclarations();
             ParseMacroPrelude();
             bool defined = false, exposed = false;
             while (Current.Text is "define" or "pub")
@@ -1166,14 +1274,14 @@ public static partial class OresParser
             while (Current.Text is "*" or "/")
             {
                 char op = Current.Text[0];
-                // int/int is float in Oreslang and remains unsupported in this
-                // i64-only bootstrap; % and ^ are removed at lexical admission.
-                if (op == '/')
+                // A quantity slash has an exact signed-i64 profile. Plain
+                // int/int keeps the existing source rule.
+                if (op == '/' && _units.Count == 0)
                     throw new FormatException(
                         "Division requires float result lowering; unsupported in the i64 source subset");
                 _index++;
                 var rhs = ParseUnary(depth + 1);
-                left = new Binary(op, left, rhs);
+                left = op == '/' ? new QuantityDivision(left, rhs) : new Binary(op, left, rhs);
             }
             return left;
         }
@@ -1368,8 +1476,9 @@ public static partial class OresParser
                 // Signed minimum needs special treatment: its magnitude is > long.MaxValue.
                 if (Current.Text.Replace("_", "", StringComparison.Ordinal).TrimStart('0') == "9223372036854775808")
                 {
+                    Token magnitude = Current;
                     _index++;
-                    return new Literal(long.MinValue);
+                    return ParseNumericSuffix(magnitude, long.MinValue);
                 }
                 return new Unary('-', ParseUnary(depth + 1));
             }
@@ -1381,12 +1490,12 @@ public static partial class OresParser
             }
             if (Current.Text.Length == 0 || Current.Text[0] is < '0' or > '9')
                 throw new FormatException($"Expected integer at offset {Current.Offset}");
-            var raw = Current.Text;
+            Token numericToken = Current;
             _index++;
-            if (!long.TryParse(raw.Replace("_", "", StringComparison.Ordinal),
+            if (!long.TryParse(numericToken.Text.Replace("_", "", StringComparison.Ordinal),
                 NumberStyles.None, CultureInfo.InvariantCulture, out long result))
-                throw new FormatException($"Invalid i64 at offset {tokens[_index - 1].Offset}");
-            return new Literal(result);
+                throw new FormatException($"Invalid i64 at offset {numericToken.Offset}");
+            return ParseNumericSuffix(numericToken, result);
         }
 
         // A nominal Entry<K,V> and a Pair<A,B> remain different source

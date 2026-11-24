@@ -23,6 +23,11 @@ public static class RuntimeHost
             await Console.Error.WriteLineAsync("Oreslang division by zero");
             return 70;
         }
+        catch (RefinementViolationException failure)
+        {
+            await Console.Error.WriteLineAsync(failure.Message);
+            return 70;
+        }
         catch (ArgumentOutOfRangeException)
         {
             // Integer.pow uses this CLR type for a negative exponent. Do not
