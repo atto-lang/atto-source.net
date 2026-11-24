@@ -36,6 +36,8 @@ public sealed record StructuredNegate(int At, StructuredExpr Value)
     : StructuredExpr(At, IrValueType.I64);
 internal sealed record StructuredCheckedI32(int At, StructuredExpr Value)
     : StructuredExpr(At, IrValueType.I64);
+internal sealed record StructuredCheckRefinement(int At, StructuredExpr Value, long Minimum, long Maximum)
+    : StructuredExpr(At, IrValueType.I64);
 public sealed record StructuredConditional(int At, StructuredExpr Test,
     StructuredExpr WhenTrue, StructuredExpr WhenFalse, IrValueType ResultType)
     : StructuredExpr(At, ResultType);

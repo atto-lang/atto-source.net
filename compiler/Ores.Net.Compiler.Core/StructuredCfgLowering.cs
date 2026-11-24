@@ -329,6 +329,14 @@ public static class OresStructuredCfgLowering
                     int operand = Expression(check.Value, ref block, variables);
                     return Emit(block, CfgOpcode.CheckedI32, IrValueType.I64, left: operand);
                 }
+                case StructuredCheckRefinement cast:
+                {
+                    int operand = Expression(cast.Value, ref block, variables);
+                    int minimum = Emit(block, CfgOpcode.ConstantI64, IrValueType.I64, value: cast.Minimum);
+                    int maximum = Emit(block, CfgOpcode.ConstantI64, IrValueType.I64, value: cast.Maximum);
+                    return Emit(block, CfgOpcode.CheckRefinement, IrValueType.I64, left: operand,
+                        arguments: [minimum, maximum]);
+                }
                 case StructuredNegate negate:
                 {
                     int zero = Emit(block, CfgOpcode.ConstantI64, IrValueType.I64, value: 0);

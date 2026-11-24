@@ -15,23 +15,41 @@ internal static class CfgCilEmitter
         ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
         if (graph.Parameters.Count != 0 || graph.ResultType != IrValueType.I64)
             throw new FormatException("Standalone CFG CIL requires parameterless i64 Run entry");
+        MemberReferenceHandle refinementViolation = default;
         CilEmitter.EmitLibraryCore(outputFile, (metadata, bodies) =>
-            WriteMethod(graph, metadata, bodies, null));
+            WriteMethod(graph, metadata, bodies, null, ref refinementViolation));
     }
 
     public static void EmitLibrary(VerifiedCfgModule module, string outputFile)
     {
         ArgumentNullException.ThrowIfNull(module);
         ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
+        MemberReferenceHandle refinementViolation = default;
         CilEmitter.EmitLibraryModuleCore(outputFile, module,
             (graph, metadata, bodies, handles) =>
-                WriteMethod(graph, metadata, bodies, handles));
+                WriteMethod(graph, metadata, bodies, handles, ref refinementViolation));
+    }
+
+    private static MemberReferenceHandle AddRefinementViolationConstructor(MetadataBuilder metadata)
+    {
+        var runtime = metadata.AddAssemblyReference(
+            metadata.GetOrAddString("Ores.Net.Runtime"),
+            new Version(1, 0, 0, 0), default, default, default, default);
+        var type = metadata.AddTypeReference(runtime,
+            metadata.GetOrAddString("Ores.Net.Runtime"),
+            metadata.GetOrAddString("RefinementViolationException"));
+        var signature = new BlobBuilder();
+        new BlobEncoder(signature).MethodSignature(isInstanceMethod: true).Parameters(
+            0, result => result.Void(), _ => { });
+        return metadata.AddMemberReference(type,
+            metadata.GetOrAddString(".ctor"), metadata.GetOrAddBlob(signature));
     }
 
     private static (int BodyOffset, BlobBuilder Code, BlobBuilder? Locals) WriteMethod(
         VerifiedCfgFunction graph, MetadataBuilder metadata,
         MethodBodyStreamEncoder bodies,
-        IReadOnlyDictionary<string, MethodDefinitionHandle>? handles)
+        IReadOnlyDictionary<string, MethodDefinitionHandle>? handles,
+        ref MemberReferenceHandle refinementViolation)
     {
             var blocks = graph.Blocks;
             int valueCount = blocks.Sum(b => b.Parameters.Count + b.Instructions.Count);
@@ -245,6 +263,27 @@ internal static class CfgCilEmitter
                             il.OpCode(ILOpCode.Conv_ovf_i4);
                             il.OpCode(ILOpCode.Conv_i8);
                             break;
+                        case CfgOpcode.CheckRefinement:
+                        {
+                            if (refinementViolation.IsNil)
+                                refinementViolation = AddRefinementViolationConstructor(metadata);
+                            var invalid = il.DefineLabel();
+                            var valid = il.DefineLabel();
+                            il.LoadLocal(op.Left!.Value);
+                            il.LoadLocal(op.Arguments![0]);
+                            il.Branch(ILOpCode.Blt, invalid);
+                            il.LoadLocal(op.Left.Value);
+                            il.LoadLocal(op.Arguments[1]);
+                            il.Branch(ILOpCode.Bgt, invalid);
+                            il.Branch(ILOpCode.Br, valid);
+                            il.MarkLabel(invalid);
+                            il.OpCode(ILOpCode.Newobj);
+                            il.Token(refinementViolation);
+                            il.OpCode(ILOpCode.Throw);
+                            il.MarkLabel(valid);
+                            il.LoadLocal(op.Left.Value);
+                            break;
+                        }
                         case CfgOpcode.CheckedAdd:
                         case CfgOpcode.CheckedSubtract:
                         case CfgOpcode.CheckedMultiply:

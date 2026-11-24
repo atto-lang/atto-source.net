@@ -40,7 +40,9 @@ public enum CfgOpcode
     ShiftRightLogicalI64,
     ShiftRightArithmeticI64,
     // Checked signed-i32 range boundary with an i64 SSA representation.
-    CheckedI32
+    CheckedI32,
+    // Left is the value; Arguments supplies the inclusive signed bounds.
+    CheckRefinement
 }
 
 public readonly record struct CfgParameter(int Id, IrValueType Type);
@@ -464,6 +466,15 @@ public static class OresCfgVerifier
                             op.BoolConstant is not null || op.Target is not null || op.Arguments is not null)
                             throw new FormatException("Malformed CFG checked i32 boundary");
                         Use(i, opIndex, op.Left.Value, IrValueType.I64);
+                        break;
+                    case CfgOpcode.CheckRefinement:
+                        RequireType(op.Type, IrValueType.I64);
+                        if (op.Left is null || op.Right is not null || op.I64Constant is not null ||
+                            op.BoolConstant is not null || op.Target is not null || op.Arguments is not { Count: 2 })
+                            throw new FormatException("Malformed CFG checked refinement");
+                        Use(i, opIndex, op.Left.Value, IrValueType.I64);
+                        Use(i, opIndex, op.Arguments[0], IrValueType.I64);
+                        Use(i, opIndex, op.Arguments[1], IrValueType.I64);
                         break;
                     case CfgOpcode.CheckedAdd:
                     case CfgOpcode.CheckedSubtract:

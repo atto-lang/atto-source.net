@@ -19,6 +19,9 @@ internal readonly record struct VerifiedI64Range
 
     internal bool Includes(VerifiedI64Range actual) => low <= actual.low && high >= actual.high;
 
+    internal long Minimum => low;
+    internal long Maximum => high;
+
     internal bool Nonnegative => low >= 0;
     internal bool Positive => low > 0;
     internal bool Nonpositive => high <= 0;

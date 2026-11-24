@@ -262,7 +262,7 @@ public static partial class OresParser
                         local = ReadVerifiedName();
                     }
                     Expect("=");
-                    var value = VerifiedSum(0);
+                    var value = VerifiedExpression(0);
                     type.Require(value.Type, "E_REFINEMENT_BINDING", "binding " + local);
                     Expect(";");
                     if (!verifiedLocals.TryAdd(local, type with { Range = value.Type.Range }))
@@ -273,7 +273,7 @@ public static partial class OresParser
                 int returnAt = Current.Offset;
                 if (!Take("return"))
                     throw new FormatException("E_REFINEMENT_BODY: expected an explicit return after immutable bindings");
-                var returned = VerifiedSum(0);
+                var returned = VerifiedExpression(0);
                 declared.Require(returned.Type, "E_REFINEMENT_RETURN", "return from " + name);
                 guaranteed.Require(returned.Type, "E_REFINEMENT_POSTCONDITION", "ensures of " + name);
                 foreach (int upper in upperParameters)
@@ -297,6 +297,27 @@ public static partial class OresParser
                 verifiedFunctions.Add(name, new VerifiedFunction(required, guaranteed, upperParameters));
             }
             throw new FormatException("E_REFINEMENT_EXPORT: verified source requires a public main");
+        }
+
+        private QuantityTerm VerifiedExpression(int depth)
+        {
+            var term = VerifiedSum(depth);
+            while (Current.Text == "as")
+            {
+                int at = Current.Offset;
+                _index++;
+                if (Current.Text == "?")
+                    throw new FormatException("E_REFINEMENT_CAST: optional refinement casts are unsupported");
+                var target = ReadRefinedType();
+                target.Unit.RequireCompatible(term.Type.Unit);
+                if (term.Height + 1 >= MaxDepth)
+                    throw new FormatException("E_UNIT_LIMIT: quantity expression is too deep");
+                var range = term.Type.Range.OnNormalResultWithin(target.Range);
+                term = new QuantityTerm(
+                    new StructuredCheckRefinement(at, term.Expression, target.Range.Minimum, target.Range.Maximum),
+                    target with { Range = range }, term.Height + 1, term.UpperBounds);
+            }
+            return term;
         }
 
         private QuantityTerm VerifiedSum(int depth)
@@ -367,7 +388,7 @@ public static partial class OresParser
             CheckDepth(depth);
             if (Take("("))
             {
-                var term = VerifiedSum(depth + 1);
+                var term = VerifiedExpression(depth + 1);
                 Expect(")");
                 return term;
             }
@@ -434,7 +455,7 @@ public static partial class OresParser
                     int index = arguments.Count;
                     if (index >= function.Parameters.Count)
                         throw new FormatException("E_REFINEMENT_CALL: incorrect arity");
-                    var arg = VerifiedSum(depth + 1);
+                    var arg = VerifiedExpression(depth + 1);
                     function.Parameters[index].Require(arg.Type, "E_REFINEMENT_PRECONDITION",
                         $"argument {index + 1} of {name}");
                     arguments.Add(arg.Expression);
