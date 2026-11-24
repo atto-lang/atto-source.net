@@ -17,6 +17,14 @@ using var actors = new ActorRuntime(new ActorRuntimeOptions
     }
 });
 var resumed = new ConcurrentDictionary<ActorRef, ActorKind>();
+var requestIds = new ConcurrentDictionary<Guid, byte>();
+void CheckHeaders(HttpResponseMessage response, string mode)
+{
+    if (response.Headers.GetValues("X-Actor-Mode").Single() != mode ||
+        !Guid.TryParseExact(response.Headers.GetValues("X-Request-Id").Single(), "D", out Guid id) ||
+        !requestIds.TryAdd(id, 0))
+        throw new InvalidOperationException("Compiled actor response metadata mismatch or reused request identity");
+}
 ActorHttpEndpoint Resolve(string method, string path)
 {
     var endpoint = HttpActors.Bind((method, path) switch
@@ -46,8 +54,11 @@ await Task.WhenAll(Enumerable.Range(0, 32).Select(async index =>
 {
     if (index % 2 == 0)
     {
-        if (await client.GetStringAsync("/hello") != "hello from shared actor")
+        using var response = await client.GetAsync("/hello");
+        if (response.StatusCode != HttpStatusCode.OK ||
+            await response.Content.ReadAsStringAsync() != "hello from shared actor")
             throw new InvalidOperationException("Compiled shared handler response mismatch");
+        CheckHeaders(response, "shared");
     }
     else
     {
@@ -55,6 +66,7 @@ await Task.WhenAll(Enumerable.Range(0, 32).Select(async index =>
         using var response = await client.PostAsync("/echo", new StringContent(body));
         if (response.StatusCode != HttpStatusCode.Created || await response.Content.ReadAsStringAsync() != body)
             throw new InvalidOperationException("Compiled isolated handler did not echo the owned body");
+        CheckHeaders(response, "isolated");
     }
 }));
 

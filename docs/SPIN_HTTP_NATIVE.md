@@ -36,8 +36,11 @@ below.
 
 `oresnet emit-http-actors-csharp input.atto --out HttpActors.g.cs` admits a
 closed source profile for shared and isolated HTTP actors. A handler claims
-its exchange, optionally reads the prebuffered request body, awaits a single
-response and ends its actor. The emitted source binds statically to Kestrel
+its exchange, stages response headers, optionally reads the prebuffered
+request body, awaits a single response and ends its actor. Header values can
+come from a string literal or the current exchange's `request_id`. The
+transport validates header names and values, bounds their aggregate size,
+and owns message framing. The emitted source binds statically to Kestrel
 and the actor runtime. Response completion enters the same actor generation
 as a fresh scheduler turn after the physical write releases its arena pin.
 

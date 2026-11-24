@@ -7,6 +7,12 @@ namespace Ores.Net.Compiler;
 
 public static partial class OresParser
 {
+    private static readonly HashSet<string> HttpTransportHeaders = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Connection", "Content-Length", "Content-Type", "Keep-Alive",
+        "Proxy-Connection", "TE", "Trailer", "Transfer-Encoding", "Upgrade"
+    };
+
     /// <summary>Emits the closed HTTP receive and response continuation profile for static Native AOT linking.</summary>
     public static string EmitHttpActorHandlers(string source)
     {
@@ -62,6 +68,34 @@ public static partial class OresParser
             }
         }
 
+        void ReadHeaders(string exchange, List<HttpHeader> headers)
+        {
+            while (Take(exchange))
+            {
+                if (headers.Count == 32) throw Deny("at most 32 response header writes per receive");
+                Sequence(".", "set_header", "(");
+                string name = StringLiteral();
+                if (name.Length is < 1 or > 128 ||
+                    name.Any(c => c is not (>= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9')
+                        && !"!#$%&'*+-.^_`|~".Contains(c)) || HttpTransportHeaders.Contains(name))
+                    throw Deny("invalid or transport-owned HTTP response header");
+                Expect(",");
+                string? value = null;
+                if (Take(exchange))
+                {
+                    Sequence(".", "request_id");
+                }
+                else
+                {
+                    value = StringLiteral();
+                    if (value.Length > 8192 - name.Length - 4 || value.Any(c => c is < ' ' or > '~'))
+                        throw Deny("invalid or oversized HTTP response header value");
+                }
+                Sequence(")", ";");
+                headers.Add(new HttpHeader(name, value));
+            }
+        }
+
         while (Peek().Text.Length != 0)
         {
             if (handlers.Count == 64) throw Deny("at most 64 handlers per source file");
@@ -71,7 +105,7 @@ public static partial class OresParser
             string name = Identifier();
             if (!names.Add(name)) throw Deny("duplicate HTTP actor '" + name + "'");
             Expect("as");
-            if (!Take("susp")) Take("suspends");
+            if (!Take("susp") && !Take("suspends")) Take("async");
             Sequence("receive", "(", "ActorMail", "<", "String", ">");
             string mail = Identifier();
             Sequence(")", ":", "void", "{", "val");
@@ -79,12 +113,15 @@ public static partial class OresParser
             if (exchange == mail) throw Deny("exchange must have a distinct binding");
             Sequence("=", "http", ".", "claim", "(", mail, ".", "value", ")", ";");
 
+            var headers = new List<HttpHeader>();
+            ReadHeaders(exchange, headers);
             string? body = null;
             if (Take("val"))
             {
                 body = Identifier();
                 if (body == exchange || body == mail) throw Deny("body must have a distinct binding");
                 Sequence("=", "await", exchange, ".", "body_text", "(", ")", ";");
+                ReadHeaders(exchange, headers);
             }
             Sequence("await", exchange, ".", "respond", "(");
             if (!int.TryParse(Peek().Text, NumberStyles.None, CultureInfo.InvariantCulture, out int status) ||
@@ -105,7 +142,7 @@ public static partial class OresParser
             }
             else Expect(body);
             Sequence(")", ";", "self", ".", "end", "(", ")", ";", "return", ";", "}", "end");
-            handlers.Add(new HttpHandler(name, isolated, status, contentType, response));
+            handlers.Add(new HttpHandler(name, isolated, headers, status, contentType, response));
         }
         if (handlers.Count == 0) throw Deny("expected an HTTP actor definition");
 
@@ -125,17 +162,29 @@ public static partial class OresParser
         {
             output.Append("        ").Append(HttpCSharpLiteral(handler.Name)).Append(" => new(ActorKind.")
                 .Append(handler.Isolated ? "Private" : "Shared")
-                .Append(", static (actor, exchange) => exchange.Respond(actor, ")
+                .AppendLine(", static (actor, exchange) =>")
+                .AppendLine("        {");
+            foreach (var header in handler.Headers)
+            {
+                output.Append("            exchange.SetResponseHeader(actor, ")
+                    .Append(HttpCSharpLiteral(header.Name)).Append(", ")
+                    .Append(header.Value is null ? "exchange.RequestId(actor)" : HttpCSharpLiteral(header.Value))
+                    .AppendLine(");");
+            }
+            output.Append("            exchange.Respond(actor, ")
                 .Append(handler.Status.ToString(CultureInfo.InvariantCulture)).Append(", ")
                 .Append(HttpCSharpLiteral(handler.ContentType)).Append(", ")
                 .Append(handler.Response is null ? "exchange.ReadBodyText(actor)" : HttpCSharpLiteral(handler.Response))
-                .AppendLine(")) { AfterResponse = static (actor, runtime) => runtime.Stop(actor.Self) },");
+                .AppendLine(");")
+                .AppendLine("        }) { AfterResponse = static (actor, runtime) => runtime.Stop(actor.Self) },");
         }
         return output.AppendLine("        _ => throw new System.ArgumentException(\"Unknown compiled HTTP actor\", nameof(name))")
             .AppendLine("    };").AppendLine("}").ToString().Replace("\r\n", "\n", StringComparison.Ordinal);
     }
 
-    private sealed record HttpHandler(string Name, bool Isolated, int Status, string ContentType, string? Response);
+    private sealed record HttpHeader(string Name, string? Value);
+    private sealed record HttpHandler(string Name, bool Isolated, List<HttpHeader> Headers,
+        int Status, string ContentType, string? Response);
 
     // JSON string escaping emits a subset of the C# ordinary string literal grammar.
     private static string HttpCSharpLiteral(string value) => "\"" + JsonEncodedText.Encode(value) + "\"";

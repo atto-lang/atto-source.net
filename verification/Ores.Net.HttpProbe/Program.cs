@@ -8,6 +8,8 @@ static void Require(bool value, string label)
 { if (!value) throw new Exception("HTTP probe failed: " + label); }
 static bool Denied(Action action)
 { try { action(); return false; } catch (InvalidOperationException) { return true; } }
+static bool BadHeader(Action action)
+{ try { action(); return false; } catch (ArgumentException) { return true; } }
 static async Task Until(Func<bool> condition, Func<string>? describe = null)
 {
     using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
@@ -59,6 +61,8 @@ ActorHttpEndpoint Resolve(string method, string path) => new(
             });
             ticket = exchange.Move(context, target);
             Require(Denied(() => exchange.Path(context)), "sender alias revoked before delivery");
+            Require(Denied(() => exchange.SetResponseHeader(context, "X-Former-Owner", "stale")),
+                "former exchange owner cannot alter headers");
             Interlocked.Increment(ref denials);
             var wrong = actors.Spawn(ActorKind.Shared, (intruder, _) =>
             {
@@ -79,7 +83,24 @@ ActorHttpEndpoint Resolve(string method, string path) => new(
             response = Encoding.UTF8.GetString(body);
         }
         if (path == "/oversized-response") response = new string('x', 2048);
+        if (path == "/metadata")
+        {
+            Require(BadHeader(() => exchange.SetResponseHeader(context, "cOnTeNt-LeNgTh", "0")),
+                "actor cannot set message framing");
+            Require(BadHeader(() => exchange.SetResponseHeader(context, "X-Probe", "before\r\nafter")),
+                "multiline header value denied");
+            for (int i = 0; i < 31; i++)
+                exchange.SetResponseHeader(context, $"X-Probe-{i}", new string('x', 240));
+            Require(BadHeader(() => exchange.SetResponseHeader(context, "X-Over-Budget", new string('x', 1024))),
+                "aggregate header bytes bounded");
+            exchange.SetResponseHeader(context, "X-Request-Id", exchange.RequestId(context));
+            Require(BadHeader(() => exchange.SetResponseHeader(context, "X-Extra-Header", "no")),
+                "header count bounded");
+        }
         exchange.Respond(context, 200, "text/plain", response);
+        if (path == "/metadata")
+            Require(Denied(() => exchange.SetResponseHeader(context, "X-Probe-0", "late")),
+                "headers cannot change after response admission");
         if (path == "/duplicate")
         {
             Require(Denied(() => exchange.Respond(context, 200, "text/plain", "duplicate")), "one writer");
@@ -102,9 +123,16 @@ using (var echo = await client.PostAsync("/echo", new StringContent("body-roundt
 using (var moved = await client.PostAsync("/move", new StringContent("owned-body")))
     Require(await moved.Content.ReadAsStringAsync() == "moved", "exchange transfer over real HTTP");
 Require(Denied(() => retained!.Path(retainedContext!)), "retained physical turn denied");
+Require(Denied(() => retained!.SetResponseHeader(retainedContext!, "X-Stale-Turn", "rejected")),
+    "retained turn cannot edit headers");
 Interlocked.Increment(ref denials);
 Require(await client.GetStringAsync("/duplicate") == "shared", "duplicate response rejected");
 Require(await client.GetStringAsync("/resume") == "shared", "response precedes continuation");
+using (var metadata = await client.GetAsync("/metadata"))
+    Require(metadata.IsSuccessStatusCode &&
+        Guid.TryParseExact(metadata.Headers.GetValues("X-Request-Id").Single(), "D", out _) &&
+        metadata.Headers.GetValues("X-Probe-0").Single() == new string('x', 240),
+        "bounded staged headers commit with the response");
 using (var head = await client.SendAsync(new HttpRequestMessage(HttpMethod.Head, "/shared")))
     Require((await head.Content.ReadAsByteArrayAsync()).Length == 0 && head.Content.Headers.ContentLength == 6, "HEAD body suppression");
 using (var tooLarge = await client.PostAsync("/echo", new ByteArrayContent(new byte[1025])))
