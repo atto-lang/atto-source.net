@@ -36,6 +36,16 @@ public sealed class ActorHttpExchange
     public int BodyLength(ActorContext actor) => _lease.BodyLength(actor, _generation);
     public void CopyBody(ActorContext actor, Span<byte> destination) =>
         _lease.CopyBody(actor, _generation, destination);
+    public string ReadBodyText(ActorContext actor)
+    {
+        byte[] bytes = new byte[BodyLength(actor)];
+        try
+        {
+            CopyBody(actor, bytes);
+            return Encoding.UTF8.GetString(bytes);
+        }
+        finally { CryptographicOperations.ZeroMemory(bytes); }
+    }
     public HttpExchangeTicket Move(ActorContext actor, ActorRef destination) =>
         _lease.Move(actor, _generation, destination);
 
@@ -67,6 +77,11 @@ internal sealed class HttpExchangeLease
     internal Task Completion => _completion.Task;
     internal Task OwnerTermination { get; private set; } = Task.CompletedTask;
     internal void Fail(Exception failure) => _completion.TrySetException(failure);
+    internal bool ResponseBelongsToInitialOwner(ActorRef actor)
+    {
+        lock (_gate) return _owner == actor && _generation == 1;
+    }
+
     internal Task StopOwner()
     {
         lock (_gate)
@@ -185,6 +200,7 @@ internal sealed class HttpExchangeLease
 
     private async Task WriteResponseAsync(int status, string contentType, byte[] bytes, ActorArenaLifetimePin pin)
     {
+        Exception? error = null;
         try
         {
             var http = _http!;
@@ -194,10 +210,12 @@ internal sealed class HttpExchangeLease
             if (http.Request.Method != "HEAD" && status is not (204 or 304))
                 await http.Response.Body.WriteAsync(bytes, _cancellation).ConfigureAwait(false);
             await http.Response.CompleteAsync().ConfigureAwait(false);
-            _completion.TrySetResult();
         }
-        catch (Exception failure) { _completion.TrySetException(failure); }
+        catch (Exception failure) { error = failure; }
         finally { CryptographicOperations.ZeroMemory(bytes); pin.Dispose(); }
+        // Publish only after the physical write relinquishes its arena pin.
+        if (error is null) _completion.TrySetResult();
+        else _completion.TrySetException(error);
     }
 
     internal async Task CloseAsync()

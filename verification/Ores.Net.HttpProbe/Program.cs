@@ -8,10 +8,14 @@ static void Require(bool value, string label)
 { if (!value) throw new Exception("HTTP probe failed: " + label); }
 static bool Denied(Action action)
 { try { action(); return false; } catch (InvalidOperationException) { return true; } }
-static async Task Until(Func<bool> condition)
+static async Task Until(Func<bool> condition, Func<string>? describe = null)
 {
     using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-    while (!condition()) await Task.Delay(5, deadline.Token);
+    try { while (!condition()) await Task.Delay(5, deadline.Token); }
+    catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+    {
+        throw new TimeoutException("HTTP probe did not quiesce " + describe?.Invoke());
+    }
 }
 
 using var actors = new ActorRuntime(new ActorRuntimeOptions
@@ -25,6 +29,12 @@ var ids = new ConcurrentDictionary<ulong, bool>();
 ActorHttpExchange? retained = null;
 ActorContext? retainedContext = null;
 int denials = 0;
+int responseContinuations = 0;
+void Resume(ActorContext context, ActorRuntime runtime)
+{
+    Interlocked.Increment(ref responseContinuations);
+    runtime.Stop(context.Self);
+}
 ActorHttpEndpoint Resolve(string method, string path) => new(
     path == "/private" ? ActorKind.Private : ActorKind.Shared,
     (context, exchange) =>
@@ -75,8 +85,12 @@ ActorHttpEndpoint Resolve(string method, string path) => new(
             Require(Denied(() => exchange.Respond(context, 200, "text/plain", "duplicate")), "one writer");
             Interlocked.Increment(ref denials);
         }
-        if (path != "/linger") actors.Stop(context.Self);
-    });
+        if (path is not ("/linger" or "/resume")) actors.Stop(context.Self);
+    })
+    {
+        AfterResponse = path is "/resume" or "/fault" or "/oversized-response" or "/timeout"
+            ? Resume : null
+    };
 
 await using var server = await ActorHttpServer.StartAsync(actors, Resolve,
     new ActorHttpServerOptions { MaxRequests = 16, MaxBodyBytes = 1024, MaxResponseBytes = 1024, RequestTimeout = TimeSpan.FromSeconds(2) });
@@ -90,6 +104,7 @@ using (var moved = await client.PostAsync("/move", new StringContent("owned-body
 Require(Denied(() => retained!.Path(retainedContext!)), "retained physical turn denied");
 Interlocked.Increment(ref denials);
 Require(await client.GetStringAsync("/duplicate") == "shared", "duplicate response rejected");
+Require(await client.GetStringAsync("/resume") == "shared", "response precedes continuation");
 using (var head = await client.SendAsync(new HttpRequestMessage(HttpMethod.Head, "/shared")))
     Require((await head.Content.ReadAsByteArrayAsync()).Length == 0 && head.Content.Headers.ContentLength == 6, "HEAD body suppression");
 using (var tooLarge = await client.PostAsync("/echo", new ByteArrayContent(new byte[1025])))
@@ -99,14 +114,19 @@ using (var bad = await client.GetAsync("/oversized-response")) Require(bad.Statu
 var requests = Enumerable.Range(0, 12).Select(i => client.GetStringAsync(i % 2 == 0 ? "/private" : "/shared"));
 Require((await Task.WhenAll(requests)).Length == 12, "concurrent single-carrier progress");
 using (var timeout = await client.GetAsync("/timeout")) Require(timeout.StatusCode == HttpStatusCode.GatewayTimeout, "deadline retires nonresponding actor");
-await Until(() => actors.LiveActors == 0 && actors.NativeReservedBytes == 0 && server.ActiveRequests == 0);
+string DescribeMainServer() =>
+    $"alive={actors.LiveActors}, native bytes={actors.NativeReservedBytes}, admitted={server.ActiveRequests}";
+await Until(() => actors.LiveActors == 0 && actors.NativeReservedBytes == 0 && server.ActiveRequests == 0,
+    DescribeMainServer);
 using (var canceled = new CancellationTokenSource(TimeSpan.FromMilliseconds(80)))
 {
     try { await client.GetAsync("/timeout", canceled.Token); throw new Exception("client cancellation did not interrupt request"); }
     catch (OperationCanceledException) when (canceled.IsCancellationRequested) { }
 }
-await Until(() => actors.LiveActors == 0 && actors.NativeReservedBytes == 0 && server.ActiveRequests == 0);
+await Until(() => actors.LiveActors == 0 && actors.NativeReservedBytes == 0 && server.ActiveRequests == 0,
+    DescribeMainServer);
 Require(await client.GetStringAsync("/shared") == "shared", "disconnect recovery");
+Require(responseContinuations == 1, "only a completed response resumes its actor");
 
 await using (var bounded = await ActorHttpServer.StartAsync(actors, Resolve,
     new ActorHttpServerOptions { MaxRequests = 1, MaxBodyBytes = 1024, RequestTimeout = TimeSpan.FromMilliseconds(350) }))

@@ -1,0 +1,18 @@
+define actor SharedHello as
+  susp receive(ActorMail<String> mail): void {
+    val request = http.claim(mail.value);
+    await request.respond(200, "text/plain; charset=utf-8", "hello from shared actor");
+    self.end();
+    return;
+  }
+end
+
+define isoactor IsolatedEcho as
+  suspends receive(ActorMail<String> mail): void {
+    val request = http.claim(mail.value);
+    val body = await request.body_text();
+    await request.respond(201, "text/plain; charset=utf-8", body);
+    self.end();
+    return;
+  }
+end
