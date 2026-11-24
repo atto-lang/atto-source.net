@@ -172,14 +172,22 @@ public static partial class OresStructuredParser
         var lexer = new Lexer(source, moduleMode: false);
         try
         {
+            string previous = "", beforePrevious = "";
             while (lexer.Read() is { Text.Length: > 0 } token)
-                if (token.Text == "guard" || !guardOnly && token.Text is
-                    "/" or "Option" or "Some" or "None" or "Result" or "trap" or "trap!" or "throw" or "throw!" or
-                    "panic" or "panic!" or "raise" or "raise!") return true;
+            {
+                if (token.Text == "guard") return true;
+                if (guardOnly) continue;
+                if (token.Text is "/" or "Option" or "Some" or "None" or "Result" or "trap" or "trap!" or "throw" or "throw!" or
+                    "panic" or "panic!" or "raise" or "raise!" ||
+                    (beforePrevious == "Integer" && previous == "." && token.Text is "rem" or "mod"))
+                    return true;
+                beforePrevious = previous;
+                previous = token.Text;
+            }
         }
         catch (FormatException)
         {
-            // An input outside the CFG lexer before any guard token belongs
+            // An input outside the CFG lexer before any matching token belongs
             // to the ordinary frontend and its existing diagnostics.
         }
         return false;
