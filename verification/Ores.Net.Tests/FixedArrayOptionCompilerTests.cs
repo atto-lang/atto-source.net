@@ -175,6 +175,19 @@ internal static class FixedArrayOptionCompilerTests
             "fnc main():int{val Array<int> a=Array.of(42);return a.get_copy(true).unwrap_or(0);}",
             "Array<int>.get_copy index must be int");
 
+        // Current immutable profile: prove the signed index is never narrowed
+        // to a 32-bit slot and that a mutable get_copy is not silently
+        // treated as immutable. The latter is a capability denial, not
+        // the final actor-owned mutable-array ownership contract.
+        Check("fnc main():int{val Array<int> a=Array.of(7);return a.get_copy(4294967296).unwrap_or(42);}",
+            42, "copy-no-i32-index-truncation");
+        Check("fnc main():int{val Array<int> a=Array.of(7);return a.get_copy(-9223372036854775808).unwrap_or(42);}",
+            42, "copy-minimum-signed-index");
+        DenyDiagnostic(
+            "fnc main():int{let Array<int> a=Array.of(42);return a.get_copy(0).unwrap_or(0);}",
+            "E_ARRAY_IMMUTABLE_ONLY");
+        Console.WriteLine("NET_FIXED_ARRAY_COPY_BOUNDARY_TESTS_EXECUTED|positive=2|negative=1");
+
         var valid = OresCfgVerifier.Verify(Forge(new CfgInstruction(2,
             CfgOpcode.ArrayIndexValidI64, IrValueType.Bool, Left: 0, I64Constant: 8)));
         if (valid.Blocks[0].Instructions[2].Type != IrValueType.Bool)
