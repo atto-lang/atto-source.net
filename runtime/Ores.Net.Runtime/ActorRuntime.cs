@@ -793,6 +793,27 @@ public sealed class ActorRuntime : IDisposable
         return cell.Terminated.Task;
     }
 
+    // The state write and Stop use the same cell gate. Only a physical turn
+    // carrying this cell's exact context may publish a protocol transition.
+    internal bool TryPublishProtocolState(ActorContext context, ref ushort state, ushort destination)
+    {
+        ActorCell? cell;
+        lock (_gate)
+        {
+            if (_closed || !_actors.TryGetValue(context.Self.Id, out cell) ||
+                cell.Reference != context.Self)
+                return false;
+        }
+        lock (cell.Gate)
+        {
+            if (cell.Stopping || !cell.Mailbox.Authorizes(context.Self))
+                return false;
+            context.ValidateActiveTurn();
+            state = destination;
+            return true;
+        }
+    }
+
     // Statically bound capability-provider dispatch. This is the existing
     // bounded mailbox admission, not a socket send or asynchronous offload.
     internal void PostHostMessage(ActorRef actor) => Send(actor, ReadOnlySpan<byte>.Empty);

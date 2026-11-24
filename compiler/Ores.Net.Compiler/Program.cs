@@ -290,10 +290,12 @@ try
         if (!string.Equals(Path.GetExtension(args[3]), ".cs",
             StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Actor C# source output requires a .cs file");
-        var actorMethod = OresParser.InspectSynchronousActorIncrement(source);
-        var generated = ActorIncrementSourceEmitter.EmitCSharp(actorMethod);
+        var protocolActorSource = OresParser.TryEmitVerifiedProtocolActors(source);
+        var generated = protocolActorSource ?? ActorIncrementSourceEmitter.EmitCSharp(
+            OresParser.InspectSynchronousActorIncrement(source));
         WriteAtomicSource(args[3], generated);
-        Console.WriteLine($"Emitted experimental static actor C# from verified increment IR: {Path.GetFullPath(args[3])}");
+        string actorProfile = protocolActorSource is null ? "increment IR" : "protocol bindings";
+        Console.WriteLine($"Emitted experimental static actor C# from verified {actorProfile}: {Path.GetFullPath(args[3])}");
         return 0;
     }
     var verifiedRefinement = validCheck || validCompile || validStructuredCheck || validStructuredCompile

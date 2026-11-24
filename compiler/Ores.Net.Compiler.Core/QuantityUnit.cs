@@ -41,6 +41,18 @@ internal sealed class QuantityUnit
     internal bool SameUnit(QuantityUnit other) =>
         numerator == other.numerator && denominator == other.denominator && HasDimension(other);
 
+    internal void WriteCanonical(BinaryWriter writer)
+    {
+        writer.Write(dimensions.Count);
+        foreach (var (dimension, power) in dimensions)
+        {
+            writer.Write(dimension);
+            writer.Write(power);
+        }
+        writer.Write(numerator.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        writer.Write(denominator.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
     internal void RequireCompatible(QuantityUnit other)
     {
         if (!HasDimension(other))
