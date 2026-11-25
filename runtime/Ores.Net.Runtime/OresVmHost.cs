@@ -51,6 +51,7 @@ public sealed partial class OresVmHost
         public ulong Generation { get; }
         internal bool Suspended { get; set; }
         internal bool Completed { get; set; }
+        internal bool CancellationRequested { get; set; }
         internal ulong NextStateLoanGeneration { get; set; } = 1;
         internal int StateLoanDepth { get; set; }
         internal ActorStateLoan? ActiveStateLoan { get; set; }
@@ -245,6 +246,8 @@ public sealed partial class OresVmHost
             // A nested state reborrow may attenuate, never amplify, the
             // current scope's authority. Reject before allocating a generation
             // or fencing the existing loan.
+            if (turn.CancellationRequested)
+                throw new InvalidOperationException("cancelled actor turn cannot acquire new state loans");
             if (writable && turn.ActiveStateLoan is { Writable: false })
                 throw new InvalidOperationException("read-only actor state loan cannot grant writable nested loan");
             if (turn.StateLoanDepth >= 32)
@@ -303,6 +306,8 @@ public sealed partial class OresVmHost
             var s = Check(handle); CheckTurn(s, actor, turn);
             if (!ReferenceEquals(actor.RunningTurn, turn))
                 throw new InvalidOperationException("actor logical turn already suspended");
+            if (turn.CancellationRequested)
+                throw new InvalidOperationException("cancelled actor turn cannot suspend again");
             if (turn.ActiveStateLoan is not null)
                 throw new InvalidOperationException("state loan must retire before suspension");
             turn.Suspended = true;
@@ -311,10 +316,23 @@ public sealed partial class OresVmHost
     }
 
     public void ResumeActorTurn(
-        IsolateHandle handle, ActorTicket actor, ActorTurnTicket turn)
+        IsolateHandle handle, ActorTicket actor, ActorTurnTicket turn) =>
+        ResumeActorTurnCore(handle, actor, turn, cancellationCleanup: false);
+
+    // Trusted scheduler-only cleanup entry. A cancelled continuation cannot
+    // resume through ordinary dispatch. The scheduler must run unwind only.
+    internal void ResumeActorTurnForCancellation(
+        IsolateHandle handle, ActorTicket actor, ActorTurnTicket turn) =>
+        ResumeActorTurnCore(handle, actor, turn, cancellationCleanup: true);
+
+    private void ResumeActorTurnCore(
+        IsolateHandle handle, ActorTicket actor, ActorTurnTicket turn,
+        bool cancellationCleanup)
     {
         lock (_gate) {
             var s = Check(handle); CheckTurn(s, actor, turn);
+            if (turn.CancellationRequested != cancellationCleanup)
+                throw new InvalidOperationException("actor cancellation resume authority mismatch");
             if (!turn.Suspended)
                 throw new InvalidOperationException("actor logical turn is not suspended");
             if (actor.RunningTurn is not null)
@@ -329,6 +347,8 @@ public sealed partial class OresVmHost
     {
         lock (_gate) {
             var s = Check(handle); CheckTurn(s, actor, turn);
+            if (turn.CancellationRequested)
+                throw new InvalidOperationException("cancelled actor turn requires terminal cancellation acknowledgement");
             if (turn.ActiveStateLoan is not null)
                 throw new InvalidOperationException("state loan must retire before completion");
             FinishTurn(actor, turn);
@@ -336,21 +356,33 @@ public sealed partial class OresVmHost
     }
 
     /// <summary>
-    /// Cancellation owns the same terminal transition as successful completion:
-    /// it fences the exact active turn, clears actor admission once, and makes
-    /// every later resume/complete/cancel attempt stale.
+    /// Request cancellation without releasing a live receive, running slot,
+    /// or state loan. The trusted scheduler owns cleanup and retirement.
+    /// </summary>
+    public void RequestActorTurnCancellation(
+        IsolateHandle handle, ActorTicket actor, ActorTurnTicket turn)
+    {
+        lock (_gate) {
+            var s = Check(handle); CheckTurn(s, actor, turn);
+            turn.CancellationRequested = true;
+        }
+    }
+
+    /// <summary>
+    /// Trusted scheduler terminal acknowledgement, not a cancellation request.
+    /// Caller must have completed unwind and physical carrier retirement (or
+    /// proven that the suspended continuation cannot enter again).
+    /// This host ledger cannot independently attest carrier retirement.
     /// </summary>
     public void CancelActorTurn(
         IsolateHandle handle, ActorTicket actor, ActorTurnTicket turn)
     {
         lock (_gate) {
             var s = Check(handle); CheckTurn(s, actor, turn);
-            // Terminal cancellation revokes all bounded nested scopes.
-            while (turn.ActiveStateLoan is { } loan) {
-                loan.Released = true;
-                turn.ActiveStateLoan = loan.Parent;
-            }
-            turn.StateLoanDepth = 0;
+            if (!turn.CancellationRequested)
+                throw new InvalidOperationException("actor cancellation was not requested");
+            if (turn.ActiveStateLoan is not null || turn.StateLoanDepth != 0)
+                throw new InvalidOperationException("state loans must unwind before cancellation acknowledgement");
             FinishTurn(actor, turn);
         }
     }
