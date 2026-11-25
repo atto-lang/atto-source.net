@@ -216,7 +216,7 @@ public static partial class OresParser
                 else if (pos + 1 < source.Length && (source.AsSpan(pos, 2).SequenceEqual("->") ||
                          source.AsSpan(pos, 2).SequenceEqual("==")))
                     pos += 2;
-                else if (";:.,=+{}()|<>-".IndexOf(ch) >= 0)
+                else if (";:.,=+{}()|<>-!".IndexOf(ch) >= 0)
                     pos++;
                 else throw new FormatException($"E_EXTERNAL_RECEIVE: unsupported token at offset {pos}");
                 _tokens.Add(new DeclaredToken(source[start..pos], start));
@@ -284,6 +284,17 @@ public static partial class OresParser
                     CultureInfo.InvariantCulture, out long n))
                 throw new FormatException("E_EXTERNAL_RECEIVE: i64 literal out of range");
             return n;
+        }
+
+        internal void TrapKeyword()
+        {
+            int offset = At.Offset;
+            E("trap");
+            if (At.Text == "!") {
+                if (At.Offset != offset + 4)
+                    throw new FormatException("E_ACTOR_AWAIT: trap! must be contiguous");
+                E("!");
+            }
         }
 
         internal string Loan()
