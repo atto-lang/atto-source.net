@@ -471,6 +471,10 @@ public sealed partial class OresVmHost
             // No DATA enqueue, allocation, or capacity check at retirement.
             if (actor.ParentTerminalSlot is { } slot) {
                 slot.Notice = new ChildTerminalNotice(actor.Id, actor.Epoch, terminalKind);
+                // Move ready slots to the tail, preserving publication order
+                // even when children retire out of registration order.
+                slot.Parent.TerminalControls.Remove(slot);
+                slot.Parent.TerminalControls.Add(slot);
                 actor.ParentTerminalSlot = null;
             }
         }
