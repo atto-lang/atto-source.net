@@ -8,7 +8,7 @@ namespace Ores.Net.Compiler;
 
 // Frozen in-memory registry metadata. Expected lock digest is independently trusted.
 // No filesystem/network access or caller-supplied export authority.
-public sealed class FrozenImportSnapshot
+public sealed partial class FrozenImportSnapshot
 {
     private const int MaxManifest=8192, MaxLock=32768, MaxFiles=64, MaxSource=1048576;
     private readonly Dictionary<string,string> namespaces, exports, sources;
@@ -131,6 +131,5 @@ public sealed class FrozenImportSnapshot
         if(source is null||!source.StartsWith(Name+"/",StringComparison.Ordinal)) throw Fail("E_IMPORT_PATH","wrong pinned package");
         return NamespaceForSubpath(source[(Name.Length+1)..]);
     }
-    // No graph view until arbitrary source namespace parsing and visibility
-    // become available in the actual .NET compiler. Never infer from filenames.
+    // Source-derived graph integration lives in FrozenImportSnapshot.Graph.cs.
 }
