@@ -153,7 +153,9 @@ internal static class VmIsolateHostTests
         ExpectFailure(() => host.EndActorStateLoan(tenant, child, turn, outer), "cleanup remains LIFO");
         ExpectFailure(() => host.AcknowledgeActorTurnCancellation(tenant, parent, turn), "foreign ack");
         if (signal.IsCompleted) throw new Exception("cancel request published terminal notice");
+        ExpectFailure(() => host.AcknowledgeActorTurnCancellation(tenant, child, turn), "ack with two live loans");
         host.EndActorStateLoan(tenant, child, turn, inner);
+        ExpectFailure(() => host.AcknowledgeActorTurnCancellation(tenant, child, turn), "ack with outer loan still live");
         host.EndActorStateLoan(tenant, child, turn, outer);
         host.AcknowledgeActorTurnCancellation(tenant, child, turn);
         ExpectFailure(() => host.AcknowledgeActorTurnCancellation(tenant, child, turn), "duplicate ack");
