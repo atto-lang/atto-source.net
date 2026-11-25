@@ -6,6 +6,8 @@ on:
       - 'verification/Ores.Net.Tests/CompilerCacheKeySelfTest.cs'
       - 'compiler/Ores.Net.Compiler.Core/CompilerArtifactReceipt.cs'
       - 'verification/Ores.Net.Tests/CompilerArtifactReceiptSelfTest.cs'
+      - 'compiler/Ores.Net.Compiler.Core/CompilerCacheLedger.cs'
+      - 'verification/Ores.Net.Tests/CompilerCacheLedgerSelfTest.cs'
       - '.github/workflows/compiler-cache-key.yml'
 permissions:
   contents: read
@@ -41,5 +43,7 @@ jobs:
           cmp verification/Ores.Net.Tests/CompilerCacheKeySelfTest.cs "$work/CompilerCacheKeySelfTest.cs"
           cp verification/Ores.Net.Tests/CompilerArtifactReceiptSelfTest.cs "$work/"
           cmp verification/Ores.Net.Tests/CompilerArtifactReceiptSelfTest.cs "$work/CompilerArtifactReceiptSelfTest.cs"
-          printf '%s\n' 'CompilerCacheKeySelfTest.Run();' 'CompilerArtifactReceiptSelfTest.Run();' > "$work/Program.cs"
+          cp verification/Ores.Net.Tests/CompilerCacheLedgerSelfTest.cs "$work/"
+          cmp verification/Ores.Net.Tests/CompilerCacheLedgerSelfTest.cs "$work/CompilerCacheLedgerSelfTest.cs"
+          printf '%s\n' 'CompilerCacheKeySelfTest.Run();' 'CompilerArtifactReceiptSelfTest.Run();' 'CompilerCacheLedgerSelfTest.Run();' > "$work/Program.cs"
           dotnet run --project "$work" --configuration Release
