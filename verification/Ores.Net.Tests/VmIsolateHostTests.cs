@@ -391,6 +391,62 @@ internal static class VmIsolateHostTests
         Console.WriteLine("NET_MIGRATABLE_CARRIER_SEGMENTS_HOST_TESTS_PASS");
     }
 
+    private static void CheckSupervisorHandlerDispatch()
+    {
+        var host = new OresVmHost(maxTenants: 1, maxQueuedMailBytes: 1);
+        var tenant = host.CreateIsolate("supervisor-handler", maxActors: 3, maxQueuedMailBytes: 1);
+        host.Start(tenant);
+        var parent = host.RegisterActor(tenant, 1);
+        host.ConfigureNamedActorState(tenant, parent, "Counter", "Counter|1:I",
+            new[] { new OresVmHost.ActorStateField(OresVmHost.ActorStateScalarKind.Int64) });
+        var scheduler = host.CreateTrustedScheduler();
+        host.SendActor(tenant, parent, parent.CurrentRef, new byte[] { 42 });
+        for (var i = 1; i < 1024; i++)
+            host.SendActor(tenant, parent, parent.CurrentRef, Array.Empty<byte>());
+        var first = host.RegisterSupervisedActor(tenant, parent, 2);
+        var second = host.RegisterSupervisedActor(tenant, parent, 3);
+        var ready = scheduler.WaitForSupervisorTerminal(tenant, parent);
+        host.RetireFaultedActor(tenant, first);
+        host.RetireActor(tenant, second);
+        if (!ready.IsCompletedSuccessfully) throw new Exception("handler lost readiness");
+        ExpectFailure(() => scheduler.TryDispatchSupervisorTerminal(tenant, parent, "Wrong|1:I",
+            (_, _) => throw new Exception("wrong-layout handler entered")), "layout admission");
+        var seen = new HashSet<ulong>();
+        OresVmHost.ActorDispatchScope? stale = null;
+        if (!scheduler.TryDispatchSupervisorTerminal(tenant, parent, "Counter|1:I", (scope, notice) => {
+            if (!seen.Add(notice.ChildEpoch)) throw new Exception("duplicate notice");
+            stale = scope;
+            ExpectFailure(() => scheduler.TryDispatchSupervisorTerminal(tenant, parent, "Counter|1:I",
+                (_, _) => throw new Exception("nested handler entered")), "nested handler admission");
+            scope.AddInt64(0, 20);
+        })) throw new Exception("first supervisor handler did not run");
+        ExpectFailure(() => stale!.ReadInt64(0), "retired supervisor handler scope");
+        ExpectFailure(() => scheduler.TryDispatchSupervisorTerminal(tenant, parent, "Counter|1:I", (scope, notice) => {
+            if (!seen.Add(notice.ChildEpoch)) throw new Exception("duplicate notice");
+            scope.AddInt64(0, 22);
+            throw new InvalidOperationException("fixture handler fault");
+        }), "faulting supervisor handler");
+        if (seen.Count != 2 || !seen.Contains(first.Epoch) || !seen.Contains(second.Epoch) ||
+            host.ActorTurnSnapshot(tenant, parent).Active ||
+            scheduler.TryDispatchSupervisorTerminal(tenant, parent, "Counter|1:I",
+                (_, _) => throw new Exception("terminal replay")))
+            throw new Exception("supervisor handler retirement or exact-once selection");
+        if (parent.QueuedMessages != 1024 || host.QueuedMail(tenant).Tenant != 1)
+            throw new Exception("supervisor handler changed DATA quota");
+        var data = scheduler.DequeueUser(tenant, parent);
+        if (data is null || data.Length != 1 || data[0] != 42)
+            throw new Exception("supervisor handler changed DATA head");
+        var turn = host.BeginActorTurn(tenant, parent);
+        var loan = host.BeginActorStateLoan(tenant, parent, turn);
+        if (host.ReadActorStateInt64(tenant, parent, turn, loan, 0) != 42)
+            throw new Exception("supervisor handler state was not committed");
+        host.EndActorStateLoan(tenant, parent, turn, loan);
+        host.CompleteActorTurn(tenant, parent, turn);
+        host.RetireActor(tenant, parent);
+        host.BeginShutdown(tenant); host.CompleteShutdown(tenant); host.Destroy(tenant);
+        Console.WriteLine("NET_SUPERVISOR_HANDLER_DISPATCH_HOST_TESTS_PASS");
+    }
+
     internal static void RunSupervisorTerminalChecks()
     {
         CheckSupervisorTerminalReservations();
@@ -399,6 +455,7 @@ internal static class VmIsolateHostTests
         CheckScheduledCarrierRetirement();
         CheckSupervisorDispatchPriority();
         CheckMigratableCarrierSegments();
+        CheckSupervisorHandlerDispatch();
     }
 
     public static void Run()
