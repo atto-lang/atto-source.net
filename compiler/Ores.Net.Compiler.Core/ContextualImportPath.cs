@@ -49,7 +49,7 @@ public static class ContextualImportPath
     }
 
     private static bool Alpha(char c) => c is >= 'A' and <= 'Z' or >= 'a' and <= 'z';
-    private static bool Valid(string p)
+    internal static bool Valid(string p)
     {
         if (p.Length is < 1 or > 64 || !(Alpha(p[0]) || p[0] == '_')
             || p.StartsWith("__atto_", StringComparison.Ordinal) || Reserved.Contains(p)) return false;
