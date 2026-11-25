@@ -408,24 +408,7 @@ Console.WriteLine("DURABLE_M0_REFERENCE_ONLY|sha256=" + durableM0PinnedSha +
             "manifest-verified multi-file package linker",
             "namespace import needs exact manifest ownership");
 
-        // Canonical dotted namespace-first spellings enter the exact same
-        // authenticated Core import lane as the existing wildcard spelling.
-        foreach (string selector in new[] { "core.math", "'core.math'", "\"core.math\"" })
-        {
-            File.WriteAllText(main, "import namespace m from " + selector +
-                "; fnc main()->int { return m.min_int(42,43); }");
-            Require(OresSourceModuleCompiler.Compile(main, new[] { root }).Sources.Count == 2,
-                "canonical builtin namespace import must compile the authenticated source");
-        }
-        foreach (string clause in new[] { "import self.utils;", "import super.config;", "import pkg;" })
-        {
-            File.WriteAllText(main, clause + " fnc main()->int { return 42; }");
-            RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
-                "E_IMPORT_PATH", "invalid contextual import before physical lookup");
-        }
-        File.WriteAllText(main, "import pkg.config; fnc main()->int { return 42; }");
-        RejectDiagnostic(() => OresSourceModuleCompiler.Compile(main, new[] { root }),
-            "authenticated package-export graph", "no ambient contextual import fallback");
+        ContextualImportParserSelfTest.Run();
 
         // Standalone compilation must also refuse lifecycle hooks; only
         // checking linked dependency imports is insufficient.
