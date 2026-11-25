@@ -111,10 +111,15 @@ internal static class VmIsolateHostTests
         Console.WriteLine("NET_NESTED_STATE_AUTHORITY_CURRENT_MAIN_TEST_PASS");
     }
 
-    public static void Run()
+    internal static void RunSupervisorTerminalChecks()
     {
         CheckSupervisorTerminalReservations();
         CheckNestedStateAuthority();
+    }
+
+    public static void Run()
+    {
+        RunSupervisorTerminalChecks();
         var host = new OresVmHost(maxTenants: 2);
         // Fail closed: the native TenantVm isolate is not wired in yet, and a
         // host dictionary is not an isolate, so untrusted admission must reject.
