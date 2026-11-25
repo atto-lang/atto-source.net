@@ -91,6 +91,30 @@ internal static class ActorHeapV1CompilerSelfTest
                 !string.Equals(falseGenerated, generated, StringComparison.Ordinal),
             "changing the expected guest assertion must change emitted native comparison");
 
+        // A bounded chain has one compiler-owned local per construction,
+        // and nested finally cleanup from the last owner back to the first.
+        string chain = source.Replace("assert(second.next?.value == 42)",
+            "let third = new Node(7, second)\n        let fourth = new Node(3, third)\n        assert(fourth.next?.value == 7)",
+            StringComparison.Ordinal);
+        var chainPlan = ActorHeapV1Compiler.Parse(chain);
+        Require(chainPlan.ExtraValues.SequenceEqual(new long[] { 7, 3 }),
+            "additional nodes are parsed rather than hardcoded");
+        string chainGenerated = ActorHeapV1Compiler.EmitCSharp(chain);
+        Require(chainGenerated.Contains("WriteOwnedGuestReference32(node3, 8, second)", StringComparison.Ordinal) &&
+                chainGenerated.Contains("WriteOwnedGuestReference32(node4, 8, node3)", StringComparison.Ordinal) &&
+                chainGenerated.Contains("ReadOwnedGuestReference32(node4, 8)", StringComparison.Ordinal) &&
+                chainGenerated.IndexOf("DropOwnedGuestObject32(node4)", StringComparison.Ordinal) <
+                chainGenerated.IndexOf("DropOwnedGuestObject32(node3)", StringComparison.Ordinal) &&
+                chainGenerated.IndexOf("DropOwnedGuestObject32(node3)", StringComparison.Ordinal) <
+                chainGenerated.IndexOf("DropOwnedGuestObject32(second)", StringComparison.Ordinal) &&
+                chainGenerated.IndexOf("DropOwnedGuestObject32(second)", StringComparison.Ordinal) <
+                chainGenerated.IndexOf("DropOwnedGuestObject32(first)", StringComparison.Ordinal) &&
+                chainGenerated.Split("finally", StringSplitOptions.None).Length >= 8,
+            "every admitted node is cleaned in reverse order even on earlier cleanup failure");
+        RejectV1(chain.Replace("new Node(3, third)", "new Node(3, first)", StringComparison.Ordinal));
+        RejectV1(chain.Replace("let fourth =", "let message =", StringComparison.Ordinal));
+        RejectV1(chain.Replace("let fourth =", "let second =", StringComparison.Ordinal));
+
         // The *production* structured compiler must continue refusing this
         // nominal source until its general nominal CFG/CIL path is implemented.
         RejectStructured(source);
