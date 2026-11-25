@@ -82,6 +82,8 @@ for case in reject-inline-suspend:E_SYNC_TASK_SUSPEND reject-do-value:E_TASK_RET
     reject-long-marker-async:E_CALLABLE_MODIFIERS \
     reject-nested-task-loop-transfer:E_SYNC_TASK_LOOP_TRANSFER_UNSUPPORTED \
     reject-task-loop-continue:E_SYNC_TASK_LOOP_TRANSFER_UNSUPPORTED \
+    reject-task-loop-transfer-do:E_SYNC_TASK_LOOP_TRANSFER_UNSUPPORTED \
+    reject-task-loop-continue-do:E_SYNC_TASK_LOOP_TRANSFER_UNSUPPORTED \
     reject-assignment-nested-writeback:E_SYNC_TASK_WRITEBACK_UNSUPPORTED \
     reject-assignment-shortcircuit-writeback:E_SYNC_TASK_WRITEBACK_UNSUPPORTED \
     reject-assignment-inherited-floor:E_SYNC_TASK_WRITEBACK_UNSUPPORTED \
