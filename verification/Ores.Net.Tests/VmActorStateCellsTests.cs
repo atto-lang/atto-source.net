@@ -119,6 +119,7 @@ internal static class VmActorStateCellsTests
         Deny(() => host.ReadActorStateInt64(tenantB, b1, turnB, write, 0),
             "cross-actor stale state loan");
         host.CancelActorTurn(tenantB, b1, turnB);
+        host.AcknowledgeActorTurnCancellation(tenantB, b1, turnB);
         Deny(() => host.WriteActorStateInt64(tenantB, b1, turnB, bloan, 0, 8),
             "cancelled turn write must be denied");
         var bnext = host.BeginActorTurn(tenantB, b1);
