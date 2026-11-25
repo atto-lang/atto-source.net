@@ -232,13 +232,21 @@ public static partial class OresStructuredParser
         }
     }
 
-    private static StructuredLinkedUnit ParseCore(string source, LinkedModuleContext? linking)
+    internal static IReadOnlyList<StaticImportGraph.Export> ParseFrozenExports(FrozenImportSnapshot snapshot, string expectedNamespace)
+    {
+        var inventory = new List<StaticImportGraph.Export>();
+        _ = ParseCore(snapshot.ProviderSource(expectedNamespace), null, expectedNamespace, inventory);
+        return inventory.AsReadOnly();
+    }
+
+    private static StructuredLinkedUnit ParseCore(string source, LinkedModuleContext? linking,
+        string? frozenNamespace = null, List<StaticImportGraph.Export>? frozenExports = null)
     {
         ValidateSourceInput(source);
         ActorPubSubSourceAdmission.RejectUnsupported(source);
         // No structural match lowering or readonly shape metadata in scalar CIL yet.
         StructuralShapeAdmission.RejectUnsupportedPatterns(source, allowCompileTimeRows: true);
-        var lexer = new Lexer(source, linking is not null);
+        var lexer = new Lexer(source, linking is not null || frozenNamespace is not null);
         var tokens = new List<Token>();
         // Distinguish a forbidden local nominal declaration from an
         // unsupported top-level class/actor before either reaches lowering.
@@ -364,7 +372,7 @@ public static partial class OresStructuredParser
                 throw new FormatException(
                     $"ACTOR_FORWARD_NATIVEAOT_UNSUPPORTED: actor forward requires nominal actor identity, ownership and executable CIL lowering at offset {token.Offset}");
             if (token.Text == "namespace" && i > 0 && tokens[i - 1].Text == "use" &&
-                !(linking is not null &&
+                frozenNamespace is null && !(linking is not null &&
                   linking.UnitIdentity.StartsWith("@atto.core/", StringComparison.Ordinal)))
                 throw new FormatException(
                     $"NAMESPACE_RUNTIME_NATIVEAOT_UNSUPPORTED: file namespace requires authenticated compiler-owned Core source or verified package linker at offset {token.Offset}");
@@ -535,6 +543,8 @@ public static partial class OresStructuredParser
         }
         RejectUnsupportedMacros(tokens);
         var reader = new Reader(tokens, linking);
+        if (frozenNamespace is not null)
+            return reader.ReadFrozenNamespace(frozenNamespace, frozenExports!);
         return linking is null
             ? new StructuredLinkedUnit(reader.ReadProgram(), null, new Dictionary<string, StructuredFunction>())
             : reader.ReadLinkedUnit();
@@ -1263,6 +1273,30 @@ public static partial class OresStructuredParser
             throw Error("E_UNSUPPORTED: namespace aliases require authenticated static binding integration");
         }
 
+        private bool frozenProvider;
+        internal StructuredLinkedUnit ReadFrozenNamespace(string expected, List<StaticImportGraph.Export> inventory)
+        {
+            // This entry point accepts bytes only from a verified snapshot.
+            // Do not confer compiler-owned Core authority on any package.
+            Expect("use"); Expect("namespace");
+            string[] parts = expected.Split('.');
+            for (int i=0; i<parts.Length; i++)
+            {
+                if (i != 0) Expect(".");
+                if (Current.Text != parts[i]) throw Error("E_MANIFEST: provider namespace mismatch");
+                index++;
+            }
+            Expect(";");
+            if (Current.Text == "import") throw Error("E_UNSUPPORTED: frozen provider imports require complete dependency closure");
+            frozenProvider = true;
+            var program = ReadDeclarations(false);
+            inventory.Add(new StaticImportGraph.Export(expected,StaticImportGraph.Kind.Namespace,true));
+            foreach (string name in functions.Keys.OrderBy(x=>x,StringComparer.Ordinal))
+                inventory.Add(new StaticImportGraph.Export(expected+"."+name,StaticImportGraph.Kind.Fnc,exports.ContainsKey(name)));
+            return new StructuredLinkedUnit(program, null,
+                new System.Collections.ObjectModel.ReadOnlyDictionary<string, StructuredFunction>(exports));
+        }
+
         internal StructuredLinkedUnit ReadLinkedUnit()
         {
             _ = ReadImports();
@@ -1331,7 +1365,11 @@ public static partial class OresStructuredParser
                         $"Option/Result/trap requires verified tagged-sum CIL and NativeAOT guest-control lowering at offset {Current.Offset}: trap function modifier is unsupported");
                 if (Current.Text is "class" or "actor")
                     throw Error("Nominal class/actor methods require receiver-erased method slots, type/borrow checking and Native AOT CIL lowering; unsupported in .NET structured frontend");
-                if (!Take("fnc")) Expect("routine");
+                if (!Take("fnc"))
+                {
+                    if (frozenProvider) throw Error("E_UNSUPPORTED: frozen provider supports ordinary root functions only");
+                    Expect("routine");
+                }
                 int at = Current.Offset;
                 string name = Name();
                 // This NativeAOT slice does not lower once-only initialization
