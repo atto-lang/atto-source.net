@@ -392,6 +392,7 @@ public sealed partial class OresVmHost
             // Only the trusted host may enqueue typed control envelopes.
             // Empty user Send() cannot forge a dispatch ticket.
             actor.Mailbox.EnqueueTrustedDispatch(actor.Mailbox.CurrentRef);
+            SignalActorPump(actor);
         }
     }
 
