@@ -51,7 +51,15 @@ for case in brace-continue:42 keyword-continue:42 keyword-failure:0 short-circui
       "$fixture" "$expected" "$actual" >&2
     exit 1
   fi
-  printf 'GUARD_FORWARD_PORT %s %s value=%s source_blob=%s\n' "$mode" "$fixture" "$actual" "$(git hash-object "$source")"
+  # Bind execution to the exact CIL and actual launched guest.
+  if [[ "$mode" == coreclr ]]; then
+    artifact="$output/app/oreslang-app.dll"
+  else
+    artifact="$output/app/oreslang-app"
+  fi
+  printf 'GUARD_FORWARD_PORT %s %s value=%s source_blob=%s cil_blob=%s artifact_blob=%s head=%s\n' \
+    "$mode" "$fixture" "$actual" "$(git hash-object "$source")" \
+    "$(git hash-object "$output/OresGenerated.dll")" "$(git hash-object "$artifact")" "$(git rev-parse HEAD)"
 done
 
 for case in reject-fallthrough:E_GUARD reject-mixed:E_GUARD reject-nonbool:E_GUARD \
