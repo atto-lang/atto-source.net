@@ -1751,11 +1751,6 @@ public static partial class OresStructuredParser
             }
             if (Take("guard"))
             {
-                // The language requires a callable return on every guard failure.
-                // A lexical task or match return would instead join a local scope.
-                // Fail closed until nonlocal exits and their cleanup are lowered.
-                if (localReturn is not null)
-                    throw Error("E_GUARD_LOCAL_RETURN_UNSUPPORTED: guard requires an enclosing callable return, not a lexical scope exit");
                 // Both forms use the exact same checked CFG and type rules.
                 // A successful guard falls through; a failed one must exit.
                 var condition = Expr(depth + 1);
@@ -1774,6 +1769,11 @@ public static partial class OresStructuredParser
                     condition, new StructuredBool(at, false), IrValueType.Bool);
                 IReadOnlyList<StructuredStmt> failure;
                 bool returns;
+                // Guard failure explicitly targets the callable, unlike ordinary
+                // task and match-arm returns. The verified scalar/tagged CFG
+                // has no admitted defer or resource-loan cleanup to skip.
+                var previousLocalReturn = localReturn;
+                localReturn = null;
                 guardFailureDepth++;
                 try
                 {
@@ -1789,7 +1789,11 @@ public static partial class OresStructuredParser
                     else
                         throw Error("E_GUARD: expected '{ ... }' or 'else ... end'");
                 }
-                finally { guardFailureDepth--; }
+                finally
+                {
+                    guardFailureDepth--;
+                    localReturn = previousLocalReturn;
+                }
                 if (!returns) throw Error("E_GUARD: failure block must return on every path");
                 // A guard does not itself terminate the success continuation.
                 return (new StructuredIf(at, inverted, failure, null), false);

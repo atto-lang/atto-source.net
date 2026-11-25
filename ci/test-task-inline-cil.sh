@@ -13,7 +13,7 @@ if [[ "$mode" == macos-arm64 ]]; then
   dotnet restore host/Ores.Net.NativeHost -r osx-arm64
   # publish-macos verifies both Mach-O executables and uses the standalone
   # compiler to emit the input CIL before linking the app.
-  for fixture in inline-value inline-cooperate nested-inline guard-result-task; do
+  for fixture in inline-value inline-cooperate nested-inline guard-result-task guard-nonlocal; do
     destination="artifacts/sync-task-$fixture"
     bash scripts/publish-macos.sh "$source/$fixture.atto" "$destination"
     [[ "$(env -i PATH=/usr/bin:/bin "$destination/osx-arm64/oreslang-app")" == 42 ]]
@@ -23,7 +23,7 @@ if [[ "$mode" == macos-arm64 ]]; then
 else
   dotnet build "$compiler_project" -c Release
   oresnet=(dotnet run --project "$compiler_project" -c Release --no-build --)
-  for fixture in inline-value inline-cooperate nested-inline guard-result-task; do
+  for fixture in inline-value inline-cooperate nested-inline guard-result-task guard-nonlocal; do
     destination="$work/$fixture"
     mkdir -p "$destination"
     "${oresnet[@]}" compile "$source/$fixture.atto" --out "$destination/OresGenerated.dll"
@@ -37,10 +37,10 @@ fi
 
 for case in reject-inline-suspend:E_SYNC_TASK_SUSPEND reject-do-value:E_TASK_RETURN_TYPE \
     reject-bare-inline:E_SYNTAX reject-writeback:E_SYNC_TASK_WRITEBACK_UNSUPPORTED \
-    reject-guard-inline-brace:E_GUARD_LOCAL_RETURN_UNSUPPORTED \
-    reject-guard-inline-keyword:E_GUARD_LOCAL_RETURN_UNSUPPORTED \
-    reject-guard-do-match:E_GUARD_LOCAL_RETURN_UNSUPPORTED \
-    reject-guard-do-task:E_GUARD_LOCAL_RETURN_UNSUPPORTED \
+    reject-guard-inline-brace:RETURN_VALUE_REQUIRED \
+    reject-guard-inline-keyword:E_GUARD \
+    reject-guard-do-match:RETURN_VALUE_REQUIRED \
+    reject-guard-do-task:E_GUARD \
     reject-await-after-inline:E_SUSPENDS_UNSUPPORTED \
     reject-await-nested-inline:E_SYNC_TASK_SUSPEND; do
   fixture=${case%%:*}
