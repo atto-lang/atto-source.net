@@ -1,0 +1,49 @@
+name: Actor slab heap focused managed and NativeAOT host tests
+on:
+  push:
+    branches: [feat/actor-slab-heap-net-20261121]
+  pull_request:
+    paths:
+      - 'runtime/Ores.Net.Runtime/**'
+      - 'verification/Ores.Net.ActorSlabHeapProbe/**'
+      - 'verification/Ores.Net.Tests/ActorSlabHeapSelfTest.cs'
+      - 'contracts/actor-slab-heap/**'
+      - '.github/workflows/actor-slab-heap-host.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  heap:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            rid: linux-x64
+          - os: macos-15
+            rid: osx-arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.x'
+      - name: Execute exact-head heap tests on CoreCLR and NativeAOT
+        shell: bash
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+          RID: ${{ matrix.rid }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          git rev-parse 'HEAD^{tree}'
+          project=verification/Ores.Net.ActorSlabHeapProbe/Ores.Net.ActorSlabHeapProbe.csproj
+          dotnet run --project "$project" -c Release
+          out="$PWD/verification/Ores.Net.ActorSlabHeapProbe/artifacts/native"
+          dotnet publish "$project" -c Release -r "$RID" -p:PublishAot=true -o "$out"
+          "$out/Ores.Net.ActorSlabHeapProbe"
+          echo 'HEAP_HOST_ONLY_PASS; GUEST_CONFORMANCE=NOT_EXECUTED'
