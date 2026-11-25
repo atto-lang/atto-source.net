@@ -7,17 +7,21 @@ public sealed class VerifiedActorAwait
 {
     internal VerifiedActorAwait(string actor, string field, long initial, string method,
         long? producerLeft = null, long? producerRight = null,
-        long? secondLeft = null, long? secondRight = null, bool trapResult = false)
+        long? secondLeft = null, long? secondRight = null, bool trapResult = false,
+        bool firstCapturesSaved = false, bool secondCapturesResult = false)
     {
         ActorName = actor; FieldName = field; InitialValue = initial; MethodName = method;
         ProducerLeft = producerLeft; ProducerRight = producerRight;
         SecondLeft = secondLeft; SecondRight = secondRight; TrapResult = trapResult;
+        FirstCapturesSaved = firstCapturesSaved; SecondCapturesResult = secondCapturesResult;
     }
     public long? ProducerLeft { get; }
     public long? ProducerRight { get; }
     public long? SecondLeft { get; }
     public long? SecondRight { get; }
     public bool TrapResult { get; }
+    public bool FirstCapturesSaved { get; }
+    public bool SecondCapturesResult { get; }
     public string ActorName { get; }
     public string FieldName { get; }
     public long InitialValue { get; }
@@ -52,12 +56,15 @@ public static partial class OresParser
         r.E(")"); r.E(":"); r.E("int"); r.E("{");
         r.E("val"); r.E("int"); string saved = r.Id(); r.E("="); r.E(input); r.E(";");
         long? producerLeft = null, producerRight = null;
+        bool firstCapturesSaved = false, secondCapturesResult = false;
         if (!hostFuture) {
-            // Capture-free, finite checked arithmetic only; no ambient actor
-            // state, task nesting, suspension or runtime-generated code.
+            // Finite checked arithmetic; only the explicitly owned saved i64
+            // can be captured. No actor state, nested task or suspension.
             r.E("val"); r.E("Future"); r.E("<"); r.E("int"); r.E(">");
             future = r.Id(); r.E("="); r.E("task"); r.E("<"); r.E("int"); r.E(">");
-            r.E("{"); r.E("return"); producerLeft = r.I64(); r.E("+");
+            r.E("{"); r.E("return");
+            firstCapturesSaved = r.Take(saved);
+            producerLeft = firstCapturesSaved ? 0L : r.I64(); r.E("+");
             producerRight = r.I64(); r.E(";"); r.E("}"); r.E(";");
         }
         r.E("val"); r.E("int"); string result = r.Id(); r.E("="); r.E("await"); r.E(future); r.E(";");
@@ -66,7 +73,9 @@ public static partial class OresParser
         if (!hostFuture && r.Take("val")) {
             r.E("Future"); r.E("<"); r.E("int"); r.E(">");
             secondFuture = r.Id(); r.E("="); r.E("task"); r.E("<"); r.E("int"); r.E(">");
-            r.E("{"); r.E("return"); secondLeft = r.I64(); r.E("+");
+            r.E("{"); r.E("return");
+            secondCapturesResult = r.Take(result);
+            secondLeft = secondCapturesResult ? 0L : r.I64(); r.E("+");
             secondRight = r.I64(); r.E(";"); r.E("}"); r.E(";");
             r.E("val"); r.E("int"); secondResult = r.Id(); r.E("=");
             r.E("await"); r.E(secondFuture); r.E(";");
@@ -91,7 +100,9 @@ public static partial class OresParser
         if (names.Distinct(StringComparer.Ordinal).Count() != names.Length ||
             names.Any(n => reserved.Contains(n, StringComparer.Ordinal)))
             throw new FormatException("E_ACTOR_AWAIT: shadowed or reserved source identifier");
-        return new VerifiedActorAwait(actor, field, initial, method, producerLeft, producerRight, secondLeft, secondRight);
+        return new VerifiedActorAwait(actor, field, initial, method, producerLeft, producerRight,
+            secondLeft, secondRight, firstCapturesSaved: firstCapturesSaved,
+            secondCapturesResult: secondCapturesResult);
     }
 
     // Separate closed expression-trap profile: a single Future<int> input or
@@ -189,6 +200,9 @@ public static class ActorAwaitSourceEmitter
             return emitted;
         static string Literal(long value) => value == long.MinValue ? "long.MinValue" :
             value.ToString(CultureInfo.InvariantCulture) + "L";
+        string firstProducer = plan.FirstCapturesSaved
+            ? "new OresVmHost.ActorScalarTask(Produce, _saved, " + Literal(right) + ")"
+            : "new OresVmHost.ActorScalarTask(static () => Produce(" + Literal(left) + ", " + Literal(right) + "))";
         // Keep the external-Future ABI unchanged. Source-owned producer mode
         // uses the same verified frame and a separate bounded carrier item.
         string owned = emitted
@@ -198,8 +212,7 @@ public static class ActorAwaitSourceEmitter
             .Replace("        _pending = pending ?? throw new System.ArgumentNullException(nameof(pending));\n",
                 "", StringComparison.Ordinal)
             .Replace("        _pc = 1;",
-                "        var producer = new OresVmHost.ActorScalarTask(static () => Produce(" +
-                    Literal(left) + ", " + Literal(right) + "));\n" +
+                "        var producer = " + firstProducer + ";\n" +
                 "        _pending = producer.Future;\n        _pc = 1;", StringComparison.Ordinal)
             .Replace("new OresVmHost.ActorPumpStep(_pending, Resume);",
                 "new OresVmHost.ActorPumpStep(producer.Future, Resume, producer);", StringComparison.Ordinal)
@@ -211,6 +224,9 @@ public static class ActorAwaitSourceEmitter
         if (plan.SecondLeft is not long secondLeft || plan.SecondRight is not long secondRight)
             return owned;
 
+        string secondProducer = plan.SecondCapturesResult
+            ? "new OresVmHost.ActorScalarTask(Produce, _first, " + Literal(secondRight) + ")"
+            : "new OresVmHost.ActorScalarTask(static () => Produce(" + Literal(secondLeft) + ", " + Literal(secondRight) + "))";
         // The first awaited value is an owned scalar. No scope or loan may
         // cross the second suspension. Evaluate arithmetic only after both
         // awaits, preserving source evaluation order and checked overflow.
@@ -223,8 +239,7 @@ public static class ActorAwaitSourceEmitter
                 "if (_pc != 1 || _pending is null || !_pending.IsCompleted)", StringComparison.Ordinal)
             .Replace("        _pc = 2;\n        long delta = checked(_saved + _pending.GetAwaiter().GetResult());",
                 "        _first = _pending.GetAwaiter().GetResult();\n" +
-                "        var producer = new OresVmHost.ActorScalarTask(static () => Produce(" +
-                    Literal(secondLeft) + ", " + Literal(secondRight) + "));\n" +
+                "        var producer = " + secondProducer + ";\n" +
                 "        _pending = producer.Future;\n        _pc = 2;\n" +
                 "        return new OresVmHost.ActorPumpStep(producer.Future, ResumeSecond, producer, ObserveFaultInSegment: true);\n" +
                 "    }\n" +
