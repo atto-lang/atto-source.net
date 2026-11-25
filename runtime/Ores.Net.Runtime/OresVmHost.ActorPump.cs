@@ -84,6 +84,7 @@ public sealed partial class OresVmHost
         }
 
         bool preferResume = false;
+        bool preferProducer = false;
         Task[]? RunOne()
         {
             stop.ThrowIfCancellationRequested();
@@ -117,7 +118,7 @@ public sealed partial class OresVmHost
                         (preferResume || (!controlReady && !ordinaryReady));
                     bool chooseProducer = producerIndex >= 0 &&
                         (preferResume || (!controlReady && !ordinaryReady));
-                    if (chooseResume) {
+                    if (chooseResume && (!chooseProducer || !preferProducer)) {
                         var item = pending[readyIndex];
                         // Completed fault/cancellation terminates this pump;
                         // finally discards all of its still-pending tickets.
@@ -132,9 +133,11 @@ public sealed partial class OresVmHost
                         segment = item.Step.Next;
                         pending.RemoveAt(readyIndex);
                         preferResume = false;
+                        preferProducer = true;
                     } else if (chooseProducer) {
                         producer = pending[producerIndex].Step.Producer;
                         preferResume = false;
+                        preferProducer = false;
                     } else if (controlReady || ordinaryReady) {
                         lease = new object();
                         if (controlReady) {
