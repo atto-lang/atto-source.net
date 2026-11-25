@@ -45,6 +45,9 @@ internal static class ActorAwaitSourceTests
         RunTrappedAwait(fault: false);
         RunTrappedAwait(fault: true);
         RunTrappedFuture();
+        RunCapturedTasks();
+        CheckCancelledReceiveChildRetirement();
+        Console.WriteLine("NET_CAPTURED_ACTOR_TASKS_TESTS_PASS");
         Console.WriteLine("NET_TRAPPED_ACTOR_AWAIT_TESTS_PASS");
         Console.WriteLine("NET_TWO_AWAIT_ACTOR_FRAMES_TESTS_PASS");
         Console.WriteLine("NET_SOURCE_OWNED_ACTOR_TASK_TESTS_PASS");
@@ -59,7 +62,7 @@ internal static class ActorAwaitSourceTests
         var golden = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "GeneratedTaskActor.g.cs"));
         Require(ActorAwaitSourceEmitter.EmitCSharp(plan) ==
             golden.Replace("\r\n", "\n", StringComparison.Ordinal), "source-owned producer golden");
-        Reject(source.Replace("5 + 7", "saved + 7", StringComparison.Ordinal));
+        Reject(source.Replace("5 + 7", "incoming + 7", StringComparison.Ordinal));
         Reject(source.Replace("5 + 7", "self.count + 7", StringComparison.Ordinal));
         Reject(source.Replace("5 + 7", "await pending + 7", StringComparison.Ordinal));
         Reject(source.Replace("task<int>", "task<bool>", StringComparison.Ordinal));
@@ -360,6 +363,122 @@ internal static class ActorAwaitSourceTests
             try { pump.WaitAsync(timeout).GetAwaiter().GetResult(); }
             catch (OperationCanceledException) { }
         }
+        host.RetireActor(tenant, actor);
+        host.BeginShutdown(tenant); host.CompleteShutdown(tenant); host.Destroy(tenant);
+    }
+
+    private static void RunCapturedTasks()
+    {
+        var source = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "CaptureTaskCounter.atto"));
+        var plan = OresParser.InspectActorAwait(source);
+        Require(plan.FirstCapturesSaved && plan.SecondCapturesResult &&
+            plan.ProducerRight == 5 && plan.SecondRight == 11, "owned capture plan");
+        var golden = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "GeneratedCaptureTaskCounter.g.cs"));
+        Require(ActorAwaitSourceEmitter.EmitCSharp(plan) ==
+            golden.Replace("\r\n", "\n", StringComparison.Ordinal), "captured task golden");
+        Reject(source.Replace("return saved + 5", "return count + 5", StringComparison.Ordinal));
+        Reject(source.Replace("return saved + 5", "return result + 5", StringComparison.Ordinal));
+        Reject(source.Replace("return result + 11", "return second + 11", StringComparison.Ordinal));
+        Reject(source.Replace("return result + 11", "return self.count + 11", StringComparison.Ordinal));
+        long original = 7;
+        var copy = new OresVmHost.ActorScalarTask(static (left, right) => checked(left + right), original, 5);
+        original = 99;
+        copy.Run();
+        Require(original == 99 && copy.Future.GetAwaiter().GetResult() == 12, "scalar capture copied at construction");
+        var receiver = new CaptureReceiver();
+        try {
+            _ = new OresVmHost.ActorScalarTask(receiver.Add, 1, 2);
+            throw new Exception("instance-bound producer admitted");
+        } catch (InvalidOperationException) { }
+
+        var host = new OresVmHost(maxTenants: 1);
+        var tenant = host.CreateIsolate("captured-task", maxActors: 1, maxActorWorkers: 1);
+        host.Start(tenant);
+        var actor = AwaitActor_CaptureTaskCounter.Create(host, tenant, 1, true);
+        var scheduler = host.CreateTrustedScheduler();
+        var frame = new AwaitActor_CaptureTaskCounter(7);
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var timeout = TimeSpan.FromSeconds(10);
+        using var stop = new CancellationTokenSource();
+        OresVmHost.ActorPumpStep Wrap(OresVmHost.ActorPumpStep step) => step with {
+            Next = scope => {
+                var next = step.Next(scope);
+                if (next is not null) return Wrap(next);
+                done.TrySetResult();
+                return null;
+            }
+        };
+        var pump = scheduler.RunPumpAsync(tenant, actor, AwaitActor_CaptureTaskCounter.Layout,
+            (_, _) => throw new Exception("unexpected DATA"), scope => Wrap(frame.Start_add(scope)),
+            (_, _) => throw new Exception("unexpected terminal"), stop.Token);
+        try {
+            scheduler.Enqueue(tenant, actor);
+            done.Task.WaitAsync(timeout).GetAwaiter().GetResult();
+            Require(frame.Result == 42, "captured source task result");
+        } finally {
+            stop.Cancel();
+            try { pump.WaitAsync(timeout).GetAwaiter().GetResult(); }
+            catch (OperationCanceledException) { }
+        }
+        Require(host.ActorReceiveSnapshot(tenant, actor).Live == 0, "captured frame retired");
+        host.RetireActor(tenant, actor);
+        host.BeginShutdown(tenant); host.CompleteShutdown(tenant); host.Destroy(tenant);
+    }
+
+    private sealed class CaptureReceiver
+    {
+        internal long Add(long left, long right) => left + right;
+    }
+
+    private static void CheckCancelledReceiveChildRetirement()
+    {
+        var host = new OresVmHost(maxTenants: 1);
+        var tenant = host.CreateIsolate("cancel-unpublished-child", maxActors: 1, maxActorWorkers: 1);
+        host.Start(tenant);
+        var actor = host.RegisterActor(tenant, 1, serial: false, maxLiveReceives: 2);
+        host.ConfigureNamedActorState(tenant, actor, "Counter", "Counter|1:I",
+            new[] { new OresVmHost.ActorStateField(OresVmHost.ActorStateScalarKind.Int64) });
+        var scheduler = host.CreateTrustedScheduler();
+        var child = new OresVmHost.ActorScalarTask(static () => throw new Exception("cancelled child executed"));
+        var siblingReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var siblingStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var timeout = TimeSpan.FromSeconds(10);
+        using var stop = new CancellationTokenSource();
+        int receipts = 0;
+        var pump = scheduler.RunPumpAsync(tenant, actor, "Counter|1:I",
+            (_, _) => throw new Exception("unexpected DATA"), scope => {
+                if (++receipts == 1) {
+                    siblingStarted.TrySetResult();
+                    return new OresVmHost.ActorPumpStep(siblingReady.Task, next => {
+                        Require(next.AddInt64(0, 42) == 42, "unrelated sibling survived cancellation");
+                        finished.TrySetResult();
+                        return null;
+                    });
+                }
+                var turn = actor.ActiveTurn ?? throw new Exception("missing running turn");
+                host.CancelActorTurn(tenant, actor, turn);
+                return new OresVmHost.ActorPumpStep(child.Future,
+                    _ => throw new Exception("cancelled child resumed"), child);
+            }, (_, _) => throw new Exception("unexpected terminal"), stop.Token);
+        try {
+            scheduler.Enqueue(tenant, actor);
+            siblingStarted.Task.WaitAsync(timeout).GetAwaiter().GetResult();
+            scheduler.Enqueue(tenant, actor);
+            try {
+                child.Future.WaitAsync(timeout).GetAwaiter().GetResult();
+                throw new Exception("cancelled unpublished child completed successfully");
+            } catch (OperationCanceledException) { }
+            Require(child.Future.IsCanceled, "unpublished child was not cancelled");
+            siblingReady.TrySetResult();
+            finished.Task.WaitAsync(timeout).GetAwaiter().GetResult();
+            Require(!pump.IsCompleted, "acknowledged receive cancellation killed pump");
+        } finally {
+            stop.Cancel();
+            try { pump.WaitAsync(timeout).GetAwaiter().GetResult(); }
+            catch (OperationCanceledException) { }
+        }
+        Require(host.ActorReceiveSnapshot(tenant, actor).Live == 0, "cancelled receive or sibling leaked");
         host.RetireActor(tenant, actor);
         host.BeginShutdown(tenant); host.CompleteShutdown(tenant); host.Destroy(tenant);
     }
