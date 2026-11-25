@@ -527,8 +527,12 @@ public static partial class OresStructuredParser
                 throw new FormatException(
                     $"E_CRITICAL_UNSUPPORTED: structured CIL has no authenticated guard owner or FIFO continuation lowering at offset {tokens[i].Offset}");
             if (word is "suspends" or "await")
-                throw new FormatException(
-                    $"E_SUSPENDS_UNSUPPORTED: structured CIL lacks typed suspension/continuation lowering at offset {tokens[i].Offset}");
+            {
+                string diagnostic = word == "await" && IsInsideInlineTask(tokens, i)
+                    ? "E_SYNC_TASK_SUSPEND: this suspension lacks a same-thread continuation"
+                    : "E_SUSPENDS_UNSUPPORTED: structured CIL lacks typed suspension/continuation lowering";
+                throw new FormatException($"{diagnostic} at offset {tokens[i].Offset}");
+            }
             if (tokens[i].Text == "select" &&
                 StaticSelectAdmission.IsStaticSelectFollower(tokens[i + 1].Text))
                 throw StaticSelectAdmission.Unsupported(tokens[i].Offset);
@@ -564,6 +568,52 @@ public static partial class OresStructuredParser
         return linking is null
             ? new StructuredLinkedUnit(reader.ReadProgram(), null, new Dictionary<string, StructuredFunction>())
             : reader.ReadLinkedUnit();
+    }
+
+    // Diagnostic-only lexical classification. The preflight still rejects every
+    // await; no token sequence can grant suspension or bypass the typed parser.
+    private static bool IsInsideInlineTask(IReadOnlyList<Token> tokens, int at)
+    {
+        int braces = 0;
+        var taskBodies = new Stack<int>();
+        int pendingBody = -1;
+        for (int i = 0; i < at; i++)
+        {
+            if (tokens[i].Text == "sync" && i + 1 < at && tokens[i + 1].Text == "task")
+            {
+                int body = i + 2;
+                if (body < at && tokens[body].Text == "<")
+                {
+                    int angles = 0;
+                    do
+                    {
+                        if (tokens[body].Text == "<") angles++;
+                        else if (tokens[body].Text == ">") angles--;
+                        else if (tokens[body].Text is "{" or "}" or ";") break;
+                        body++;
+                    }
+                    while (body < at && angles > 0);
+                    if (angles != 0) continue;
+                }
+                if (body < at && tokens[body].Text == "{") pendingBody = body;
+            }
+            if (tokens[i].Text == "{")
+            {
+                braces++;
+                if (i == pendingBody)
+                {
+                    taskBodies.Push(braces);
+                    pendingBody = -1;
+                }
+            }
+            else if (tokens[i].Text == "}")
+            {
+                if (taskBodies.Count != 0 && taskBodies.Peek() == braces)
+                    taskBodies.Pop();
+                braces--;
+            }
+        }
+        return taskBodies.Count != 0;
     }
 
     // Syntax-only method-slot admission over tokens produced by the *same*

@@ -40,18 +40,28 @@ for case in reject-inline-suspend:E_SYNC_TASK_SUSPEND reject-do-value:E_TASK_RET
     reject-guard-inline-brace:E_GUARD_LOCAL_RETURN_UNSUPPORTED \
     reject-guard-inline-keyword:E_GUARD_LOCAL_RETURN_UNSUPPORTED \
     reject-guard-do-match:E_GUARD_LOCAL_RETURN_UNSUPPORTED \
-    reject-guard-do-task:E_GUARD_LOCAL_RETURN_UNSUPPORTED; do
+    reject-guard-do-task:E_GUARD_LOCAL_RETURN_UNSUPPORTED \
+    reject-await-after-inline:E_SUSPENDS_UNSUPPORTED \
+    reject-await-nested-inline:E_SYNC_TASK_SUSPEND; do
   fixture=${case%%:*}
   expected=${case#*:}
   destination="$work/$fixture"
   mkdir -p "$destination"
   status=0
   "${oresnet[@]}" check "$source/$fixture.atto" >"$destination/check.stdout" 2>"$destination/check.stderr" || status=$?
-  [[ "$status" == 1 ]]
-  grep -Fq "$expected" "$destination/check.stderr"
+  if [[ "$status" != 1 ]] || ! grep -Fq "$expected" "$destination/check.stderr"; then
+    printf 'CHECK_DENIAL_MISMATCH %s expected=%s status=%s\n' "$fixture" "$expected" "$status" >&2
+    cat "$destination/check.stdout" "$destination/check.stderr" >&2
+    exit 1
+  fi
   status=0
-  actual="$("${oresnet[@]}" compile "$source/$fixture.atto" --out "$destination/OresGenerated.dll" 2>&1)" || status=$?
-  [[ "$status" == 1 && "$actual" == *"$expected"* && ! -e "$destination/OresGenerated.dll" ]]
+  "${oresnet[@]}" compile "$source/$fixture.atto" --out "$destination/OresGenerated.dll" \
+    >"$destination/compile.stdout" 2>"$destination/compile.stderr" || status=$?
+  if [[ "$status" != 1 || -e "$destination/OresGenerated.dll" ]] || ! grep -Fq "$expected" "$destination/compile.stderr"; then
+    printf 'COMPILE_DENIAL_MISMATCH %s expected=%s status=%s\n' "$fixture" "$expected" "$status" >&2
+    cat "$destination/compile.stdout" "$destination/compile.stderr" >&2
+    exit 1
+  fi
   printf 'SYNC_TASK_NO_ARTIFACT %s %s %s\n' "$mode" "$fixture" "$expected"
 done
 
