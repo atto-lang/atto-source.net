@@ -23,6 +23,8 @@ public static partial class OresStructuredParser
         private int? inlineValueBindingFloor;
         private int? directInlineWritebackOffset;
         private int? conditionalWritebackRoot;
+        private int? matchWritebackRoot;
+        private HashSet<int>? matchWritebackArms;
         private HashSet<int>? conditionalWritebackArms;
 
         // Lexical lookahead only selects the supported statement context.
@@ -86,13 +88,14 @@ public static partial class OresStructuredParser
         // A conditional's own parser selects only its immediate, complete
         // arms. Nested conditionals and other expression nodes cannot inherit
         // the permission. The caller verifies the resulting root AST.
-        private StructuredExpr ReadConditionalStatementArm(int depth, bool root, string terminator)
+        private StructuredExpr ReadConditionalStatementArm(int depth, bool root, string terminator,
+            bool conditionalOnly = false)
         {
             int? previous = directInlineWritebackOffset;
             bool selected = root && IsDirectInlineStatementValue(index, terminator);
             directInlineWritebackOffset = selected ? Current.Offset : null;
             if (selected) conditionalWritebackArms!.Add(Current.Offset);
-            try { return Expr(depth); }
+            try { return conditionalOnly ? Conditional(depth) : Expr(depth); }
             finally { directInlineWritebackOffset = previous; }
         }
 
@@ -104,6 +107,22 @@ public static partial class OresStructuredParser
                 conditional.WhenFalse is StructuredSyncTaskValue no && no.Offset == offset);
         }
 
+        // Only complete, semicolon-terminated task values in immediate match
+        // arms receive permission. Neither the subject nor the guard does.
+        private StructuredExpr ReadMatchStatementArm(int depth, IrValueType? expected, bool root)
+        {
+            int? previous = directInlineWritebackOffset;
+            bool selected = root && IsDirectInlineStatementValue(index);
+            directInlineWritebackOffset = selected ? Current.Offset : null;
+            if (selected) matchWritebackArms!.Add(Current.Offset);
+            try { return expected is { } type ? ExpectedExpr(depth, type) : Expr(depth); }
+            finally { directInlineWritebackOffset = previous; }
+        }
+
+        private static bool IsMatchWritebackShape(StructuredExpr value, HashSet<int> arms) =>
+            value is StructuredMatchValue match && arms.All(offset => match.Match.Arms.Any(arm =>
+                arm.Value is StructuredSyncTaskValue task && task.Offset == offset));
+
         // Both declarations and mutable assignments evaluate a complete RHS
         // in the current SSA environment before installing their binding.
         // The offset is a narrow permission, never inherited by other nodes.
@@ -112,10 +131,18 @@ public static partial class OresStructuredParser
             int? previous = directInlineWritebackOffset;
             int? previousRoot = conditionalWritebackRoot;
             var previousArms = conditionalWritebackArms;
+            int? previousMatchRoot = matchWritebackRoot;
+            var previousMatchArms = matchWritebackArms;
+            bool keywordMatch = allowWriteback && Current.Text == "match";
+            matchWritebackRoot = keywordMatch ? Current.Offset : null;
+            matchWritebackArms = keywordMatch ? new HashSet<int>() : null;
             bool keywordConditional = allowWriteback && Current.Text is ("if" or "ifnot" or "unless");
-            conditionalWritebackRoot = keywordConditional ? Current.Offset : null;
-            conditionalWritebackArms = keywordConditional ? new HashSet<int>() : null;
-            int? selected = allowWriteback && !keywordConditional ? StatementWritebackOffset() : null;
+            // The statement entry offset also identifies a possible ternary.
+            // Only its parser can grant permission after consuming '?'.
+            bool allowConditional = allowWriteback && !keywordMatch;
+            conditionalWritebackRoot = allowConditional ? Current.Offset : null;
+            conditionalWritebackArms = allowConditional ? new HashSet<int>() : null;
+            int? selected = allowWriteback && !keywordConditional && !keywordMatch ? StatementWritebackOffset() : null;
             directInlineWritebackOffset = selected;
             try
             {
@@ -125,6 +152,9 @@ public static partial class OresStructuredParser
                 if (conditionalWritebackArms is { Count: > 0 } arms &&
                     !IsConditionalWritebackShape(value, arms))
                     throw Error("E_SYNC_TASK_WRITEBACK_UNSUPPORTED: conditional writeback requires immediate statement arms");
+                if (matchWritebackArms is { Count: > 0 } matchArms &&
+                    !IsMatchWritebackShape(value, matchArms))
+                    throw Error("E_SYNC_TASK_WRITEBACK_UNSUPPORTED: match writeback requires immediate statement arms");
                 return value;
             }
             finally
@@ -132,6 +162,8 @@ public static partial class OresStructuredParser
                 directInlineWritebackOffset = previous;
                 conditionalWritebackRoot = previousRoot;
                 conditionalWritebackArms = previousArms;
+                matchWritebackRoot = previousMatchRoot;
+                matchWritebackArms = previousMatchArms;
             }
         }
 

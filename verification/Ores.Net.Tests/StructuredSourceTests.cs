@@ -102,6 +102,17 @@ internal static class StructuredSourceTests
     public static void Run()
     {
         NegatedDoIfSyntax();
+        Require(OresStructuredParser.Parse(
+            "pub fnc main():int{val bool f=false;guard !(f), !(!true){return 0;}return 42;}").Body.Count == 3,
+            "parenthesized prefix logical not must not be confused with macro invocation");
+        RejectFeature("pub fnc main():int{return missing!(42);}",
+            "NET_STRUCTURED_MACRO_EXPANDER_REQUIRED");
+        RejectFeature("pub fnc main():int{return missing ! (42);}",
+            "NET_STRUCTURED_MACRO_EXPANDER_REQUIRED");
+        RejectFeature("pub fnc main():int{return!(42);}",
+            "NET_STRUCTURED_MACRO_EXPANDER_REQUIRED");
+        RejectFeature("pub fnc main():int{val bool x=!(42);return 42;}",
+            "Logical not requires bool");
         // Native AOT has no actor hierarchy, trait/interface witness ABI,
         // runtime-owned receive slot or actor state loan lowering yet. Every
         // source spelling must fail at the dedicated capability boundary.
