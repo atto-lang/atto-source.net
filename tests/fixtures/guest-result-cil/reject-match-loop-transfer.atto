@@ -1,0 +1,10 @@
+pub fnc main(): int {
+  loop {
+    do match true over
+      on true -> { break; }
+      on false -> { return; }
+    end
+    return 7;
+  }
+  return 42;
+}
