@@ -242,6 +242,11 @@ public sealed partial class OresVmHost
             var s = Check(handle); CheckTurn(s, actor, turn);
             if (!ReferenceEquals(actor.RunningTurn, turn))
                 throw new InvalidOperationException("actor state access while suspended");
+            // A nested state reborrow may attenuate, never amplify, the
+            // current scope's authority. Reject before allocating a generation
+            // or fencing the existing loan.
+            if (writable && turn.ActiveStateLoan is { Writable: false })
+                throw new InvalidOperationException("read-only actor state loan cannot grant writable nested loan");
             if (turn.StateLoanDepth >= 32)
                 throw new InvalidOperationException("bounded actor state loan nesting exceeded");
             if (turn.NextStateLoanGeneration == ulong.MaxValue)
