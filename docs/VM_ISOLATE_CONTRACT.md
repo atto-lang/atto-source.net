@@ -187,3 +187,21 @@ API while maintaining scheduler-owned logical single-flight execution.
 The primitive's lock does not establish guest scheduler non-reentrancy by
 itself. No NativeAOT success claim is valid until the exact PR head compiles
 and runs on real Linux and Windows runners with nonzero executed steps.
+
+
+### Reserved supervisor terminal CONTROL (trusted host substrate)
+
+Each admitted supervised child reserves one of its exact direct parent's 64
+terminal slots before admission. This per-parent bound includes both live
+children and published but unsettled notices; it is independent of mailbox
+DATA and internal dispatch receipts. Registration refuses excess children
+without consuming a child incarnation. Terminal retirement publishes a bounded
+value-only child ID, epoch and terminal kind into the preallocated slot after
+resource and logical-turn checks. Publication order is preserved. Settlement
+is direct-parent only, once-only, and restores the reservation. Parent retirement
+refuses outstanding reservations, including unread notices. Reused numeric
+child IDs receive fresh epochs. No payload or child state is transferred.
+
+This is a host ledger, not a source supervisor implementation. Actual scheduler
+wake-up, CONTROL-before-DATA selection and bounded fairness, cleanup/retirement
+authentication, and compiled guest/AOT tests are still required.
