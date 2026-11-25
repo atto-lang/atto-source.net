@@ -250,12 +250,17 @@ public unsafe sealed class ActorArena : IDisposable
     private readonly HashSet<ActorArenaLifetimePin> _issuedLifetimePins =
         new(ReferenceEqualityComparer.Instance);
 
-    // Guest object fields contain only 4-byte actor-local words. They are NOT
-    // capabilities. An original-generation target proof is retained out of
-    // line per issued parent/field; never reconstruct it from an offset.
-    private readonly Dictionary<ActorArenaHandle, Dictionary<int, ActorArenaHandle>>
-        _managedRef32Edges = new(ReferenceEqualityComparer.Instance);
-    private int _managedRef32EdgeCount;
+    // Guest fields remain four-byte words. Original issued slot/generation
+    // proofs are actor-private native records, not CLR objects per edge.
+    // Dense bounded ledger: linear lookup for this initial migration; a
+    // production high-fanout profile needs a measured native index.
+    private struct Ref32Proof
+    {
+        internal int ParentSlot, FieldOffset, TargetSlot;
+        internal ulong ParentGeneration, TargetGeneration;
+    }
+    private Ref32Proof* _managedRef32Edges;
+    private int _managedRef32EdgeCount, _ref32ProofCapacity, _ref32ProofBytes;
 
     private byte* _persistent;
     private byte* _scratch;
@@ -388,7 +393,11 @@ public unsafe sealed class ActorArena : IDisposable
     public int ScratchCapacityBytes => _scratchCapacity;
     public int ReservedNativeBytes
     {
-        get { lock (_gate) return _persistentCommitted + _scratchCommitted; }
+        get { lock (_gate) return checked(_persistentCommitted + _scratchCommitted + _ref32ProofBytes); }
+    }
+    public int ReferenceProofNativeBytes
+    {
+        get { lock (_gate) return _ref32ProofBytes; }
     }
     public bool DemandBacked => _demandBacked;
 
@@ -690,8 +699,10 @@ public unsafe sealed class ActorArena : IDisposable
             Zero(_persistent + slot.Offset, slot.Length);
             _persistentLiveBytes -= slot.Length;
             _liveAllocations--;
-            if (_managedRef32Edges.Remove(handle, out var outgoing))
-                _managedRef32EdgeCount -= outgoing.Count;
+            for (int i = _managedRef32EdgeCount - 1; i >= 0; --i)
+                if (_managedRef32Edges[i].ParentSlot == handle.Slot &&
+                    _managedRef32Edges[i].ParentGeneration == handle.Generation)
+                    RemoveRef32ProofLocked(i);
             slot.Live = false;
             slot.Issued = null;
             slot.Offset = 0;
@@ -770,40 +781,24 @@ public unsafe sealed class ActorArena : IDisposable
                 encoded = checked((uint)(targetSlot.Offset / 8 + 1));
             }
 
-            // Publish an original-generation sidecar proof *before* bytes.
-            // Hash-table allocation failure must not forge a guest field.
+            // Commit native proof before publishing the guest bytes.
+            int index = FindRef32ProofLocked(parent, fieldOffset);
             if (target is not null)
             {
-                // Check quota *before* creating a new sidecar dictionary.
-                // Repeated denied stores must not populate empty metadata.
-                bool updatingEdge = _managedRef32Edges.TryGetValue(parent, out var current)
-                    && current.ContainsKey(fieldOffset);
-                if (!updatingEdge && _managedRef32EdgeCount == MaxManagedRef32Edges)
-                    throw new InvalidOperationException(
-                        "Actor managed reference sidecar quota exhausted");
-                if (!_managedRef32Edges.TryGetValue(parent, out var fields))
+                if (index < 0)
                 {
-                    fields = new Dictionary<int, ActorArenaHandle>();
-                    _managedRef32Edges.Add(parent, fields);
+                    EnsureRef32ProofCapacityLocked();
+                    index = _managedRef32EdgeCount++;
                 }
-                if (!fields.ContainsKey(fieldOffset))
+                _managedRef32Edges[index] = new Ref32Proof
                 {
-                    if (_managedRef32EdgeCount == MaxManagedRef32Edges)
-                        throw new InvalidOperationException(
-                            "Actor managed reference sidecar quota exhausted");
-                    fields.Add(fieldOffset, target);
-                    _managedRef32EdgeCount++;
-                }
-                else
-                    fields[fieldOffset] = target;
+                    ParentSlot = parent.Slot, ParentGeneration = parent.Generation,
+                    FieldOffset = fieldOffset,
+                    TargetSlot = target.Slot, TargetGeneration = target.Generation
+                };
             }
-            else if (_managedRef32Edges.TryGetValue(parent, out var fields))
-            {
-                if (fields.Remove(fieldOffset))
-                    _managedRef32EdgeCount--;
-                if (fields.Count == 0)
-                    _managedRef32Edges.Remove(parent);
-            }
+            else if (index >= 0)
+                RemoveRef32ProofLocked(index);
 
             BinaryPrimitives.WriteUInt32LittleEndian(
                 new Span<byte>(_persistent + parentSlot.Offset + fieldOffset, 4),
@@ -827,17 +822,21 @@ public unsafe sealed class ActorArena : IDisposable
 
             uint word = BinaryPrimitives.ReadUInt32LittleEndian(
                 new ReadOnlySpan<byte>(_persistent + parentSlot.Offset + fieldOffset, 4));
-            bool hasProof = _managedRef32Edges.TryGetValue(parent, out var fields)
-                && fields!.ContainsKey(fieldOffset);
-            if (word == 0 && !hasProof)
+            int index = FindRef32ProofLocked(parent, fieldOffset);
+            if (word == 0 && index < 0)
                 return null;
-            if (word == 0 || !hasProof)
+            if (word == 0 || index < 0)
                 throw new InvalidOperationException(
                     "Missing or corrupted original-generation 32-bit field proof");
-            if (!fields!.TryGetValue(fieldOffset, out var original))
-                throw new InvalidOperationException(
-                    "Original-generation 32-bit field proof disappeared");
-
+            Ref32Proof proof = _managedRef32Edges[index];
+            if (proof.TargetSlot < 0 || proof.TargetSlot >= _nextSlot)
+                throw new InvalidOperationException("Invalid original target slot");
+            ref Slot candidate = ref _slots[proof.TargetSlot];
+            // Recover only the still-issued capability of the original
+            // generation; never reconstruct a handle from guest bytes.
+            if (!candidate.Live || candidate.Generation != proof.TargetGeneration ||
+                candidate.Issued is not { } original)
+                throw new InvalidOperationException("Stale original-generation 32-bit field proof");
             ref Slot targetSlot = ref ValidateHandleLocked(original);
             if ((targetSlot.Offset & 7) != 0 ||
                 word != checked((uint)(targetSlot.Offset / 8 + 1)))
@@ -845,6 +844,84 @@ public unsafe sealed class ActorArena : IDisposable
                     "32-bit guest field does not match issued actor target");
             return original;
         }
+    }
+
+    private int FindRef32ProofLocked(ActorArenaHandle parent, int offset)
+    {
+        for (int i = 0; i < _managedRef32EdgeCount; i++)
+        {
+            ref Ref32Proof proof = ref _managedRef32Edges[i];
+            if (proof.ParentSlot == parent.Slot && proof.ParentGeneration == parent.Generation &&
+                proof.FieldOffset == offset) return i;
+        }
+        return -1;
+    }
+
+    private void RemoveRef32ProofLocked(int index)
+    {
+        int last = --_managedRef32EdgeCount;
+        if (index != last) _managedRef32Edges[index] = _managedRef32Edges[last];
+        _managedRef32Edges[last] = default;
+    }
+
+    private void EnsureRef32ProofCapacityLocked()
+    {
+        if (_managedRef32EdgeCount < _ref32ProofCapacity) return;
+        if (_ref32ProofCapacity == MaxManagedRef32Edges)
+            throw new InvalidOperationException("Actor managed reference sidecar quota exhausted");
+        int capacity = _ref32ProofCapacity == 0 ? 16 :
+            Math.Min(MaxManagedRef32Edges, checked(_ref32ProofCapacity * 2));
+        int bytes = checked(capacity * sizeof(Ref32Proof));
+        // Charge the full replacement before allocating; old and new storage
+        // coexist until the old ledger has been scrubbed and released.
+        _budget.Reserve(bytes);
+        bool processReserved = false;
+        Ref32Proof* replacement = null;
+        try
+        {
+            if (!ReferenceEquals(_budget, ActorArenaBudget.Process))
+            {
+                ActorArenaBudget.Process.Reserve(bytes);
+                processReserved = true;
+            }
+            replacement = (Ref32Proof*)NativeMemory.AllocZeroed((nuint)bytes);
+            if (replacement == null) throw new OutOfMemoryException("Native Ref32 proof ledger");
+            if (_managedRef32Edges != null)
+            {
+                Buffer.MemoryCopy(_managedRef32Edges, replacement, bytes, _ref32ProofBytes);
+                Zero((byte*)_managedRef32Edges, _ref32ProofBytes);
+                NativeMemory.Free(_managedRef32Edges);
+                _budget.Refund(_ref32ProofBytes);
+                if (!ReferenceEquals(_budget, ActorArenaBudget.Process))
+                    ActorArenaBudget.Process.Refund(_ref32ProofBytes);
+            }
+            _managedRef32Edges = replacement;
+            _ref32ProofCapacity = capacity;
+            _ref32ProofBytes = bytes;
+        }
+        catch
+        {
+            if (replacement != null)
+            {
+                Zero((byte*)replacement, bytes);
+                NativeMemory.Free(replacement);
+            }
+            if (processReserved) ActorArenaBudget.Process.Refund(bytes);
+            _budget.Refund(bytes);
+            throw;
+        }
+    }
+
+    private void ReleaseRef32ProofsLocked()
+    {
+        if (_managedRef32Edges == null) return;
+        Zero((byte*)_managedRef32Edges, _ref32ProofBytes);
+        NativeMemory.Free(_managedRef32Edges);
+        _managedRef32Edges = null;
+        _budget.Refund(_ref32ProofBytes);
+        if (!ReferenceEquals(_budget, ActorArenaBudget.Process))
+            ActorArenaBudget.Process.Refund(_ref32ProofBytes);
+        _managedRef32EdgeCount = _ref32ProofCapacity = _ref32ProofBytes = 0;
     }
 
     private static void ValidateManagedRef32Field(int offset, int parentLength)
@@ -1193,8 +1270,7 @@ public unsafe sealed class ActorArena : IDisposable
         _issuedScratch.Clear();
         _issuedReadLoans.Clear();
         _issuedLifetimePins.Clear();
-        _managedRef32Edges.Clear();
-        _managedRef32EdgeCount = 0;
+        ReleaseRef32ProofsLocked();
         _activeTurn = null;
         _activeCarrier = null;
         _nextSlot = 0;
