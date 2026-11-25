@@ -35,6 +35,7 @@ public sealed partial class OresVmHost
                 actor.StateKinds is null ||
                 !string.Equals(actor.StateLayoutIdentity, expectedLayoutIdentity, StringComparison.Ordinal))
                 throw new InvalidOperationException("scheduled segment admission denied");
+            CheckNewReceiveAdmission(actor);
             CheckOrdinaryDispatchPriority(state, actor);
             if (!actor.Mailbox.TryReceiveEmptyDispatch())
                 throw new InvalidOperationException("scheduled segment requires FIFO dispatch receipt");
@@ -68,6 +69,7 @@ public sealed partial class OresVmHost
                 actor.StateKinds is null ||
                 !string.Equals(actor.StateLayoutIdentity, expectedLayoutIdentity, StringComparison.Ordinal))
                 throw new InvalidOperationException("supervisor handler admission denied");
+            CheckNewReceiveAdmission(actor);
             if (!TryTakeScheduledSupervisorTerminal(scheduler, handle, actor, out notice))
                 return false;
             turn = BeginActorTurn(handle, actor);
@@ -91,7 +93,7 @@ public sealed partial class OresVmHost
         ActorTicket actor, ActorContinuation continuation)
     {
         if (!ReferenceEquals(continuation.Scheduler, scheduler) ||
-            !ReferenceEquals(actor.ActiveTurn, continuation.Turn) ||
+            !actor.LiveTurns.Contains(continuation.Turn) ||
             !ReferenceEquals(continuation.Turn.PendingContinuation, continuation) ||
             !continuation.Turn.ManagedContinuation || !continuation.Turn.Suspended ||
             continuation.Turn.ScheduledCarrierLease is not null)
@@ -112,12 +114,14 @@ public sealed partial class OresVmHost
             var state = Check(handle);
             CheckTurn(state, actor, turn);
             ValidateContinuation(scheduler, actor, continuation);
-            if (turn.CancellationRequested || state.Phase != Phase.Running)
+            if (turn.CancellationRequested || state.Phase != Phase.Running ||
+                actor.ActiveTurn is not null)
                 throw new InvalidOperationException("continuation admission closed");
             // Consume the old ticket and install fresh physical authority in
             // one critical section. A concurrent replay cannot run a delegate.
             turn.PendingContinuation = null;
             turn.Suspended = false;
+            actor.ActiveTurn = turn;
             InstallSegmentCarrier(turn, lease);
         }
         return ExecuteScheduledSegment(scheduler, handle, actor, turn, lease, segment);
@@ -161,7 +165,7 @@ public sealed partial class OresVmHost
         lock (_gate) {
             var state = Check(handle);
             CheckTurn(state, actor, turn);
-            if (!turn.ManagedContinuation ||
+            if (!turn.ManagedContinuation || !ReferenceEquals(actor.ActiveTurn, turn) ||
                 !ReferenceEquals(turn.ScheduledCarrierLease, lease) ||
                 turn.ScheduledCarrierThread != Environment.CurrentManagedThreadId ||
                 turn.ActiveStateLoan is not null || turn.StateLoanDepth != 0)
@@ -174,6 +178,7 @@ public sealed partial class OresVmHost
             if (next is not null) {
                 turn.Suspended = true;
                 turn.PendingContinuation = next;
+                actor.ActiveTurn = null;
                 return next;
             }
             turn.ManagedContinuation = false;
