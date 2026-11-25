@@ -6,13 +6,17 @@ namespace Ores.Net.Compiler;
 public sealed class VerifiedActorAwait
 {
     internal VerifiedActorAwait(string actor, string field, long initial, string method,
-        long? producerLeft = null, long? producerRight = null)
+        long? producerLeft = null, long? producerRight = null,
+        long? secondLeft = null, long? secondRight = null)
     {
         ActorName = actor; FieldName = field; InitialValue = initial; MethodName = method;
         ProducerLeft = producerLeft; ProducerRight = producerRight;
+        SecondLeft = secondLeft; SecondRight = secondRight;
     }
     public long? ProducerLeft { get; }
     public long? ProducerRight { get; }
+    public long? SecondLeft { get; }
+    public long? SecondRight { get; }
     public string ActorName { get; }
     public string FieldName { get; }
     public long InitialValue { get; }
@@ -53,15 +57,29 @@ public static partial class OresParser
             producerRight = r.I64(); r.E(";"); r.E("}"); r.E(";");
         }
         r.E("val"); r.E("int"); string result = r.Id(); r.E("="); r.E("await"); r.E(future); r.E(";");
+        long? secondLeft = null, secondRight = null;
+        string? secondFuture = null, secondResult = null;
+        if (!hostFuture && r.Take("val")) {
+            r.E("Future"); r.E("<"); r.E("int"); r.E(">");
+            secondFuture = r.Id(); r.E("="); r.E("task"); r.E("<"); r.E("int"); r.E(">");
+            r.E("{"); r.E("return"); secondLeft = r.I64(); r.E("+");
+            secondRight = r.I64(); r.E(";"); r.E("}"); r.E(";");
+            r.E("val"); r.E("int"); secondResult = r.Id(); r.E("=");
+            r.E("await"); r.E(secondFuture); r.E(";");
+        }
         r.E("return"); r.StateIntrinsic("write"); string loan = r.Loan();
         r.E("{"); r.E(loan); r.E("."); r.E(field); r.E("=");
         r.E(loan); r.E("."); r.E(field); r.E("+"); r.E("(");
-        r.E(saved); r.E("+"); r.E(result); r.E(")"); r.E(";");
+        r.E(saved); r.E("+"); r.E(result);
+        if (secondResult is not null) { r.E("+"); r.E(secondResult); }
+        r.E(")"); r.E(";");
         r.E("return"); r.E(loan); r.E("."); r.E(field); r.E(";");
         r.E("}"); r.E(")"); r.E(";"); r.E("}"); r.Done();
         // No source identifiers are emitted as unescaped C# locals. Reject
         // shadowing and lifecycle hooks at the source boundary.
         string[] names = [actor, field, receiver, method, input, future, saved, result, loan];
+        if (secondFuture is not null && secondResult is not null)
+            names = [.. names, secondFuture, secondResult];
         string[] reserved = ["self", "handle_state", "receive", "init", "send", "end",
             "tear_down", "on_start", "on_stop", "on_restart", "on_panic", "on_throw",
             "on_raise", "on_recover", "await", "suspends", "critical", "int", "Future",
@@ -69,7 +87,7 @@ public static partial class OresParser
         if (names.Distinct(StringComparer.Ordinal).Count() != names.Length ||
             names.Any(n => reserved.Contains(n, StringComparer.Ordinal)))
             throw new FormatException("E_ACTOR_AWAIT: shadowed or reserved source identifier");
-        return new VerifiedActorAwait(actor, field, initial, method, producerLeft, producerRight);
+        return new VerifiedActorAwait(actor, field, initial, method, producerLeft, producerRight, secondLeft, secondRight);
     }
 }
 
@@ -134,7 +152,7 @@ public static class ActorAwaitSourceEmitter
             value.ToString(CultureInfo.InvariantCulture) + "L";
         // Keep the external-Future ABI unchanged. Source-owned producer mode
         // uses the same verified frame and a separate bounded carrier item.
-        return emitted
+        string owned = emitted
             .Replace("private readonly Task<long> _pending;",
                 "private Task<long>? _pending;", StringComparison.Ordinal)
             .Replace("(long incoming, Task<long> pending)", "(long incoming)", StringComparison.Ordinal)
@@ -151,5 +169,32 @@ public static class ActorAwaitSourceEmitter
             .Replace("    private OresVmHost.ActorPumpStep? Resume(",
                 "    private static long Produce(long left, long right) => checked(left + right);\n" +
                 "    private OresVmHost.ActorPumpStep? Resume(", StringComparison.Ordinal);
+        if (plan.SecondLeft is not long secondLeft || plan.SecondRight is not long secondRight)
+            return owned;
+
+        // The first awaited value is an owned scalar. No scope or loan may
+        // cross the second suspension. Evaluate arithmetic only after both
+        // awaits, preserving source evaluation order and checked overflow.
+        return owned
+            .Replace("    private int _pc;", "    private long _first;\n    private int _pc;", StringComparison.Ordinal)
+            .Replace("new OresVmHost.ActorPumpStep(producer.Future, Resume, producer);",
+                "new OresVmHost.ActorPumpStep(producer.Future, Resume, producer, ObserveFaultInSegment: true);",
+                StringComparison.Ordinal)
+            .Replace("if (_pc != 1 || _pending is null || !_pending.IsCompletedSuccessfully)",
+                "if (_pc != 1 || _pending is null || !_pending.IsCompleted)", StringComparison.Ordinal)
+            .Replace("        _pc = 2;\n        long delta = checked(_saved + _pending.GetAwaiter().GetResult());",
+                "        _first = _pending.GetAwaiter().GetResult();\n" +
+                "        var producer = new OresVmHost.ActorScalarTask(static () => Produce(" +
+                    Literal(secondLeft) + ", " + Literal(secondRight) + "));\n" +
+                "        _pending = producer.Future;\n        _pc = 2;\n" +
+                "        return new OresVmHost.ActorPumpStep(producer.Future, ResumeSecond, producer, ObserveFaultInSegment: true);\n" +
+                "    }\n" +
+                "    private OresVmHost.ActorPumpStep? ResumeSecond(OresVmHost.ActorDispatchScope scope)\n" +
+                "    {\n" +
+                "        if (_pc != 2 || _pending is null || !_pending.IsCompleted)\n" +
+                "            throw new System.InvalidOperationException(\"stale or non-ready second resume\");\n" +
+                "        long second = _pending.GetAwaiter().GetResult();\n" +
+                "        _pc = 3;\n" +
+                "        long delta = checked(checked(_saved + _first) + second);", StringComparison.Ordinal);
     }
 }
