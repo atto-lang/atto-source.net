@@ -36,6 +36,7 @@ require(args.Length == 0 || expectAssertionFailure,
 using var runtime = new ActorRuntime(options);
 using var completed = new CountdownEvent(expectAssertionFailure ? 1 : 6);
 int observedExpectedAssertion = 0;
+int measuredTurns = 0;
 
 ActorMessageHandler handler = (context, message) =>
 {
@@ -44,11 +45,24 @@ ActorMessageHandler handler = (context, message) =>
         require(message.Length == 1, "generated actor probe message shape");
         // This method must be compiled from the checked .atto source. The
         // checked-in project contains no C# implementation of guest Node.
+        require(context.LiveGuestObjectCount == 0, "receive begins without leaked guest roots");
+        long before = GC.GetAllocatedBytesForCurrentThread();
         Ores.Net.Generated.ActorHeapV1Guest.receive(context, message.Span[0]);
+        long delta = GC.GetAllocatedBytesForCurrentThread() - before;
+        require(context.LiveGuestObjectCount == 0, "generated receive must drop every guest root before return");
+        // First receive warms the lazy native table and immutable layout
+        // metadata. Only successful subsequent guest calls are measured.
+        if (!expectAssertionFailure && message.Span[0] > 1)
+        {
+            require(delta == 0, "steady-state generated guest allocated managed bytes");
+            Interlocked.Increment(ref measuredTurns);
+        }
     }
     catch (InvalidOperationException error) when
         (expectAssertionFailure && error.Message == "E_ACTOR_HEAP_V1_ASSERT")
     {
+        require(context.LiveGuestObjectCount == 0,
+            "generated assertion failure must clean all guest roots before actor retirement");
         Interlocked.Increment(ref observedExpectedAssertion);
         throw; // Let the runtime's actual actor-fault retirement path execute.
     }
@@ -94,6 +108,9 @@ else
             TimeSpan.FromSeconds(10)) && runtime.FaultedTurns == 0,
         "compiled guest object graph may not fault or silently skip a turn");
 
+    require(Volatile.Read(ref measuredTurns) == 4,
+        "four warmed compiler-generated guest receives must allocate zero managed bytes");
+    Console.WriteLine("ATTO_ACTOR_HEAP_WARMED_GUEST_ZERO_MANAGED_BYTES=4");
     runtime.Stop(privateActor);
     runtime.Stop(sharedActor);
     require(SpinWait.SpinUntil(() =>
