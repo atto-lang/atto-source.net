@@ -2293,19 +2293,18 @@ public static partial class OresStructuredParser
                 if (inverted)
                     condition = CheckedBinary(at, StructuredOperator.EqualBool,
                         condition, new StructuredBool(at, false), IrValueType.Bool);
-                // Preserve the legacy '; do ... fi' and brace spellings;
-                // canonical 'then ... fi' may omit its optional semicolon.
+                // Statement conditionals accept braces, then ... fi, and
+                // do ... fi, with or without a separator before the keyword.
+                // Leading "do if" retains its separate then-only contract.
                 bool semicolon = Take(";");
                 bool delimited = Take("then");
                 if (explicitDo && !delimited)
                     throw Error("do if/ifnot/unless requires 'then'");
-                // Preserve modern-main legacy if/ifnot/unless ... then ...
-                // imperative acceptance; a separate spec migration must not
-                // silently break older compiled source.
-                if (semicolon && !delimited)
+                if (!delimited && !explicitDo)
                 {
-                    Expect("do");
-                    delimited = true;
+                    delimited = Take("do");
+                    if (semicolon && !delimited)
+                        throw Error("Expected 'then' or 'do' after conditional separator");
                 }
                 IReadOnlyList<StructuredStmt> yes;
                 bool yesReturns;
