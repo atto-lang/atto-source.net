@@ -41,6 +41,11 @@ internal static class ActorAwaitSourceTests
         CheckProducerLifecycle();
         RunTwoAwaits(fault: false);
         RunTwoAwaits(fault: true);
+        CheckTrapAwaitAbi();
+        RunTrappedAwait(fault: false);
+        RunTrappedAwait(fault: true);
+        RunTrappedFuture();
+        Console.WriteLine("NET_TRAPPED_ACTOR_AWAIT_TESTS_PASS");
         Console.WriteLine("NET_TWO_AWAIT_ACTOR_FRAMES_TESTS_PASS");
         Console.WriteLine("NET_SOURCE_OWNED_ACTOR_TASK_TESTS_PASS");
         Console.WriteLine("NET_VERIFIED_ACTOR_AWAIT_FRAME_TESTS_PASS");
@@ -199,6 +204,162 @@ internal static class ActorAwaitSourceTests
         scheduler.Enqueue(tenant, actor);
         Require(scheduler.DispatchNext(tenant, actor, name + "|1:I",
             scope => scope.ReadInt64(0)) == (fault ? 0 : 42), "state after producer outcome");
+        host.RetireActor(tenant, actor);
+        host.BeginShutdown(tenant); host.CompleteShutdown(tenant); host.Destroy(tenant);
+    }
+
+    private static void CheckTrapAwaitAbi()
+    {
+        var error = GuestResults.CreateError("original async error");
+        var ordinary = GuestAwaitResults.TrapCompletedI64(Task.FromException<long>(GuestResults.Throw(error)));
+        Require(GuestResults.IsErr(ordinary) && ReferenceEquals(GuestResults.UnwrapErr(ordinary), error),
+            "ordinary async Error identity");
+        var overflow = GuestAwaitResults.TrapCompletedI64(Task.FromException<long>(new OverflowException()));
+        Require(GuestResults.IsErrorType(GuestResults.UnwrapErr(overflow), "ArithmeticOverflowError"),
+            "async overflow nominal type");
+        var zero = GuestAwaitResults.TrapCompletedI64(Task.FromException<long>(new DivideByZeroException()));
+        Require(GuestResults.IsErrorType(GuestResults.UnwrapErr(zero), "DivisionByZeroError"),
+            "async zero nominal type");
+
+        void Escapes(Exception signal)
+        {
+            try {
+                _ = GuestAwaitResults.TrapCompletedI64(Task.FromException<long>(signal));
+                throw new Exception("trap swallowed a nonordinary effect");
+            } catch (Exception actual) when (ReferenceEquals(actual, signal)) { }
+        }
+        Escapes(GuestResults.Panic(error));
+        Escapes(GuestResults.Raise(error));
+        Escapes(new InvalidOperationException("host invariant"));
+        Escapes(new OperationCanceledException("guest cancellation"));
+        try {
+            _ = GuestAwaitResults.TrapCompletedI64(Task.FromCanceled<long>(new CancellationToken(true)));
+            throw new Exception("trap swallowed a cancelled future");
+        } catch (OperationCanceledException) { }
+        var pending = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+        try {
+            _ = GuestAwaitResults.TrapCompletedI64(pending.Task);
+            throw new Exception("trap awaited incomplete future inline");
+        } catch (InvalidOperationException) { }
+    }
+
+    private static void RunTrappedAwait(bool fault)
+    {
+        string name = fault ? "TrapFaultCounter" : "TrapTaskCounter";
+        string source = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, name + ".atto"));
+        var plan = OresParser.InspectActorAwait(source);
+        Require(plan.TrapResult && plan.ProducerLeft.HasValue, "verified source-owned trap plan");
+        var golden = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Generated" + name + ".g.cs"));
+        Require(ActorAwaitSourceEmitter.EmitCSharp(plan) ==
+            golden.Replace("\r\n", "\n", StringComparison.Ordinal), "trapped task golden");
+        string otherSpelling = fault ? source.Replace("trap(", "trap!(", StringComparison.Ordinal) :
+            source.Replace("trap!(", "trap(", StringComparison.Ordinal);
+        Require(ActorAwaitSourceEmitter.EmitCSharp(OresParser.InspectActorAwait(otherSpelling)) ==
+            ActorAwaitSourceEmitter.EmitCSharp(plan), "trap and trap! must lower identically");
+        Reject(source.Replace("Result<int, Error>", "Result<int, bool>", StringComparison.Ordinal));
+        Reject(source.Replace("await pending", "await count", StringComparison.Ordinal));
+        Reject(source.Replace(fault ? "trap(" : "trap!(", "trap !(", StringComparison.Ordinal));
+        Reject(source.Replace("await pending", "await await pending", StringComparison.Ordinal));
+
+        var host = new OresVmHost(maxTenants: 1);
+        var tenant = host.CreateIsolate(fault ? "trap-fault" : "trap-ok", maxActors: 1, maxActorWorkers: 1);
+        host.Start(tenant);
+        var actor = fault ? AwaitActor_TrapFaultCounter.Create(host, tenant, 1, true) :
+            AwaitActor_TrapTaskCounter.Create(host, tenant, 1, true);
+        var scheduler = host.CreateTrustedScheduler();
+        var successful = new AwaitActor_TrapTaskCounter();
+        var failed = new AwaitActor_TrapFaultCounter();
+        var done = new TaskCompletionSource<GuestResultI64>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var survived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var stop = new CancellationTokenSource();
+        var timeout = TimeSpan.FromSeconds(10);
+        int receipts = 0;
+        var pump = scheduler.RunPumpAsync(tenant, actor, name + "|1:I",
+            (_, _) => throw new Exception("unexpected DATA"),
+            scope => {
+                if (++receipts != 1) {
+                    Require(scope.ReadInt64(0) == 0, "trapped await changed actor state");
+                    survived.TrySetResult();
+                    return null;
+                }
+                var step = fault ? failed.Start_observe(scope) : successful.Start_observe(scope);
+                Require(step.Producer is not null && !step.Ready.IsCompleted &&
+                    step.ObserveFaultInSegment, "trap must observe asynchronously on resume");
+                return step with { Next = next => {
+                    var result = step.Next(next);
+                    Require(result is null, "trapped frame should complete");
+                    done.TrySetResult((fault ? failed.Result : successful.Result) ??
+                        throw new Exception("missing typed Result"));
+                    return null;
+                }};
+            }, (_, _) => throw new Exception("unexpected terminal"), stop.Token);
+        try {
+            scheduler.Enqueue(tenant, actor);
+            var outcome = done.Task.WaitAsync(timeout).GetAwaiter().GetResult();
+            if (fault)
+                Require(GuestResults.IsErr(outcome) &&
+                    GuestResults.IsErrorType(GuestResults.UnwrapErr(outcome), "ArithmeticOverflowError"),
+                    "trapped producer overflow");
+            else Require(GuestResults.IsOk(outcome) && GuestResults.Unwrap(outcome) == 42,
+                "trapped producer Ok(42)");
+            scheduler.Enqueue(tenant, actor);
+            survived.Task.WaitAsync(timeout).GetAwaiter().GetResult();
+            Require(!pump.IsCompleted, "ordinary trapped fault terminated pump");
+        } finally {
+            stop.Cancel();
+            try { pump.WaitAsync(timeout).GetAwaiter().GetResult(); }
+            catch (OperationCanceledException) { }
+        }
+        Require(host.ActorReceiveSnapshot(tenant, actor).Live == 0, "trapped receive retired");
+        host.RetireActor(tenant, actor);
+        host.BeginShutdown(tenant); host.CompleteShutdown(tenant); host.Destroy(tenant);
+    }
+
+    private static void RunTrappedFuture()
+    {
+        var source = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "TrapFutureCounter.atto"));
+        var plan = OresParser.InspectActorAwait(source);
+        Require(plan.TrapResult && !plan.ProducerLeft.HasValue, "external typed Future plan");
+        var golden = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "GeneratedTrapFutureCounter.g.cs"));
+        Require(ActorAwaitSourceEmitter.EmitCSharp(plan) ==
+            golden.Replace("\r\n", "\n", StringComparison.Ordinal), "trapped Future golden");
+
+        var host = new OresVmHost(maxTenants: 1);
+        var tenant = host.CreateIsolate("trap-future", maxActors: 1, maxActorWorkers: 1);
+        host.Start(tenant);
+        var actor = AwaitActor_TrapFutureCounter.Create(host, tenant, 1, true);
+        var scheduler = host.CreateTrustedScheduler();
+        var expected = GuestResults.CreateError("asynchronous original");
+        var pending = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var frame = new AwaitActor_TrapFutureCounter(pending.Task);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var timeout = TimeSpan.FromSeconds(10);
+        using var stop = new CancellationTokenSource();
+        var pump = scheduler.RunPumpAsync(tenant, actor, AwaitActor_TrapFutureCounter.Layout,
+            (_, _) => throw new Exception("unexpected DATA"),
+            scope => {
+                var step = frame.Start_observe(scope);
+                started.TrySetResult();
+                return step with { Next = next => {
+                    var result = step.Next(next);
+                    finished.TrySetResult();
+                    return result;
+                }};
+            }, (_, _) => throw new Exception("unexpected terminal"), stop.Token);
+        try {
+            scheduler.Enqueue(tenant, actor);
+            started.Task.WaitAsync(timeout).GetAwaiter().GetResult();
+            pending.TrySetException(GuestResults.Throw(expected));
+            finished.Task.WaitAsync(timeout).GetAwaiter().GetResult();
+            Require(frame.Result.HasValue &&
+                ReferenceEquals(GuestResults.UnwrapErr(frame.Result.Value), expected),
+                "resumed frame preserves original nominal Error");
+        } finally {
+            stop.Cancel();
+            try { pump.WaitAsync(timeout).GetAwaiter().GetResult(); }
+            catch (OperationCanceledException) { }
+        }
         host.RetireActor(tenant, actor);
         host.BeginShutdown(tenant); host.CompleteShutdown(tenant); host.Destroy(tenant);
     }
