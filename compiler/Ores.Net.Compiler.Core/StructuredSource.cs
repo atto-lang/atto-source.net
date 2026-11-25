@@ -239,6 +239,12 @@ public static partial class OresStructuredParser
         return inventory.AsReadOnly();
     }
 
+    // Reuse the exact structured parser over the original immutable bytes.
+    // A checked provider is not yet an executable module until CFG verification.
+    internal static StructuredProgram ParseFrozenProvider(FrozenImportSnapshot snapshot, string expectedNamespace)
+        => ParseCore(snapshot.ProviderSource(expectedNamespace), null, expectedNamespace,
+            new List<StaticImportGraph.Export>()).Program;
+
     private static StructuredLinkedUnit ParseCore(string source, LinkedModuleContext? linking,
         string? frozenNamespace = null, List<StaticImportGraph.Export>? frozenExports = null)
     {
