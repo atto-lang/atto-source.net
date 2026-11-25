@@ -5,6 +5,9 @@ on:
       - 'compiler/Ores.Net.Compiler.Core/ContextualImportPath.cs'
       - 'verification/Ores.Net.Tests/ContextualImportPathSelfTest.cs'
       - '.github/workflows/contextual-import-path.yml'
+      - 'compiler/Ores.Net.Compiler.Core/StructuredSource.cs'
+      - 'verification/Ores.Net.Tests/ContextualImportParserSelfTest.cs'
+      - 'verification/Ores.Net.Tests/Program.cs'
       - 'global.json'
 permissions:
   contents: read
@@ -43,3 +46,14 @@ jobs:
           dotnet run --project "$work" --configuration Release
       - name: Compile actual compiler project
         run: dotnet build compiler/Ores.Net.Compiler.Core/Ores.Net.Compiler.Core.csproj -c Release
+      - name: Run production source module compiler import tests
+        run: |
+          set -eu
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          dotnet new console --framework net10.0 --no-restore --output "$work"
+          dotnet add "$work" reference "$PWD/compiler/Ores.Net.Compiler.Core/Ores.Net.Compiler.Core.csproj"
+          cp verification/Ores.Net.Tests/ContextualImportParserSelfTest.cs "$work/"
+          cmp verification/Ores.Net.Tests/ContextualImportParserSelfTest.cs "$work/ContextualImportParserSelfTest.cs"
+          printf '%s\n' 'ContextualImportParserSelfTest.Run();' > "$work/Program.cs"
+          dotnet run --project "$work" --configuration Release
