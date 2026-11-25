@@ -108,3 +108,14 @@ jobs:
           file "$work/native/FrozenGuest"
           test "$("$work/native/FrozenGuest")" = 42
           echo "FROZEN_NATIVEAOT_GUEST|result=42|static-reference|no-reflection"
+          sha256sum "$work/OresGenerated.dll.args.dll"
+          mkdir "$work/args"
+          cp "$work/OresGenerated.dll.args.dll" "$work/args/OresGenerated.dll"
+          cmp "$work/OresGenerated.dll.args.dll" "$work/args/OresGenerated.dll"
+          mkdir "$work/args/host"
+          cp "$work/host/FrozenGuest.csproj" "$work/host/Program.cs" "$work/args/host/"
+          dotnet publish "$work/args/host/FrozenGuest.csproj" -c Release -r linux-x64 -o "$work/args/native"
+          file "$work/args/native/FrozenGuest"
+          test "$("$work/args/native/FrozenGuest")" = 42
+          echo "FROZEN_NATIVEAOT_ARGS_GUEST|result=42|static-reference|no-reflection"
+
