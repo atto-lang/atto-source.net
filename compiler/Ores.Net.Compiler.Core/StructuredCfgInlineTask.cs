@@ -75,7 +75,7 @@ public static partial class OresStructuredCfgLowering
             // The task is part of this very CFG and uses ordinary lexical
             // branches. There is no task object, call boundary or dispatch.
             var continuation = new LexicalContinuation(this, variables, task.Type,
-                writeBack: task.Type == IrValueType.Void);
+                writeBack: task.WriteBack);
             var environment = new Dictionary<string, Binding>(variables, StringComparer.Ordinal);
             var end = EmitStatements(task.Body, block, environment, continuation.Finish);
             if (end is not null) continuation.Finish(end, environment, null);

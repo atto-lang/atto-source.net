@@ -1,5 +1,5 @@
 pub fnc main(): int {
   let int count = 0;
-  val int result = sync task<int> { count = 2; return 40; };
+  val int result = 1 + sync task<int> { count = 2; return 39; };
   return result + count;
 }

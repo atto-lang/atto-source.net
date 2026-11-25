@@ -1959,7 +1959,18 @@ public static partial class OresStructuredParser
                     aggregateScopes.Any(scope => scope.ContainsKey(name)))
                     throw new FormatException($"Duplicate local binding at offset {nameAt}");
                 Expect("=");
-                var initializer = annotated ? ExpectedExpr(depth + 1, type) : Expr(depth + 1);
+                // Only a complete, unconditional statement initializer may
+                // publish inline-task writes. Nested expression joins do not
+                // yet merge mutable environments (short circuit, ternary, match).
+                var previousWriteback = directInlineWritebackOffset;
+                directInlineWritebackOffset = kind != StructuredBindingKind.Const &&
+                    IsDirectInlineInitializer() ? Current.Offset : null;
+                StructuredExpr initializer;
+                try
+                {
+                    initializer = annotated ? ExpectedExpr(depth + 1, type) : Expr(depth + 1);
+                }
+                finally { directInlineWritebackOffset = previousWriteback; }
                 if (annotated)
                     Require(initializer, type, "Local initializer has wrong type");
                 else
@@ -2552,7 +2563,8 @@ public static partial class OresStructuredParser
                 index += 2;
                 if (trapOperandDepth != 0)
                     throw Error("E_TRAP_INLINE_TASK_UNSUPPORTED: outlining a sync task requires lexical writeback on failure");
-                return TaggedPostfix(new StructuredSyncTaskValue(offset, ReadInlineTask(depth + 1, imperative: false)), depth);
+                return TaggedPostfix(new StructuredSyncTaskValue(offset, ReadInlineTask(depth + 1, imperative: false,
+                    writeBack: directInlineWritebackOffset == offset)), depth);
             }
             if (inlineTaskDepth != 0 && Current.Text is "await" or "yield")
                 throw Error("E_SYNC_TASK_SUSPEND: this suspension lacks a same-thread continuation");
