@@ -647,6 +647,95 @@ internal static class VmIsolateHostTests
         Console.WriteLine("NET_AUTOMATIC_ACTOR_PUMP_HOST_TESTS_PASS");
     }
 
+    private static void CheckDedicatedActorPumpCarriers()
+    {
+        var host = new OresVmHost(maxTenants: 1);
+        var tenant = host.CreateIsolate("dedicated-pump", maxActors: 2, maxActorWorkers: 1);
+        host.Start(tenant);
+        var a = host.RegisterActor(tenant, 1);
+        var b = host.RegisterActor(tenant, 2);
+        foreach (var actor in new[] { a, b })
+            host.ConfigureNamedActorState(tenant, actor, "Counter", "Counter|1:I",
+                new[] { new OresVmHost.ActorStateField(OresVmHost.ActorStateScalarKind.Int64) });
+        var scheduler = host.CreateTrustedScheduler();
+        var timeout = TimeSpan.FromSeconds(10);
+        using var stop = new CancellationTokenSource();
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var otherRan = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resumed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        int carrier = 0;
+        void CheckCarrier()
+        {
+            if (ActorDispatchDomains.CurrentLane != 0 || Thread.CurrentThread.IsThreadPoolThread)
+                throw new Exception("pump guest segment not on dedicated actor carrier");
+            var current = Environment.CurrentManagedThreadId;
+            if (carrier == 0) carrier = current;
+            if (carrier != current) throw new Exception("one-worker tenant used multiple carriers");
+        }
+        var pumpA = scheduler.RunPumpAsync(tenant, a, "Counter|1:I",
+            (_, _) => null, scope => {
+                CheckCarrier();
+                scope.AddInt64(0, 20);
+                started.TrySetResult();
+                return new OresVmHost.ActorPumpStep(ready.Task, next => {
+                    CheckCarrier();
+                    if (next.AddInt64(0, 22) != 42) throw new Exception("resumed actor state");
+                    resumed.TrySetResult();
+                    return null;
+                });
+            }, (_, _) => { }, stop.Token);
+        var pumpB = scheduler.RunPumpAsync(tenant, b, "Counter|1:I",
+            (_, _) => null, scope => {
+                CheckCarrier();
+                if (scope.AddInt64(0, 1) == 1) {
+                    otherRan.TrySetResult();
+                } else {
+                    // Deliberately hold the test fixture's physical carrier to
+                    // prove cancellation cannot abandon admitted execution.
+                    entered.TrySetResult();
+                    release.Task.WaitAsync(timeout).GetAwaiter().GetResult();
+                }
+                return null;
+            }, (_, _) => { }, stop.Token);
+        try {
+            scheduler.Enqueue(tenant, a);
+            started.Task.WaitAsync(timeout).GetAwaiter().GetResult();
+            ExpectFailure(() => host.BeginActorTurn(tenant, a), "manual admission while pump owns actor");
+            ExpectFailure(() => host.TryReceiveActor(tenant, a, out _), "manual DATA steal");
+            ExpectFailure(() => host.TryTakeSupervisorTerminal(tenant, a, out _), "manual CONTROL steal");
+            scheduler.Enqueue(tenant, b);
+            otherRan.Task.WaitAsync(timeout).GetAwaiter().GetResult();
+            if (ready.Task.IsCompleted) throw new Exception("suspension fixture prematurely ready");
+            ready.TrySetResult();
+            resumed.Task.WaitAsync(timeout).GetAwaiter().GetResult();
+            scheduler.Enqueue(tenant, b);
+            entered.Task.WaitAsync(timeout).GetAwaiter().GetResult();
+            stop.Cancel();
+            if (pumpB.IsCompleted)
+                throw new Exception("pump cancellation abandoned live physical carrier");
+            ExpectFailure(() => host.RetireActor(tenant, b), "retire live dedicated carrier");
+            release.TrySetResult();
+        }
+        finally {
+            release.TrySetResult();
+            stop.Cancel();
+            foreach (var pump in new[] { pumpA, pumpB }) {
+                try { pump.WaitAsync(timeout).GetAwaiter().GetResult(); }
+                catch (OperationCanceledException) { }
+            }
+        }
+        if (host.ActorReceiveSnapshot(tenant, a).Live != 0 ||
+            host.ActorReceiveSnapshot(tenant, b).Live != 0)
+            throw new Exception("dedicated carrier shutdown leaked logical receives");
+        host.RetireActor(tenant, a);
+        host.RetireActor(tenant, b);
+        host.BeginShutdown(tenant); host.CompleteShutdown(tenant); host.Destroy(tenant);
+        Console.WriteLine("NET_DEDICATED_ACTOR_PUMP_CARRIERS_HOST_TESTS_PASS");
+    }
+
     internal static void RunSupervisorTerminalChecks()
     {
         CheckSupervisorTerminalReservations();
@@ -658,6 +747,7 @@ internal static class VmIsolateHostTests
         CheckSupervisorHandlerDispatch();
         CheckBoundedReentrantReceives();
         CheckAutomaticActorPump();
+        CheckDedicatedActorPumpCarriers();
     }
 
     public static void Run()
