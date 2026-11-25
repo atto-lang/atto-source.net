@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 namespace Ores.Net.Runtime;
@@ -31,11 +32,12 @@ public unsafe sealed class ActorSlabHeap : IDisposable
     public const int HeaderBytes = 64;
     public const int MaxSmall = 2048;
     public const int MaxAlignment = 64;
-    public static ReadOnlySpan<ushort> ClassBytes => new ushort[]
-    {
+    // Constant primitive span lowers to static data; no per-lookup array.
+    public static ReadOnlySpan<ushort> ClassBytes =>
+    [
         16, 32, 48, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512,
         640, 768, 896, 1024, 1280, 1536, 1792, 2048,
-    };
+    ];
     private const int Classes = 24;
     private const int BitmapBits = (HeaderBytes - 16) * 8; // same as the C++ header
     private const uint None = 0;
@@ -60,8 +62,14 @@ public unsafe sealed class ActorSlabHeap : IDisposable
     private readonly nuint _reserve, _budget, _granule;
     private readonly uint _maxPages;
     private uint _highWater, _freeRuns;
-    // One 24-entry table per heap (not per object): partial-page list heads.
-    private readonly uint[] _partial = new uint[Classes];
+    // Fixed-size inline metadata in the host owner; no separate CLR array.
+    // The owner object itself is still managed, not a whole-process GC-free claim.
+    [InlineArray(Classes)]
+    private struct PartialHeads
+    {
+        private uint _first;
+    }
+    private PartialHeads _partial;
     private nuint _handleBase;
     private uint _handleCapacity, _slotBits, _maxGen, _freeSlotHead, _freeSlotTail, _quarantined;
     private bool _retired;
@@ -470,6 +478,7 @@ public unsafe sealed class ActorSlabHeap : IDisposable
             _pages = null;
         }
         _committed = 0;
+        _partial = default;
         _retired = true;
         _stats = default;
     }
