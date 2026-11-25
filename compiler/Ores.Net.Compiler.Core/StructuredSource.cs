@@ -241,12 +241,12 @@ public static partial class OresStructuredParser
 
     // Reuse the exact structured parser over the original immutable bytes.
     // A checked provider is not yet an executable module until CFG verification.
-    internal static StructuredProgram ParseFrozenProvider(FrozenImportSnapshot snapshot, string expectedNamespace)
+    internal static StructuredProgram ParseFrozenProvider(FrozenImportSnapshot snapshot, string expectedNamespace, string methodPrefix = "")
         => ParseCore(snapshot.ProviderSource(expectedNamespace), null, expectedNamespace,
-            new List<StaticImportGraph.Export>()).Program;
+            new List<StaticImportGraph.Export>(), methodPrefix).Program;
 
     private static StructuredLinkedUnit ParseCore(string source, LinkedModuleContext? linking,
-        string? frozenNamespace = null, List<StaticImportGraph.Export>? frozenExports = null)
+        string? frozenNamespace = null, List<StaticImportGraph.Export>? frozenExports = null, string frozenMethodPrefix = "")
     {
         ValidateSourceInput(source);
         ActorPubSubSourceAdmission.RejectUnsupported(source);
@@ -550,7 +550,7 @@ public static partial class OresStructuredParser
         RejectUnsupportedMacros(tokens);
         var reader = new Reader(tokens, linking);
         if (frozenNamespace is not null)
-            return reader.ReadFrozenNamespace(frozenNamespace, frozenExports!);
+            return reader.ReadFrozenNamespace(frozenNamespace, frozenExports!, frozenMethodPrefix);
         return linking is null
             ? new StructuredLinkedUnit(reader.ReadProgram(), null, new Dictionary<string, StructuredFunction>())
             : reader.ReadLinkedUnit();
@@ -1280,7 +1280,8 @@ public static partial class OresStructuredParser
         }
 
         private bool frozenProvider;
-        internal StructuredLinkedUnit ReadFrozenNamespace(string expected, List<StaticImportGraph.Export> inventory)
+        private string frozenMethodPrefix = "";
+        internal StructuredLinkedUnit ReadFrozenNamespace(string expected, List<StaticImportGraph.Export> inventory, string methodPrefix)
         {
             // This entry point accepts bytes only from a verified snapshot.
             // Do not confer compiler-owned Core authority on any package.
@@ -1295,9 +1296,10 @@ public static partial class OresStructuredParser
             Expect(";");
             if (Current.Text == "import") throw Error("E_UNSUPPORTED: frozen provider imports require complete dependency closure");
             frozenProvider = true;
+            frozenMethodPrefix = methodPrefix;
             var program = ReadDeclarations(false);
             inventory.Add(new StaticImportGraph.Export(expected,StaticImportGraph.Kind.Namespace,true));
-            foreach (string name in functions.Keys.OrderBy(x=>x,StringComparer.Ordinal))
+            foreach (string name in visible.Keys.OrderBy(x=>x,StringComparer.Ordinal))
                 inventory.Add(new StaticImportGraph.Export(expected+"."+name,StaticImportGraph.Kind.Fnc,exports.ContainsKey(name)));
             return new StructuredLinkedUnit(program, null,
                 new System.Collections.ObjectModel.ReadOnlyDictionary<string, StructuredFunction>(exports));
@@ -1469,7 +1471,7 @@ public static partial class OresStructuredParser
                 StructuredExpr? inlineReturn =
                     helperBody.Count == 1 && helperBody[0] is StructuredReturn only
                         ? only.Value : null;
-                string methodName = linking?.CanonicalName(name) ?? name;
+                string methodName = linking?.CanonicalName(name) ?? (frozenMethodPrefix + name);
                 var declaration = new StructuredFunction(methodName,
                     Array.AsReadOnly(parameters.ToArray()), resultType,
                     inlineReturn, helperBody);
