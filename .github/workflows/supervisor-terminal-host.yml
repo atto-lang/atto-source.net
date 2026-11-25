@@ -48,14 +48,18 @@ jobs:
           grep -Fx NET_AUTOMATIC_ACTOR_PUMP_HOST_TESTS_PASS supervisor-terminal.log
           grep -Fx NET_DEDICATED_ACTOR_PUMP_CARRIERS_HOST_TESTS_PASS supervisor-terminal.log
           grep -Fx NET_VERIFIED_ACTOR_AWAIT_FRAME_TESTS_PASS supervisor-terminal.log
+          grep -Fx NET_SOURCE_OWNED_ACTOR_TASK_TESTS_PASS supervisor-terminal.log
       - name: Verify CLI-generated source identity and standalone NativeAOT actor frame
         shell: bash
         run: |
           set -euo pipefail
           dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -- emit-actor-await-csharp verification/Ores.Net.Tests/AwaitCounter.atto --out "$RUNNER_TEMP/AwaitActor.g.cs"
           git diff --no-index --ignore-cr-at-eol verification/Ores.Net.Tests/GeneratedAwaitActor.g.cs "$RUNNER_TEMP/AwaitActor.g.cs"
+          dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -- emit-actor-await-csharp verification/Ores.Net.Tests/TaskCounter.atto --out "$RUNNER_TEMP/TaskActor.g.cs"
+          git diff --no-index --ignore-cr-at-eol verification/Ores.Net.Tests/GeneratedTaskActor.g.cs "$RUNNER_TEMP/TaskActor.g.cs"
           if [[ "$RUNNER_OS" == Windows ]]; then rid=win-x64; exe=Ores.Net.ActorAwaitProbe.exe; else rid=linux-x64; exe=Ores.Net.ActorAwaitProbe; fi
           dotnet publish verification/Ores.Net.ActorAwaitProbe/Ores.Net.ActorAwaitProbe.csproj -c Release -r "$rid" -p:PublishAot=true -o "$RUNNER_TEMP/await-native"
           "$RUNNER_TEMP/await-native/$exe" | tee actor-await-native.log
           grep -Fx NET_VERIFIED_ACTOR_AWAIT_FRAME_TESTS_PASS actor-await-native.log
+          grep -Fx NET_SOURCE_OWNED_ACTOR_TASK_TESTS_PASS actor-await-native.log
 
