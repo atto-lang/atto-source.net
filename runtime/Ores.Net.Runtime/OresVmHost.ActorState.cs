@@ -292,6 +292,20 @@ public sealed partial class OresVmHost
             out SupervisorTerminalNotice notice)
             => Host.TryTakeScheduledSupervisorTerminal(this, isolate, actor, out notice);
 
+        // Host scheduler segment bridge; a resume ticket is not a guest
+        // callback, Future, or general source-level async lowering.
+        internal ActorContinuation? StartSegment(IsolateHandle isolate, ActorTicket actor,
+            string layout, Func<ActorDispatchScope, bool> segment)
+            => Host.StartScheduledSegment(this, isolate, actor, layout, segment);
+
+        internal ActorContinuation? ResumeSegment(IsolateHandle isolate, ActorTicket actor,
+            ActorContinuation continuation, Func<ActorDispatchScope, bool> segment)
+            => Host.ResumeScheduledSegment(this, isolate, actor, continuation, segment);
+
+        internal void DiscardContinuation(IsolateHandle isolate, ActorTicket actor,
+            ActorContinuation continuation)
+            => Host.DiscardScheduledContinuation(this, isolate, actor, continuation);
+
         /// <summary>Admit one bounded empty control message for a future turn.</summary>
         public void Enqueue(IsolateHandle isolate, ActorTicket actor)
             => Host.EnqueueScheduledActor(this, isolate, actor);
