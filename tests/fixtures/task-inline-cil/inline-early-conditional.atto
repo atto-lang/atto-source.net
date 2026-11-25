@@ -1,0 +1,32 @@
+fnc scalar(bool first): int {
+    let int count = 0;
+    val int result = sync task<int> {
+        if first do
+            count = 2;
+            return 40;
+        fi
+        count = 3;
+        return 39;
+    };
+    return result + count;
+}
+
+fnc tagged(bool first): int {
+    let int count = 0;
+    let Option<int> state = None;
+    state = sync task<Option<int>> {
+        if first do
+            count = 2;
+            return Some(40);
+        fi
+        count = 3;
+        return Some(39);
+    };
+    return state.unwrap() + count;
+}
+
+pub fnc main(): int {
+    guard scalar(true) eq 42, scalar(false) eq 42,
+        tagged(true) eq 42, tagged(false) eq 42 { return 1; }
+    return 42;
+}
