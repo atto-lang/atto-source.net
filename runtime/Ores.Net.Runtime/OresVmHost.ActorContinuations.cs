@@ -179,6 +179,7 @@ public sealed partial class OresVmHost
                 turn.Suspended = true;
                 turn.PendingContinuation = next;
                 actor.ActiveTurn = null;
+                SignalActorPump(actor);
                 return next;
             }
             turn.ManagedContinuation = false;
