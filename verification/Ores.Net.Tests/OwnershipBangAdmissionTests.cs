@@ -19,8 +19,12 @@ internal static class OwnershipBangAdmissionTests
         })
         {
             string source = "pub fnc main(): int { return " + operand + "; }";
-            RequireUnsupported(() => OresParser.Parse(source), "scalar", operand);
-            RequireUnsupported(() => OresStructuredParser.Parse(source), "structured", operand);
+            var marker = operand.IndexOf('!');
+            bool missingSeparator = marker + 1 >= operand.Length ||
+                operand[marker + 1] is not (' ' or '\t' or '\r' or '\n' or '\v' or '\f');
+            var diagnostic = missingSeparator ? "E_BANG_KEYWORD_WHITESPACE" : "OWNERSHIP_BANG_BACKEND_UNSUPPORTED";
+            RequireUnsupported(() => OresParser.Parse(source), "scalar", operand, diagnostic);
+            RequireUnsupported(() => OresStructuredParser.Parse(source), "structured", operand, diagnostic);
         }
 
         foreach (string inert in new[] {
@@ -67,11 +71,11 @@ internal static class OwnershipBangAdmissionTests
         throw new Exception("Unbounded nested comments in " + frontend);
     }
 
-    private static void RequireUnsupported(Action action, string frontend, string input)
+    private static void RequireUnsupported(Action action, string frontend, string input, string diagnostic)
     {
         try { action(); }
         catch (FormatException ex) when (ex.Message.Contains(
-            "OWNERSHIP_BANG_BACKEND_UNSUPPORTED", StringComparison.Ordinal)) { return; }
+            diagnostic, StringComparison.Ordinal)) { return; }
         throw new Exception("Missing typed ownership rejection: " + frontend + " " + input);
     }
 
