@@ -134,6 +134,65 @@ internal static class ActorPubSubSelfTest
         }
 
 
+        foreach (var extension in new[] { latest, lossy })
+        {
+            bool denied = false;
+            try { _ = extension.TryPublish(publisher, "not portable"); }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("RELIABLE"))
+            { denied = true; }
+            Require(denied, "portable TryPublish must reject non-RELIABLE policy");
+            Require(!extension.TryRead(left, out _),
+                "rejected extension attempt must not enqueue");
+            Require(extension.Publish(publisher, "legacy").Sequence == 3,
+                "legacy Publish remains supported and refusal consumes no sequence");
+            Require(extension.TryRead(left, out _), "legacy publication remains readable");
+        }
+
+        // Test-only reflection seeds the private counter at otherwise
+        // unreachable boundaries; production admission has no reset API.
+        // This host regression is not a NativeAOT guest receipt.
+        var sequenceTopic = a.DefineTopic<string>(
+            "sequence-boundary", ActorTopicDeliveryPolicy.Reliable, 1);
+        Require(sequenceTopic.Subscribe(left), "boundary subscription");
+        var topicsField = typeof(ActorPubSub).GetField("_topics",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        var topics = (System.Collections.IDictionary)topicsField.GetValue(runtime.PubSub)!;
+        object? state = null;
+        foreach (System.Collections.DictionaryEntry entry in topics)
+        {
+            if (entry.Key.ToString()!.Contains("sequence-boundary", StringComparison.Ordinal))
+            {
+                state = entry.Value;
+                break;
+            }
+        }
+        Require(state is not null, "boundary topic state located");
+        var sequenceField = state!.GetType().GetField("_lastSequence",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        sequenceField.SetValue(state, ulong.MaxValue - 2);
+        Require(sequenceTopic.TryPublish(publisher, "occupied").Sequence == ulong.MaxValue - 1,
+            "penultimate u64 sequence");
+        ActorPublishReceipt full = sequenceTopic.TryPublish(publisher, "refused");
+        Require(full.Backpressured && full.Sequence == 0 && full.Accepted == 0,
+            "Full before exhaustion consumes no sequence");
+        Require(sequenceTopic.TryRead(left, out string occupied) && occupied == "occupied",
+            "Full leaves prior delivery unchanged");
+        Require(sequenceTopic.TryPublish(publisher, "last").Sequence == ulong.MaxValue,
+            "final u64 sequence admitted exactly once");
+        for (int attempt = 0; attempt < 2; attempt++)
+        {
+            bool exhausted = false;
+            try { _ = sequenceTopic.TryPublish(publisher, "never"); }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("sequence exhausted"))
+            { exhausted = true; }
+            Require(exhausted, "exhaustion must win over Full, then remain permanent");
+            if (attempt == 0)
+                Require(sequenceTopic.TryReadDelivery(left, out var last) &&
+                        last.Sequence == ulong.MaxValue && last.Value == "last",
+                    "exhaustion does not disturb last admitted delivery");
+        }
+        Require(!sequenceTopic.TryRead(left, out _), "no wraparound delivery");
+
         runtime.Stop(left);
         runtime.Stop(late);
         Require(SpinWait.SpinUntil(() => runtime.LiveActors == 3,
