@@ -8,6 +8,7 @@ internal static class ActorArenaSelfTest
         CheckedFourByteRefsRejectForeignAndStaleTargets();
         CheckedRef32SurvivesDynamicBackingGrowth();
         Ref32NativeProofBudgetAndReclamation();
+        Ref32NativeIndexPreservesPeersDuringChurn();
         DemandBackedGrowthPreservesActorRootsAndBudget();
         DemandBackedGrowthDeniedDuringFfiPin();
         DemandBackedScratchAndQuiescentPin();
@@ -160,6 +161,43 @@ internal static class ActorArenaSelfTest
         }
         Require(b.Retire() && b.ReferenceProofNativeBytes == 0 && larger.ReservedBytes == 0,
             "native proof ledger is scrubbed and refunded at quiescent retirement");
+    }
+
+    private static void Ref32NativeIndexPreservesPeersDuringChurn()
+    {
+        var budget = new ActorArenaBudget(128 * 1024);
+        using var arena = new ActorArena(86004, 1, 4096, 512, 8, 2, 2, budget: budget);
+        using (var turn = arena.EnterTurn(86004, 1))
+        {
+            var left = arena.AllocatePersistent(turn, 256);
+            var right = arena.AllocatePersistent(turn, 256);
+            var child = arena.AllocatePersistent(turn, 8);
+            for (int i = 0; i < 64; i++)
+            {
+                arena.WriteManagedRef32(turn, left, i * 4, child);
+                arena.WriteManagedRef32(turn, right, i * 4, child);
+            }
+            int warmedBytes = arena.ReferenceProofNativeBytes;
+            for (int round = 0; round < 16; round++)
+            {
+                for (int i = round % 2; i < 64; i += 2)
+                    arena.WriteManagedRef32(turn, left, i * 4, null);
+                for (int i = 0; i < 64; i++)
+                {
+                    Require(ReferenceEquals(arena.ReadManagedRef32(turn, right, i * 4), child),
+                        "deletion preserves neighboring probe chains");
+                    if (i % 2 == round % 2)
+                        Require(arena.ReadManagedRef32(turn, left, i * 4) is null, "cleared proof is absent");
+                }
+                for (int i = 0; i < 64; i++) arena.WriteManagedRef32(turn, left, i * 4, child);
+            }
+            Require(arena.ReferenceProofNativeBytes == warmedBytes, "churn does not grow native table");
+            arena.ReleasePersistent(turn, left);
+            for (int i = 0; i < 64; i++)
+                Require(ReferenceEquals(arena.ReadManagedRef32(turn, right, i * 4), child),
+                    "parent retirement leaves sibling proofs intact");
+        }
+        Require(arena.Retire() && budget.ReservedBytes == 0, "indexed native proofs fully refunded");
     }
 
     private static void DemandBackedGrowthPreservesActorRootsAndBudget()
