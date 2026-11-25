@@ -1219,7 +1219,48 @@ public static partial class OresStructuredParser
                 if (imports.Count >= 64) throw Error("Import declaration budget exceeded");
                 imports.Add(new SourceImport(kind, name, quoted[1..^1], offset));
             }
+            RejectUnlinkedAliases();
             return imports.AsReadOnly();
+        }
+
+        // A bounded declaration batch is normalized before any source module
+        // discovery. Do not treat an acyclic alias as an executable constant.
+        private bool AtAlias() => Current.Text == "define" && index + 1 < tokens.Count
+            && tokens[index + 1].Text == "alias";
+
+        private string ReadAliasPath()
+        {
+            string first = Name();
+            if (first.Length > 64) throw Error("E_IMPORT_PATH: alias component too long");
+            string path = first;
+            int count = 1;
+            while (Take("."))
+            {
+                if (++count > 8) throw Error("E_IMPORT_PATH: alias path too deep");
+                string part = Name();
+                if (part.Length > 64) throw Error("E_IMPORT_PATH: alias component too long");
+                path += "." + part;
+            }
+            return path;
+        }
+
+        private void RejectUnlinkedAliases()
+        {
+            if (!AtAlias()) return;
+            var aliases = new List<StaticImportGraph.Alias>();
+            while (AtAlias())
+            {
+                index += 2;
+                if (aliases.Count >= 256) throw Error("E_SOURCE_LIMIT: namespace alias budget exceeded");
+                string left = ReadAliasPath();
+                string name, reference;
+                if (Take("=")) { name = left; reference = ReadAliasPath(); }
+                else { Expect("as"); reference = left; name = Name(); }
+                Expect(";");
+                aliases.Add(new StaticImportGraph.Alias(name, reference));
+            }
+            StaticImportGraph.PrecheckAliases(aliases);
+            throw Error("E_UNSUPPORTED: namespace aliases require authenticated static binding integration");
         }
 
         internal StructuredLinkedUnit ReadLinkedUnit()
