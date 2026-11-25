@@ -7,6 +7,8 @@ on:
       - 'runtime/Ores.Net.Runtime/**'
       - 'host/**'
       - 'ci/test-task-inline-cil.sh'
+      - 'verification/assert-macos-native-release.sh'
+      - 'build/StrictNativeAot.targets'
       - 'tests/fixtures/task-inline-cil/**'
       - '.github/workflows/task-inline-cil.yml'
   workflow_dispatch:

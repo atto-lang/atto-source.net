@@ -1,0 +1,3 @@
+pub fnc main(): int {
+    return sync task<int> { return macro_name ! (42); };
+}
