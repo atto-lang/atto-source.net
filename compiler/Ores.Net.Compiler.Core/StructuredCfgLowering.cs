@@ -291,6 +291,12 @@ public static partial class OresStructuredCfgLowering
                     return (Emit(block, CfgOpcode.ReadOptionI64Tag, IrValueType.Bool, left: value),
                         Emit(block, CfgOpcode.ReadOptionI64Payload, IrValueType.I64, left: value));
                 }
+                case StructuredSyncTaskValue task when task.Type == IrValueType.OptionI64:
+                {
+                    int value = InlineTaskValue(task, ref block, variables);
+                    return (Emit(block, CfgOpcode.ReadOptionI64Tag, IrValueType.Bool, left: value),
+                        Emit(block, CfgOpcode.ReadOptionI64Payload, IrValueType.I64, left: value));
+                }
                 case StructuredResultInspect result when result.ValueType == IrValueType.OptionI64:
                     return UnwrapResultOption(Expression(result.Result, ref block, variables), block);
                 case StructuredPropagate propagation when propagation.Type == IrValueType.OptionI64:
@@ -397,6 +403,8 @@ public static partial class OresStructuredCfgLowering
                     return variable.ValueId;
                 case StructuredMatchValue match:
                     return MatchValue(match, ref block, variables);
+                case StructuredSyncTaskValue task:
+                    return InlineTaskValue(task, ref block, variables);
                 // Operands may short-circuit into new CFG blocks (ref block), so
                 // evaluate them fully before emitting into the current block.
                 case StructuredOptionPresent present:
@@ -577,7 +585,7 @@ public static partial class OresStructuredCfgLowering
 
         private Block? EmitStatements(IReadOnlyList<StructuredStmt> statements,
             Block start, Dictionary<string, Binding> variables,
-            Action<Block, Dictionary<string, Binding>>? exitMatch = null)
+            Action<Block, Dictionary<string, Binding>, int?>? localExit = null)
         {
             Block? current = start;
             foreach (var stmt in statements)
@@ -661,14 +669,7 @@ public static partial class OresStructuredCfgLowering
                     case StructuredReturn returned:
                     {
                         Block evalBlock = current;
-                        int result;
-                        if (returned.Value.Type == IrValueType.OptionI64)
-                        {
-                            var parts = OptionParts(returned.Value, ref evalBlock, variables);
-                            result = Emit(evalBlock, CfgOpcode.PackOptionI64, IrValueType.OptionI64,
-                                left: parts.Tag, right: parts.Payload);
-                        }
-                        else result = Expression(returned.Value, ref evalBlock, variables);
+                        int result = PackedValue(returned.Value, ref evalBlock, variables);
                         evalBlock.Terminator = new CfgReturn(result);
                         current = null;
                         break;
@@ -689,19 +690,30 @@ public static partial class OresStructuredCfgLowering
                         current = OverflowCatch(caught, current, variables);
                         break;
                     case StructuredIf conditional:
-                        current = If(conditional, current, variables, exitMatch);
+                        current = If(conditional, current, variables, localExit);
                         break;
                     case StructuredWhile loop:
-                        current = While(loop, current, variables, exitMatch);
+                        current = While(loop, current, variables, localExit);
                         break;
                     case StructuredDoMatch match:
                         current = LowerMatch(match.Match, current, variables).Join;
                         break;
-                    case StructuredMatchExit:
-                        if (exitMatch is null) throw new FormatException("Unscoped do match return");
-                        exitMatch(current, variables);
+                    case StructuredDoSyncTask task:
+                        current = LowerInlineTask(task.Task, current, variables).Join;
+                        break;
+                    case StructuredInlineCooperate:
+                        Emit(current, CfgOpcode.InlineCooperate, IrValueType.Bool);
+                        break;
+                    case StructuredLocalExit returned:
+                    {
+                        if (localExit is null) throw new FormatException("Unscoped lexical return");
+                        Block evalBlock = current;
+                        int? value = returned.Value is { } expression
+                            ? PackedValue(expression, ref evalBlock, variables) : null;
+                        localExit(evalBlock, variables, value);
                         current = null;
                         break;
+                    }
                     default:
                         throw new FormatException("Unsupported structured CFG statement");
                 }
@@ -749,7 +761,7 @@ public static partial class OresStructuredCfgLowering
         }
 
         private Block? If(StructuredIf statement, Block origin,
-            Dictionary<string, Binding> variables, Action<Block, Dictionary<string, Binding>>? exitMatch)
+            Dictionary<string, Binding> variables, Action<Block, Dictionary<string, Binding>, int?>? localExit)
         {
             Block conditionBlock = origin;
             int condition = Expression(statement.Condition, ref conditionBlock, variables);
@@ -757,7 +769,7 @@ public static partial class OresStructuredCfgLowering
             var thenBlock = NewBlock();
             var thenEnvironment = new Dictionary<string, Binding>(
                 variables, StringComparer.Ordinal);
-            Block? thenEnd = EmitStatements(statement.Then, thenBlock, thenEnvironment, exitMatch);
+            Block? thenEnd = EmitStatements(statement.Then, thenBlock, thenEnvironment, localExit);
 
             Block? elseBlock = null;
             Block? elseEnd = null;
@@ -766,7 +778,7 @@ public static partial class OresStructuredCfgLowering
             if (statement.Else is not null)
             {
                 elseBlock = NewBlock();
-                elseEnd = EmitStatements(statement.Else, elseBlock, elseEnvironment, exitMatch);
+                elseEnd = EmitStatements(statement.Else, elseBlock, elseEnvironment, localExit);
             }
 
             if (thenEnd is null && statement.Else is not null && elseEnd is null)
@@ -796,7 +808,7 @@ public static partial class OresStructuredCfgLowering
         }
 
         private Block While(StructuredWhile statement, Block origin,
-            Dictionary<string, Binding> variables, Action<Block, Dictionary<string, Binding>>? exitMatch)
+            Dictionary<string, Binding> variables, Action<Block, Dictionary<string, Binding>, int?>? localExit)
         {
             var names = Names(variables);
             var headerVariables = new Dictionary<string, Binding>(StringComparer.Ordinal);
@@ -808,7 +820,7 @@ public static partial class OresStructuredCfgLowering
             Block body = NewBlock();
             var bodyVariables = new Dictionary<string, Binding>(
                 headerVariables, StringComparer.Ordinal);
-            Block? bodyEnd = EmitStatements(statement.Body, body, bodyVariables, exitMatch);
+            Block? bodyEnd = EmitStatements(statement.Body, body, bodyVariables, localExit);
             if (bodyEnd is not null)
                 bodyEnd.Terminator = new CfgJump(header.Name, Values(names, bodyVariables));
 

@@ -1,0 +1,7 @@
+pub fnc main(): int {
+  val int value = sync task<int> {
+    guard false { return; }
+    return 1;
+  };
+  return value;
+}

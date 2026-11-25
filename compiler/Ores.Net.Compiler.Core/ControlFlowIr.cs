@@ -60,7 +60,8 @@ public enum CfgOpcode
     ResultErrText,
     ResultUnwrapTextErr,
     CheckedRemainder,
-    CheckedModulo
+    CheckedModulo,
+    InlineCooperate
 }
 
 public readonly record struct CfgParameter(int Id, IrValueType Type);
@@ -523,6 +524,13 @@ public static class OresCfgVerifier
                         Use(i, opIndex, op.Left.Value, operand.Type);
                         if (op.Opcode == CfgOpcode.ResultUnwrapOr)
                             Use(i, opIndex, op.Right!.Value, IrValueType.I64);
+                        break;
+                    case CfgOpcode.InlineCooperate:
+                        RequireType(op.Type, IrValueType.Bool);
+                        if (op.Left is not null || op.Right is not null || op.I64Constant is not null ||
+                            op.BoolConstant is not null || op.Target is not null || op.Arguments is not null ||
+                            op.TextOperand is not null)
+                            throw new FormatException("Malformed CFG inline cooperation");
                         break;
                     case CfgOpcode.PackOptionI64:
                         RequireType(op.Type, IrValueType.OptionI64);
