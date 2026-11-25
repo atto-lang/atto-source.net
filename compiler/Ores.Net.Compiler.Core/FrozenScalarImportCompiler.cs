@@ -62,14 +62,28 @@ public static partial class OresStructuredParser
         reader.Expect("pub"); reader.Expect("fnc"); reader.Expect("main");
         reader.Expect("("); reader.Expect(")");
         if(!reader.Take("->")) reader.Expect(":");
-        reader.Expect("int"); reader.Expect("{"); reader.Expect("return");
+        reader.Expect("int"); reader.Expect("{");
+        var body=new List<StructuredStmt>();
+        while(reader.Take("val")) {
+            if(reader.Locals.Count>=16) throw new FormatException("E_SOURCE_LIMIT: local binding budget exceeded");
+            reader.Expect("int");
+            string local=reader.LocalName();
+            if(reader.Locals.ContainsKey(local)) throw new FormatException("E_DUPLICATE: duplicate local binding");
+            reader.Expect("=");
+            var initial=reader.Expression(0);
+            reader.Expect(";");
+            string generated="frozen_local_"+reader.Locals.Count.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            reader.Locals.Add(local,generated);
+            body.Add(new StructuredLet(0,generated,IrValueType.I64,initial,StructuredBindingKind.Val));
+        }
+        reader.Expect("return");
         string call=reader.Path();
         reader.Expect("(");
         var arguments=new List<StructuredExpr>();
         if(!reader.Take(")")) {
             do {
                 if(arguments.Count>=16) throw new FormatException("E_SOURCE_LIMIT: call argument budget exceeded");
-                arguments.Add(new StructuredInt(0,reader.Integer()));
+                arguments.Add(reader.Expression(0));
             } while(reader.Take(","));
             reader.Expect(")");
         }
@@ -77,6 +91,8 @@ public static partial class OresStructuredParser
         if(!reader.AtEnd) throw new FormatException("E_UNSUPPORTED: trailing guest source");
         if(!call.Contains('.')) throw new FormatException("E_UNSUPPORTED: qualified static call required");
 
+        if(reader.Locals.ContainsKey(call[..call.IndexOf('.')]))
+            throw new FormatException("E_IMPORT_KIND: scalar local shadows qualified call root");
         var graph=new StaticImportGraph();
         foreach(var import in imports)
         {
@@ -113,8 +129,8 @@ public static partial class OresStructuredParser
         if(functions.ContainsKey("main"))
             throw new FormatException("E_UNSUPPORTED: provider main requires canonical method names");
         var result=new StructuredCall(0,member,arguments.AsReadOnly(),IrValueType.I64);
-        var program=new StructuredProgram("main",Array.AsReadOnly<StructuredStmt>(
-            new StructuredStmt[]{new StructuredReturn(0,result)}),functions,provider.FunctionOrder);
+        body.Add(new StructuredReturn(0,result));
+        var program=new StructuredProgram("main",body.AsReadOnly(),functions,provider.FunctionOrder);
         return OresStructuredCfgLowering.LowerModule(program);
     }
 
@@ -122,6 +138,8 @@ public static partial class OresStructuredParser
     {
         private readonly Lexer lexer;
         private Token current;
+        private int expressionNodes;
+        internal Dictionary<string,string> Locals {get;}=new(StringComparer.Ordinal);
         internal FrozenConsumerReader(Lexer lexer) {this.lexer=lexer;current=lexer.Read();}
         internal bool AtEnd => current.Text.Length==0;
         private void Advance() {current=lexer.Read();}
@@ -148,6 +166,41 @@ public static partial class OresStructuredParser
                 path+="."+Component();
             }
             return path;
+        }
+        internal string LocalName()=>Component();
+        private void ChargeExpression(int depth) {
+            if(depth>16||++expressionNodes>128)
+                throw new FormatException("E_SOURCE_LIMIT: scalar expression budget exceeded");
+        }
+        internal StructuredExpr Expression(int depth) {
+            var value=Product(depth);
+            while(current.Text is "+" or "-") {
+                string op=current.Text; Advance(); ChargeExpression(depth);
+                value=new StructuredBinary(0,op=="+"?StructuredOperator.Add:StructuredOperator.Subtract,
+                    value,Product(depth),IrValueType.I64);
+            }
+            return value;
+        }
+        private StructuredExpr Product(int depth) {
+            var value=Atom(depth);
+            while(Take("*")) {
+                ChargeExpression(depth);
+                value=new StructuredBinary(0,StructuredOperator.Multiply,value,Atom(depth),IrValueType.I64);
+            }
+            return value;
+        }
+        private StructuredExpr Atom(int depth) {
+            ChargeExpression(depth);
+            if(Take("(")) {
+                var value=Expression(depth+1); Expect(")"); return value;
+            }
+            if(ContextualImportPath.Valid(current.Text)) {
+                string name=Component();
+                if(!Locals.TryGetValue(name,out var generated))
+                    throw new FormatException("E_UNBOUND: unbound scalar local");
+                return new StructuredRead(0,generated,IrValueType.I64);
+            }
+            return new StructuredInt(0,Integer());
         }
         internal long Integer()
         {
