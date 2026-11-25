@@ -51,6 +51,7 @@ public sealed partial class OresVmHost
         internal ulong NextTurnGeneration { get; set; } = 1;
         internal ActorTurnTicket? ActiveTurn { get; set; }
         internal TaskCompletionSource? TerminalReady { get; set; }
+        internal int SupervisorControlBurst { get; set; }
         // Compiler-owned typed state layout, installed once before any turn.
         // The values live in Heap (StateBlock); only the kinds are managed.
         internal ActorStateScalarKind[]? StateKinds { get; set; }
