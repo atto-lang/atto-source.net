@@ -1,0 +1,13 @@
+namespace counter;
+declare pub actor TaskCounter;
+define state on actor TaskCounter as { let int count: 0; }
+
+pub suspends mtd (TaskCounter counter) add(int incoming): int {
+    val int saved = incoming;
+    val Future<int> pending = task<int> { return 5 + 7; };
+    val int result = await pending;
+    return self.handle_state(critical-write |s| -> {
+        s.count = s.count + (saved + result);
+        return s.count;
+    });
+}

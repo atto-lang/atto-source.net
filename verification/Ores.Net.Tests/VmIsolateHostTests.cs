@@ -9,8 +9,750 @@ internal static class VmIsolateHostTests
         throw new Exception("IsolateVM gate failed: " + label);
     }
 
+    private static void CheckSupervisorTerminalReservations()
+    {
+        var host = new OresVmHost(maxTenants: 2, maxQueuedMailBytes: 1);
+        var tenant = host.CreateIsolate("control", maxActors: 3, maxQueuedMailBytes: 1);
+        var foreign = host.CreateIsolate("foreign-control", maxActors: 1);
+        host.Start(tenant); host.Start(foreign);
+        var parent = host.RegisterActor(tenant, 1);
+        var unrelated = host.RegisterActor(tenant, 2);
+        var foreignParent = host.RegisterActor(foreign, 1);
+        ExpectFailure(() => host.RegisterSupervisedActor(tenant, foreignParent, 3),
+            "foreign supervisor authority");
+        ExpectFailure(() => host.RegisterSupervisedActor(tenant, parent, 2),
+            "duplicate child must not leak a terminal reservation");
+        var child = host.RegisterSupervisedActor(tenant, parent, 3);
+        var wake = host.WaitForSupervisorTerminalAsync(tenant, parent);
+        if (wake.IsCompleted || !ReferenceEquals(wake, host.WaitForSupervisorTerminalAsync(tenant, parent)))
+            throw new Exception("pending terminal wakeup must be shared and incomplete");
+        var unrelatedWake = host.WaitForSupervisorTerminalAsync(tenant, unrelated);
+        ExpectFailure(() => host.WaitForSupervisorTerminalAsync(foreign, parent), "foreign readiness authority");
+
+        // Saturate both DATA message count and byte budget, including empty
+        // user messages. Terminal delivery must not consume a DATA slot.
+        host.SendActor(tenant, parent, parent.CurrentRef, new byte[] { 42 });
+        for (var i = 1; i < 1024; i++)
+            host.SendActor(tenant, parent, parent.CurrentRef, Array.Empty<byte>());
+        ExpectFailure(() => host.SendActor(tenant, parent, parent.CurrentRef,
+            Array.Empty<byte>()), "full DATA count");
+        ExpectFailure(() => host.RetireActor(tenant, parent), "live supervised child");
+        if (host.TryTakeSupervisorTerminal(tenant, parent, out _))
+            throw new Exception("terminal notification before retirement");
+
+        var turn = host.BeginActorTurn(tenant, child);
+        ExpectFailure(() => host.RetireFaultedActor(tenant, child), "live child turn");
+        host.CompleteActorTurn(tenant, child, turn);
+        var pin = host.PinResource(tenant, child);
+        ExpectFailure(() => host.RetireFaultedActor(tenant, child), "live resource pin");
+        if (host.TryTakeSupervisorTerminal(tenant, parent, out _))
+            throw new Exception("failed retirement published a terminal");
+        host.RetireResource(tenant, child, pin);
+        host.RetireFaultedActor(tenant, child);
+        if (!wake.IsCompletedSuccessfully || unrelatedWake.IsCompleted ||
+            !host.WaitForSupervisorTerminalAsync(tenant, parent).IsCompletedSuccessfully)
+            throw new Exception("terminal readiness not level-triggered for exact parent");
+        ExpectFailure(() => host.RetireFaultedActor(tenant, child), "terminal replay");
+        ExpectFailure(() => host.RetireActor(tenant, parent), "unredeemed child terminal");
+        if (host.TryTakeSupervisorTerminal(tenant, unrelated, out _))
+            throw new Exception("unrelated actor stole terminal notice");
+        ExpectFailure(() => host.TryTakeSupervisorTerminal(foreign, parent, out _),
+            "foreign tenant redemption");
+
+        // Reuse the numeric ID without confusing old and new incarnations.
+        var replacement = host.RegisterSupervisedActor(tenant, parent, 3);
+        host.RetireActor(tenant, replacement);
+        var third = host.RegisterSupervisedActor(tenant, parent, 3);
+        host.RetireActor(tenant, third);
+        ExpectFailure(() => host.RegisterSupervisedActor(tenant, parent, 3),
+            "unredeemed terminal quota must be bounded across ID reuse");
+        var received = new Dictionary<ulong, OresVmHost.SupervisorTerminalKind>();
+        while (host.TryTakeSupervisorTerminal(tenant, parent, out var notice)) {
+            if (notice.ChildId != 3 || !received.TryAdd(notice.ChildEpoch, notice.Outcome))
+                throw new Exception("invalid or duplicate terminal identity");
+        }
+        if (received.Count != 3 ||
+            received[child.Epoch] != OresVmHost.SupervisorTerminalKind.Faulted ||
+            received[replacement.Epoch] != OresVmHost.SupervisorTerminalKind.Stopped ||
+            received[third.Epoch] != OresVmHost.SupervisorTerminalKind.Stopped)
+            throw new Exception("missing or misrouted terminal");
+        if (parent.QueuedMessages != 1024 || host.QueuedMail(tenant).Tenant != 1)
+            throw new Exception("terminal delivery changed DATA accounting");
+
+        var nextWake = host.WaitForSupervisorTerminalAsync(tenant, parent);
+        if (nextWake.IsCompleted || ReferenceEquals(wake, nextWake))
+            throw new Exception("drained terminal readiness did not rearm");
+        var last = host.RegisterSupervisedActor(tenant, parent, 3);
+        host.BeginShutdown(tenant);
+        host.RetireActor(tenant, last);
+        if (!nextWake.IsCompletedSuccessfully)
+            throw new Exception("terminal wakeup lost during quiescence");
+        if (!host.TryTakeSupervisorTerminal(tenant, parent, out var finalNotice) ||
+            finalNotice.ChildEpoch != last.Epoch ||
+            host.TryTakeSupervisorTerminal(tenant, parent, out _))
+            throw new Exception("quiescent terminal drain or replay failed");
+        if (!host.TryReceiveActor(tenant, parent, out var payload) ||
+            payload is null || payload.Length != 1 || payload[0] != 42)
+            throw new Exception("DATA head corrupted by terminal delivery");
+        var finalWake = host.WaitForSupervisorTerminalAsync(tenant, parent);
+        host.RetireActor(tenant, unrelated);
+        host.RetireActor(tenant, parent);
+        if (!unrelatedWake.IsCanceled || !finalWake.IsCanceled)
+            throw new Exception("retired parent left an unresolved readiness task");
+        ExpectFailure(() => host.WaitForSupervisorTerminalAsync(tenant, parent), "stale readiness parent");
+        host.CompleteShutdown(tenant); host.Destroy(tenant);
+        host.RetireActor(foreign, foreignParent);
+        host.BeginShutdown(foreign); host.CompleteShutdown(foreign); host.Destroy(foreign);
+        Console.WriteLine("NET_SUPERVISOR_TERMINAL_RESERVATION_HOST_TESTS_PASS");
+    }
+
+    private static void CheckNestedStateAuthority()
+    {
+        var host = new OresVmHost(maxTenants: 1);
+        var tenant = host.CreateIsolate("nested-authority");
+        host.Start(tenant);
+        var actor = host.RegisterActor(tenant, 1);
+        var turn = host.BeginActorTurn(tenant, actor);
+        var read = host.BeginActorStateLoan(tenant, actor, turn);
+        ExpectFailure(() => host.BeginActorStateLoan(tenant, actor, turn, writable: true),
+            "read-only parent cannot mint writable child");
+        host.ValidateActorStateLoan(tenant, actor, turn, read);
+        var nested = host.BeginActorStateLoan(tenant, actor, turn);
+        if (nested.Generation != read.Generation + 1)
+            throw new Exception("denied write reborrow consumed generation");
+        host.EndActorStateLoan(tenant, actor, turn, nested);
+        host.EndActorStateLoan(tenant, actor, turn, read);
+        host.CompleteActorTurn(tenant, actor, turn);
+        host.RetireActor(tenant, actor);
+        host.BeginShutdown(tenant); host.CompleteShutdown(tenant); host.Destroy(tenant);
+        Console.WriteLine("NET_NESTED_STATE_AUTHORITY_CURRENT_MAIN_TEST_PASS");
+    }
+
+    private static void CheckCancellationRetirement()
+    {
+        var host = new OresVmHost(maxTenants: 1);
+        var tenant = host.CreateIsolate("cancel-retirement", maxActors: 2);
+        host.Start(tenant);
+        var parent = host.RegisterActor(tenant, 1);
+        var child = host.RegisterSupervisedActor(tenant, parent, 2);
+        var turn = host.BeginActorTurn(tenant, child);
+        var outer = host.BeginActorStateLoan(tenant, child, turn, writable: true);
+        var inner = host.BeginActorStateLoan(tenant, child, turn);
+        ExpectFailure(() => host.AcknowledgeActorTurnCancellation(tenant, child, turn),
+            "ack without request");
+        var signal = host.WaitForSupervisorTerminalAsync(tenant, parent);
+        // Request from another host thread, while the execution owner still holds
+        // nested state authority. Joining this host request is not guest retirement.
+        Task.Run(() => host.CancelActorTurn(tenant, child, turn)).GetAwaiter().GetResult();
+        host.CancelActorTurn(tenant, child, turn); // idempotent while live
+        ExpectFailure(() => host.BeginActorTurn(tenant, child), "cancelled lane still occupied");
+        ExpectFailure(() => host.RetireFaultedActor(tenant, child), "retirement before owner acknowledgment");
+        ExpectFailure(() => host.BeginActorStateLoan(tenant, child, turn), "new state loan after cancel");
+        ExpectFailure(() => host.ValidateActorStateLoan(tenant, child, turn, inner), "state access after cancel");
+        ExpectFailure(() => host.CompleteActorTurn(tenant, child, turn), "cancel cannot complete successfully");
+        ExpectFailure(() => host.EndActorStateLoan(tenant, child, turn, outer), "cleanup remains LIFO");
+        ExpectFailure(() => host.AcknowledgeActorTurnCancellation(tenant, parent, turn), "foreign ack");
+        if (signal.IsCompleted) throw new Exception("cancel request published terminal notice");
+        ExpectFailure(() => host.AcknowledgeActorTurnCancellation(tenant, child, turn), "ack with two live loans");
+        host.EndActorStateLoan(tenant, child, turn, inner);
+        ExpectFailure(() => host.AcknowledgeActorTurnCancellation(tenant, child, turn), "ack with outer loan still live");
+        host.EndActorStateLoan(tenant, child, turn, outer);
+        host.AcknowledgeActorTurnCancellation(tenant, child, turn);
+        ExpectFailure(() => host.AcknowledgeActorTurnCancellation(tenant, child, turn), "duplicate ack");
+        var next = host.BeginActorTurn(tenant, child);
+        if (next.Generation <= turn.Generation) throw new Exception("turn generation reused");
+        host.SuspendActorTurn(tenant, child, next);
+        host.CancelActorTurn(tenant, child, next);
+        ExpectFailure(() => host.ResumeActorTurn(tenant, child, next), "cancelled suspended turn resume");
+        ExpectFailure(() => host.RetireActor(tenant, child), "cancelled suspended turn before ack");
+        host.AcknowledgeActorTurnCancellation(tenant, child, next);
+        host.RetireFaultedActor(tenant, child);
+        if (!signal.IsCompletedSuccessfully ||
+            !host.TryTakeSupervisorTerminal(tenant, parent, out var notice) ||
+            notice.ChildEpoch != child.Epoch)
+            throw new Exception("terminal not published after cancellation retirement");
+        host.RetireActor(tenant, parent);
+        host.BeginShutdown(tenant); host.CompleteShutdown(tenant); host.Destroy(tenant);
+        Console.WriteLine("NET_ACTOR_CANCEL_RETIREMENT_HOST_TESTS_PASS");
+    }
+
+    private static void CheckScheduledCarrierRetirement()
+    {
+        var host = new OresVmHost(maxTenants: 1);
+        var tenant = host.CreateIsolate("scheduled-carrier", maxActors: 2);
+        host.Start(tenant);
+        var parent = host.RegisterActor(tenant, 1);
+        var child = host.RegisterSupervisedActor(tenant, parent, 2);
+        host.ConfigureNamedActorState(tenant, child, "Counter", "Counter|1:I",
+            new[] { new OresVmHost.ActorStateField(OresVmHost.ActorStateScalarKind.Int64) });
+        var scheduler = host.CreateTrustedScheduler();
+        var signal = scheduler.WaitForSupervisorTerminal(tenant, parent);
+        scheduler.Enqueue(tenant, child);
+        OresVmHost.ActorTurnTicket? captured = null;
+        OresVmHost.ActorDispatchScope? staleScope = null;
+        ExpectFailure(() => scheduler.DispatchNext(tenant, child, "Counter|1:I", scope => {
+            captured = child.ActiveTurn ?? throw new Exception("missing active turn");
+            var turn = captured;
+            staleScope = scope;
+            var loan = turn.ActiveStateLoan ?? throw new Exception("missing dispatch loan");
+            // A separate physical host thread is not the owner carrier.
+            Task.Factory.StartNew(() => {
+                ExpectFailure(() => host.ValidateActorStateLoan(tenant, child, turn, loan),
+                    "foreign carrier state access");
+                ExpectFailure(() => host.EndActorStateLoan(tenant, child, turn, loan),
+                    "foreign carrier cleanup");
+                host.CancelActorTurn(tenant, child, turn);
+                ExpectFailure(() => host.AcknowledgeActorTurnCancellation(tenant, child, turn),
+                    "foreign early cancellation acknowledgment");
+            }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default)
+                .GetAwaiter().GetResult();
+            ExpectFailure(() => scope.ReadInt64(0), "cancelled generated scope access");
+            host.EndActorStateLoan(tenant, child, turn, loan);
+            // Even with no outstanding state loan, the delegate is still on
+            // the carrier. The exact private scheduler lease must remain live.
+            ExpectFailure(() => host.AcknowledgeActorTurnCancellation(tenant, child, turn),
+                "zero loans are not physical retirement");
+            ExpectFailure(() => host.CompleteActorTurn(tenant, child, turn),
+                "complete while scheduled carrier live");
+            ExpectFailure(() => host.RetireFaultedActor(tenant, child),
+                "terminal before physical delegate unwind");
+            if (signal.IsCompleted) throw new Exception("premature supervisor terminal");
+            throw new InvalidOperationException("fixture cancellation");
+        }), "cancelled scheduled dispatch");
+        if (captured is null || staleScope is null || host.ActorTurnSnapshot(tenant, child).Active)
+            throw new Exception("scheduled cancellation did not retire after unwind");
+        ExpectFailure(() => staleScope.ReadInt64(0), "stale generated scope");
+        ExpectFailure(() => host.AcknowledgeActorTurnCancellation(tenant, child, captured),
+            "retired scheduled ticket replay");
+        scheduler.Enqueue(tenant, child);
+        if (scheduler.DispatchNext(tenant, child, "Counter|1:I", scope => scope.AddInt64(0, 42)) != 42)
+            throw new Exception("scheduled lane did not recover");
+        host.RetireFaultedActor(tenant, child);
+        if (!signal.IsCompletedSuccessfully ||
+            !scheduler.TryDequeueSupervisorTerminal(tenant, parent, out var notice) ||
+            notice.ChildEpoch != child.Epoch)
+            throw new Exception("retired child missing scheduled terminal");
+        host.RetireActor(tenant, parent);
+        host.BeginShutdown(tenant); host.CompleteShutdown(tenant); host.Destroy(tenant);
+        Console.WriteLine("NET_SCHEDULED_CARRIER_RETIREMENT_HOST_TESTS_PASS");
+    }
+
+    private static void CheckSupervisorDispatchPriority()
+    {
+        var host = new OresVmHost(maxTenants: 1, maxQueuedMailBytes: 1);
+        var tenant = host.CreateIsolate("control-priority", maxActors: 70, maxQueuedMailBytes: 1);
+        host.Start(tenant);
+        var parent = host.RegisterActor(tenant, 1);
+        host.ConfigureNamedActorState(tenant, parent, "Counter", "Counter|1:I",
+            new[] { new OresVmHost.ActorStateField(OresVmHost.ActorStateScalarKind.Int64) });
+        var scheduler = host.CreateTrustedScheduler();
+        host.SendActor(tenant, parent, parent.CurrentRef, new byte[] { 42 });
+        scheduler.Enqueue(tenant, parent);
+        for (var i = 0; i < OresVmHost.SupervisorControlBurstLimit + 2; i++) {
+            var child = host.RegisterSupervisedActor(tenant, parent, 2);
+            host.RetireActor(tenant, child);
+        }
+        var live = host.BeginActorTurn(tenant, parent);
+        ExpectFailure(() => scheduler.TryDequeueSupervisorTerminal(tenant, parent, out _),
+            "CONTROL selection during active turn");
+        host.CompleteActorTurn(tenant, parent, live);
+        ExpectFailure(() => scheduler.DequeueUser(tenant, parent), "CONTROL before DATA");
+        var seen = new HashSet<ulong>();
+        for (var i = 0; i < OresVmHost.SupervisorControlBurstLimit; i++) {
+            if (!scheduler.TryDequeueSupervisorTerminal(tenant, parent, out var notice) ||
+                !seen.Add(notice.ChildEpoch))
+                throw new Exception("missing or replayed priority CONTROL");
+        }
+        if (scheduler.TryDequeueSupervisorTerminal(tenant, parent, out _) ||
+            parent.QueuedMessages != 2)
+            throw new Exception("ordinary FIFO did not receive its bounded opportunity");
+        var data = scheduler.DequeueUser(tenant, parent);
+        if (data is null || data.Length != 1 || data[0] != 42 ||
+            host.QueuedMail(tenant).Tenant != 0)
+            throw new Exception("ordinary DATA or accounting changed");
+        ExpectFailure(() => scheduler.DispatchNext(tenant, parent, "Counter|1:I", scope => scope.ReadInt64(0)),
+            "CONTROL before internal FIFO receipt");
+        while (scheduler.TryDequeueSupervisorTerminal(tenant, parent, out var notice))
+            if (!seen.Add(notice.ChildEpoch)) throw new Exception("terminal replay");
+        if (seen.Count != OresVmHost.SupervisorControlBurstLimit + 2 ||
+            scheduler.DispatchNext(tenant, parent, "Counter|1:I", scope => scope.AddInt64(0, 42)) != 42)
+            throw new Exception("CONTROL drain or internal FIFO receipt failed");
+        host.RetireActor(tenant, parent);
+        // An internal receipt without a configured dispatch layout cannot
+        // impose the ordinary FIFO opportunity and starve terminal CONTROL.
+        var unconfigured = host.RegisterActor(tenant, 1);
+        scheduler.Enqueue(tenant, unconfigured);
+        for (var i = 0; i < OresVmHost.SupervisorControlBurstLimit + 1; i++) {
+            var child = host.RegisterSupervisedActor(tenant, unconfigured, 2);
+            host.RetireActor(tenant, child);
+        }
+        for (var i = 0; i < OresVmHost.SupervisorControlBurstLimit + 1; i++)
+            if (!scheduler.TryDequeueSupervisorTerminal(tenant, unconfigured, out _))
+                throw new Exception("unrunnable FIFO receipt starved terminal CONTROL");
+        if (unconfigured.QueuedMessages != 1)
+            throw new Exception("unconfigured receipt was consumed");
+        host.ConfigureNamedActorState(tenant, unconfigured, "Counter", "Counter|1:I",
+            new[] { new OresVmHost.ActorStateField(OresVmHost.ActorStateScalarKind.Int64) });
+        if (scheduler.DispatchNext(tenant, unconfigured, "Counter|1:I", scope => scope.AddInt64(0, 42)) != 42)
+            throw new Exception("configured FIFO receipt did not recover");
+        host.RetireActor(tenant, unconfigured);
+        host.BeginShutdown(tenant); host.CompleteShutdown(tenant); host.Destroy(tenant);
+        Console.WriteLine("NET_SUPERVISOR_DISPATCH_PRIORITY_HOST_TESTS_PASS");
+    }
+
+    private static void CheckMigratableCarrierSegments()
+    {
+        var host = new OresVmHost(maxTenants: 1);
+        var tenant = host.CreateIsolate("migratable-carrier", maxActors: 2);
+        host.Start(tenant);
+        var actor = host.RegisterActor(tenant, 1, serial: true);
+        var other = host.RegisterActor(tenant, 2);
+        host.ConfigureNamedActorState(tenant, actor, "Counter", "Counter|1:I",
+            new[] { new OresVmHost.ActorStateField(OresVmHost.ActorStateScalarKind.Int64) });
+        var scheduler = host.CreateTrustedScheduler();
+        var foreignScheduler = host.CreateTrustedScheduler();
+        scheduler.Enqueue(tenant, actor);
+        int firstThread = Environment.CurrentManagedThreadId;
+        OresVmHost.ActorDispatchScope? oldScope = null;
+        var first = scheduler.StartSegment(tenant, actor, "Counter|1:I", scope => {
+            oldScope = scope;
+            if (scope.AddInt64(0, 20) != 20) throw new Exception("first segment state");
+            return true;
+        }) ?? throw new Exception("missing initial continuation");
+        var turn = first.Turn;
+        if (!host.ActorTurnSnapshot(tenant, actor).Suspended ||
+            turn.ScheduledCarrierLease is not null)
+            throw new Exception("suspended segment retained its carrier");
+        ExpectFailure(() => oldScope!.ReadInt64(0), "retired scope access");
+        ExpectFailure(() => host.ResumeActorTurn(tenant, actor, turn), "raw resume bypass");
+        ExpectFailure(() => host.CompleteActorTurn(tenant, actor, turn), "raw completion bypass");
+        ExpectFailure(() => host.BeginActorTurn(tenant, actor), "serial logical lane retained");
+        ExpectFailure(() => foreignScheduler.ResumeSegment(tenant, actor, first, _ => false),
+            "foreign scheduler continuation");
+        ExpectFailure(() => scheduler.ResumeSegment(tenant, other, first, _ => false),
+            "foreign actor continuation");
+        var forged = new OresVmHost.ActorContinuation(scheduler, turn);
+        ExpectFailure(() => scheduler.ResumeSegment(tenant, actor, forged, _ => false),
+            "forged continuation identity");
+
+        var second = Task.Factory.StartNew(() =>
+            scheduler.ResumeSegment(tenant, actor, first, scope => {
+                if (Environment.CurrentManagedThreadId == firstThread)
+                    throw new Exception("fixture did not migrate carrier");
+                ExpectFailure(() => oldScope!.ReadInt64(0), "old scope after migration");
+                ExpectFailure(() => scheduler.ResumeSegment(tenant, actor, first, _ => false),
+                    "reentrant ticket replay");
+                if (scope.AddInt64(0, 22) != 42) throw new Exception("migrated state");
+                return true;
+            }), CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default)
+            .GetAwaiter().GetResult() ?? throw new Exception("missing second continuation");
+        if (ReferenceEquals(first, second) || !ReferenceEquals(turn, second.Turn))
+            throw new Exception("continuation freshness or logical identity");
+        ExpectFailure(() => scheduler.ResumeSegment(tenant, actor, first, _ => false),
+            "old continuation after resuspension");
+        ExpectFailure(() => scheduler.DiscardContinuation(tenant, actor, second),
+            "discard without cancellation");
+        host.CancelActorTurn(tenant, actor, turn);
+        ExpectFailure(() => host.AcknowledgeActorTurnCancellation(tenant, actor, turn),
+            "raw cancel acknowledgment bypass");
+        ExpectFailure(() => scheduler.ResumeSegment(tenant, actor, second, _ => false),
+            "cancelled continuation resume");
+        ExpectFailure(() => scheduler.DiscardContinuation(tenant, actor, first),
+            "old continuation discard");
+        scheduler.DiscardContinuation(tenant, actor, second);
+        ExpectFailure(() => scheduler.DiscardContinuation(tenant, actor, second),
+            "duplicate discard");
+
+        scheduler.Enqueue(tenant, actor);
+        var completed = scheduler.StartSegment(tenant, actor, "Counter|1:I", scope => {
+            if (scope.ReadInt64(0) != 42) throw new Exception("state after cancellation");
+            return false;
+        });
+        if (completed is not null || host.ActorTurnSnapshot(tenant, actor).Active)
+            throw new Exception("completed segment retained authority");
+
+        scheduler.Enqueue(tenant, actor);
+        bool cancelled = false;
+        try {
+            scheduler.StartSegment(tenant, actor, "Counter|1:I", scope => {
+                var current = actor.ActiveTurn ?? throw new Exception("no running segment");
+                host.CancelActorTurn(tenant, actor, current);
+                ExpectFailure(() => host.AcknowledgeActorTurnCancellation(tenant, actor, current),
+                    "running segment cancel acknowledgment");
+                return true;
+            });
+        } catch (OperationCanceledException) { cancelled = true; }
+        if (!cancelled || host.ActorTurnSnapshot(tenant, actor).Active)
+            throw new Exception("cancelled segment returned a false success or retained lane");
+
+        host.RetireActor(tenant, actor);
+        host.RetireActor(tenant, other);
+        host.BeginShutdown(tenant); host.CompleteShutdown(tenant); host.Destroy(tenant);
+        Console.WriteLine("NET_MIGRATABLE_CARRIER_SEGMENTS_HOST_TESTS_PASS");
+    }
+
+    private static void CheckSupervisorHandlerDispatch()
+    {
+        var host = new OresVmHost(maxTenants: 1, maxQueuedMailBytes: 1);
+        var tenant = host.CreateIsolate("supervisor-handler", maxActors: 3, maxQueuedMailBytes: 1);
+        host.Start(tenant);
+        var parent = host.RegisterActor(tenant, 1);
+        host.ConfigureNamedActorState(tenant, parent, "Counter", "Counter|1:I",
+            new[] { new OresVmHost.ActorStateField(OresVmHost.ActorStateScalarKind.Int64) });
+        var scheduler = host.CreateTrustedScheduler();
+        host.SendActor(tenant, parent, parent.CurrentRef, new byte[] { 42 });
+        for (var i = 1; i < 1024; i++)
+            host.SendActor(tenant, parent, parent.CurrentRef, Array.Empty<byte>());
+        var first = host.RegisterSupervisedActor(tenant, parent, 2);
+        var second = host.RegisterSupervisedActor(tenant, parent, 3);
+        var ready = scheduler.WaitForSupervisorTerminal(tenant, parent);
+        host.RetireFaultedActor(tenant, first);
+        host.RetireActor(tenant, second);
+        if (!ready.IsCompletedSuccessfully) throw new Exception("handler lost readiness");
+        ExpectFailure(() => scheduler.TryDispatchSupervisorTerminal(tenant, parent, "Wrong|1:I",
+            (_, _) => throw new Exception("wrong-layout handler entered")), "layout admission");
+        var seen = new HashSet<ulong>();
+        OresVmHost.ActorDispatchScope? stale = null;
+        if (!scheduler.TryDispatchSupervisorTerminal(tenant, parent, "Counter|1:I", (scope, notice) => {
+            if (!seen.Add(notice.ChildEpoch)) throw new Exception("duplicate notice");
+            stale = scope;
+            ExpectFailure(() => scheduler.TryDispatchSupervisorTerminal(tenant, parent, "Counter|1:I",
+                (_, _) => throw new Exception("nested handler entered")), "nested handler admission");
+            scope.AddInt64(0, 20);
+        })) throw new Exception("first supervisor handler did not run");
+        ExpectFailure(() => stale!.ReadInt64(0), "retired supervisor handler scope");
+        ExpectFailure(() => scheduler.TryDispatchSupervisorTerminal(tenant, parent, "Counter|1:I", (scope, notice) => {
+            if (!seen.Add(notice.ChildEpoch)) throw new Exception("duplicate notice");
+            scope.AddInt64(0, 22);
+            throw new InvalidOperationException("fixture handler fault");
+        }), "faulting supervisor handler");
+        if (seen.Count != 2 || !seen.Contains(first.Epoch) || !seen.Contains(second.Epoch) ||
+            host.ActorTurnSnapshot(tenant, parent).Active ||
+            scheduler.TryDispatchSupervisorTerminal(tenant, parent, "Counter|1:I",
+                (_, _) => throw new Exception("terminal replay")))
+            throw new Exception("supervisor handler retirement or exact-once selection");
+        if (parent.QueuedMessages != 1024 || host.QueuedMail(tenant).Tenant != 1)
+            throw new Exception("supervisor handler changed DATA quota");
+        var data = scheduler.DequeueUser(tenant, parent);
+        if (data is null || data.Length != 1 || data[0] != 42)
+            throw new Exception("supervisor handler changed DATA head");
+        var turn = host.BeginActorTurn(tenant, parent);
+        var loan = host.BeginActorStateLoan(tenant, parent, turn);
+        if (host.ReadActorStateInt64(tenant, parent, turn, loan, 0) != 42)
+            throw new Exception("supervisor handler state was not committed");
+        host.EndActorStateLoan(tenant, parent, turn, loan);
+        host.CompleteActorTurn(tenant, parent, turn);
+        host.RetireActor(tenant, parent);
+        host.BeginShutdown(tenant); host.CompleteShutdown(tenant); host.Destroy(tenant);
+        Console.WriteLine("NET_SUPERVISOR_HANDLER_DISPATCH_HOST_TESTS_PASS");
+    }
+
+    private static void CheckBoundedReentrantReceives()
+    {
+        var host = new OresVmHost(maxTenants: 1);
+        var tenant = host.CreateIsolate("bounded-receives", maxActors: 3);
+        host.Start(tenant);
+        var actor = host.RegisterActor(tenant, 1, serial: false, maxLiveReceives: 2);
+        var ordinary = host.RegisterActor(tenant, 2);
+        var serial = host.RegisterActor(tenant, 3, serial: true);
+        if (ordinary.MaxLiveReceives != 32 || serial.MaxLiveReceives != 1 ||
+            actor.MaxLiveReceives != 2)
+            throw new Exception("default ordinary or explicit serial receive quota");
+        host.ConfigureNamedActorState(tenant, actor, "Counter", "Counter|1:I",
+            new[] { new OresVmHost.ActorStateField(OresVmHost.ActorStateScalarKind.Int64) });
+        var scheduler = host.CreateTrustedScheduler();
+        scheduler.Enqueue(tenant, actor);
+        var first = scheduler.StartSegment(tenant, actor, "Counter|1:I", scope => {
+            scope.AddInt64(0, 10);
+            return true;
+        }) ?? throw new Exception("first continuation missing");
+        if (host.ActorReceiveSnapshot(tenant, actor) != (1, 1, 0UL))
+            throw new Exception("first suspension did not release running gate");
+
+        scheduler.Enqueue(tenant, actor);
+        var second = scheduler.StartSegment(tenant, actor, "Counter|1:I", scope => {
+            if (scope.AddInt64(0, 20) != 30)
+                throw new Exception("ordinary sibling did not observe committed state");
+            var current = actor.ActiveTurn ?? throw new Exception("missing running sibling");
+            if (host.ActorReceiveSnapshot(tenant, actor) != (2, 1, current.Generation))
+                throw new Exception("logical and running counts diverged");
+            ExpectFailure(() => scheduler.ResumeSegment(tenant, actor, first, _ => false),
+                "resume while sibling owns state gate");
+            return true;
+        }) ?? throw new Exception("second continuation missing");
+        if (host.ActorReceiveSnapshot(tenant, actor) != (2, 2, 0UL))
+            throw new Exception("logical capacity not retained across both suspensions");
+        scheduler.Enqueue(tenant, actor);
+        ExpectFailure(() => scheduler.StartSegment(tenant, actor, "Counter|1:I", _ => false),
+            "new receive at logical capacity");
+        if (actor.QueuedMessages != 1)
+            throw new Exception("capacity denial consumed FIFO receipt");
+        ExpectFailure(() => host.RetireActor(tenant, actor), "retirement with suspended receives");
+
+        // Resumption uses an existing logical receive, not a third quota slot.
+        var done = scheduler.ResumeSegment(tenant, actor, second, scope => {
+            var current = actor.ActiveTurn ?? throw new Exception("missing resumed sibling");
+            host.CancelActorTurn(tenant, actor, first.Turn);
+            scheduler.DiscardContinuation(tenant, actor, first);
+            if (host.ActorReceiveSnapshot(tenant, actor) != (1, 0, current.Generation) ||
+                scope.AddInt64(0, 12) != 42)
+                throw new Exception("suspended sibling cancellation revoked running authority");
+            ExpectFailure(() => scheduler.ResumeSegment(tenant, actor, first, _ => false),
+                "cancelled sibling replay");
+            return false;
+        });
+        if (done is not null || host.ActorReceiveSnapshot(tenant, actor) != (0, 0, 0UL))
+            throw new Exception("logical retirement did not release exact receive");
+        if (scheduler.StartSegment(tenant, actor, "Counter|1:I", scope => {
+            if (scope.ReadInt64(0) != 42) throw new Exception("state after interleaving");
+            return false;
+        }) is not null || actor.QueuedMessages != 0)
+            throw new Exception("queued receipt did not recover after capacity release");
+
+        // Legacy raw host APIs retain the same exclusive running-state gate.
+        var rawA = host.BeginActorTurn(tenant, ordinary);
+        host.SuspendActorTurn(tenant, ordinary, rawA);
+        var rawB = host.BeginActorTurn(tenant, ordinary);
+        var loan = host.BeginActorStateLoan(tenant, ordinary, rawB);
+        ExpectFailure(() => host.ResumeActorTurn(tenant, ordinary, rawA),
+            "raw resume while sibling running");
+        host.CancelActorTurn(tenant, ordinary, rawA);
+        host.AcknowledgeActorTurnCancellation(tenant, ordinary, rawA);
+        host.ValidateActorStateLoan(tenant, ordinary, rawB, loan);
+        host.EndActorStateLoan(tenant, ordinary, rawB, loan);
+        host.CompleteActorTurn(tenant, ordinary, rawB);
+
+        var only = host.BeginActorTurn(tenant, serial);
+        host.SuspendActorTurn(tenant, serial, only);
+        ExpectFailure(() => host.BeginActorTurn(tenant, serial), "serial receive while suspended");
+        ExpectFailure(() => host.RetireActor(tenant, serial), "serial suspended lifetime");
+        host.ResumeActorTurn(tenant, serial, only);
+        host.CompleteActorTurn(tenant, serial, only);
+        host.RetireActor(tenant, serial);
+        host.RetireActor(tenant, ordinary);
+        host.RetireActor(tenant, actor);
+        host.BeginShutdown(tenant); host.CompleteShutdown(tenant); host.Destroy(tenant);
+        Console.WriteLine("NET_BOUNDED_REENTRANT_RECEIVES_HOST_TESTS_PASS");
+    }
+
+    private static void CheckAutomaticActorPump()
+    {
+        var host = new OresVmHost(maxTenants: 1);
+        var tenant = host.CreateIsolate("automatic-pump", maxActors: 2);
+        host.Start(tenant);
+        var actor = host.RegisterActor(tenant, 1, serial: false, maxLiveReceives: 2);
+        host.ConfigureNamedActorState(tenant, actor, "Counter", "Counter|1:I",
+            new[] { new OresVmHost.ActorStateField(OresVmHost.ActorStateScalarKind.Int64) });
+        var scheduler = host.CreateTrustedScheduler();
+        var timeout = TimeSpan.FromSeconds(10);
+        using var stop = new CancellationTokenSource();
+        var readyA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var readyB = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var startedA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var startedB = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resumedA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resumedB = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var terminal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var parked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var never = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var parkedBarrier = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelledBarrier = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        OresVmHost.ActorTurnTicket? cancelledTurn = null;
+        int receipts = 0;
+        var pump = scheduler.RunPumpAsync(tenant, actor, "Counter|1:I",
+            (scope, data) => {
+                if (data.Length != 1) throw new Exception("invalid pump DATA");
+                if (data.Span[0] == 1) {
+                    scope.AddInt64(0, 10);
+                    startedA.TrySetResult();
+                    return new OresVmHost.ActorPumpStep(readyA.Task, next => {
+                        next.AddInt64(0, 5);
+                        resumedA.TrySetResult();
+                        return null;
+                    });
+                }
+                if (data.Span[0] == 2) {
+                    scope.AddInt64(0, 20);
+                    startedB.TrySetResult();
+                    return new OresVmHost.ActorPumpStep(readyB.Task, next => {
+                        next.AddInt64(0, 7);
+                        resumedB.TrySetResult();
+                        return null;
+                    });
+                }
+                if (scope.ReadInt64(0) != 42)
+                    throw new Exception("ready continuations failed to commit");
+                if (data.Span[0] == 5) {
+                    cancelledTurn = actor.ActiveTurn;
+                    return new OresVmHost.ActorPumpStep(never.Task,
+                        _ => throw new Exception("cancelled suspended continuation resumed"));
+                }
+                if (data.Span[0] == 6) {
+                    parkedBarrier.TrySetResult();
+                    return null;
+                }
+                if (data.Span[0] == 7) {
+                    if (cancelledTurn is null || !cancelledTurn.Completed)
+                        throw new Exception("cancelled ticket not discarded before new work");
+                    cancelledBarrier.TrySetResult();
+                    return null;
+                }
+                parked.TrySetResult();
+                return new OresVmHost.ActorPumpStep(never.Task,
+                    _ => throw new Exception("shutdown resumed a never-ready continuation"));
+            },
+            _ => { Interlocked.Increment(ref receipts); return null; },
+            (scope, notice) => {
+                if (notice.ChildId != 2) throw new Exception("wrong supervisor notice");
+                terminal.TrySetResult();
+            }, stop.Token);
+        try {
+            // Duplicate pump is rejected without creating a second worker.
+            ExpectFailure(() => scheduler.RunPumpAsync(tenant, actor, "Counter|1:I",
+                (_, _) => null, _ => null, (_, _) => { }).GetAwaiter().GetResult(),
+                "duplicate automatic pump");
+            host.SendActor(tenant, actor, actor.CurrentRef, new byte[] { 1 });
+            host.SendActor(tenant, actor, actor.CurrentRef, new byte[] { 2 });
+            Task.WhenAll(startedA.Task, startedB.Task).WaitAsync(timeout).GetAwaiter().GetResult();
+            // Ready continuations can resume even at full logical capacity.
+            readyA.TrySetResult();
+            readyB.TrySetResult();
+            Task.WhenAll(resumedA.Task, resumedB.Task).WaitAsync(timeout).GetAwaiter().GetResult();
+            var child = host.RegisterSupervisedActor(tenant, actor, 2);
+            host.RetireActor(tenant, child);
+            terminal.Task.WaitAsync(timeout).GetAwaiter().GetResult();
+             scheduler.Enqueue(tenant, actor);
+            host.SendActor(tenant, actor, actor.CurrentRef, new byte[] { 5 });
+            host.SendActor(tenant, actor, actor.CurrentRef, new byte[] { 6 });
+            parkedBarrier.Task.WaitAsync(timeout).GetAwaiter().GetResult();
+            host.CancelActorTurn(tenant, actor, cancelledTurn!);
+            host.SendActor(tenant, actor, actor.CurrentRef, new byte[] { 7 });
+            cancelledBarrier.Task.WaitAsync(timeout).GetAwaiter().GetResult();
+            host.SendActor(tenant, actor, actor.CurrentRef, new byte[] { 4 });
+            parked.Task.WaitAsync(timeout).GetAwaiter().GetResult();
+            host.BeginShutdown(tenant);
+            pump.WaitAsync(timeout).GetAwaiter().GetResult();
+            if (host.ActorReceiveSnapshot(tenant, actor) != (0, 0, 0UL) ||
+                receipts != 1 || never.Task.IsCompleted)
+                throw new Exception("pump shutdown failed to retire bounded pending work");
+            host.RetireActor(tenant, actor);
+            host.CompleteShutdown(tenant);
+            host.Destroy(tenant);
+        }
+        finally {
+            stop.Cancel();
+            try { pump.WaitAsync(timeout).GetAwaiter().GetResult(); }
+            catch (OperationCanceledException) { }
+        }
+        Console.WriteLine("NET_AUTOMATIC_ACTOR_PUMP_HOST_TESTS_PASS");
+    }
+
+    private static void CheckDedicatedActorPumpCarriers()
+    {
+        var host = new OresVmHost(maxTenants: 1);
+        var tenant = host.CreateIsolate("dedicated-pump", maxActors: 2, maxActorWorkers: 1);
+        host.Start(tenant);
+        var a = host.RegisterActor(tenant, 1);
+        var b = host.RegisterActor(tenant, 2);
+        foreach (var actor in new[] { a, b })
+            host.ConfigureNamedActorState(tenant, actor, "Counter", "Counter|1:I",
+                new[] { new OresVmHost.ActorStateField(OresVmHost.ActorStateScalarKind.Int64) });
+        var scheduler = host.CreateTrustedScheduler();
+        var timeout = TimeSpan.FromSeconds(10);
+        using var stop = new CancellationTokenSource();
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var otherRan = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resumed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        int carrier = 0;
+        void CheckCarrier()
+        {
+            if (ActorDispatchDomains.CurrentLane != 0 || Thread.CurrentThread.IsThreadPoolThread)
+                throw new Exception("pump guest segment not on dedicated actor carrier");
+            var current = Environment.CurrentManagedThreadId;
+            if (carrier == 0) carrier = current;
+            if (carrier != current) throw new Exception("one-worker tenant used multiple carriers");
+        }
+        var pumpA = scheduler.RunPumpAsync(tenant, a, "Counter|1:I",
+            (_, _) => null, scope => {
+                CheckCarrier();
+                scope.AddInt64(0, 20);
+                started.TrySetResult();
+                return new OresVmHost.ActorPumpStep(ready.Task, next => {
+                    CheckCarrier();
+                    if (next.AddInt64(0, 22) != 42) throw new Exception("resumed actor state");
+                    resumed.TrySetResult();
+                    return null;
+                });
+            }, (_, _) => { }, stop.Token);
+        var pumpB = scheduler.RunPumpAsync(tenant, b, "Counter|1:I",
+            (_, _) => null, scope => {
+                CheckCarrier();
+                if (scope.AddInt64(0, 1) == 1) {
+                    otherRan.TrySetResult();
+                } else {
+                    // Deliberately hold the test fixture's physical carrier to
+                    // prove cancellation cannot abandon admitted execution.
+                    entered.TrySetResult();
+                    release.Task.WaitAsync(timeout).GetAwaiter().GetResult();
+                }
+                return null;
+            }, (_, _) => { }, stop.Token);
+        try {
+            scheduler.Enqueue(tenant, a);
+            started.Task.WaitAsync(timeout).GetAwaiter().GetResult();
+            ExpectFailure(() => host.BeginActorTurn(tenant, a), "manual admission while pump owns actor");
+            ExpectFailure(() => host.TryReceiveActor(tenant, a, out _), "manual DATA steal");
+            ExpectFailure(() => host.TryTakeSupervisorTerminal(tenant, a, out _), "manual CONTROL steal");
+            scheduler.Enqueue(tenant, b);
+            otherRan.Task.WaitAsync(timeout).GetAwaiter().GetResult();
+            if (ready.Task.IsCompleted) throw new Exception("suspension fixture prematurely ready");
+            ready.TrySetResult();
+            resumed.Task.WaitAsync(timeout).GetAwaiter().GetResult();
+            scheduler.Enqueue(tenant, b);
+            entered.Task.WaitAsync(timeout).GetAwaiter().GetResult();
+            stop.Cancel();
+            if (pumpB.IsCompleted)
+                throw new Exception("pump cancellation abandoned live physical carrier");
+            ExpectFailure(() => host.RetireActor(tenant, b), "retire live dedicated carrier");
+            release.TrySetResult();
+        }
+        finally {
+            release.TrySetResult();
+            stop.Cancel();
+            foreach (var pump in new[] { pumpA, pumpB }) {
+                try { pump.WaitAsync(timeout).GetAwaiter().GetResult(); }
+                catch (OperationCanceledException) { }
+            }
+        }
+        if (host.ActorReceiveSnapshot(tenant, a).Live != 0 ||
+            host.ActorReceiveSnapshot(tenant, b).Live != 0)
+            throw new Exception("dedicated carrier shutdown leaked logical receives");
+        host.RetireActor(tenant, a);
+        host.RetireActor(tenant, b);
+        host.BeginShutdown(tenant); host.CompleteShutdown(tenant); host.Destroy(tenant);
+        Console.WriteLine("NET_DEDICATED_ACTOR_PUMP_CARRIERS_HOST_TESTS_PASS");
+    }
+
+    internal static void RunSupervisorTerminalChecks()
+    {
+        CheckSupervisorTerminalReservations();
+        CheckNestedStateAuthority();
+        CheckCancellationRetirement();
+        CheckScheduledCarrierRetirement();
+        CheckSupervisorDispatchPriority();
+        CheckMigratableCarrierSegments();
+        CheckSupervisorHandlerDispatch();
+        CheckBoundedReentrantReceives();
+        CheckAutomaticActorPump();
+        CheckDedicatedActorPumpCarriers();
+    }
+
     public static void Run()
     {
+        RunSupervisorTerminalChecks();
         var host = new OresVmHost(maxTenants: 2);
         // Fail closed: the native TenantVm isolate is not wired in yet, and a
         // host dictionary is not an isolate, so untrusted admission must reject.

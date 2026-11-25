@@ -1,0 +1,75 @@
+name: Supervisor terminal host reservation
+on:
+  pull_request:
+    paths:
+      - 'runtime/Ores.Net.Runtime/**'
+      - 'verification/Ores.Net.Tests/**'
+      - 'verification/Ores.Net.ActorAwaitProbe/**'
+      - 'compiler/**'
+      - '.github/workflows/supervisor-terminal-host.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  host-reservations:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.x'
+      - name: Verify source and execute focused managed host checks
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-fA-F]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          echo "NET_SUPERVISOR_HOST_HEAD=$(git rev-parse HEAD) TREE=$(git rev-parse HEAD^{tree})"
+          dotnet run --project verification/Ores.Net.Tests/Ores.Net.Tests.csproj -c Release -- --supervisor-terminal-host-only | tee supervisor-terminal.log
+          grep -Fx NET_SUPERVISOR_TERMINAL_RESERVATION_HOST_TESTS_PASS supervisor-terminal.log
+          grep -Fx NET_NESTED_STATE_AUTHORITY_CURRENT_MAIN_TEST_PASS supervisor-terminal.log
+          grep -Fx NET_ACTOR_CANCEL_RETIREMENT_HOST_TESTS_PASS supervisor-terminal.log
+          grep -Fx NET_SCHEDULED_CARRIER_RETIREMENT_HOST_TESTS_PASS supervisor-terminal.log
+          grep -Fx NET_SUPERVISOR_DISPATCH_PRIORITY_HOST_TESTS_PASS supervisor-terminal.log
+          grep -Fx NET_MIGRATABLE_CARRIER_SEGMENTS_HOST_TESTS_PASS supervisor-terminal.log
+          grep -Fx NET_SUPERVISOR_HANDLER_DISPATCH_HOST_TESTS_PASS supervisor-terminal.log
+          grep -Fx NET_BOUNDED_REENTRANT_RECEIVES_HOST_TESTS_PASS supervisor-terminal.log
+          grep -Fx NET_AUTOMATIC_ACTOR_PUMP_HOST_TESTS_PASS supervisor-terminal.log
+          grep -Fx NET_DEDICATED_ACTOR_PUMP_CARRIERS_HOST_TESTS_PASS supervisor-terminal.log
+          grep -Fx NET_VERIFIED_ACTOR_AWAIT_FRAME_TESTS_PASS supervisor-terminal.log
+          grep -Fx NET_SOURCE_OWNED_ACTOR_TASK_TESTS_PASS supervisor-terminal.log
+          grep -Fx NET_TWO_AWAIT_ACTOR_FRAMES_TESTS_PASS supervisor-terminal.log
+          grep -Fx NET_TRAPPED_ACTOR_AWAIT_TESTS_PASS supervisor-terminal.log
+          grep -Fx NET_CAPTURED_ACTOR_TASKS_TESTS_PASS supervisor-terminal.log
+      - name: Verify CLI-generated source identity and standalone NativeAOT actor frame
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -- emit-actor-await-csharp verification/Ores.Net.Tests/AwaitCounter.atto --out "$RUNNER_TEMP/AwaitActor.g.cs"
+          git diff --no-index --ignore-cr-at-eol verification/Ores.Net.Tests/GeneratedAwaitActor.g.cs "$RUNNER_TEMP/AwaitActor.g.cs"
+          dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -- emit-actor-await-csharp verification/Ores.Net.Tests/TaskCounter.atto --out "$RUNNER_TEMP/TaskActor.g.cs"
+          git diff --no-index --ignore-cr-at-eol verification/Ores.Net.Tests/GeneratedTaskActor.g.cs "$RUNNER_TEMP/TaskActor.g.cs"
+          for actor in MultiTaskCounter FaultTaskCounter TrapTaskCounter TrapFaultCounter TrapFutureCounter CaptureTaskCounter; do
+            dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -- emit-actor-await-csharp "verification/Ores.Net.Tests/$actor.atto" --out "$RUNNER_TEMP/Generated$actor.g.cs"
+            git diff --no-index --ignore-cr-at-eol "verification/Ores.Net.Tests/Generated$actor.g.cs" "$RUNNER_TEMP/Generated$actor.g.cs"
+          done
+          if [[ "$RUNNER_OS" == Windows ]]; then rid=win-x64; exe=Ores.Net.ActorAwaitProbe.exe; else rid=linux-x64; exe=Ores.Net.ActorAwaitProbe; fi
+          dotnet publish verification/Ores.Net.ActorAwaitProbe/Ores.Net.ActorAwaitProbe.csproj -c Release -r "$rid" -p:PublishAot=true -o "$RUNNER_TEMP/await-native"
+          "$RUNNER_TEMP/await-native/$exe" | tee actor-await-native.log
+          grep -Fx NET_VERIFIED_ACTOR_AWAIT_FRAME_TESTS_PASS actor-await-native.log
+          grep -Fx NET_SOURCE_OWNED_ACTOR_TASK_TESTS_PASS actor-await-native.log
+          grep -Fx NET_TWO_AWAIT_ACTOR_FRAMES_TESTS_PASS actor-await-native.log
+          grep -Fx NET_TRAPPED_ACTOR_AWAIT_TESTS_PASS actor-await-native.log
+          grep -Fx NET_CAPTURED_ACTOR_TASKS_TESTS_PASS actor-await-native.log
+

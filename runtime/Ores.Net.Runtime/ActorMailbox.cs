@@ -314,6 +314,15 @@ public sealed class ActorMailbox : IDisposable
         }
     }
 
+    // Trusted scheduler inspection only. Never consume or expose a receipt.
+    // An unconfigured generated dispatch cannot block independent CONTROL.
+    internal bool HasRunnableOrdinaryHead(bool canDispatchReceipt)
+    {
+        lock (_gate)
+            return !_closed && _messages.Count != 0 &&
+                (!_messages.Peek().IsControl || canDispatchReceipt);
+    }
+
     public bool TryReceive(out byte[]? payload)
     {
         lock (_gate)

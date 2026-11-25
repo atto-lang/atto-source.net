@@ -97,7 +97,7 @@ public sealed partial class OresVmHost
         lock (_gate) {
             var tenant = Check(handle);
             CheckActor(tenant, actor);
-            if (tenant.Phase != Phase.Running || actor.ActiveTurn is not null ||
+            if (tenant.Phase != Phase.Running || actor.LiveTurns.Count != 0 ||
                 actor.NextTurnGeneration != 1 || actor.StateKinds is not null)
                 throw new InvalidOperationException("actor state layout admission closed");
             if (fields.Length is < 1 or > 16)
@@ -284,6 +284,39 @@ public sealed partial class OresVmHost
         public byte[]? DequeueUser(IsolateHandle isolate, ActorTicket actor)
             => Host.DequeueScheduledActorUser(this, isolate, actor);
 
+        // Trusted scheduler bridge. Readiness is not a dispatch or carrier ticket.
+        internal Task WaitForSupervisorTerminal(IsolateHandle isolate, ActorTicket actor)
+            => Host.WaitForSupervisorTerminalAsync(isolate, actor);
+
+        internal bool TryDequeueSupervisorTerminal(IsolateHandle isolate, ActorTicket actor,
+            out SupervisorTerminalNotice notice)
+            => Host.TryTakeScheduledSupervisorTerminal(this, isolate, actor, out notice);
+
+        // Host scheduler segment bridge; a resume ticket is not a guest
+        // callback, Future, or general source-level async lowering.
+        internal bool TryDispatchSupervisorTerminal(IsolateHandle isolate, ActorTicket actor,
+            string layout, Action<ActorDispatchScope, SupervisorTerminalNotice> handler)
+            => Host.TryDispatchSupervisorSegment(this, isolate, actor, layout, handler);
+
+        internal Task RunPumpAsync(IsolateHandle isolate, ActorTicket actor, string layout,
+            Func<ActorDispatchScope, ReadOnlyMemory<byte>, ActorPumpStep?> onData,
+            Func<ActorDispatchScope, ActorPumpStep?> onReceipt,
+            Action<ActorDispatchScope, SupervisorTerminalNotice> onTerminal,
+            CancellationToken stop = default)
+            => Host.RunActorPumpAsync(this, isolate, actor, layout, onData, onReceipt, onTerminal, stop);
+
+        internal ActorContinuation? StartSegment(IsolateHandle isolate, ActorTicket actor,
+            string layout, Func<ActorDispatchScope, bool> segment)
+            => Host.StartScheduledSegment(this, isolate, actor, layout, segment);
+
+        internal ActorContinuation? ResumeSegment(IsolateHandle isolate, ActorTicket actor,
+            ActorContinuation continuation, Func<ActorDispatchScope, bool> segment)
+            => Host.ResumeScheduledSegment(this, isolate, actor, continuation, segment);
+
+        internal void DiscardContinuation(IsolateHandle isolate, ActorTicket actor,
+            ActorContinuation continuation)
+            => Host.DiscardScheduledContinuation(this, isolate, actor, continuation);
+
         /// <summary>Admit one bounded empty control message for a future turn.</summary>
         public void Enqueue(IsolateHandle isolate, ActorTicket actor)
             => Host.EnqueueScheduledActor(this, isolate, actor);
@@ -340,12 +373,16 @@ public sealed partial class OresVmHost
             CheckActor(tenant, actor);
             if (tenant.Phase != Phase.Running || actor.ActiveTurn is not null)
                 throw new InvalidOperationException("actor user dequeue admission closed");
+            CheckNewReceiveAdmission(actor);
+            CheckOrdinaryDispatchPriority(tenant, actor);
             // Host and mailbox gates are held in the same order as SendActor.
             // TryReceive refuses to consume typed scheduler controls.
             // Use the current host-mediated path so dequeuing DATA refunds
             // actor, tenant and host byte accounting exactly once. Typed
             // control at FIFO head remains unconsumed by that operation.
-            return TryReceiveActor(isolate, actor, out var payload) ? payload : null;
+            if (!TryReceiveActor(isolate, actor, out var payload)) return null;
+            actor.SupervisorControlBurst = 0;
+            return payload;
         }
     }
 
@@ -362,6 +399,7 @@ public sealed partial class OresVmHost
             // Only the trusted host may enqueue typed control envelopes.
             // Empty user Send() cannot forge a dispatch ticket.
             actor.Mailbox.EnqueueTrustedDispatch(actor.Mailbox.CurrentRef);
+            SignalActorPump(actor);
         }
     }
 
@@ -377,6 +415,9 @@ public sealed partial class OresVmHost
         if (!ReferenceEquals(scheduler.Host, this))
             throw new InvalidOperationException("foreign actor scheduler");
 
+        // The lease is private to this synchronous invocation, never passed
+        // through the guest scope or an external cancellation callback.
+        var carrierLease = new object();
         ActorTurnTicket turn;
         lock (_gate) {
             var tenant = Check(handle);
@@ -394,6 +435,8 @@ public sealed partial class OresVmHost
                     "generated actor method does not match configured actor layout");
             if (actor.NextTurnGeneration == ulong.MaxValue)
                 throw new InvalidOperationException("actor logical turn generation exhausted");
+            CheckNewReceiveAdmission(actor);
+            CheckOrdinaryDispatchPriority(tenant, actor);
             // Do not dequeue nonempty messages or start a turn without
             // consuming exactly one admitted, FIFO-head control tick.
             if (!actor.Mailbox.TryReceiveEmptyDispatch())
@@ -402,24 +445,62 @@ public sealed partial class OresVmHost
             // _gate remains held across dequeue and logical-turn admission.
             // No other host thread may race to consume or retire the actor.
             turn = BeginActorTurn(handle, actor);
+            actor.SupervisorControlBurst = 0;
+            turn.ScheduledCarrierLease = carrierLease;
+            turn.ScheduledCarrierThread = Environment.CurrentManagedThreadId;
         }
         ActorDispatchScope? scope = null;
+        ActorStateLoan? loan = null;
         try {
-            var loan = BeginActorStateLoan(handle, actor, turn, writable: true);
+            loan = BeginActorStateLoan(handle, actor, turn, writable: true);
             scope = new ActorDispatchScope(this, handle, actor, turn, loan);
             var result = generatedMethod(scope);
             scope.Revoke();
             EndActorStateLoan(handle, actor, turn, loan);
-            CompleteActorTurn(handle, actor, turn);
+            FinishScheduledActorExecution(handle, actor, turn, carrierLease, cancelled: false);
             return result;
         }
         catch {
             // Scope revocation precedes logical-lane retirement, even when
             // the generated method retained the scope or threw mid-update.
             scope?.Revoke();
-            try { CancelActorTurn(handle, actor, turn); }
+            // This synchronous dispatch owner has returned from the generated
+            // delegate (including its unwind); the scope is already revoked.
+            // Request alone cannot release the lane.
+            try {
+                CancelActorTurn(handle, actor, turn);
+                if (loan is not null && !loan.Released)
+                    EndActorStateLoan(handle, actor, turn, loan);
+                FinishScheduledActorExecution(handle, actor, turn, carrierLease, cancelled: true);
+            }
             catch (InvalidOperationException) { }
             throw;
+        }
+    }
+
+    // Only the scheduler invocation that installed the exact lease can
+    // relinquish it, after the delegate and its scope have unwound. Do not
+    // expose this as a caller-mintable physical-retirement receipt.
+    private void FinishScheduledActorExecution(IsolateHandle handle, ActorTicket actor,
+        ActorTurnTicket turn, object carrierLease, bool cancelled)
+    {
+        lock (_gate) {
+            var state = Check(handle);
+            CheckTurn(state, actor, turn);
+            if (!ReferenceEquals(actor.ActiveTurn, turn) ||
+                !ReferenceEquals(turn.ScheduledCarrierLease, carrierLease) ||
+                turn.ScheduledCarrierThread != Environment.CurrentManagedThreadId)
+                throw new InvalidOperationException("stale or foreign scheduled carrier retirement");
+            if (turn.ActiveStateLoan is not null || turn.StateLoanDepth != 0)
+                throw new InvalidOperationException("scheduled carrier still owns state loans");
+            // Cancellation may race the return of a successful delegate.
+            // Keep the lease installed until the failure path retires it.
+            if (turn.CancellationRequested != cancelled)
+                throw new InvalidOperationException("scheduled carrier cancellation outcome mismatch");
+            turn.ScheduledCarrierLease = null;
+            turn.ScheduledCarrierThread = 0;
+            if (cancelled) AcknowledgeActorTurnCancellation(handle, actor, turn);
+            else CompleteActorTurn(handle, actor, turn);
         }
     }
 
