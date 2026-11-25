@@ -4,6 +4,8 @@ on:
     paths:
       - 'runtime/Ores.Net.Runtime/**'
       - 'verification/Ores.Net.Tests/**'
+      - 'verification/Ores.Net.ActorAwaitProbe/**'
+      - 'compiler/**'
       - '.github/workflows/supervisor-terminal-host.yml'
   workflow_dispatch:
 permissions:
@@ -45,3 +47,15 @@ jobs:
           grep -Fx NET_BOUNDED_REENTRANT_RECEIVES_HOST_TESTS_PASS supervisor-terminal.log
           grep -Fx NET_AUTOMATIC_ACTOR_PUMP_HOST_TESTS_PASS supervisor-terminal.log
           grep -Fx NET_DEDICATED_ACTOR_PUMP_CARRIERS_HOST_TESTS_PASS supervisor-terminal.log
+          grep -Fx NET_VERIFIED_ACTOR_AWAIT_FRAME_TESTS_PASS supervisor-terminal.log
+      - name: Verify CLI-generated source identity and standalone NativeAOT actor frame
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -- emit-actor-await-csharp verification/Ores.Net.Tests/AwaitCounter.atto --out "$RUNNER_TEMP/AwaitActor.g.cs"
+          git diff --no-index --ignore-cr-at-eol verification/Ores.Net.Tests/GeneratedAwaitActor.g.cs "$RUNNER_TEMP/AwaitActor.g.cs"
+          if [[ "$RUNNER_OS" == Windows ]]; then rid=win-x64; exe=Ores.Net.ActorAwaitProbe.exe; else rid=linux-x64; exe=Ores.Net.ActorAwaitProbe; fi
+          dotnet publish verification/Ores.Net.ActorAwaitProbe/Ores.Net.ActorAwaitProbe.csproj -c Release -r "$rid" -p:PublishAot=true -o "$RUNNER_TEMP/await-native"
+          "$RUNNER_TEMP/await-native/$exe" | tee actor-await-native.log
+          grep -Fx NET_VERIFIED_ACTOR_AWAIT_FRAME_TESTS_PASS actor-await-native.log
+
