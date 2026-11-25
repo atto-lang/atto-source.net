@@ -68,4 +68,33 @@ public sealed class FrozenDependencyGraph
             throw Fail("E_UNBOUND","undeclared direct dependency "+owner+" -> "+dependency);
         return packages[dependency];
     }
+    // Source-level candidates only; never sufficient to trust a cached artifact.
+    public sealed record InvalidationPlan(IReadOnlyList<string> Rebuild,IReadOnlyList<string> Reusable,IReadOnlyList<string> Removed);
+    public InvalidationPlan PlanAgainst(FrozenDependencyGraph? previous)
+    {
+        var dirty=new HashSet<string>(StringComparer.Ordinal);
+        var rebuild=new List<string>();
+        var reusable=new List<string>();
+        var removed=new List<string>();
+        foreach(string name in DependencyOrder) {
+            var current=packages[name];
+            if(previous is null||!previous.packages.TryGetValue(name,out var old)||
+                current.Version!=old.Version||current.LockDigest!=old.LockDigest||
+                current.Dependencies.Keys.Any(dirty.Contains)) {
+                dirty.Add(name);rebuild.Add(name);
+            } else reusable.Add(name);
+        }
+        if(previous is not null)
+            foreach(string name in previous.DependencyOrder.Reverse())
+                if(!packages.ContainsKey(name)) removed.Add(name);
+        return new(rebuild.AsReadOnly(),reusable.AsReadOnly(),removed.AsReadOnly());
+    }
+    // Stable logical ID, not a cache key. Input must belong to the verified graph.
+    public string ProviderIdentity(string owner,string ns)
+    {
+        if(!packages.TryGetValue(owner,out var snapshot)||!snapshot.NamespaceNames.Contains(ns,StringComparer.Ordinal))
+            throw Fail("E_UNBOUND","unknown provider identity");
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(owner+"\n"+ns))).ToLowerInvariant();
+    }
 }

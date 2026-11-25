@@ -70,7 +70,7 @@ public static partial class OresStructuredParser
             var inventory=new List<StaticImportGraph.Export>();
             foreach(string ns in owner.NamespaceNames) {
                 if(linkedPrefixes.Count>=16) throw new FormatException("E_SOURCE_LIMIT: linked provider budget exceeded");
-                string prefix="frozen_provider_"+linkedPrefixes.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)+"_";
+                string prefix="frozen_provider_"+closure.ProviderIdentity(identity,ns)+"_";
                 var unit=ParseCore(owner.ProviderSource(ns),null,ns,inventory,prefix,(source,member)=>{
                     string[] parts=source.Split('/');
                     if(parts.Length<4) throw new FormatException("E_IMPORT_PATH: provider function import requires explicit exported subpath");

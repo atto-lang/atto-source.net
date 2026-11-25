@@ -92,6 +92,35 @@ internal static class FrozenDependencyGraphSelfTest
         string guest="import pkg '"+A+"' as p; pub fnc main()->int{return p.network.answer();}";
         Deny("E_UNBOUND",()=>OresStructuredParser.CompileFrozenScalar(guest,new[]{root,b}));
         _=OresStructuredParser.CompileFrozenScalar(guest,new[]{root,b,c});
+        var independent=WithDeps(D);
+        var chain=WithDeps(A,b);
+        var old=FrozenDependencyGraph.Verify(new[]{chain,b,c,independent});
+        var same=FrozenDependencyGraph.Verify(new[]{independent,c,b,chain});
+        if(same.PlanAgainst(old).Rebuild.Count!=0||!same.PlanAgainst(old).Reusable.SequenceEqual(old.DependencyOrder)||
+            !old.PlanAgainst(null).Rebuild.SequenceEqual(old.DependencyOrder))throw new InvalidOperationException("cold/warm plan");
+        var changedSource=Snapshot(C,"1.0.0",new(),new(),Source.Replace("42","43"));
+        var b2=WithDeps(B,changedSource);var a2=WithDeps(A,b2);
+        foreach(var list in new[]{new[]{a2,b2,changedSource,independent},new[]{independent,changedSource,b2,a2}}) {
+            var next=FrozenDependencyGraph.Verify(list);
+            var plan=next.PlanAgainst(old);
+            if(!plan.Rebuild.SequenceEqual(new[]{C,B,A})||!plan.Reusable.SequenceEqual(new[]{D})||plan.Removed.Count!=0)
+                throw new InvalidOperationException("transitive selective invalidation");
+            if(next.ProviderIdentity(C,"network")!=old.ProviderIdentity(C,"network"))throw new InvalidOperationException("content changed logical identity");
+        }
+        var without=FrozenDependencyGraph.Verify(new[]{independent});
+        if(!without.PlanAgainst(old).Removed.SequenceEqual(new[]{A,B,C})||
+            !old.PlanAgainst(without).Rebuild.SequenceEqual(new[]{C,B,A}))throw new InvalidOperationException("removal or addition plan");
+        var rewire=FrozenDependencyGraph.Verify(new[]{WithDeps(A,c),c,independent}).PlanAgainst(old);
+        if(!rewire.Rebuild.SequenceEqual(new[]{A})||!rewire.Reusable.SequenceEqual(new[]{C,D})||!rewire.Removed.SequenceEqual(new[]{B}))
+            throw new InvalidOperationException("rewire plan");
+        Deny("E_LOCK_HASH",()=>FrozenDependencyGraph.Verify(new[]{chain,b,changedSource,independent}));
+        if(old.ProviderIdentity(A,"network")!="680d736917e8f15f615de63abf42fdd332543f48c88065637ffb62ae7f82e636"||
+            old.ProviderIdentity(A,"network")!=same.ProviderIdentity(A,"network")||
+            old.ProviderIdentity(A,"network")==old.ProviderIdentity(D,"network"))
+            throw new InvalidOperationException("stable provider identity");
+        Deny("E_UNBOUND",()=>without.ProviderIdentity(A,"network"));
+        Deny("E_UNBOUND",()=>old.ProviderIdentity(A,"missing"));
+        _=OresStructuredParser.CompileFrozenScalar(guest,new[]{root,b,c,independent});
         Console.WriteLine("Frozen dependency closure: deterministic diamond, edge authority, missing and wrong pins, malformed cycles, compiler admission");
     }
 }
