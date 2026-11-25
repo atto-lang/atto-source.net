@@ -46,6 +46,41 @@ public sealed partial class OresVmHost
         return ExecuteScheduledSegment(scheduler, handle, actor, turn, lease, segment);
     }
 
+    // Trusted host-handler dispatch, not compiler lowering. The terminal
+    // selection and logical admission are atomic; the handler runs outside
+    // the host gate. Once selected the notice is not replayed on handler fault.
+    private bool TryDispatchSupervisorSegment(ActorScheduler scheduler,
+        IsolateHandle handle, ActorTicket actor, string expectedLayoutIdentity,
+        Action<ActorDispatchScope, SupervisorTerminalNotice> handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        ArgumentException.ThrowIfNullOrEmpty(expectedLayoutIdentity);
+        if (!ReferenceEquals(scheduler.Host, this))
+            throw new InvalidOperationException("foreign actor scheduler");
+        var lease = new object();
+        ActorTurnTicket turn;
+        SupervisorTerminalNotice notice;
+        lock (_gate) {
+            var state = Check(handle);
+            CheckActor(state, actor);
+            if (state.Phase != Phase.Running || actor.ActiveTurn is not null ||
+                actor.NextTurnGeneration == ulong.MaxValue ||
+                actor.StateKinds is null ||
+                !string.Equals(actor.StateLayoutIdentity, expectedLayoutIdentity, StringComparison.Ordinal))
+                throw new InvalidOperationException("supervisor handler admission denied");
+            if (!TryTakeScheduledSupervisorTerminal(scheduler, handle, actor, out notice))
+                return false;
+            turn = BeginActorTurn(handle, actor);
+            turn.ManagedContinuation = true;
+            InstallSegmentCarrier(turn, lease);
+        }
+        ExecuteScheduledSegment(scheduler, handle, actor, turn, lease, scope => {
+            handler(scope, notice);
+            return false;
+        });
+        return true;
+    }
+
     private static void InstallSegmentCarrier(ActorTurnTicket turn, object lease)
     {
         turn.ScheduledCarrierLease = lease;
