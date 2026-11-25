@@ -293,6 +293,13 @@ public static partial class OresStructuredCfgLowering
                     return (Emit(block, CfgOpcode.ReadOptionI64Tag, IrValueType.Bool, left: value),
                         Emit(block, CfgOpcode.ReadOptionI64Payload, IrValueType.I64, left: value));
                 }
+                case StructuredConditional conditional when conditional.Type == IrValueType.OptionI64 &&
+                    HasConditionalWriteback(conditional):
+                {
+                    int value = ConditionalWritebackValue(conditional, ref block, variables);
+                    return (Emit(block, CfgOpcode.ReadOptionI64Tag, IrValueType.Bool, left: value),
+                        Emit(block, CfgOpcode.ReadOptionI64Payload, IrValueType.I64, left: value));
+                }
                 case StructuredSyncTaskValue task when task.Type == IrValueType.OptionI64:
                 {
                     int value = InlineTaskValue(task, ref block, variables);
@@ -457,6 +464,8 @@ public static partial class OresStructuredCfgLowering
                 }
                 case StructuredConditional conditional:
                 {
+                    if (HasConditionalWriteback(conditional))
+                        return ConditionalWritebackValue(conditional, ref block, variables);
                     int condition = Expression(conditional.Test, ref block, variables);
                     var yes = NewBlock();
                     var no = NewBlock();
@@ -478,6 +487,28 @@ public static partial class OresStructuredCfgLowering
                     {
                         int condition = Expression(binary.Left, ref block, variables);
                         var rhs = NewBlock();
+                        // Only a parser-authorized immediate task RHS can
+                        // publish writes here. Keep independent environments
+                        // for the skipped and evaluated edges.
+                        if (binary.Right is StructuredSyncTaskValue { Task.WriteBack: true })
+                        {
+                            var names = Names(variables);
+                            var merged = new Dictionary<string, Binding>(StringComparer.Ordinal);
+                            var continuation = Join(names, variables, merged);
+                            int result = NextValue();
+                            continuation.Parameters.Add(new CfgParameter(result, IrValueType.Bool));
+                            int[] skipped = [.. Values(names, variables), condition];
+                            var rhsVariables = new Dictionary<string, Binding>(variables, StringComparer.Ordinal);
+                            block.Terminator = binary.Operator == StructuredOperator.LogicalAnd
+                                ? new CfgBranch(condition, rhs.Name, [], continuation.Name, skipped)
+                                : new CfgBranch(condition, continuation.Name, skipped, rhs.Name, []);
+                            int evaluated = Expression(binary.Right, ref rhs, rhsVariables);
+                            rhs.Terminator = new CfgJump(continuation.Name,
+                                [.. Values(names, rhsVariables), evaluated]);
+                            foreach (var (name, binding) in merged) variables[name] = binding;
+                            block = continuation;
+                            return result;
+                        }
                         var join = NewBlock();
                         int joined = NextValue();
                         join.Parameters.Add(new CfgParameter(joined, IrValueType.Bool));
@@ -529,6 +560,29 @@ public static partial class OresStructuredCfgLowering
                 default:
                     throw new FormatException("Unsupported structured CFG expression");
             }
+        }
+
+        private static bool HasConditionalWriteback(StructuredConditional conditional) =>
+            conditional.WhenTrue is StructuredSyncTaskValue { Task.WriteBack: true } ||
+            conditional.WhenFalse is StructuredSyncTaskValue { Task.WriteBack: true };
+
+        private int ConditionalWritebackValue(StructuredConditional conditional, ref Block block,
+            Dictionary<string, Binding> variables)
+        {
+            int condition = Expression(conditional.Test, ref block, variables);
+            var yes = NewBlock();
+            var no = NewBlock();
+            block.Terminator = new CfgBranch(condition, yes.Name, [], no.Name, []);
+            var yesVariables = new Dictionary<string, Binding>(variables, StringComparer.Ordinal);
+            var noVariables = new Dictionary<string, Binding>(variables, StringComparer.Ordinal);
+            var continuation = new LexicalContinuation(this, variables, conditional.Type, writeBack: true);
+            int yesValue = PackedValue(conditional.WhenTrue, ref yes, yesVariables);
+            continuation.Finish(yes, yesVariables, yesValue);
+            int noValue = PackedValue(conditional.WhenFalse, ref no, noVariables);
+            continuation.Finish(no, noVariables, noValue);
+            var (join, value) = continuation.Complete();
+            block = join ?? throw new FormatException("Conditional writeback has no continuation");
+            return value;
         }
 
         private static string[] Names(Dictionary<string, Binding> variables) =>
