@@ -83,7 +83,8 @@ public unsafe sealed class ActorSlabHeap : IDisposable
             throw new ArgumentException("invalid actor slab heap configuration", nameof(config));
         _reserve = reserve;
         _budget = config.BudgetBytes;
-        _granule = Math.Max(config.CommitGranule, (nuint)PageBytes) / PageBytes * PageBytes;
+        // Clamp the rounding granule to the actor's addressable reserve.
+        _granule = Math.Min(Math.Max(config.CommitGranule, (nuint)PageBytes) / PageBytes * PageBytes, reserve);
         _maxPages = (uint)(reserve / PageBytes);
         _stats = new SlabStats { ReservedBytes = reserve, MetadataBytes = _maxPages };
         if (config.HandleCapacity != 0 && InitHandles(config.HandleCapacity, config.HandleGenerationBits) is { } error)
@@ -108,7 +109,10 @@ public unsafe sealed class ActorSlabHeap : IDisposable
             if (genBitsCfg < 2 || genBitsCfg > genBits) return SlabStatus.InvalidConfig;
             genBits = genBitsCfg;
         }
-        var count = (uint)(((nuint)capacity * 8 + HeaderBytes + PageBytes - 1) / PageBytes);
+        // Compute table size independently of the host pointer width.
+        var required = ((ulong)capacity * 8 + HeaderBytes + PageBytes - 1) / PageBytes;
+        if (required > _maxPages) return SlabStatus.OutOfMemory;
+        var count = (uint)required;
         var s = TakePages(count, out var first);
         if (s != SlabStatus.Ok) return s;
         _pages[first] = new Page { Kind = Kind.Meta, Run = count };
@@ -130,7 +134,8 @@ public unsafe sealed class ActorSlabHeap : IDisposable
     {
         if (end <= _committed) return SlabStatus.Ok;
         if (end > _reserve) return SlabStatus.OutOfMemory;
-        var target = Math.Min((end + _granule - 1) / _granule * _granule, _reserve);
+        var rounded = ((ulong)end + (ulong)_granule - 1) / (ulong)_granule * (ulong)_granule;
+        var target = (nuint)Math.Min(rounded, (ulong)_reserve);
         if (target > _budget)
         {
             if (end > _budget) return SlabStatus.BudgetExceeded;
@@ -172,6 +177,9 @@ public unsafe sealed class ActorSlabHeap : IDisposable
         }
         first = 0;
         if (count > _maxPages - _highWater) return SlabStatus.OutOfMemory;
+        // Reject a physical budget miss before growing page metadata.
+        if ((ulong)(_highWater + count) * PageBytes > (ulong)_budget)
+            return SlabStatus.BudgetExceeded;
         var s = EnsurePageSlots(_highWater + count);
         if (s != SlabStatus.Ok) return s;
         s = CommitThrough((nuint)(_highWater + count) * PageBytes);
@@ -297,8 +305,9 @@ public unsafe sealed class ActorSlabHeap : IDisposable
     private SlabStatus AllocateLarge(nuint bytes, out uint word)
     {
         word = 0;
-        if (bytes > _reserve) return SlabStatus.OutOfMemory;
-        var count = (uint)((bytes + HeaderBytes + PageBytes - 1) / PageBytes);
+        // Header and page rounding must fit even on a 32-bit host.
+        if (bytes > _reserve - HeaderBytes) return SlabStatus.OutOfMemory;
+        var count = (uint)(((ulong)bytes + HeaderBytes + PageBytes - 1) / PageBytes);
         var s = TakePages(count, out var first);
         if (s != SlabStatus.Ok) return s;
         _pages[first] = new Page { Kind = Kind.Large, Run = count };
