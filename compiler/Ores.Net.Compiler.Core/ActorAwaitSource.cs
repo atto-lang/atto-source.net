@@ -90,7 +90,7 @@ public static class ActorAwaitSourceEmitter
                     _saved = incoming;
                     _pending = pending ?? throw new System.ArgumentNullException(nameof(pending));
                 }
-                internal OresVmHost.ActorPumpStep Start(OresVmHost.ActorDispatchScope scope)
+                internal OresVmHost.ActorPumpStep Start_{{plan.MethodName}}(OresVmHost.ActorDispatchScope scope)
                 {
                     if (_pc != 0) throw new System.InvalidOperationException("stale start");
                     _pc = 1;
