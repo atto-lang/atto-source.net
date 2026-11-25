@@ -447,6 +447,94 @@ internal static class VmIsolateHostTests
         Console.WriteLine("NET_SUPERVISOR_HANDLER_DISPATCH_HOST_TESTS_PASS");
     }
 
+    private static void CheckBoundedReentrantReceives()
+    {
+        var host = new OresVmHost(maxTenants: 1);
+        var tenant = host.CreateIsolate("bounded-receives", maxActors: 3);
+        host.Start(tenant);
+        var actor = host.RegisterActor(tenant, 1, serial: false, maxLiveReceives: 2);
+        var ordinary = host.RegisterActor(tenant, 2);
+        var serial = host.RegisterActor(tenant, 3, serial: true);
+        if (ordinary.MaxLiveReceives != 32 || serial.MaxLiveReceives != 1 ||
+            actor.MaxLiveReceives != 2)
+            throw new Exception("default ordinary or explicit serial receive quota");
+        host.ConfigureNamedActorState(tenant, actor, "Counter", "Counter|1:I",
+            new[] { new OresVmHost.ActorStateField(OresVmHost.ActorStateScalarKind.Int64) });
+        var scheduler = host.CreateTrustedScheduler();
+        scheduler.Enqueue(tenant, actor);
+        var first = scheduler.StartSegment(tenant, actor, "Counter|1:I", scope => {
+            scope.AddInt64(0, 10);
+            return true;
+        }) ?? throw new Exception("first continuation missing");
+        if (host.ActorReceiveSnapshot(tenant, actor) != (1, 1, 0UL))
+            throw new Exception("first suspension did not release running gate");
+
+        scheduler.Enqueue(tenant, actor);
+        var second = scheduler.StartSegment(tenant, actor, "Counter|1:I", scope => {
+            if (scope.AddInt64(0, 20) != 30)
+                throw new Exception("ordinary sibling did not observe committed state");
+            var current = actor.ActiveTurn ?? throw new Exception("missing running sibling");
+            if (host.ActorReceiveSnapshot(tenant, actor) != (2, 1, current.Generation))
+                throw new Exception("logical and running counts diverged");
+            ExpectFailure(() => scheduler.ResumeSegment(tenant, actor, first, _ => false),
+                "resume while sibling owns state gate");
+            return true;
+        }) ?? throw new Exception("second continuation missing");
+        if (host.ActorReceiveSnapshot(tenant, actor) != (2, 2, 0UL))
+            throw new Exception("logical capacity not retained across both suspensions");
+        scheduler.Enqueue(tenant, actor);
+        ExpectFailure(() => scheduler.StartSegment(tenant, actor, "Counter|1:I", _ => false),
+            "new receive at logical capacity");
+        if (actor.QueuedMessages != 1)
+            throw new Exception("capacity denial consumed FIFO receipt");
+        ExpectFailure(() => host.RetireActor(tenant, actor), "retirement with suspended receives");
+
+        // Resumption uses an existing logical receive, not a third quota slot.
+        var done = scheduler.ResumeSegment(tenant, actor, second, scope => {
+            var current = actor.ActiveTurn ?? throw new Exception("missing resumed sibling");
+            host.CancelActorTurn(tenant, actor, first.Turn);
+            scheduler.DiscardContinuation(tenant, actor, first);
+            if (host.ActorReceiveSnapshot(tenant, actor) != (1, 0, current.Generation) ||
+                scope.AddInt64(0, 12) != 42)
+                throw new Exception("suspended sibling cancellation revoked running authority");
+            ExpectFailure(() => scheduler.ResumeSegment(tenant, actor, first, _ => false),
+                "cancelled sibling replay");
+            return false;
+        });
+        if (done is not null || host.ActorReceiveSnapshot(tenant, actor) != (0, 0, 0UL))
+            throw new Exception("logical retirement did not release exact receive");
+        if (scheduler.StartSegment(tenant, actor, "Counter|1:I", scope => {
+            if (scope.ReadInt64(0) != 42) throw new Exception("state after interleaving");
+            return false;
+        }) is not null || actor.QueuedMessages != 0)
+            throw new Exception("queued receipt did not recover after capacity release");
+
+        // Legacy raw host APIs retain the same exclusive running-state gate.
+        var rawA = host.BeginActorTurn(tenant, ordinary);
+        host.SuspendActorTurn(tenant, ordinary, rawA);
+        var rawB = host.BeginActorTurn(tenant, ordinary);
+        var loan = host.BeginActorStateLoan(tenant, ordinary, rawB);
+        ExpectFailure(() => host.ResumeActorTurn(tenant, ordinary, rawA),
+            "raw resume while sibling running");
+        host.CancelActorTurn(tenant, ordinary, rawA);
+        host.AcknowledgeActorTurnCancellation(tenant, ordinary, rawA);
+        host.ValidateActorStateLoan(tenant, ordinary, rawB, loan);
+        host.EndActorStateLoan(tenant, ordinary, rawB, loan);
+        host.CompleteActorTurn(tenant, ordinary, rawB);
+
+        var only = host.BeginActorTurn(tenant, serial);
+        host.SuspendActorTurn(tenant, serial, only);
+        ExpectFailure(() => host.BeginActorTurn(tenant, serial), "serial receive while suspended");
+        ExpectFailure(() => host.RetireActor(tenant, serial), "serial suspended lifetime");
+        host.ResumeActorTurn(tenant, serial, only);
+        host.CompleteActorTurn(tenant, serial, only);
+        host.RetireActor(tenant, serial);
+        host.RetireActor(tenant, ordinary);
+        host.RetireActor(tenant, actor);
+        host.BeginShutdown(tenant); host.CompleteShutdown(tenant); host.Destroy(tenant);
+        Console.WriteLine("NET_BOUNDED_REENTRANT_RECEIVES_HOST_TESTS_PASS");
+    }
+
     internal static void RunSupervisorTerminalChecks()
     {
         CheckSupervisorTerminalReservations();
@@ -456,6 +544,7 @@ internal static class VmIsolateHostTests
         CheckSupervisorDispatchPriority();
         CheckMigratableCarrierSegments();
         CheckSupervisorHandlerDispatch();
+        CheckBoundedReentrantReceives();
     }
 
     public static void Run()
