@@ -20,6 +20,8 @@ on:
       - 'compiler/Ores.Net.Compiler/FrozenPackageCommand.cs'
       - 'compiler/Ores.Net.Compiler/Program.cs'
       - 'verification/frozen-package-cli-fixtures.py'
+      - 'compiler/Ores.Net.Compiler.Core/FrozenDependencyGraph.cs'
+      - 'verification/Ores.Net.Tests/FrozenDependencyGraphSelfTest.cs'
       - 'global.json'
 permissions:
   contents: read
@@ -77,7 +79,9 @@ jobs:
           cmp verification/Ores.Net.Tests/ContextualImportParserSelfTest.cs "$work/ContextualImportParserSelfTest.cs"
           cp verification/Ores.Net.Tests/FrozenImportGraphSelfTest.cs "$work/"
           cmp verification/Ores.Net.Tests/FrozenImportGraphSelfTest.cs "$work/FrozenImportGraphSelfTest.cs"
-          printf '%s\n' 'ContextualImportParserSelfTest.Run();' 'FrozenImportGraphSelfTest.Run();' > "$work/Program.cs"
+          cp verification/Ores.Net.Tests/FrozenDependencyGraphSelfTest.cs "$work/"
+          cmp verification/Ores.Net.Tests/FrozenDependencyGraphSelfTest.cs "$work/FrozenDependencyGraphSelfTest.cs"
+          printf '%s\n' 'ContextualImportParserSelfTest.Run();' 'FrozenImportGraphSelfTest.Run();' 'FrozenDependencyGraphSelfTest.Run();' > "$work/Program.cs"
           dotnet run --project "$work" --configuration Release
       - name: Check real frozen CLI and atomic output on tampering
         run: |
