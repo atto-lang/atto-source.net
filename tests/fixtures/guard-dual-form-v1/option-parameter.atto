@@ -1,0 +1,20 @@
+fnc check(int left, Option<int> value, int right): int {
+    guard value.is_some() else
+        ^ right;
+    end
+    return left + value.unwrap_or(0);
+}
+
+fnc forward(Option<int> value): int {
+    guard value.is_some() {
+        return check(1, value, 7);
+    }
+    return check(2, value, 9);
+}
+
+pub fnc main(): int {
+    guard check(100, Some(-9223372036854775808), 0) eq -9223372036854775708 {
+        return 1;
+    }
+    return forward(Some(33)) + forward(None);
+}

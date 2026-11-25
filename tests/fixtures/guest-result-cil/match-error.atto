@@ -1,0 +1,15 @@
+fnc load(): int {
+  throw! new Error("missing user");
+}
+
+pub fnc main(): int {
+  val Result<int, Error> result = trap! load();
+  let int code = 101;
+  do match result over
+    on Ok(value) -> { code = 102; }
+    on Err(failure) -> {
+      if failure.message == "missing user" { code = 7; } fi
+    }
+  end
+  return code;
+}

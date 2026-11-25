@@ -28,10 +28,13 @@ internal static class ElmCompositionAdmissionTests
                 throw new Exception("Noncanonical composition fixture: " + name);
 
             Reject(() => { _ = OresParser.Parse(source); }, name + "/shipping");
-            Reject(() => { _ = OresStructuredParser.Parse(source); }, name + "/structured");
+            if (name is "postfix_option_return" or "postfix_result_return")
+                _ = OresStructuredCfgLowering.LowerModule(source);
+            else
+                Reject(() => { _ = OresStructuredParser.Parse(source); }, name + "/structured");
         }
 
-        Console.WriteLine($"{cases.Count} reactive composition source cases rejected by both .NET frontends");
+        Console.WriteLine("Structured CIL verified two postfix propagation cases and rejected 14 other cases");
     }
 
     private static void Reject(Action operation, string name)

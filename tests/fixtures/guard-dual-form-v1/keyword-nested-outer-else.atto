@@ -1,0 +1,11 @@
+// Inner guard's else/end must not consume outer if's else/fi.
+pub fnc main(): int {
+  if true then
+    guard true else
+      return 5;
+    end
+  else
+    return 7;
+  fi
+  return 42;
+}

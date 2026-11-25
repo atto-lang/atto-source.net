@@ -50,7 +50,8 @@ public enum StructuredOperator { Add, Subtract, Multiply, EqualI64, LessThanI64,
     LessThanOrEqualI64, GreaterThanOrEqualI64,
     EqualBool, NotEqualBool, LogicalAnd, LogicalOr, LogicalXor,
     // atto-spec bitwise-and-stream-operators-v1: <<<, >>> and infix ashr.
-    ShiftLeft, ShiftRightLogical, ShiftRightArithmetic }
+    ShiftLeft, ShiftRightLogical, ShiftRightArithmetic,
+    Divide, EqualGuestError, NotEqualGuestError, EqualGuestText, NotEqualGuestText, Remainder, Modulo }
 public sealed record StructuredBinary(int At, StructuredOperator Operator,
     StructuredExpr Left, StructuredExpr Right, IrValueType ResultType)
     : StructuredExpr(At, ResultType);
@@ -123,11 +124,30 @@ public static partial class OresStructuredParser
                 (tokens[i - 1].Text is "define" or "pub"))
                 throw new FormatException(
                     $"NET_STRUCTURED_MACRO_EXPANDER_REQUIRED: macro declarations require typed AST expansion before OresIR/CIL at offset {tokens[i].Offset}; runtime fallback is forbidden");
-            if (tokens[i].Text == "!" && i > 0 && i + 1 < tokens.Count &&
-                tokens[i + 1].Text == "(")
+            if (tokens[i].Text == "!" && i + 1 < tokens.Count &&
+                tokens[i + 1].Text == "(" && !IsPrefixBangPosition(tokens, i))
                 throw new FormatException(
                     $"NET_STRUCTURED_MACRO_EXPANDER_REQUIRED: macro invocation requires typed AST expansion before OresIR/CIL at offset {tokens[i].Offset}; runtime fallback is forbidden");
         }
+    }
+
+    // A parenthesized boolean operand is not a macro splice. Permit only
+    // expression-prefix positions whose previous token cannot be a callee.
+    // Identifier/number/member spellings followed by ! (even with trivia)
+    // retain the original fail-closed macro diagnostic.
+    private static bool IsPrefixBangPosition(IReadOnlyList<Token> tokens, int at)
+    {
+        if (at == 0) return true;
+        var before = tokens[at - 1];
+        if (before.Text is "(" or "=" or "," or ":" or "?" or "{" or ";" or
+            "^" or "->" or "&&" or "||" or "^^" or "==" or "!=" or "!eq" or
+            "<" or ">" or "<=" or ">=" or "!" or "+" or "-" or "*" or "/")
+            return true;
+        // Do not treat contiguous reserved-name macro-like forms such as
+        // return!(...) as keyword followed by a prefix expression.
+        return before.Offset + before.Text.Length < tokens[at].Offset &&
+            before.Text is ("return" or "guard" or "when" or "if" or "ifnot" or
+                "unless" or "then" or "else" or "and" or "or" or "xor" or "eq" or "neq");
     }
 
     // `...source` directly inside `infer struct|record { }` or `= record { }` is the
@@ -163,6 +183,40 @@ public static partial class OresStructuredParser
 
     public static StructuredProgram Parse(string source)
         => ParseCore(source, null).Program;
+
+    internal static StructuredProgram ParseProduction(string source)
+        => ParseCore(source, null, productionGuard: true).Program;
+
+    internal static bool HasGuardToken(string source)
+        => HasStructuredFeatureToken(source, guardOnly: true);
+
+    internal static bool HasStructuredFeatureToken(string source, bool guardOnly = false)
+    {
+        if (guardOnly && !source.Contains("guard", StringComparison.Ordinal)) return false;
+        var lexer = new Lexer(source, moduleMode: false);
+        try
+        {
+            string previous = "", beforePrevious = "";
+            while (lexer.Read() is { Text.Length: > 0 } token)
+            {
+                if (token.Text == "guard") return true;
+                if (guardOnly) continue;
+                if (token.Text is "/" or "Option" or "Some" or "None" or "Result" or "trap" or "trap!" or "throw" or "throw!" or
+                    "panic" or "panic!" or "raise" or "raise!" or "match" ||
+                    (previous == "sync" && token.Text == "task") ||
+                    (beforePrevious == "Integer" && previous == "." && token.Text is "rem" or "mod"))
+                    return true;
+                beforePrevious = previous;
+                previous = token.Text;
+            }
+        }
+        catch (FormatException)
+        {
+            // An input outside the CFG lexer before any matching token belongs
+            // to the ordinary frontend and its existing diagnostics.
+        }
+        return false;
+    }
 
     internal static StructuredLinkedUnit ParseLinked(string source, LinkedModuleContext linking)
         => ParseCore(source, linking);
@@ -246,7 +300,9 @@ public static partial class OresStructuredParser
             new List<StaticImportGraph.Export>(), methodPrefix).Program;
 
     private static StructuredLinkedUnit ParseCore(string source, LinkedModuleContext? linking,
-        string? frozenNamespace = null, List<StaticImportGraph.Export>? frozenExports = null, string frozenMethodPrefix = "", Func<string,string,StructuredFunction>? frozenResolve = null)
+        string? frozenNamespace = null, List<StaticImportGraph.Export>? frozenExports = null,
+        string frozenMethodPrefix = "", Func<string,string,StructuredFunction>? frozenResolve = null,
+        bool productionGuard = false)
     {
         ValidateSourceInput(source);
         ActorPubSubSourceAdmission.RejectUnsupported(source);
@@ -468,6 +524,11 @@ public static partial class OresStructuredParser
             throw new FormatException(
                 $"NET_NOMINAL_METHODS_UNSUPPORTED: Nominal class/actor methods require receiver-erased method slots, type/borrow checking and Native AOT CIL lowering; unsupported in .NET structured frontend at offset {firstNominalOffset}");
         }
+        // Keep the existing standalone scalar and linked admission boundaries.
+        // The inline-task profile may declare suspension permission, but still
+        // cannot execute a suspension. Recognize the token pair, not trivia.
+        bool inlineProfile = linking is null && frozenNamespace is null && Enumerable.Range(0, tokens.Count - 1)
+            .Any(i => tokens[i].Text == "sync" && tokens[i + 1].Text == "task");
         for (int i = 0; i + 1 < tokens.Count; i++)
         {
             // No protected state heap or virtual actor activation exists in
@@ -493,6 +554,10 @@ public static partial class OresStructuredParser
             // This lexer has already removed comments, so no raw regex scan.
             string word = tokens[i].Text;
             string next = tokens[i + 1].Text;
+            // Frozen package providers retain the prior closed scalar boundary.
+            // Standalone task/guard/match support is not an imported ABI grant.
+            if (frozenNamespace is not null && word is ("guard" or "match" or "susp"))
+                throw new FormatException($"E_UNSUPPORTED: frozen provider requires closed scalar lowering at offset {tokens[i].Offset}");
             // Compiler-owned lexical recognition: the Java/LLVM canonical
             // telemetry scope must not accidentally become an ordinary scalar
             // local or inert call. The current .NET CIL path has neither an
@@ -513,9 +578,15 @@ public static partial class OresStructuredParser
             if (word == "critical")
                 throw new FormatException(
                     $"E_CRITICAL_UNSUPPORTED: structured CIL has no authenticated guard owner or FIFO continuation lowering at offset {tokens[i].Offset}");
-            if (word is "suspends" or "await")
-                throw new FormatException(
-                    $"E_SUSPENDS_UNSUPPORTED: structured CIL lacks typed suspension/continuation lowering at offset {tokens[i].Offset}");
+            bool permittedMarker = inlineProfile && word == "suspends" &&
+                next is ("fnc" or "routine");
+            if ((word is "suspends" or "await") && !permittedMarker)
+            {
+                string diagnostic = word == "await" && IsInsideInlineTask(tokens, i)
+                    ? "E_SYNC_TASK_SUSPEND: this suspension lacks a same-thread continuation"
+                    : "E_SUSPENDS_UNSUPPORTED: structured CIL lacks typed suspension/continuation lowering";
+                throw new FormatException($"{diagnostic} at offset {tokens[i].Offset}");
+            }
             if (tokens[i].Text == "select" &&
                 StaticSelectAdmission.IsStaticSelectFollower(tokens[i + 1].Text))
                 throw StaticSelectAdmission.Unsupported(tokens[i].Offset);
@@ -548,12 +619,58 @@ public static partial class OresStructuredParser
                     $"Tuple-v2 explicit spread requires single-evaluation checked lowering at offset {tokens[i].Offset}");
         }
         RejectUnsupportedMacros(tokens);
-        var reader = new Reader(tokens, linking);
+        var reader = new Reader(tokens, linking, productionGuard: productionGuard);
         if (frozenNamespace is not null)
             return reader.ReadFrozenNamespace(frozenNamespace, frozenExports!, frozenMethodPrefix, frozenResolve);
         return linking is null
             ? new StructuredLinkedUnit(reader.ReadProgram(), null, new Dictionary<string, StructuredFunction>())
             : reader.ReadLinkedUnit();
+    }
+
+    // Diagnostic-only lexical classification. The preflight still rejects every
+    // await; no token sequence can grant suspension or bypass the typed parser.
+    private static bool IsInsideInlineTask(IReadOnlyList<Token> tokens, int at)
+    {
+        int braces = 0;
+        var taskBodies = new Stack<int>();
+        int pendingBody = -1;
+        for (int i = 0; i < at; i++)
+        {
+            if (tokens[i].Text == "sync" && i + 1 < at && tokens[i + 1].Text == "task")
+            {
+                int body = i + 2;
+                if (body < at && tokens[body].Text == "<")
+                {
+                    int angles = 0;
+                    do
+                    {
+                        if (tokens[body].Text == "<") angles++;
+                        else if (tokens[body].Text == ">") angles--;
+                        else if (tokens[body].Text is "{" or "}" or ";") break;
+                        body++;
+                    }
+                    while (body < at && angles > 0);
+                    if (angles != 0) continue;
+                }
+                if (body < at && tokens[body].Text == "{") pendingBody = body;
+            }
+            if (tokens[i].Text == "{")
+            {
+                braces++;
+                if (i == pendingBody)
+                {
+                    taskBodies.Push(braces);
+                    pendingBody = -1;
+                }
+            }
+            else if (tokens[i].Text == "}")
+            {
+                if (taskBodies.Count != 0 && taskBodies.Peek() == braces)
+                    taskBodies.Pop();
+                braces--;
+            }
+        }
+        return taskBodies.Count != 0;
     }
 
     // Syntax-only method-slot admission over tokens produced by the *same*
@@ -779,6 +896,8 @@ public static partial class OresStructuredParser
     {
         private int index;
         private bool previousWasWith;
+        private bool previousWasString;
+        private bool previousWasSync;
         public Token Read()
         {
             while (index < source.Length)
@@ -827,7 +946,9 @@ public static partial class OresStructuredParser
             if (index == source.Length) return new Token("", index);
             char ch = source[index];
             bool precededByWith = previousWasWith;
+            bool precededByString = previousWasString;
             previousWasWith = false;
+            previousWasString = false;
             if (precededByWith && ch == '{')
                 throw new FormatException(
                     $"WITH_BACKEND_UNSUPPORTED: immutable with requires checked rt copy/take, "
@@ -885,6 +1006,12 @@ public static partial class OresStructuredParser
                 do { index++; } while (index < source.Length &&
                     (Alpha(source[index]) || Digit(source[index]) || source[index] == '_'));
                 string word = source[offset..index];
+                if (word is "trap" or "throw" or "panic" or "raise" && index < source.Length &&
+                    source[index] == '!' && (index + 1 == source.Length || source[index + 1] != '=') &&
+                    !(index + 2 < source.Length && source[index + 1] == 'e' && source[index + 2] == 'q' &&
+                        (index + 3 == source.Length ||
+                        !(Alpha(source[index + 3]) || Digit(source[index + 3]) || source[index + 3] == '_'))))
+                    index++;
                 if (word == "select" &&
                     StaticSelectAdmission.FollowedByStaticSelect(source, offset))
                     throw StaticSelectAdmission.Unsupported(offset);
@@ -908,22 +1035,15 @@ public static partial class OresStructuredParser
                 if (word == "unsafe")
                     throw new FormatException(
                         $"unsafe boundary requires checked effects, native grants and Native AOT lowering at offset {offset}");
-                // Reject before the condition is lexed: `guard 1>0` contains
-                // characters this lexer refuses outside module mode.
-                if (word == "guard")
-                    throw new FormatException(
-                        $"GUARD_BACKEND_UNSUPPORTED: early-exit CFG and ownership lowering required at offset {offset}");
-                // Match/default is a true expression grammar extension, not a
-                // valid scalar identifier or CIL fallthrough. This lexer skips
-                // comments before this check; no source-substring blacklist.
-                if (word == "match")
-                    throw new FormatException(
-                        $"MATCH_DEFAULT_BACKEND_UNSUPPORTED: typed match requires real pattern admission, ordered CFG fallback and exhaustiveness before CIL emission at offset {offset}");
+                // The structured CFG frontend admits statically terminal
+                // boolean guards. Its lexer must preserve the real token so
+                // the typed Statement path validates and lowers it below.
+                // The separate shipping scalar lexer remains fail-closed.
                 if (word is "cpu" or "gpu" or "quantum" ||
                     (word == "nb" && !StaticSelectAdmission.FollowedByStaticSelect(source, index)))
                     throw new FormatException(
                         $"execution region '{word}' requires verified CPU/GPU Task lowering; no implicit CPU fallback at offset {offset}");
-                if (word == "task")
+                if (word == "task" && !previousWasSync)
                 {
                     if (ContextualTaskBoundary.OpensBlock(source, index))
                         throw new FormatException(
@@ -944,11 +1064,8 @@ public static partial class OresStructuredParser
                     $"noncanonical '%' source operator; use named Integer.rem/mod at offset {offset}");
             else if (ch == '^')
             {
-                // `^^` is the canonical eager boolean XOR (spec ch.16); single `^`
-                // stays out of the grammar (integer XOR is Integer.bitXor).
-                if (index + 1 < source.Length && source[index + 1] == '^') index += 2;
-                else throw new FormatException(
-                    $"Reserved AttoLang operator '^'; use Integer.bitXor(a, b) at offset {offset}");
+                // The reader admits single caret only in return position.
+                index += index + 1 < source.Length && source[index + 1] == '^' ? 2 : 1;
             }
             else if (ch == '!' && index + 2 < source.Length &&
                      source[index + 1] == 'e' && source[index + 2] == 'q' &&
@@ -985,13 +1102,15 @@ public static partial class OresStructuredParser
                      ((ch == '|' && source[index + 1] == '>') ||
                       (ch == '<' && source[index + 1] == '|')))
                 index += 2;
-            else if (ch == '|' && !moduleMode)
+            else if (ch == '|' && !moduleMode && !precededByString)
                 throw new FormatException(
                     $"Lexical captures require checked closure lowering at offset {offset}");
-            // Only `name!(` is lexed (for the fail-closed macro gate); a lone or
-            // spaced `!` keeps main's invalid-character diagnostic.
-            else if (ch == '!' && index + 1 < source.Length && source[index + 1] == '(') index++;
-            else if ("()+-*{}:;=<>.,?~".IndexOf(ch) >= 0 ||
+            // Prefix logical not already has typed boolean lowering in Unary.
+            // Preserve the earlier != / !eq recognition and the separate
+            // fail-closed macro and ownership admission gates.
+            else if (ch == '!') index++;
+            else if ("()+-*/{}:;=<>.,?~".IndexOf(ch) >= 0 ||
+                (ch == '|' && precededByString) ||
                 (moduleMode && "[]/>!|&".IndexOf(ch) >= 0)) index++;
             else throw new FormatException($"Invalid character at offset {offset}");
             var tokenText = source[offset..index];
@@ -1001,25 +1120,22 @@ public static partial class OresStructuredParser
                 throw new FormatException(
                     $"nominal enum overloads require compiler-bound dispatch (unsupported .NET bootstrap) at offset {offset}");
             previousWasWith = tokenText == "with";
-            // The opt-in structured compiler has independently verified closed
-            // Option<int> lowering; unlike the shipping scalar frontend it
-            // must admit Option/Some/None tokens. Everything else in the
-            // tagged family is still unsupported, even when reached via
-            // linked-unit discovery, and must fail before typed SSA/CIL.
-            // This is a complete-token check after skipping source trivia.
-            // Prelude names are auto-imported, not reserved words: a user
-            // declaration such as `class Box` must still lex. Only the tagged
-            // Result family is rejected here; type positions consult the
-            // CoreTypeRegistry in Type() and fail closed there.
-            if (tokenText is "Result" or "Ok" or "Err")
-                throw new FormatException(
-                    $"Option/Result/trap requires verified tagged-sum CIL and NativeAOT guest-control lowering (E_CORE_TYPE_LOWERING_UNSUPPORTED: {CoreTypeRegistry.Lookup(tokenText)?.CanonicalIdentity} has no verified .NET structured/NativeAOT lowering) at offset {offset}");
+            // Linked source retains the existing closed tagged-family boundary.
+            if (moduleMode && tokenText is ("Result" or "Ok" or "Err"))
+                throw new FormatException($"E_CORE_TYPE_LOWERING_UNSUPPORTED: linked Result ABI is not verified at offset {offset}");
+            if (moduleMode && previousWasSync && tokenText == "task")
+                throw new FormatException($"E_LINKED_SYNC_TASK_UNSUPPORTED: linked inline task ABI is not verified at offset {offset}");
+            if (moduleMode && tokenText is ("trap" or "trap!" or "throw" or "throw!" or
+                "raise" or "raise!" or "panic" or "panic!"))
+                throw new FormatException($"E_LINKED_GUEST_EFFECT_UNSUPPORTED: linked guest effect ABI is not verified at offset {offset}");
+            previousWasString = tokenText is "String" or "string";
+            previousWasSync = tokenText == "sync";
             return new Token(tokenText, offset);
         }
     }
 
-    private sealed class Reader(List<Token> tokens, LinkedModuleContext? linking = null,
-        bool allowCoreNamespace = false)
+    private sealed partial class Reader(List<Token> tokens, LinkedModuleContext? linking = null,
+        bool allowCoreNamespace = false, bool productionGuard = false)
     {
         private sealed record LocalBinding(IrValueType Type, StructuredBindingKind Kind,
             long? ConstantValue);
@@ -1384,9 +1500,10 @@ public static partial class OresStructuredParser
                         exposed = true;
                     }
                 }
-                if (Current.Text == "trap")
-                    throw new FormatException(
-                        $"Option/Result/trap requires verified tagged-sum CIL and NativeAOT guest-control lowering at offset {Current.Offset}: trap function modifier is unsupported");
+                // A callable may declare suspension permission even when
+                // this profile can prove it has no suspension points.
+                if (!Take("susp")) Take("suspends");
+                bool trapped = Take("trap") || Take("trap!");
                 if (Current.Text is "class" or "actor")
                     throw Error("Nominal class/actor methods require receiver-erased method slots, type/borrow checking and Native AOT CIL lowering; unsupported in .NET structured frontend");
                 if (!Take("fnc"))
@@ -1426,10 +1543,6 @@ public static partial class OresStructuredParser
                             Expect(":");
                         }
                         IrValueType type = Type();
-                        // The two-word tagged Option ABI is not exposed
-                        // across calls until checked signatures exist.
-                        if (type == IrValueType.OptionI64)
-                            throw Error("E_OPTION_ABI_UNSUPPORTED: Option<int> method parameters need verified two-word ABI");
                         if (type == IrValueType.FixedArrayI64)
                             throw Error("E_ARRAY_ABI_UNSUPPORTED: fixed array parameters need verified scalar layout ABI");
                         string parameter = nameFirst ?? Name();
@@ -1443,20 +1556,21 @@ public static partial class OresStructuredParser
                     while (Take(","));
                 }
                 Expect(")");
+                if (parameters.Sum(p => p.Type == IrValueType.OptionI64 ? 2 : 1)
+                    > OresCfgVerifier.MaxMethodParameters)
+                    throw Error("E_OPTION_ABI_BUDGET: flattened parameters exceed the verified method slot limit");
                 bool arrowReturn = Take("->");
                 if (!arrowReturn) Expect(":");
                 if (Current.Text == "(")
                     throw Error("Tuple-v2 shorthand return requires typed tuple ownership/ABI lowering");
                 IrValueType resultType = Take("void") ? IrValueType.Void : Type();
-                if (resultType == IrValueType.OptionI64)
-                    throw Error("E_OPTION_ABI_UNSUPPORTED: Option<int> method results need verified two-word ABI");
                 if (resultType == IrValueType.FixedArrayI64)
                     throw Error("E_ARRAY_ABI_UNSUPPORTED: fixed array method results need verified scalar layout ABI");
                 if (name == "main" && entry)
                 {
                     if (visible.ContainsKey(name)) throw Error("Entry main conflicts with an imported callable");
                     activeReturnType = IrValueType.I64;
-                    if (parameters.Count != 0 || resultType != IrValueType.I64)
+                    if (trapped || parameters.Count != 0 || resultType != IrValueType.I64)
                         throw new FormatException($"main must have signature ():int at offset {at}");
                     var (body, returns) = arrowReturn && Current.Text == "::"
                         ? CommaBody(0) : Block(0);
@@ -1465,7 +1579,7 @@ public static partial class OresStructuredParser
                 }
                 if (visible.ContainsKey(name))
                     throw new FormatException($"Duplicate typed helper at offset {at}");
-                if (functions.Count >= MaxHelpers)
+                if (functions.Count + (trapped ? 2 : 1) > MaxHelpers)
                     throw Error("Typed helper declaration budget exceeded");
                 // All helper bodies now share the same checked typed block
                 // parser as main. The separate MethodDef ABI isolates locals.
@@ -1491,6 +1605,7 @@ public static partial class OresStructuredParser
                 var declaration = new StructuredFunction(methodName,
                     Array.AsReadOnly(parameters.ToArray()), resultType,
                     inlineReturn, helperBody);
+                if (trapped) declaration = WrapTrappedCallable(declaration, at);
                 functions.Add(methodName, declaration);
                 visible.Add(name, declaration);
                 if (exposed) exports.Add(name, declaration);
@@ -1506,6 +1621,8 @@ public static partial class OresStructuredParser
         private (IReadOnlyList<StructuredStmt> Body, bool Returns) CommaBody(int depth)
         {
             Budget(depth);
+            if (productionGuard)
+                throw Error("RETURN_EXPLICIT_REQUIRED: production structured declarations require a block with an explicit value return");
             Expect("::");
             scopes.Add(new Dictionary<string, LocalBinding>(StringComparer.Ordinal));
             localTypeScopes.Add(new HashSet<string>(StringComparer.Ordinal));
@@ -1607,7 +1724,7 @@ public static partial class OresStructuredParser
         // The existing bracketed CFG path remains available. Canonical ores.core
         // also uses 'if predicate; do ... [else ...] fi' without braces.
         // Close lexical scopes at each arm; never turn source into rewritten C#.
-        private (IReadOnlyList<StructuredStmt> Body, bool Returns) DelimitedArm(int depth)
+        private (IReadOnlyList<StructuredStmt> Body, bool Returns) DelimitedArm(int depth, bool outerElse = false)
         {
             Budget(depth);
             scopes.Add(new Dictionary<string, LocalBinding>(StringComparer.Ordinal));
@@ -1621,7 +1738,7 @@ public static partial class OresStructuredParser
                 if (terminated) throw Error("Unreachable statement");
                 if (++statements > MaxStatements)
                     throw Error("Structured statement budget exceeded");
-                var (statement, returns) = Statement(depth + 1);
+                var (statement, returns) = Statement(depth + 1, outerElse);
                 body.Add(statement);
                 terminated = returns;
             }
@@ -1630,7 +1747,42 @@ public static partial class OresStructuredParser
             return (Array.AsReadOnly(body.ToArray()), terminated);
         }
 
-        private (StructuredStmt Statement, bool Returns) Statement(int depth)
+        // Guard's else/end failure arm has its own lexical scope, exactly
+        // like Block({ ... }). It cannot capture or leak local bindings into
+        // the continuation, and all reachable paths must be terminal.
+        private (IReadOnlyList<StructuredStmt> Body, bool Returns) GuardKeywordArm(int depth)
+        {
+            Budget(depth);
+            scopes.Add(new Dictionary<string, LocalBinding>(StringComparer.Ordinal));
+            localTypeScopes.Add(new HashSet<string>(StringComparer.Ordinal));
+            aggregateScopes.Add(new Dictionary<string, StaticAggregate>(StringComparer.Ordinal));
+            try
+            {
+                var body = new List<StructuredStmt>();
+                bool terminated = false;
+                while (Current.Text != "end")
+                {
+                    if (Current.Text.Length == 0 || Current.Text is "}" or "fi")
+                        throw Error("E_GUARD: expected 'end' to close keyword guard");
+                    if (terminated) throw Error("E_GUARD: unreachable statement after terminal failure");
+                    if (++statements > MaxStatements)
+                        throw Error("Structured guard statement budget exceeded");
+                    var (statement, returns) = Statement(depth + 1);
+                    body.Add(statement);
+                    terminated = returns;
+                }
+                Expect("end");
+                return (Array.AsReadOnly(body.ToArray()), terminated);
+            }
+            finally
+            {
+                scopes.RemoveAt(scopes.Count - 1);
+                localTypeScopes.RemoveAt(localTypeScopes.Count - 1);
+                aggregateScopes.RemoveAt(aggregateScopes.Count - 1);
+            }
+        }
+
+        private (StructuredStmt Statement, bool Returns) Statement(int depth, bool outerElse = false)
         {
             Budget(depth);
             int at = Current.Offset;
@@ -1818,6 +1970,10 @@ public static partial class OresStructuredParser
                             throw new FormatException(
                                 $"Aggregate const field overflow at offset {offset}");
                         }
+                        catch (DivideByZeroException)
+                        {
+                            throw new FormatException($"Aggregate const field division by zero at offset {offset}");
+                        }
                         string fieldType = expr.Type == IrValueType.Bool ? "bool" : "int";
                         plan.AddNamed(fieldName, fieldType);
                         values[fieldName] = expr.Type == IrValueType.Bool
@@ -1847,13 +2003,60 @@ public static partial class OresStructuredParser
                 return (new StructuredLet(at, placeholder, IrValueType.I64,
                     new StructuredInt(at, 0), StructuredBindingKind.Const), false);
             }
-            if (Current.Text == "guard")
-                throw new FormatException(
-                    $"GUARD_BACKEND_UNSUPPORTED: early-exit CFG and ownership lowering required at offset {at}");
-            if (Take("return"))
+            if (Take("guard"))
             {
+                // Both forms use the exact same checked CFG and type rules.
+                // A successful guard falls through; a failed one must exit.
+                var condition = Expr(depth + 1);
+                Require(condition, IrValueType.Bool, "E_GUARD: condition must be bool");
+                // The comma-separated contract is left-to-right and lazy.
+                // The existing LogicalAnd CFG lowers RHS into a guarded
+                // branch; never eagerly evaluate an unproven later test.
+                while (Take(","))
+                {
+                    var next = Expr(depth + 1);
+                    Require(next, IrValueType.Bool, "E_GUARD: each condition must be bool");
+                    condition = CheckedBinary(at, StructuredOperator.LogicalAnd,
+                        condition, next, IrValueType.Bool);
+                }
+                var inverted = CheckedBinary(at, StructuredOperator.EqualBool,
+                    condition, new StructuredBool(at, false), IrValueType.Bool);
+                IReadOnlyList<StructuredStmt> failure;
+                bool returns;
+                // Guard failure explicitly targets the callable, unlike ordinary
+                // task and match-arm returns. The verified scalar/tagged CFG
+                // has no admitted defer or resource-loan cleanup to skip.
+                var previousLocalReturn = localReturn;
+                localReturn = null;
+                guardFailureDepth++;
+                try
+                {
+                    if (Current.Text == "{")
+                    {
+                        (failure, returns) = Block(depth + 1);
+                        if (!outerElse && Current.Text == "else")
+                            throw Error("E_GUARD: a brace guard cannot also have an else/end arm");
+                    }
+                    else if (Take("else"))
+                        (failure, returns) = GuardKeywordArm(depth + 1);
+                    else
+                        throw Error("E_GUARD: expected '{ ... }' or 'else ... end'");
+                }
+                finally
+                {
+                    guardFailureDepth--;
+                    localReturn = previousLocalReturn;
+                }
+                if (!returns) throw Error("E_GUARD: failure block must return on every path");
+                // A guard does not itself terminate the success continuation.
+                return (new StructuredIf(at, inverted, failure, null), false);
+            }
+            if (Take("return") || Take("^"))
+            {
+                if (localReturn is { } scope) return (ReadLocalExit(at, depth, scope), true);
                 if (activeReturnType == IrValueType.Void)
                 {
+                    Take("void");
                     if (Current.Text != ";")
                         throw Error("RETURN_VOID_VALUE: void function cannot return a value");
                     Expect(";");
@@ -1861,7 +2064,7 @@ public static partial class OresStructuredParser
                 }
                 if (Current.Text == ";")
                     throw Error("RETURN_VALUE_REQUIRED: non-void function requires a value");
-                var value = Expr(depth + 1);
+                var value = ExpectedExpr(depth + 1, activeReturnType);
                 Require(value, activeReturnType,
                     "Return value does not match function result type");
                 Expect(";");
@@ -1873,8 +2076,28 @@ public static partial class OresStructuredParser
             if (Current.Text == "mut")
                 throw new FormatException(
                     $"E_MUT_QUALIFIER: bare mut needs const, val or let at offset {Current.Offset}");
+            if (Current.Text is "throw" or "throw!" or "panic" or "panic!" or "raise" or "raise!")
+            {
+                if (guardFailureDepth != 0)
+                    throw Error("E_GUARD: exceptional exit does not replace a guard return");
+                var effect = Current.Text switch
+                {
+                    "throw" or "throw!" => CfgGuestEffect.Throw,
+                    "panic" or "panic!" => CfgGuestEffect.Panic,
+                    _ => CfgGuestEffect.Raise
+                };
+                index++;
+                var value = Expr(depth + 1);
+                Require(value, IrValueType.GuestError, $"{effect.ToString().ToLowerInvariant()} requires Error");
+                Expect(";");
+                return (new StructuredSignal(at, value, effect), true);
+            }
+            if ((localReturn is not null || guardFailureDepth != 0) && Current.Text is ("defer" or "using"))
+                throw Error("E_LEXICAL_CLEANUP_UNSUPPORTED: resource cleanup requires a verified unwind continuation");
             if (Take("try"))
             {
+                if (localReturn is not null)
+                    throw Error("E_LOCAL_TRY_RETURN_UNSUPPORTED: try/catch return requires a lexical continuation");
                 if (activeReturnType != IrValueType.I64)
                     throw Error("Native Error catch v1 supports only int-returning functions");
                 Expect("{");
@@ -1980,7 +2203,7 @@ public static partial class OresStructuredParser
                     index++;
                     // Prefix forms admit const int x=e, const x:int=e, const x=e.
                     // A declaration's type is a check; it is not a cast.
-                    annotated = Current.Text is "int" or "bool" or "Option" or "Array"; // type-first incl. closed Option<int> and fixed Array<int>
+                    annotated = Current.Text is "int" or "bool" or "Option" or "Array" or "Result" or "Error";
                     if (annotated)
                     {
                         type = Type();
@@ -2002,7 +2225,10 @@ public static partial class OresStructuredParser
                     aggregateScopes.Any(scope => scope.ContainsKey(name)))
                     throw new FormatException($"Duplicate local binding at offset {nameAt}");
                 Expect("=");
-                var initializer = Expr(depth + 1);
+                // Only complete unconditional statement values publish
+                // writes. Conditional expression joins remain fail-closed.
+                var initializer = ReadStatementValue(depth + 1, annotated ? type : null,
+                    allowWriteback: kind != StructuredBindingKind.Const && !commaBindingTerminator);
                 if (annotated)
                     Require(initializer, type, "Local initializer has wrong type");
                 else
@@ -2011,9 +2237,9 @@ public static partial class OresStructuredParser
                     throw Error("E_ARRAY_IMMUTABLE_ONLY: fixed Array<int> requires val; mutable borrow, resize and const folding are unsupported");
                 long? constantValue = null;
                 // Any const Option<int> fails closed, not only scalar-shaped initializers.
-                if (kind == StructuredBindingKind.Const && type == IrValueType.OptionI64)
+                if (kind == StructuredBindingKind.Const && type is not (IrValueType.I64 or IrValueType.Bool))
                     throw new FormatException(
-                        $"E_OPTION_CONST_UNSUPPORTED: Option<int> const folding needs tagged-value proof at offset {at}");
+                        $"E_OPTION_CONST_UNSUPPORTED: non-scalar const folding needs a typed proof at offset {at}");
                 // Typed scalar const (type-first `int x=e`, `const int x=e`,
                 // `const x:int=e`) must be compile-time evaluable (spec #49,
                 // java #3066). Untyped `const x=e` keeps java's stage-one
@@ -2030,6 +2256,10 @@ public static partial class OresStructuredParser
                     {
                         throw new FormatException(
                             $"E_CONST_OVERFLOW: compile-time const overflow at offset {initializer.Offset}");
+                    }
+                    catch (DivideByZeroException)
+                    {
+                        throw new FormatException($"Compile-time const division by zero at offset {initializer.Offset}");
                     }
                     initializer = type == IrValueType.Bool
                         ? new StructuredBool(initializer.Offset, constantValue.Value != 0)
@@ -2068,7 +2298,7 @@ public static partial class OresStructuredParser
                 }
                 IReadOnlyList<StructuredStmt> yes;
                 bool yesReturns;
-                if (delimited) (yes, yesReturns) = DelimitedArm(depth + 1);
+                if (delimited) (yes, yesReturns) = DelimitedArm(depth + 1, outerElse: true);
                 else (yes, yesReturns) = Block(depth + 1);
                 IReadOnlyList<StructuredStmt>? no = null;
                 bool noReturns = false;
@@ -2082,16 +2312,63 @@ public static partial class OresStructuredParser
                 return (new StructuredIf(at, condition, yes, no),
                     yesReturns && noReturns);
             }
+            if (Current.Text == "rt" && tokens[index + 1].Text == "cooperate")
+            {
+                if (inlineTaskDepth == 0)
+                    throw Error("E_COOPERATE_CONTEXT: this profile admits same-thread cooperation inside sync task");
+                index += 2;
+                Expect(";");
+                return (new StructuredInlineCooperate(at), false);
+            }
+            if (explicitDo && Take("sync"))
+            {
+                Expect("task");
+                var task = ReadInlineTask(depth + 1, imperative: true);
+                Take(";");
+                return (new StructuredDoSyncTask(at, task), task.ExitsScope);
+            }
+            if (explicitDo && Current.Text == "match")
+            {
+                if (guardFailureDepth != 0)
+                    throw Error("E_GUARD: imperative match inside a failure arm requires verified callable-return analysis");
+                Expect("match");
+                var match = ReadMatch(depth + 1, imperative: true);
+                return (new StructuredDoMatch(at, match), !match.Completes);
+            }
+            if (Current.Text == "match")
+                throw Error("MATCH_VALUE_REQUIRED: use match as a value or do match as a statement");
             if (explicitDo)
-                throw Error("Expected if, ifnot or unless after 'do'");
+                throw Error("Expected if, ifnot, unless, match or sync task after 'do'");
+            if (AtSyncTask())
+                throw Error("E_SYNTAX: a standalone sync task requires do");
             if (Take("break"))
             {
+                // The existing block terminal flag includes loop transfers.
+                // They cannot prove a callable return for a guard failure.
+                if (guardFailureDepth != 0)
+                    throw Error("E_GUARD: loop transfer does not replace a guard return");
+                // A loop opened inside the current lexical scope owns its
+                // break/continue edges. Never jump to a pre-existing outer loop.
+                if (localReturn is { } lexical && loopDepth <= lexical.LoopFloor)
+                    throw Error(lexical.Diagnostic == "MATCH_VOID_ARM"
+                        ? "E_MATCH_LOOP_TRANSFER_UNSUPPORTED: lexical match exit needs a verified join"
+                        : "E_SYNC_TASK_LOOP_TRANSFER_UNSUPPORTED: loop transfer needs a verified lexical continuation");
                 if (loopDepth == 0) throw Error("break requires an enclosing loop");
                 Expect(";");
                 return (new StructuredBreak(at), true);
             }
             if (Take("continue"))
             {
+                // The existing block terminal flag includes loop transfers.
+                // They cannot prove a callable return for a guard failure.
+                if (guardFailureDepth != 0)
+                    throw Error("E_GUARD: loop transfer does not replace a guard return");
+                // A loop opened inside the current lexical scope owns its
+                // break/continue edges. Never jump to a pre-existing outer loop.
+                if (localReturn is { } lexical && loopDepth <= lexical.LoopFloor)
+                    throw Error(lexical.Diagnostic == "MATCH_VOID_ARM"
+                        ? "E_MATCH_LOOP_TRANSFER_UNSUPPORTED: lexical match exit needs a verified join"
+                        : "E_SYNC_TASK_LOOP_TRANSFER_UNSUPPORTED: loop transfer needs a verified lexical continuation");
                 if (loopDepth == 0) throw Error("continue requires an enclosing loop");
                 Expect(";");
                 return (new StructuredContinue(at), true);
@@ -2119,14 +2396,49 @@ public static partial class OresStructuredParser
             if (binding.Kind != StructuredBindingKind.Let)
                 throw new FormatException(
                     $"E_IMMUTABLE_REBIND: Cannot reassign {binding.Kind.ToString().ToLowerInvariant()} binding '{variable}' at offset {variableAt}");
+            if (inlineValueBindingFloor is int floor && scopes.Take(floor).Any(scope => scope.ContainsKey(variable)))
+                throw Error("E_SYNC_TASK_WRITEBACK_UNSUPPORTED: value-context sync task cannot yet assign a surrounding local");
             Expect("=");
-            var assigned = Expr(depth + 1);
+            var assigned = ReadStatementValue(depth + 1, binding.Type, allowWriteback: true);
             Require(assigned, binding.Type, "Assignment has wrong type");
             Expect(";");
             return (new StructuredSet(at, variable, assigned), false);
         }
         private IrValueType Type()
         {
+            if (Current.Text == "Error" && linking is null)
+            {
+                CoreTypeRegistry.Require("Error", 0);
+                index++;
+                return IrValueType.GuestError;
+            }
+            if (linking is null && Take("Result"))
+            {
+                CoreTypeRegistry.Require("Result", 2);
+                // Parse before erasure, so a disallowed error type or payload
+                // cannot accidentally select an existing generated ABI.
+                Expect("<");
+                if (Current.Text is not ("int" or "Option"))
+                    throw Error("E_RESULT_PAYLOAD_ABI_UNSUPPORTED: expected int or Option<int>");
+                var payload = Type();
+                Expect(",");
+                IrValueType result;
+                if (Take("Error")) result = GuestResultTypes.Wrap(payload);
+                else if (payload == IrValueType.I64 && (Take("String") || Take("string")))
+                {
+                    result = IrValueType.ResultI64Text;
+                    if (Take("|"))
+                    {
+                        Expect("Error");
+                        result = IrValueType.ResultI64TextOrError;
+                    }
+                }
+                else throw Error("E_RESULT_ERROR_ABI_UNSUPPORTED: expected Error or a supported String error");
+                Expect(">");
+                if (payload is not (IrValueType.I64 or IrValueType.OptionI64))
+                    throw Error("E_RESULT_PAYLOAD_ABI_UNSUPPORTED: expected int or Option<int>");
+                return result;
+            }
             // Every builtin type lookup is checked against the canonical
             // registry before backend-specific AST/SSA admission. A catalog
             // entry alone never grants a backend lowering.
@@ -2197,6 +2509,7 @@ public static partial class OresStructuredParser
             if (name.Length is < 1 or > MaxIdentifier ||
                 !(Alpha(name[0]) || name[0] == '_') ||
                 !name.Skip(1).All(c => Alpha(c) || Digit(c) || c == '_') ||
+                name.StartsWith(TrappedBodyPrefix, StringComparison.Ordinal) ||
                 name is "if" or "ifnot" or "unless" or "else" or "while" or "loop" or "break" or "continue" or "return" or "let"
                     or "int" or "bool" or "true" or "false" or "and" or "or" or "xor"
                     or "define" or "pub" or "fnc" or "const" or "val" or "final"
@@ -2205,7 +2518,8 @@ public static partial class OresStructuredParser
                     or "do" or "fi" or "try" or "catch" or "finally"
                     or "is" or "type"
                     or "routine" or "async" or "isoactor" or "guard"
-                    or "Some" or "None" or "Option" or "Array" or "trap")
+                    or "Some" or "None" or "Option" or "Array" or "trap" or "Result" or "Error"
+                    or "Ok" or "Err" or "throw" or "raise" or "panic" or "new" or "match")
                 throw new FormatException($"Invalid identifier at offset {at}");
             index++;
             return name;
@@ -2262,6 +2576,9 @@ public static partial class OresStructuredParser
                         StructuredOperator.Add => checked(left + right),
                         StructuredOperator.Subtract => checked(left - right),
                         StructuredOperator.Multiply => checked(left * right),
+                        StructuredOperator.Divide => checked(left / right),
+                        StructuredOperator.Remainder => Ores.Net.Runtime.StrictSigned64Arithmetic.Rem(left, right),
+                        StructuredOperator.Modulo => Ores.Net.Runtime.StrictSigned64Arithmetic.Mod(left, right),
                         StructuredOperator.ShiftLeft => left << ConstantShiftDistance(right),
                         StructuredOperator.ShiftRightLogical => (long)((ulong)left >> ConstantShiftDistance(right)),
                         StructuredOperator.ShiftRightArithmetic => left >> ConstantShiftDistance(right),
@@ -2304,6 +2621,12 @@ public static partial class OresStructuredParser
                 Expect(")");
                 return new StructuredOptionAbsent(at, option);
             }
+            if (Take("unwrap"))
+            {
+                Expect("(");
+                Expect(")");
+                return TypedNode(new StructuredOptionUnwrap(at, option), option);
+            }
             if (Take("unwrap_or"))
             {
                 Expect("(");
@@ -2312,7 +2635,7 @@ public static partial class OresStructuredParser
                 Expect(")");
                 return new StructuredOptionOr(at, option, fallback);
             }
-            throw Error("E_OPTION_METHOD_UNSUPPORTED: use is_some(), is_none(), or unwrap_or(int)");
+            throw Error("E_OPTION_METHOD_UNSUPPORTED: use is_some(), is_none(), unwrap(), or unwrap_or(int)");
         }
         // The structured NativeAOT subset admits only already-declared,
         // statically bound unary named helper functions. It deliberately
@@ -2352,6 +2675,8 @@ public static partial class OresStructuredParser
             }
             if (Current.Text == "<|")
                 throw Error("E_VALUE_PIPE_DIRECTION: parenthesize mixed |> and <| applications");
+            if (Current.Text == "^")
+                throw Error("Reserved AttoLang operator '^' in expressions; use Integer.bitXor(a, b)");
             return value;
         }
 
@@ -2378,9 +2703,11 @@ public static partial class OresStructuredParser
         private StructuredExpr Conditional(int depth)
         {
             Budget(depth);
+            int expressionStart = Current.Offset;
             if (Current.Text is "if" or "ifnot" or "unless")
             {
                 int valueIfAt = Current.Offset;
+                bool writebackRoot = conditionalWritebackRoot == valueIfAt;
                 bool inverted = Current.Text is "ifnot" or "unless";
                 index++;
                 var predicate = Expr(depth + 1);
@@ -2391,11 +2718,11 @@ public static partial class OresStructuredParser
                 Expect("then");
                 if (Current.Text is "break" or "continue" or "return")
                     throw Error("Value if branch must produce a value; control transfers require 'do if'");
-                var whenTrue = Expr(depth + 1);
+                var whenTrue = ReadConditionalStatementArm(depth + 1, writebackRoot, "else");
                 Expect("else");
                 if (Current.Text is "break" or "continue" or "return")
                     throw Error("Value if branch must produce a value; control transfers require 'do if'");
-                var whenFalse = Expr(depth + 1);
+                var whenFalse = ReadConditionalStatementArm(depth + 1, writebackRoot, "fi");
                 Expect("fi");
                 if (whenTrue.Type != whenFalse.Type)
                     throw Error("Value if result types differ");
@@ -2406,9 +2733,11 @@ public static partial class OresStructuredParser
             int at = Current.Offset;
             index++;
             Require(test, IrValueType.Bool, "Conditional test requires bool");
-            var yes = Expr(depth + 1);
+            bool ternaryWritebackRoot = conditionalWritebackRoot == expressionStart;
+            var yes = ReadConditionalStatementArm(depth + 1, ternaryWritebackRoot, ":");
             Expect(":");
-            var no = Conditional(depth + 1);
+            var no = ReadConditionalStatementArm(depth + 1, ternaryWritebackRoot, ";",
+                conditionalOnly: true);
             if (yes.Type != no.Type)
                 throw new FormatException($"Conditional result types differ at offset {at}");
             return CheckedConditional(at, test, yes, no);
@@ -2497,7 +2826,8 @@ public static partial class OresStructuredParser
                 int at = Current.Offset;
                 bool notEqual = Current.Text is "!=" or "neq" or "!eq";
                 index++;
-                var right = Compare(depth + 1);
+                var right = left.Type == IrValueType.GuestText && IsOrdinaryText(Current.Text)
+                    ? new StructuredGuestText(Current.Offset, ErrorMessage()) : Compare(depth + 1);
                 if (left.Type == IrValueType.OptionI64 ||
                     right.Type == IrValueType.OptionI64)
                 {
@@ -2509,11 +2839,16 @@ public static partial class OresStructuredParser
                 }
                 else
                 {
-                    if (left.Type != right.Type)
+                    if (left.Type != right.Type || left.Type is not
+                        (IrValueType.Bool or IrValueType.I64 or IrValueType.GuestError or IrValueType.GuestText))
                         throw new FormatException($"Equality requires matching int or bool operands at offset {at}");
-                    var op = left.Type == IrValueType.Bool
-                        ? (notEqual ? StructuredOperator.NotEqualBool : StructuredOperator.EqualBool)
-                        : (notEqual ? StructuredOperator.NotEqualI64 : StructuredOperator.EqualI64);
+                    var op = left.Type switch
+                    {
+                        IrValueType.Bool => notEqual ? StructuredOperator.NotEqualBool : StructuredOperator.EqualBool,
+                        IrValueType.GuestError => notEqual ? StructuredOperator.NotEqualGuestError : StructuredOperator.EqualGuestError,
+                        IrValueType.GuestText => notEqual ? StructuredOperator.NotEqualGuestText : StructuredOperator.EqualGuestText,
+                        _ => notEqual ? StructuredOperator.NotEqualI64 : StructuredOperator.EqualI64
+                    };
                     left = CheckedBinary(at, op, left, right, IrValueType.Bool);
                 }
             }
@@ -2524,6 +2859,16 @@ public static partial class OresStructuredParser
             var left = Shift(depth + 1);
             while (true)
             {
+                if (Take("is"))
+                {
+                    Require(left, IrValueType.GuestError, "Type inspection requires Error in this backend");
+                    string name = Current.Text;
+                    if (name is not ("Error" or "ArithmeticOverflowError" or "DivisionByZeroError"))
+                        throw Error("Unsupported nominal Error type test");
+                    index++;
+                    left = TypedNode(new StructuredErrorTest(left.Offset, left, name, IsType: true), left);
+                    continue;
+                }
                 if (Current.Text == "as")
                 {
                     int castAt = Current.Offset;
@@ -2624,15 +2969,16 @@ public static partial class OresStructuredParser
         private StructuredExpr Multiply(int depth)
         {
             Budget(depth);
-            var left = Unary(depth + 1);
-            while (Current.Text == "*")
+            var left = PropagatePostfix(depth + 1);
+            while (Current.Text is "*" or "/")
             {
                 int at = Current.Offset;
+                var operation = Current.Text == "*" ? StructuredOperator.Multiply : StructuredOperator.Divide;
                 index++;
-                var right = Unary(depth + 1);
-                Require(left, IrValueType.I64, "Multiplication requires int operands");
-                Require(right, IrValueType.I64, "Multiplication requires int operands");
-                left = CheckedBinary(at, StructuredOperator.Multiply,
+                var right = PropagatePostfix(depth + 1);
+                Require(left, IrValueType.I64, "Multiplication and division require int operands");
+                Require(right, IrValueType.I64, "Multiplication and division require int operands");
+                left = CheckedBinary(at, operation,
                     left, right, IrValueType.I64);
             }
             return left;
@@ -2640,14 +2986,43 @@ public static partial class OresStructuredParser
         private StructuredExpr Unary(int depth)
         {
             Budget(depth);
-            // trap yields Result<T, Error> (spec ch. 7, S-04), and over a Result
-            // it does not wrap again. This backend has no verified Result/Error
-            // CIL lowering, so trap fails closed. It must never fall back to the
-            // retired Option<int> slice, which would give a program a different
-            // type here than on the Java and LLVM backends.
-            if (Current.Text == "trap")
-                throw new FormatException(
-                    $"E_TRAP_RESULT_UNSUPPORTED: Option/Result/trap requires verified tagged-sum CIL and NativeAOT guest-control lowering; trap yields Result<int, Error> and .NET has no Result/Error lowering yet at offset {Current.Offset}");
+            int offset = Current.Offset;
+            if (Take("match")) return ReadMatchValue(offset, depth);
+            if (AtSyncTask())
+            {
+                index += 2;
+                if (trapOperandDepth != 0)
+                    throw Error("E_TRAP_INLINE_TASK_UNSUPPORTED: outlining a sync task requires lexical writeback on failure");
+                return TaggedPostfix(new StructuredSyncTaskValue(offset, ReadInlineTask(depth + 1, imperative: false,
+                    writeBack: directInlineWritebackOffset == offset)), depth);
+            }
+            if (inlineTaskDepth != 0 && Current.Text is "await" or "yield")
+                throw Error("E_SYNC_TASK_SUSPEND: this suspension lacks a same-thread continuation");
+            if (Take("trap") || Take("trap!")) return TrapOperand(offset, depth);
+            if (Take("Ok")) return TaggedPostfix(NewResult(offset, success: true, depth), depth);
+            if (Take("Err")) return TaggedPostfix(NewResult(offset, success: false, depth), depth);
+            if (Take("new") || Current.Text == "Error")
+            {
+                Expect("Error");
+                Expect("(");
+                string message = ErrorMessage();
+                Expect(")");
+                return TaggedPostfix(new StructuredGuestError(offset, message), depth);
+            }
+            if (Current.Text == "Integer" && index + 2 < tokens.Count &&
+                tokens[index + 1].Text == "." && tokens[index + 2].Text is "rem" or "mod")
+            {
+                var operation = tokens[index + 2].Text == "rem" ? StructuredOperator.Remainder : StructuredOperator.Modulo;
+                index += 3;
+                Expect("(");
+                var left = Expr(depth + 1);
+                Expect(",");
+                var right = Expr(depth + 1);
+                Expect(")");
+                Require(left, IrValueType.I64, "Named integer arithmetic requires int operands");
+                Require(right, IrValueType.I64, "Named integer arithmetic requires int operands");
+                return CheckedBinary(offset, operation, left, right, IrValueType.I64);
+            }
             if (Current.Text.Length > 0 && Current.Text[0] is '\'' or '"' or '\u0060')
                 throw new FormatException(
                     $"STRING_BACKEND_UNSUPPORTED: quoted strings and template interpolation require typed String CFG/CIL/NativeAOT lowering at offset {Current.Offset}");
@@ -2688,8 +3063,8 @@ public static partial class OresStructuredParser
                 index++;
                 var operand = Unary(depth + 1);
                 Require(operand, IrValueType.Bool, "Logical not requires bool");
-                return new StructuredConditional(at, operand,
-                    new StructuredBool(at, false), new StructuredBool(at, true), IrValueType.Bool);
+                return CheckedConditional(at, operand,
+                    new StructuredBool(at, false), new StructuredBool(at, true));
             }
             if (Current.Text == "-")
             {
@@ -2708,9 +3083,8 @@ public static partial class OresStructuredParser
             {
                 var inner = Expr(depth + 1);
                 Expect(")");
-                return OptionPostfix(inner, depth);
+                return TaggedPostfix(inner, depth);
             }
-            int offset = Current.Offset;
             if (Take("Array"))
             {
                 Expect(".");
@@ -2772,8 +3146,9 @@ public static partial class OresStructuredParser
             bool localBinding = scopes.Any(scope => scope.ContainsKey(name));
             // Option methods on local values must not be reinterpreted as
             // linked module qualification or static method dispatch.
-            if (localBinding && Lookup(name, offset).Type == IrValueType.OptionI64)
-                return OptionPostfix(new StructuredRead(offset, name, IrValueType.OptionI64), depth);
+            if (localBinding && Lookup(name, offset).Type is var taggedType &&
+                (taggedType is IrValueType.OptionI64 or IrValueType.GuestError or IrValueType.GuestText || taggedType.IsResult()))
+                return TaggedPostfix(new StructuredRead(offset, name, taggedType), depth);
             if (localBinding && Lookup(name, offset).Type == IrValueType.FixedArrayI64)
                 return ArrayPostfix(new StructuredRead(offset, name, IrValueType.FixedArrayI64), depth);
             if (linking is not null)
@@ -2795,7 +3170,9 @@ public static partial class OresStructuredParser
                     {
                         if (args.Count >= MaxParameters)
                             throw Error("Typed helper call argument budget exceeded");
-                        args.Add(Expr(depth + 1));
+                        args.Add(args.Count < target.Parameters.Count
+                            ? ExpectedExpr(depth + 1, target.Parameters[args.Count].Type)
+                            : Expr(depth + 1));
                     }
                     while (Take(","));
                 }
@@ -2811,7 +3188,7 @@ public static partial class OresStructuredParser
                 var node = new StructuredCall(offset, target.Name,
                     Array.AsReadOnly(args.ToArray()), target.ResultType);
                 expressionHeights.Add(node, height);
-                return node;
+                return TaggedPostfix(node, depth);
             }
             var binding = Lookup(name, offset);
             if (binding.Kind == StructuredBindingKind.Const && binding.ConstantValue.HasValue)

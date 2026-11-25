@@ -6,6 +6,8 @@ internal static class TaskI64SourceTests
     internal const string Source = "pub fnc main():int {const Future<int> f = Future.from_task(task {return 6 * 7;}); return await f;}";
     internal const string StdAwaitSource =
         "pub fnc main():int {const Future<int> f = Future.from_task(task {return 6 * 7;}); return f |> std.await;}";
+    private const string CanonicalSource =
+        "pub susp fnc main():int {val Future<int> f = task<int> { ^ 6 * 7; }; return await f;}";
 
 
     internal static void Run()
@@ -14,10 +16,16 @@ internal static class TaskI64SourceTests
         // Both spellings use the same verified producer IR and one observed
         // Future. This is not general coroutine/async source admission.
         var piped = TaskI64Source.Check(StdAwaitSource);
+        var typed = TaskI64Source.Check(CanonicalSource);
+        var longSpelling = TaskI64Source.Check(CanonicalSource.Replace("susp ", "suspends ", StringComparison.Ordinal));
+        if (!longSpelling.Producer.Instructions.SequenceEqual(typed.Producer.Instructions))
+            throw new Exception("suspends changed the checked producer IR");
         var fixtureSource = File.ReadAllText("tests/fixtures/std-await-v1/task-i64-42.atto");
         _ = TaskI64Source.Check(fixtureSource);
         if (!piped.Producer.Instructions.SequenceEqual(program.Producer.Instructions))
             throw new Exception("std.await changed the checked Task-i64 producer IR");
+        if (!typed.Producer.Instructions.SequenceEqual(program.Producer.Instructions))
+            throw new Exception("Canonical task<int> changed the checked Task-i64 producer IR");
 
         var dir = Path.Combine(Path.GetTempPath(), "ores-task-ir-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
@@ -49,6 +57,12 @@ internal static class TaskI64SourceTests
             _ = TaskI64Source.Check(Source.Replace("task {", "task " + trivia + " {", StringComparison.Ordinal));
         _ = TaskI64Source.Check(Source.Replace("const Future", "let Future", StringComparison.Ordinal));
         foreach (var invalid in new[] {
+            CanonicalSource.Replace("susp ", "", StringComparison.Ordinal),
+            CanonicalSource.Replace("susp ", "async ", StringComparison.Ordinal),
+            CanonicalSource.Replace("Future<int> f", "Future<int> sync", StringComparison.Ordinal).Replace("await f", "await sync", StringComparison.Ordinal),
+            CanonicalSource.Replace("val Future", "const Future", StringComparison.Ordinal),
+            CanonicalSource.Replace("= task<int>", "= sync task<int>", StringComparison.Ordinal),
+            CanonicalSource.Replace("task<int>", "task<bool>", StringComparison.Ordinal),
             StdAwaitSource.Replace("std.await", "std.await()", StringComparison.Ordinal),
             StdAwaitSource.Replace("std.await", "std.await2", StringComparison.Ordinal),
             StdAwaitSource.Replace("f |> std.await", "other |> std.await", StringComparison.Ordinal),

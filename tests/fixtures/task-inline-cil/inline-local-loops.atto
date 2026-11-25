@@ -1,0 +1,13 @@
+pub fnc main(): int {
+    let int count = 0;
+    let Option<int> state = None;
+    val int value = sync task<int> {
+        loop {
+            count = count + 1;
+            if count eq 2 { continue; } fi
+            if count eq 5 { state = Some(7); break; } fi
+        }
+        return 30;
+    };
+    return value + count + state.unwrap();
+}
