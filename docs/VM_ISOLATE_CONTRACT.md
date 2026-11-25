@@ -136,8 +136,15 @@ must enforce this check on each access; holding a token alone is insufficient.
 
 Both `SuspendActorTurn` and `CompleteActorTurn` reject outstanding loans.
 After physical carrier suspension, a resumed continuation must request a
-fresh state loan. Terminal cancellation revokes the entire bounded nested
-loan chain before making the actor lane available for its next user turn.
+fresh state loan. Cancellation requests retain all live receive permits and
+state loans until cooperative cleanup. New loans and ordinary continuation
+entry are denied after cancellation. Existing loans unwind in LIFO order;
+only a trusted scheduler cleanup entry may resume a cancelled suspended turn.
+The narrow host profile rejects further suspension during cancellation cleanup.
+`CancelActorTurn` is terminal acknowledgement, requires an earlier request
+and zero live loans, and must only be invoked after physical carrier retirement
+or proof that the suspended continuation cannot run again. The host ledger
+cannot prove this independently; source scheduler integration remains required.
 Cancellation and restart never revive old loan objects or turn tickets.
 
 This is **host admission only**, NOT executable `.ores` actor state lowering,
