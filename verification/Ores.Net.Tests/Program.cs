@@ -6,6 +6,7 @@ using Ores.Net.Runtime;
 if (args.Length == 1 && args[0] == "--supervisor-terminal-host-only")
 {
     VmIsolateHostTests.RunSupervisorTerminalChecks();
+    ActorAwaitSourceTests.Run();
     return;
 }
 
@@ -702,6 +703,7 @@ StdEnvHostSnapshotV1SelfTest.Run(); // host-only, no std/env guest link
 ActorStateSchemaAdmissionTests.Run();
 ActorStateLayoutIntegrationTests.Run();
 ActorGeneratedCounterTests.Run();
+ActorAwaitSourceTests.Run();
 VmActorStateCellsTests.Run(); // compiled but never executed before 2026-11-20
 VmActorHeapModelTests.Run(); // atto-spec ch. 27 actor heap model for OresVmHost actors
 ShiftOperatorTests.Run(); // atto-spec bitwise-and-stream-operators-v1 shifts on the real CLR
