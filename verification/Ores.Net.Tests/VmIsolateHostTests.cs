@@ -32,6 +32,14 @@ internal static class VmIsolateHostTests
 
         host.ResumeActorTurn(tenant, actor, first);
         var loan = host.BeginActorStateLoan(tenant, actor, first, writable: true);
+        ExpectFailure(() => host.CancelActorTurn(tenant, actor, second),
+            "terminal acknowledgement without cancellation request");
+        host.RequestActorTurnCancellation(tenant, actor, second);
+        host.RequestActorTurnCancellation(tenant, actor, second);
+        ExpectFailure(() => host.ResumeActorTurn(tenant, actor, second),
+            "cancelled suspended sibling cannot resume normally");
+        ExpectFailure(() => host.RetireActor(tenant, actor),
+            "cancellation request is not retirement");
         host.CancelActorTurn(tenant, actor, second);
         host.ValidateActorStateLoan(tenant, actor, first, loan, requireWrite: true);
         ExpectFailure(() => host.ResumeActorTurn(tenant, actor, second), "canceled sibling cannot resume");
@@ -178,6 +186,17 @@ internal static class VmIsolateHostTests
             throw new Exception("actor logical turn generation replay");
         var cancelParent = host.BeginActorStateLoan(a, actorA, nextTurn, writable: true);
         var cancelChild = host.BeginActorStateLoan(a, actorA, nextTurn);
+        host.RequestActorTurnCancellation(a, actorA, nextTurn);
+        ExpectFailure(() => host.BeginActorTurn(a, actorA),
+            "running cancelled turn retains admission");
+        ExpectFailure(() => host.CancelActorTurn(a, actorA, nextTurn),
+            "terminal acknowledgement with live nested loans");
+        ExpectFailure(() => host.BeginActorStateLoan(a, actorA, nextTurn),
+            "cancelled turn cannot acquire additional loans");
+        ExpectFailure(() => host.CompleteActorTurn(a, actorA, nextTurn),
+            "cancellation must not become successful completion");
+        host.EndActorStateLoan(a, actorA, nextTurn, cancelChild);
+        host.EndActorStateLoan(a, actorA, nextTurn, cancelParent);
         host.CancelActorTurn(a, actorA, nextTurn);
         ExpectFailure(() => host.ValidateActorStateLoan(a, actorA, nextTurn, cancelParent),
             "cancelled parent loan survived");
@@ -203,7 +222,23 @@ internal static class VmIsolateHostTests
         host.CompleteActorTurn(a, actorA, postCancelTurn);
         if (host.ActorTurnSnapshot(a, actorA).Active)
             throw new Exception("completed actor logical turn remained active");
+        var cleanupTurn = host.BeginActorTurn(a, actorA);
+        host.SuspendActorTurn(a, actorA, cleanupTurn);
+        ExpectFailure(() => host.ResumeActorTurnForCancellation(a, actorA, cleanupTurn),
+            "cleanup authority requires cancellation request");
+        host.RequestActorTurnCancellation(a, actorA, cleanupTurn);
+        ExpectFailure(() => host.ResumeActorTurn(a, actorA, cleanupTurn),
+            "cancelled continuation cannot resume normally");
+        ExpectFailure(() => host.BeginActorTurn(a, actorA),
+            "serial cancellation retains receive until cleanup retires");
+        host.ResumeActorTurnForCancellation(a, actorA, cleanupTurn);
+        ExpectFailure(() => host.SuspendActorTurn(a, actorA, cleanupTurn),
+            "cancelled cleanup cannot suspend again in host profile");
+        host.CancelActorTurn(a, actorA, cleanupTurn);
+        ExpectFailure(() => host.ResumeActorTurnForCancellation(a, actorA, cleanupTurn),
+            "retired cleanup cannot reenter");
         Console.WriteLine("NET_ISOLATE_SERIAL_RECEIVE_FENCE_PASS");
+        Console.WriteLine("NET_ISOLATE_CANCEL_REQUEST_RETIREMENT_PASS");
 
         var pin = host.PinResource(a, actorA);
         ExpectFailure(() => host.PinResource(a, actorA), "pin quota");
