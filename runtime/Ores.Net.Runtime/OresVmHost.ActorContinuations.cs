@@ -128,6 +128,14 @@ public sealed partial class OresVmHost
         return ExecuteScheduledSegment(scheduler, handle, actor, turn, lease, segment);
     }
 
+    // Distinguish a trusted retirement acknowledgement from a guest
+    // throwing OperationCanceledException as its own observable outcome.
+    private sealed class ScheduledActorTurnCancelledException : OperationCanceledException
+    {
+        internal ScheduledActorTurnCancelledException()
+            : base("scheduled actor segment cancelled") { }
+    }
+
     private ActorContinuation? ExecuteScheduledSegment(ActorScheduler scheduler,
         IsolateHandle handle, ActorTicket actor, ActorTurnTicket turn, object lease,
         Func<ActorDispatchScope, bool> segment)
@@ -155,7 +163,7 @@ public sealed partial class OresVmHost
         // If a new suspended ticket was published, return that exact ticket;
         // its owner must explicitly discard it if cancellation wins later.
         if (next is null && turn.CancellationRequested)
-            throw new OperationCanceledException("scheduled actor segment cancelled");
+            throw new ScheduledActorTurnCancelledException();
         return next;
     }
 
