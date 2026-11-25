@@ -36,13 +36,14 @@ for case in \
   duplicate-parameter:E_DUP_PARAM \
   bool-unsupported:E_RETURN_TYPE \
   no-main:E_ENTRY \
-  int-division-float-required:E_DIVISION_FLOAT_RESULT \
-  int-division-in-helper:E_DIVISION_FLOAT_RESULT \
-  int-division-nested:E_DIVISION_FLOAT_RESULT \
+  checked-i64-division-zero:E_I64_DIVISION_BY_ZERO \
+  checked-i64-division-overflow:E_I64_DIVISION_OVERFLOW \
+  checked-i64-division-unproven:E_I64_DIVISION_UNVERIFIED \
+  checked-i64-division-min-unproven:E_I64_DIVISION_UNVERIFIED \
   signed-min-underflow:E_LITERAL \
-  float-result-in-int-return:E_DIVISION_FLOAT_RESULT \
-  float-result-as-int-arg:E_TYPE \
-  unsupported-float-addition:E_DIVISION_FLOAT_RESULT; do
+  float-result-in-int-return:E_RETURN_TYPE \
+  float-result-as-int-arg:E_RETURN_TYPE \
+  unsupported-float-addition:E_RETURN_TYPE; do
   name="$(echo "$case" | cut -d: -f1)"
   diagnostic="$(echo "$case" | cut -d: -f2)"
   rm -f artifacts/Rejected.dll
@@ -58,7 +59,7 @@ for case in \
   }
   test ! -e artifacts/Rejected.dll || { echo "NEGATIVE_ARTIFACT_LEAK case=$name"; exit 1; }
 done
-echo "ATTO_DIRECT_CIL_NEGATIVE_PASS checks=19"
+echo "ATTO_DIRECT_CIL_NEGATIVE_PASS checks=20"
 dotnet build "$host" -c Release
 expect_42 CORECLR_GUEST dotnet run --no-build -c Release --project "$host"
 dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true \
@@ -67,32 +68,19 @@ test -x /tmp/atto-cil-nativeaot/Atto.Cil.Guest.Host
 expect_42 NATIVEAOT_GUEST /tmp/atto-cil-nativeaot/Atto.Cil.Guest.Host
 
 # Additional genuine CIL guest executions; neither calculation is in C#.
-for fixture in fixtures/cil/precedence.atto fixtures/cil/forward-call.atto fixtures/cil/signed-min-boundary.atto; do
+for fixture in fixtures/cil/precedence.atto fixtures/cil/forward-call.atto fixtures/cil/signed-min-boundary.atto fixtures/cil/checked-i64-division.atto; do
   dotnet run --no-build -c Release --project "$compiler" -- "$fixture" "$guest"
   dotnet build "$host" -c Release
   expect_42 EXTRA_CORECLR_GUEST dotnet run --no-build -c Release --project "$host"
-  if [[ "$fixture" == "fixtures/cil/signed-min-boundary.atto" ]]; then
-    # The valid signed minimum must execute through both real compilation paths.
-    dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true \
-      --self-contained true -o /tmp/atto-cil-signed-min-nativeaot
-    test -x /tmp/atto-cil-signed-min-nativeaot/Atto.Cil.Guest.Host
-    expect_42 SIGNED_MIN_NATIVEAOT_GUEST /tmp/atto-cil-signed-min-nativeaot/Atto.Cil.Guest.Host
-  fi
+  case "$fixture" in
+    fixtures/cil/signed-min-boundary.atto|fixtures/cil/checked-i64-division.atto)
+      name="$(basename "$fixture" .atto)"
+      artifact_dir="/tmp/atto-cil-$name-nativeaot"
+      dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true \
+        --self-contained true -o "$artifact_dir"
+      test -x "$artifact_dir/Atto.Cil.Guest.Host"
+      expect_42 "${name}_NATIVEAOT_GUEST" "$artifact_dir/Atto.Cil.Guest.Host"
+      ;;
+  esac
 done
-echo "ATTO_DIRECT_CIL_POSITIVE_PASS fixtures=4"
-
-# Actual typed int/int -> float code generation with verified CIL method
-# signatures, checked integer subexpressions and signed operands.
-# The bridge checks generated guest output; it does not perform guest division.
-float_host=tests/Atto.Cil.Float.Guest.Host/Atto.Cil.Float.Guest.Host.csproj
-dotnet run --no-build -c Release --project "$compiler" -- \
-  fixtures/cil/float-division.atto "$guest"
-test -s "$guest"
-dotnet build "$float_host" -c Release
-expect_42 FLOAT_CORECLR_GUEST dotnet run --no-build -c Release --project "$float_host"
-dotnet publish "$float_host" -c Release -r linux-x64 -p:PublishAot=true \
-  --self-contained true -o /tmp/atto-cil-float-nativeaot
-test -x /tmp/atto-cil-float-nativeaot/Atto.Cil.Float.Guest.Host
-expect_42 FLOAT_NATIVEAOT_GUEST /tmp/atto-cil-float-nativeaot/Atto.Cil.Float.Guest.Host
-echo "ATTO_DIRECT_CIL_FLOAT_DIVISION_POSITIVE_PASS fixtures=1"
-
+echo "ATTO_DIRECT_CIL_POSITIVE_PASS fixtures=5"
