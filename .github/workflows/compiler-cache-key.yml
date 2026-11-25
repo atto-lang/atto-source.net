@@ -4,6 +4,8 @@ on:
     paths:
       - 'compiler/Ores.Net.Compiler.Core/CompilerCacheKey.cs'
       - 'verification/Ores.Net.Tests/CompilerCacheKeySelfTest.cs'
+      - 'compiler/Ores.Net.Compiler.Core/CompilerArtifactReceipt.cs'
+      - 'verification/Ores.Net.Tests/CompilerArtifactReceiptSelfTest.cs'
       - '.github/workflows/compiler-cache-key.yml'
 permissions:
   contents: read
@@ -37,5 +39,7 @@ jobs:
           dotnet add "$work" reference "$PWD/compiler/Ores.Net.Compiler.Core/Ores.Net.Compiler.Core.csproj"
           cp verification/Ores.Net.Tests/CompilerCacheKeySelfTest.cs "$work/"
           cmp verification/Ores.Net.Tests/CompilerCacheKeySelfTest.cs "$work/CompilerCacheKeySelfTest.cs"
-          printf '%s\n' 'CompilerCacheKeySelfTest.Run();' > "$work/Program.cs"
+          cp verification/Ores.Net.Tests/CompilerArtifactReceiptSelfTest.cs "$work/"
+          cmp verification/Ores.Net.Tests/CompilerArtifactReceiptSelfTest.cs "$work/CompilerArtifactReceiptSelfTest.cs"
+          printf '%s\n' 'CompilerCacheKeySelfTest.Run();' 'CompilerArtifactReceiptSelfTest.Run();' > "$work/Program.cs"
           dotnet run --project "$work" --configuration Release
