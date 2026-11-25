@@ -113,6 +113,7 @@ public sealed partial class OresVmHost
         lock (_gate) {
             var state = Check(handle);
             CheckTurn(state, actor, turn);
+            CheckPumpDispatchAuthority(actor);
             ValidateContinuation(scheduler, actor, continuation);
             if (turn.CancellationRequested || state.Phase != Phase.Running ||
                 actor.ActiveTurn is not null)
