@@ -89,8 +89,17 @@ internal static class StructuredSourceTests
             "break requires an enclosing loop");
         RejectFeature("fnc main():int{do unless false then continue; fi return 0;}",
             "continue requires an enclosing loop");
-        RejectFeature("fnc main():int{loop{if true then break; fi}return 0;}",
-            "use 'do if'");
+        // The production parser deliberately preserves legacy imperative
+        // if ... then ... fi. Check it with the same typed CFG lowering as
+        // explicit do-if; out-of-loop transfers and value-if remain denied.
+        const string legacy = "fnc main():int{loop{if true then break; fi}return 42;}";
+        const string canonical = "fnc main():int{loop{do if true then break; fi}return 42;}";
+        Require(OresStructuredParser.Parse(legacy).Body.Count ==
+                OresStructuredParser.Parse(canonical).Body.Count,
+            "legacy imperative if retains canonical loop shape");
+        _ = OresStructuredCfgLowering.Lower(legacy);
+        _ = OresStructuredCfgLowering.Lower(canonical);
+        Console.WriteLine("NET_LEGACY_AND_CANONICAL_DO_IF_CFG_ADMITTED");
         RejectFeature("fnc main():int{return ifnot false then break; else 3 fi;}",
             "must produce a value");
         RejectFeature("fnc main():int{return unless true then 3 fi;}",
@@ -544,7 +553,7 @@ pub async routine main(): void {
         {
             try
             {
-                _ = readLinkedImports.Invoke(null, new object?[] { source });
+                _ = readLinkedImports.Invoke(null, new object?[] { source, false });
             }
             catch (System.Reflection.TargetInvocationException failure)
                 when (failure.InnerException is FormatException error &&
@@ -557,14 +566,14 @@ pub async routine main(): void {
                 "Linked import discovery admitted malformed source before full parse: " +
                 expectedError);
         }
-        _ = readLinkedImports.Invoke(null, new object?[] { "/* valid \uD83D\uDD12 */" });
+        _ = readLinkedImports.Invoke(null, new object?[] { "/* valid \uD83D\uDD12 */", false });
 
         // Local value types are block-local declarations on the structured
         // frontend. They are admitted into the AST but deliberately rejected
         // by CFG/CIL lowering until value layout and construction are verified.
         var localTypes = OresStructuredParser.Parse("""
             fnc main():int {
-                struct Pair { int left; int right }
+                struct LocalPair { int left; int right }
                 record Status { bool ready, int code };
                 return 42;
             }
@@ -572,7 +581,7 @@ pub async routine main(): void {
         Require(localTypes.Body.Count == 3,
             "local struct/record declarations are preserved as statements");
         Require(localTypes.Body[0] is StructuredLocalTypeDecl {
-            Name: "Pair", Kind: StructuredLocalTypeKind.Struct, Fields.Count: 2
+            Name: "LocalPair", Kind: StructuredLocalTypeKind.Struct, Fields.Count: 2
         } pair && pair.Fields[0] == new StructuredLocalField("left", IrValueType.I64)
                && pair.Fields[1] == new StructuredLocalField("right", IrValueType.I64),
             "local struct field order and scalar types are preserved");
@@ -581,9 +590,9 @@ pub async routine main(): void {
         } status && status.Fields[0] == new StructuredLocalField("ready", IrValueType.Bool)
                  && status.Fields[1] == new StructuredLocalField("code", IrValueType.I64),
             "local record field order and scalar types are preserved");
-        Reject("fnc main():int{struct Pair{int x;int x}return 1;}",
+        Reject("fnc main():int{struct LocalPair{int x;int x}return 1;}",
             "duplicate local value-type fields are forbidden");
-        Reject("fnc main():int{struct Pair{int x}if true{record Pair{int y}}return 1;}",
+        Reject("fnc main():int{struct LocalPair{int x}if true{record LocalPair{int y}}return 1;}",
             "nested local value types cannot shadow an active local type");
         foreach (var nominal in new[] {
             "fnc main():int{class Local{}return 1;}",
@@ -601,7 +610,7 @@ pub async routine main(): void {
         try
         {
             _ = OresStructuredCfgLowering.Lower(
-                "fnc main():int{struct Pair{int left;int right}return 42;}");
+                "fnc main():int{struct LocalPair{int left;int right}return 42;}");
             throw new Exception("Local value type reached CFG lowering without layout support");
         }
         catch (FormatException ex)
@@ -1219,8 +1228,9 @@ pub async routine main(): void {
         }
         catch (FormatException ex)
         {
-            Require(ex.Message.Contains("use 'rt mut borrow'", StringComparison.Ordinal),
-                "legacy mutable borrow diagnostic must name canonical spelling");
+            Require(ex.Message.Contains("Ownership operation 'rt mut borrow' requires typed actor-arena lowering",
+                    StringComparison.Ordinal) && ex.Message.EndsWith("at offset 22", StringComparison.Ordinal),
+                "legacy mutable borrow must fail at the exact canonical typed ownership gate");
         }
 
         foreach (var source in new[] {

@@ -23,6 +23,23 @@ internal static class DisjointFieldPlaceAdmissionTests
             classOffset + " in " + frontend + " for " + fixture);
     }
 
+    // StructuredSource lexes the complete input before nominal admission.
+    // Its earlier ownership gate is intentional; assert the exact gate and
+    // exact first borrow offset on the pinned multi-feature fixtures.
+    private static void RejectStructuredBorrow(string source, string fixture)
+    {
+        int offset = source.IndexOf("borrow!", StringComparison.Ordinal);
+        if (offset < 0) throw new Exception("Pinned borrow site missing: " + fixture);
+        try { _ = OresStructuredParser.Parse(source); }
+        catch (FormatException ex) when (
+            ex.Message.StartsWith("OWNERSHIP_BANG_BACKEND_UNSUPPORTED: 'borrow!'", StringComparison.Ordinal) &&
+            ex.Message.EndsWith("at offset " + offset, StringComparison.Ordinal))
+        {
+            return;
+        }
+        throw new Exception("Expected exact structured ownership denial at " + offset + " for " + fixture);
+    }
+
     private static string GitBlobSha(byte[] bytes)
     {
         byte[] header = Encoding.ASCII.GetBytes($"blob {bytes.Length}\0");
@@ -38,6 +55,12 @@ internal static class DisjointFieldPlaceAdmissionTests
         if (OresParser.Parse(accepted) is null ||
             OresStructuredParser.Parse(accepted).Body.Count != 1)
             throw new Exception("Valid scalar control incorrectly denied");
+
+        // Isolate the nominal boundary independently of the earlier lexical
+        // ownership gate; both frontends must still deny ordinary classes.
+        const string nominalOnly = "define class Person as end\nfnc main():int{return 42;}";
+        RejectNominal(() => { _ = OresParser.Parse(nominalOnly); }, "scalar", "nominal-only", 7);
+        RejectNominal(() => { _ = OresStructuredParser.Parse(nominalOnly); }, "structured", "nominal-only", 7);
 
         var fixtures = new (string Kind, string Filename, string BlobSha)[] {
             ("pass", "two-disjoint-writers.atto", "b22a031b37d9722b8a7d20b48e81136ec4552099"),
@@ -60,9 +83,8 @@ internal static class DisjointFieldPlaceAdmissionTests
             int classOffset = declarationOffset + "define ".Length;
             RejectNominal(() => { _ = OresParser.Parse(source); },
                 "scalar", fixtureName, classOffset);
-            RejectNominal(() => { _ = OresStructuredParser.Parse(source); },
-                "structured", fixtureName, classOffset);
+            RejectStructuredBorrow(source, fixtureName);
         }
-        Console.WriteLine("ATTO_NET_DISJOINT_FIELD_LOAN_ADMISSION_DENIED blobs=4 frontends=2; GUEST=NOT_EXECUTED");
+        Console.WriteLine("ATTO_NET_DISJOINT_FIELD_LOAN_ADMISSION_DENIED blobs=4 scalar_nominal=4 structured_borrow=4 nominal_controls=2; GUEST=NOT_EXECUTED");
     }
 }
