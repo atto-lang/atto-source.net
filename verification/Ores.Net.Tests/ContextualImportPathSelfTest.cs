@@ -13,7 +13,7 @@ internal static class ContextualImportPathSelfTest
             (null, "pkg.config", "config"),
             ("network.http", "self.utils", "network.http.utils"),
             ("network.http", "super.config", "network.config"),
-            ("network.http", "super.super.shared", "shared"),
+            ("network.http", "super.super.common", "common"),
             (null, "pkg.a.b.c.d.e.f.g", "a.b.c.d.e.f.g"),
             ("network.http", "pkg.config", "config")
         };
@@ -32,6 +32,8 @@ internal static class ContextualImportPathSelfTest
             ("network.http", "self"),
             ("network.http", "super"),
             ("network.http.client", "super.super"),
+            (null, "pkg.shared"),
+            ("network.shared", "super.config"),
             (null, "self.utils"),
             (null, "super.config"),
             ("network.http", "super.super.super.shared"),
@@ -49,6 +51,6 @@ internal static class ContextualImportPathSelfTest
             catch (FormatException e) { denied = e.Message.StartsWith("E_IMPORT_PATH", StringComparison.Ordinal); }
             if (!denied) throw new InvalidOperationException("invalid contextual import admitted: " + c.Path);
         }
-        Console.WriteLine("Static import path: 6 positives and 19 denials; resolver only");
+        Console.WriteLine("Static import path: 6 positives and 21 denials; resolver only");
     }
 }
