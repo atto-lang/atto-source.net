@@ -86,11 +86,11 @@ public static partial class OresStructuredParser
                     return fn;
                 });
                 if(inventory.Count>256) throw new FormatException("E_SOURCE_LIMIT: export inventory exceeded");
-                var program=unit.Program;
-                var functions=program.Functions??throw new FormatException("E_IMPORT_KIND: missing provider functions");
+                var providerProgram=unit.Program;
+                var functions=providerProgram.Functions??throw new FormatException("E_IMPORT_KIND: missing provider functions");
                 if(functions.ContainsKey(prefix+"main")) throw new FormatException("E_UNSUPPORTED: provider main remains outside bounded profile");
                 if(functions.Count>64-methods.Count) throw new FormatException("E_SOURCE_LIMIT: linked function budget exceeded");
-                foreach(string method in program.FunctionOrder??throw new FormatException("E_IMPORT_KIND: missing provider order")) {
+                foreach(string method in providerProgram.FunctionOrder??throw new FormatException("E_IMPORT_KIND: missing provider order")) {
                     if(!methods.TryAdd(method,functions[method])) throw new FormatException("E_DUPLICATE: canonical provider method");
                     order.Add(method);
                 }
