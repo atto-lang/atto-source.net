@@ -1,4 +1,5 @@
 // Verified one-await actor frame; static NativeAOT source.
+#nullable enable
 using Ores.Net.Runtime;
 using System.Threading.Tasks;
 namespace Oreslang.Generated;
