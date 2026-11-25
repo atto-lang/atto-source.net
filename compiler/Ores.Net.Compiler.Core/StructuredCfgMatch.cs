@@ -32,7 +32,8 @@ public static partial class OresStructuredCfgLowering
             }
 
             var continuation = new LexicalContinuation(this, variables, match.Type,
-                writeBack: match.Type == IrValueType.Void);
+                writeBack: match.Type == IrValueType.Void ||
+                    match.Arms.Any(arm => arm.Value is StructuredSyncTaskValue { Task.WriteBack: true }));
 
             MatchTags remaining = MatchTags.Any;
             foreach (var arm in match.Arms)

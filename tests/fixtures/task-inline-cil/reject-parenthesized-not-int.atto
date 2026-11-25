@@ -1,0 +1,4 @@
+pub fnc main(): int {
+    val bool value = sync task<bool> { return !(42); };
+    return 42;
+}

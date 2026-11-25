@@ -1,5 +1,5 @@
 pub fnc main(): int {
   let int count = 0;
-  val bool result = false && sync task<bool> { count = 42; return true; };
+  val bool result = true && (false && sync task<bool> { count = 42; return true; });
   return count;
 }
