@@ -138,6 +138,7 @@ public sealed partial class OresVmHost
         lock (_gate) {
             var state = Check(handle);
             CheckActor(state, parent);
+            CheckPumpDispatchAuthority(parent);
             (ulong Id, ulong Epoch)? readyChild = null;
             notice = default;
             foreach (var entry in state.SupervisorTerminals) {
