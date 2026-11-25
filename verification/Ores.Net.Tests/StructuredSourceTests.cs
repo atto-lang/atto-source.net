@@ -102,6 +102,17 @@ internal static class StructuredSourceTests
     public static void Run()
     {
         NegatedDoIfSyntax();
+        Require(OresStructuredParser.Parse(
+            "pub fnc main():int{val bool f=false;guard !(f), !(!true){return 0;}return 42;}").Body.Count == 3,
+            "parenthesized prefix logical not must not be confused with macro invocation");
+        RejectFeature("pub fnc main():int{return missing!(42);}",
+            "NET_STRUCTURED_MACRO_EXPANDER_REQUIRED");
+        RejectFeature("pub fnc main():int{return missing ! (42);}",
+            "NET_STRUCTURED_MACRO_EXPANDER_REQUIRED");
+        RejectFeature("pub fnc main():int{return!(42);}",
+            "NET_STRUCTURED_MACRO_EXPANDER_REQUIRED");
+        RejectFeature("pub fnc main():int{val bool x=!(42);return 42;}",
+            "Logical not requires bool");
         // Native AOT has no actor hierarchy, trait/interface witness ABI,
         // runtime-owned receive slot or actor state loan lowering yet. Every
         // source spelling must fail at the dedicated capability boundary.
@@ -1388,8 +1399,10 @@ pub async routine main(): void {
             "lowercase logical word reservation is case-sensitive");
         Reject("fnc main():int{let bool b=true;return b+1;}",
             "boolean arithmetic");
-        Reject("fnc main():int{let int x=1/2;return x;}",
-            "int division is not i64 in canonical semantics");
+        Require(CfgReferenceEvaluator.Evaluate(OresStructuredCfgLowering.Lower(
+            "fnc main():int{return -7/3;}")) == -2,
+            "signed integer division truncates toward zero");
+        Reject("fnc main():int{return 1/false;}", "division requires both operands to be int");
         Reject("fnc main():int{let int x=9223372036854775808;return x;}",
             "literal exceeding i64 range");
         Reject("fnc main():int{let int x=-9223372036854775809;return x;}",

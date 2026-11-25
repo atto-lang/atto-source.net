@@ -1,0 +1,7 @@
+fnc remainder(int divisor): int {
+  return Integer.rem(-7, divisor);
+}
+
+pub fnc main(): int {
+  return remainder(0);
+}

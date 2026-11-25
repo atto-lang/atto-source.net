@@ -1,0 +1,5 @@
+fnc fail(): int { raise! new Error("raise bypasses trap"); }
+pub fnc main(): int {
+  val result = trap! fail();
+  return result.unwrap_or(42);
+}

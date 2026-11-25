@@ -1,0 +1,7 @@
+pub susp fnc main(): int {
+  val Option<int> value = sync task<Option<int>> {
+    if true { return Some(await task<int> { return 42; }); } fi
+    return None;
+  };
+  return 0;
+}
