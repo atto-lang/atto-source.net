@@ -60,4 +60,32 @@ Append to the lock after `[files]`:
 
 The example hash is a placeholder, not an admitted digest. Every supplied archive still requires an independent trusted pin. The manifest and lock dependency key sets must match exactly. Before any provider parsing, verify all supplied packages, reject absent dependencies, conflicting versions/lock digests, duplicates and cycles, and derive deterministic dependency-first order. A package may resolve only a directly declared edge, not a dependency merely reachable through another package. This profile permits at most 16 packages and 128 aggregate edges; unused supplied snapshots are checked too. Cycle diagnostics precede edge digest mismatch checks on structurally cyclic malformed input. These tables are an implementation preview, not yet a normative registry lock format.
 
-**Important:** metadata closure admission is integrated into check/compile/run. Provider source imports themselves remain unsupported: A can declare and authenticate B and B can declare and authenticate C, but guest calls from A into B and B into C still require transitive source linker integration. No transitive guest execution claim.
+## Direct provider-to-provider calls (bounded candidate)
+
+In dependency-first order the compiler now parses the original authenticated provider
+source with the existing structured frontend. It accepts the explicit single-function
+selector through a declared dependency's exported subpath:
+
+```atto
+use namespace network;
+import fnc answer as next from pkg '@org/project/b/api';
+
+pub fnc answer(int x) -> int {
+    return next(x) + 1;
+}
+```
+
+The owner must directly declare B and pin its exact version and lock digest. The
+subpath `api` must be explicitly exported by B, and `answer` must be public.
+Imports remain local bindings, not re-exports. A dependency reached only through B
+does not authorize the owner to import that dependency directly. All source-owned
+functions get separate compiler-owned method identities; calls go through the typed
+CFG verifier and static CIL emitter. The candidate eagerly checks all supplied package
+providers in deterministic order, with a maximum of 16 namespace providers and 64
+linked methods. No filesystem fallback or runtime namespace object.
+
+CI includes a three-package A -> B -> C candidate guest expected to return 42,
+order-independent CIL emission and four negative checks. NativeAOT is proven only
+when the standalone native binary actually executes on the exact reviewed head.
+This remains a bounded scalar lane: general namespace imports within providers,
+grouped selections, relative imports and general-purpose CLI linking are not admitted.
