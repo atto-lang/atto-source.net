@@ -377,6 +377,9 @@ public sealed partial class OresVmHost
         if (!ReferenceEquals(scheduler.Host, this))
             throw new InvalidOperationException("foreign actor scheduler");
 
+        // The lease is private to this synchronous invocation, never passed
+        // through the guest scope or an external cancellation callback.
+        var carrierLease = new object();
         ActorTurnTicket turn;
         lock (_gate) {
             var tenant = Check(handle);
@@ -402,6 +405,8 @@ public sealed partial class OresVmHost
             // _gate remains held across dequeue and logical-turn admission.
             // No other host thread may race to consume or retire the actor.
             turn = BeginActorTurn(handle, actor);
+            turn.ScheduledCarrierLease = carrierLease;
+            turn.ScheduledCarrierThread = Environment.CurrentManagedThreadId;
         }
         ActorDispatchScope? scope = null;
         ActorStateLoan? loan = null;
@@ -411,7 +416,7 @@ public sealed partial class OresVmHost
             var result = generatedMethod(scope);
             scope.Revoke();
             EndActorStateLoan(handle, actor, turn, loan);
-            CompleteActorTurn(handle, actor, turn);
+            FinishScheduledActorExecution(handle, actor, turn, carrierLease, cancelled: false);
             return result;
         }
         catch {
@@ -425,10 +430,35 @@ public sealed partial class OresVmHost
                 CancelActorTurn(handle, actor, turn);
                 if (loan is not null && !loan.Released)
                     EndActorStateLoan(handle, actor, turn, loan);
-                AcknowledgeActorTurnCancellation(handle, actor, turn);
+                FinishScheduledActorExecution(handle, actor, turn, carrierLease, cancelled: true);
             }
             catch (InvalidOperationException) { }
             throw;
+        }
+    }
+
+    // Only the scheduler invocation that installed the exact lease can
+    // relinquish it, after the delegate and its scope have unwound. Do not
+    // expose this as a caller-mintable physical-retirement receipt.
+    private void FinishScheduledActorExecution(IsolateHandle handle, ActorTicket actor,
+        ActorTurnTicket turn, object carrierLease, bool cancelled)
+    {
+        lock (_gate) {
+            var state = Check(handle);
+            CheckTurn(state, actor, turn);
+            if (!ReferenceEquals(turn.ScheduledCarrierLease, carrierLease) ||
+                turn.ScheduledCarrierThread != Environment.CurrentManagedThreadId)
+                throw new InvalidOperationException("stale or foreign scheduled carrier retirement");
+            if (turn.ActiveStateLoan is not null || turn.StateLoanDepth != 0)
+                throw new InvalidOperationException("scheduled carrier still owns state loans");
+            // Cancellation may race the return of a successful delegate.
+            // Keep the lease installed until the failure path retires it.
+            if (turn.CancellationRequested != cancelled)
+                throw new InvalidOperationException("scheduled carrier cancellation outcome mismatch");
+            turn.ScheduledCarrierLease = null;
+            turn.ScheduledCarrierThread = 0;
+            if (cancelled) AcknowledgeActorTurnCancellation(handle, actor, turn);
+            else CompleteActorTurn(handle, actor, turn);
         }
     }
 
