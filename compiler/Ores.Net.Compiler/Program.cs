@@ -86,15 +86,17 @@ bool validEmitSource = args.Length == 4 && args[2] == "--out" &&
     (args[0] == "emit-csharp" || args[0] == "emit-fsharp");
 bool validStaticFacts = args.Length == 2 &&
     (args[0] == "static-facts" || args[0] == "static-facts-structured");
-// Explicit source-only preview. Never accept actor pipes in normal check/compile.
+// Both actor pipe entrypoints require the bounded, typed graph profile.
 bool validActorPipePlan = args.Length == 2 && args[0] == "plan-actor-pipe";
+bool validActorPipeCompile = args.Length == 4 &&
+    args[0] == "compile-actor-pipe" && args[2] == "--out";
 bool moduleCommand = args.Length >= 1 && args[0] is "check-modules" or "compile-modules";
 if ((mathI64Granted && !validCheck && !validCompile) ||
     (!validCheck && !validAsyncRun && !validEnumCheck && !validEnumCompile && !validDeclaredReceiveSyntax && !validCompile && !validStructuredCheck && !validStructuredCompile &&
-     !validStaticFacts && !validTaskCheck && !validTaskCompile && !validActorPipePlan && !validEmitActorSource && !validEmitHttpActors && !validExternalReceive && !validCounterMain && !validEmitSource && !moduleCommand))
+     !validStaticFacts && !validTaskCheck && !validTaskCompile && !validActorPipePlan && !validActorPipeCompile && !validEmitActorSource && !validEmitHttpActors && !validExternalReceive && !validCounterMain && !validEmitSource && !moduleCommand))
 {
     Console.Error.WriteLine("       oresnet emit-http-actors-csharp input.atto --out path/HttpActors.g.cs");
-    Console.Error.WriteLine("usage: oresnet check-enum-v1 FILE.atto | oresnet compile-enum-v1 FILE.atto --out path/OresGenerated.dll | oresnet check input.atto|input.ores | oresnet run-async input.ores | oresnet compile input.atto|input.ores --out path/OresGenerated.dll | oresnet check-task-i64 input.ores | oresnet compile-task-i64 input.ores --out path/OresGenerated.dll | oresnet check-structured input.atto|input.ores | oresnet compile-structured input.atto|input.ores --out path/OresGenerated.dll | oresnet emit-csharp input.atto|input.ores --out path/OresProgram.cs | oresnet emit-fsharp input.atto|input.ores --out path/OresProgram.fs | oresnet static-facts input.atto|input.ores | oresnet static-facts-structured input.atto|input.ores | oresnet plan-actor-pipe input.atto (typed plan only, not executable actors) | oresnet emit-actor-csharp Counter.atto --out path/Actor_Counter.g.cs | oresnet emit-external-counter-csharp ROOT --out path/DeclaredActor_Counter.g.cs | oresnet emit-counter-main-csharp ROOT --out path/GeneratedCounterMainV2.g.cs | oresnet check-declared-receive-syntax receive.atto (syntax only, NOT guest execution)");
+    Console.Error.WriteLine("usage: oresnet check-enum-v1 FILE.atto | oresnet compile-enum-v1 FILE.atto --out path/OresGenerated.dll | oresnet check input.atto|input.ores | oresnet run-async input.ores | oresnet compile input.atto|input.ores --out path/OresGenerated.dll | oresnet check-task-i64 input.ores | oresnet compile-task-i64 input.ores --out path/OresGenerated.dll | oresnet check-structured input.atto|input.ores | oresnet compile-structured input.atto|input.ores --out path/OresGenerated.dll | oresnet emit-csharp input.atto|input.ores --out path/OresProgram.cs | oresnet emit-fsharp input.atto|input.ores --out path/OresProgram.fs | oresnet static-facts input.atto|input.ores | oresnet static-facts-structured input.atto|input.ores | oresnet plan-actor-pipe input.atto (typed plan only) | oresnet compile-actor-pipe input.atto --out path/OresGenerated.dll | oresnet emit-actor-csharp Counter.atto --out path/Actor_Counter.g.cs | oresnet emit-external-counter-csharp ROOT --out path/DeclaredActor_Counter.g.cs | oresnet emit-counter-main-csharp ROOT --out path/GeneratedCounterMainV2.g.cs | oresnet check-declared-receive-syntax receive.atto (syntax only, NOT guest execution)");
     return 2;
 }
 
@@ -220,6 +222,13 @@ try
             $"NET_DECLARED_COUNTER_RECEIVE_SYNTAX_PASS|namespace={admitted.Namespace}" +
             $"|actor={admitted.ActorName}|field={admitted.StateField}" +
             $"|stop={admitted.StopOnMailValue}|guest_not_executed");
+        return 0;
+    }
+    if (validActorPipeCompile)
+    {
+        if (!string.Equals(Path.GetExtension(args[1]), ".atto", StringComparison.OrdinalIgnoreCase))
+            throw new FormatException("Actor pipe compilation requires an .atto source file");
+        CilEmitter.EmitActorPipeLibrary(source, args[3]);
         return 0;
     }
     if (validActorPipePlan)

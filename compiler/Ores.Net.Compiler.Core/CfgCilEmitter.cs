@@ -19,13 +19,14 @@ internal static class CfgCilEmitter
             WriteMethod(graph, metadata, bodies, null));
     }
 
-    public static void EmitLibrary(VerifiedCfgModule module, string outputFile)
+    public static void EmitLibrary(VerifiedCfgModule module, string outputFile,
+        IReadOnlyDictionary<string, string>? exportedNames = null)
     {
         ArgumentNullException.ThrowIfNull(module);
         ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
         CilEmitter.EmitLibraryModuleCore(outputFile, module,
             (graph, metadata, bodies, handles) =>
-                WriteMethod(graph, metadata, bodies, handles));
+                WriteMethod(graph, metadata, bodies, handles), exportedNames);
     }
 
     private static (int BodyOffset, BlobBuilder Code, BlobBuilder? Locals) WriteMethod(

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
@@ -89,6 +90,79 @@ public static class CilEmitter
     // reach the multi-method emitter; no Reflection.Emit or runtime code load.
     public static void EmitLibrary(VerifiedCfgModule module, string outputFile) =>
         CfgCilEmitter.EmitLibrary(module, outputFile);
+
+    public static void EmitActorPipeLibrary(string source, string outputFile)
+    {
+        var graph = OresStructuredParser.PlanActorPipeV1(source);
+        var linked = new System.Text.StringBuilder(graph.HandlerSource);
+        linked.Append("fnc actor_pipe_stage(int stage,int payload):int{\n");
+        for (int i = 0; i < graph.Stages.Count; i++)
+        {
+            var stage = graph.Stages[i];
+            string input = stage.MessageInput == "bool" ? "payload != 0" : "payload";
+            string call = stage.HandlerMethod + "(" + input + ")";
+            linked.Append(CultureInfo.InvariantCulture, $"if stage == {i}{{");
+            if (stage.MessageOutput == "bool")
+                linked.Append("if ").Append(call).Append("{return 1;}return 0;");
+            else
+                linked.Append("return ").Append(call).Append(';');
+            linked.Append("}\n");
+        }
+        // The runtime invokes this ABI only with indices from the compiled count.
+        linked.Append("return 0;}\n");
+        linked.Append(CultureInfo.InvariantCulture,
+            $"fnc actor_pipe_stage_count():int{{return {graph.Stages.Count};}}\n");
+        linked.Append(CultureInfo.InvariantCulture,
+            $"fnc main():int{{return {graph.InputMessage};}}\n");
+
+        var module = OresStructuredCfgLowering.LowerModule(linked.ToString());
+        foreach (var handler in module.Helpers)
+            RequireFiniteActorPipeTurn(handler);
+
+        CfgCilEmitter.EmitLibrary(module, outputFile,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["main"] = "ActorPipeInput",
+                ["actor_pipe_stage"] = "ActorPipeStage",
+                ["actor_pipe_stage_count"] = "ActorPipeStageCount"
+            });
+    }
+
+    private static void RequireFiniteActorPipeTurn(VerifiedCfgFunction function)
+    {
+        var blocks = function.Blocks.ToDictionary(block => block.Name, StringComparer.Ordinal);
+        var completed = new Dictionary<string, bool>(StringComparer.Ordinal);
+        Visit(function.Entry);
+
+        void Visit(string name)
+        {
+            if (completed.TryGetValue(name, out bool done))
+            {
+                if (!done)
+                    throw new FormatException(
+                        "E_ACTOR_PIPE_TURN_UNBOUNDED: pipeline handlers require acyclic control flow");
+                return;
+            }
+
+            completed.Add(name, false);
+            var block = blocks[name];
+            if (block.OverflowTarget is { } overflow)
+                Visit(overflow);
+            switch (block.Terminator)
+            {
+                case CfgJump jump:
+                    Visit(jump.Target);
+                    break;
+                case CfgBranch branch:
+                    Visit(branch.TrueTarget);
+                    Visit(branch.FalseTarget);
+                    break;
+            }
+            completed[name] = true;
+        }
+    }
+
+
 
     private static int WriteVerifiedIr(VerifiedIrFunction program, InstructionEncoder il,
         MetadataBuilder metadata)
@@ -346,7 +420,8 @@ public static class CilEmitter
         VerifiedCfgModule module,
         Func<VerifiedCfgFunction, MetadataBuilder, MethodBodyStreamEncoder,
             IReadOnlyDictionary<string, MethodDefinitionHandle>,
-            (int BodyOffset, BlobBuilder Code, BlobBuilder? Locals)> buildBody)
+            (int BodyOffset, BlobBuilder Code, BlobBuilder? Locals)> buildBody,
+        IReadOnlyDictionary<string, string>? exportedNames)
     {
         ArgumentNullException.ThrowIfNull(module);
         ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
@@ -418,10 +493,13 @@ public static class CilEmitter
             if (entry.Locals is not null) hash.AppendData(entry.Locals.ToArray());
         foreach (var signature in signatureBlobs)
             hash.AppendData(signature.ToArray());
-        // The MVID must also change when a method is renamed but its body
-        // and signature stay byte-for-byte identical.
+        // Include the exported ABI so different public surfaces have distinct MVIDs.
         foreach (var method in methods)
+        {
             hash.AppendData(System.Text.Encoding.UTF8.GetBytes(method.Name + "\0"));
+            if (exportedNames is not null && exportedNames.TryGetValue(method.Name, out var name))
+                hash.AppendData(System.Text.Encoding.UTF8.GetBytes(name + "\0"));
+        }
         var mvid = new Guid(hash.GetHashAndReset().AsSpan(0, 16));
         metadata.AddModule(0, metadata.GetOrAddString("OresGenerated.dll"),
             metadata.GetOrAddGuid(mvid), default, default);
@@ -443,11 +521,14 @@ public static class CilEmitter
         int nextParameterRow = 1;
         for (int i = 0; i < methods.Length; i++)
         {
+            string? export = i == 0 ? "Run" : null;
+            if (exportedNames is not null)
+                exportedNames.TryGetValue(methods[i].Name, out export);
             var handle = metadata.AddMethodDefinition(
-                (i == 0 ? MethodAttributes.Public : MethodAttributes.Private) |
+                (export is null ? MethodAttributes.Private : MethodAttributes.Public) |
                     MethodAttributes.Static | MethodAttributes.HideBySig,
                 MethodImplAttributes.IL,
-                metadata.GetOrAddString(i == 0 ? "Run" : "helper_" + methods[i].Name),
+                metadata.GetOrAddString(export ?? "helper_" + methods[i].Name),
                 metadata.GetOrAddBlob(signatureBlobs[i]),
                 bodies[i].Offset, MetadataTokens.ParameterHandle(nextParameterRow));
             if (handle != handles[methods[i].Name])

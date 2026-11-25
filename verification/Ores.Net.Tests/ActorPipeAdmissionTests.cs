@@ -9,6 +9,8 @@ internal static class ActorPipeAdmissionTests
         var rejected = new (string Expression, string Operator)[]
         {
             ("p pipe c", "pipe"),
+            ("p pipe! c", "pipe!"),
+            ("p rpipe!/* gap */c", "rpipe!"),
             ("writable rpipe readable", "rpipe"),
             ("spawn Consumer() rpipe spawn Producer()", "rpipe"),
             ("writable rpipe transform rpipe readable", "rpipe"),
@@ -50,6 +52,13 @@ internal static class ActorPipeAdmissionTests
             _ = OresStructuredParser.Parse(source);
         }
 
+        foreach (string expression in new[] { "p pipe!suffix", "p rpipe!! c" })
+        {
+            string source = "fnc main():int{return " + expression + ";}";
+            AssertBangBoundary(() => OresParser.Parse(source));
+            AssertBangBoundary(() => OresStructuredParser.Parse(source));
+        }
+
         // Contextual spelling is not a globally reserved identifier. This
         // control must continue to parse in the structured helper/local subset.
         _ = OresStructuredParser.Parse(
@@ -70,6 +79,15 @@ internal static class ActorPipeAdmissionTests
             AppContext.BaseDirectory, "actor-pipe-two-stage.atto"));
         AssertNotAccepted(() => OresParser.Parse(guest), "shipping .atto guest");
         AssertNotAccepted(() => OresStructuredParser.Parse(guest), "structured .atto guest");
+    }
+
+    private static void AssertBangBoundary(Action parse)
+    {
+        try { parse(); }
+        catch (FormatException error) when (
+            error.Message.StartsWith("E_PIPE_BANG_BOUNDARY:", StringComparison.Ordinal))
+        { return; }
+        throw new Exception("Expected a pipe bang token boundary diagnostic");
     }
 
     private static void AssertRejected(Action parse, int offset, string label)

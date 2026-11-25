@@ -1,0 +1,46 @@
+name: Bounded actor pipe guest CoreCLR and NativeAOT
+on:
+  push:
+    branches: [feat/actor-pipe-execution-20261123]
+  pull_request:
+    paths:
+      - 'compiler/**'
+      - 'runtime/Ores.Net.Runtime/**'
+      - 'host/Ores.Net.ActorPipeNativeHost/**'
+      - 'tests/fixtures/actor-pipe*.atto'
+      - 'verification/assert-actor-pipe-guest.sh'
+      - '.github/workflows/actor-pipe-guest.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  pipe:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            rid: linux-x64
+          - os: macos-15
+            rid: osx-arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.x'
+      - name: Verify exact candidate and execute bounded actor pipeline guests
+        shell: bash
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || github.sha }}
+          RID: ${{ matrix.rid }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          git rev-parse 'HEAD^{tree}'
+          bash verification/assert-actor-pipe-guest.sh
+          bash verification/assert-actor-pipe-guest.sh "$RID"
