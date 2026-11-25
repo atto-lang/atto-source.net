@@ -12,12 +12,14 @@ public sealed partial class FrozenImportSnapshot
 {
     private const int MaxManifest=8192, MaxLock=32768, MaxFiles=64, MaxSource=1048576;
     private readonly Dictionary<string,string> namespaces, exports, sources;
+    public sealed record Dependency(string Version,string LockDigest);
+    public IReadOnlyDictionary<string,Dependency> Dependencies {get;}
     public string Name {get;}
     public string Version {get;}
     public string LockDigest {get;}
     private FrozenImportSnapshot(string name,string version,string digest,Dictionary<string,string> ns,
-        Dictionary<string,string> ex,Dictionary<string,string> src)
-    { Name=name; Version=version; LockDigest=digest; namespaces=ns; exports=ex; sources=src; }
+        Dictionary<string,string> ex,Dictionary<string,string> src,Dictionary<string,Dependency> dependencies)
+    { Name=name; Version=version; LockDigest=digest; namespaces=ns; exports=ex; sources=src; Dependencies=new System.Collections.ObjectModel.ReadOnlyDictionary<string,Dependency>(dependencies); }
     private static FormatException Fail(string code,string msg)=>new(code+": "+msg);
     private static bool Digest(string? s)=>s is not null && s.Length==64 && s.All(c=>c is >= '0' and <= '9' or >= 'a' and <= 'f');
     private static string Sha(byte[] b)=>Convert.ToHexString(SHA256.HashData(b)).ToLowerInvariant();
@@ -68,9 +70,9 @@ public sealed partial class FrozenImportSnapshot
         if(!Digest(expectedLock)) throw Fail("E_LOCK","invalid trusted lock digest");
         byte[] manifest=Bounded(manifestInput,MaxManifest,"E_MANIFEST"), lockBytes=Bounded(lockInput,MaxLock,"E_LOCK");
         if(Sha(lockBytes)!=expectedLock) throw Fail("E_LOCK_HASH","lock digest mismatch");
-        var tables=Parse(Text(lockBytes,"E_LOCK"),new[]{"[lock]","[files]"},"E_LOCK");
+        var tables=Parse(Text(lockBytes,"E_LOCK"),new[]{"[lock]","[files]","[dependencies]"},"E_LOCK");
         var header=Table(tables,"[lock]"); var pins=Table(tables,"[files]");
-        if(!tables.Keys.SequenceEqual(new[]{"[lock]","[files]"})||header.Count!=1||
+        if(!(tables.Keys.SequenceEqual(new[]{"[lock]","[files]"})||tables.Keys.SequenceEqual(new[]{"[lock]","[files]","[dependencies]"}))||header.Count!=1||
             !header.TryGetValue("manifest_sha256",out string? manifestHash)||!Digest(manifestHash)||pins.Count==0)
             throw Fail("E_LOCK","invalid lock inventory");
         if(Sha(manifest)!=manifestHash) throw Fail("E_LOCK_HASH","manifest digest mismatch");
@@ -86,7 +88,7 @@ public sealed partial class FrozenImportSnapshot
             if(Sha(data)!=e.Value) throw Fail("E_LOCK_HASH","source digest mismatch");
             src.Add(e.Key,Text(data,"E_LOCK"));
         }
-        var m=Parse(Text(manifest,"E_MANIFEST"),new[]{"[package]","[namespaces]","[exports]"},"E_MANIFEST");
+        var m=Parse(Text(manifest,"E_MANIFEST"),new[]{"[package]","[namespaces]","[exports]","[dependencies]"},"E_MANIFEST");
         var pkg=Table(m,"[package]"); var ns=Table(m,"[namespaces]"); var ex=Table(m,"[exports]");
         if(pkg.Count!=2||!pkg.TryGetValue("name",out var name)||!name.StartsWith('@')||
             name[1..].Split('/').Length!=3||!name[1..].Split('/').All(Segment)||
@@ -104,7 +106,17 @@ public sealed partial class FrozenImportSnapshot
         }
         foreach(var e in ex) if(!Subpath(e.Key)||!providers.ContainsKey(e.Value)) throw Fail("E_MANIFEST","dangling subpath");
         if(!used.SetEquals(src.Keys)) throw Fail("E_UNSUPPORTED","additional dependency sources not admitted");
-        return new FrozenImportSnapshot(name,version,expectedLock,providers,ex,src);
+        var declared=Table(m,"[dependencies]"); var locked=Table(tables,"[dependencies]");
+        if(declared.Count>16||!new HashSet<string>(declared.Keys,StringComparer.Ordinal).SetEquals(locked.Keys))
+            throw Fail("E_LOCK","dependency inventory mismatch");
+        var deps=new Dictionary<string,Dependency>(StringComparer.Ordinal);
+        foreach(var e in declared) {
+            if(!e.Key.StartsWith('@')||e.Key[1..].Split('/').Length!=3||!e.Key[1..].Split('/').All(Segment)||
+                e.Value.Length is <1 or >64||!e.Value.All(c=>AlphaNum(c)||c is '.' or '+' or '-')||!Digest(locked[e.Key]))
+                throw Fail("E_LOCK","invalid dependency identity, version or pin");
+            deps.Add(e.Key,new Dependency(e.Value,locked[e.Key]));
+        }
+        return new FrozenImportSnapshot(name,version,expectedLock,providers,ex,src,deps);
     }
     public string NamespaceForSubpath(string path) {
         if(!Subpath(path)||!exports.TryGetValue(path,out var ns)) throw Fail("E_UNBOUND","undeclared subpath");
