@@ -9,8 +9,112 @@ internal static class VmIsolateHostTests
         throw new Exception("IsolateVM gate failed: " + label);
     }
 
+    private static void CheckSupervisorTerminalReservations()
+    {
+        var host = new OresVmHost(maxTenants: 2, maxQueuedMailBytes: 1);
+        var tenant = host.CreateIsolate("control", maxActors: 3, maxQueuedMailBytes: 1);
+        var foreign = host.CreateIsolate("foreign-control", maxActors: 1);
+        host.Start(tenant); host.Start(foreign);
+        var parent = host.RegisterActor(tenant, 1);
+        var unrelated = host.RegisterActor(tenant, 2);
+        var foreignParent = host.RegisterActor(foreign, 1);
+        ExpectFailure(() => host.RegisterSupervisedActor(tenant, foreignParent, 3),
+            "foreign supervisor authority");
+        ExpectFailure(() => host.RegisterSupervisedActor(tenant, parent, 2),
+            "duplicate child must not leak a terminal reservation");
+        var child = host.RegisterSupervisedActor(tenant, parent, 3);
+
+        // Saturate both DATA message count and byte budget, including empty
+        // user messages. Terminal delivery must not consume a DATA slot.
+        host.SendActor(tenant, parent, parent.CurrentRef, new byte[] { 42 });
+        for (var i = 1; i < 1024; i++)
+            host.SendActor(tenant, parent, parent.CurrentRef, Array.Empty<byte>());
+        ExpectFailure(() => host.SendActor(tenant, parent, parent.CurrentRef,
+            Array.Empty<byte>()), "full DATA count");
+        ExpectFailure(() => host.RetireActor(tenant, parent), "live supervised child");
+        if (host.TryTakeSupervisorTerminal(tenant, parent, out _))
+            throw new Exception("terminal notification before retirement");
+
+        var turn = host.BeginActorTurn(tenant, child);
+        ExpectFailure(() => host.RetireFaultedActor(tenant, child), "live child turn");
+        host.CompleteActorTurn(tenant, child, turn);
+        var pin = host.PinResource(tenant, child);
+        ExpectFailure(() => host.RetireFaultedActor(tenant, child), "live resource pin");
+        if (host.TryTakeSupervisorTerminal(tenant, parent, out _))
+            throw new Exception("failed retirement published a terminal");
+        host.RetireResource(tenant, child, pin);
+        host.RetireFaultedActor(tenant, child);
+        ExpectFailure(() => host.RetireFaultedActor(tenant, child), "terminal replay");
+        ExpectFailure(() => host.RetireActor(tenant, parent), "unredeemed child terminal");
+        if (host.TryTakeSupervisorTerminal(tenant, unrelated, out _))
+            throw new Exception("unrelated actor stole terminal notice");
+        ExpectFailure(() => host.TryTakeSupervisorTerminal(foreign, parent, out _),
+            "foreign tenant redemption");
+
+        // Reuse the numeric ID without confusing old and new incarnations.
+        var replacement = host.RegisterSupervisedActor(tenant, parent, 3);
+        host.RetireActor(tenant, replacement);
+        var third = host.RegisterSupervisedActor(tenant, parent, 3);
+        host.RetireActor(tenant, third);
+        ExpectFailure(() => host.RegisterSupervisedActor(tenant, parent, 3),
+            "unredeemed terminal quota must be bounded across ID reuse");
+        var received = new Dictionary<ulong, OresVmHost.SupervisorTerminalKind>();
+        while (host.TryTakeSupervisorTerminal(tenant, parent, out var notice)) {
+            if (notice.ChildId != 3 || !received.TryAdd(notice.ChildEpoch, notice.Outcome))
+                throw new Exception("invalid or duplicate terminal identity");
+        }
+        if (received.Count != 3 ||
+            received[child.Epoch] != OresVmHost.SupervisorTerminalKind.Faulted ||
+            received[replacement.Epoch] != OresVmHost.SupervisorTerminalKind.Stopped ||
+            received[third.Epoch] != OresVmHost.SupervisorTerminalKind.Stopped)
+            throw new Exception("missing or misrouted terminal");
+        if (parent.QueuedMessages != 1024 || host.QueuedMail(tenant).Tenant != 1)
+            throw new Exception("terminal delivery changed DATA accounting");
+
+        var last = host.RegisterSupervisedActor(tenant, parent, 3);
+        host.BeginShutdown(tenant);
+        host.RetireActor(tenant, last);
+        if (!host.TryTakeSupervisorTerminal(tenant, parent, out var finalNotice) ||
+            finalNotice.ChildEpoch != last.Epoch ||
+            host.TryTakeSupervisorTerminal(tenant, parent, out _))
+            throw new Exception("quiescent terminal drain or replay failed");
+        if (!host.TryReceiveActor(tenant, parent, out var payload) ||
+            payload is null || payload.Length != 1 || payload[0] != 42)
+            throw new Exception("DATA head corrupted by terminal delivery");
+        host.RetireActor(tenant, unrelated);
+        host.RetireActor(tenant, parent);
+        host.CompleteShutdown(tenant); host.Destroy(tenant);
+        host.RetireActor(foreign, foreignParent);
+        host.BeginShutdown(foreign); host.CompleteShutdown(foreign); host.Destroy(foreign);
+        Console.WriteLine("NET_SUPERVISOR_TERMINAL_RESERVATION_HOST_TESTS_PASS");
+    }
+
+    private static void CheckNestedStateAuthority()
+    {
+        var host = new OresVmHost(maxTenants: 1);
+        var tenant = host.CreateIsolate("nested-authority");
+        host.Start(tenant);
+        var actor = host.RegisterActor(tenant, 1);
+        var turn = host.BeginActorTurn(tenant, actor);
+        var read = host.BeginActorStateLoan(tenant, actor, turn);
+        ExpectFailure(() => host.BeginActorStateLoan(tenant, actor, turn, writable: true),
+            "read-only parent cannot mint writable child");
+        host.ValidateActorStateLoan(tenant, actor, turn, read);
+        var nested = host.BeginActorStateLoan(tenant, actor, turn);
+        if (nested.Generation != read.Generation + 1)
+            throw new Exception("denied write reborrow consumed generation");
+        host.EndActorStateLoan(tenant, actor, turn, nested);
+        host.EndActorStateLoan(tenant, actor, turn, read);
+        host.CompleteActorTurn(tenant, actor, turn);
+        host.RetireActor(tenant, actor);
+        host.BeginShutdown(tenant); host.CompleteShutdown(tenant); host.Destroy(tenant);
+        Console.WriteLine("NET_NESTED_STATE_AUTHORITY_CURRENT_MAIN_TEST_PASS");
+    }
+
     public static void Run()
     {
+        CheckSupervisorTerminalReservations();
+        CheckNestedStateAuthority();
         var host = new OresVmHost(maxTenants: 2);
         // Fail closed: the native TenantVm isolate is not wired in yet, and a
         // host dictionary is not an isolate, so untrusted admission must reject.
