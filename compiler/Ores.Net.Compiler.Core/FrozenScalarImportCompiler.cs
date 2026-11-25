@@ -127,6 +127,23 @@ public static partial class OresStructuredParser
                         !linkedExports.TryGetValue((target.Name,selected,member),out var fn))
                         throw new FormatException("E_IMPORT_KIND: expected public dependency function");
                     return fn;
+                    }, frozenNamespaceResolve:(source,selector)=>{
+                        string[] parts=source.Split('/');
+                        if(parts.Length<3) throw new FormatException("E_IMPORT_PATH: invalid provider namespace package");
+                        string dependency=string.Join("/",parts.Take(3));
+                        var target=closure.RequireDependency(identity,dependency);
+                        string selected=target.SelectNamespace(source,selector);
+                        if(!linkedViews.TryGetValue(target.Name,out var view))
+                            throw new FormatException("E_IMPORT_PATH: dependency not linked before owner");
+                        if(view.Lookup(selected).Kind!=StaticImportGraph.Kind.Namespace)
+                            throw new FormatException("E_IMPORT_KIND: expected public dependency namespace");
+                        return member=>{
+                            var export=view.Lookup(selected+"."+member);
+                            if(export.Kind!=StaticImportGraph.Kind.Fnc||
+                                !linkedExports.TryGetValue((target.Name,selected,member),out var fn))
+                                throw new FormatException("E_IMPORT_KIND: expected public dependency function");
+                            return fn;
+                        };
                     });
                     cached=new CachedProvider(unit.Program,ownExports.AsReadOnly());
                     reparsed.Add(prefix);
