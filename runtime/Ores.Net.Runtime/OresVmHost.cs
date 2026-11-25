@@ -115,6 +115,8 @@ public sealed partial class OresVmHost
         internal required IsolateHandle Handle { get; init; }
         internal required int ActorLimit { get; init; }
         internal required int PinLimit { get; init; }
+        internal required int ActorWorkerLimit { get; init; }
+        internal ActorDispatchDomains? PumpDomains;
         internal required DurableLockQueues Durable { get; init; }
         internal Phase Phase;
         internal ulong NextActorEpoch = 1;
@@ -194,8 +196,11 @@ public sealed partial class OresVmHost
             IsolationMode.TrustedInProcess, maxQueuedMailBytes);
 
     public IsolateHandle CreateIsolate(string tenantId, int maxActors = 64, int maxResourcePins = 1024,
-        IsolationMode isolation = IsolationMode.TrustedInProcess, long maxQueuedMailBytes = 16L * 1024 * 1024)
+        IsolationMode isolation = IsolationMode.TrustedInProcess, long maxQueuedMailBytes = 16L * 1024 * 1024,
+        int maxActorWorkers = 4)
     {
+        if (maxActorWorkers is < 1 or > ActorDispatcherOptions.MaxWorkersPerDomain)
+            throw new ArgumentOutOfRangeException(nameof(maxActorWorkers));
         if (isolation != IsolationMode.TrustedInProcess)
             throw new InvalidOperationException("native TenantVm isolate not wired into this host yet");
         // Dot-only IDs are future path/namespace control components, not
@@ -215,6 +220,7 @@ public sealed partial class OresVmHost
             var handle = new IsolateHandle(tenantId, _nextGeneration++);
             _tenants.Add(tenantId, new TenantState {
                 Handle = handle, ActorLimit = maxActors, PinLimit = maxResourcePins,
+                ActorWorkerLimit = maxActorWorkers,
                 MailLimit = maxQueuedMailBytes,
                 Durable = new DurableLockQueues(handle.Generation)
             });
@@ -795,11 +801,17 @@ public sealed partial class OresVmHost
 
     public void Destroy(IsolateHandle handle)
     {
+        ActorDispatchDomains? domains;
         lock (_gate) {
             var s = Check(handle);
             if (s.Phase != Phase.Stopped) throw new InvalidOperationException("isolate not stopped");
+            // Stopped implies all actors (and therefore all pump owners)
+            // retired. Detach before joining; never join under the host gate.
+            domains = s.PumpDomains;
+            s.PumpDomains = null;
             _tenants.Remove(handle.TenantId);
         }
+        domains?.Dispose();
     }
 
     public (Phase Phase, ulong Generation, int Actors, int Pins) Snapshot(IsolateHandle handle)
