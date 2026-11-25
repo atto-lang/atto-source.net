@@ -33,6 +33,12 @@ internal static class ContextualImportParserSelfTest
                 ("import namespace m from core.", "manifest-verified multi-file package linker"),
                 ("import namespace m from", "manifest-verified multi-file package linker"),
                 ("import pkg.", "E_IMPORT_PATH"),
+                ("define alias a = b; define alias b = a; fnc main()->int { return 42; }", "E_IMPORT_CYCLE"),
+                ("define alias a as b; define alias b as a; fnc main()->int { return 42; }", "E_IMPORT_CYCLE"),
+                ("define alias a = b.child; define alias a as b; fnc main()->int { return 42; }", "E_IMPORT_CYCLE"),
+                ("import fnc f from './missing.atto'; define alias a = a; fnc main()->int { return 42; }", "E_IMPORT_CYCLE"),
+                ("define alias a = b; define alias a = c; fnc main()->int { return 42; }", "E_DUPLICATE"),
+                ("define alias a = core.math; fnc main()->int { return 42; }", "authenticated static binding integration"),
             })
             {
                 File.WriteAllText(main, pair.Source);
@@ -45,7 +51,7 @@ internal static class ContextualImportParserSelfTest
                 }
                 if (!denied) throw new InvalidOperationException("Unverified import admitted: " + pair.Source);
             }
-            Console.WriteLine("Contextual import production parser: legacy + 3 builtin spellings, 10 diagnosed denials");
+            Console.WriteLine("Contextual import production parser: legacy + 3 builtin spellings, 16 diagnosed denials");
         }
         finally { Directory.Delete(root, true); }
     }
