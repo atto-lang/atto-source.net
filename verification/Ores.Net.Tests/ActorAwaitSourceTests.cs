@@ -55,6 +55,8 @@ internal static class ActorAwaitSourceTests
         var startedA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var startedB = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resumedA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resumedB = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var timeout = TimeSpan.FromSeconds(10);
         using var stop = new CancellationTokenSource();
         int calls = 0;
@@ -65,12 +67,20 @@ internal static class ActorAwaitSourceTests
                 if (call == 1) {
                     var step = first.Start_add(scope);
                     startedA.TrySetResult();
-                    return step;
+                    return new OresVmHost.ActorPumpStep(step.Ready, next => {
+                        var result = step.Next(next);
+                        resumedA.TrySetResult();
+                        return result;
+                    });
                 }
                 if (call == 2) {
                     var step = second.Start_add(scope);
                     startedB.TrySetResult();
-                    return step;
+                    return new OresVmHost.ActorPumpStep(step.Ready, next => {
+                        var result = step.Next(next);
+                        resumedB.TrySetResult();
+                        return result;
+                    });
                 }
                 Require(scope.ReadInt64(0) == 42, "compiled frame state total");
                 finished.TrySetResult();
@@ -88,11 +98,9 @@ internal static class ActorAwaitSourceTests
             startedB.Task.WaitAsync(timeout).GetAwaiter().GetResult();
             if (serial) Require(first.Result == 15, "serial actor started second receive before first retired");
             readyB.TrySetResult(7);
-            // A receipt is not a completion barrier for ordinary actors; use
-            // the pump's result witnesses via bounded asynchronous completion.
-            // Wait for both frame results using a host-only readiness barrier.
-            // The following test hook is populated by the generated frame.
-            Task.WhenAll(first.Completion, second.Completion).WaitAsync(timeout).GetAwaiter().GetResult();
+            // Host-only witnesses wrap the emitted resume method; the frame
+            // itself retains no test callback or completion source.
+            Task.WhenAll(resumedA.Task, resumedB.Task).WaitAsync(timeout).GetAwaiter().GetResult();
             Require(first.Result.HasValue && second.Result.HasValue &&
                 Math.Max(first.Result.Value, second.Result.Value) == 42, "compiled frame results");
             scheduler.Enqueue(tenant, actor);
