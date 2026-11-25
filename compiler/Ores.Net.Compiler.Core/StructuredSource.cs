@@ -124,11 +124,30 @@ public static partial class OresStructuredParser
                 (tokens[i - 1].Text is "define" or "pub"))
                 throw new FormatException(
                     $"NET_STRUCTURED_MACRO_EXPANDER_REQUIRED: macro declarations require typed AST expansion before OresIR/CIL at offset {tokens[i].Offset}; runtime fallback is forbidden");
-            if (tokens[i].Text == "!" && i > 0 && i + 1 < tokens.Count &&
-                tokens[i + 1].Text == "(")
+            if (tokens[i].Text == "!" && i + 1 < tokens.Count &&
+                tokens[i + 1].Text == "(" && !IsPrefixBangPosition(tokens, i))
                 throw new FormatException(
                     $"NET_STRUCTURED_MACRO_EXPANDER_REQUIRED: macro invocation requires typed AST expansion before OresIR/CIL at offset {tokens[i].Offset}; runtime fallback is forbidden");
         }
+    }
+
+    // A parenthesized boolean operand is not a macro splice. Permit only
+    // expression-prefix positions whose previous token cannot be a callee.
+    // Identifier/number/member spellings followed by ! (even with trivia)
+    // retain the original fail-closed macro diagnostic.
+    private static bool IsPrefixBangPosition(IReadOnlyList<Token> tokens, int at)
+    {
+        if (at == 0) return true;
+        var before = tokens[at - 1];
+        if (before.Text is "(" or "=" or "," or ":" or "?" or "{" or ";" or
+            "^" or "->" or "&&" or "||" or "^^" or "==" or "!=" or "!eq" or
+            "<" or ">" or "<=" or ">=" or "!" or "+" or "-" or "*" or "/")
+            return true;
+        // Do not treat contiguous reserved-name macro-like forms such as
+        // return!(...) as keyword followed by a prefix expression.
+        return before.Offset + before.Text.Length < tokens[at].Offset &&
+            before.Text is ("return" or "guard" or "when" or "if" or "ifnot" or
+                "unless" or "then" or "else" or "and" or "or" or "xor" or "eq" or "neq");
     }
 
     // `...source` directly inside `infer struct|record { }` or `= record { }` is the
@@ -2879,8 +2898,8 @@ public static partial class OresStructuredParser
                 index++;
                 var operand = Unary(depth + 1);
                 Require(operand, IrValueType.Bool, "Logical not requires bool");
-                return new StructuredConditional(at, operand,
-                    new StructuredBool(at, false), new StructuredBool(at, true), IrValueType.Bool);
+                return CheckedConditional(at, operand,
+                    new StructuredBool(at, false), new StructuredBool(at, true));
             }
             if (Current.Text == "-")
             {

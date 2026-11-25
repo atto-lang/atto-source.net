@@ -47,3 +47,7 @@ A complete runtime declaration or mutable assignment may also use `condition ? t
 ### NativeAOT regression repair: prefix logical not
 
 The #257 and #258 task jobs failed at offset 338 of inline-shortcircuit-writeback.atto, the `!result` token. The structured parser already has typed boolean negation, but the standalone lexer admitted only a bang followed by `(`. Admit the standalone bang after the existing multi-character operators and ownership handling, without altering macro preflight or `!=` / `!eq` precedence. Preserve the failed fixture verbatim. Add a dedicated guest for adjacent and spaced prefix not and both inequality spellings, plus nonbool, macro and ownership denials. Parenthesized bang remains conservatively gated by the existing macro preflight; this repair does not expand macro admission. Exact-head rerun required.
+
+### Parenthesized logical negation admission
+
+Separate prefix `!(bool-expression)` from unsupported macro invocation using a narrow token-context predicate. Prefix punctuation and separated expression-introducing keywords admit boolean operands; adjacent keyword macro-like forms and identifier-led invocations (including spaced bang) retain the existing macro diagnostic. Typed Unary checks bool and now uses CheckedConditional to account for the AST height. No macro or ownership lowering is added. A dedicated native/managed guest plus three no-artifact denials and structured parser assertions exercise the boundary. This is a separate candidate so the prefix-not regression repair can finish its exact-head CI unchanged.
