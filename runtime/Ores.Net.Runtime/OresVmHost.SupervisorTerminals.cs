@@ -37,7 +37,7 @@ public sealed partial class OresVmHost
             var reservation = new SupervisorTerminalReservation(parent);
             state.SupervisorTerminals.EnsureCapacity(state.SupervisorTerminals.Count + 1);
             var child = RegisterActor(handle, childId);
-            state.SupervisorTerminals.Add(child, reservation);
+            state.SupervisorTerminals.Add((child.Id, child.Epoch), reservation);
             return child;
         }
     }
@@ -54,18 +54,18 @@ public sealed partial class OresVmHost
         lock (_gate) {
             var state = Check(handle);
             CheckActor(state, parent);
-            ActorTicket? readyChild = null;
+            (ulong Id, ulong Epoch)? readyChild = null;
             notice = default;
             foreach (var entry in state.SupervisorTerminals) {
                 if (ReferenceEquals(entry.Value.Parent, parent) &&
                     entry.Value.Outcome is { } outcome) {
                     readyChild = entry.Key;
-                    notice = new SupervisorTerminalNotice(readyChild.Id, readyChild.Epoch, outcome);
+                    notice = new SupervisorTerminalNotice(entry.Key.Id, entry.Key.Epoch, outcome);
                     break;
                 }
             }
             if (readyChild is null) return false;
-            state.SupervisorTerminals.Remove(readyChild);
+            state.SupervisorTerminals.Remove(readyChild.Value);
             return true;
         }
     }
