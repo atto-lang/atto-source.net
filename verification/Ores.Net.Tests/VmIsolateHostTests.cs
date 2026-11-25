@@ -176,11 +176,119 @@ internal static class VmIsolateHostTests
         Console.WriteLine("NET_ACTOR_CANCEL_RETIREMENT_HOST_TESTS_PASS");
     }
 
+    private static void CheckScheduledCarrierRetirement()
+    {
+        var host = new OresVmHost(maxTenants: 1);
+        var tenant = host.CreateIsolate("scheduled-carrier", maxActors: 2);
+        host.Start(tenant);
+        var parent = host.RegisterActor(tenant, 1);
+        var child = host.RegisterSupervisedActor(tenant, parent, 2);
+        host.ConfigureNamedActorState(tenant, child, "Counter", "Counter|1:I",
+            new[] { new OresVmHost.ActorStateField(OresVmHost.ActorStateScalarKind.Int64) });
+        var scheduler = host.CreateTrustedScheduler();
+        var signal = scheduler.WaitForSupervisorTerminal(tenant, parent);
+        scheduler.Enqueue(tenant, child);
+        OresVmHost.ActorTurnTicket? captured = null;
+        OresVmHost.ActorDispatchScope? staleScope = null;
+        ExpectFailure(() => scheduler.DispatchNext(tenant, child, "Counter|1:I", scope => {
+            captured = child.ActiveTurn ?? throw new Exception("missing active turn");
+            var turn = captured;
+            staleScope = scope;
+            var loan = turn.ActiveStateLoan ?? throw new Exception("missing dispatch loan");
+            // A separate physical host thread is not the owner carrier.
+            Task.Factory.StartNew(() => {
+                ExpectFailure(() => host.ValidateActorStateLoan(tenant, child, turn, loan),
+                    "foreign carrier state access");
+                ExpectFailure(() => host.EndActorStateLoan(tenant, child, turn, loan),
+                    "foreign carrier cleanup");
+                host.CancelActorTurn(tenant, child, turn);
+                ExpectFailure(() => host.AcknowledgeActorTurnCancellation(tenant, child, turn),
+                    "foreign early cancellation acknowledgment");
+            }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default)
+                .GetAwaiter().GetResult();
+            ExpectFailure(() => scope.ReadInt64(0), "cancelled generated scope access");
+            host.EndActorStateLoan(tenant, child, turn, loan);
+            // Even with no outstanding state loan, the delegate is still on
+            // the carrier. The exact private scheduler lease must remain live.
+            ExpectFailure(() => host.AcknowledgeActorTurnCancellation(tenant, child, turn),
+                "zero loans are not physical retirement");
+            ExpectFailure(() => host.CompleteActorTurn(tenant, child, turn),
+                "complete while scheduled carrier live");
+            ExpectFailure(() => host.RetireFaultedActor(tenant, child),
+                "terminal before physical delegate unwind");
+            if (signal.IsCompleted) throw new Exception("premature supervisor terminal");
+            throw new InvalidOperationException("fixture cancellation");
+        }), "cancelled scheduled dispatch");
+        if (captured is null || staleScope is null || host.ActorTurnSnapshot(tenant, child).Active)
+            throw new Exception("scheduled cancellation did not retire after unwind");
+        ExpectFailure(() => staleScope.ReadInt64(0), "stale generated scope");
+        ExpectFailure(() => host.AcknowledgeActorTurnCancellation(tenant, child, captured),
+            "retired scheduled ticket replay");
+        scheduler.Enqueue(tenant, child);
+        if (scheduler.DispatchNext(tenant, child, "Counter|1:I", scope => scope.AddInt64(0, 42)) != 42)
+            throw new Exception("scheduled lane did not recover");
+        host.RetireFaultedActor(tenant, child);
+        if (!signal.IsCompletedSuccessfully ||
+            !scheduler.TryDequeueSupervisorTerminal(tenant, parent, out var notice) ||
+            notice.ChildEpoch != child.Epoch)
+            throw new Exception("retired child missing scheduled terminal");
+        host.RetireActor(tenant, parent);
+        host.BeginShutdown(tenant); host.CompleteShutdown(tenant); host.Destroy(tenant);
+        Console.WriteLine("NET_SCHEDULED_CARRIER_RETIREMENT_HOST_TESTS_PASS");
+    }
+
+    private static void CheckSupervisorDispatchPriority()
+    {
+        var host = new OresVmHost(maxTenants: 1, maxQueuedMailBytes: 1);
+        var tenant = host.CreateIsolate("control-priority", maxActors: 70, maxQueuedMailBytes: 1);
+        host.Start(tenant);
+        var parent = host.RegisterActor(tenant, 1);
+        host.ConfigureNamedActorState(tenant, parent, "Counter", "Counter|1:I",
+            new[] { new OresVmHost.ActorStateField(OresVmHost.ActorStateScalarKind.Int64) });
+        var scheduler = host.CreateTrustedScheduler();
+        host.SendActor(tenant, parent, parent.CurrentRef, new byte[] { 42 });
+        scheduler.Enqueue(tenant, parent);
+        for (var i = 0; i < OresVmHost.SupervisorControlBurstLimit + 2; i++) {
+            var child = host.RegisterSupervisedActor(tenant, parent, 2);
+            host.RetireActor(tenant, child);
+        }
+        var live = host.BeginActorTurn(tenant, parent);
+        ExpectFailure(() => scheduler.TryDequeueSupervisorTerminal(tenant, parent, out _),
+            "CONTROL selection during active turn");
+        host.CompleteActorTurn(tenant, parent, live);
+        ExpectFailure(() => scheduler.DequeueUser(tenant, parent), "CONTROL before DATA");
+        var seen = new HashSet<ulong>();
+        for (var i = 0; i < OresVmHost.SupervisorControlBurstLimit; i++) {
+            if (!scheduler.TryDequeueSupervisorTerminal(tenant, parent, out var notice) ||
+                !seen.Add(notice.ChildEpoch))
+                throw new Exception("missing or replayed priority CONTROL");
+        }
+        if (scheduler.TryDequeueSupervisorTerminal(tenant, parent, out _) ||
+            parent.QueuedMessages != 2)
+            throw new Exception("ordinary FIFO did not receive its bounded opportunity");
+        var data = scheduler.DequeueUser(tenant, parent);
+        if (data is null || data.Length != 1 || data[0] != 42 ||
+            host.QueuedMail(tenant).Tenant != 0)
+            throw new Exception("ordinary DATA or accounting changed");
+        ExpectFailure(() => scheduler.DispatchNext(tenant, parent, "Counter|1:I", scope => scope.ReadInt64(0)),
+            "CONTROL before internal FIFO receipt");
+        while (scheduler.TryDequeueSupervisorTerminal(tenant, parent, out var notice))
+            if (!seen.Add(notice.ChildEpoch)) throw new Exception("terminal replay");
+        if (seen.Count != OresVmHost.SupervisorControlBurstLimit + 2 ||
+            scheduler.DispatchNext(tenant, parent, "Counter|1:I", scope => scope.AddInt64(0, 42)) != 42)
+            throw new Exception("CONTROL drain or internal FIFO receipt failed");
+        host.RetireActor(tenant, parent);
+        host.BeginShutdown(tenant); host.CompleteShutdown(tenant); host.Destroy(tenant);
+        Console.WriteLine("NET_SUPERVISOR_DISPATCH_PRIORITY_HOST_TESTS_PASS");
+    }
+
     internal static void RunSupervisorTerminalChecks()
     {
         CheckSupervisorTerminalReservations();
         CheckNestedStateAuthority();
         CheckCancellationRetirement();
+        CheckScheduledCarrierRetirement();
+        CheckSupervisorDispatchPriority();
     }
 
     public static void Run()
