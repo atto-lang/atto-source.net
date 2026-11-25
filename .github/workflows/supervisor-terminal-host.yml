@@ -40,3 +40,4 @@ jobs:
           grep -Fx NET_ACTOR_CANCEL_RETIREMENT_HOST_TESTS_PASS supervisor-terminal.log
           grep -Fx NET_SCHEDULED_CARRIER_RETIREMENT_HOST_TESTS_PASS supervisor-terminal.log
           grep -Fx NET_SUPERVISOR_DISPATCH_PRIORITY_HOST_TESTS_PASS supervisor-terminal.log
+          grep -Fx NET_MIGRATABLE_CARRIER_SEGMENTS_HOST_TESTS_PASS supervisor-terminal.log
