@@ -1563,18 +1563,23 @@ public static partial class OresStructuredParser
             }
             return left;
         }
-        // Fixed arrays only expose checked get(index). Index is evaluated once;
-        // the result is a real typed Option<int>, not an unchecked read.
+        // Both get(index) and get_copy(index) perform a checked, Copy<int>
+        // lookup over the SAME immutable, fixed-size scalar SSA values.
+        // The signed index is evaluated once, and no address/loan escapes.
+        // This does not enable mutable Array<T>, general copy traits, or
+        // LLVM's full actor-owned dynamic collection semantics.
         private StructuredExpr ArrayPostfix(StructuredExpr array, int depth)
         {
             if (array.Type != IrValueType.FixedArrayI64 || !Take("."))
                 return array;
             int at = Current.Offset;
-            if (!Take("get"))
-                throw Error("E_ARRAY_METHOD_UNSUPPORTED: fixed Array<int> only supports get(int)");
+            string operation = Current.Text;
+            if (!Take("get") && !Take("get_copy"))
+                throw Error("E_ARRAY_METHOD_UNSUPPORTED: fixed Array<int> only supports get(int) or get_copy(int)");
             Expect("(");
             var atIndex = Expr(depth + 1);
-            Require(atIndex, IrValueType.I64, "Array<int>.get index must be int");
+            Require(atIndex, IrValueType.I64,
+                $"Array<int>.{operation} index must be int");
             Expect(")");
             return OptionPostfix(new StructuredArrayGet(at, array, atIndex), depth);
         }

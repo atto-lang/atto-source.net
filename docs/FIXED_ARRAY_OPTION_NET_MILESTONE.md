@@ -40,6 +40,18 @@ pub fnc main():int {
 - A bound of eight prevents dynamic SSA explosion from a single literal;
   all element expressions evaluate exactly once, left-to-right. A larger
   array is **rejected**, not silently allocated on the CLR heap.
+- **Cross-backend Copy<int> subset:** the experimental compiler additionally
+  accepts `array.get_copy(index)`, lowering it to the **same**
+  `StructuredArrayGet` → checked `Option<int>` CFG/CIL path as `array.get(index)`.
+  This is a spelling and semantic compatibility step with LLVM's
+  `Array<int>.get_copy(int)` for the **immutable, closed scalar** intersection.
+  No borrow or alias is returned. It does **not** implement LLVM's owned
+  dynamically mutable array, `new Array<int>()`, `add`, `set`,
+  ReadLoan, actor-owned native region, or native array transport.
+  No general `Copy<T>` inference is enabled. The new exact-source fixture
+  `contracts/collections/v1/array-get-copy-immutable42.atto` tests
+  `Some(0)`, `Some(42)`, `None`, and the native executable's return 42.
+  A bool-index fixture must be rejected with a compiler-owned type error.
 - Unsafe `array[index]` remains disabled, aligned with hardening PR #418.
   A future semantic merge with #418 must preserve that denial and admit only
   separately typechecked collection construction and checked `.get()`.
@@ -68,8 +80,9 @@ Future guest collection implementation must first establish:
 The separate .NET 10 Linux/Windows workflow at
 `.github/workflows/fixed-array-option-nativeaot.yml` must execute:
 
-- 21 independent valid source → verified CFG → emitted CIL interpretation
-  positive cases, 24 negative source cases, 11 forged CFG mutations;
+- 31 independent valid source → verified CFG → emitted CIL interpretation
+  positive cases, 32 negative source cases, 11 forged CFG mutations, and
+  diagnostic-exact bool-index rejection for `.get_copy`;
 - exact Git-blob-verified `.atto` sources for present, absent and empty
   arrays, and denied mutable, direct indexed, over-budget forms;
 - real source compiler and separately linked Linux and Windows NativeAOT
