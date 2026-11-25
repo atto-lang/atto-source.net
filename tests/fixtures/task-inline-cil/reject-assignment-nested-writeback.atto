@@ -1,0 +1,6 @@
+pub fnc main(): int {
+    let int result = 0;
+    let int count = 0;
+    result = 1 + sync task<int> { count = 2; return 39; };
+    return result + count;
+}
