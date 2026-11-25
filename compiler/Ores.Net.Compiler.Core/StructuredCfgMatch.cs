@@ -31,24 +31,8 @@ public static partial class OresStructuredCfgLowering
                     : Emit(block, CfgOpcode.ResultIsOk, IrValueType.Bool, left: value);
             }
 
-            string[] names = Names(variables);
-            Block? join = null;
-            int result = -1;
-            var joined = new Dictionary<string, Binding>(StringComparer.Ordinal);
-            void Finish(Block end, Dictionary<string, Binding> environment, int? value = null)
-            {
-                if (join is null)
-                {
-                    join = Join(names, variables, joined);
-                    if (match.Type != IrValueType.Void)
-                    {
-                        result = NextValue();
-                        join.Parameters.Add(new CfgParameter(result, match.Type));
-                    }
-                }
-                var arguments = Values(names, environment);
-                end.Terminator = new CfgJump(join.Name, value is int id ? [..arguments, id] : arguments);
-            }
+            var continuation = new LexicalContinuation(this, variables, match.Type,
+                writeBack: match.Type == IrValueType.Void);
 
             MatchTags remaining = MatchTags.Any;
             foreach (var arm in match.Arms)
@@ -85,28 +69,19 @@ public static partial class OresStructuredCfgLowering
 
                 if (arm.Value is { } expression)
                 {
-                    int value;
-                    if (expression.Type == IrValueType.OptionI64)
-                    {
-                        var parts = OptionParts(expression, ref selected, environment);
-                        value = Emit(selected, CfgOpcode.PackOptionI64, IrValueType.OptionI64,
-                            left: parts.Tag, right: parts.Payload);
-                    }
-                    else value = Expression(expression, ref selected, environment);
-                    Finish(selected, environment, value);
+                    int value = PackedValue(expression, ref selected, environment);
+                    continuation.Finish(selected, environment, value);
                 }
                 else
                 {
-                    var end = EmitStatements(arm.Body!, selected, environment,
-                        (exit, locals) => Finish(exit, locals));
-                    if (end is not null) Finish(end, environment);
+                    var end = EmitStatements(arm.Body!, selected, environment, continuation.Finish);
+                    if (end is not null) continuation.Finish(end, environment, null);
                 }
 
                 if (next is not null) block = next;
             }
             if (remaining != 0) throw new FormatException("Missing verified exhaustive match witness");
-            foreach (var (name, binding) in joined) variables[name] = binding;
-            return (join, result);
+            return continuation.Complete();
         }
 
         private Binding MatchBinding(StructuredMatchArm arm, Binding subject, Block block)
