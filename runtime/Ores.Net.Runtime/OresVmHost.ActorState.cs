@@ -294,6 +294,10 @@ public sealed partial class OresVmHost
 
         // Host scheduler segment bridge; a resume ticket is not a guest
         // callback, Future, or general source-level async lowering.
+        internal bool TryDispatchSupervisorTerminal(IsolateHandle isolate, ActorTicket actor,
+            string layout, Action<ActorDispatchScope, SupervisorTerminalNotice> handler)
+            => Host.TryDispatchSupervisorSegment(this, isolate, actor, layout, handler);
+
         internal ActorContinuation? StartSegment(IsolateHandle isolate, ActorTicket actor,
             string layout, Func<ActorDispatchScope, bool> segment)
             => Host.StartScheduledSegment(this, isolate, actor, layout, segment);
