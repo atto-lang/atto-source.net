@@ -7,16 +7,17 @@ public sealed class VerifiedActorAwait
 {
     internal VerifiedActorAwait(string actor, string field, long initial, string method,
         long? producerLeft = null, long? producerRight = null,
-        long? secondLeft = null, long? secondRight = null)
+        long? secondLeft = null, long? secondRight = null, bool trapResult = false)
     {
         ActorName = actor; FieldName = field; InitialValue = initial; MethodName = method;
         ProducerLeft = producerLeft; ProducerRight = producerRight;
-        SecondLeft = secondLeft; SecondRight = secondRight;
+        SecondLeft = secondLeft; SecondRight = secondRight; TrapResult = trapResult;
     }
     public long? ProducerLeft { get; }
     public long? ProducerRight { get; }
     public long? SecondLeft { get; }
     public long? SecondRight { get; }
+    public bool TrapResult { get; }
     public string ActorName { get; }
     public string FieldName { get; }
     public long InitialValue { get; }
@@ -38,7 +39,10 @@ public static partial class OresParser
         string field = r.Id(); r.E(":"); long initial = r.I64(); r.E(";"); r.E("}");
         r.E("pub"); r.E("suspends"); r.E("mtd"); r.E("("); r.E(actor);
         string receiver = r.Id(); r.E(")");
-        string method = r.Id(); r.E("("); r.E("int"); string input = r.Id();
+        string method = r.Id(); r.E("(");
+        if (!r.Take("int"))
+            return InspectTrappedActorAwaitTail(r, actor, field, initial, receiver, method);
+        string input = r.Id();
         bool hostFuture = r.Take(",");
         string future;
         if (hostFuture) {
@@ -89,6 +93,40 @@ public static partial class OresParser
             throw new FormatException("E_ACTOR_AWAIT: shadowed or reserved source identifier");
         return new VerifiedActorAwait(actor, field, initial, method, producerLeft, producerRight, secondLeft, secondRight);
     }
+
+    // Separate closed expression-trap profile: a single Future<int> input or
+    // source-owned checked scalar producer. No implicit Result flattening,
+    // arbitrary error union or state mutation under the trap.
+    private static VerifiedActorAwait InspectTrappedActorAwaitTail(DeclaredReader r,
+        string actor, string field, long initial, string receiver, string method)
+    {
+        bool external = r.Take("Future");
+        string future = "";
+        if (external) {
+            r.E("<"); r.E("int"); r.E(">"); future = r.Id();
+        }
+        r.E(")"); r.E(":"); r.E("Result"); r.E("<"); r.E("int");
+        r.E(","); r.E("Error"); r.E(">"); r.E("{");
+        long? left = null, right = null;
+        if (!external) {
+            r.E("val"); r.E("Future"); r.E("<"); r.E("int"); r.E(">");
+            future = r.Id(); r.E("="); r.E("task"); r.E("<"); r.E("int"); r.E(">");
+            r.E("{"); r.E("return"); left = r.I64(); r.E("+"); right = r.I64();
+            r.E(";"); r.E("}"); r.E(";");
+        }
+        r.E("return"); r.TrapKeyword(); r.E("("); r.E("await"); r.E(future);
+        r.E(")"); r.E(";"); r.E("}"); r.Done();
+        string[] names = [actor, field, receiver, method, future];
+        string[] reserved = ["self", "handle_state", "receive", "init", "send", "end",
+            "tear_down", "on_start", "on_stop", "on_restart", "on_panic", "on_throw",
+            "on_raise", "on_recover", "await", "suspends", "critical", "int", "Future",
+            "val", "let", "return", "pub", "mtd", "actor", "state", "define", "declare",
+            "task", "trap", "Result", "Error"];
+        if (names.Distinct(StringComparer.Ordinal).Count() != names.Length ||
+            names.Any(n => reserved.Contains(n, StringComparer.Ordinal)))
+            throw new FormatException("E_ACTOR_AWAIT: shadowed or reserved trap binding");
+        return new VerifiedActorAwait(actor, field, initial, method, left, right, trapResult: true);
+    }
 }
 
 /// <summary>Build-time C# for one typed suspension edge; no dynamic emit.
@@ -99,6 +137,7 @@ public static class ActorAwaitSourceEmitter
     public static string EmitCSharp(VerifiedActorAwait plan)
     {
         ArgumentNullException.ThrowIfNull(plan);
+        if (plan.TrapResult) return EmitTrapped(plan);
         string initial = plan.InitialValue == long.MinValue ? "long.MinValue" :
             plan.InitialValue.ToString(CultureInfo.InvariantCulture) + "L";
         string emitted = $$"""
@@ -196,5 +235,61 @@ public static class ActorAwaitSourceEmitter
                 "        long second = _pending.GetAwaiter().GetResult();\n" +
                 "        _pc = 3;\n" +
                 "        long delta = checked(checked(_saved + _first) + second);", StringComparison.Ordinal);
+    }
+
+    private static string EmitTrapped(VerifiedActorAwait plan)
+    {
+        static string Literal(long value) => value == long.MinValue ? "long.MinValue" :
+            value.ToString(CultureInfo.InvariantCulture) + "L";
+        bool owned = plan.ProducerLeft.HasValue && plan.ProducerRight.HasValue;
+        string constructor = owned
+            ? "internal AwaitActor_" + plan.ActorName + "() { }"
+            : "internal AwaitActor_" + plan.ActorName +
+                "(Task<long> pending) { _pending = pending ?? throw new System.ArgumentNullException(nameof(pending)); }";
+        string start = owned
+            ? "var producer = new OresVmHost.ActorScalarTask(static () => Produce(" +
+                Literal(plan.ProducerLeft!.Value) + ", " + Literal(plan.ProducerRight!.Value) + "));\n" +
+                "        _pending = producer.Future;\n        _pc = 1;\n" +
+                "        return new OresVmHost.ActorPumpStep(producer.Future, Resume, producer, ObserveFaultInSegment: true);"
+            : "_pc = 1;\n        return new OresVmHost.ActorPumpStep(_pending!, Resume, ObserveFaultInSegment: true);";
+        return $$"""
+            // Verified trapped actor await; exact shared GuestResults ABI.
+            #nullable enable
+            using Ores.Net.Runtime;
+            using System.Threading.Tasks;
+            namespace Oreslang.Generated;
+            internal sealed class AwaitActor_{{plan.ActorName}}
+            {
+                internal const string Layout = "{{plan.ActorName}}|1:I";
+                internal static OresVmHost.ActorTicket Create(OresVmHost host,
+                    OresVmHost.IsolateHandle isolate, ulong id, bool serial)
+                {
+                    var actor = host.RegisterActor(isolate, id, serial);
+                    try {
+                        host.ConfigureNamedActorState(isolate, actor, "{{plan.ActorName}}", Layout,
+                            new[] { new OresVmHost.ActorStateField(OresVmHost.ActorStateScalarKind.Int64, {{Literal(plan.InitialValue)}}) });
+                        return actor;
+                    } catch { host.RetireActor(isolate, actor); throw; }
+                }
+                private Task<long>? _pending;
+                private int _pc;
+                internal GuestResultI64? Result { get; private set; }
+                {{constructor}}
+                internal OresVmHost.ActorPumpStep Start_{{plan.MethodName}}(OresVmHost.ActorDispatchScope scope)
+                {
+                    if (_pc != 0) throw new System.InvalidOperationException("stale start");
+                    {{start}}
+                }
+                private static long Produce(long left, long right) => checked(left + right);
+                private OresVmHost.ActorPumpStep? Resume(OresVmHost.ActorDispatchScope scope)
+                {
+                    if (_pc != 1 || _pending is null || !_pending.IsCompleted)
+                        throw new System.InvalidOperationException("stale or non-ready resume");
+                    _pc = 2;
+                    Result = GuestAwaitResults.TrapCompletedI64(_pending);
+                    return null;
+                }
+            }
+            """.Replace("\r\n", "\n", StringComparison.Ordinal) + "\n";
     }
 }
