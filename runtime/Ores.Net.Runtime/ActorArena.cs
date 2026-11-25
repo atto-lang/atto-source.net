@@ -261,6 +261,8 @@ public unsafe sealed class ActorArena : IDisposable
     }
     private Ref32Proof* _managedRef32Edges;
     private int _managedRef32EdgeCount, _ref32ProofCapacity, _ref32ProofBytes;
+    private void* _guestSlotTable;
+    private int _guestSlotTableBytes;
 
     private byte* _persistent;
     private byte* _scratch;
@@ -393,13 +395,70 @@ public unsafe sealed class ActorArena : IDisposable
     public int ScratchCapacityBytes => _scratchCapacity;
     public int ReservedNativeBytes
     {
-        get { lock (_gate) return checked(_persistentCommitted + _scratchCommitted + _ref32ProofBytes); }
+        get { lock (_gate) return checked(_persistentCommitted + _scratchCommitted + _ref32ProofBytes + _guestSlotTableBytes); }
     }
     public int ReferenceProofNativeBytes
     {
         get { lock (_gate) return _ref32ProofBytes; }
     }
     public bool DemandBacked => _demandBacked;
+
+    // One lazy native guest-slot table per actor incarnation. The arena owns
+    // its lifetime, including outstanding loans after logical STOP.
+    internal void* AllocateGuestSlotTable(ActorArenaTurn turn, int bytes)
+    {
+        lock (_gate)
+        {
+            ValidateTurnLocked(turn);
+            EnsureAdmissionOpenLocked();
+            if (_guestSlotTable != null || bytes <= 0)
+                throw new InvalidOperationException("Guest slot table already admitted or invalid");
+            _budget.Reserve(bytes);
+            bool processReserved = false;
+            try
+            {
+                if (!ReferenceEquals(_budget, ActorArenaBudget.Process))
+                {
+                    ActorArenaBudget.Process.Reserve(bytes);
+                    processReserved = true;
+                }
+                void* table = NativeMemory.AllocZeroed((nuint)bytes);
+                if (table == null) throw new OutOfMemoryException("Native guest slot table");
+                _guestSlotTable = table;
+                _guestSlotTableBytes = bytes;
+                return table;
+            }
+            catch
+            {
+                if (processReserved) ActorArenaBudget.Process.Refund(bytes);
+                _budget.Refund(bytes);
+                throw;
+            }
+        }
+    }
+
+    internal void RollbackGuestSlotTable(ActorArenaTurn turn, void* table)
+    {
+        lock (_gate)
+        {
+            ValidateTurnLocked(turn);
+            if (table == null || table != _guestSlotTable)
+                throw new InvalidOperationException("Foreign guest slot table rollback");
+            ReleaseGuestSlotTableLocked();
+        }
+    }
+
+    private void ReleaseGuestSlotTableLocked()
+    {
+        if (_guestSlotTable == null) return;
+        Zero((byte*)_guestSlotTable, _guestSlotTableBytes);
+        NativeMemory.Free(_guestSlotTable);
+        _guestSlotTable = null;
+        _budget.Refund(_guestSlotTableBytes);
+        if (!ReferenceEquals(_budget, ActorArenaBudget.Process))
+            ActorArenaBudget.Process.Refund(_guestSlotTableBytes);
+        _guestSlotTableBytes = 0;
+    }
 
     public bool IsRetired
     {
@@ -1271,6 +1330,7 @@ public unsafe sealed class ActorArena : IDisposable
         _issuedReadLoans.Clear();
         _issuedLifetimePins.Clear();
         ReleaseRef32ProofsLocked();
+        ReleaseGuestSlotTableLocked();
         _activeTurn = null;
         _activeCarrier = null;
         _nextSlot = 0;
