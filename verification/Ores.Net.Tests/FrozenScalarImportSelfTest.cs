@@ -91,7 +91,7 @@ internal static class FrozenScalarImportSelfTest
         CilEmitter.EmitLibrary(OresStructuredParser.CompileFrozenScalar(argsHeader+"4_0,-2);}",new[]{argsSnapshot}),argsOutput);
         if(!File.ReadAllBytes(argsOutput).AsSpan().SequenceEqual(argBaseline))
             throw new InvalidOperationException("decimal separator changed emitted CIL");
-        foreach(string arguments in new[]{"40","40,-2,1","40,true","40,2.0","40,1+1",
+        foreach(string arguments in new[]{"40","40,-2,1","40,true","40,2.0","40,1/1",
             "9223372036854775808,0","-9223372036854775809,0","40,-2,",string.Join(",",System.Linq.Enumerable.Repeat("1",17))})
         {
             try {
@@ -106,6 +106,33 @@ internal static class FrozenScalarImportSelfTest
         } catch(FormatException e) {
             if(!e.Message.Contains("E_IMPORT_KIND",StringComparison.Ordinal)) throw;
         }
-        Console.WriteLine("Frozen scalar: ten CIL candidates in two equivalent groups, twenty-three rejections; NativeAOT separate");
+        string expressionHeader=header+"define alias web = network; pub fnc main()->int{";
+        string[] expressions={
+            "return web.answer(2+19*2,-2);",
+            "return web.answer((2+18)*2,-2);",
+            "val int x=20; val int y=x*2; return web.answer(y,-2);",
+            "val int selected_call=40; return web.answer(selected_call,-2);"
+        };
+        for(int i=0;i<expressions.Length;i++) {
+            string suffix=i.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            string expressionOutput=output+".expr"+suffix+".dll";
+            CilEmitter.EmitLibrary(OresStructuredParser.CompileFrozenScalar(expressionHeader+expressions[i]+"}",new[]{argsSnapshot}),expressionOutput);
+        }
+        foreach(string invalid in new[]{
+            "val int x=x; return web.answer(x,-2);",
+            "val int x=y; val int y=40; return web.answer(x,-2);",
+            "val int x=20; val int x=40; return web.answer(x,-2);",
+            "val int web=40; return web.answer(web,-2);",
+            "val int x=40; x=41; return web.answer(x,-2);",
+            "return web.answer(web.answer(40,-2),0);",
+            "return web.answer("+new string('(',17)+"40"+new string(')',17)+",-2);",
+            "return web.answer("+string.Join("+",System.Linq.Enumerable.Repeat("1",65))+",-2);"
+        }) {
+            try {
+                _=OresStructuredParser.CompileFrozenScalar(expressionHeader+invalid+"}",new[]{argsSnapshot});
+                throw new InvalidOperationException("invalid expression body admitted: "+invalid);
+            } catch(FormatException) {}
+        }
+        Console.WriteLine("Frozen scalar: fourteen CIL candidates, thirty-one rejections; NativeAOT separate");
     }
 }
