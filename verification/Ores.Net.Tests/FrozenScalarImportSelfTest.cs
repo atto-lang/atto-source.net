@@ -30,7 +30,11 @@ internal static class FrozenScalarImportSelfTest
             header+"define alias web = network; "+main,
             header+"define alias network as web; "+main,
             header+"define alias web = next; define alias next = network; "+main,
-            "import namespace net as web from pkg '"+Name+"/network/http'; "+main
+            "import namespace net as web from pkg '"+Name+"/network/http'; "+main,
+            "import pkg '"+Name+"'; define alias web = package.network; "+main,
+            "import pkg '"+Name+"'; define alias web = project.package.network; "+main,
+            "import pkg '"+Name+"'; define alias web = org.project.package.network; "+main,
+            "import pkg '"+Name+"' as root; define alias root.network as web; "+main
         };
         byte[]? baseline=null;
         foreach(string source in positives)
@@ -43,6 +47,8 @@ internal static class FrozenScalarImportSelfTest
                 throw new InvalidOperationException("equivalent alias spelling changed emitted CIL");
         }
         foreach(var bad in new (string Source,string Code)[]{
+            ("import pkg '"+Name+"' as root; pub fnc main()->int{return package.network.answer();}","E_UNBOUND"),
+            ("import pkg '"+Name+"'; pub fnc main()->int{return package.answer();}","E_UNBOUND"),
             (header+"pub fnc main()->int{return network.secret();}","E_PRIVATE"),
             (header+"pub fnc main()->int{return network.missing();}","E_UNBOUND"),
             (header+"define alias a = b; define alias b = a; pub fnc main()->int{return network.answer();}","E_IMPORT_CYCLE"),
@@ -77,6 +83,6 @@ internal static class FrozenScalarImportSelfTest
         }
         if(baseline is null || !File.ReadAllBytes(output).AsSpan().SequenceEqual(baseline))
             throw new InvalidOperationException("negative tests altered generated artifact");
-        Console.WriteLine("Frozen scalar: four byte-identical emitted CIL guests, eleven rejections; NativeAOT execution separate");
+        Console.WriteLine("Frozen scalar: eight byte-identical emitted CIL guests, thirteen rejections; NativeAOT execution separate");
     }
 }
