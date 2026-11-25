@@ -81,6 +81,33 @@ internal static class StaticImportGraphSelfTest
         Deny("E_SOURCE_LIMIT",()=>budget.BindAliases(new Alias[]{new("extra","p")}));
         var oversized=new Alias[257]; Array.Fill(oversized,new Alias("x","p"));
         Deny("E_SOURCE_LIMIT",()=>PrecheckAliases(oversized));
-        Console.WriteLine("Static import graph: four resolver suites passed; no guest claim");
+        var one=Make(Id(Domain.Package,"@atto-lang/network/http",'a'),true);
+        var two=Make(Id(Domain.Package,"@acme/network/http",'b'),false);
+        var collision=Make(Id(Domain.Package,"@atto_lang/network/http",'c'),false);
+        foreach(bool reverse in new[]{false,true}) {
+            var scope=new StaticImportGraph();
+            scope.BindPackage(reverse?two:one,null);
+            scope.BindPackage(reverse?one:two,null);
+            Deny("E_AMBIGUOUS",()=>scope.Resolve("http.net.http.get"));
+            Deny("E_AMBIGUOUS",()=>scope.Resolve("network.http.net.http.get"));
+            Check(ReferenceEquals(one,scope.Resolve("atto_lang.network.http.net.http.get").View),"full suffix changed identity");
+            Deny("E_UNBOUND",()=>scope.Resolve("acme.network.http.net.http.get"));
+            scope.BindPackage(collision,null);
+            Deny("E_AMBIGUOUS",()=>scope.Resolve("atto_lang.network.http.net.http.get"));
+        }
+        var renamed=new StaticImportGraph();
+        renamed.BindPackage(one,"web");
+        Check(ReferenceEquals(one,renamed.Resolve("web.net.http.get").View),"explicit alias changed identity");
+        Deny("E_UNBOUND",()=>renamed.Resolve("http.net.http.get"));
+        Deny("E_UNBOUND",()=>renamed.Resolve("net.http.get"));
+        var invalid=Make(Id(Domain.Package,"@a/b/shared",'d'),true);
+        Deny("E_IMPORT_PATH",()=>renamed.BindPackage(invalid,null));
+        renamed.BindPackage(invalid,"other");
+        Check(ReferenceEquals(invalid,renamed.Resolve("other.net.http.get").View),"reserved basename explicit rename failed");
+        var nearLimit=new StaticImportGraph();
+        for(int i=0;i<254;i++) nearLimit.BindRoot(one,"v"+i,Tier.Explicit);
+        Deny("E_SOURCE_LIMIT",()=>nearLimit.BindPackage(one,null));
+        Deny("E_UNBOUND",()=>nearLimit.Resolve("http.net.http.get"));
+        Console.WriteLine("Static import graph: five resolver suites passed; no guest claim");
     }
 }
