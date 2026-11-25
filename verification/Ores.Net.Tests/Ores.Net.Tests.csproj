@@ -156,7 +156,9 @@
     <ProjectReference Include="../../runtime/Ores.Net.Runtime/Ores.Net.Runtime.csproj" />
     <Content Include="GeneratedCounterActor.g.cs" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="GeneratedAwaitActor.g.cs" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="GeneratedTaskActor.g.cs" CopyToOutputDirectory="PreserveNewest" />
     <None Update="AwaitCounter.atto" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="TaskCounter.atto" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="GeneratedMessageCounterActor.g.cs" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="GeneratedExternalCounterActor.g.cs" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="GeneratedCounterMainV2.g.cs" CopyToOutputDirectory="PreserveNewest" />
