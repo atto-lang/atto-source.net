@@ -795,7 +795,8 @@ public sealed class ActorRuntime : IDisposable
 
     // Statically bound capability-provider dispatch. This is the existing
     // bounded mailbox admission, not a socket send or asynchronous offload.
-    internal void PostHostMessage(ActorRef actor) => Send(actor, ReadOnlySpan<byte>.Empty);
+    internal void PostHostMessage(ActorRef actor, ReadOnlySpan<byte> payload = default) =>
+        Send(actor, payload);
 
     public void Dispose()
     {
