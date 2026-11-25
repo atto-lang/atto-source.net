@@ -13,6 +13,7 @@ internal static class ActorSlabHeapSelfTest
         PackingAndCrossClassReuse();
         ForgedInteriorAndTailRefsFailClosed();
         BudgetFailureIsAtomic();
+        LargeRequestsAndGranuleRespectNativeWidth();
         HandlesFifoStaleAndQuarantine();
         StressIntegrity();
         SmallClassSteadyStateAllocatesNoManagedBytes();
@@ -90,6 +91,23 @@ internal static class ActorSlabHeapSelfTest
         Check(h.Allocate(100_000, 8, out _) == SlabStatus.BudgetExceeded, "large over budget");
         Check(h.Stats.LiveObjects == before.LiveObjects && h.Stats.LivePages == before.LivePages, "unchanged");
         Check(h.Free(refs[^1]) == SlabStatus.Ok && h.Allocate(512, 8, out _) == SlabStatus.Ok, "keeps working");
+    }
+
+    private static void LargeRequestsAndGranuleRespectNativeWidth()
+    {
+        // The same 4-GiB-minus-one-page reserve is representable on x86/arm32
+        // and x64/arm64. Only 64 KiB is actually available to commit.
+        nuint reserve = (nuint)0xFFFFF000u;
+        using var h = new ActorSlabHeap(new ActorSlabHeapConfig(reserve, 64 * 1024)
+        { CommitGranule = nuint.MaxValue });
+        Check(h.Allocate(reserve, 8, out var bad) == SlabStatus.OutOfMemory && bad == 0,
+            "large request must include its header within reserve");
+        Check(h.Allocate(reserve - ActorSlabHeap.HeaderBytes, 8, out bad) == SlabStatus.BudgetExceeded && bad == 0,
+            "large near-limit request must respect physical budget before commit");
+        Check(h.Stats.LiveObjects == 0 && h.Stats.CommittedBytes == 0, "large refusal leaves no live allocation");
+        Check(h.Allocate(16, 8, out var word) == SlabStatus.Ok, "small allocation after large refusal");
+        Check(h.Stats.CommittedBytes == 64 * 1024, "commit granule is bounded by physical budget");
+        Check(h.Free(word) == SlabStatus.Ok, "free after large refusal");
     }
 
     private static void HandlesFifoStaleAndQuarantine()
