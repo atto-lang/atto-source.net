@@ -38,7 +38,9 @@ public static class FrozenPackageArchive
     }
     public static FrozenImportSnapshot Read(string archive,string name,string version,string trustedLock)
     {
-        using var bytes=new MemoryStream(ReadBounded(archive,MaxArchive),writable:false);
+        byte[] original=ReadBounded(archive,MaxArchive);
+        var directory=FrozenZipDirectory.Inspect(original);
+        using var bytes=new MemoryStream(original,writable:false);
         using var zip=new ZipArchive(bytes,ZipArchiveMode.Read);
         if(zip.Entries.Count>66) throw new FormatException("E_SOURCE_LIMIT: archive entry budget exceeded");
         var sources=new Dictionary<string,byte[]>(StringComparer.Ordinal);
@@ -49,6 +51,7 @@ public static class FrozenPackageArchive
             string key=entry.FullName;
             if(!names.Add(key)||key.EndsWith('/'))
                 throw new FormatException("E_IMPORT_PATH: duplicate or directory archive entry");
+            if(!directory.TryGetValue(key,out var indexed)) throw new FormatException("E_IMPORT_PATH: unindexed ZIP entry");
             int limit=key switch {
                 ".atto.pkg.toml"=>8192,
                 ".atto.pkg.lock"=>32768,
@@ -56,15 +59,20 @@ public static class FrozenPackageArchive
                     key[..^5].Split('/').All(Component)=>1048576,
                 _=>throw new FormatException("E_IMPORT_PATH: invalid archive entry name")
             };
+            if(entry.Length!=indexed.Size||entry.CompressedLength!=indexed.Compressed)
+                throw new FormatException("E_IMPORT_PATH: central ZIP content mismatch");
             if(entry.Length>limit||entry.Length>MaxTotal-total)
                 throw new FormatException("E_SOURCE_LIMIT: expanded archive budget exceeded");
             using var input=entry.Open();
             byte[] data=ReadBounded(input,Math.Min(limit,MaxTotal-total));
+            if(data.Length!=indexed.Size||FrozenZipDirectory.Crc32(data)!=indexed.Crc)
+                throw new FormatException("E_IMPORT_PATH: decoded ZIP content mismatch");
             total+=data.Length;
             if(key==".atto.pkg.toml") manifest=data;
             else if(key==".atto.pkg.lock") lockBytes=data;
             else sources.Add(key,data);
         }
+        if(!names.SetEquals(directory.Keys)) throw new FormatException("E_IMPORT_PATH: incomplete ZIP inventory");
         if(manifest is null||lockBytes is null) throw new FormatException("E_LOCK: missing manifest or lock entry");
         return FrozenImportSnapshot.Verify(name,version,trustedLock,manifest,lockBytes,sources);
     }
