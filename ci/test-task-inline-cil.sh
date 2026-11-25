@@ -16,7 +16,13 @@ if [[ "$mode" == macos-arm64 ]]; then
   for fixture in inline-value inline-cooperate nested-inline guard-result-task guard-nonlocal inline-writeback inline-suspends-marker inline-local-loops inline-assignment-writeback inline-shortcircuit-writeback; do
     destination="artifacts/sync-task-$fixture"
     bash scripts/publish-macos.sh "$source/$fixture.atto" "$destination"
-    [[ "$(env -i PATH=/usr/bin:/bin "$destination/osx-arm64/oreslang-app")" == 42 ]]
+    guest_status=0
+    guest_output=$(env -i PATH=/usr/bin:/bin "$destination/osx-arm64/oreslang-app" 2>"$work/$fixture.stderr") || guest_status=$?
+    if [[ "$guest_status" != 0 || "$guest_output" != 42 ]]; then
+      printf 'SYNC_TASK_GUEST_MISMATCH %s %s status=%s stdout=%s\n' "$mode" "$fixture" "$guest_status" "$guest_output" >&2
+      cat "$work/$fixture.stderr" >&2
+      exit 1
+    fi
     printf 'SYNC_TASK_GUEST %s %s value=42\n' "$mode" "$fixture"
   done
   oresnet=(artifacts/compiler/osx-arm64/oresnet)
@@ -30,7 +36,13 @@ else
     dotnet build host/Ores.Net.NativeHost -c Release --no-incremental -o "$destination/app" \
       -p:PublishAot=false -p:SelfContained=false -p:PublishTrimmed=false \
       "-p:GeneratedAssembly=$destination/OresGenerated.dll"
-    [[ "$(dotnet "$destination/app/oreslang-app.dll")" == 42 ]]
+    guest_status=0
+    guest_output=$(dotnet "$destination/app/oreslang-app.dll" 2>"$work/$fixture.stderr") || guest_status=$?
+    if [[ "$guest_status" != 0 || "$guest_output" != 42 ]]; then
+      printf 'SYNC_TASK_GUEST_MISMATCH %s %s status=%s stdout=%s\n' "$mode" "$fixture" "$guest_status" "$guest_output" >&2
+      cat "$work/$fixture.stderr" >&2
+      exit 1
+    fi
     printf 'SYNC_TASK_GUEST %s %s value=42\n' "$mode" "$fixture"
   done
 fi

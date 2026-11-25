@@ -10,7 +10,7 @@ fnc and_case(bool run): int {
         guard result, state.is_some() { return 1; }
         return count + state.unwrap();
     } fi
-    guard !result, state.is_none() { return 2; }
+    guard result eq false, state.is_none() { return 2; }
     return count + 42;
 }
 fnc or_case(bool skip): int {
@@ -26,7 +26,7 @@ fnc or_case(bool skip): int {
         guard result, state.is_none() { return 3; }
         return count + 42;
     } fi
-    guard !result, state.is_some() { return 4; }
+    guard result eq false, state.is_some() { return 4; }
     return count + state.unwrap();
 }
 pub fnc main(): int {
