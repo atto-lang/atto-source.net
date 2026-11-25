@@ -59,6 +59,7 @@ public static partial class OresStructuredParser
         }
         // Diagnose unused cycles before any provider parsing or lookup.
         StaticImportGraph.PrecheckAliases(aliases);
+        FrozenDependencyGraph.Verify(packages);
         var graph=new StaticImportGraph();
         foreach(var import in imports)
         {
