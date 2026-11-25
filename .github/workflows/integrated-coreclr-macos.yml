@@ -1,0 +1,48 @@
+name: Integrated CoreCLR macOS guest recovery
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/integrated-coreclr-macos.yml'
+      - 'compiler/**'
+      - 'runtime/**'
+      - 'host/**'
+      - 'ci/test-*.sh'
+      - 'tests/fixtures/**'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  coreclr-macos:
+    runs-on: macos-15
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [task, result, guard, root-task]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.x'
+      - name: Execute exact-head managed guest suite on macOS
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          SUITE: ${{ matrix.suite }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = arm64
+          git log -1 --format='%H %T'
+          dotnet --info
+          case "$SUITE" in
+            task) bash ci/test-task-inline-cil.sh coreclr ;;
+            result) bash ci/test-guest-result-cil.sh ;;
+            guard) bash ci/test-guard-dual-form-net.sh coreclr ;;
+            root-task) bash ci/test-root-task-forward-port.sh coreclr ;;
+            *) exit 2 ;;
+          esac
+          echo "CORECLR_MACOS_SUITE_PASSED $SUITE"
