@@ -6,7 +6,7 @@ public sealed partial class OresVmHost
     // the next segment waits on a task without retaining a physical carrier.
     // The readiness task is not execution authority or a guest Future ABI.
     internal sealed record ActorPumpStep(Task Ready, Func<ActorDispatchScope, ActorPumpStep?> Next,
-        ActorScalarTask? Producer = null);
+        ActorScalarTask? Producer = null, bool ObserveFaultInSegment = false);
 
     // A single capture-free scalar producer per suspended receive, executed
     // as its own work item on the same bounded actor domain. No Task.Run,
@@ -20,10 +20,20 @@ public sealed partial class OresVmHost
         internal ActorScalarTask(Func<long> body) =>
             _body = body ?? throw new ArgumentNullException(nameof(body));
         internal Task<long> Future => _completion.Task;
+        internal void Claim()
+        {
+            if (Interlocked.CompareExchange(ref _claimed, 1, 0) != 0)
+                throw new InvalidOperationException("scalar producer replay");
+        }
         internal void Run()
         {
-            if (Interlocked.Exchange(ref _claimed, 1) != 0)
-                throw new InvalidOperationException("scalar producer replay");
+            Claim();
+            RunClaimed();
+        }
+        internal void RunClaimed()
+        {
+            if (Interlocked.CompareExchange(ref _claimed, 2, 1) != 1)
+                throw new InvalidOperationException("scalar producer not admitted or replayed");
             try { _completion.TrySetResult(_body()); }
             catch (Exception error) { _completion.TrySetException(error); }
         }
@@ -120,9 +130,11 @@ public sealed partial class OresVmHost
                         (preferResume || (!controlReady && !ordinaryReady));
                     if (chooseResume && (!chooseProducer || !preferProducer)) {
                         var item = pending[readyIndex];
-                        // Completed fault/cancellation terminates this pump;
-                        // finally discards all of its still-pending tickets.
-                        item.Step.Ready.GetAwaiter().GetResult();
+                        // Opt-in generated await observes the original typed CLR
+                        // outcome on its fresh carrier, outside the host gate.
+                        // Legacy callbacks retain the fail-closed success gate.
+                        if (!item.Step.ObserveFaultInSegment)
+                            item.Step.Ready.GetAwaiter().GetResult();
                         ValidateContinuation(scheduler, actor, item.Ticket);
                         lease = new object();
                         turn = item.Ticket.Turn;
@@ -135,7 +147,9 @@ public sealed partial class OresVmHost
                         preferResume = false;
                         preferProducer = true;
                     } else if (chooseProducer) {
-                        producer = pending[producerIndex].Step.Producer;
+                        producer = pending[producerIndex].Step.Producer!;
+                        // Admission and parent cancellation are ordered by _gate.
+                        producer.Claim();
                         preferResume = false;
                         preferProducer = false;
                     } else if (controlReady || ordinaryReady) {
@@ -172,7 +186,7 @@ public sealed partial class OresVmHost
             }
 
             if (producer is not null) {
-                producer.Run(); // outside gate; no active actor state lease
+                producer.RunClaimed(); // outside gate; no active actor state lease
                 return null;
             }
             if (turn is null) return waits!;
