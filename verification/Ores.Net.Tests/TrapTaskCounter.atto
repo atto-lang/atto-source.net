@@ -1,0 +1,8 @@
+namespace counter;
+declare pub actor TrapTaskCounter;
+define state on actor TrapTaskCounter as { let int count: 0; }
+
+pub suspends mtd (TrapTaskCounter counter) observe(): Result<int, Error> {
+    val Future<int> pending = task<int> { return 19 + 23; };
+    return trap!(await pending);
+}
