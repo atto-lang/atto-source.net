@@ -106,7 +106,7 @@ public sealed partial class OresVmHost
         internal readonly Dictionary<ulong, ActorTicket> Actors = new();
         internal readonly Dictionary<ActorTicket, int> PinsByActor = new();
         // One bounded terminal reservation per admitted supervised child incarnation.
-        internal readonly Dictionary<ActorTicket, SupervisorTerminalReservation> SupervisorTerminals = new();
+        internal readonly Dictionary<(ulong Id, ulong Epoch), SupervisorTerminalReservation> SupervisorTerminals = new();
         internal int ActivePins;
         internal long ScalarState;
         internal int ActiveGuestCalls;
@@ -521,7 +521,7 @@ public sealed partial class OresVmHost
             s.Actors.Remove(actor.Id);
             // Publish only after host retirement, into the pre-reserved record.
             // No DATA capacity, mailbox send, or guest callback is involved.
-            if (s.SupervisorTerminals.TryGetValue(actor, out var terminal))
+            if (s.SupervisorTerminals.TryGetValue((actor.Id, actor.Epoch), out var terminal))
                 terminal.Outcome = outcome;
         }
     }
