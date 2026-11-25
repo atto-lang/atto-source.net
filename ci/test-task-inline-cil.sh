@@ -10,7 +10,7 @@ host=host/Ores.Net.NativeHost/Ores.Net.NativeHost.csproj
 task_host=host/Ores.Net.TaskI64NativeHost/Ores.Net.TaskI64NativeHost.csproj
 work="$(mktemp -d)"
 trap 'rm -rf -- "$work"' EXIT
-fixtures=(inline-value inline-cooperate nested-inline guard-result-task guard-nonlocal inline-writeback inline-suspends-marker inline-local-loops inline-assignment-writeback inline-shortcircuit-writeback inline-conditional-writeback inline-match-writeback inline-ternary-writeback inline-prefix-not inline-parenthesized-not)
+fixtures=(inline-value inline-cooperate nested-inline guard-result-task guard-nonlocal inline-writeback inline-suspends-marker inline-local-loops inline-local-loops-do inline-assignment-writeback inline-shortcircuit-writeback inline-conditional-writeback inline-match-writeback inline-ternary-writeback inline-prefix-not inline-parenthesized-not)
 failures=0
 
 # One exact compiler per lane, in a fresh private temporary directory.
