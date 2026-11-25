@@ -1,0 +1,13 @@
+fnc quotient(int numerator, int denominator): int {
+  ^ numerator / denominator;
+}
+
+pub fnc main(): int {
+  val ok = trap! quotient(-7, 3);
+  val zero = trap quotient(7, 0);
+  val overflow = trap! quotient(-9223372036854775808, -1);
+  guard ok.unwrap() eq -2 { return 1; }
+  guard zero.unwrap_err() is DivisionByZeroError { return 2; }
+  guard overflow.unwrap_err() is ArithmeticOverflowError { return 3; }
+  return 42;
+}

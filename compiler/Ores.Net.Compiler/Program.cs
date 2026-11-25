@@ -13,8 +13,8 @@ if(args.Length>0 && args[0] is "check-frozen" or "compile-frozen")
     }
 }
 
-// The shipping default stays byte-for-byte unchanged. Only the scalar
-// check/compile lane may select the preview v1/v2 callable-body contract.
+// Only the scalar check/compile lane may select the preview v1/v2
+// callable-body contract.
 int? explicitLanguageVersion = null;
 var retainedArgs = new List<string>();
 for (int index = 0; index < args.Length; index++)
@@ -77,9 +77,8 @@ bool validDeclaredReceiveSyntax = args.Length == 2 &&
 bool validCompile = args.Length == 4 && args[0] == "compile" && args[2] == "--out";
 bool validTaskCheck = args.Length == 2 && args[0] == "check-task-i64";
 bool validTaskCompile = args.Length == 4 && args[0] == "compile-task-i64" && args[2] == "--out";
-// Opt-in verification lane only: never silently broaden shipping scalar check/compile.
-// Separate opt-in nominal enum guest/compiler slice; shipping scalar and
-// structured entrypoints retain their fail-closed ADT admission boundaries.
+// Nominal enums are a separate opt-in guest compiler slice. Normal
+// check/compile only admit guards via the verified standalone CFG profile.
 bool validEnumCheck = args.Length == 2 && args[0] == "check-enum-v1";
 bool validEnumCompile = args.Length == 4 &&
     args[0] == "compile-enum-v1" && args[2] == "--out";
@@ -315,20 +314,23 @@ try
         Console.WriteLine($"Emitted experimental static actor C# from verified increment IR: {Path.GetFullPath(args[3])}");
         return 0;
     }
-    if (validStructuredCheck || validStructuredCompile)
+    bool normalStructuredEntry = (validCheck || validCompile) && !mathI64Granted &&
+        !explicitLanguageVersion.HasValue &&
+        string.Equals(Path.GetExtension(args[1]), ".atto", StringComparison.OrdinalIgnoreCase);
+    var verifiedCfg = validStructuredCheck || validStructuredCompile
+        ? OresStructuredCfgLowering.LowerModule(source)
+        : normalStructuredEntry ? OresStructuredCfgLowering.TryLowerProductionModule(source) : null;
+    if (verifiedCfg is not null)
     {
-        // Experimental typed source -> verified CFG -> deterministic CIL.
-        // Never enter the shipping scalar path or accept unsupported effects.
-        var verifiedCfg = OresStructuredCfgLowering.LowerModule(source);
-        if (validStructuredCompile)
+        if (validCompile || validStructuredCompile)
         {
             if (!string.Equals(Path.GetFileName(args[3]), "OresGenerated.dll",
                 StringComparison.OrdinalIgnoreCase))
                 throw new ArgumentException("Generated assembly must be named OresGenerated.dll");
             CilEmitter.EmitLibrary(verifiedCfg, args[3]);
-            Console.WriteLine($"Emitted experimental structured CIL: {Path.GetFullPath(args[3])}");
+            Console.WriteLine($"Emitted verified CFG CIL: {Path.GetFullPath(args[3])}");
         }
-        else Console.WriteLine("Experimental structured source and verified CFG: OK");
+        else Console.WriteLine("AttoLang source and verified CFG: OK");
         return 0;
     }
     var expression = OresParser.Parse(source, dotnetPolicy, explicitLanguageVersion);

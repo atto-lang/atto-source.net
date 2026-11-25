@@ -30,5 +30,16 @@ public static class RuntimeHost
             await Console.Error.WriteLineAsync("Oreslang negative integer exponent");
             return 70;
         }
+        catch (GuestSignal signal)
+        {
+            string effect = signal switch
+            {
+                GuestPanicSignal => "panic",
+                GuestRaiseSignal => "raise",
+                _ => "error"
+            };
+            await Console.Error.WriteLineAsync($"Oreslang {effect}: {signal.Error.Message}");
+            return 70;
+        }
     }
 }

@@ -36,23 +36,37 @@ public static class TaskI64Source
         }
         if (Current() == "define") at++;
         if (Current() == "pub") at++;
+        bool suspendingEntry = Current() is "susp" or "suspends";
+        if (suspendingEntry) at++;
         Expect("fnc"); Expect("main"); Expect("("); Expect(")");
         Expect(":"); Expect("int"); Expect("{");
-        if (Current() is not ("const" or "let"))
+        string bindingKind = Current();
+        if (bindingKind is not ("const" or "let" or "val"))
             throw new FormatException("Task-i64 root requires one explicit Future<int> binding");
         at++;
         Expect("Future"); Expect("<"); Expect("int"); Expect(">");
         string name = Current();
         if (name.Length is < 1 or > 128 || !IdentifierStart(name[0]) ||
-            !name.All(IdentifierPart) || name is "task" or "await" or "return" or
+            !name.All(IdentifierPart) || name is "task" or "await" or "return" or "susp" or "suspends" or "val" or "sync" or
                 "Future" or "Task" or "self" or "main" or "int" or "let" or "const" or
                 "throw" or "raise" or "panic" or "async" or "suspend" or "spawn" or
                 "actor" or "class" or "if" or "else" or "while" or "for" or "end" or
                 "true" or "false" or "fnc" or "pub" or "define" or "rt")
             throw new FormatException("Task-i64 Future binding needs an ordinary identifier");
         at++;
-        Expect("="); Expect("Future"); Expect("."); Expect("from_task"); Expect("(");
-        Expect("task"); Expect("{"); Expect("return");
+        Expect("=");
+        bool canonical = Current() == "task";
+        if (canonical && (!suspendingEntry || bindingKind == "const"))
+            throw new FormatException("Task-i64 scheduled task requires a suspending root and a runtime Future binding");
+        if (!canonical)
+        {
+            Expect("Future"); Expect("."); Expect("from_task"); Expect("(");
+        }
+        Expect("task");
+        if (canonical) { Expect("<"); Expect("int"); Expect(">"); }
+        Expect("{");
+        if (Current() == "^") at++;
+        else Expect("return");
         var body = new List<string>();
         while (Current() != ";")
         {
@@ -70,7 +84,9 @@ public static class TaskI64Source
         var producer = OresIrLowering.Lower(expression);
         if (producer.Instructions.Count > 4096)
             throw new FormatException("Task-i64 producer exceeds 4096 verified operations");
-        Expect(";"); Expect("}"); Expect(")"); Expect(";");
+        Expect(";"); Expect("}");
+        if (!canonical) Expect(")");
+        Expect(";");
         Expect("return");
         if (Current() == "await")
         {
@@ -132,7 +148,7 @@ public static class TaskI64Source
             {
                 while (i < source.Length && IdentifierPart(source[i])) i++;
             }
-            else if (!"(){}:;=<>.+-*".Contains(c))
+            else if (!"(){}:;=<>.+-*^".Contains(c))
                 throw new FormatException($"Unsupported Task-i64 source character at offset {start}");
             if (i - start > 128) throw new FormatException("Task-i64 token exceeds 128 characters");
             tokens.Add(source[start..i]);

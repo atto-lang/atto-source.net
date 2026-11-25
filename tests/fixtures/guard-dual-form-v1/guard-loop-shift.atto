@@ -1,0 +1,10 @@
+pub fnc main(): int {
+    let int count = 0;
+    loop {
+        count = count + 1;
+        if count eq 21 { break; } fi
+        continue;
+    }
+    guard count eq 21 { return 1; }
+    return count <<< 1;
+}
