@@ -59,6 +59,62 @@ public static partial class OresStructuredParser
         }
         // Diagnose unused cycles before any provider parsing or lookup.
         StaticImportGraph.PrecheckAliases(aliases);
+        var graph=new StaticImportGraph();
+        foreach(var import in imports)
+        {
+            if(import.Selector is null)
+            {
+                if(!available.TryGetValue(import.Source,out var root))
+                    throw new FormatException("E_UNBOUND: package root not in authenticated snapshot set");
+                graph.BindPackage(root.FunctionView(),import.Binding);
+                continue;
+            }
+            string[] parts=import.Source.Split('/');
+            if(parts.Length<3) throw new FormatException("E_IMPORT_PATH: invalid package selector");
+            if(!available.TryGetValue(string.Join("/",parts.Take(3)),out var package))
+                throw new FormatException("E_UNBOUND: package not in authenticated snapshot set");
+            package.BindNamespace(graph,import.Source,import.Selector,import.Binding!,import.Renamed);
+        }
+        graph.BindAliases(aliases);
+
+        var providerPrefixes=new Dictionary<(string Name,string Namespace),string>();
+        var methods=new Dictionary<string,StructuredFunction>(StringComparer.Ordinal);
+        var order=new List<string>();
+        int calls=0;
+        reader.ResolveCall=(reference,arguments)=>{
+            if(++calls>32) throw new FormatException("E_SOURCE_LIMIT: imported call budget exceeded");
+            var target=graph.Resolve(reference);
+            if(target.Kind!=StaticImportGraph.Kind.Fnc)
+                throw new FormatException("E_IMPORT_KIND: expected public function");
+            if(!available.TryGetValue(target.View.Origin.Identity,out var owner) ||
+                !ReferenceEquals(owner.FunctionView(),target.View))
+                throw new FormatException("E_IMPORT_PATH: selected view not owned by authenticated snapshot");
+            int dot=target.Path.LastIndexOf('.');
+            if(dot<=0) throw new FormatException("E_IMPORT_PATH: missing provider namespace");
+            string ns=target.Path[..dot], member=target.Path[(dot+1)..];
+            var key=(owner.Name,ns);
+            if(!providerPrefixes.TryGetValue(key,out var prefix)) {
+                if(providerPrefixes.Count>=16) throw new FormatException("E_SOURCE_LIMIT: provider budget exceeded");
+                prefix="frozen_provider_"+providerPrefixes.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)+"_";
+                var provider=ParseFrozenProvider(owner,ns,prefix);
+                var functions=provider.Functions ?? throw new FormatException("E_IMPORT_KIND: missing provider functions");
+                if(functions.ContainsKey(prefix+"main"))
+                    throw new FormatException("E_UNSUPPORTED: provider main remains outside bounded profile");
+                if(functions.Count>64-methods.Count)
+                    throw new FormatException("E_SOURCE_LIMIT: linked function budget exceeded");
+                foreach(string method in provider.FunctionOrder ?? throw new FormatException("E_IMPORT_KIND: missing provider order")) {
+                    if(!methods.TryAdd(method,functions[method]))
+                        throw new FormatException("E_DUPLICATE: canonical provider method");
+                    order.Add(method);
+                }
+                providerPrefixes.Add(key,prefix);
+            }
+            string canonical=prefix+member;
+            if(!methods.TryGetValue(canonical,out var function)||function.Parameters.Count!=arguments.Count||
+                function.Parameters.Any(p=>p.Type!=IrValueType.I64)||function.ResultType!=IrValueType.I64)
+                throw new FormatException("E_IMPORT_KIND: selected function must accept exact signed-int arguments and return int");
+            return new StructuredCall(0,canonical,arguments,IrValueType.I64);
+        };
         reader.Expect("pub"); reader.Expect("fnc"); reader.Expect("main");
         reader.Expect("("); reader.Expect(")");
         if(!reader.Take("->")) reader.Expect(":");
@@ -77,60 +133,13 @@ public static partial class OresStructuredParser
             body.Add(new StructuredLet(0,generated,IrValueType.I64,initial,StructuredBindingKind.Val));
         }
         reader.Expect("return");
-        string call=reader.Path();
-        reader.Expect("(");
-        var arguments=new List<StructuredExpr>();
-        if(!reader.Take(")")) {
-            do {
-                if(arguments.Count>=16) throw new FormatException("E_SOURCE_LIMIT: call argument budget exceeded");
-                arguments.Add(reader.Expression(0));
-            } while(reader.Take(","));
-            reader.Expect(")");
-        }
+        var result=reader.Expression(0);
         reader.Expect(";"); reader.Expect("}");
         if(!reader.AtEnd) throw new FormatException("E_UNSUPPORTED: trailing guest source");
-        if(!call.Contains('.')) throw new FormatException("E_UNSUPPORTED: qualified static call required");
-
-        if(reader.Locals.ContainsKey(call[..call.IndexOf('.')]))
-            throw new FormatException("E_IMPORT_KIND: scalar local shadows qualified call root");
-        var graph=new StaticImportGraph();
-        foreach(var import in imports)
-        {
-            if(import.Selector is null)
-            {
-                if(!available.TryGetValue(import.Source,out var root))
-                    throw new FormatException("E_UNBOUND: package root not in authenticated snapshot set");
-                graph.BindPackage(root.FunctionView(),import.Binding);
-                continue;
-            }
-            string[] parts=import.Source.Split('/');
-            if(parts.Length<3) throw new FormatException("E_IMPORT_PATH: invalid package selector");
-            if(!available.TryGetValue(string.Join("/",parts.Take(3)),out var package))
-                throw new FormatException("E_UNBOUND: package not in authenticated snapshot set");
-            package.BindNamespace(graph,import.Source,import.Selector,import.Binding!,import.Renamed);
-        }
-        graph.BindAliases(aliases);
-        var target=graph.Resolve(call);
-        if(target.Kind!=StaticImportGraph.Kind.Fnc)
-            throw new FormatException("E_IMPORT_KIND: expected public function");
-        if(!available.TryGetValue(target.View.Origin.Identity,out var owner) ||
-            !ReferenceEquals(owner.FunctionView(),target.View))
-            throw new FormatException("E_IMPORT_PATH: selected view not owned by authenticated snapshot");
-        int dot=target.Path.LastIndexOf('.');
-        if(dot<=0) throw new FormatException("E_IMPORT_PATH: missing provider namespace");
-        var provider=ParseFrozenProvider(owner,target.Path[..dot]);
-        string member=target.Path[(dot+1)..];
-        var functions=provider.Functions ?? throw new FormatException("E_IMPORT_KIND: missing provider functions");
-        if(!functions.TryGetValue(member,out var function) || function.Parameters.Count!=arguments.Count ||
-           function.Parameters.Any(p=>p.Type!=IrValueType.I64) || function.ResultType!=IrValueType.I64)
-            throw new FormatException("E_IMPORT_KIND: selected function must accept the exact signed-int argument list and return int");
-        // Reserve the entry method name; do not confuse an imported main with
-        // the synthesized consumer entry. Other helper names remain unchanged.
-        if(functions.ContainsKey("main"))
-            throw new FormatException("E_UNSUPPORTED: provider main requires canonical method names");
-        var result=new StructuredCall(0,member,arguments.AsReadOnly(),IrValueType.I64);
+        if(calls==0) throw new FormatException("E_UNSUPPORTED: frozen guest requires imported call");
         body.Add(new StructuredReturn(0,result));
-        var program=new StructuredProgram("main",body.AsReadOnly(),functions,provider.FunctionOrder);
+        var program=new StructuredProgram("main",body.AsReadOnly(),
+            new System.Collections.ObjectModel.ReadOnlyDictionary<string,StructuredFunction>(methods),order.AsReadOnly());
         return OresStructuredCfgLowering.LowerModule(program);
     }
 
@@ -139,6 +148,7 @@ public static partial class OresStructuredParser
         private readonly Lexer lexer;
         private Token current;
         private int expressionNodes;
+        internal Func<string,IReadOnlyList<StructuredExpr>,StructuredExpr>? ResolveCall;
         internal Dictionary<string,string> Locals {get;}=new(StringComparer.Ordinal);
         internal FrozenConsumerReader(Lexer lexer) {this.lexer=lexer;current=lexer.Read();}
         internal bool AtEnd => current.Text.Length==0;
@@ -196,6 +206,25 @@ public static partial class OresStructuredParser
             }
             if(ContextualImportPath.Valid(current.Text)) {
                 string name=Component();
+                if(current.Text==".") {
+                    if(Locals.ContainsKey(name)) throw new FormatException("E_IMPORT_KIND: scalar local shadows qualified call root");
+                    string reference=name;
+                    int count=1;
+                    while(Take(".")) {
+                        if(++count>8) throw new FormatException("E_IMPORT_PATH: path too deep");
+                        reference+="."+Component();
+                    }
+                    Expect("(");
+                    var args=new List<StructuredExpr>();
+                    if(!Take(")")) {
+                        do {
+                            if(args.Count>=16) throw new FormatException("E_SOURCE_LIMIT: call argument budget exceeded");
+                            args.Add(Expression(depth+1));
+                        } while(Take(","));
+                        Expect(")");
+                    }
+                    return (ResolveCall ?? throw new FormatException("E_UNSUPPORTED: import call unavailable"))(reference,args.AsReadOnly());
+                }
                 if(!Locals.TryGetValue(name,out var generated))
                     throw new FormatException("E_UNBOUND: unbound scalar local");
                 return new StructuredRead(0,generated,IrValueType.I64);
