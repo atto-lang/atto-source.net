@@ -173,6 +173,8 @@ public static partial class OresStructuredParser
             var operand = Unary(depth + 1);
             if (!operand.Type.IsResult() && operand.Type != IrValueType.OptionI64) return operand;
             if (!Take("?")) return operand;
+            if (inlineTaskDepth != 0)
+                throw Error("E_SYNC_TASK_PROPAGATION_UNSUPPORTED: postfix ? requires a typed inline failure return");
             if (trapOperandDepth != 0)
                 throw Error("E_TRAP_PROPAGATION_UNSUPPORTED: postfix ? inside a trap operand requires a nonlocal exit");
             if (activeReturnType != operand.Type)

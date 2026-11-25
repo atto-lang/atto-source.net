@@ -11,17 +11,15 @@ internal sealed record StructuredMatch(StructuredExpr Subject, IReadOnlyList<Str
     IrValueType Type, bool Completes);
 internal sealed record StructuredDoMatch(int At, StructuredMatch Match) : StructuredStmt(At);
 internal sealed record StructuredMatchValue(int At, StructuredMatch Match) : StructuredExpr(At, Match.Type);
-internal sealed record StructuredMatchExit(int At) : StructuredStmt(At);
 
 public static partial class OresStructuredParser
 {
     private sealed partial class Reader
     {
-        private int doMatchDepth;
-
         private StructuredExpr ReadMatchValue(int offset, int depth)
         {
-            var match = ReadMatch(depth + 1, imperative: false);
+            var match = ReadMatch(depth + 1, imperative: false,
+                writebackRoot: matchWritebackRoot == offset);
             var children = new List<StructuredExpr> { match.Subject };
             foreach (var arm in match.Arms)
             {
@@ -31,7 +29,7 @@ public static partial class OresStructuredParser
             return TaggedPostfix(TypedNode(new StructuredMatchValue(offset, match), children.ToArray()), depth);
         }
 
-        private StructuredMatch ReadMatch(int depth, bool imperative)
+        private StructuredMatch ReadMatch(int depth, bool imperative, bool writebackRoot = false)
         {
             Budget(depth);
             IrValueType? result = imperative ? IrValueType.Void : null;
@@ -82,14 +80,16 @@ public static partial class OresStructuredParser
                         bool arrow = Take("->");
                         if (imperative)
                         {
-                            doMatchDepth++;
+                            var previousReturn = localReturn;
+                            var scopeReturn = new LocalReturnScope("MATCH_VOID_ARM", IrValueType.Void, loopDepth);
+                            localReturn = scopeReturn;
                             try
                             {
                                 var (body, terminal) = Block(depth + 1);
-                                completes |= !terminal || HasArmExit(body);
+                                completes |= !terminal || scopeReturn.HasExit;
                                 arms.Add(new StructuredMatchArm(tags, literal, binding, bindingType, guard, body, null));
                             }
-                            finally { doMatchDepth--; }
+                            finally { localReturn = previousReturn; }
                         }
                         else
                         {
@@ -97,8 +97,7 @@ public static partial class OresStructuredParser
                             if (braced && !Take("return") && !Take("^"))
                                 throw Error("MATCH_ARM_RETURN_REQUIRED: a value match block requires return or ^");
                             if (!braced && !arrow) throw Error("Expected a match arm block or '->'");
-                            var value = (result ?? context) is { } expected
-                                ? ExpectedExpr(depth + 1, expected) : Expr(depth + 1);
+                            var value = ReadMatchStatementArm(depth + 1, result ?? context, writebackRoot);
                             if (value.Type is IrValueType.FixedArrayI64 or IrValueType.Void)
                                 throw Error("MATCH_VALUE_ABI_UNSUPPORTED: match requires a supported scalar or tagged result");
                             result ??= value.Type;
@@ -123,16 +122,6 @@ public static partial class OresStructuredParser
             }
             finally { expectedExpressionType = context; }
         }
-
-        private static bool HasArmExit(IReadOnlyList<StructuredStmt> body) => body.Any(statement =>
-            statement switch
-            {
-                StructuredMatchExit => true,
-                StructuredIf conditional => HasArmExit(conditional.Then) ||
-                    conditional.Else is { } otherwise && HasArmExit(otherwise),
-                StructuredWhile loop => HasArmExit(loop.Body),
-                _ => false
-            });
 
         private long? ReadMatchLiteral()
         {
