@@ -22,10 +22,12 @@ public static partial class OresStructuredParser
         private int inlineTaskDepth;
         private int? inlineValueBindingFloor;
         private int? directInlineWritebackOffset;
+        private int? conditionalWritebackRoot;
+        private HashSet<int>? conditionalWritebackArms;
 
         // Lexical lookahead only selects the supported statement context.
         // The ordinary typed parser still checks the complete task and result.
-        private bool IsDirectInlineStatementValue(int start)
+        private bool IsDirectInlineStatementValue(int start, string terminator = ";")
         {
             if (start + 1 >= tokens.Count || tokens[start].Text != "sync" ||
                 tokens[start + 1].Text != "task") return false;
@@ -38,7 +40,7 @@ public static partial class OresStructuredParser
             {
                 if (tokens[cursor].Text == "{") braces++;
                 else if (tokens[cursor].Text == "}" && --braces == 0)
-                    return cursor + 1 < tokens.Count && tokens[cursor + 1].Text == ";";
+                    return cursor + 1 < tokens.Count && tokens[cursor + 1].Text == terminator;
             }
             return false;
         }
@@ -81,22 +83,56 @@ public static partial class OresStructuredParser
                 Right: StructuredSyncTaskValue rhs
             } && rhs.Offset == offset;
 
+        // A conditional's own parser selects only its immediate, complete
+        // arms. Nested conditionals and other expression nodes cannot inherit
+        // the permission. The caller verifies the resulting root AST.
+        private StructuredExpr ReadConditionalStatementArm(int depth, bool root, string terminator)
+        {
+            int? previous = directInlineWritebackOffset;
+            bool selected = root && IsDirectInlineStatementValue(index, terminator);
+            directInlineWritebackOffset = selected ? Current.Offset : null;
+            if (selected) conditionalWritebackArms!.Add(Current.Offset);
+            try { return Expr(depth); }
+            finally { directInlineWritebackOffset = previous; }
+        }
+
+        private static bool IsConditionalWritebackShape(StructuredExpr value, HashSet<int> arms)
+        {
+            if (value is not StructuredConditional conditional) return false;
+            return arms.All(offset =>
+                conditional.WhenTrue is StructuredSyncTaskValue yes && yes.Offset == offset ||
+                conditional.WhenFalse is StructuredSyncTaskValue no && no.Offset == offset);
+        }
+
         // Both declarations and mutable assignments evaluate a complete RHS
         // in the current SSA environment before installing their binding.
         // The offset is a narrow permission, never inherited by other nodes.
         private StructuredExpr ReadStatementValue(int depth, IrValueType? expected, bool allowWriteback)
         {
             int? previous = directInlineWritebackOffset;
-            int? selected = allowWriteback ? StatementWritebackOffset() : null;
+            int? previousRoot = conditionalWritebackRoot;
+            var previousArms = conditionalWritebackArms;
+            bool keywordConditional = allowWriteback && Current.Text is ("if" or "ifnot" or "unless");
+            conditionalWritebackRoot = keywordConditional ? Current.Offset : null;
+            conditionalWritebackArms = keywordConditional ? new HashSet<int>() : null;
+            int? selected = allowWriteback && !keywordConditional ? StatementWritebackOffset() : null;
             directInlineWritebackOffset = selected;
             try
             {
                 var value = expected is { } type ? ExpectedExpr(depth, type) : Expr(depth);
                 if (selected is int offset && !IsWritebackStatementShape(value, offset))
                     throw Error("E_SYNC_TASK_WRITEBACK_UNSUPPORTED: writeback requires a complete task or short-circuit statement value");
+                if (conditionalWritebackArms is { Count: > 0 } arms &&
+                    !IsConditionalWritebackShape(value, arms))
+                    throw Error("E_SYNC_TASK_WRITEBACK_UNSUPPORTED: conditional writeback requires immediate statement arms");
                 return value;
             }
-            finally { directInlineWritebackOffset = previous; }
+            finally
+            {
+                directInlineWritebackOffset = previous;
+                conditionalWritebackRoot = previousRoot;
+                conditionalWritebackArms = previousArms;
+            }
         }
 
         private bool AtSyncTask() => Current.Text == "sync" && tokens[index + 1].Text == "task";

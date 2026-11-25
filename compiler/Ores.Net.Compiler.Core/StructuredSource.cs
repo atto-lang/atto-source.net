@@ -2521,6 +2521,7 @@ public static partial class OresStructuredParser
             if (Current.Text is "if" or "ifnot" or "unless")
             {
                 int valueIfAt = Current.Offset;
+                bool writebackRoot = conditionalWritebackRoot == valueIfAt;
                 bool inverted = Current.Text is "ifnot" or "unless";
                 index++;
                 var predicate = Expr(depth + 1);
@@ -2531,11 +2532,11 @@ public static partial class OresStructuredParser
                 Expect("then");
                 if (Current.Text is "break" or "continue" or "return")
                     throw Error("Value if branch must produce a value; control transfers require 'do if'");
-                var whenTrue = Expr(depth + 1);
+                var whenTrue = ReadConditionalStatementArm(depth + 1, writebackRoot, "else");
                 Expect("else");
                 if (Current.Text is "break" or "continue" or "return")
                     throw Error("Value if branch must produce a value; control transfers require 'do if'");
-                var whenFalse = Expr(depth + 1);
+                var whenFalse = ReadConditionalStatementArm(depth + 1, writebackRoot, "fi");
                 Expect("fi");
                 if (whenTrue.Type != whenFalse.Type)
                     throw Error("Value if result types differ");

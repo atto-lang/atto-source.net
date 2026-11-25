@@ -13,7 +13,7 @@ if [[ "$mode" == macos-arm64 ]]; then
   dotnet restore host/Ores.Net.NativeHost -r osx-arm64
   # publish-macos verifies both Mach-O executables and uses the standalone
   # compiler to emit the input CIL before linking the app.
-  for fixture in inline-value inline-cooperate nested-inline guard-result-task guard-nonlocal inline-writeback inline-suspends-marker inline-local-loops inline-assignment-writeback inline-shortcircuit-writeback; do
+  for fixture in inline-value inline-cooperate nested-inline guard-result-task guard-nonlocal inline-writeback inline-suspends-marker inline-local-loops inline-assignment-writeback inline-shortcircuit-writeback inline-conditional-writeback; do
     destination="artifacts/sync-task-$fixture"
     bash scripts/publish-macos.sh "$source/$fixture.atto" "$destination"
     [[ "$(env -i PATH=/usr/bin:/bin "$destination/osx-arm64/oreslang-app")" == 42 ]]
@@ -23,7 +23,7 @@ if [[ "$mode" == macos-arm64 ]]; then
 else
   dotnet build "$compiler_project" -c Release
   oresnet=(dotnet run --project "$compiler_project" -c Release --no-build --)
-  for fixture in inline-value inline-cooperate nested-inline guard-result-task guard-nonlocal inline-writeback inline-suspends-marker inline-local-loops inline-assignment-writeback inline-shortcircuit-writeback; do
+  for fixture in inline-value inline-cooperate nested-inline guard-result-task guard-nonlocal inline-writeback inline-suspends-marker inline-local-loops inline-assignment-writeback inline-shortcircuit-writeback inline-conditional-writeback; do
     destination="$work/$fixture"
     mkdir -p "$destination"
     "${oresnet[@]}" compile "$source/$fixture.atto" --out "$destination/OresGenerated.dll"
@@ -62,7 +62,10 @@ for case in reject-inline-suspend:E_SYNC_TASK_SUSPEND reject-do-value:E_TASK_RET
     reject-assignment-shortcircuit-writeback:E_SYNC_TASK_WRITEBACK_UNSUPPORTED \
     reject-assignment-inherited-floor:E_SYNC_TASK_WRITEBACK_UNSUPPORTED \
     reject-shortcircuit-nonroot:E_SYNC_TASK_WRITEBACK_UNSUPPORTED \
-    reject-shortcircuit-inherited-floor:E_SYNC_TASK_WRITEBACK_UNSUPPORTED; do
+    reject-shortcircuit-inherited-floor:E_SYNC_TASK_WRITEBACK_UNSUPPORTED \
+    reject-conditional-nonroot:E_SYNC_TASK_WRITEBACK_UNSUPPORTED \
+    reject-conditional-inherited-floor:E_SYNC_TASK_WRITEBACK_UNSUPPORTED \
+    reject-conditional-nested-arm:E_SYNC_TASK_WRITEBACK_UNSUPPORTED; do
   fixture=${case%%:*}
   expected=${case#*:}
   destination="$work/$fixture"
