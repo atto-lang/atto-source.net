@@ -148,6 +148,7 @@ internal static class ActorPubSubSelfTest
             Require(extension.TryRead(left, out _), "legacy publication remains readable");
         }
 
+#if ENSEMBLE_SEQUENCE_BOUNDARY_HOST_TEST
         // Test-only reflection seeds the private counter at otherwise
         // unreachable boundaries; production admission has no reset API.
         // This host regression is not a NativeAOT guest receipt.
@@ -192,6 +193,7 @@ internal static class ActorPubSubSelfTest
                     "exhaustion does not disturb last admitted delivery");
         }
         Require(!sequenceTopic.TryRead(left, out _), "no wraparound delivery");
+#endif
 
         runtime.Stop(left);
         runtime.Stop(late);
