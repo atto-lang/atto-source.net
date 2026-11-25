@@ -1,0 +1,26 @@
+fnc matches(int value, int target): bool {
+    return value eq target;
+}
+
+fnc choose(int route): int {
+    let int count = 0;
+    val int result = sync task<int> {
+        if matches(route, 0) && count eq 0 do
+            count = count + 2;
+            return 40;
+        fi
+        count = count + 1;
+        if matches(route, 1) && count eq 1 then
+            count = count + 2;
+            return 39;
+        fi
+        count = count + 3;
+        return 38;
+    };
+    return result + count;
+}
+
+pub fnc main(): int {
+    guard choose(0) eq 42, choose(1) eq 42, choose(2) eq 42 { return 1; }
+    return 42;
+}
