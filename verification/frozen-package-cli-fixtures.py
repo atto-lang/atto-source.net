@@ -36,3 +36,17 @@ archive("extra.zip", extra=("extra.atto", b"bad"))
 archive("duplicate.zip", extra=(path, source))
 archive("no-lock.zip", include_lock=False)
 archive("oversized.zip", extra=("big.atto", b"x" * 1048577))
+
+# Mutate ZIP structure without modifying the independently pinned source bytes.
+valid = (root / "good.zip").read_bytes()
+eocd = len(valid) - 22
+assert valid[eocd:eocd+4] == b"PK\x05\x06"
+central = int.from_bytes(valid[eocd+16:eocd+20], "little")
+assert valid[central:central+4] == b"PK\x01\x02"
+(root / "truncated.zip").write_bytes(valid[:central])
+(root / "trailing.zip").write_bytes(valid + b"\x00")
+for label, offset in (("central-name", central+46), ("central-offset", central+42),
+                      ("central-crc", central+16), ("central-count", eocd+10)):
+    changed = bytearray(valid)
+    changed[offset] ^= 1
+    (root / (label + ".zip")).write_bytes(changed)
