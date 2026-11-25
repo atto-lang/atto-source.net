@@ -16,6 +16,10 @@ on:
       - 'verification/Ores.Net.Tests/FrozenImportGraphSelfTest.cs'
       - 'compiler/Ores.Net.Compiler.Core/FrozenScalarImportCompiler.cs'
       - 'verification/Ores.Net.Tests/FrozenScalarImportSelfTest.cs'
+      - 'compiler/Ores.Net.Compiler.Core/FrozenPackageArchive.cs'
+      - 'compiler/Ores.Net.Compiler/FrozenPackageCommand.cs'
+      - 'compiler/Ores.Net.Compiler/Program.cs'
+      - 'verification/frozen-package-cli-fixtures.py'
       - 'global.json'
 permissions:
   contents: read
@@ -75,6 +79,30 @@ jobs:
           cmp verification/Ores.Net.Tests/FrozenImportGraphSelfTest.cs "$work/FrozenImportGraphSelfTest.cs"
           printf '%s\n' 'ContextualImportParserSelfTest.Run();' 'FrozenImportGraphSelfTest.Run();' > "$work/Program.cs"
           dotnet run --project "$work" --configuration Release
+      - name: Check real frozen CLI and atomic output on tampering
+        run: |
+          set -eu
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          python3 verification/frozen-package-cli-fixtures.py "$work"
+          pin="$(cat "$work/pin")"
+          project=compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj
+          dotnet build "$project" -c Release
+          cli() { dotnet run --no-build -c Release --project "$project" -- "$@"; }
+          cli check-frozen "$work/main.atto" --package "$work/good.zip" @org/project/package 1.0.0 "$pin"
+          cli compile-frozen "$work/main.atto" --package "$work/good.zip" @org/project/package 1.0.0 "$pin" --out "$work/OresGenerated.dll"
+          cp "$work/OresGenerated.dll" "$work/baseline.dll"
+          for fixture in tampered traversal extra duplicate no-lock oversized; do
+            if cli compile-frozen "$work/main.atto" --package "$work/$fixture.zip" @org/project/package 1.0.0 "$pin" --out "$work/OresGenerated.dll"; then
+              echo "unexpected archive admission: $fixture"; exit 1
+            fi
+            cmp "$work/baseline.dll" "$work/OresGenerated.dll"
+          done
+          if cli compile-frozen "$work/main.atto" --package "$work/good.zip" @org/project/package 1.0.0 "$(printf '%064d' 0)" --out "$work/OresGenerated.dll"; then exit 1; fi
+          if cli compile-frozen "$work/missing.atto" --package "$work/good.zip" @org/project/package 1.0.0 "$pin" --out "$work/OresGenerated.dll"; then exit 1; fi
+          cmp "$work/baseline.dll" "$work/OresGenerated.dll"
+          if cli check-frozen "$work/main.atto" --package "$work/good.zip" @org/project/package 1.0.0 "$pin" --capability interop.dotnet.math-i64; then exit 1; fi
+          echo "FROZEN_CLI|check=pass|compile=pass|negative-output-preserved"
       - name: Emit frozen scalar guest and execute static NativeAOT host
         run: |
           set -eu
