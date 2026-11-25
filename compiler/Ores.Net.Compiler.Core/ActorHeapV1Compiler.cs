@@ -11,8 +11,8 @@ namespace Ores.Net.Compiler;
 /// 
 /// The general scalar/structured compiler still rejects nominal classes and
 /// actors. This lane admits one homogeneous class with an i64 field and a
-/// nullable self-reference, and one actor receive body containing exactly two
-/// constructions and one checked dereference assertion. Nothing else.
+/// nullable self-reference, and one actor receive body containing two to eight
+/// chained constructions and one checked dereference assertion. Nothing else.
 /// Widen only after real guest/type/effect/ownership conformance execution.
 /// </summary>
 public static class ActorHeapV1Compiler
@@ -33,10 +33,16 @@ public static class ActorHeapV1Compiler
             "panic", "recover"
         }, StringComparer.Ordinal);
 
+    public const int MaxGraphNodes = 8;
+
     public sealed record Plan(
         string ClassName, string ActorName, string ValueField,
         string NextField, string MessageName, string FirstVariable,
-        string SecondVariable, long FirstValue, long SecondValue, long ExpectedValue);
+        string SecondVariable, long FirstValue, long SecondValue, long ExpectedValue)
+    {
+        // Additional constructors form a strictly backward-linked chain.
+        public IReadOnlyList<long> ExtraValues { get; init; } = Array.Empty<long>();
+    }
 
     private readonly record struct Token(string Text, int Offset);
 
@@ -103,9 +109,32 @@ public static class ActorHeapV1Compiler
         reader.Expect(",");
         reader.Expect(first);
         reader.Expect(")");
+        var owners = new HashSet<string>(StringComparer.Ordinal) { message, first, second };
+        if (owners.Count != 3)
+            throw new FormatException("E_ACTOR_HEAP_V1_LOCAL: owner shadows receive parameter");
+        var extras = new List<long>();
+        string last = second;
+        while (reader.Peek("let"))
+        {
+            if (extras.Count == MaxGraphNodes - 2)
+                throw new FormatException("E_ACTOR_HEAP_V1_BUDGET: graph node count exceeded");
+            reader.Expect("let");
+            string name = reader.Identifier();
+            if (!owners.Add(name))
+                throw new FormatException("E_ACTOR_HEAP_V1_LOCAL: duplicate owner binding");
+            reader.Expect("=");
+            reader.Expect("new");
+            reader.Expect(cls);
+            reader.Expect("(");
+            extras.Add(reader.I64());
+            reader.Expect(",");
+            reader.Expect(last);
+            reader.Expect(")");
+            last = name;
+        }
         reader.Expect("assert");
         reader.Expect("(");
-        reader.Expect(second);
+        reader.Expect(last);
         reader.Expect(".");
         reader.Expect(nextField);
         reader.Expect("?");
@@ -118,7 +147,8 @@ public static class ActorHeapV1Compiler
         reader.Expect("end");
         reader.ExpectEnd();
         return new Plan(cls, actor, valueField, nextField, message,
-            first, second, firstValue, secondValue, expected);
+            first, second, firstValue, secondValue, expected)
+            { ExtraValues = extras.ToArray() };
     }
 
     public static string EmitCSharp(string source)
@@ -153,6 +183,9 @@ public static class ActorHeapV1Compiler
         output.AppendLine("        context.RequireOwnedGuestStorageAbiV1(\"generation16_slot16\");");
         output.AppendLine("        ActorGuestOwnedRef32 first = default;");
         output.AppendLine("        ActorGuestOwnedRef32 second = default;");
+        for (int i = 0; i < plan.ExtraValues.Count; i++)
+            output.Append("        ActorGuestOwnedRef32 ").Append(OwnerName(i + 2))
+                .AppendLine(" = default;");
         output.AppendLine("        try");
         output.AppendLine("        {");
         output.AppendLine("            Span<byte> value = stackalloc byte[8];");
@@ -166,7 +199,20 @@ public static class ActorHeapV1Compiler
             .Append(secondLiteral).AppendLine(");");
         output.AppendLine("            context.WriteOwnedGuestObject32(second, 0, value);");
         output.AppendLine("            context.WriteOwnedGuestReference32(second, 8, first);");
-        output.AppendLine("            ActorGuestOwnedRef32 linked = context.ReadOwnedGuestReference32(second, 8);");
+        for (int i = 0; i < plan.ExtraValues.Count; i++)
+        {
+            string current = OwnerName(i + 2), previous = OwnerName(i + 1);
+            output.Append("            ").Append(current)
+                .AppendLine(" = context.AllocateOwnedTypedGuestObject32(layout);");
+            output.Append("            BinaryPrimitives.WriteInt64LittleEndian(value, ")
+                .Append(Literal(plan.ExtraValues[i])).AppendLine(");");
+            output.Append("            context.WriteOwnedGuestObject32(").Append(current)
+                .AppendLine(", 0, value);");
+            output.Append("            context.WriteOwnedGuestReference32(").Append(current)
+                .Append(", 8, ").Append(previous).AppendLine(");");
+        }
+        output.Append("            ActorGuestOwnedRef32 linked = context.ReadOwnedGuestReference32(")
+            .Append(OwnerName(plan.ExtraValues.Count + 1)).AppendLine(", 8);");
         output.AppendLine("            if (linked.IsNull)");
         output.AppendLine("                throw new InvalidOperationException(\"E_ACTOR_HEAP_V1_NULL\");");
         output.AppendLine("            context.ReadOwnedGuestObject32(linked, 0, value);");
@@ -176,31 +222,52 @@ public static class ActorHeapV1Compiler
         output.AppendLine("        }");
         output.AppendLine("        finally");
         output.AppendLine("        {");
-        output.AppendLine("            // Every owned native root gets its cleanup attempt even");
-        output.AppendLine("            // if an earlier reference clear or destructor fails.");
-        output.AppendLine("            try");
-        output.AppendLine("            {");
-        output.AppendLine("                if (!second.IsNull)");
-        output.AppendLine("                {");
-        output.AppendLine("                    try");
-        output.AppendLine("                    {");
-        output.AppendLine("                        context.WriteOwnedGuestReference32(second, 8, default);");
-        output.AppendLine("                    }");
-        output.AppendLine("                    finally");
-        output.AppendLine("                    {");
-        output.AppendLine("                        context.DropOwnedGuestObject32(second);");
-        output.AppendLine("                    }");
-        output.AppendLine("                }");
-        output.AppendLine("            }");
-        output.AppendLine("            finally");
-        output.AppendLine("            {");
-        output.AppendLine("                if (!first.IsNull)");
-        output.AppendLine("                    context.DropOwnedGuestObject32(first);");
-        output.AppendLine("            }");
+        // Generate nested finally blocks in reverse construction order.
+        // Each initialized owner receives a cleanup attempt even when an
+        // earlier destructor fails. No runtime graph traversal or GC.
+        EmitCleanup(output, plan.ExtraValues.Count + 1, "            ");
         output.AppendLine("        }");
         output.AppendLine("    }");
         output.AppendLine("}");
         return output.ToString();
+    }
+
+    private static string OwnerName(int index) => index switch
+    {
+        0 => "first", 1 => "second",
+        _ => "node" + (index + 1).ToString(CultureInfo.InvariantCulture)
+    };
+
+    private static void EmitCleanup(StringBuilder output, int index, string indent)
+    {
+        string name = OwnerName(index);
+        if (index == 0)
+        {
+            output.Append(indent).AppendLine("if (!first.IsNull)");
+            output.Append(indent).AppendLine("    context.DropOwnedGuestObject32(first);");
+            return;
+        }
+
+        output.Append(indent).AppendLine("try");
+        output.Append(indent).AppendLine("{");
+        output.Append(indent).Append("    if (!").Append(name).AppendLine(".IsNull)");
+        output.Append(indent).AppendLine("    {");
+        output.Append(indent).AppendLine("        try");
+        output.Append(indent).AppendLine("        {");
+        output.Append(indent).Append("            context.WriteOwnedGuestReference32(")
+            .Append(name).AppendLine(", 8, default);");
+        output.Append(indent).AppendLine("        }");
+        output.Append(indent).AppendLine("        finally");
+        output.Append(indent).AppendLine("        {");
+        output.Append(indent).Append("            context.DropOwnedGuestObject32(")
+            .Append(name).AppendLine(");");
+        output.Append(indent).AppendLine("        }");
+        output.Append(indent).AppendLine("    }");
+        output.Append(indent).AppendLine("}");
+        output.Append(indent).AppendLine("finally");
+        output.Append(indent).AppendLine("{");
+        EmitCleanup(output, index - 1, indent + "    ");
+        output.Append(indent).AppendLine("}");
     }
 
     private static string Literal(long number) =>
@@ -211,6 +278,8 @@ public static class ActorHeapV1Compiler
     {
         private int _index;
         private Token Current => tokens[_index];
+
+        internal bool Peek(string text) => string.Equals(Current.Text, text, StringComparison.Ordinal);
 
         internal void Expect(string text)
         {
