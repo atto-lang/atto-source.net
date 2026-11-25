@@ -12,13 +12,13 @@ internal static class FrozenScalarImportSelfTest
     private const string Provider="use namespace network; fnc secret(): int { return 40; } pub fnc answer(): int { return secret() + 2; }";
     private static byte[] Bytes(string s)=>Encoding.UTF8.GetBytes(s);
     private static string Sha(byte[] b)=>Convert.ToHexString(SHA256.HashData(b)).ToLowerInvariant();
-    private static FrozenImportSnapshot Snapshot(string source)
+    private static FrozenImportSnapshot Snapshot(string source,string name=Name)
     {
-        byte[] b=Bytes(source), m=Bytes(Manifest);
+        byte[] b=Bytes(source), m=Bytes(Manifest.Replace(Name,name));
         byte[] l=Bytes("[lock]\nmanifest_sha256 = \""+Sha(m)+"\"\n[files]\n\""+Path+"\" = \""+Sha(b)+"\"\n");
         // Test fixture constructs its own trusted pin; production must supply
         // the digest from an independent authenticated lock authority.
-        return FrozenImportSnapshot.Verify(Name,"1.0.0",Sha(l),m,l,new Dictionary<string,byte[]>{{Path,b}});
+        return FrozenImportSnapshot.Verify(name,"1.0.0",Sha(l),m,l,new Dictionary<string,byte[]>{{Path,b}});
     }
     internal static void Run(string output)
     {
@@ -124,7 +124,7 @@ internal static class FrozenScalarImportSelfTest
             "val int x=20; val int x=40; return web.answer(x,-2);",
             "val int web=40; return web.answer(web,-2);",
             "val int x=40; x=41; return web.answer(x,-2);",
-            "return web.answer(web.answer(40,-2),0);",
+            "return web.answer(web.missing(40,-2),0);",
             "return web.answer("+new string('(',17)+"40"+new string(')',17)+",-2);",
             "return web.answer("+string.Join("+",System.Linq.Enumerable.Repeat("1",65))+",-2);"
         }) {
@@ -133,6 +133,31 @@ internal static class FrozenScalarImportSelfTest
                 throw new InvalidOperationException("invalid expression body admitted: "+invalid);
             } catch(FormatException) {}
         }
-        Console.WriteLine("Frozen scalar: fourteen CIL candidates, thirty-one rejections; NativeAOT separate");
+        const string secondName="@other/project/package";
+        var first=Snapshot("use namespace network; fnc helper(int x):int{return x+2;} pub fnc answer(int x):int{return helper(x);}");
+        var second=Snapshot("use namespace network; fnc helper(int x):int{return x*2;} pub fnc answer(int x):int{return helper(x);}",secondName);
+        string multiHeader="import pkg '"+Name+"' as left; import pkg '"+secondName+"' as right; pub fnc main()->int{";
+        string[] multi={
+            "return left.network.answer(right.network.answer(20));",
+            "val int x=right.network.answer(20); return left.network.answer(x);",
+            "return left.network.answer(19)+right.network.answer(10)+1;",
+            "return left.network.answer(left.network.answer(38));"
+        };
+        for(int i=0;i<multi.Length;i++) {
+            string suffix=i.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            CilEmitter.EmitLibrary(OresStructuredParser.CompileFrozenScalar(multiHeader+multi[i]+"}",new[]{first,second}),output+".multi"+suffix+".dll");
+        }
+        foreach(string bad in new[]{
+            "return left.network.answer(right.network.helper(20));",
+            "return left.network.answer(right.network.answer());",
+            "val int right=20; return left.network.answer(right.network.answer(20));",
+            "return "+string.Join("+",System.Linq.Enumerable.Repeat("left.network.answer(0)",33))+";"
+        }) {
+            try {
+                _=OresStructuredParser.CompileFrozenScalar(multiHeader+bad+"}",new[]{first,second});
+                throw new InvalidOperationException("invalid multi-provider call admitted: "+bad);
+            } catch(FormatException) {}
+        }
+        Console.WriteLine("Frozen scalar: eighteen CIL candidates, thirty-five rejections; NativeAOT separate");
     }
 }
