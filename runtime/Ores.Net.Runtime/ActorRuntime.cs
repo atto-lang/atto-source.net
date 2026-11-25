@@ -193,6 +193,17 @@ public sealed class ActorContext
         return _guestHeap.Value;
     }
 
+    // Host verification only. This observes the current physical turn's
+    // live guest slots without materializing an unused guest heap.
+    public int LiveGuestObjectCount
+    {
+        get
+        {
+            _arena.ValidatePhysicalTurn(_turn);
+            return _guestHeap.IsValueCreated ? _guestHeap.Value.LiveCount : 0;
+        }
+    }
+
     // Trusted low-level ABI only: a uint32 word is NOT a cross-actor reference.
     public uint AllocateGuestObject32(int bytes, int alignment = 8) =>
         GuestHeapForActiveTurn().Allocate(_turn, bytes, alignment);
