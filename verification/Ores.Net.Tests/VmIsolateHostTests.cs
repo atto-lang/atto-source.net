@@ -305,7 +305,7 @@ internal static class VmIsolateHostTests
         var host = new OresVmHost(maxTenants: 1);
         var tenant = host.CreateIsolate("migratable-carrier", maxActors: 2);
         host.Start(tenant);
-        var actor = host.RegisterActor(tenant, 1);
+        var actor = host.RegisterActor(tenant, 1, serial: true);
         var other = host.RegisterActor(tenant, 2);
         host.ConfigureNamedActorState(tenant, actor, "Counter", "Counter|1:I",
             new[] { new OresVmHost.ActorStateField(OresVmHost.ActorStateScalarKind.Int64) });
