@@ -32,7 +32,13 @@ public enum CfgOpcode
     BoolNot,
     // Closed Option<int> equality: tags (Bool) and active payloads (I64).
     // All four operands must be verified SSA values in evaluation order.
-    OptionEqualI64
+    OptionEqualI64,
+    // atto-spec bitwise-and-stream-operators-v1 i64 shifts. The distance must
+    // be 0..63; anything else raises the checked OverflowException before a
+    // shift instruction runs (CIL shifts by >= 64 are unspecified).
+    ShiftLeftI64,
+    ShiftRightLogicalI64,
+    ShiftRightArithmeticI64
 }
 
 public readonly record struct CfgParameter(int Id, IrValueType Type);
@@ -297,6 +303,9 @@ public static class OresCfgVerifier
                     op.Opcode is CfgOpcode.CheckedAdd or
                         CfgOpcode.CheckedSubtract or
                         CfgOpcode.CheckedMultiply or
+                        CfgOpcode.ShiftLeftI64 or
+                        CfgOpcode.ShiftRightLogicalI64 or
+                        CfgOpcode.ShiftRightArithmeticI64 or
                         CfgOpcode.Call))
                     throw new FormatException(
                         "Arithmetic-overflow region has no fallible numeric operation");
@@ -450,6 +459,9 @@ public static class OresCfgVerifier
                     case CfgOpcode.CheckedSubtract:
                     case CfgOpcode.CheckedMultiply:
                     case CfgOpcode.CheckedDivide:
+                    case CfgOpcode.ShiftLeftI64:
+                    case CfgOpcode.ShiftRightLogicalI64:
+                    case CfgOpcode.ShiftRightArithmeticI64:
                     case CfgOpcode.EqualI64:
                     case CfgOpcode.NotEqualI64:
                     case CfgOpcode.LessThanI64:

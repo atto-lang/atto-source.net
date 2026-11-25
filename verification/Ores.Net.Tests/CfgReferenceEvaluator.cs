@@ -45,6 +45,9 @@ internal static class CfgReferenceEvaluator
                     CfgOpcode.CheckedAdd => checked(Left() + Right()),
                     CfgOpcode.CheckedSubtract => checked(Left() - Right()),
                     CfgOpcode.CheckedMultiply => checked(Left() * Right()),
+                    CfgOpcode.ShiftLeftI64 => Left() << ShiftDistance(Right()),
+                    CfgOpcode.ShiftRightLogicalI64 => (long)((ulong)Left() >> ShiftDistance(Right())),
+                    CfgOpcode.ShiftRightArithmeticI64 => Left() >> ShiftDistance(Right()),
                     CfgOpcode.CheckedDivide => DivideChecked(Left(), Right()),
                     CfgOpcode.EqualI64 => Left() == Right(),
                     CfgOpcode.NotEqualI64 => Left() != Right(),
@@ -94,6 +97,10 @@ internal static class CfgReferenceEvaluator
 
         throw new InvalidOperationException("CFG execution exceeded finite step budget");
     }
+
+    // Same contract as the emitted guard: 0..63, else the checked OverflowException.
+    private static int ShiftDistance(long distance) =>
+        distance is >= 0 and <= 63 ? (int)distance : throw new OverflowException();
 
     private static long DivideChecked(long left, long right)
     {

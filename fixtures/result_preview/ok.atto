@@ -1,0 +1,2 @@
+fnc value(): int { return 42; }
+pub fnc main(): Result<int,Error> { return trap value(); }

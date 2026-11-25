@@ -1,0 +1,1 @@
+pub fnc main(): int { const int base = 40; int answer = base + 2; return answer; }

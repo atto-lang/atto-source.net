@@ -31,13 +31,28 @@ public sealed class ActorHttpExchange
 
     public string Method(ActorContext actor) => _lease.Read(actor, _generation, c => c.Request.Method);
     public string Path(ActorContext actor) => _lease.Read(actor, _generation, c => c.Request.Path.Value ?? "/");
+    public string RequestId(ActorContext actor) =>
+        _lease.Read(actor, _generation, _ => _lease.RequestId);
     public string Header(ActorContext actor, string name) =>
         _lease.Read(actor, _generation, c => c.Request.Headers[name].ToString());
     public int BodyLength(ActorContext actor) => _lease.BodyLength(actor, _generation);
     public void CopyBody(ActorContext actor, Span<byte> destination) =>
         _lease.CopyBody(actor, _generation, destination);
+    public string ReadBodyText(ActorContext actor)
+    {
+        byte[] bytes = new byte[BodyLength(actor)];
+        try
+        {
+            CopyBody(actor, bytes);
+            return Encoding.UTF8.GetString(bytes);
+        }
+        finally { CryptographicOperations.ZeroMemory(bytes); }
+    }
     public HttpExchangeTicket Move(ActorContext actor, ActorRef destination) =>
         _lease.Move(actor, _generation, destination);
+
+    public void SetResponseHeader(ActorContext actor, string name, string value) =>
+        _lease.SetResponseHeader(actor, _generation, name, value);
 
     /// <summary>Starts native async response I/O; never blocks the actor carrier.</summary>
     public void Respond(ActorContext actor, int status, string contentType, string body) =>
@@ -46,11 +61,19 @@ public sealed class ActorHttpExchange
 
 internal sealed class HttpExchangeLease
 {
+    private const int MaxResponseHeaders = 32;
+    private const int MaxResponseHeaderBytes = 8192;
+    private static readonly HashSet<string> TransportHeaders = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Connection", "Content-Length", "Content-Type", "Keep-Alive",
+        "Proxy-Connection", "TE", "Trailer", "Transfer-Encoding", "Upgrade"
+    };
     private readonly object _gate = new();
     private HttpContext? _http;
     private readonly ActorRuntime _runtime;
     private readonly CancellationToken _cancellation;
     private readonly int _maxResponseBytes;
+    private readonly Dictionary<string, string> _responseHeaders = new(StringComparer.OrdinalIgnoreCase);
     private readonly TaskCompletionSource _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private ActorRef _owner;
     private ulong _generation = 1;
@@ -60,13 +83,20 @@ internal sealed class HttpExchangeLease
     private Task? _physicalOperation;
     private byte[] _transitBody;
     private ActorArenaHandle? _body;
+    private int _responseHeaderBytes;
 
     internal HttpExchangeLease(ActorRuntime runtime, HttpContext http, byte[] body, int maxResponseBytes,
         CancellationToken cancellation)
     { _runtime = runtime; _http = http; _transitBody = body; _maxResponseBytes = maxResponseBytes; _cancellation = cancellation; }
     internal Task Completion => _completion.Task;
+    internal string RequestId { get; } = Guid.NewGuid().ToString("D");
     internal Task OwnerTermination { get; private set; } = Task.CompletedTask;
     internal void Fail(Exception failure) => _completion.TrySetException(failure);
+    internal bool ResponseBelongsToInitialOwner(ActorRef actor)
+    {
+        lock (_gate) return _owner == actor && _generation == 1;
+    }
+
     internal Task StopOwner()
     {
         lock (_gate)
@@ -183,21 +213,55 @@ internal sealed class HttpExchangeLease
         }
     }
 
+    internal void SetResponseHeader(ActorContext actor, ulong generation, string name, string value)
+    {
+        lock (_gate)
+        {
+            RequireOwner(actor, generation);
+            if (_pending) throw new InvalidOperationException("HTTP response already started");
+            ArgumentNullException.ThrowIfNull(name);
+            ArgumentNullException.ThrowIfNull(value);
+            if (name.Length is < 1 or > 128 || name.Any(c => !IsHeaderNameCharacter(c)) ||
+                TransportHeaders.Contains(name))
+                throw new ArgumentException("Invalid or transport-owned HTTP response header");
+
+            bool replaces = _responseHeaders.TryGetValue(name, out string? previous);
+            int oldSize = replaces ? name.Length + previous!.Length + 4 : 0;
+            int remaining = MaxResponseHeaderBytes - _responseHeaderBytes + oldSize;
+            if ((!replaces && _responseHeaders.Count == MaxResponseHeaders) ||
+                value.Length > remaining - name.Length - 4)
+                throw new ArgumentOutOfRangeException(nameof(value), "HTTP response header budget exceeded");
+            if (value.Any(c => c is < ' ' or > '~'))
+                throw new ArgumentException("Invalid HTTP response header value", nameof(value));
+            _responseHeaders[name] = value;
+            _responseHeaderBytes += name.Length + value.Length + 4 - oldSize;
+        }
+    }
+
+    private static bool IsHeaderNameCharacter(char c) =>
+        c is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' ||
+        "!#$%&'*+-.^_`|~".Contains(c);
+
     private async Task WriteResponseAsync(int status, string contentType, byte[] bytes, ActorArenaLifetimePin pin)
     {
+        Exception? error = null;
         try
         {
             var http = _http!;
             http.Response.StatusCode = status;
             http.Response.ContentType = contentType;
             http.Response.ContentLength = status is 204 or 304 ? null : bytes.Length;
+            foreach (var header in _responseHeaders)
+                http.Response.Headers[header.Key] = header.Value;
             if (http.Request.Method != "HEAD" && status is not (204 or 304))
                 await http.Response.Body.WriteAsync(bytes, _cancellation).ConfigureAwait(false);
             await http.Response.CompleteAsync().ConfigureAwait(false);
-            _completion.TrySetResult();
         }
-        catch (Exception failure) { _completion.TrySetException(failure); }
+        catch (Exception failure) { error = failure; }
         finally { CryptographicOperations.ZeroMemory(bytes); pin.Dispose(); }
+        // Publish only after the physical write relinquishes its arena pin.
+        if (error is null) _completion.TrySetResult();
+        else _completion.TrySetException(error);
     }
 
     internal async Task CloseAsync()

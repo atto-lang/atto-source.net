@@ -34,8 +34,16 @@ for case in \
   unknown-parameter:E_SYMBOL \
   no-return:E_PARSE \
   duplicate-parameter:E_DUP_PARAM \
-  bool-unsupported:E_PARSE \
-  no-main:E_ENTRY; do
+  bool-unsupported:E_RETURN_TYPE \
+  no-main:E_ENTRY \
+  checked-i64-division-zero:E_I64_DIVISION_BY_ZERO \
+  checked-i64-division-overflow:E_I64_DIVISION_OVERFLOW \
+  checked-i64-division-unproven:E_I64_DIVISION_UNVERIFIED \
+  checked-i64-division-min-unproven:E_I64_DIVISION_UNVERIFIED \
+  signed-min-underflow:E_LITERAL \
+  float-result-in-int-return:E_RETURN_TYPE \
+  float-result-as-int-arg:E_RETURN_TYPE \
+  unsupported-float-addition:E_RETURN_TYPE; do
   name="$(echo "$case" | cut -d: -f1)"
   diagnostic="$(echo "$case" | cut -d: -f2)"
   rm -f artifacts/Rejected.dll
@@ -51,7 +59,7 @@ for case in \
   }
   test ! -e artifacts/Rejected.dll || { echo "NEGATIVE_ARTIFACT_LEAK case=$name"; exit 1; }
 done
-echo "ATTO_DIRECT_CIL_NEGATIVE_PASS checks=12"
+echo "ATTO_DIRECT_CIL_NEGATIVE_PASS checks=20"
 dotnet build "$host" -c Release
 expect_42 CORECLR_GUEST dotnet run --no-build -c Release --project "$host"
 dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true \
@@ -60,9 +68,19 @@ test -x /tmp/atto-cil-nativeaot/Atto.Cil.Guest.Host
 expect_42 NATIVEAOT_GUEST /tmp/atto-cil-nativeaot/Atto.Cil.Guest.Host
 
 # Additional genuine CIL guest executions; neither calculation is in C#.
-for fixture in fixtures/cil/precedence.atto fixtures/cil/forward-call.atto; do
+for fixture in fixtures/cil/precedence.atto fixtures/cil/forward-call.atto fixtures/cil/signed-min-boundary.atto fixtures/cil/checked-i64-division.atto; do
   dotnet run --no-build -c Release --project "$compiler" -- "$fixture" "$guest"
   dotnet build "$host" -c Release
   expect_42 EXTRA_CORECLR_GUEST dotnet run --no-build -c Release --project "$host"
+  case "$fixture" in
+    fixtures/cil/signed-min-boundary.atto|fixtures/cil/checked-i64-division.atto)
+      name="$(basename "$fixture" .atto)"
+      artifact_dir="/tmp/atto-cil-$name-nativeaot"
+      dotnet publish "$host" -c Release -r linux-x64 -p:PublishAot=true \
+        --self-contained true -o "$artifact_dir"
+      test -x "$artifact_dir/Atto.Cil.Guest.Host"
+      expect_42 "${name}_NATIVEAOT_GUEST" "$artifact_dir/Atto.Cil.Guest.Host"
+      ;;
+  esac
 done
-echo "ATTO_DIRECT_CIL_POSITIVE_PASS fixtures=3"
+echo "ATTO_DIRECT_CIL_POSITIVE_PASS fixtures=5"

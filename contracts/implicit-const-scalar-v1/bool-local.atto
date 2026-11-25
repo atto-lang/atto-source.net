@@ -1,0 +1,1 @@
+pub fnc main(): int { bool ready = true; return 42; }

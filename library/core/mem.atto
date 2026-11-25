@@ -1,0 +1,25 @@
+// core/mem (atto-source.net): power-of-two layout predicates, int/bool slice.
+// align_up/align_down (Option<int>) wait for typed Option module lowering.
+define module mem as
+  pub fnc is_power_of_two(int value): bool {
+    if value <= 0 then return false; fi
+    let int p = 1;
+    loop {
+      if p >= value then break; fi
+      if p >= 4611686018427387904 then break; fi
+      p = p * 2;
+    }
+    return p == value;
+  }
+  pub fnc log2_floor(int value): int {
+    let int k = 0;
+    let int p = 1;
+    loop {
+      if p >= 4611686018427387904 then break; fi
+      if p * 2 > value then break; fi
+      p = p * 2;
+      k = k + 1;
+    }
+    return k;
+  }
+end

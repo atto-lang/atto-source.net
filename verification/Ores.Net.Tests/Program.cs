@@ -3,6 +3,7 @@ using Mono.Cecil.Cil;
 using Ores.Net.Compiler;
 using Ores.Net.Runtime;
 
+DisjointFieldPlaceAdmissionTests.Run(); // reject-only; never guest parity
 ReadonlyShapeProjectionV1Tests.Run();
 NativeSourceIdentityV1SelfTest.Run();
 ActorTypedReplySlotsSelfTest.Run(); // NativeAOT-safe host ledger, NOT guest request() lowering
@@ -38,6 +39,46 @@ static void InvalidSend(Action action, string why)
     catch (InvalidOperationException) { return; }
     throw new Exception("Expected mailbox rejection: " + why);
 }
+
+// Reconcile legacy PR #183 onto current main: both .NET source parsers
+// already deny raw ESC/DEL before comment/string parsing. Test the
+// rejection without overwriting the newer main validation logic.
+foreach (char terminalControl in new[] { '\u001b', '\u007f' })
+{
+    string embedded = "fnc main():int{/*" + terminalControl + "*/return 42;}";
+    string trailing = "fnc main():int{return 42;} //" + terminalControl;
+    int embeddedOffset = embedded.IndexOf(terminalControl);
+    int trailingOffset = trailing.IndexOf(terminalControl);
+    Require(embeddedOffset > 0 && trailingOffset > 0, "control offset must exist");
+    RejectDiagnostic(() => OresParser.Parse(embedded),
+        $"terminal control at offset {embeddedOffset}", "scalar embedded control offset");
+    RejectDiagnostic(() => OresParser.Parse(trailing),
+        $"terminal control at offset {trailingOffset}", "scalar trailing control offset");
+    RejectDiagnostic(() => OresStructuredParser.Parse(embedded),
+        $"terminal control at offset {embeddedOffset}", "structured embedded control offset");
+    RejectDiagnostic(() => OresStructuredParser.Parse(trailing),
+        $"terminal control at offset {trailingOffset}", "structured trailing control offset");
+
+    // Validate raw source before parsing, even when a control occurs inside a
+    // syntactically unsupported quoted string or as the first source code unit.
+    // An unrelated syntax error must not disguise a terminal-control bypass.
+    string quoted = "fnc main():int{const string s = \"" +
+        terminalControl + "\"; return 42;}";
+    int quotedOffset = quoted.IndexOf(terminalControl);
+    RejectDiagnostic(() => OresParser.Parse(quoted),
+        $"terminal control at offset {quotedOffset}", "scalar quoted raw control");
+    RejectDiagnostic(() => OresStructuredParser.Parse(quoted),
+        $"terminal control at offset {quotedOffset}", "structured quoted raw control");
+    string leading = terminalControl + "fnc main():int{return 42;}";
+    RejectDiagnostic(() => OresParser.Parse(leading),
+        "terminal control at offset 0", "scalar leading raw control");
+    RejectDiagnostic(() => OresStructuredParser.Parse(leading),
+        "terminal control at offset 0", "structured leading raw control");
+}
+Require(OresParser.Parse("fnc main():int{\r\n\treturn 42;\r\n}") is not null,
+    "ordinary scalar CRLF and TAB must remain accepted");
+Require(OresStructuredParser.Parse("fnc main():int{\r\n\treturn 42;\r\n}").Body.Count == 1,
+    "ordinary structured CRLF and TAB must remain accepted");
 
 // Typed static select must fail with the select-specific diagnostic in
 // both compiler entry points, even when trivia separates the tokens. It is
@@ -604,6 +645,7 @@ VmIsolateHostTests.Run();
 VmIsolateHostHardeningTests.Run();
 OptionResultTrapAdmissionTests.Run();
 OptionI64CompilerTests.Run(); // opt-in typed Option<int> source -> verified CFG -> CIL
+CoreTypeRegistryTests.Run(); // canonical type identity, allocation, drop, Send and parser admission
 FixedArrayOptionCompilerTests.Run(); // immutable Array<int>.get -> tagged Option<int> verified CIL
 SafeCollectionSourceAdmissionTests.Run(); // indexed collection access remains fail-closed
 // Shared TCP-pool capabilities are not guest-lowered by either .NET frontend.
@@ -651,11 +693,13 @@ CriticalSuspendsBoundaryTests.Run(); // compiler-owned scalar admission, not run
 AttoSemanticNegativeGateTests.Run(); // canonical .atto negatives + IR/CIL positive controls (not NativeAOT)
 AsyncOnlyIoPolicyTests.Run();
 CapabilityIoLifecycleV1SelfTest.Run();
+StdEnvHostSnapshotV1SelfTest.Run(); // host-only, no std/env guest link
 ActorStateSchemaAdmissionTests.Run();
 ActorStateLayoutIntegrationTests.Run();
 ActorGeneratedCounterTests.Run();
 VmActorStateCellsTests.Run(); // compiled but never executed before 2026-11-20
 VmActorHeapModelTests.Run(); // atto-spec ch. 27 actor heap model for OresVmHost actors
+ShiftOperatorTests.Run(); // atto-spec bitwise-and-stream-operators-v1 shifts on the real CLR
 DeclaredActorCounterV2Tests.Run();
 CounterMainV2Tests.Run();
 SourceByteBudgetTests.Run();
@@ -834,6 +878,7 @@ SelectableI64FutureSelfTest.Run();
 ActorDispatchDomainsSelfTest.Run();
 ActorDispatchAffinitySelfTest.Run();
 ActorRuntimeSelfTest.Run();
+GuestCooperationBudgetSelfTest.Run(); // host-only fuel seam, no source lowering
 ActorRuntimeGracefulDrainSelfTest.Run(); // HOST only; not guest pipe lowering
 SupervisorDataFenceParitySelfTest.Run(); // HOST only; stop-vs-send and sibling parity
 ActorPubSubSelfTest.Run();

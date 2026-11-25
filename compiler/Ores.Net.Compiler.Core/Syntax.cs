@@ -720,6 +720,16 @@ public static partial class OresParser
                           $".NET source Future continuation lowering is unavailable at offset {start}"
                         : $"Nested Option remains nested; implicit Option flatten is forbidden; " +
                           $".NET source Option lowering is unavailable at offset {start}");
+                // Canonical bang exceptional control must not degrade to an
+                // ordinary scalar callable or host-side .NET exception.
+                if (word is "trap" or "throw" or "raise" or "panic" &&
+                    _i < text.Length && text[_i] == '!' &&
+                    (_i + 1 >= text.Length || text[_i + 1] != '=') &&
+                    !(text.AsSpan(_i).StartsWith("!eq", StringComparison.Ordinal) &&
+                      (_i + 3 == text.Length ||
+                       !(char.IsLetterOrDigit(text[_i + 3]) || text[_i + 3] == '_'))))
+                    throw new FormatException(
+                        $"EXCEPTION_BANG_BACKEND_UNSUPPORTED: {word}! requires typed Error/Result, checked unwind, actor supervision and verified NativeAOT lowering at offset {start}");
                 if (word is "Option" or "Result" or "Some" or "None" or "Ok" or "Err" or "trap")
                     throw new FormatException(
                         $"Option/Result/trap requires verified tagged-sum CIL and NativeAOT guest-control lowering at offset {start}");
@@ -1156,11 +1166,11 @@ public static partial class OresParser
             while (Current.Text is "*" or "/")
             {
                 char op = Current.Text[0];
-                // int/int is float in Oreslang and remains unsupported in this
+                // Checked int/int division remains unsupported in this
                 // i64-only bootstrap; % and ^ are removed at lexical admission.
                 if (op == '/')
                     throw new FormatException(
-                        "Division requires float result lowering; unsupported in the i64 source subset");
+                        "Checked integer division requires typed guest error lowering; unsupported in the i64 source subset");
                 _index++;
                 var rhs = ParseUnary(depth + 1);
                 left = new Binary(op, left, rhs);
@@ -1298,7 +1308,7 @@ public static partial class OresParser
             // The scalar subset admits only this one typed Integer intrinsic.
             // Parser-owned name resolution rejects arbitrary Integer.* calls.
             // A first native, escaping-free product construction slice:
-            // Tuple.of(<i64 literals...>)[constant_slot] / ~tuple(...)[slot].
+            // Tuple.of(<i64 literals...>)[constant_slot] only; ~ is structural shorthand.
             // All operands are pure checked constants, so projecting the
             // selected SSA scalar preserves the exact source evaluation
             // behavior without allocating a host tuple or losing an effect.
@@ -1306,14 +1316,8 @@ public static partial class OresParser
             {
                 int at = Current.Offset;
                 if (Take("~"))
-                {
-                    if (Take("tuple")) return ParseScalarizedTupleFactory(depth + 1, at);
-                    if (Take("record")) return ParseScalarizedRecordFactory(depth + 1, at);
-                    if (Take("entry")) return ParseScalarizedBinaryProductFactory(depth + 1, at, isEntry: true);
-                    if (Take("pair")) return ParseScalarizedBinaryProductFactory(depth + 1, at, isEntry: false);
                     throw new FormatException(
-                        $"E_COLLECTION_FACTORY_UNSUPPORTED: ~kind requires verified owned collection lowering at offset {at}");
-                }
+                        $"E_COLLECTION_FACTORY_REMOVED: '~' denotes structural typing, not a collection constructor; use Type.of(...) at offset {at}");
                 if (Take("Tuple"))
                 {
                     Expect(".");

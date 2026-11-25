@@ -1,0 +1,6 @@
+pub fnc add_bounds(int lower, int upper): int {
+    return lower + upper + 43;
+}
+pub fnc main(): int {
+    return add_bounds(-9223372036854775808, 9223372036854775807);
+}
