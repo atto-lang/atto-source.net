@@ -127,7 +127,9 @@ executed locally; no .NET SDK is installed here.
 `ActorTurnTicket` now supports bounded (at most 32 nested) `ActorStateLoan`
 scopes. Only the active, unsuspended logical turn can mint a loan, and nested
 critical scopes temporarily fence the parent loan. The innermost loan must
-be returned in LIFO order; a released loan can never validate again. Writes
+be returned in LIFO order; a released loan can never validate again. A nested state loan may attenuate but never amplify its parent’s authority.
+A read-only parent cannot issue a writable child, even when an ancestor is
+writable; denial is atomic and does not consume a loan generation. Writes
 require a writable ticket, and `ValidateActorStateLoan` checks exact actor,
 isolate, logical turn and loan identity. Future generated state operations
 must enforce this check on each access; holding a token alone is insufficient.
