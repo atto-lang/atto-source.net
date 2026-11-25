@@ -94,13 +94,14 @@ public sealed partial class OresVmHost
     {
         ActorStateLoan? loan = null;
         ActorDispatchScope? scope = null;
+        ActorContinuation? next;
         try {
             loan = BeginActorStateLoan(handle, actor, turn, writable: true);
             scope = new ActorDispatchScope(this, handle, actor, turn, loan);
             bool suspend = segment(scope);
             scope.Revoke();
             EndActorStateLoan(handle, actor, turn, loan);
-            return RetireSegment(scheduler, handle, actor, turn, lease, suspend);
+            next = RetireSegment(scheduler, handle, actor, turn, lease, suspend);
         }
         catch {
             scope?.Revoke();
@@ -110,6 +111,12 @@ public sealed partial class OresVmHost
             RetireSegment(scheduler, handle, actor, turn, lease, suspend: false);
             throw;
         }
+        // A cancellation racing a normal return must not look like success.
+        // If a new suspended ticket was published, return that exact ticket;
+        // its owner must explicitly discard it if cancellation wins later.
+        if (next is null && turn.CancellationRequested)
+            throw new OperationCanceledException("scheduled actor segment cancelled");
+        return next;
     }
 
     private ActorContinuation? RetireSegment(ActorScheduler scheduler,
