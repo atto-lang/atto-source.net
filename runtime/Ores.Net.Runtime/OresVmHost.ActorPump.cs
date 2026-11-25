@@ -214,6 +214,11 @@ public sealed partial class OresVmHost
                         throw new InvalidOperationException("producer readiness identity mismatch");
                     return true;
                 });
+            } catch (ScheduledActorTurnCancelledException) {
+                // This exact receive has physically retired. Cancel its
+                // unadmitted child, but do not drain unrelated live receives.
+                next?.Producer?.CancelUnstarted();
+                return null;
             } catch {
                 // A produced step may never have been published (e.g.
                 // cancellation wins after the delegate returns). Its child
