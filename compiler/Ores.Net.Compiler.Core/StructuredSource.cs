@@ -1092,6 +1092,7 @@ public static partial class OresStructuredParser
 
         internal IReadOnlyList<SourceImport> ReadImports()
         {
+            string? currentNamespace = null;
             // File-level namespace metadata is not a runtime object or an
             // ambient import. It is admitted here only for SHA-pinned Core
             // source identities; all other namespaces remain fail-closed.
@@ -1108,6 +1109,7 @@ public static partial class OresStructuredParser
                 Expect(";");
                 if (linking is null && !allowCoreNamespace)
                     throw Error("Core namespace requires authenticated Core import provenance");
+                currentNamespace = "atto.core." + leaf;
                 if (linking is not null)
                 {
                     if (!string.Equals(linking.UnitIdentity, "@atto.core/" + leaf + ".atto",
@@ -1121,6 +1123,62 @@ public static partial class OresStructuredParser
             while (Take("import"))
             {
                 int offset = Current.Offset;
+                // Validate contextual path shape before any filesystem or
+                // external lookup. Linking requires authenticated package metadata.
+                if (Current.Text is "self" or "super" ||
+                    (Current.Text == "pkg" && index + 1 < tokens.Count &&
+                     tokens[index + 1].Text is "." or ";"))
+                {
+                    string logical = Current.Text;
+                    index++;
+                    int components = 1;
+                    while (Take("."))
+                    {
+                        if (++components > 8 || Current.Text.Length > 64)
+                            throw Error("E_IMPORT_PATH: contextual path exceeds budget");
+                        if (Current.Text is "." or ";" or "<eof>")
+                            throw Error("E_IMPORT_PATH: missing contextual path component");
+                        logical += "." + Current.Text;
+                        index++;
+                    }
+                    if (Take("as")) _ = Name();
+                    Expect(";");
+                    _ = ContextualImportPath.Normalize(logical, currentNamespace);
+                    throw Error("E_UNSUPPORTED: contextual import requires authenticated package-export graph");
+                }
+                // Closed compiler-owned namespace-first aliases only. Emit the
+                // identical import record used by the existing authenticated
+                // Core wildcard lane, never a caller-supplied path.
+                if (Take("namespace"))
+                {
+                    string alias = Name();
+                    if (!Take("from"))
+                        throw Error("import namespace requires manifest-verified multi-file package linker");
+                    string selector = Current.Text;
+                    index++;
+                    if (selector.Length >= 2 && (selector[0] == '"' || selector[0] == '\'') &&
+                        selector[^1] == selector[0])
+                        selector = selector[1..^1];
+                    else if (selector == "core" && Take("."))
+                    {
+                        selector += "." + Current.Text;
+                        index++;
+                    }
+                    string? canonical = selector switch
+                    {
+                        "core.math" => "atto.core/math",
+                        "core.hash" => "atto.core/hash",
+                        "core.cell" => "atto.core/cell",
+                        _ => null
+                    };
+                    if (canonical is null || Current.Text != ";")
+                        throw Error("import namespace requires manifest-verified multi-file package linker");
+                    UnsafeStdlibImportAdmission.RequireGuestSafe(canonical);
+                    Expect(";");
+                    if (imports.Count >= 64) throw Error("Import declaration budget exceeded");
+                    imports.Add(new SourceImport("builtin_namespace", alias, canonical, offset));
+                    continue;
+                }
                 string kind;
                 string name;
                 if (Take("*"))
@@ -1136,9 +1194,6 @@ public static partial class OresStructuredParser
                 else
                 {
                     kind = Current.Text;
-                    // 'import namespace' is NOT file's 'use namespace' header.
-                    if (kind == "namespace")
-                        throw Error("import namespace requires manifest-verified multi-file package linker");
                     if (kind is not ("fnc" or "module"))
                         throw Error("Linked source supports fnc, module and authenticated Core wildcard imports");
                     index++;
