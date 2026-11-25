@@ -2040,18 +2040,10 @@ public static partial class OresStructuredParser
                     aggregateScopes.Any(scope => scope.ContainsKey(name)))
                     throw new FormatException($"Duplicate local binding at offset {nameAt}");
                 Expect("=");
-                // Only a complete, unconditional statement initializer may
-                // publish inline-task writes. Nested expression joins do not
-                // yet merge mutable environments (short circuit, ternary, match).
-                var previousWriteback = directInlineWritebackOffset;
-                directInlineWritebackOffset = kind != StructuredBindingKind.Const &&
-                    IsDirectInlineInitializer() ? Current.Offset : null;
-                StructuredExpr initializer;
-                try
-                {
-                    initializer = annotated ? ExpectedExpr(depth + 1, type) : Expr(depth + 1);
-                }
-                finally { directInlineWritebackOffset = previousWriteback; }
+                // Only complete unconditional statement values publish
+                // writes. Conditional expression joins remain fail-closed.
+                var initializer = ReadStatementValue(depth + 1, annotated ? type : null,
+                    allowWriteback: kind != StructuredBindingKind.Const && !commaBindingTerminator);
                 if (annotated)
                     Require(initializer, type, "Local initializer has wrong type");
                 else
@@ -2222,7 +2214,7 @@ public static partial class OresStructuredParser
             if (inlineValueBindingFloor is int floor && scopes.Take(floor).Any(scope => scope.ContainsKey(variable)))
                 throw Error("E_SYNC_TASK_WRITEBACK_UNSUPPORTED: value-context sync task cannot yet assign a surrounding local");
             Expect("=");
-            var assigned = ExpectedExpr(depth + 1, binding.Type);
+            var assigned = ReadStatementValue(depth + 1, binding.Type, allowWriteback: true);
             Require(assigned, binding.Type, "Assignment has wrong type");
             Expect(";");
             return (new StructuredSet(at, variable, assigned), false);

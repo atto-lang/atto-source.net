@@ -23,3 +23,7 @@ Canonical suspension-permission spelling `suspends fnc` is now admitted by the s
 ### Lexically owned loops
 
 A task or imperative match arm may now break or continue a loop opened within that same lexical return scope. Record the loop depth on scope entry and require a strictly deeper loop at each transfer. Existing CFG loop-target stack and typed SSA join carry mutable scalar and Option state across continue/break. Crossing into a pre-existing enclosing loop remains rejected, even between nested tasks. Guard failure still cannot use a loop transfer as its callable-return proof. Dual-lane positive and negative cases cover local loops, nested task boundary and match boundary. Exact-head execution pending.
+
+### Complete mutable assignment RHS
+
+The same statement-value gate now admits complete `let` assignment RHS tasks, including scalar and Option results. The existing StructuredSet lowering evaluates the entire RHS and publishes SSA writeback before installing the assignment's final result; a write to the destination within the task is therefore overwritten by the final assignment. The parser still denies nested arithmetic, short circuit, inherited write floors, immutable destinations, const and comma-body declaration writeback. AST shape is checked after lexical selection. Both guest profiles include a multi-branch scalar/Option positive and three no-artifact denials. Exact-head execution required.

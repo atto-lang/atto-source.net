@@ -1,0 +1,25 @@
+fnc scalar(bool first): int {
+    let int value = 1;
+    let int count = 0;
+    value = sync task<int> {
+        value = 100;
+        if first { count = 2; return 40; } fi
+        count = 3;
+        return 39;
+    };
+    return value + count;
+}
+fnc tagged(): int {
+    let Option<int> state = None;
+    let int count = 0;
+    state = sync task<Option<int>> {
+        state = Some(100);
+        count = 2;
+        return Some(40);
+    };
+    return state.unwrap() + count;
+}
+pub fnc main(): int {
+    guard scalar(true) eq 42, scalar(false) eq 42 { return 1; }
+    return tagged();
+}

@@ -25,7 +25,7 @@ public static partial class OresStructuredParser
 
         // Lexical lookahead only selects the supported statement context.
         // The ordinary typed parser still checks the complete task and result.
-        private bool IsDirectInlineInitializer()
+        private bool IsDirectInlineStatementValue()
         {
             if (!AtSyncTask()) return false;
             int cursor = index + 2;
@@ -40,6 +40,24 @@ public static partial class OresStructuredParser
                     return cursor + 1 < tokens.Count && tokens[cursor + 1].Text == ";";
             }
             return false;
+        }
+
+        // Both declarations and mutable assignments evaluate a complete RHS
+        // in the current SSA environment before installing their binding.
+        // The offset is a narrow permission, never inherited by other nodes.
+        private StructuredExpr ReadStatementValue(int depth, IrValueType? expected, bool allowWriteback)
+        {
+            int? previous = directInlineWritebackOffset;
+            bool direct = allowWriteback && IsDirectInlineStatementValue();
+            directInlineWritebackOffset = direct ? Current.Offset : null;
+            try
+            {
+                var value = expected is { } type ? ExpectedExpr(depth, type) : Expr(depth);
+                if (direct && value is not StructuredSyncTaskValue)
+                    throw Error("E_SYNC_TASK_WRITEBACK_UNSUPPORTED: writeback requires a complete inline-task statement value");
+                return value;
+            }
+            finally { directInlineWritebackOffset = previous; }
         }
 
         private bool AtSyncTask() => Current.Text == "sync" && tokens[index + 1].Text == "task";
