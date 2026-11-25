@@ -23,6 +23,11 @@ internal static class VmIsolateHostTests
         ExpectFailure(() => host.RegisterSupervisedActor(tenant, parent, 2),
             "duplicate child must not leak a terminal reservation");
         var child = host.RegisterSupervisedActor(tenant, parent, 3);
+        var wake = host.WaitForSupervisorTerminalAsync(tenant, parent);
+        if (wake.IsCompleted || !ReferenceEquals(wake, host.WaitForSupervisorTerminalAsync(tenant, parent)))
+            throw new Exception("pending terminal wakeup must be shared and incomplete");
+        var unrelatedWake = host.WaitForSupervisorTerminalAsync(tenant, unrelated);
+        ExpectFailure(() => host.WaitForSupervisorTerminalAsync(foreign, parent), "foreign readiness authority");
 
         // Saturate both DATA message count and byte budget, including empty
         // user messages. Terminal delivery must not consume a DATA slot.
@@ -44,6 +49,9 @@ internal static class VmIsolateHostTests
             throw new Exception("failed retirement published a terminal");
         host.RetireResource(tenant, child, pin);
         host.RetireFaultedActor(tenant, child);
+        if (!wake.IsCompletedSuccessfully || unrelatedWake.IsCompleted ||
+            !host.WaitForSupervisorTerminalAsync(tenant, parent).IsCompletedSuccessfully)
+            throw new Exception("terminal readiness not level-triggered for exact parent");
         ExpectFailure(() => host.RetireFaultedActor(tenant, child), "terminal replay");
         ExpectFailure(() => host.RetireActor(tenant, parent), "unredeemed child terminal");
         if (host.TryTakeSupervisorTerminal(tenant, unrelated, out _))
@@ -71,9 +79,14 @@ internal static class VmIsolateHostTests
         if (parent.QueuedMessages != 1024 || host.QueuedMail(tenant).Tenant != 1)
             throw new Exception("terminal delivery changed DATA accounting");
 
+        var nextWake = host.WaitForSupervisorTerminalAsync(tenant, parent);
+        if (nextWake.IsCompleted || ReferenceEquals(wake, nextWake))
+            throw new Exception("drained terminal readiness did not rearm");
         var last = host.RegisterSupervisedActor(tenant, parent, 3);
         host.BeginShutdown(tenant);
         host.RetireActor(tenant, last);
+        if (!nextWake.IsCompletedSuccessfully)
+            throw new Exception("terminal wakeup lost during quiescence");
         if (!host.TryTakeSupervisorTerminal(tenant, parent, out var finalNotice) ||
             finalNotice.ChildEpoch != last.Epoch ||
             host.TryTakeSupervisorTerminal(tenant, parent, out _))
@@ -81,8 +94,12 @@ internal static class VmIsolateHostTests
         if (!host.TryReceiveActor(tenant, parent, out var payload) ||
             payload is null || payload.Length != 1 || payload[0] != 42)
             throw new Exception("DATA head corrupted by terminal delivery");
+        var finalWake = host.WaitForSupervisorTerminalAsync(tenant, parent);
         host.RetireActor(tenant, unrelated);
         host.RetireActor(tenant, parent);
+        if (!unrelatedWake.IsCanceled || !finalWake.IsCanceled)
+            throw new Exception("retired parent left an unresolved readiness task");
+        ExpectFailure(() => host.WaitForSupervisorTerminalAsync(tenant, parent), "stale readiness parent");
         host.CompleteShutdown(tenant); host.Destroy(tenant);
         host.RetireActor(foreign, foreignParent);
         host.BeginShutdown(foreign); host.CompleteShutdown(foreign); host.Destroy(foreign);
@@ -111,10 +128,57 @@ internal static class VmIsolateHostTests
         Console.WriteLine("NET_NESTED_STATE_AUTHORITY_CURRENT_MAIN_TEST_PASS");
     }
 
+    private static void CheckCancellationRetirement()
+    {
+        var host = new OresVmHost(maxTenants: 1);
+        var tenant = host.CreateIsolate("cancel-retirement", maxActors: 2);
+        host.Start(tenant);
+        var parent = host.RegisterActor(tenant, 1);
+        var child = host.RegisterSupervisedActor(tenant, parent, 2);
+        var turn = host.BeginActorTurn(tenant, child);
+        var outer = host.BeginActorStateLoan(tenant, child, turn, writable: true);
+        var inner = host.BeginActorStateLoan(tenant, child, turn);
+        ExpectFailure(() => host.AcknowledgeActorTurnCancellation(tenant, child, turn),
+            "ack without request");
+        var signal = host.WaitForSupervisorTerminalAsync(tenant, parent);
+        // Request from another host thread, while the execution owner still holds
+        // nested state authority. Joining this host request is not guest retirement.
+        Task.Run(() => host.CancelActorTurn(tenant, child, turn)).GetAwaiter().GetResult();
+        host.CancelActorTurn(tenant, child, turn); // idempotent while live
+        ExpectFailure(() => host.BeginActorTurn(tenant, child), "cancelled lane still occupied");
+        ExpectFailure(() => host.RetireFaultedActor(tenant, child), "retirement before owner acknowledgment");
+        ExpectFailure(() => host.BeginActorStateLoan(tenant, child, turn), "new state loan after cancel");
+        ExpectFailure(() => host.ValidateActorStateLoan(tenant, child, turn, inner), "state access after cancel");
+        ExpectFailure(() => host.CompleteActorTurn(tenant, child, turn), "cancel cannot complete successfully");
+        ExpectFailure(() => host.EndActorStateLoan(tenant, child, turn, outer), "cleanup remains LIFO");
+        ExpectFailure(() => host.AcknowledgeActorTurnCancellation(tenant, parent, turn), "foreign ack");
+        if (signal.IsCompleted) throw new Exception("cancel request published terminal notice");
+        host.EndActorStateLoan(tenant, child, turn, inner);
+        host.EndActorStateLoan(tenant, child, turn, outer);
+        host.AcknowledgeActorTurnCancellation(tenant, child, turn);
+        ExpectFailure(() => host.AcknowledgeActorTurnCancellation(tenant, child, turn), "duplicate ack");
+        var next = host.BeginActorTurn(tenant, child);
+        if (next.Generation <= turn.Generation) throw new Exception("turn generation reused");
+        host.SuspendActorTurn(tenant, child, next);
+        host.CancelActorTurn(tenant, child, next);
+        ExpectFailure(() => host.ResumeActorTurn(tenant, child, next), "cancelled suspended turn resume");
+        ExpectFailure(() => host.RetireActor(tenant, child), "cancelled suspended turn before ack");
+        host.AcknowledgeActorTurnCancellation(tenant, child, next);
+        host.RetireFaultedActor(tenant, child);
+        if (!signal.IsCompletedSuccessfully ||
+            !host.TryTakeSupervisorTerminal(tenant, parent, out var notice) ||
+            notice.ChildEpoch != child.Epoch)
+            throw new Exception("terminal not published after cancellation retirement");
+        host.RetireActor(tenant, parent);
+        host.BeginShutdown(tenant); host.CompleteShutdown(tenant); host.Destroy(tenant);
+        Console.WriteLine("NET_ACTOR_CANCEL_RETIREMENT_HOST_TESTS_PASS");
+    }
+
     internal static void RunSupervisorTerminalChecks()
     {
         CheckSupervisorTerminalReservations();
         CheckNestedStateAuthority();
+        CheckCancellationRetirement();
     }
 
     public static void Run()
