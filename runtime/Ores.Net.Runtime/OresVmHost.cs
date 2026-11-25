@@ -40,6 +40,8 @@ public sealed partial class OresVmHost
         internal ActorTurnTicket? RunningTurn { get; set; }
         // Compiler-owned, typed actor-local cells. Installed once before any turn.
         internal ActorStateCell[]? StateCells { get; set; }
+        internal TerminalControlSlot? ParentTerminalSlot { get; set; }
+        internal List<TerminalControlSlot> TerminalControls { get; } = new();
     }
 
     public sealed class ActorTurnTicket
@@ -437,14 +439,21 @@ public sealed partial class OresVmHost
         }
     }
 
-    public void RetireActor(IsolateHandle handle, ActorTicket actor)
+    public void RetireActor(IsolateHandle handle, ActorTicket actor) =>
+        RetireActor(handle, actor, ChildTerminalKind.Stopped);
+
+    public void RetireActor(IsolateHandle handle, ActorTicket actor, ChildTerminalKind terminalKind)
     {
+        if (!Enum.IsDefined(terminalKind))
+            throw new ArgumentOutOfRangeException(nameof(terminalKind));
         lock (_gate) {
             var s = Check(handle); CheckActor(s, actor);
             if (s.PinsByActor[actor] != 0)
                 throw new InvalidOperationException("actor has outstanding resources");
             if (actor.LiveTurns.Count != 0)
                 throw new InvalidOperationException("actor has active logical turn");
+            if (actor.TerminalControls.Count != 0)
+                throw new InvalidOperationException("supervisor has unsettled child terminal CONTROL reservations");
             actor.Mailbox.Stop(); // Erase pending private queued copies.
             // Clear bounded actor-local cells before removing host ownership.
             // Managed memory may still be retained by the GC; this is logical
@@ -458,6 +467,12 @@ public sealed partial class OresVmHost
             }
             s.PinsByActor.Remove(actor);
             s.Actors.Remove(actor.Id);
+            // Registration reserved the exact parent incarnation's slot.
+            // No DATA enqueue, allocation, or capacity check at retirement.
+            if (actor.ParentTerminalSlot is { } slot) {
+                slot.Notice = new ChildTerminalNotice(actor.Id, actor.Epoch, terminalKind);
+                actor.ParentTerminalSlot = null;
+            }
         }
     }
 
