@@ -1136,7 +1136,7 @@ public static partial class OresStructuredParser
                     {
                         if (++components > 8 || Current.Text.Length > 64)
                             throw Error("E_IMPORT_PATH: contextual path exceeds budget");
-                        if (Current.Text is "." or ";" or "<eof>")
+                        if (Current.Text is "." or ";" or "")
                             throw Error("E_IMPORT_PATH: missing contextual path component");
                         logical += "." + Current.Text;
                         index++;
@@ -1155,12 +1155,14 @@ public static partial class OresStructuredParser
                     if (!Take("from"))
                         throw Error("import namespace requires manifest-verified multi-file package linker");
                     string selector = Current.Text;
+                    if (selector.Length == 0) throw Error("import namespace requires manifest-verified multi-file package linker");
                     index++;
                     if (selector.Length >= 2 && (selector[0] == '"' || selector[0] == '\'') &&
                         selector[^1] == selector[0])
                         selector = selector[1..^1];
                     else if (selector == "core" && Take("."))
                     {
+                        if (Current.Text.Length == 0) throw Error("import namespace requires manifest-verified multi-file package linker");
                         selector += "." + Current.Text;
                         index++;
                     }
