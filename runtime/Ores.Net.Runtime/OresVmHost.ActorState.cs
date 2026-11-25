@@ -417,7 +417,13 @@ public sealed partial class OresVmHost
             // Scope revocation precedes logical-lane retirement, even when
             // the generated method retained the scope or threw mid-update.
             scope?.Revoke();
-            try { CancelActorTurn(handle, actor, turn); }
+            // This synchronous dispatch owner has returned from the generated
+            // delegate (including its unwind); the scope is already revoked.
+            // Request alone cannot release the lane.
+            try {
+                CancelActorTurn(handle, actor, turn);
+                AcknowledgeActorTurnCancellation(handle, actor, turn);
+            }
             catch (InvalidOperationException) { }
             throw;
         }
