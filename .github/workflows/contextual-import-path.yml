@@ -8,6 +8,8 @@ on:
       - 'compiler/Ores.Net.Compiler.Core/StructuredSource.cs'
       - 'verification/Ores.Net.Tests/ContextualImportParserSelfTest.cs'
       - 'verification/Ores.Net.Tests/Program.cs'
+      - 'compiler/Ores.Net.Compiler.Core/StaticImportGraph.cs'
+      - 'verification/Ores.Net.Tests/StaticImportGraphSelfTest.cs'
       - 'global.json'
 permissions:
   contents: read
@@ -43,6 +45,10 @@ jobs:
           cp verification/Ores.Net.Tests/ContextualImportPathSelfTest.cs "$work/"
           cmp compiler/Ores.Net.Compiler.Core/ContextualImportPath.cs "$work/ContextualImportPath.cs"
           cmp verification/Ores.Net.Tests/ContextualImportPathSelfTest.cs "$work/ContextualImportPathSelfTest.cs"
+          cp compiler/Ores.Net.Compiler.Core/StaticImportGraph.cs "$work/"
+          cp verification/Ores.Net.Tests/StaticImportGraphSelfTest.cs "$work/"
+          cmp compiler/Ores.Net.Compiler.Core/StaticImportGraph.cs "$work/StaticImportGraph.cs"
+          cmp verification/Ores.Net.Tests/StaticImportGraphSelfTest.cs "$work/StaticImportGraphSelfTest.cs"
           dotnet run --project "$work" --configuration Release
       - name: Compile actual compiler project
         run: dotnet build compiler/Ores.Net.Compiler.Core/Ores.Net.Compiler.Core.csproj -c Release
