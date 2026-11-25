@@ -573,7 +573,7 @@ pub async routine main(): void {
         // by CFG/CIL lowering until value layout and construction are verified.
         var localTypes = OresStructuredParser.Parse("""
             fnc main():int {
-                struct Pair { int left; int right }
+                struct LocalPair { int left; int right }
                 record Status { bool ready, int code };
                 return 42;
             }
@@ -581,7 +581,7 @@ pub async routine main(): void {
         Require(localTypes.Body.Count == 3,
             "local struct/record declarations are preserved as statements");
         Require(localTypes.Body[0] is StructuredLocalTypeDecl {
-            Name: "Pair", Kind: StructuredLocalTypeKind.Struct, Fields.Count: 2
+            Name: "LocalPair", Kind: StructuredLocalTypeKind.Struct, Fields.Count: 2
         } pair && pair.Fields[0] == new StructuredLocalField("left", IrValueType.I64)
                && pair.Fields[1] == new StructuredLocalField("right", IrValueType.I64),
             "local struct field order and scalar types are preserved");
@@ -590,9 +590,9 @@ pub async routine main(): void {
         } status && status.Fields[0] == new StructuredLocalField("ready", IrValueType.Bool)
                  && status.Fields[1] == new StructuredLocalField("code", IrValueType.I64),
             "local record field order and scalar types are preserved");
-        Reject("fnc main():int{struct Pair{int x;int x}return 1;}",
+        Reject("fnc main():int{struct LocalPair{int x;int x}return 1;}",
             "duplicate local value-type fields are forbidden");
-        Reject("fnc main():int{struct Pair{int x}if true{record Pair{int y}}return 1;}",
+        Reject("fnc main():int{struct LocalPair{int x}if true{record LocalPair{int y}}return 1;}",
             "nested local value types cannot shadow an active local type");
         foreach (var nominal in new[] {
             "fnc main():int{class Local{}return 1;}",
@@ -610,7 +610,7 @@ pub async routine main(): void {
         try
         {
             _ = OresStructuredCfgLowering.Lower(
-                "fnc main():int{struct Pair{int left;int right}return 42;}");
+                "fnc main():int{struct LocalPair{int left;int right}return 42;}");
             throw new Exception("Local value type reached CFG lowering without layout support");
         }
         catch (FormatException ex)
