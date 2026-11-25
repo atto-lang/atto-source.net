@@ -211,6 +211,9 @@ internal static class ActorAwaitSourceTests
         Require(cancelled.Future.IsCanceled && calls == 0, "unstarted cancellation");
         try { cancelled.Run(); throw new Exception("cancelled producer executed"); }
         catch (InvalidOperationException) { }
+        try { cancelled.RunClaimed(); throw new Exception("cancelled producer redeemed as admitted"); }
+        catch (InvalidOperationException) { }
+        Require(calls == 0, "cancelled producer body ran through claimed path");
         var admitted = new OresVmHost.ActorScalarTask(() => ++calls);
         admitted.Claim();
         admitted.CancelUnstarted();
