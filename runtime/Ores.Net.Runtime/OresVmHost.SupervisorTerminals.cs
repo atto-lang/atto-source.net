@@ -43,9 +43,43 @@ public sealed partial class OresVmHost
     }
 
     /// <summary>
+    /// Scheduler-facing level-triggered readiness. One shared pending task
+    /// per parent, never one waiter allocation per call. It carries no
+    /// redemption authority and must be followed by exact-parent redemption.
+    /// Continuations are queued asynchronously; no user code runs under _gate.
+    /// </summary>
+    internal Task WaitForSupervisorTerminalAsync(IsolateHandle handle, ActorTicket parent)
+    {
+        lock (_gate) {
+            var state = Check(handle);
+            CheckActor(state, parent);
+            foreach (var reservation in state.SupervisorTerminals.Values)
+                if (ReferenceEquals(reservation.Parent, parent) && reservation.Outcome.HasValue)
+                    return Task.CompletedTask;
+            parent.TerminalReady ??= new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            return parent.TerminalReady.Task;
+        }
+    }
+
+    private static void SignalSupervisorTerminal(ActorTicket parent)
+    {
+        var ready = parent.TerminalReady;
+        parent.TerminalReady = null;
+        ready?.TrySetResult();
+    }
+
+    private static void CloseSupervisorTerminalWait(ActorTicket parent)
+    {
+        var ready = parent.TerminalReady;
+        parent.TerminalReady = null;
+        ready?.TrySetCanceled();
+    }
+
+    /// <summary>
     /// Direct, exactly-once host redemption by the registered parent ticket.
     /// No DATA dequeue or bytes are required. This bounded scan does not
-    /// promise FIFO terminal order or implement scheduler wakeup/fairness.
+    /// promise FIFO terminal order or implement scheduler dispatch/fairness.
     /// May drain during quiescence before retiring the parent.
     /// </summary>
     internal bool TryTakeSupervisorTerminal(IsolateHandle handle,
