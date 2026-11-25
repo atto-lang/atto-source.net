@@ -67,6 +67,7 @@ public sealed partial class OresVmHost
         var ready = parent.TerminalReady;
         parent.TerminalReady = null;
         ready?.TrySetResult();
+        SignalActorPump(parent);
     }
 
     private static void CloseSupervisorTerminalWait(ActorTicket parent)
