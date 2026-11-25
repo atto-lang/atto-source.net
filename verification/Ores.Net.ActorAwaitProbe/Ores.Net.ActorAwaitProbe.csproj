@@ -11,13 +11,22 @@
     <Compile Include="../Ores.Net.Tests/GeneratedTaskActor.g.cs" Link="GeneratedTaskActor.g.cs" />
     <Compile Include="../Ores.Net.Tests/GeneratedMultiTaskCounter.g.cs" Link="GeneratedMultiTaskCounter.g.cs" />
     <Compile Include="../Ores.Net.Tests/GeneratedFaultTaskCounter.g.cs" Link="GeneratedFaultTaskCounter.g.cs" />
+    <Compile Include="../Ores.Net.Tests/GeneratedTrapTaskCounter.g.cs" Link="GeneratedTrapTaskCounter.g.cs" />
+    <Compile Include="../Ores.Net.Tests/GeneratedTrapFaultCounter.g.cs" Link="GeneratedTrapFaultCounter.g.cs" />
+    <Compile Include="../Ores.Net.Tests/GeneratedTrapFutureCounter.g.cs" Link="GeneratedTrapFutureCounter.g.cs" />
     <None Include="../Ores.Net.Tests/GeneratedAwaitActor.g.cs" Link="GeneratedAwaitActor.g.cs" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../Ores.Net.Tests/GeneratedTaskActor.g.cs" Link="GeneratedTaskActor.g.cs" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../Ores.Net.Tests/GeneratedMultiTaskCounter.g.cs" Link="GeneratedMultiTaskCounter.g.cs" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../Ores.Net.Tests/GeneratedFaultTaskCounter.g.cs" Link="GeneratedFaultTaskCounter.g.cs" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../Ores.Net.Tests/GeneratedTrapTaskCounter.g.cs" Link="GeneratedTrapTaskCounter.g.cs" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../Ores.Net.Tests/GeneratedTrapFaultCounter.g.cs" Link="GeneratedTrapFaultCounter.g.cs" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../Ores.Net.Tests/GeneratedTrapFutureCounter.g.cs" Link="GeneratedTrapFutureCounter.g.cs" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../Ores.Net.Tests/AwaitCounter.atto" Link="AwaitCounter.atto" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../Ores.Net.Tests/TaskCounter.atto" Link="TaskCounter.atto" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../Ores.Net.Tests/MultiTaskCounter.atto" Link="MultiTaskCounter.atto" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../Ores.Net.Tests/FaultTaskCounter.atto" Link="FaultTaskCounter.atto" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../Ores.Net.Tests/TrapTaskCounter.atto" Link="TrapTaskCounter.atto" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../Ores.Net.Tests/TrapFaultCounter.atto" Link="TrapFaultCounter.atto" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../Ores.Net.Tests/TrapFutureCounter.atto" Link="TrapFutureCounter.atto" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
