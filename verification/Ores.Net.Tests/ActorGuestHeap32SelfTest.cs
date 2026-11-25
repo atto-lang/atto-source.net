@@ -6,6 +6,7 @@ internal static class ActorGuestHeap32SelfTest
     public static void Run()
     {
         RejectIncompatibleRef32StorageAbi();
+        NativeGuestSlotTableBudgetFailureRollsBack();
         ActorGuestRefEncodingV1SelfTest.Run();
         PerActorReferencesSurviveTurnsAndDenyStaleAccess();
         GenerationExhaustionFailsClosedWithoutWrapping();
@@ -19,6 +20,26 @@ internal static class ActorGuestHeap32SelfTest
         Console.WriteLine("PASS actor-ref32-owned-auth: per-actor handles deny cross-actor aliasing, stale reads and foreign links (host only)");
         Console.WriteLine("PASS actor-ref32-cycle-reclaim: cyclic typed guest links do not retain native arena past final read loan (host only)");
         Console.WriteLine("PASS .NET actor-local 32-bit guest refs (host runtime only; not compiled guest)");
+    }
+
+    private static void NativeGuestSlotTableBudgetFailureRollsBack()
+    {
+        // Metadata fits, but the requested payload backing cannot be admitted.
+        var budget = new ActorArenaBudget(512);
+        using var arena = new ActorArena(87001, 1, 4096, 128, 4, 2, 2,
+            budget: budget, demandBacked: true);
+        var heap = new ActorGuestHeap32(arena, 4);
+        using (var turn = arena.EnterTurn(87001, 1))
+        {
+            for (int i = 0; i < 8; i++)
+            {
+                ExpectInvalid(() => heap.Allocate(turn, 16), "payload budget failure");
+                Require(heap.LiveCount == 0 && arena.LiveAllocations == 0 &&
+                        arena.ReservedNativeBytes == 0 && budget.ReservedBytes == 0,
+                    "first failed guest admission rolls back native table and payload charge");
+            }
+        }
+        Require(arena.Retire() && budget.ReservedBytes == 0, "failed table remains uncharged");
     }
 
     private static void RejectIncompatibleRef32StorageAbi()
@@ -265,8 +286,8 @@ internal static class ActorGuestHeap32SelfTest
             heldLoan is not null, "cyclic graph completed a real actor turn");
 
         long reserved = runtime.NativeReservedBytes;
-        Require(reserved == 2048 + 128,
-            "cyclic graph does not require a second native graph allocator");
+        Require(reserved > 2048 + 128,
+            "cyclic graph accounts for native guest slot metadata in addition to payload");
         runtime.Stop(actor);
         Require(SpinWait.SpinUntil(() => runtime.LiveActors == 0,
             TimeSpan.FromSeconds(10)), "cyclic graph actor STOP logically completes");
@@ -629,6 +650,8 @@ internal static class ActorGuestHeap32SelfTest
         Require(SpinWait.SpinUntil(() => runtime.CompletedMessages == 1,
             TimeSpan.FromSeconds(10)), "loan holder physical turn exited");
         Require(outstanding is not null, "read loan created by guest payload");
+        Require(runtime.NativeReservedBytes > reserved, "first guest allocation charges native table");
+        reserved = runtime.NativeReservedBytes;
         runtime.Stop(actor);
         Require(SpinWait.SpinUntil(() => runtime.LiveActors == 0,
             TimeSpan.FromSeconds(10)), "actor logically retired after STOP");
