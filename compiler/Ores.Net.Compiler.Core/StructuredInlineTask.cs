@@ -25,10 +25,11 @@ public static partial class OresStructuredParser
 
         // Lexical lookahead only selects the supported statement context.
         // The ordinary typed parser still checks the complete task and result.
-        private bool IsDirectInlineStatementValue()
+        private bool IsDirectInlineStatementValue(int start)
         {
-            if (!AtSyncTask()) return false;
-            int cursor = index + 2;
+            if (start + 1 >= tokens.Count || tokens[start].Text != "sync" ||
+                tokens[start + 1].Text != "task") return false;
+            int cursor = start + 2;
             while (cursor < tokens.Count && tokens[cursor].Text is not ("{" or ";" or "}" or ""))
                 cursor++;
             if (cursor >= tokens.Count || tokens[cursor].Text != "{") return false;
@@ -42,19 +43,57 @@ public static partial class OresStructuredParser
             return false;
         }
 
+        // Admit only an entire statement task or the immediate right operand
+        // of a top-level short-circuit expression ending at the semicolon.
+        // Tokens retain literal delimiters, so quoted punctuation is not a brace.
+        private int? StatementWritebackOffset()
+        {
+            if (IsDirectInlineStatementValue(index)) return Current.Offset;
+            int parens = 0, braces = 0, brackets = 0;
+            for (int cursor = index; cursor + 2 < tokens.Count; cursor++)
+            {
+                string token = tokens[cursor].Text;
+                if (parens == 0 && braces == 0 && brackets == 0)
+                {
+                    if (token is ";" or "}" or "") break;
+                    if (token is ("and" or "&&" or "or" or "||") &&
+                        IsDirectInlineStatementValue(cursor + 1))
+                        return tokens[cursor + 1].Offset;
+                }
+                switch (token)
+                {
+                    case "(": parens++; break;
+                    case ")": if (--parens < 0) return null; break;
+                    case "{": braces++; break;
+                    case "}": if (--braces < 0) return null; break;
+                    case "[": brackets++; break;
+                    case "]": if (--brackets < 0) return null; break;
+                }
+            }
+            return null;
+        }
+
+        private static bool IsWritebackStatementShape(StructuredExpr value, int offset) =>
+            value is StructuredSyncTaskValue task && task.Offset == offset ||
+            value is StructuredBinary
+            {
+                Operator: StructuredOperator.LogicalAnd or StructuredOperator.LogicalOr,
+                Right: StructuredSyncTaskValue rhs
+            } && rhs.Offset == offset;
+
         // Both declarations and mutable assignments evaluate a complete RHS
         // in the current SSA environment before installing their binding.
         // The offset is a narrow permission, never inherited by other nodes.
         private StructuredExpr ReadStatementValue(int depth, IrValueType? expected, bool allowWriteback)
         {
             int? previous = directInlineWritebackOffset;
-            bool direct = allowWriteback && IsDirectInlineStatementValue();
-            directInlineWritebackOffset = direct ? Current.Offset : null;
+            int? selected = allowWriteback ? StatementWritebackOffset() : null;
+            directInlineWritebackOffset = selected;
             try
             {
                 var value = expected is { } type ? ExpectedExpr(depth, type) : Expr(depth);
-                if (direct && value is not StructuredSyncTaskValue)
-                    throw Error("E_SYNC_TASK_WRITEBACK_UNSUPPORTED: writeback requires a complete inline-task statement value");
+                if (selected is int offset && !IsWritebackStatementShape(value, offset))
+                    throw Error("E_SYNC_TASK_WRITEBACK_UNSUPPORTED: writeback requires a complete task or short-circuit statement value");
                 return value;
             }
             finally { directInlineWritebackOffset = previous; }

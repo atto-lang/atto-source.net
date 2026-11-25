@@ -478,6 +478,28 @@ public static partial class OresStructuredCfgLowering
                     {
                         int condition = Expression(binary.Left, ref block, variables);
                         var rhs = NewBlock();
+                        // Only a parser-authorized immediate task RHS can
+                        // publish writes here. Keep independent environments
+                        // for the skipped and evaluated edges.
+                        if (binary.Right is StructuredSyncTaskValue { Task.WriteBack: true })
+                        {
+                            var names = Names(variables);
+                            var merged = new Dictionary<string, Binding>(StringComparer.Ordinal);
+                            var continuation = Join(names, variables, merged);
+                            int result = NextValue();
+                            continuation.Parameters.Add(new CfgParameter(result, IrValueType.Bool));
+                            int[] skipped = [.. Values(names, variables), condition];
+                            var rhsVariables = new Dictionary<string, Binding>(variables, StringComparer.Ordinal);
+                            block.Terminator = binary.Operator == StructuredOperator.LogicalAnd
+                                ? new CfgBranch(condition, rhs.Name, [], continuation.Name, skipped)
+                                : new CfgBranch(condition, continuation.Name, skipped, rhs.Name, []);
+                            int evaluated = Expression(binary.Right, ref rhs, rhsVariables);
+                            rhs.Terminator = new CfgJump(continuation.Name,
+                                [.. Values(names, rhsVariables), evaluated]);
+                            foreach (var (name, binding) in merged) variables[name] = binding;
+                            block = continuation;
+                            return result;
+                        }
                         var join = NewBlock();
                         int joined = NextValue();
                         join.Parameters.Add(new CfgParameter(joined, IrValueType.Bool));
