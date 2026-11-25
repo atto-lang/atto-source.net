@@ -59,7 +59,50 @@ public static partial class OresStructuredParser
         }
         // Diagnose unused cycles before any provider parsing or lookup.
         StaticImportGraph.PrecheckAliases(aliases);
-        FrozenDependencyGraph.Verify(packages);
+        var closure=FrozenDependencyGraph.Verify(packages);
+        var linkedViews=new Dictionary<string,StaticImportGraph.View>(StringComparer.Ordinal);
+        var linkedExports=new Dictionary<(string Package,string Namespace,string Member),StructuredFunction>();
+        var linkedPrefixes=new Dictionary<(string Package,string Namespace),string>();
+        var methods=new Dictionary<string,StructuredFunction>(StringComparer.Ordinal);
+        var order=new List<string>();
+        foreach(string identity in closure.DependencyOrder) {
+            var owner=available[identity];
+            var inventory=new List<StaticImportGraph.Export>();
+            foreach(string ns in owner.NamespaceNames) {
+                if(linkedPrefixes.Count>=16) throw new FormatException("E_SOURCE_LIMIT: linked provider budget exceeded");
+                string prefix="frozen_provider_"+linkedPrefixes.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)+"_";
+                var unit=ParseCore(owner.ProviderSource(ns),null,ns,inventory,prefix,(source,member)=>{
+                    string[] parts=source.Split('/');
+                    if(parts.Length<4) throw new FormatException("E_IMPORT_PATH: provider function import requires explicit exported subpath");
+                    string dependency=string.Join("/",parts.Take(3));
+                    var target=closure.RequireDependency(identity,dependency);
+                    string selected=target.NamespaceForSubpath(string.Join("/",parts.Skip(3)));
+                    if(!linkedViews.TryGetValue(target.Name,out var view))
+                        throw new FormatException("E_IMPORT_PATH: dependency not linked before owner");
+                    var export=view.Lookup(selected+"."+member);
+                    if(export.Kind!=StaticImportGraph.Kind.Fnc||
+                        !linkedExports.TryGetValue((target.Name,selected,member),out var fn))
+                        throw new FormatException("E_IMPORT_KIND: expected public dependency function");
+                    return fn;
+                });
+                if(inventory.Count>256) throw new FormatException("E_SOURCE_LIMIT: export inventory exceeded");
+                var program=unit.Program;
+                var functions=program.Functions??throw new FormatException("E_IMPORT_KIND: missing provider functions");
+                if(functions.ContainsKey(prefix+"main")) throw new FormatException("E_UNSUPPORTED: provider main remains outside bounded profile");
+                if(functions.Count>64-methods.Count) throw new FormatException("E_SOURCE_LIMIT: linked function budget exceeded");
+                foreach(string method in program.FunctionOrder??throw new FormatException("E_IMPORT_KIND: missing provider order")) {
+                    if(!methods.TryAdd(method,functions[method])) throw new FormatException("E_DUPLICATE: canonical provider method");
+                    order.Add(method);
+                }
+                foreach(var entry in inventory.Where(e=>e.Visible&&e.Kind==StaticImportGraph.Kind.Fnc&&e.Path.StartsWith(ns+".",StringComparison.Ordinal))) {
+                    string member=entry.Path[(ns.Length+1)..];
+                    if(member.Contains('.')||!functions.TryGetValue(prefix+member,out var fn)) continue;
+                    linkedExports.Add((identity,ns,member),fn);
+                }
+                linkedPrefixes.Add((identity,ns),prefix);
+            }
+            linkedViews.Add(identity,new StaticImportGraph.View(new StaticImportGraph.Origin(StaticImportGraph.Domain.Package,owner.Name,owner.LockDigest),inventory));
+        }
         var graph=new StaticImportGraph();
         foreach(var import in imports)
         {
@@ -67,20 +110,20 @@ public static partial class OresStructuredParser
             {
                 if(!available.TryGetValue(import.Source,out var root))
                     throw new FormatException("E_UNBOUND: package root not in authenticated snapshot set");
-                graph.BindPackage(root.FunctionView(),import.Binding);
+                graph.BindPackage(linkedViews[root.Name],import.Binding);
                 continue;
             }
             string[] parts=import.Source.Split('/');
             if(parts.Length<3) throw new FormatException("E_IMPORT_PATH: invalid package selector");
             if(!available.TryGetValue(string.Join("/",parts.Take(3)),out var package))
                 throw new FormatException("E_UNBOUND: package not in authenticated snapshot set");
-            package.BindNamespace(graph,import.Source,import.Selector,import.Binding!,import.Renamed);
+            if(!import.Renamed&&import.Selector!=import.Binding) throw new FormatException("E_IMPORT_PATH: rename requires explicit alias");
+            var selected=package.SelectNamespace(import.Source,import.Selector);
+            var view=linkedViews[package.Name];
+            graph.BindGroup(view.Origin,view,new[]{new StaticImportGraph.Selection(selected,import.Binding!,StaticImportGraph.Kind.Namespace,import.Renamed)});
         }
         graph.BindAliases(aliases);
 
-        var providerPrefixes=new Dictionary<(string Name,string Namespace),string>();
-        var methods=new Dictionary<string,StructuredFunction>(StringComparer.Ordinal);
-        var order=new List<string>();
         int calls=0;
         reader.ResolveCall=(reference,arguments)=>{
             if(++calls>32) throw new FormatException("E_SOURCE_LIMIT: imported call budget exceeded");
@@ -88,28 +131,13 @@ public static partial class OresStructuredParser
             if(target.Kind!=StaticImportGraph.Kind.Fnc)
                 throw new FormatException("E_IMPORT_KIND: expected public function");
             if(!available.TryGetValue(target.View.Origin.Identity,out var owner) ||
-                !ReferenceEquals(owner.FunctionView(),target.View))
+                !ReferenceEquals(linkedViews[owner.Name],target.View))
                 throw new FormatException("E_IMPORT_PATH: selected view not owned by authenticated snapshot");
             int dot=target.Path.LastIndexOf('.');
             if(dot<=0) throw new FormatException("E_IMPORT_PATH: missing provider namespace");
             string ns=target.Path[..dot], member=target.Path[(dot+1)..];
-            var key=(owner.Name,ns);
-            if(!providerPrefixes.TryGetValue(key,out var prefix)) {
-                if(providerPrefixes.Count>=16) throw new FormatException("E_SOURCE_LIMIT: provider budget exceeded");
-                prefix="frozen_provider_"+providerPrefixes.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)+"_";
-                var provider=ParseFrozenProvider(owner,ns,prefix);
-                var functions=provider.Functions ?? throw new FormatException("E_IMPORT_KIND: missing provider functions");
-                if(functions.ContainsKey(prefix+"main"))
-                    throw new FormatException("E_UNSUPPORTED: provider main remains outside bounded profile");
-                if(functions.Count>64-methods.Count)
-                    throw new FormatException("E_SOURCE_LIMIT: linked function budget exceeded");
-                foreach(string method in provider.FunctionOrder ?? throw new FormatException("E_IMPORT_KIND: missing provider order")) {
-                    if(!methods.TryAdd(method,functions[method]))
-                        throw new FormatException("E_DUPLICATE: canonical provider method");
-                    order.Add(method);
-                }
-                providerPrefixes.Add(key,prefix);
-            }
+            if(!linkedPrefixes.TryGetValue((owner.Name,ns),out var prefix))
+                throw new FormatException("E_IMPORT_PATH: provider not linked");
             string canonical=prefix+member;
             if(!methods.TryGetValue(canonical,out var function)||function.Parameters.Count!=arguments.Count||
                 function.Parameters.Any(p=>p.Type!=IrValueType.I64)||function.ResultType!=IrValueType.I64)
