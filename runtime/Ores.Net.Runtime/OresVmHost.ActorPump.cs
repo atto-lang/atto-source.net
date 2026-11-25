@@ -194,17 +194,28 @@ public sealed partial class OresVmHost
             if (turn is null) return waits!;
 
             ActorPumpStep? next = null;
-            var continuation = ExecuteScheduledSegment(scheduler, handle, actor, turn, lease!, scope => {
-                next = segment!(scope);
-                if (next is null) return false;
-                ArgumentNullException.ThrowIfNull(next.Ready);
-                ArgumentNullException.ThrowIfNull(next.Next);
-                if (next.Producer is not null && !ReferenceEquals(next.Ready, next.Producer.Future))
-                    throw new InvalidOperationException("producer readiness identity mismatch");
-                return true;
-            });
+            ActorContinuation? continuation;
+            try {
+                continuation = ExecuteScheduledSegment(scheduler, handle, actor, turn, lease!, scope => {
+                    next = segment!(scope);
+                    if (next is null) return false;
+                    ArgumentNullException.ThrowIfNull(next.Ready);
+                    ArgumentNullException.ThrowIfNull(next.Next);
+                    if (next.Producer is not null && !ReferenceEquals(next.Ready, next.Producer.Future))
+                        throw new InvalidOperationException("producer readiness identity mismatch");
+                    return true;
+                });
+            } catch {
+                // A produced step may never have been published (e.g.
+                // cancellation wins after the delegate returns). Its child
+                // must not be left with an unresolved unadmitted Future.
+                next?.Producer?.CancelUnstarted();
+                throw;
+            }
             if (continuation is not null)
                 pending.Add(new PendingPumpStep(continuation, next!));
+            else
+                next?.Producer?.CancelUnstarted();
             return null; // exactly one execution segment per queued item
         }
 
