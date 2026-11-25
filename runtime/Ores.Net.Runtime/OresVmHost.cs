@@ -458,12 +458,10 @@ public sealed partial class OresVmHost
             var s = Check(handle); CheckTurn(s, actor, turn);
             if (!turn.CancellationRequested)
                 throw new InvalidOperationException("actor turn cancellation was not requested");
-            // After physical unwind, revoke remaining logical scope tokens.
-            while (turn.ActiveStateLoan is { } loan) {
-                loan.Released = true;
-                turn.ActiveStateLoan = loan.Parent;
-            }
-            turn.StateLoanDepth = 0;
+            // Zero state loans are necessary, but not sufficient to prove
+            // physical retirement: the caller is the trusted execution owner.
+            if (turn.ActiveStateLoan is not null || turn.StateLoanDepth != 0)
+                throw new InvalidOperationException("state loans must unwind before cancellation acknowledgment");
             turn.Completed = true;
             turn.Suspended = false;
             actor.ActiveTurn = null;
