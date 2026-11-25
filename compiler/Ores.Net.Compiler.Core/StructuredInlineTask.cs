@@ -10,9 +10,10 @@ public static partial class OresStructuredParser
 {
     private sealed partial class Reader
     {
-        private sealed class LocalReturnScope(string diagnostic, IrValueType? type)
+        private sealed class LocalReturnScope(string diagnostic, IrValueType? type, int loopFloor)
         {
             public string Diagnostic { get; } = diagnostic;
+            public int LoopFloor { get; } = loopFloor;
             public IrValueType? Type { get; set; } = type;
             public bool HasExit { get; set; }
         }
@@ -83,7 +84,7 @@ public static partial class OresStructuredParser
             if (declared == IrValueType.FixedArrayI64)
                 throw Error("E_TASK_RETURN_TYPE: inline task array results require a verified aggregate layout");
 
-            var scope = new LocalReturnScope("E_TASK_RETURN_TYPE", declared);
+            var scope = new LocalReturnScope("E_TASK_RETURN_TYPE", declared, loopDepth);
             var previous = localReturn;
             var previousFloor = inlineValueBindingFloor;
             // Never widen an inherited write restriction when a nested

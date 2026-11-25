@@ -80,7 +80,7 @@ public static partial class OresStructuredParser
                         if (imperative)
                         {
                             var previousReturn = localReturn;
-                            var scopeReturn = new LocalReturnScope("MATCH_VOID_ARM", IrValueType.Void);
+                            var scopeReturn = new LocalReturnScope("MATCH_VOID_ARM", IrValueType.Void, loopDepth);
                             localReturn = scopeReturn;
                             try
                             {

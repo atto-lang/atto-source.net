@@ -2170,7 +2170,9 @@ public static partial class OresStructuredParser
                 // They cannot prove a callable return for a guard failure.
                 if (guardFailureDepth != 0)
                     throw Error("E_GUARD: loop transfer does not replace a guard return");
-                if (localReturn is { } lexical)
+                // A loop opened inside the current lexical scope owns its
+                // break/continue edges. Never jump to a pre-existing outer loop.
+                if (localReturn is { } lexical && loopDepth <= lexical.LoopFloor)
                     throw Error(lexical.Diagnostic == "MATCH_VOID_ARM"
                         ? "E_MATCH_LOOP_TRANSFER_UNSUPPORTED: lexical match exit needs a verified join"
                         : "E_SYNC_TASK_LOOP_TRANSFER_UNSUPPORTED: loop transfer needs a verified lexical continuation");
@@ -2184,7 +2186,9 @@ public static partial class OresStructuredParser
                 // They cannot prove a callable return for a guard failure.
                 if (guardFailureDepth != 0)
                     throw Error("E_GUARD: loop transfer does not replace a guard return");
-                if (localReturn is { } lexical)
+                // A loop opened inside the current lexical scope owns its
+                // break/continue edges. Never jump to a pre-existing outer loop.
+                if (localReturn is { } lexical && loopDepth <= lexical.LoopFloor)
                     throw Error(lexical.Diagnostic == "MATCH_VOID_ARM"
                         ? "E_MATCH_LOOP_TRANSFER_UNSUPPORTED: lexical match exit needs a verified join"
                         : "E_SYNC_TASK_LOOP_TRANSFER_UNSUPPORTED: loop transfer needs a verified lexical continuation");
