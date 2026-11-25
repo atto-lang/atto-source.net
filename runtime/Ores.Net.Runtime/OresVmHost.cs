@@ -56,6 +56,7 @@ public sealed partial class OresVmHost
         public int MaxLiveReceives { get; }
         internal TaskCompletionSource? TerminalReady { get; set; }
         internal ActorScheduler? PumpOwner { get; set; }
+        internal int PumpCarrierThread { get; set; }
         internal TaskCompletionSource? PumpReady { get; set; }
         internal int SupervisorControlBurst { get; set; }
         // Compiler-owned typed state layout, installed once before any turn.
@@ -301,6 +302,7 @@ public sealed partial class OresVmHost
     {
         lock (_gate) {
             var s = Check(handle); CheckActor(s, actor);
+            CheckPumpDispatchAuthority(actor);
             if (!actor.Mailbox.TryReceive(out payload) || payload is null) { payload = null; return false; }
             actor.QueuedBytes -= payload.Length;
             s.QueuedMailBytes -= payload.Length;
@@ -356,6 +358,7 @@ public sealed partial class OresVmHost
 
     private static void CheckNewReceiveAdmission(ActorTicket actor)
     {
+        CheckPumpDispatchAuthority(actor);
         if (actor.ActiveTurn is not null || actor.LiveTurns.Count >= actor.MaxLiveReceives)
             throw new InvalidOperationException("actor running or logical receive capacity exhausted");
     }
@@ -469,6 +472,7 @@ public sealed partial class OresVmHost
             var s = Check(handle); CheckTurn(s, actor, turn);
             if (turn.CancellationRequested)
                 throw new InvalidOperationException("actor turn cancellation requested");
+            CheckPumpDispatchAuthority(actor);
             if (turn.ManagedContinuation)
                 throw new InvalidOperationException("scheduler-managed turn requires exact continuation ticket");
             if (!turn.Suspended)
