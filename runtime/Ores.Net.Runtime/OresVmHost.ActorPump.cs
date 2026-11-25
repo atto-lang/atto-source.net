@@ -19,6 +19,15 @@ public sealed partial class OresVmHost
         private int _claimed;
         internal ActorScalarTask(Func<long> body) =>
             _body = body ?? throw new ArgumentNullException(nameof(body));
+        // Both scalar operands are copied at admission. The generated method
+        // group must be static: a task must never retain the actor frame.
+        internal ActorScalarTask(Func<long, long, long> body, long left, long right)
+        {
+            ArgumentNullException.ThrowIfNull(body);
+            if (body.Target is not null)
+                throw new InvalidOperationException("scalar task capture requires static producer");
+            _body = () => body(left, right);
+        }
         internal Task<long> Future => _completion.Task;
         internal void Claim()
         {
