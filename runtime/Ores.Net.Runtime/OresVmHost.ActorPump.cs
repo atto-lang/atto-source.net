@@ -15,9 +15,14 @@ public sealed partial class OresVmHost
         wake?.TrySetResult();
     }
 
-    // One opt-in pump per configured actor. External trusted hosts must not
-    // concurrently drive the same actor manually. All actual selection and
-    // admission are atomic with the host gate regardless of wakeup order.
+    private static void CheckPumpDispatchAuthority(ActorTicket actor)
+    {
+        if (actor.PumpOwner is not null && actor.PumpCarrierThread != Environment.CurrentManagedThreadId)
+            throw new InvalidOperationException("actor is owned by automatic scheduler pump");
+    }
+
+    // One opt-in pump per configured actor. Manual dispatch from another
+    // thread cannot consume its DATA, receipts, or reserved CONTROL.
     private async Task RunActorPumpAsync(ActorScheduler scheduler,
         IsolateHandle handle, ActorTicket actor, string layout,
         Func<ActorDispatchScope, ReadOnlyMemory<byte>, ActorPumpStep?> onData,
@@ -149,8 +154,17 @@ public sealed partial class OresVmHost
                 var completion = new TaskCompletionSource<Task[]?>(
                     TaskCreationOptions.RunContinuationsAsynchronously);
                 if (!domains.TryDispatch(ActorKind.Private, () => {
-                    try { completion.TrySetResult(RunOne()); }
-                    catch (Exception error) { completion.TrySetException(error); }
+                    Task[]? result = null;
+                    Exception? failure = null;
+                    lock (_gate) actor.PumpCarrierThread = Environment.CurrentManagedThreadId;
+                    try { result = RunOne(); }
+                    catch (Exception error) { failure = error; }
+                    finally {
+                        lock (_gate) actor.PumpCarrierThread = 0;
+                    }
+                    // Publish only after clearing physical pump authority.
+                    if (failure is null) completion.TrySetResult(result);
+                    else completion.TrySetException(failure);
                 }))
                     throw new InvalidOperationException("tenant actor carrier admission denied");
 
