@@ -26,6 +26,10 @@ internal static class FrozenImportSnapshotSelfTest
         Array.Fill(source,(byte)'x');
         if(snap.ProviderSource("network")!=Source||snap.NamespaceForSubpath("network/http")!="network")
             throw new InvalidOperationException("frozen input identity lost");
+        if(snap.SelectNamespace(Name,"api.network")!="network"||snap.SelectNamespace(Name+"/network/http","other")!="network")
+            throw new InvalidOperationException("public namespace selector mismatch");
+        Deny(()=>snap.SelectNamespace(Name+"/src/network","network"));
+        Deny(()=>snap.SelectNamespace("@wrong/project/package","network"));
         Deny(()=>snap.NamespaceForSubpath("src/network"));
         Deny(()=>FrozenImportSnapshot.Verify(Name,Version,new string('0',64),Bytes(Manifest),l,Inputs(Bytes(Source))));
         Deny(()=>FrozenImportSnapshot.Verify(Name,Version,hash,Bytes(Manifest+"\n"),l,Inputs(Bytes(Source))));
