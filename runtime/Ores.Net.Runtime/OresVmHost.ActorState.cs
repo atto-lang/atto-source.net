@@ -298,6 +298,13 @@ public sealed partial class OresVmHost
             string layout, Action<ActorDispatchScope, SupervisorTerminalNotice> handler)
             => Host.TryDispatchSupervisorSegment(this, isolate, actor, layout, handler);
 
+        internal Task RunPumpAsync(IsolateHandle isolate, ActorTicket actor, string layout,
+            Func<ActorDispatchScope, ReadOnlyMemory<byte>, ActorPumpStep?> onData,
+            Func<ActorDispatchScope, ActorPumpStep?> onReceipt,
+            Action<ActorDispatchScope, SupervisorTerminalNotice> onTerminal,
+            CancellationToken stop = default)
+            => Host.RunActorPumpAsync(this, isolate, actor, layout, onData, onReceipt, onTerminal, stop);
+
         internal ActorContinuation? StartSegment(IsolateHandle isolate, ActorTicket actor,
             string layout, Func<ActorDispatchScope, bool> segment)
             => Host.StartScheduledSegment(this, isolate, actor, layout, segment);
