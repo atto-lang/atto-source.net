@@ -141,6 +141,10 @@ internal static class VmActorStateCellsTests
             throw new Exception("foreign tenant signed counter mismatch");
         Deny(() => host.ReadActorStateInt64(tenantB, b1, turnB, write, 0),
             "cross-actor stale state loan");
+        host.RequestActorTurnCancellation(tenantB, b1, turnB);
+        Deny(() => host.CancelActorTurn(tenantB, b1, turnB),
+            "cancellation acknowledgement must not revoke a live state loan");
+        host.EndActorStateLoan(tenantB, b1, turnB, bloan);
         host.CancelActorTurn(tenantB, b1, turnB);
         Deny(() => host.WriteActorStateInt64(tenantB, b1, turnB, bloan, 0, 8),
             "cancelled turn write must be denied");
