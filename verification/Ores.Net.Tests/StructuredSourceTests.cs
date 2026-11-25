@@ -89,8 +89,17 @@ internal static class StructuredSourceTests
             "break requires an enclosing loop");
         RejectFeature("fnc main():int{do unless false then continue; fi return 0;}",
             "continue requires an enclosing loop");
-        RejectFeature("fnc main():int{loop{if true then break; fi}return 0;}",
-            "use 'do if'");
+        // The production parser deliberately preserves legacy imperative
+        // if ... then ... fi. Check it with the same typed CFG lowering as
+        // explicit do-if; out-of-loop transfers and value-if remain denied.
+        const string legacy = "fnc main():int{loop{if true then break; fi}return 42;}";
+        const string canonical = "fnc main():int{loop{do if true then break; fi}return 42;}";
+        Require(OresStructuredParser.Parse(legacy).Body.Count ==
+                OresStructuredParser.Parse(canonical).Body.Count,
+            "legacy imperative if retains canonical loop shape");
+        _ = OresStructuredCfgLowering.Lower(legacy);
+        _ = OresStructuredCfgLowering.Lower(canonical);
+        Console.WriteLine("NET_LEGACY_AND_CANONICAL_DO_IF_CFG_ADMITTED");
         RejectFeature("fnc main():int{return ifnot false then break; else 3 fi;}",
             "must produce a value");
         RejectFeature("fnc main():int{return unless true then 3 fi;}",
