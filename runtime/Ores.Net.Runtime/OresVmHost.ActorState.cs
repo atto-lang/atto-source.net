@@ -284,6 +284,14 @@ public sealed partial class OresVmHost
         public byte[]? DequeueUser(IsolateHandle isolate, ActorTicket actor)
             => Host.DequeueScheduledActorUser(this, isolate, actor);
 
+        // Trusted scheduler bridge. Readiness is not a dispatch or carrier ticket.
+        internal Task WaitForSupervisorTerminal(IsolateHandle isolate, ActorTicket actor)
+            => Host.WaitForSupervisorTerminalAsync(isolate, actor);
+
+        internal bool TryDequeueSupervisorTerminal(IsolateHandle isolate, ActorTicket actor,
+            out SupervisorTerminalNotice notice)
+            => Host.TryTakeScheduledSupervisorTerminal(this, isolate, actor, out notice);
+
         /// <summary>Admit one bounded empty control message for a future turn.</summary>
         public void Enqueue(IsolateHandle isolate, ActorTicket actor)
             => Host.EnqueueScheduledActor(this, isolate, actor);
@@ -340,12 +348,15 @@ public sealed partial class OresVmHost
             CheckActor(tenant, actor);
             if (tenant.Phase != Phase.Running || actor.ActiveTurn is not null)
                 throw new InvalidOperationException("actor user dequeue admission closed");
+            CheckOrdinaryDispatchPriority(tenant, actor);
             // Host and mailbox gates are held in the same order as SendActor.
             // TryReceive refuses to consume typed scheduler controls.
             // Use the current host-mediated path so dequeuing DATA refunds
             // actor, tenant and host byte accounting exactly once. Typed
             // control at FIFO head remains unconsumed by that operation.
-            return TryReceiveActor(isolate, actor, out var payload) ? payload : null;
+            if (!TryReceiveActor(isolate, actor, out var payload)) return null;
+            actor.SupervisorControlBurst = 0;
+            return payload;
         }
     }
 
@@ -397,6 +408,7 @@ public sealed partial class OresVmHost
                     "generated actor method does not match configured actor layout");
             if (actor.NextTurnGeneration == ulong.MaxValue)
                 throw new InvalidOperationException("actor logical turn generation exhausted");
+            CheckOrdinaryDispatchPriority(tenant, actor);
             // Do not dequeue nonempty messages or start a turn without
             // consuming exactly one admitted, FIFO-head control tick.
             if (!actor.Mailbox.TryReceiveEmptyDispatch())
@@ -405,6 +417,7 @@ public sealed partial class OresVmHost
             // _gate remains held across dequeue and logical-turn admission.
             // No other host thread may race to consume or retire the actor.
             turn = BeginActorTurn(handle, actor);
+            actor.SupervisorControlBurst = 0;
             turn.ScheduledCarrierLease = carrierLease;
             turn.ScheduledCarrierThread = Environment.CurrentManagedThreadId;
         }
