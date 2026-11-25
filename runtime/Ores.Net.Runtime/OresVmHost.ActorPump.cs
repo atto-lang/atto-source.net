@@ -39,7 +39,9 @@ public sealed partial class OresVmHost
         }
         internal void CancelUnstarted()
         {
-            if (Interlocked.CompareExchange(ref _claimed, 1, 0) == 0)
+            // Cancelled is distinct from admitted: RunClaimed must not
+            // execute a producer whose cancellation won admission.
+            if (Interlocked.CompareExchange(ref _claimed, 3, 0) == 0)
                 _completion.TrySetCanceled();
         }
     }
