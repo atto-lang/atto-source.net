@@ -159,10 +159,16 @@
     <Content Include="GeneratedTaskActor.g.cs" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="GeneratedMultiTaskCounter.g.cs" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="GeneratedFaultTaskCounter.g.cs" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="GeneratedTrapTaskCounter.g.cs" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="GeneratedTrapFaultCounter.g.cs" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="GeneratedTrapFutureCounter.g.cs" CopyToOutputDirectory="PreserveNewest" />
     <None Update="AwaitCounter.atto" CopyToOutputDirectory="PreserveNewest" />
     <None Update="TaskCounter.atto" CopyToOutputDirectory="PreserveNewest" />
     <None Update="MultiTaskCounter.atto" CopyToOutputDirectory="PreserveNewest" />
     <None Update="FaultTaskCounter.atto" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="TrapTaskCounter.atto" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="TrapFaultCounter.atto" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="TrapFutureCounter.atto" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="GeneratedMessageCounterActor.g.cs" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="GeneratedExternalCounterActor.g.cs" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="GeneratedCounterMainV2.g.cs" CopyToOutputDirectory="PreserveNewest" />
