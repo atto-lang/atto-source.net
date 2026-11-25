@@ -105,6 +105,8 @@ public sealed partial class OresVmHost
         internal ulong NextActorEpoch = 1;
         internal readonly Dictionary<ulong, ActorTicket> Actors = new();
         internal readonly Dictionary<ActorTicket, int> PinsByActor = new();
+        // One bounded terminal reservation per admitted supervised child incarnation.
+        internal readonly Dictionary<ActorTicket, SupervisorTerminalReservation> SupervisorTerminals = new();
         internal int ActivePins;
         internal long ScalarState;
         internal int ActiveGuestCalls;
@@ -335,6 +337,8 @@ public sealed partial class OresVmHost
             var s = Check(handle); CheckTurn(s, actor, turn);
             if (turn.Suspended)
                 throw new InvalidOperationException("actor state access while suspended");
+            if (writable && turn.ActiveStateLoan is { Writable: false })
+                throw new InvalidOperationException("read-only actor state loan cannot grant writable nested loan");
             if (turn.StateLoanDepth >= 32)
                 throw new InvalidOperationException("bounded actor state loan nesting exceeded");
             if (turn.NextStateLoanGeneration == ulong.MaxValue)
@@ -481,7 +485,14 @@ public sealed partial class OresVmHost
         }
     }
 
-    public void RetireActor(IsolateHandle handle, ActorTicket actor)
+    public void RetireActor(IsolateHandle handle, ActorTicket actor) =>
+        RetireActorCore(handle, actor, SupervisorTerminalKind.Stopped);
+
+    // Trusted host fault retirement; no guest exception or payload is retained.
+    internal void RetireFaultedActor(IsolateHandle handle, ActorTicket actor) =>
+        RetireActorCore(handle, actor, SupervisorTerminalKind.Faulted);
+
+    private void RetireActorCore(IsolateHandle handle, ActorTicket actor, SupervisorTerminalKind outcome)
     {
         lock (_gate) {
             var s = Check(handle); CheckActor(s, actor);
@@ -490,6 +501,10 @@ public sealed partial class OresVmHost
                 throw new InvalidOperationException("actor has outstanding resources");
             if (actor.ActiveTurn is not null)
                 throw new InvalidOperationException("actor has active logical turn");
+            // Do not abandon a live child or an unconsumed terminal reservation.
+            foreach (var reservation in s.SupervisorTerminals.Values)
+                if (ReferenceEquals(reservation.Parent, actor))
+                    throw new InvalidOperationException("supervisor has outstanding child terminal reservations");
             actor.Mailbox.Stop(); // Erase pending private queued copies.
             s.QueuedMailBytes -= actor.QueuedBytes;
             _queuedMailBytes -= actor.QueuedBytes;
@@ -504,6 +519,10 @@ public sealed partial class OresVmHost
             actor.Heap.Retire();
             s.PinsByActor.Remove(actor);
             s.Actors.Remove(actor.Id);
+            // Publish only after host retirement, into the pre-reserved record.
+            // No DATA capacity, mailbox send, or guest callback is involved.
+            if (s.SupervisorTerminals.TryGetValue(actor, out var terminal))
+                terminal.Outcome = outcome;
         }
     }
 
