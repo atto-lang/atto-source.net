@@ -50,6 +50,7 @@ public sealed partial class OresVmHost
         public int QueuedMessages => Mailbox.QueuedMessages;
         internal ulong NextTurnGeneration { get; set; } = 1;
         internal ActorTurnTicket? ActiveTurn { get; set; }
+        internal TaskCompletionSource? TerminalReady { get; set; }
         // Compiler-owned typed state layout, installed once before any turn.
         // The values live in Heap (StateBlock); only the kinds are managed.
         internal ActorStateScalarKind[]? StateKinds { get; set; }
@@ -66,6 +67,7 @@ public sealed partial class OresVmHost
         public ulong Generation { get; }
         internal bool Suspended { get; set; }
         internal bool Completed { get; set; }
+        internal bool CancellationRequested { get; set; }
         internal ulong NextStateLoanGeneration { get; set; } = 1;
         internal int StateLoanDepth { get; set; }
         internal ActorStateLoan? ActiveStateLoan { get; set; }
@@ -335,8 +337,8 @@ public sealed partial class OresVmHost
     {
         lock (_gate) {
             var s = Check(handle); CheckTurn(s, actor, turn);
-            if (turn.Suspended)
-                throw new InvalidOperationException("actor state access while suspended");
+            if (turn.Suspended || turn.CancellationRequested)
+                throw new InvalidOperationException("actor state access while suspended or cancelling");
             if (writable && turn.ActiveStateLoan is { Writable: false })
                 throw new InvalidOperationException("read-only actor state loan cannot grant writable nested loan");
             if (turn.StateLoanDepth >= 32)
@@ -353,9 +355,11 @@ public sealed partial class OresVmHost
 
     private static void CheckStateLoan(
         TenantState state, ActorTicket actor, ActorTurnTicket turn,
-        ActorStateLoan loan, bool requireWrite)
+        ActorStateLoan loan, bool requireWrite, bool releasing = false)
     {
         CheckTurn(state, actor, turn);
+        if (turn.CancellationRequested && !releasing)
+            throw new InvalidOperationException("actor turn cancellation requested");
         if (turn.Suspended || loan is null || loan.Released ||
             !ReferenceEquals(loan.Turn, turn) ||
             !ReferenceEquals(turn.ActiveStateLoan, loan))
@@ -381,7 +385,7 @@ public sealed partial class OresVmHost
     {
         lock (_gate) {
             var s = Check(handle);
-            CheckStateLoan(s, actor, turn, loan, false);
+            CheckStateLoan(s, actor, turn, loan, false, releasing: true);
             loan.Released = true;
             turn.ActiveStateLoan = loan.Parent;
             --turn.StateLoanDepth;
@@ -393,6 +397,8 @@ public sealed partial class OresVmHost
     {
         lock (_gate) {
             var s = Check(handle); CheckTurn(s, actor, turn);
+            if (turn.CancellationRequested)
+                throw new InvalidOperationException("actor turn cancellation requested");
             if (turn.Suspended)
                 throw new InvalidOperationException("actor logical turn already suspended");
             if (turn.ActiveStateLoan is not null)
@@ -406,6 +412,8 @@ public sealed partial class OresVmHost
     {
         lock (_gate) {
             var s = Check(handle); CheckTurn(s, actor, turn);
+            if (turn.CancellationRequested)
+                throw new InvalidOperationException("actor turn cancellation requested");
             if (!turn.Suspended)
                 throw new InvalidOperationException("actor logical turn is not suspended");
             turn.Suspended = false;
@@ -417,6 +425,8 @@ public sealed partial class OresVmHost
     {
         lock (_gate) {
             var s = Check(handle); CheckTurn(s, actor, turn);
+            if (turn.CancellationRequested)
+                throw new InvalidOperationException("cancelled turn requires retirement acknowledgment");
             if (turn.ActiveStateLoan is not null)
                 throw new InvalidOperationException("state loan must retire before completion");
             turn.Completed = true;
@@ -426,16 +436,29 @@ public sealed partial class OresVmHost
     }
 
     /// <summary>
-    /// Cancellation owns the same terminal transition as successful completion:
-    /// it fences the exact active turn, clears actor admission once, and makes
-    /// every later resume/complete/cancel attempt stale.
+    /// Request cancellation without releasing logical admission or state
+    /// storage. Repeated requests on the same live ticket are idempotent.
+    /// The trusted execution owner must acknowledge after physical unwind.
     /// </summary>
     public void CancelActorTurn(
         IsolateHandle handle, ActorTicket actor, ActorTurnTicket turn)
     {
         lock (_gate) {
             var s = Check(handle); CheckTurn(s, actor, turn);
-            // Terminal cancellation revokes all bounded nested scopes.
+            turn.CancellationRequested = true;
+        }
+    }
+
+    // Trusted host execution-owner boundary, NOT a proof of carrier identity.
+    // Call only after guest execution and cleanup have physically returned.
+    internal void AcknowledgeActorTurnCancellation(
+        IsolateHandle handle, ActorTicket actor, ActorTurnTicket turn)
+    {
+        lock (_gate) {
+            var s = Check(handle); CheckTurn(s, actor, turn);
+            if (!turn.CancellationRequested)
+                throw new InvalidOperationException("actor turn cancellation was not requested");
+            // After physical unwind, revoke remaining logical scope tokens.
             while (turn.ActiveStateLoan is { } loan) {
                 loan.Released = true;
                 turn.ActiveStateLoan = loan.Parent;
@@ -521,8 +544,11 @@ public sealed partial class OresVmHost
             s.Actors.Remove(actor.Id);
             // Publish only after host retirement, into the pre-reserved record.
             // No DATA capacity, mailbox send, or guest callback is involved.
-            if (s.SupervisorTerminals.TryGetValue((actor.Id, actor.Epoch), out var terminal))
+            CloseSupervisorTerminalWait(actor);
+            if (s.SupervisorTerminals.TryGetValue((actor.Id, actor.Epoch), out var terminal)) {
                 terminal.Outcome = outcome;
+                SignalSupervisorTerminal(terminal.Parent);
+            }
         }
     }
 
