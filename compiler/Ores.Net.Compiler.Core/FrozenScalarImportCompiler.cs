@@ -13,15 +13,47 @@ public static partial class OresStructuredParser
     /// The ordinary CFG verifier and CIL emitter then own executable lowering.
     /// </summary>
     public static VerifiedCfgModule CompileFrozenScalar(string consumer, IReadOnlyList<FrozenImportSnapshot> packages)
+        => new FrozenScalarSession().Compile(consumer,packages).Module;
+
+    // Only private parser-produced typed providers are retained. No caller can
+    // supply cached ASTs. Every build lowers and verifies the entire CFG anew.
+    private sealed record CachedProvider(StructuredProgram Program,IReadOnlyList<StaticImportGraph.Export> Exports);
+    public sealed record FrozenScalarBuild(VerifiedCfgModule Module,
+        IReadOnlyList<string> ReparsedProviders,IReadOnlyList<string> ReusedProviders);
+
+    public sealed class FrozenScalarSession
+    {
+        private readonly object gate=new();
+        private FrozenDependencyGraph? previous;
+        private Dictionary<(string Package,string Namespace),CachedProvider> cache=new();
+        public FrozenScalarBuild Compile(string consumer,IReadOnlyList<FrozenImportSnapshot> packages)
+        {
+            lock(gate) {
+                var result=CompileFrozenScalarCore(consumer,packages,previous,cache,out var nextGraph,out var next);
+                // Publish only after full current-graph CFG verification succeeds.
+                previous=nextGraph;cache=next;
+                return result;
+            }
+        }
+        public void Clear() {lock(gate){previous=null;cache=new();}}
+    }
+
+    private static FrozenScalarBuild CompileFrozenScalarCore(string consumer,IReadOnlyList<FrozenImportSnapshot> packages,
+        FrozenDependencyGraph? previous,Dictionary<(string Package,string Namespace),CachedProvider> cache,
+        out FrozenDependencyGraph nextGraph,out Dictionary<(string Package,string Namespace),CachedProvider> next)
     {
         if (consumer is null || consumer.Length > 65536 || packages is null ||
             packages.Count is <1 or >16)
             throw new FormatException("E_SOURCE_LIMIT: frozen scalar guest budget exceeded");
         ValidateSourceInput(consumer);
         var available = new SortedDictionary<string,FrozenImportSnapshot>(StringComparer.Ordinal);
-        foreach (var package in packages)
+        // Snapshot caller inventory before verification and linking.
+        packages=packages.ToArray();
+        foreach (var package in packages) {
+            if(package is null) throw new FormatException("E_LOCK: null snapshot");
             if (!available.TryAdd(package.Name,package))
                 throw new FormatException("E_AMBIGUOUS: multiple snapshots for package name");
+        }
 
         var lexer = new Lexer(consumer, true);
         var reader = new FrozenConsumerReader(lexer);
@@ -60,6 +92,10 @@ public static partial class OresStructuredParser
         // Diagnose unused cycles before any provider parsing or lookup.
         StaticImportGraph.PrecheckAliases(aliases);
         var closure=FrozenDependencyGraph.Verify(packages);
+        var dirty=new HashSet<string>(closure.PlanAgainst(previous).Rebuild,StringComparer.Ordinal);
+        var staged=new Dictionary<(string Package,string Namespace),CachedProvider>();
+        var reparsed=new List<string>();
+        var reused=new List<string>();
         var linkedViews=new Dictionary<string,StaticImportGraph.View>(StringComparer.Ordinal);
         var linkedExports=new Dictionary<(string Package,string Namespace,string Member),StructuredFunction>();
         var linkedPrefixes=new Dictionary<(string Package,string Namespace),string>();
@@ -70,8 +106,15 @@ public static partial class OresStructuredParser
             var inventory=new List<StaticImportGraph.Export>();
             foreach(string ns in owner.NamespaceNames) {
                 if(linkedPrefixes.Count>=16) throw new FormatException("E_SOURCE_LIMIT: linked provider budget exceeded");
-                string prefix="frozen_provider_"+linkedPrefixes.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)+"_";
-                var unit=ParseCore(owner.ProviderSource(ns),null,ns,inventory,prefix,(source,member)=>{
+                string prefix="frozen_provider_"+closure.ProviderIdentity(identity,ns)+"_";
+                var key=(identity,ns);
+                CachedProvider cached;
+                if(!dirty.Contains(identity)&&cache.TryGetValue(key,out var prior)) {
+                    cached=prior;
+                    reused.Add(prefix);
+                } else {
+                    var ownExports=new List<StaticImportGraph.Export>();
+                    var unit=ParseCore(owner.ProviderSource(ns),null,ns,ownExports,prefix,(source,member)=>{
                     string[] parts=source.Split('/');
                     if(parts.Length<4) throw new FormatException("E_IMPORT_PATH: provider function import requires explicit exported subpath");
                     string dependency=string.Join("/",parts.Take(3));
@@ -84,9 +127,14 @@ public static partial class OresStructuredParser
                         !linkedExports.TryGetValue((target.Name,selected,member),out var fn))
                         throw new FormatException("E_IMPORT_KIND: expected public dependency function");
                     return fn;
-                });
+                    });
+                    cached=new CachedProvider(unit.Program,ownExports.AsReadOnly());
+                    reparsed.Add(prefix);
+                }
+                staged.Add(key,cached);
+                inventory.AddRange(cached.Exports);
                 if(inventory.Count>256) throw new FormatException("E_SOURCE_LIMIT: export inventory exceeded");
-                var providerProgram=unit.Program;
+                var providerProgram=cached.Program;
                 var functions=providerProgram.Functions??throw new FormatException("E_IMPORT_KIND: missing provider functions");
                 if(functions.ContainsKey(prefix+"main")) throw new FormatException("E_UNSUPPORTED: provider main remains outside bounded profile");
                 if(functions.Count>64-methods.Count) throw new FormatException("E_SOURCE_LIMIT: linked function budget exceeded");
@@ -94,7 +142,7 @@ public static partial class OresStructuredParser
                     if(!methods.TryAdd(method,functions[method])) throw new FormatException("E_DUPLICATE: canonical provider method");
                     order.Add(method);
                 }
-                foreach(var entry in inventory.Where(e=>e.Visible&&e.Kind==StaticImportGraph.Kind.Fnc&&e.Path.StartsWith(ns+".",StringComparison.Ordinal))) {
+                foreach(var entry in cached.Exports.Where(e=>e.Visible&&e.Kind==StaticImportGraph.Kind.Fnc&&e.Path.StartsWith(ns+".",StringComparison.Ordinal))) {
                     string member=entry.Path[(ns.Length+1)..];
                     if(member.Contains('.')||!functions.TryGetValue(prefix+member,out var fn)) continue;
                     linkedExports.Add((identity,ns,member),fn);
@@ -169,7 +217,9 @@ public static partial class OresStructuredParser
         body.Add(new StructuredReturn(0,result));
         var program=new StructuredProgram("main",body.AsReadOnly(),
             new System.Collections.ObjectModel.ReadOnlyDictionary<string,StructuredFunction>(methods),order.AsReadOnly());
-        return OresStructuredCfgLowering.LowerModule(program);
+        var verified=OresStructuredCfgLowering.LowerModule(program);
+        nextGraph=closure;next=staged;
+        return new FrozenScalarBuild(verified,reparsed.AsReadOnly(),reused.AsReadOnly());
     }
 
     private sealed class FrozenConsumerReader
