@@ -535,6 +535,94 @@ internal static class VmIsolateHostTests
         Console.WriteLine("NET_BOUNDED_REENTRANT_RECEIVES_HOST_TESTS_PASS");
     }
 
+    private static void CheckAutomaticActorPump()
+    {
+        var host = new OresVmHost(maxTenants: 1);
+        var tenant = host.CreateIsolate("automatic-pump", maxActors: 2);
+        host.Start(tenant);
+        var actor = host.RegisterActor(tenant, 1, serial: false, maxLiveReceives: 2);
+        host.ConfigureNamedActorState(tenant, actor, "Counter", "Counter|1:I",
+            new[] { new OresVmHost.ActorStateField(OresVmHost.ActorStateScalarKind.Int64) });
+        var scheduler = host.CreateTrustedScheduler();
+        var timeout = TimeSpan.FromSeconds(10);
+        using var stop = new CancellationTokenSource();
+        var readyA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var readyB = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var startedA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var startedB = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resumedA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resumedB = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var terminal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var parked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var never = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        int receipts = 0;
+        var pump = scheduler.RunPumpAsync(tenant, actor, "Counter|1:I",
+            (scope, data) => {
+                if (data.Length != 1) throw new Exception("invalid pump DATA");
+                if (data.Span[0] == 1) {
+                    scope.AddInt64(0, 10);
+                    startedA.TrySetResult();
+                    return new OresVmHost.ActorPumpStep(readyA.Task, next => {
+                        next.AddInt64(0, 5);
+                        resumedA.TrySetResult();
+                        return null;
+                    });
+                }
+                if (data.Span[0] == 2) {
+                    scope.AddInt64(0, 20);
+                    startedB.TrySetResult();
+                    return new OresVmHost.ActorPumpStep(readyB.Task, next => {
+                        next.AddInt64(0, 7);
+                        resumedB.TrySetResult();
+                        return null;
+                    });
+                }
+                if (scope.ReadInt64(0) != 42)
+                    throw new Exception("ready continuations failed to commit");
+                parked.TrySetResult();
+                return new OresVmHost.ActorPumpStep(never.Task,
+                    _ => throw new Exception("shutdown resumed a never-ready continuation"));
+            },
+            _ => { Interlocked.Increment(ref receipts); return null; },
+            (scope, notice) => {
+                if (notice.ChildId != 2) throw new Exception("wrong supervisor notice");
+                terminal.TrySetResult();
+            }, stop.Token);
+        try {
+            // Duplicate pump is rejected without creating a second worker.
+            ExpectFailure(() => scheduler.RunPumpAsync(tenant, actor, "Counter|1:I",
+                (_, _) => null, _ => null, (_, _) => { }).GetAwaiter().GetResult(),
+                "duplicate automatic pump");
+            host.SendActor(tenant, actor, actor.CurrentRef, new byte[] { 1 });
+            host.SendActor(tenant, actor, actor.CurrentRef, new byte[] { 2 });
+            Task.WhenAll(startedA.Task, startedB.Task).WaitAsync(timeout).GetAwaiter().GetResult();
+            // Ready continuations can resume even at full logical capacity.
+            readyA.TrySetResult();
+            readyB.TrySetResult();
+            Task.WhenAll(resumedA.Task, resumedB.Task).WaitAsync(timeout).GetAwaiter().GetResult();
+            var child = host.RegisterSupervisedActor(tenant, actor, 2);
+            host.RetireActor(tenant, child);
+            terminal.Task.WaitAsync(timeout).GetAwaiter().GetResult();
+             scheduler.Enqueue(tenant, actor);
+            host.SendActor(tenant, actor, actor.CurrentRef, new byte[] { 4 });
+            parked.Task.WaitAsync(timeout).GetAwaiter().GetResult();
+            host.BeginShutdown(tenant);
+            pump.WaitAsync(timeout).GetAwaiter().GetResult();
+            if (host.ActorReceiveSnapshot(tenant, actor) != (0, 0, 0UL) ||
+                receipts != 1 || never.Task.IsCompleted)
+                throw new Exception("pump shutdown failed to retire bounded pending work");
+            host.RetireActor(tenant, actor);
+            host.CompleteShutdown(tenant);
+            host.Destroy(tenant);
+        }
+        finally {
+            stop.Cancel();
+            try { pump.WaitAsync(timeout).GetAwaiter().GetResult(); }
+            catch (OperationCanceledException) { }
+        }
+        Console.WriteLine("NET_AUTOMATIC_ACTOR_PUMP_HOST_TESTS_PASS");
+    }
+
     internal static void RunSupervisorTerminalChecks()
     {
         CheckSupervisorTerminalReservations();
@@ -545,6 +633,7 @@ internal static class VmIsolateHostTests
         CheckMigratableCarrierSegments();
         CheckSupervisorHandlerDispatch();
         CheckBoundedReentrantReceives();
+        CheckAutomaticActorPump();
     }
 
     public static void Run()
