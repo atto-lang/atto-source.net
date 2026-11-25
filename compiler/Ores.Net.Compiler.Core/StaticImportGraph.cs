@@ -101,6 +101,31 @@ public sealed class StaticImportGraph
         Insert(staged, new Binding(binding,tier,new Target(view,"",Kind.Namespace)));
         bindings = staged;
     }
+    // Atomic natural suffix candidates, without changing package identity.
+    public void BindPackage(View view,string? explicitAlias)
+    {
+        if(view.Origin.Domain!=Domain.Package)
+            throw Error("E_IMPORT_PATH","expected frozen external package view");
+        string identity=view.Origin.Identity;
+        string[] parts=identity.StartsWith('@')?identity[1..].Split('/'):Array.Empty<string>();
+        static bool AlphaNum(char c)=>c is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9';
+        if(parts.Length!=3 || parts.Any(p=>p.Length is <1 or >64 || !AlphaNum(p[0]) || p.Any(c=>!AlphaNum(c)&&c is not ('-' or '_'))))
+            throw Error("E_IMPORT_PATH","invalid package root");
+        var staged=new List<Binding>(bindings);
+        var target=new Target(view,"",Kind.Namespace);
+        if(explicitAlias is not null) Insert(staged,new Binding(explicitAlias,Tier.Explicit,target));
+        else {
+            int count=0;
+            for(int i=parts.Length-1;i>=0;i--) {
+                var suffix=parts.Skip(i).Select(p=>p.Replace('-','_')).ToArray();
+                if(suffix.Any(p=>!ContextualImportPath.Valid(p))) continue;
+                Insert(staged,new Binding(string.Join(".",suffix),Tier.Deliberate,target));
+                count++;
+            }
+            if(count==0) throw Error("E_IMPORT_PATH","package requires explicit alias");
+        }
+        bindings=staged;
+    }
     public void BindGroup(Origin requested, View view, IReadOnlyList<Selection> selections)
     {
         if (view.Origin != requested) throw Error("E_IMPORT_PATH", "wrong source identity");
