@@ -43,3 +43,7 @@ Complete mutable assignment or runtime declaration values may use a value match 
 ### Bounded ternary statement writeback
 
 A complete runtime declaration or mutable assignment may also use `condition ? task-arm : task-arm` with immediate complete sync-task branches. The parser uses the statement entry offset and arm delimiters to grant permission; the final AST must still be the conditional root. Existing keyword conditional typed continuation joins apply unchanged, including closed Option tags and payloads. The false arm keeps the existing right-associative Conditional parser. Predicate, nested arithmetic, nonroot conditionals and inherited restricted scopes cannot publish writes. New four-path fixture and four denial fixtures are registered in both guest lanes. Exact-head execution pending.
+
+### NativeAOT regression repair: prefix logical not
+
+The #257 and #258 task jobs failed at offset 338 of inline-shortcircuit-writeback.atto, the `!result` token. The structured parser already has typed boolean negation, but the standalone lexer admitted only a bang followed by `(`. Admit the standalone bang after the existing multi-character operators and ownership handling, without altering macro preflight or `!=` / `!eq` precedence. Preserve the failed fixture verbatim. Add a dedicated guest for adjacent and spaced prefix not and both inequality spellings, plus nonbool, macro and ownership denials. Parenthesized bang remains conservatively gated by the existing macro preflight; this repair does not expand macro admission. Exact-head rerun required.

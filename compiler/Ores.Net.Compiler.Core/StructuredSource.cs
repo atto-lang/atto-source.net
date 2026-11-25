@@ -1065,9 +1065,10 @@ public static partial class OresStructuredParser
             else if (ch == '|' && !moduleMode && !precededByString)
                 throw new FormatException(
                     $"Lexical captures require checked closure lowering at offset {offset}");
-            // Only `name!(` is lexed (for the fail-closed macro gate); a lone or
-            // spaced `!` keeps main's invalid-character diagnostic.
-            else if (ch == '!' && index + 1 < source.Length && source[index + 1] == '(') index++;
+            // Prefix logical not already has typed boolean lowering in Unary.
+            // Preserve the earlier != / !eq recognition and the separate
+            // fail-closed macro and ownership admission gates.
+            else if (ch == '!') index++;
             else if ("()+-*/{}:;=<>.,?~".IndexOf(ch) >= 0 ||
                 (ch == '|' && precededByString) ||
                 (moduleMode && "[]/>!|&".IndexOf(ch) >= 0)) index++;
