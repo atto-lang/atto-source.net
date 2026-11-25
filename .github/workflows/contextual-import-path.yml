@@ -22,7 +22,7 @@ permissions:
 jobs:
   focused:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -130,5 +130,18 @@ jobs:
             test "$("$root/native/FrozenGuest")" = 42
             echo "FROZEN_NATIVEAOT_EXPR_GUEST|index=$index|result=42|static-reference|no-reflection"
           done
+          for index in 0 1 2 3; do
+            root="$work/multi$index"
+            mkdir -p "$root/host"
+            cp "$work/OresGenerated.dll.multi$index.dll" "$root/OresGenerated.dll"
+            cmp "$work/OresGenerated.dll.multi$index.dll" "$root/OresGenerated.dll"
+            sha256sum "$root/OresGenerated.dll"
+            cp "$work/host/FrozenGuest.csproj" "$work/host/Program.cs" "$root/host/"
+            dotnet publish "$root/host/FrozenGuest.csproj" -c Release -r linux-x64 -o "$root/native"
+            file "$root/native/FrozenGuest"
+            test "$("$root/native/FrozenGuest")" = 42
+            echo "FROZEN_NATIVEAOT_MULTI_GUEST|index=$index|result=42|static-reference|no-reflection"
+          done
+
 
 
