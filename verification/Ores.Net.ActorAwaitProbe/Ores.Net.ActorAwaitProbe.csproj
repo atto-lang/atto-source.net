@@ -8,7 +8,10 @@
     <ProjectReference Include="../../runtime/Ores.Net.Runtime/Ores.Net.Runtime.csproj" />
     <Compile Include="../Ores.Net.Tests/ActorAwaitSourceTests.cs" Link="ActorAwaitSourceTests.cs" />
     <Compile Include="../Ores.Net.Tests/GeneratedAwaitActor.g.cs" Link="GeneratedAwaitActor.g.cs" />
+    <Compile Include="../Ores.Net.Tests/GeneratedTaskActor.g.cs" Link="GeneratedTaskActor.g.cs" />
     <None Include="../Ores.Net.Tests/GeneratedAwaitActor.g.cs" Link="GeneratedAwaitActor.g.cs" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../Ores.Net.Tests/GeneratedTaskActor.g.cs" Link="GeneratedTaskActor.g.cs" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../Ores.Net.Tests/AwaitCounter.atto" Link="AwaitCounter.atto" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../Ores.Net.Tests/TaskCounter.atto" Link="TaskCounter.atto" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
