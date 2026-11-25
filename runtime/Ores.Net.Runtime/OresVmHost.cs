@@ -69,9 +69,12 @@ public sealed partial class OresVmHost
         internal bool Suspended { get; set; }
         internal bool Completed { get; set; }
         internal bool CancellationRequested { get; set; }
-        // Non-null only while a synchronous scheduler-owned dispatch is live.
+        // Non-null only while a scheduler-owned physical dispatch segment is live.
         internal object? ScheduledCarrierLease { get; set; }
         internal int ScheduledCarrierThread { get; set; }
+        // Set for the whole lifetime of a scheduler-managed suspendable turn.
+        internal bool ManagedContinuation { get; set; }
+        internal ActorContinuation? PendingContinuation { get; set; }
         internal ulong NextStateLoanGeneration { get; set; } = 1;
         internal int StateLoanDepth { get; set; }
         internal ActorStateLoan? ActiveStateLoan { get; set; }
@@ -412,8 +415,8 @@ public sealed partial class OresVmHost
             var s = Check(handle); CheckTurn(s, actor, turn);
             if (turn.CancellationRequested)
                 throw new InvalidOperationException("actor turn cancellation requested");
-            if (turn.ScheduledCarrierLease is not null)
-                throw new InvalidOperationException("synchronous scheduled dispatch cannot suspend");
+            if (turn.ScheduledCarrierLease is not null || turn.ManagedContinuation)
+                throw new InvalidOperationException("scheduled dispatch suspension requires owner segment retirement");
             if (turn.Suspended)
                 throw new InvalidOperationException("actor logical turn already suspended");
             if (turn.ActiveStateLoan is not null)
@@ -429,6 +432,8 @@ public sealed partial class OresVmHost
             var s = Check(handle); CheckTurn(s, actor, turn);
             if (turn.CancellationRequested)
                 throw new InvalidOperationException("actor turn cancellation requested");
+            if (turn.ManagedContinuation)
+                throw new InvalidOperationException("scheduler-managed turn requires exact continuation ticket");
             if (!turn.Suspended)
                 throw new InvalidOperationException("actor logical turn is not suspended");
             turn.Suspended = false;
@@ -440,8 +445,8 @@ public sealed partial class OresVmHost
     {
         lock (_gate) {
             var s = Check(handle); CheckTurn(s, actor, turn);
-            if (turn.ScheduledCarrierLease is not null)
-                throw new InvalidOperationException("scheduled carrier has not retired");
+            if (turn.ScheduledCarrierLease is not null || turn.ManagedContinuation)
+                throw new InvalidOperationException("scheduled carrier or continuation has not retired");
             if (turn.CancellationRequested)
                 throw new InvalidOperationException("cancelled turn requires retirement acknowledgment");
             if (turn.ActiveStateLoan is not null)
@@ -475,8 +480,8 @@ public sealed partial class OresVmHost
             var s = Check(handle); CheckTurn(s, actor, turn);
             if (!turn.CancellationRequested)
                 throw new InvalidOperationException("actor turn cancellation was not requested");
-            if (turn.ScheduledCarrierLease is not null)
-                throw new InvalidOperationException("scheduled carrier has not retired");
+            if (turn.ScheduledCarrierLease is not null || turn.ManagedContinuation)
+                throw new InvalidOperationException("scheduled carrier or continuation has not retired");
             // Zero state loans are necessary, but not sufficient to prove
             // physical retirement: the caller is the trusted execution owner.
             if (turn.ActiveStateLoan is not null || turn.StateLoanDepth != 0)
