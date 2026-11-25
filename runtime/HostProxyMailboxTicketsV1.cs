@@ -18,7 +18,7 @@ public sealed class HostMailboxTicketV1
     internal readonly ReceiptIdentityV1 Route;
     internal HostTicketStateV1 State;
     internal bool HasResult;
-    internal long ResultValue;
+    internal long CompletionValue;
     internal HostMailboxTicketV1(object owner, ReceiptIdentityV1 route)
     {
         Owner = owner;
@@ -79,7 +79,7 @@ public sealed class HostProxyMailboxTicketsV1
         lock (gate)
         {
             if (ticket is null || !ReferenceEquals(ticket.Owner, owner)) return null;
-            return new(ticket.Route, ticket.State, ticket.HasResult, ticket.ResultValue);
+            return new(ticket.Route, ticket.State, ticket.HasResult, ticket.CompletionValue);
         }
     }
     // Called by trusted actor scheduler after *this mail* is dequeued.
@@ -103,7 +103,7 @@ public sealed class HostProxyMailboxTicketsV1
             if (turn is null || fenced || current is null ||
                 !ReferenceEquals(turn.Ticket, current) ||
                 current.State != HostTicketStateV1.Started) return false;
-            current.ResultValue = result;
+            current.CompletionValue = result;
             current.HasResult = true;
             current.State = HostTicketStateV1.Processed;
             current = null;
