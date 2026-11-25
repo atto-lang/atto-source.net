@@ -55,6 +55,8 @@ public sealed partial class OresVmHost
         internal readonly HashSet<ActorTurnTicket> LiveTurns = new();
         public int MaxLiveReceives { get; }
         internal TaskCompletionSource? TerminalReady { get; set; }
+        internal ActorScheduler? PumpOwner { get; set; }
+        internal TaskCompletionSource? PumpReady { get; set; }
         internal int SupervisorControlBurst { get; set; }
         // Compiler-owned typed state layout, installed once before any turn.
         // The values live in Heap (StateBlock); only the kinds are managed.
@@ -284,6 +286,7 @@ public sealed partial class OresVmHost
             actor.QueuedBytes += payload.Length;
             s.QueuedMailBytes += payload.Length;
             _queuedMailBytes += payload.Length;
+            SignalActorPump(actor);
         }
     }
 
@@ -449,6 +452,7 @@ public sealed partial class OresVmHost
             CheckRunningTurn(actor, turn);
             turn.Suspended = true;
             actor.ActiveTurn = null;
+            SignalActorPump(actor);
         }
     }
 
@@ -496,6 +500,7 @@ public sealed partial class OresVmHost
         lock (_gate) {
             var s = Check(handle); CheckTurn(s, actor, turn);
             turn.CancellationRequested = true;
+            SignalActorPump(actor);
         }
     }
 
@@ -525,6 +530,7 @@ public sealed partial class OresVmHost
         if (ReferenceEquals(actor.ActiveTurn, turn)) actor.ActiveTurn = null;
         turn.Completed = true;
         turn.Suspended = false;
+        SignalActorPump(actor);
     }
 
     public (int Live, int Suspended, ulong RunningGeneration) ActorReceiveSnapshot(
@@ -590,8 +596,8 @@ public sealed partial class OresVmHost
             if (s.PinsByActor[actor] != 0 ||
                 s.Durable.HasActor(new DurableLockQueues.ActorKey(actor.Id, actor.Epoch)))
                 throw new InvalidOperationException("actor has outstanding resources");
-            if (actor.LiveTurns.Count != 0)
-                throw new InvalidOperationException("actor has active logical turn");
+            if (actor.LiveTurns.Count != 0 || actor.PumpOwner is not null)
+                throw new InvalidOperationException("actor has active logical turn or scheduler pump");
             // Do not abandon a live child or an unconsumed terminal reservation.
             foreach (var reservation in s.SupervisorTerminals.Values)
                 if (ReferenceEquals(reservation.Parent, actor))
@@ -679,6 +685,7 @@ public sealed partial class OresVmHost
                                 // admission, so CompleteShutdown can observe Drained.
                                 tenant.Durable.Quiesce();
                                 tenant.Phase = Phase.Quiescing;
+                foreach (var actor in tenant.Actors.Values) SignalActorPump(actor);
                             }
                             // The faulted incarnation's state is not trusted
                             // and is never read back.
@@ -772,6 +779,7 @@ public sealed partial class OresVmHost
                 throw new InvalidOperationException("shutdown phase");
             s.Durable.Quiesce();
             s.Phase = Phase.Quiescing;
+            foreach (var actor in s.Actors.Values) SignalActorPump(actor);
         }
     }
 
