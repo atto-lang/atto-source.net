@@ -976,7 +976,9 @@ try
     throw new Exception("Legacy rt borrow mut spelling was admitted");
 }
 catch (FormatException ex) when
-    (ex.Message.Contains("use 'rt mut borrow'", StringComparison.Ordinal)) { }
+    (ex.Message.Contains("Ownership operation 'rt mut borrow' requires typed actor-arena lowering", StringComparison.Ordinal) &&
+     ex.Message.EndsWith("at offset 22", StringComparison.Ordinal)) { }
+Console.WriteLine("NET_LEGACY_BORROW_ORDER_DENIED_AT_TYPED_GATE");
 
 
 foreach (var forbiddenSource in new[] {
