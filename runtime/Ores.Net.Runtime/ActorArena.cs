@@ -252,8 +252,8 @@ public unsafe sealed class ActorArena : IDisposable
 
     // Guest fields remain four-byte words. Original issued slot/generation
     // proofs are actor-private native records, not CLR objects per edge.
-    // Dense bounded ledger: linear lookup for this initial migration; a
-    // production high-fanout profile needs a measured native index.
+    // Bounded open-addressed native index. ParentGeneration == 0 denotes
+    // an empty bucket; live arena generations are never zero.
     private struct Ref32Proof
     {
         internal int ParentSlot, FieldOffset, TargetSlot;
@@ -758,10 +758,14 @@ public unsafe sealed class ActorArena : IDisposable
             Zero(_persistent + slot.Offset, slot.Length);
             _persistentLiveBytes -= slot.Length;
             _liveAllocations--;
-            for (int i = _managedRef32EdgeCount - 1; i >= 0; --i)
-                if (_managedRef32Edges[i].ParentSlot == handle.Slot &&
-                    _managedRef32Edges[i].ParentGeneration == handle.Generation)
-                    RemoveRef32ProofLocked(i);
+            for (int i = 0; i < _ref32ProofCapacity;)
+            {
+                ref Ref32Proof proof = ref _managedRef32Edges[i];
+                if (proof.ParentSlot == handle.Slot &&
+                    proof.ParentGeneration == handle.Generation)
+                    RemoveRef32ProofLocked(i); // recheck shifted bucket
+                else i++;
+            }
             slot.Live = false;
             slot.Issued = null;
             slot.Offset = 0;
@@ -847,7 +851,10 @@ public unsafe sealed class ActorArena : IDisposable
                 if (index < 0)
                 {
                     EnsureRef32ProofCapacityLocked();
-                    index = _managedRef32EdgeCount++;
+                    index = FindRef32Bucket(_managedRef32Edges, _ref32ProofCapacity,
+                        parent.Slot, parent.Generation, fieldOffset, out bool found);
+                    if (found) throw new InvalidOperationException("Duplicate native reference proof");
+                    _managedRef32EdgeCount++;
                 }
                 _managedRef32Edges[index] = new Ref32Proof
                 {
@@ -905,31 +912,70 @@ public unsafe sealed class ActorArena : IDisposable
         }
     }
 
+    private static int Ref32Bucket(int slot, ulong generation, int offset, int mask)
+    {
+        unchecked
+        {
+            ulong x = generation ^ ((ulong)(uint)slot << 32) ^ (uint)offset;
+            x ^= x >> 33; x *= 0xff51afd7ed558ccdUL;
+            x ^= x >> 33; x *= 0xc4ceb9fe1a85ec53UL;
+            x ^= x >> 33;
+            return (int)(x & (uint)mask);
+        }
+    }
+
+    private static int FindRef32Bucket(Ref32Proof* table, int capacity,
+        int parentSlot, ulong parentGeneration, int offset, out bool found)
+    {
+        int mask = capacity - 1;
+        int index = Ref32Bucket(parentSlot, parentGeneration, offset, mask);
+        for (int probes = 0; probes < capacity; probes++, index = (index + 1) & mask)
+        {
+            ref Ref32Proof entry = ref table[index];
+            if (entry.ParentGeneration == 0) { found = false; return index; }
+            if (entry.ParentSlot == parentSlot && entry.ParentGeneration == parentGeneration &&
+                entry.FieldOffset == offset) { found = true; return index; }
+        }
+        throw new InvalidOperationException("Native reference proof index exhausted");
+    }
+
     private int FindRef32ProofLocked(ActorArenaHandle parent, int offset)
     {
-        for (int i = 0; i < _managedRef32EdgeCount; i++)
-        {
-            ref Ref32Proof proof = ref _managedRef32Edges[i];
-            if (proof.ParentSlot == parent.Slot && proof.ParentGeneration == parent.Generation &&
-                proof.FieldOffset == offset) return i;
-        }
-        return -1;
+        if (_ref32ProofCapacity == 0) return -1;
+        int index = FindRef32Bucket(_managedRef32Edges, _ref32ProofCapacity,
+            parent.Slot, parent.Generation, offset, out bool found);
+        return found ? index : -1;
     }
 
     private void RemoveRef32ProofLocked(int index)
     {
-        int last = --_managedRef32EdgeCount;
-        if (index != last) _managedRef32Edges[index] = _managedRef32Edges[last];
-        _managedRef32Edges[last] = default;
+        // Backward-shift deletion preserves search chains without tombstones
+        // or allocations even under repeated reference replacement.
+        int mask = _ref32ProofCapacity - 1;
+        int hole = index;
+        for (int next = (hole + 1) & mask;
+            _managedRef32Edges[next].ParentGeneration != 0; next = (next + 1) & mask)
+        {
+            Ref32Proof entry = _managedRef32Edges[next];
+            int home = Ref32Bucket(entry.ParentSlot, entry.ParentGeneration, entry.FieldOffset, mask);
+            if (((hole - home) & mask) < ((next - home) & mask))
+            {
+                _managedRef32Edges[hole] = entry;
+                hole = next;
+            }
+        }
+        _managedRef32Edges[hole] = default;
+        _managedRef32EdgeCount--;
     }
 
     private void EnsureRef32ProofCapacityLocked()
     {
-        if (_managedRef32EdgeCount < _ref32ProofCapacity) return;
-        if (_ref32ProofCapacity == MaxManagedRef32Edges)
+        if (_managedRef32EdgeCount == MaxManagedRef32Edges)
             throw new InvalidOperationException("Actor managed reference sidecar quota exhausted");
-        int capacity = _ref32ProofCapacity == 0 ? 16 :
-            Math.Min(MaxManagedRef32Edges, checked(_ref32ProofCapacity * 2));
+        // At most 50% occupancy, with a power-of-two bucket count.
+        if (_managedRef32EdgeCount < _ref32ProofCapacity / 2) return;
+        int capacity = _ref32ProofCapacity == 0 ? 32 :
+            checked(_ref32ProofCapacity * 2);
         int bytes = checked(capacity * sizeof(Ref32Proof));
         // Charge the full replacement before allocating; old and new storage
         // coexist until the old ledger has been scrubbed and released.
@@ -947,7 +993,15 @@ public unsafe sealed class ActorArena : IDisposable
             if (replacement == null) throw new OutOfMemoryException("Native Ref32 proof ledger");
             if (_managedRef32Edges != null)
             {
-                Buffer.MemoryCopy(_managedRef32Edges, replacement, bytes, _ref32ProofBytes);
+                for (int i = 0; i < _ref32ProofCapacity; i++)
+                {
+                    Ref32Proof entry = _managedRef32Edges[i];
+                    if (entry.ParentGeneration == 0) continue;
+                    int bucket = FindRef32Bucket(replacement, capacity,
+                        entry.ParentSlot, entry.ParentGeneration, entry.FieldOffset, out bool found);
+                    if (found) throw new InvalidOperationException("Duplicate native reference proof during growth");
+                    replacement[bucket] = entry;
+                }
                 Zero((byte*)_managedRef32Edges, _ref32ProofBytes);
                 NativeMemory.Free(_managedRef32Edges);
                 _budget.Refund(_ref32ProofBytes);
