@@ -99,13 +99,17 @@ internal static class ActorGuestDemandBackedIntegrationSelfTest
                 "demand-backed arena must start with no physical native charge");
             using (ActorArenaTurn turn = arena.EnterTurn(31, 1))
             {
-                bool denied = false;
-                try { _ = arena.AllocateNativeGuest(turn, 16); }
-                catch (InvalidOperationException) { denied = true; }
-                Require(denied, "insufficient native budget must deny guest publication");
-                Require(arena.LiveAllocations == 0 && arena.ReservedNativeBytes == 0 &&
-                        tiny.ReservedBytes == 0,
-                    "failed actor guest admission must not publish a slot or reserve native bytes");
+                // Repeat failure past slot capacity: no allocation or charge may leak.
+                for (int attempt = 0; attempt < 16; attempt++)
+                {
+                    bool denied = false;
+                    try { _ = arena.AllocateNativeGuest(turn, 16); }
+                    catch (InvalidOperationException) { denied = true; }
+                    Require(denied, "insufficient native budget must deny guest publication");
+                    Require(arena.LiveAllocations == 0 && arena.ReservedNativeBytes == 0 &&
+                            tiny.ReservedBytes == 0,
+                        "failed actor guest admission must not publish a slot or reserve native bytes");
+                }
             }
             arena.Retire();
             arena.TryReclaim();
