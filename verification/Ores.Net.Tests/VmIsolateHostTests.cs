@@ -555,6 +555,9 @@ internal static class VmIsolateHostTests
         var terminal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var parked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var never = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var parkedBarrier = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelledBarrier = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        OresVmHost.ActorTurnTicket? cancelledTurn = null;
         int receipts = 0;
         var pump = scheduler.RunPumpAsync(tenant, actor, "Counter|1:I",
             (scope, data) => {
@@ -579,6 +582,21 @@ internal static class VmIsolateHostTests
                 }
                 if (scope.ReadInt64(0) != 42)
                     throw new Exception("ready continuations failed to commit");
+                if (data.Span[0] == 5) {
+                    cancelledTurn = actor.ActiveTurn;
+                    return new OresVmHost.ActorPumpStep(never.Task,
+                        _ => throw new Exception("cancelled suspended continuation resumed"));
+                }
+                if (data.Span[0] == 6) {
+                    parkedBarrier.TrySetResult();
+                    return null;
+                }
+                if (data.Span[0] == 7) {
+                    if (cancelledTurn is null || !cancelledTurn.Completed)
+                        throw new Exception("cancelled ticket not discarded before new work");
+                    cancelledBarrier.TrySetResult();
+                    return null;
+                }
                 parked.TrySetResult();
                 return new OresVmHost.ActorPumpStep(never.Task,
                     _ => throw new Exception("shutdown resumed a never-ready continuation"));
@@ -604,6 +622,12 @@ internal static class VmIsolateHostTests
             host.RetireActor(tenant, child);
             terminal.Task.WaitAsync(timeout).GetAwaiter().GetResult();
              scheduler.Enqueue(tenant, actor);
+            host.SendActor(tenant, actor, actor.CurrentRef, new byte[] { 5 });
+            host.SendActor(tenant, actor, actor.CurrentRef, new byte[] { 6 });
+            parkedBarrier.Task.WaitAsync(timeout).GetAwaiter().GetResult();
+            host.CancelActorTurn(tenant, actor, cancelledTurn!);
+            host.SendActor(tenant, actor, actor.CurrentRef, new byte[] { 7 });
+            cancelledBarrier.Task.WaitAsync(timeout).GetAwaiter().GetResult();
             host.SendActor(tenant, actor, actor.CurrentRef, new byte[] { 4 });
             parked.Task.WaitAsync(timeout).GetAwaiter().GetResult();
             host.BeginShutdown(tenant);
