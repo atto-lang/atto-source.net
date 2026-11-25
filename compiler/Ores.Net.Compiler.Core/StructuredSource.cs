@@ -1833,8 +1833,18 @@ public static partial class OresStructuredParser
                 Expect(";");
                 return (new StructuredSignal(at, value, effect), true);
             }
+            // Cleanup must never be silently discarded by a lexical or
+            // nonlocal return. This scalar CFG has no general cleanup stack.
+            if ((localReturn is not null || guardFailureDepth != 0) &&
+                Current.Text is "defer" or "using")
+                throw Error("E_LEXICAL_CLEANUP_UNSUPPORTED: resource cleanup requires a verified unwind continuation");
             if (Take("try"))
             {
+                // The legacy terminal overflow-catch emitter always emits a
+                // callable CfgReturn, not a lexical join. Until it is lowered
+                // with localExit, reject the incompatible return scope.
+                if (localReturn is not null)
+                    throw Error("E_LOCAL_TRY_RETURN_UNSUPPORTED: try/catch return requires a lexical continuation");
                 if (activeReturnType != IrValueType.I64)
                     throw Error("Native Error catch v1 supports only int-returning functions");
                 Expect("{");

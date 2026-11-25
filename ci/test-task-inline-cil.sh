@@ -45,7 +45,12 @@ for case in reject-inline-suspend:E_SYNC_TASK_SUSPEND reject-do-value:E_TASK_RET
     reject-guard-do-match:RETURN_VALUE_REQUIRED \
     reject-guard-do-task:E_GUARD \
     reject-await-after-inline:E_SUSPENDS_UNSUPPORTED \
-    reject-await-nested-inline:E_SYNC_TASK_SUSPEND; do
+    reject-await-nested-inline:E_SYNC_TASK_SUSPEND \
+    reject-try-inline:E_LOCAL_TRY_RETURN_UNSUPPORTED \
+    reject-try-match:E_LOCAL_TRY_RETURN_UNSUPPORTED \
+    reject-defer-inline:E_LEXICAL_CLEANUP_UNSUPPORTED \
+    reject-guard-cleanup:E_LEXICAL_CLEANUP_UNSUPPORTED \
+    reject-using-inline:E_LEXICAL_CLEANUP_UNSUPPORTED; do
   fixture=${case%%:*}
   expected=${case#*:}
   destination="$work/$fixture"
