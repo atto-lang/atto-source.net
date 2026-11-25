@@ -124,11 +124,30 @@ public static partial class OresStructuredParser
                 (tokens[i - 1].Text is "define" or "pub"))
                 throw new FormatException(
                     $"NET_STRUCTURED_MACRO_EXPANDER_REQUIRED: macro declarations require typed AST expansion before OresIR/CIL at offset {tokens[i].Offset}; runtime fallback is forbidden");
-            if (tokens[i].Text == "!" && i > 0 && i + 1 < tokens.Count &&
-                tokens[i + 1].Text == "(")
+            if (tokens[i].Text == "!" && i + 1 < tokens.Count &&
+                tokens[i + 1].Text == "(" && !IsPrefixBangPosition(tokens, i))
                 throw new FormatException(
                     $"NET_STRUCTURED_MACRO_EXPANDER_REQUIRED: macro invocation requires typed AST expansion before OresIR/CIL at offset {tokens[i].Offset}; runtime fallback is forbidden");
         }
+    }
+
+    // A parenthesized boolean operand is not a macro splice. Permit only
+    // expression-prefix positions whose previous token cannot be a callee.
+    // Identifier/number/member spellings followed by ! (even with trivia)
+    // retain the original fail-closed macro diagnostic.
+    private static bool IsPrefixBangPosition(IReadOnlyList<Token> tokens, int at)
+    {
+        if (at == 0) return true;
+        var before = tokens[at - 1];
+        if (before.Text is "(" or "=" or "," or ":" or "?" or "{" or ";" or
+            "^" or "->" or "&&" or "||" or "^^" or "==" or "!=" or "!eq" or
+            "<" or ">" or "<=" or ">=" or "!" or "+" or "-" or "*" or "/")
+            return true;
+        // Do not treat contiguous reserved-name macro-like forms such as
+        // return!(...) as keyword followed by a prefix expression.
+        return before.Offset + before.Text.Length < tokens[at].Offset &&
+            before.Text is ("return" or "guard" or "when" or "if" or "ifnot" or
+                "unless" or "then" or "else" or "and" or "or" or "xor" or "eq" or "neq");
     }
 
     // `...source` directly inside `infer struct|record { }` or `= record { }` is the
@@ -490,6 +509,11 @@ public static partial class OresStructuredParser
             throw new FormatException(
                 $"NET_NOMINAL_METHODS_UNSUPPORTED: Nominal class/actor methods require receiver-erased method slots, type/borrow checking and Native AOT CIL lowering; unsupported in .NET structured frontend at offset {firstNominalOffset}");
         }
+        // Keep the existing standalone scalar and linked admission boundaries.
+        // The inline-task profile may declare suspension permission, but still
+        // cannot execute a suspension. Recognize the token pair, not trivia.
+        bool inlineProfile = linking is null && Enumerable.Range(0, tokens.Count - 1)
+            .Any(i => tokens[i].Text == "sync" && tokens[i + 1].Text == "task");
         for (int i = 0; i + 1 < tokens.Count; i++)
         {
             // No protected state heap or virtual actor activation exists in
@@ -535,7 +559,9 @@ public static partial class OresStructuredParser
             if (word == "critical")
                 throw new FormatException(
                     $"E_CRITICAL_UNSUPPORTED: structured CIL has no authenticated guard owner or FIFO continuation lowering at offset {tokens[i].Offset}");
-            if (word is "suspends" or "await")
+            bool permittedMarker = inlineProfile && word == "suspends" &&
+                next is ("fnc" or "routine");
+            if ((word is "suspends" or "await") && !permittedMarker)
             {
                 string diagnostic = word == "await" && IsInsideInlineTask(tokens, i)
                     ? "E_SYNC_TASK_SUSPEND: this suspension lacks a same-thread continuation"
@@ -1058,9 +1084,10 @@ public static partial class OresStructuredParser
             else if (ch == '|' && !moduleMode && !precededByString)
                 throw new FormatException(
                     $"Lexical captures require checked closure lowering at offset {offset}");
-            // Only `name!(` is lexed (for the fail-closed macro gate); a lone or
-            // spaced `!` keeps main's invalid-character diagnostic.
-            else if (ch == '!' && index + 1 < source.Length && source[index + 1] == '(') index++;
+            // Prefix logical not already has typed boolean lowering in Unary.
+            // Preserve the earlier != / !eq recognition and the separate
+            // fail-closed macro and ownership admission gates.
+            else if (ch == '!') index++;
             else if ("()+-*/{}:;=<>.,?~".IndexOf(ch) >= 0 ||
                 (ch == '|' && precededByString) ||
                 (moduleMode && "[]/>!|&".IndexOf(ch) >= 0)) index++;
@@ -1314,7 +1341,7 @@ public static partial class OresStructuredParser
                 }
                 // A callable may declare suspension permission even when
                 // this profile can prove it has no suspension points.
-                Take("susp");
+                if (!Take("susp")) Take("suspends");
                 bool trapped = Take("trap") || Take("trap!");
                 if (Current.Text is "class" or "actor")
                     throw Error("Nominal class/actor methods require receiver-erased method slots, type/borrow checking and Native AOT CIL lowering; unsupported in .NET structured frontend");
@@ -2033,18 +2060,10 @@ public static partial class OresStructuredParser
                     aggregateScopes.Any(scope => scope.ContainsKey(name)))
                     throw new FormatException($"Duplicate local binding at offset {nameAt}");
                 Expect("=");
-                // Only a complete, unconditional statement initializer may
-                // publish inline-task writes. Nested expression joins do not
-                // yet merge mutable environments (short circuit, ternary, match).
-                var previousWriteback = directInlineWritebackOffset;
-                directInlineWritebackOffset = kind != StructuredBindingKind.Const &&
-                    IsDirectInlineInitializer() ? Current.Offset : null;
-                StructuredExpr initializer;
-                try
-                {
-                    initializer = annotated ? ExpectedExpr(depth + 1, type) : Expr(depth + 1);
-                }
-                finally { directInlineWritebackOffset = previousWriteback; }
+                // Only complete unconditional statement values publish
+                // writes. Conditional expression joins remain fail-closed.
+                var initializer = ReadStatementValue(depth + 1, annotated ? type : null,
+                    allowWriteback: kind != StructuredBindingKind.Const && !commaBindingTerminator);
                 if (annotated)
                     Require(initializer, type, "Local initializer has wrong type");
                 else
@@ -2163,7 +2182,9 @@ public static partial class OresStructuredParser
                 // They cannot prove a callable return for a guard failure.
                 if (guardFailureDepth != 0)
                     throw Error("E_GUARD: loop transfer does not replace a guard return");
-                if (localReturn is { } lexical)
+                // A loop opened inside the current lexical scope owns its
+                // break/continue edges. Never jump to a pre-existing outer loop.
+                if (localReturn is { } lexical && loopDepth <= lexical.LoopFloor)
                     throw Error(lexical.Diagnostic == "MATCH_VOID_ARM"
                         ? "E_MATCH_LOOP_TRANSFER_UNSUPPORTED: lexical match exit needs a verified join"
                         : "E_SYNC_TASK_LOOP_TRANSFER_UNSUPPORTED: loop transfer needs a verified lexical continuation");
@@ -2177,7 +2198,9 @@ public static partial class OresStructuredParser
                 // They cannot prove a callable return for a guard failure.
                 if (guardFailureDepth != 0)
                     throw Error("E_GUARD: loop transfer does not replace a guard return");
-                if (localReturn is { } lexical)
+                // A loop opened inside the current lexical scope owns its
+                // break/continue edges. Never jump to a pre-existing outer loop.
+                if (localReturn is { } lexical && loopDepth <= lexical.LoopFloor)
                     throw Error(lexical.Diagnostic == "MATCH_VOID_ARM"
                         ? "E_MATCH_LOOP_TRANSFER_UNSUPPORTED: lexical match exit needs a verified join"
                         : "E_SYNC_TASK_LOOP_TRANSFER_UNSUPPORTED: loop transfer needs a verified lexical continuation");
@@ -2211,7 +2234,7 @@ public static partial class OresStructuredParser
             if (inlineValueBindingFloor is int floor && scopes.Take(floor).Any(scope => scope.ContainsKey(variable)))
                 throw Error("E_SYNC_TASK_WRITEBACK_UNSUPPORTED: value-context sync task cannot yet assign a surrounding local");
             Expect("=");
-            var assigned = ExpectedExpr(depth + 1, binding.Type);
+            var assigned = ReadStatementValue(depth + 1, binding.Type, allowWriteback: true);
             Require(assigned, binding.Type, "Assignment has wrong type");
             Expect(";");
             return (new StructuredSet(at, variable, assigned), false);
@@ -2515,9 +2538,11 @@ public static partial class OresStructuredParser
         private StructuredExpr Conditional(int depth)
         {
             Budget(depth);
+            int expressionStart = Current.Offset;
             if (Current.Text is "if" or "ifnot" or "unless")
             {
                 int valueIfAt = Current.Offset;
+                bool writebackRoot = conditionalWritebackRoot == valueIfAt;
                 bool inverted = Current.Text is "ifnot" or "unless";
                 index++;
                 var predicate = Expr(depth + 1);
@@ -2528,11 +2553,11 @@ public static partial class OresStructuredParser
                 Expect("then");
                 if (Current.Text is "break" or "continue" or "return")
                     throw Error("Value if branch must produce a value; control transfers require 'do if'");
-                var whenTrue = Expr(depth + 1);
+                var whenTrue = ReadConditionalStatementArm(depth + 1, writebackRoot, "else");
                 Expect("else");
                 if (Current.Text is "break" or "continue" or "return")
                     throw Error("Value if branch must produce a value; control transfers require 'do if'");
-                var whenFalse = Expr(depth + 1);
+                var whenFalse = ReadConditionalStatementArm(depth + 1, writebackRoot, "fi");
                 Expect("fi");
                 if (whenTrue.Type != whenFalse.Type)
                     throw Error("Value if result types differ");
@@ -2543,9 +2568,11 @@ public static partial class OresStructuredParser
             int at = Current.Offset;
             index++;
             Require(test, IrValueType.Bool, "Conditional test requires bool");
-            var yes = Expr(depth + 1);
+            bool ternaryWritebackRoot = conditionalWritebackRoot == expressionStart;
+            var yes = ReadConditionalStatementArm(depth + 1, ternaryWritebackRoot, ":");
             Expect(":");
-            var no = Conditional(depth + 1);
+            var no = ReadConditionalStatementArm(depth + 1, ternaryWritebackRoot, ";",
+                conditionalOnly: true);
             if (yes.Type != no.Type)
                 throw new FormatException($"Conditional result types differ at offset {at}");
             return CheckedConditional(at, test, yes, no);
@@ -2871,8 +2898,8 @@ public static partial class OresStructuredParser
                 index++;
                 var operand = Unary(depth + 1);
                 Require(operand, IrValueType.Bool, "Logical not requires bool");
-                return new StructuredConditional(at, operand,
-                    new StructuredBool(at, false), new StructuredBool(at, true), IrValueType.Bool);
+                return CheckedConditional(at, operand,
+                    new StructuredBool(at, false), new StructuredBool(at, true));
             }
             if (Current.Text == "-")
             {
