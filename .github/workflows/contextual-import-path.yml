@@ -116,7 +116,9 @@ jobs:
           dotnet add "$work/emitter" reference "$PWD/compiler/Ores.Net.Compiler.Core/Ores.Net.Compiler.Core.csproj"
           cp verification/Ores.Net.Tests/FrozenScalarImportSelfTest.cs "$work/emitter/"
           cmp verification/Ores.Net.Tests/FrozenScalarImportSelfTest.cs "$work/emitter/FrozenScalarImportSelfTest.cs"
-          printf '%s\n' 'FrozenScalarImportSelfTest.Run(args[0]);' > "$work/emitter/Program.cs"
+          cp verification/Ores.Net.Tests/FrozenDependencyGraphSelfTest.cs "$work/emitter/"
+          cmp verification/Ores.Net.Tests/FrozenDependencyGraphSelfTest.cs "$work/emitter/FrozenDependencyGraphSelfTest.cs"
+          printf '%s\n' 'FrozenScalarImportSelfTest.Run(args[0]);' 'FrozenDependencyGraphSelfTest.EmitTransitiveGuest(args[0]+".transitive.dll");' > "$work/emitter/Program.cs"
           dotnet run --project "$work/emitter" --configuration Release -- "$work/OresGenerated.dll"
           sha256sum "$work/OresGenerated.dll"
           mkdir "$work/host"
@@ -177,3 +179,13 @@ jobs:
 
 
 
+          root="$work/transitive"
+          mkdir -p "$root/host"
+          cp "$work/OresGenerated.dll.transitive.dll" "$root/OresGenerated.dll"
+          cmp "$work/OresGenerated.dll.transitive.dll" "$root/OresGenerated.dll"
+          sha256sum "$root/OresGenerated.dll"
+          cp "$work/host/FrozenGuest.csproj" "$work/host/Program.cs" "$root/host/"
+          dotnet publish "$root/host/FrozenGuest.csproj" -c Release -r linux-x64 -o "$root/native"
+          file "$root/native/FrozenGuest"
+          test "$("$root/native/FrozenGuest")" = 42
+          echo "FROZEN_NATIVEAOT_TRANSITIVE_GUEST|result=42|three-authenticated-packages"
