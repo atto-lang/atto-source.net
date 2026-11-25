@@ -98,3 +98,7 @@ internal sealed record QuantityLiteral(long Value, QuantityUnit Unit) : Expressi
 // A source slash is admitted in the quantity profile. Plain scalar division
 // retains its existing source rules, including when dimensions cancel earlier.
 internal sealed record QuantityDivision(Expression Left, Expression Right) : Expression;
+
+// Typed metadata operations; no numeric conversion or runtime evaluation is introduced.
+internal sealed record QuantityAttachment(Expression Value, QuantityUnit Unit) : Expression;
+internal sealed record QuantityScalarCast(Expression Value) : Expression;
