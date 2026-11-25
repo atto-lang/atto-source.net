@@ -1228,8 +1228,9 @@ pub async routine main(): void {
         }
         catch (FormatException ex)
         {
-            Require(ex.Message.Contains("use 'rt mut borrow'", StringComparison.Ordinal),
-                "legacy mutable borrow diagnostic must name canonical spelling");
+            Require(ex.Message.Contains("Ownership operation 'rt mut borrow' requires typed actor-arena lowering",
+                    StringComparison.Ordinal) && ex.Message.EndsWith("at offset 22", StringComparison.Ordinal),
+                "legacy mutable borrow must fail at the exact canonical typed ownership gate");
         }
 
         foreach (var source in new[] {
