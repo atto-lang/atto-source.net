@@ -548,24 +548,38 @@ Require(OresParser.Parse("fnc main():int{return 42;} // define virtual actor X")
 Require(OresStructuredParser.Parse("fnc main():int{return 42;} // define state container X") is not null,
     "structured comments must not become declarations");
 
-// AttoLang guard is reserved, but .NET source CFG/ownership effects are
-// not implemented. Both parser entrypoints must deny it explicitly before
-// CIL/NativeAOT emission, not interpret it as a mutable local or function.
+// The arithmetic-only API retains its representation. Guarded programs
+// enter production through the independently verified CFG entry.
 foreach (var guardSource in new[] {
     "fnc main():int{guard true{return 1;}return 42;}",
-    "fnc main():int{guard 1>0{return 1;}return 42;}",
+    "fnc main():int{guard 1>0 else return 1; end return 42;}",
     "fnc main():int{guard false{return 1;}return 42;}"
 })
 {
     RejectDiagnostic(() => OresParser.Parse(guardSource),
-        "GUARD_BACKEND_UNSUPPORTED", "shipping scalar guard admission");
-    RejectDiagnostic(() => OresStructuredParser.Parse(guardSource),
-        "GUARD_BACKEND_UNSUPPORTED", "structured CFG guard admission");
+        "GUARD_BACKEND_UNSUPPORTED", "scalar IR guard admission");
+    Require(OresStructuredCfgLowering.TryLowerGuardedModule(guardSource) is not null,
+        "production guard source must lower to verified CFG");
 }
-RejectDiagnostic(
-    () => OresStructuredParser.Parse(
-        "fnc main():int{if true{guard false{return 1;}}else{return 2;}return 42;}"),
-    "GUARD_BACKEND_UNSUPPORTED", "nested guard is not executed as plain if");
+Require(OresStructuredCfgLowering.TryLowerGuardedModule(
+    "fnc main():int{if true{guard false{return 1;}}else{return 2;}return 42;}") is not null,
+    "production guard nested in a typed if");
+Require(OresStructuredCfgLowering.TryLowerGuardedModule(
+    "fnc main():int{return 42;} // guard is comment") is null,
+    "comment guard must not select production CFG");
+RejectDiagnostic(() => OresStructuredCfgLowering.TryLowerGuardedModule(
+    "fnc main():int{guard false else val int x=1; end return 42;}"),
+    "E_GUARD", "production guard rejects a nonterminal failure path");
+var optionGuard = OresStructuredCfgLowering.TryLowerGuardedModule("""
+    fnc checked(int prefix, Option<int> value, int suffix): int {
+        guard value.is_some() else return suffix; end
+        return prefix + value.unwrap_or(0);
+    }
+    fnc main(): int { return checked(2, Some(40), 1); }
+    """);
+Require(optionGuard is not null && optionGuard.Helpers.Single().Parameters.SequenceEqual(
+        new[] { IrValueType.I64, IrValueType.Bool, IrValueType.I64, IrValueType.I64 }),
+    "Option helper slots retain separate tags and payloads in source argument order");
 Reject(() => OresStructuredParser.Parse("fnc main():int{let int guard=42;return 42;}"),
     "guard cannot be reused as a binding name");
 Require(OresParser.Parse("fnc main():int{return 42;} // guard is comment") is Literal,
@@ -976,7 +990,8 @@ try
     throw new Exception("Legacy rt borrow mut spelling was admitted");
 }
 catch (FormatException ex) when
-    (ex.Message.Contains("use 'rt mut borrow'", StringComparison.Ordinal)) { }
+    (ex.Message.Contains("'rt mut borrow' requires typed actor-arena lowering",
+        StringComparison.Ordinal)) { }
 
 
 foreach (var forbiddenSource in new[] {

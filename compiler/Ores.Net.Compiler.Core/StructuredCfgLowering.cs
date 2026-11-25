@@ -19,6 +19,11 @@ public static class OresStructuredCfgLowering
     public static VerifiedCfgModule LowerModule(string source)
         => LowerModule(OresStructuredParser.Parse(source));
 
+    public static VerifiedCfgModule? TryLowerGuardedModule(string source)
+        => OresStructuredParser.HasGuardToken(source)
+            ? LowerModule(OresStructuredParser.ParseGuarded(source))
+            : null;
+
     internal static VerifiedCfgModule LowerModule(StructuredProgram program)
     {
         var helperSignatures = new Dictionary<string, CfgCallSignature>(StringComparer.Ordinal);
@@ -37,10 +42,11 @@ public static class OresStructuredCfgLowering
             // The method order is the exact source order, NOT the incidental
             // iteration order of a dictionary. A helper may refer only to
             // earlier, already verified signatures.
-            var verified = new Builder(emitCalls: true).LowerHelper(helper, helperSignatures);
+            var verified = new Builder(emitCalls: true)
+                .LowerHelper(helper, declarations, helperSignatures);
             methods.Add(verified);
             helperSignatures.Add(name, new CfgCallSignature(helper.ResultType,
-                Array.AsReadOnly(helper.Parameters.Select(p => p.Type).ToArray())));
+                verified.Parameters));
         }
         var main = new Builder(emitCalls: true).Lower(program, helperSignatures);
         return new VerifiedCfgModule(main, methods.AsReadOnly());
@@ -76,17 +82,26 @@ public static class OresStructuredCfgLowering
         private readonly Stack<LoopTarget> loopTargets = new();
 
         public VerifiedCfgFunction LowerHelper(StructuredFunction helper,
+            IReadOnlyDictionary<string, StructuredFunction> declarations,
             IReadOnlyDictionary<string, CfgCallSignature> signatures)
         {
-            functions = new Dictionary<string, StructuredFunction>(StringComparer.Ordinal);
+            functions = declarations;
             callSignatures = signatures;
             var entry = NewBlock();
             var parameters = new Dictionary<string, Binding>(StringComparer.Ordinal);
-            for (int i = 0; i < helper.Parameters.Count; i++)
+            var slots = new List<IrValueType>();
+            int Argument(IrValueType type)
             {
-                var p = helper.Parameters[i];
-                int id = Emit(entry, CfgOpcode.Argument, p.Type, value: i);
-                parameters.Add(p.Name, new Binding(p.Type, id));
+                int id = Emit(entry, CfgOpcode.Argument, type, value: slots.Count);
+                slots.Add(type);
+                return id;
+            }
+            foreach (var parameter in helper.Parameters)
+            {
+                var value = parameter.Type == IrValueType.OptionI64
+                    ? new Binding(parameter.Type, Argument(IrValueType.Bool), Argument(IrValueType.I64))
+                    : new Binding(parameter.Type, Argument(parameter.Type));
+                parameters.Add(parameter.Name, value);
             }
             // Parameter values are defined once by ldarg in the entry block.
             // Branch, loop and local scope semantics reuse the verified main
@@ -95,7 +110,7 @@ public static class OresStructuredCfgLowering
                 throw new FormatException("Typed helper has unterminated return path");
             return OresCfgVerifier.Verify(new CfgFunction(helper.Name, helper.ResultType,
                 entry.Name, blocks.Select(b => b.Freeze()).ToArray(),
-                helper.Parameters.Select(p => p.Type).ToArray()), signatures);
+                slots), signatures);
         }
 
         public VerifiedCfgFunction Lower(StructuredProgram program,
@@ -231,11 +246,64 @@ public static class OresStructuredCfgLowering
                         throw new FormatException("Unbound or unverified Option<int> local");
                     return (value.ValueId, value.PayloadId.Value);
                 }
+                case StructuredCall call when call.Type == IrValueType.OptionI64:
+                {
+                    var (function, parameters, slots) = PrepareCall(call, ref block, variables);
+                    if (!emitCalls)
+                        return OptionParts(InlineReturn(function), ref block, parameters);
+
+                    int result = Emit(block, CfgOpcode.Call, call.Type,
+                        target: call.Name, arguments: slots);
+                    int tag = Emit(block, CfgOpcode.ReadOptionI64Tag, IrValueType.Bool, left: result);
+                    int payload = Emit(block, CfgOpcode.ReadOptionI64Payload, IrValueType.I64, left: result);
+                    return (tag, payload);
+                }
                 default:
                     throw new FormatException(
                         "E_OPTION_I64_ONLY: unverified Option<int> expression");
             }
         }
+
+        private (StructuredFunction Function, Dictionary<string, Binding> Bindings, int[] Slots)
+            PrepareCall(StructuredCall call, ref Block block, Dictionary<string, Binding> variables)
+        {
+            if (!functions.TryGetValue(call.Name, out var function) ||
+                function.ResultType != call.Type || function.Parameters.Count != call.Arguments.Count ||
+                (emitCalls && (callSignatures is null || !callSignatures.ContainsKey(call.Name))))
+                throw new FormatException("Unverified structured helper call");
+
+            var bindings = new Dictionary<string, Binding>(StringComparer.Ordinal);
+            var slots = new List<int>();
+            // Evaluate each source operand once before starting the next one.
+            for (int i = 0; i < call.Arguments.Count; i++)
+            {
+                var parameter = function.Parameters[i];
+                var argument = call.Arguments[i];
+                if (parameter.Type != argument.Type)
+                    throw new FormatException("Unverified structured call argument type");
+                Binding binding;
+                if (argument.Type == IrValueType.OptionI64)
+                {
+                    var parts = OptionParts(argument, ref block, variables);
+                    binding = new Binding(argument.Type, parts.Tag, parts.Payload);
+                }
+                else
+                    binding = new Binding(argument.Type, Expression(argument, ref block, variables));
+
+                if (emitCalls)
+                {
+                    slots.Add(binding.ValueId);
+                    if (binding.PayloadId is int payload) slots.Add(payload);
+                }
+                else bindings.Add(parameter.Name, binding);
+            }
+            return (function, bindings, slots.ToArray());
+        }
+
+        private static StructuredExpr InlineReturn(StructuredFunction function) =>
+            function.ReturnValue ?? throw new FormatException(
+                "Statement-bodied helper requires the independent MethodDef ABI");
+
         private int Expression(StructuredExpr expression, ref Block block,
             Dictionary<string, Binding> variables)
         {
@@ -285,44 +353,13 @@ public static class OresStructuredCfgLowering
                 }
                 case StructuredCall call:
                 {
+                    if (call.Type == IrValueType.OptionI64)
+                        throw new FormatException("Option<int> helper result requires a tagged consumer");
+                    var (function, parameters, slots) = PrepareCall(call, ref block, variables);
                     if (emitCalls)
-                    {
-                        if (callSignatures is null ||
-                            !callSignatures.TryGetValue(call.Name, out var signature) ||
-                            signature.ParameterTypes.Count != call.Arguments.Count ||
-                            signature.ResultType != call.Type)
-                            throw new FormatException("Unverified structured ABI call");
-                        var args = new int[call.Arguments.Count];
-                        for (int i = 0; i < args.Length; i++)
-                        {
-                            if (call.Arguments[i].Type != signature.ParameterTypes[i])
-                                throw new FormatException("Unverified structured ABI argument");
-                            args[i] = Expression(call.Arguments[i], ref block, variables);
-                        }
                         return Emit(block, CfgOpcode.Call, call.Type,
-                            target: call.Name, arguments: args);
-                    }
-                    if (!functions.TryGetValue(call.Name, out var function) ||
-                        function.ResultType != call.Type ||
-                        function.Parameters.Count != call.Arguments.Count)
-                        throw new FormatException("Unverified structured helper call");
-
-                    // Evaluate each source argument once, left-to-right, and
-                    // bind into an independent callee scope. No dynamic call
-                    // target, implicit captures, stack frames or runtime JIT.
-                    var parameters = new Dictionary<string, Binding>(StringComparer.Ordinal);
-                    for (int i = 0; i < call.Arguments.Count; i++)
-                    {
-                        var parameter = function.Parameters[i];
-                        if (parameter.Type != call.Arguments[i].Type)
-                            throw new FormatException("Unverified structured call argument type");
-                        int value = Expression(call.Arguments[i], ref block, variables);
-                        parameters.Add(parameter.Name, new Binding(parameter.Type, value));
-                    }
-                    if (function.ReturnValue is null)
-                        throw new FormatException(
-                            "Statement-bodied helper requires the independent MethodDef ABI");
-                    return Expression(function.ReturnValue, ref block, parameters);
+                            target: call.Name, arguments: slots);
+                    return Expression(InlineReturn(function), ref block, parameters);
                 }
                 case StructuredNegate negate:
                 {
@@ -542,7 +579,14 @@ public static class OresStructuredCfgLowering
                     case StructuredReturn returned:
                     {
                         Block evalBlock = current;
-                        int result = Expression(returned.Value, ref evalBlock, variables);
+                        int result;
+                        if (returned.Value.Type == IrValueType.OptionI64)
+                        {
+                            var parts = OptionParts(returned.Value, ref evalBlock, variables);
+                            result = Emit(evalBlock, CfgOpcode.PackOptionI64, IrValueType.OptionI64,
+                                left: parts.Tag, right: parts.Payload);
+                        }
+                        else result = Expression(returned.Value, ref evalBlock, variables);
                         evalBlock.Terminator = new CfgReturn(result);
                         current = null;
                         break;

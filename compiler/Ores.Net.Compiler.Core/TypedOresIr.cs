@@ -8,9 +8,8 @@ public enum IrValueType
     Bool,
     // Method result only. Void must not be an SSA value, local, or parameter.
     Void,
-    // Source-only tagged (is_some:bool, value:i64) pair in the closed
-    // structured Option<int> slice. It NEVER occupies a single CFG SSA slot
-    // or CIL local: only its verified primitive components can be emitted.
+    // Closed structured Option<int>. Locals and parameters use scalar pairs;
+    // verified helper results use a private CIL value type at the call boundary.
     OptionI64,
     // Source-only bounded, immutable Array<int>: its elements are distinct
     // verified i64 SSA values, not CLR arrays or native guest pointers.

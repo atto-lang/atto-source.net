@@ -1,0 +1,8 @@
+fnc bad(bool present): Option<int> {
+  guard present else
+    return None;
+  end
+  return 42;
+}
+
+pub fnc main(): int { return 0; }

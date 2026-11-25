@@ -38,7 +38,10 @@ public enum CfgOpcode
     // shift instruction runs (CIL shifts by >= 64 are unspecified).
     ShiftLeftI64,
     ShiftRightLogicalI64,
-    ShiftRightArithmeticI64
+    ShiftRightArithmeticI64,
+    PackOptionI64,
+    ReadOptionI64Tag,
+    ReadOptionI64Payload
 }
 
 public readonly record struct CfgParameter(int Id, IrValueType Type);
@@ -116,6 +119,7 @@ public sealed record CfgCallSignature(IrValueType ResultType,
 public static class OresCfgVerifier
 {
     public const int MaxBlocks = 128;
+    internal const int MaxMethodParameters = 16;
     public const int MaxValues = OresIrVerifier.MaxInstructions;
     // Edge payloads are not SSA definitions, so they need a separate global
     // bound before copying any untrusted list into the immutable proof.
@@ -130,13 +134,14 @@ public static class OresCfgVerifier
     {
         ArgumentNullException.ThrowIfNull(function);
         if (!Identifier(function.Name) ||
-            function.ResultType is not (IrValueType.I64 or IrValueType.Bool or IrValueType.Void) ||
+            function.ResultType is not (IrValueType.I64 or IrValueType.Bool or IrValueType.Void or
+                IrValueType.OptionI64) ||
             !Identifier(function.Entry))
             throw new FormatException("Invalid CFG function signature");
 
         var parameters = function.Parameters ?? Array.Empty<IrValueType>();
         int methodParameterCount = parameters.Count;
-        if (methodParameterCount < 0 || methodParameterCount > 16)
+        if (methodParameterCount < 0 || methodParameterCount > MaxMethodParameters)
             throw new FormatException("Invalid CFG method signature");
         // Never enumerate an untrusted IReadOnlyList supplied to a verifier:
         // its Count can be bounded while its iterator is infinite.
@@ -392,6 +397,25 @@ public static class OresCfgVerifier
                             Use(i, opIndex, op.Arguments[arg], callee.ParameterTypes[arg]);
                         break;
                     }
+                    case CfgOpcode.PackOptionI64:
+                        RequireType(op.Type, IrValueType.OptionI64);
+                        if (op.Left is not int tag || op.Right is not int payload ||
+                            op.I64Constant is not null || op.BoolConstant is not null ||
+                            op.Target is not null || op.Arguments is not null)
+                            throw new FormatException("Malformed CFG Option<int> result");
+                        Use(i, opIndex, tag, IrValueType.Bool);
+                        Use(i, opIndex, payload, IrValueType.I64);
+                        break;
+                    case CfgOpcode.ReadOptionI64Tag:
+                    case CfgOpcode.ReadOptionI64Payload:
+                        RequireType(op.Type, op.Opcode == CfgOpcode.ReadOptionI64Tag
+                            ? IrValueType.Bool : IrValueType.I64);
+                        if (op.Left is not int option || op.Right is not null ||
+                            op.I64Constant is not null || op.BoolConstant is not null ||
+                            op.Target is not null || op.Arguments is not null)
+                            throw new FormatException("Malformed CFG Option<int> result projection");
+                        Use(i, opIndex, option, IrValueType.OptionI64);
+                        break;
                     case CfgOpcode.ArrayIndexValidI64:
                     {
                         RequireType(op.Type, IrValueType.Bool);
@@ -524,7 +548,8 @@ public static class OresCfgVerifier
 
         void AddDefinition(int id, IrValueType type, int block, int instruction)
         {
-            if (id < 0 || type is not (IrValueType.I64 or IrValueType.Bool) ||
+            if (id < 0 || (type is not (IrValueType.I64 or IrValueType.Bool) &&
+                           (type != IrValueType.OptionI64 || instruction < 0)) ||
                 !definitions.TryAdd(id, new Definition(block, instruction, type)))
                 throw new FormatException("Invalid or duplicate CFG SSA definition");
             if (definitions.Count > MaxValues)
