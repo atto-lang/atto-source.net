@@ -14,6 +14,7 @@ public sealed partial class FrozenImportSnapshot
     private readonly Dictionary<string,string> namespaces, exports, sources;
     public sealed record Dependency(string Version,string LockDigest);
     public IReadOnlyDictionary<string,Dependency> Dependencies {get;}
+    internal IReadOnlyList<string> NamespaceNames => namespaces.Keys.OrderBy(x=>x,StringComparer.Ordinal).ToArray();
     public string Name {get;}
     public string Version {get;}
     public string LockDigest {get;}
