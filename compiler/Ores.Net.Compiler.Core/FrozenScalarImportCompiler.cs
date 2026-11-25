@@ -25,11 +25,19 @@ public static partial class OresStructuredParser
 
         var lexer = new Lexer(consumer, true);
         var reader = new FrozenConsumerReader(lexer);
-        var imports = new List<(string Source,string Selector,string Binding,bool Renamed)>();
+        var imports = new List<(string Source,string? Selector,string? Binding,bool Renamed)>();
         var aliases = new List<StaticImportGraph.Alias>();
         while (reader.Take("import"))
         {
             if (imports.Count >=64) throw new FormatException("E_SOURCE_LIMIT: import budget exceeded");
+            if(reader.Take("pkg"))
+            {
+                string packageName=reader.StaticString();
+                string? alias=reader.Take("as")?reader.Path():null;
+                reader.Expect(";");
+                imports.Add((packageName,null,alias,alias is not null));
+                continue;
+            }
             reader.Expect("namespace");
             string selector=reader.Path(), binding=selector;
             bool renamed=reader.Take("as");
@@ -63,11 +71,18 @@ public static partial class OresStructuredParser
         var graph=new StaticImportGraph();
         foreach(var import in imports)
         {
+            if(import.Selector is null)
+            {
+                if(!available.TryGetValue(import.Source,out var root))
+                    throw new FormatException("E_UNBOUND: package root not in authenticated snapshot set");
+                graph.BindPackage(root.FunctionView(),import.Binding);
+                continue;
+            }
             string[] parts=import.Source.Split('/');
             if(parts.Length<3) throw new FormatException("E_IMPORT_PATH: invalid package selector");
             if(!available.TryGetValue(string.Join("/",parts.Take(3)),out var package))
                 throw new FormatException("E_UNBOUND: package not in authenticated snapshot set");
-            package.BindNamespace(graph,import.Source,import.Selector,import.Binding,import.Renamed);
+            package.BindNamespace(graph,import.Source,import.Selector,import.Binding!,import.Renamed);
         }
         graph.BindAliases(aliases);
         var target=graph.Resolve(call);
