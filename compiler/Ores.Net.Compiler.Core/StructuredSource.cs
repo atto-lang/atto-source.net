@@ -490,6 +490,11 @@ public static partial class OresStructuredParser
             throw new FormatException(
                 $"NET_NOMINAL_METHODS_UNSUPPORTED: Nominal class/actor methods require receiver-erased method slots, type/borrow checking and Native AOT CIL lowering; unsupported in .NET structured frontend at offset {firstNominalOffset}");
         }
+        // Keep the existing standalone scalar and linked admission boundaries.
+        // The inline-task profile may declare suspension permission, but still
+        // cannot execute a suspension. Recognize the token pair, not trivia.
+        bool inlineProfile = linking is null && Enumerable.Range(0, tokens.Count - 1)
+            .Any(i => tokens[i].Text == "sync" && tokens[i + 1].Text == "task");
         for (int i = 0; i + 1 < tokens.Count; i++)
         {
             // No protected state heap or virtual actor activation exists in
@@ -535,7 +540,9 @@ public static partial class OresStructuredParser
             if (word == "critical")
                 throw new FormatException(
                     $"E_CRITICAL_UNSUPPORTED: structured CIL has no authenticated guard owner or FIFO continuation lowering at offset {tokens[i].Offset}");
-            if (word is "suspends" or "await")
+            bool permittedMarker = inlineProfile && word == "suspends" &&
+                next is ("fnc" or "routine");
+            if ((word is "suspends" or "await") && !permittedMarker)
             {
                 string diagnostic = word == "await" && IsInsideInlineTask(tokens, i)
                     ? "E_SYNC_TASK_SUSPEND: this suspension lacks a same-thread continuation"
@@ -1314,7 +1321,7 @@ public static partial class OresStructuredParser
                 }
                 // A callable may declare suspension permission even when
                 // this profile can prove it has no suspension points.
-                Take("susp");
+                if (!Take("susp")) Take("suspends");
                 bool trapped = Take("trap") || Take("trap!");
                 if (Current.Text is "class" or "actor")
                     throw Error("Nominal class/actor methods require receiver-erased method slots, type/borrow checking and Native AOT CIL lowering; unsupported in .NET structured frontend");

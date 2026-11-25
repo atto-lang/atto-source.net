@@ -13,7 +13,7 @@ if [[ "$mode" == macos-arm64 ]]; then
   dotnet restore host/Ores.Net.NativeHost -r osx-arm64
   # publish-macos verifies both Mach-O executables and uses the standalone
   # compiler to emit the input CIL before linking the app.
-  for fixture in inline-value inline-cooperate nested-inline guard-result-task guard-nonlocal inline-writeback; do
+  for fixture in inline-value inline-cooperate nested-inline guard-result-task guard-nonlocal inline-writeback inline-suspends-marker; do
     destination="artifacts/sync-task-$fixture"
     bash scripts/publish-macos.sh "$source/$fixture.atto" "$destination"
     [[ "$(env -i PATH=/usr/bin:/bin "$destination/osx-arm64/oreslang-app")" == 42 ]]
@@ -23,7 +23,7 @@ if [[ "$mode" == macos-arm64 ]]; then
 else
   dotnet build "$compiler_project" -c Release
   oresnet=(dotnet run --project "$compiler_project" -c Release --no-build --)
-  for fixture in inline-value inline-cooperate nested-inline guard-result-task guard-nonlocal inline-writeback; do
+  for fixture in inline-value inline-cooperate nested-inline guard-result-task guard-nonlocal inline-writeback inline-suspends-marker; do
     destination="$work/$fixture"
     mkdir -p "$destination"
     "${oresnet[@]}" compile "$source/$fixture.atto" --out "$destination/OresGenerated.dll"
@@ -51,7 +51,11 @@ for case in reject-inline-suspend:E_SYNC_TASK_SUSPEND reject-do-value:E_TASK_RET
     reject-defer-inline:E_LEXICAL_CLEANUP_UNSUPPORTED \
     reject-guard-cleanup:E_LEXICAL_CLEANUP_UNSUPPORTED \
     reject-using-inline:E_LEXICAL_CLEANUP_UNSUPPORTED \
-    reject-task-loop-transfer:E_SYNC_TASK_LOOP_TRANSFER_UNSUPPORTED; do
+    reject-task-loop-transfer:E_SYNC_TASK_LOOP_TRANSFER_UNSUPPORTED \
+    reject-long-marker-await-inline:E_SYNC_TASK_SUSPEND \
+    reject-long-marker-await-outside:E_SUSPENDS_UNSUPPORTED \
+    reject-long-marker-critical:E_CALLABLE_MODIFIERS \
+    reject-long-marker-async:E_CALLABLE_MODIFIERS; do
   fixture=${case%%:*}
   expected=${case#*:}
   destination="$work/$fixture"
