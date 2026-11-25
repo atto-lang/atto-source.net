@@ -69,6 +69,21 @@ internal static class VmActorStateCellsTests
             "out-of-bounds index");
         Deny(() => host.ReadActorStateInt64(tenantB, b1, turnA, read, 0),
             "cross-isolate state read");
+        // Read-only state authority must not be escalated through a nested
+        // writable loan. Denial must leave the parent active and consume no
+        // loan generation, so subsequent valid reborrows remain usable.
+        Deny(() => host.BeginActorStateLoan(tenantA, a1, turnA, writable: true),
+            "read-only parent cannot grant writable nested loan");
+        if (host.ReadActorStateInt64(tenantA, a1, turnA, read, 0) != 0)
+            throw new Exception("failed nested write changed state or fenced parent");
+        var nestedRead = host.BeginActorStateLoan(tenantA, a1, turnA);
+        if (nestedRead.Generation != read.Generation + 1)
+            throw new Exception("denied nested write consumed a loan generation");
+        Deny(() => host.BeginActorStateLoan(tenantA, a1, turnA, writable: true),
+            "nested read-only scope cannot amplify authority");
+        host.ValidateActorStateLoan(tenantA, a1, turnA, nestedRead);
+        host.EndActorStateLoan(tenantA, a1, turnA, nestedRead);
+        host.ValidateActorStateLoan(tenantA, a1, turnA, read);
         host.EndActorStateLoan(tenantA, a1, turnA, read);
 
         var write = host.BeginActorStateLoan(tenantA, a1, turnA, writable: true);
@@ -79,7 +94,15 @@ internal static class VmActorStateCellsTests
         var nested = host.BeginActorStateLoan(tenantA, a1, turnA);
         Deny(() => host.AddActorStateInt64(tenantA, a1, turnA, write, 0, 1),
             "nested read-only loan must fence writable parent");
+        Deny(() => host.BeginActorStateLoan(tenantA, a1, turnA, writable: true),
+            "read-only child cannot recover writable grandparent authority");
         host.EndActorStateLoan(tenantA, a1, turnA, nested);
+        var nestedWrite = host.BeginActorStateLoan(tenantA, a1, turnA, writable: true);
+        host.ValidateActorStateLoan(tenantA, a1, turnA, nestedWrite, requireWrite: true);
+        Deny(() => host.ValidateActorStateLoan(tenantA, a1, turnA, write, requireWrite: true),
+            "writable child must still fence writable parent");
+        host.EndActorStateLoan(tenantA, a1, turnA, nestedWrite);
+        host.ValidateActorStateLoan(tenantA, a1, turnA, write, requireWrite: true);
         host.WriteActorStateInt64(tenantA, a1, turnA, write, 0, long.MaxValue);
         try {
             host.AddActorStateInt64(tenantA, a1, turnA, write, 0, 1);
