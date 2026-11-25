@@ -110,8 +110,11 @@ public sealed partial class OresVmHost
             if (state.Phase != Phase.Running || parent.ActiveTurn is not null)
                 throw new InvalidOperationException("supervisor CONTROL selection admission closed");
             notice = default;
+            var canDispatchReceipt = parent.StateKinds is not null &&
+                parent.StateLayoutIdentity is not null &&
+                parent.NextTurnGeneration != ulong.MaxValue;
             if (parent.SupervisorControlBurst >= SupervisorControlBurstLimit &&
-                parent.Mailbox.QueuedMessages != 0)
+                parent.Mailbox.HasRunnableOrdinaryHead(canDispatchReceipt))
                 return false;
             if (!TryTakeSupervisorTerminal(handle, parent, out notice))
                 return false;
