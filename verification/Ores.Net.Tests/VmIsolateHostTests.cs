@@ -58,8 +58,69 @@ internal static class VmIsolateHostTests
             : "NET_ISOLATE_DEFAULT_ORDINARY_INTERLEAVING_PASS");
     }
 
+    private static void CheckSupervisorTerminalControl()
+    {
+        var host = new OresVmHost(maxTenants: 2);
+        var tenant = host.CreateIsolate("control", maxActors: 70);
+        var foreign = host.CreateIsolate("foreign");
+        host.Start(tenant); host.Start(foreign);
+        var parent = host.RegisterActor(tenant, 1);
+        var sibling = host.RegisterActor(tenant, 2);
+        var foreignParent = host.RegisterActor(foreign, 1);
+        ExpectFailure(() => host.RegisterSupervisedActor(tenant, foreignParent, 3),
+            "cross-tenant parent authority");
+        var children = new OresVmHost.ActorTicket[64];
+        for (int i = 0; i < children.Length; ++i)
+            children[i] = host.RegisterSupervisedActor(tenant, parent, (ulong)(3 + i));
+        ExpectFailure(() => host.RegisterSupervisedActor(tenant, parent, 67),
+            "terminal capacity must be reserved before child admission");
+        ExpectFailure(() => host.RetireActor(tenant, parent),
+            "parent cannot abandon reservations");
+        if (host.TryTakeChildTerminalControl(tenant, parent, out _))
+            throw new Exception("live child must not publish a terminal notice");
+        for (int i = 0; i < 1024; ++i)
+            host.SendActor(tenant, parent, parent.Mailbox.CurrentRef, new byte[] { 7 });
+        var last = children[63];
+        var first = children[0];
+        host.RetireActor(tenant, last, OresVmHost.ChildTerminalKind.Failed);
+        host.RetireActor(tenant, first, OresVmHost.ChildTerminalKind.Cancelled);
+        if (parent.Mailbox.QueuedMessages != 1024 ||
+            host.TryTakeChildTerminalControl(tenant, sibling, out _) ||
+            host.TryTakeChildTerminalControl(foreign, foreignParent, out _))
+            throw new Exception("CONTROL must not alter DATA or reach a foreign parent");
+        ExpectFailure(() => host.RegisterSupervisedActor(tenant, parent, 67),
+            "unsettled terminal notice retains capacity");
+        ExpectFailure(() => host.RetireActor(tenant, last), "duplicate terminal publication");
+        if (!host.TryTakeChildTerminalControl(tenant, parent, out var failed) ||
+            failed.ChildId != last.Id || failed.ChildEpoch != last.Epoch ||
+            failed.Kind != OresVmHost.ChildTerminalKind.Failed)
+            throw new Exception("CONTROL must preserve retirement order and identity");
+        var replacement = host.RegisterSupervisedActor(tenant, parent, last.Id);
+        if (replacement.Epoch == last.Epoch)
+            throw new Exception("child restart must mint a fresh epoch");
+        if (!host.TryTakeChildTerminalControl(tenant, parent, out var cancelled) ||
+            cancelled.ChildId != first.Id || cancelled.ChildEpoch != first.Epoch ||
+            cancelled.Kind != OresVmHost.ChildTerminalKind.Cancelled ||
+            host.TryTakeChildTerminalControl(tenant, parent, out _))
+            throw new Exception("CONTROL settlement must be exact and once-only");
+        host.RetireActor(tenant, replacement);
+        for (int i = 1; i < 63; ++i) host.RetireActor(tenant, children[i]);
+        ExpectFailure(() => host.RetireActor(tenant, parent),
+            "parent retirement must drain terminal notices");
+        int settled = 0;
+        while (host.TryTakeChildTerminalControl(tenant, parent, out _)) ++settled;
+        if (settled != 63) throw new Exception("lost reserved terminal notice");
+        host.RetireActor(tenant, parent);
+        host.RetireActor(tenant, sibling);
+        host.RetireActor(foreign, foreignParent);
+        host.BeginShutdown(tenant); host.CompleteShutdown(tenant); host.Destroy(tenant);
+        host.BeginShutdown(foreign); host.CompleteShutdown(foreign); host.Destroy(foreign);
+        Console.WriteLine("NET_ISOLATE_RESERVED_TERMINAL_CONTROL_PASS");
+    }
+
     public static void Run()
     {
+        CheckSupervisorTerminalControl();
         VmActorStateCellsTests.Run();
         CheckOrdinaryInterleaving(boundedToTwo: false);
         CheckOrdinaryInterleaving(boundedToTwo: true);
