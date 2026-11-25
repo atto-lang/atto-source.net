@@ -97,7 +97,7 @@ public sealed partial class OresVmHost
         lock (_gate) {
             var tenant = Check(handle);
             CheckActor(tenant, actor);
-            if (tenant.Phase != Phase.Running || actor.ActiveTurn is not null ||
+            if (tenant.Phase != Phase.Running || actor.LiveTurns.Count != 0 ||
                 actor.NextTurnGeneration != 1 || actor.StateKinds is not null)
                 throw new InvalidOperationException("actor state layout admission closed");
             if (fields.Length is < 1 or > 16)
@@ -366,6 +366,7 @@ public sealed partial class OresVmHost
             CheckActor(tenant, actor);
             if (tenant.Phase != Phase.Running || actor.ActiveTurn is not null)
                 throw new InvalidOperationException("actor user dequeue admission closed");
+            CheckNewReceiveAdmission(actor);
             CheckOrdinaryDispatchPriority(tenant, actor);
             // Host and mailbox gates are held in the same order as SendActor.
             // TryReceive refuses to consume typed scheduler controls.
@@ -426,6 +427,7 @@ public sealed partial class OresVmHost
                     "generated actor method does not match configured actor layout");
             if (actor.NextTurnGeneration == ulong.MaxValue)
                 throw new InvalidOperationException("actor logical turn generation exhausted");
+            CheckNewReceiveAdmission(actor);
             CheckOrdinaryDispatchPriority(tenant, actor);
             // Do not dequeue nonempty messages or start a turn without
             // consuming exactly one admitted, FIFO-head control tick.
@@ -477,7 +479,8 @@ public sealed partial class OresVmHost
         lock (_gate) {
             var state = Check(handle);
             CheckTurn(state, actor, turn);
-            if (!ReferenceEquals(turn.ScheduledCarrierLease, carrierLease) ||
+            if (!ReferenceEquals(actor.ActiveTurn, turn) ||
+                !ReferenceEquals(turn.ScheduledCarrierLease, carrierLease) ||
                 turn.ScheduledCarrierThread != Environment.CurrentManagedThreadId)
                 throw new InvalidOperationException("stale or foreign scheduled carrier retirement");
             if (turn.ActiveStateLoan is not null || turn.StateLoanDepth != 0)
