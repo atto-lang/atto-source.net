@@ -61,6 +61,36 @@ internal static class FrozenDependencyGraphSelfTest
         Deny("E_UNBOUND",()=>OresStructuredParser.CompileFrozenScalar("import pkg '"+B+"' as p; pub fnc main()->int{return p.network.twice(20);}",new[]{b,c}));
         Console.WriteLine("FROZEN_TRANSITIVE_CIL|three packages|permutation-identical|four denials");
     }
+    internal static void EmitNamespaceGuest(string output)
+    {
+        var c=Snapshot(C,"1.0.0",new(),new(),"use namespace network; fnc secret():int{return 99;} pub fnc answer(int x):int{return x*2;}");
+        FrozenImportSnapshot FromC(string source)=>Snapshot(B,"1.0.0",new(){{C,c.Version}},new(){{C,c.LockDigest}},source);
+        var b=FromC("use namespace network; import namespace network as math from pkg '"+C+"/api'; pub fnc answer(int x):int{return math.answer(x)+1;}");
+        var a=Snapshot(A,"1.0.0",new(){{B,b.Version}},new(){{B,b.LockDigest}},
+            "use namespace network; import namespace network from pkg '"+B+"'; pub fnc answer(int x):int{return network.answer(x)+1;}");
+        string main="import pkg '"+A+"' as p; pub fnc main()->int{return p.network.answer(20);}";
+        var session=new OresStructuredParser.FrozenScalarSession();
+        var cold=session.Compile(main,new[]{a,b,c});
+        var warm=session.Compile(main,new[]{c,b,a});
+        if(cold.ReparsedProviders.Count!=3||warm.ReusedProviders.Count!=3||warm.ReparsedProviders.Count!=0)
+            throw new InvalidOperationException("namespace session counters");
+        CilEmitter.EmitLibrary(cold.Module,output);
+        byte[] baseline=System.IO.File.ReadAllBytes(output);
+        CilEmitter.EmitLibrary(warm.Module,output);
+        if(!System.IO.File.ReadAllBytes(output).AsSpan().SequenceEqual(baseline))
+            throw new InvalidOperationException("namespace warm CIL drift");
+        string fromB="import pkg '"+B+"' as p; pub fnc main()->int{return p.network.answer(20);}";
+        string prefix="use namespace network; import namespace network as math from pkg '"+C+"/api'; ";
+        Deny("E_PRIVATE",()=>OresStructuredParser.CompileFrozenScalar(fromB,new[]{FromC(prefix+"pub fnc answer(int x):int{return math.secret();}"),c}));
+        Deny("E_UNBOUND",()=>OresStructuredParser.CompileFrozenScalar(fromB,new[]{FromC(prefix+"pub fnc answer(int x):int{return math.missing(x);}"),c}));
+        Deny("E_UNBOUND",()=>OresStructuredParser.CompileFrozenScalar(fromB,new[]{FromC(prefix.Replace("/api","/src/network")+"pub fnc answer(int x):int{return x;}"),c}));
+        Deny("E_DUPLICATE",()=>OresStructuredParser.CompileFrozenScalar(fromB,new[]{FromC(prefix+"pub fnc math():int{return 42;} pub fnc answer(int x):int{return x;}"),c}));
+        Deny("E_IMPORT_KIND",()=>OresStructuredParser.CompileFrozenScalar(fromB,new[]{FromC(prefix+"pub fnc answer(int x):int{return math;}"),c}));
+        Deny("E_UNBOUND",()=>OresStructuredParser.CompileFrozenScalar(fromB.Replace("network.answer(20)","network.math.answer(20)"),new[]{b,c}));
+        var noAuthority=Snapshot(B,"1.0.0",new(),new(),prefix+"pub fnc answer(int x):int{return x;}");
+        Deny("E_UNBOUND",()=>OresStructuredParser.CompileFrozenScalar(fromB,new[]{noAuthority,c}));
+        Console.WriteLine("FROZEN_PROVIDER_NAMESPACE|three-packages|warm-identical|seven-denials");
+    }
     internal static void EmitSessionGuests(string output)
     {
         var c=Snapshot(C,"1.0.0",new(),new(),"use namespace network; pub fnc answer(int x):int{return x*2;}");

@@ -302,7 +302,8 @@ public static partial class OresStructuredParser
     private static StructuredLinkedUnit ParseCore(string source, LinkedModuleContext? linking,
         string? frozenNamespace = null, List<StaticImportGraph.Export>? frozenExports = null,
         string frozenMethodPrefix = "", Func<string,string,StructuredFunction>? frozenResolve = null,
-        bool productionGuard = false)
+        bool productionGuard = false,
+        Func<string,string,Func<string,StructuredFunction>>? frozenNamespaceResolve = null)
     {
         ValidateSourceInput(source);
         ActorPubSubSourceAdmission.RejectUnsupported(source);
@@ -621,7 +622,7 @@ public static partial class OresStructuredParser
         RejectUnsupportedMacros(tokens);
         var reader = new Reader(tokens, linking, productionGuard: productionGuard);
         if (frozenNamespace is not null)
-            return reader.ReadFrozenNamespace(frozenNamespace, frozenExports!, frozenMethodPrefix, frozenResolve);
+            return reader.ReadFrozenNamespace(frozenNamespace, frozenExports!, frozenMethodPrefix, frozenResolve, frozenNamespaceResolve);
         return linking is null
             ? new StructuredLinkedUnit(reader.ReadProgram(), null, new Dictionary<string, StructuredFunction>())
             : reader.ReadLinkedUnit();
@@ -1397,7 +1398,9 @@ public static partial class OresStructuredParser
 
         private bool frozenProvider;
         private string frozenMethodPrefix = "";
-        internal StructuredLinkedUnit ReadFrozenNamespace(string expected, List<StaticImportGraph.Export> inventory, string methodPrefix, Func<string,string,StructuredFunction>? resolve)
+        private readonly Dictionary<string,Func<string,StructuredFunction>> frozenNamespaceBindings=new(StringComparer.Ordinal);
+        internal StructuredLinkedUnit ReadFrozenNamespace(string expected, List<StaticImportGraph.Export> inventory, string methodPrefix, Func<string,string,StructuredFunction>? resolve,
+            Func<string,string,Func<string,StructuredFunction>>? resolveNamespace)
         {
             // This entry point accepts bytes only from a verified snapshot.
             // Do not confer compiler-owned Core authority on any package.
@@ -1414,7 +1417,8 @@ public static partial class OresStructuredParser
             while(Take("import")) {
                 if(resolve is null) throw Error("E_UNSUPPORTED: frozen provider imports require complete dependency closure");
                 if(importedNames.Count>=32) throw Error("E_SOURCE_LIMIT: provider import budget exceeded");
-                Expect("fnc");
+                bool namespaceImport=Take("namespace");
+                if(!namespaceImport) Expect("fnc");
                 string member=Name(), binding=member;
                 if(Take("as")) binding=Name();
                 Expect("from"); Expect("pkg");
@@ -1424,8 +1428,13 @@ public static partial class OresStructuredParser
                 index++;
                 Expect(";");
                 if(!importedNames.Add(binding)) throw Error("E_DUPLICATE: provider import binding");
-                var target=resolve(raw[1..^1],member);
-                visible.Add(binding,target);
+                if(namespaceImport) {
+                    if(resolveNamespace is null) throw Error("E_UNSUPPORTED: frozen namespace import requires verified dependency binding");
+                    frozenNamespaceBindings.Add(binding,resolveNamespace(raw[1..^1],member));
+                } else {
+                    var target=resolve(raw[1..^1],member);
+                    visible.Add(binding,target);
+                }
             }
             frozenProvider = true;
             frozenMethodPrefix = methodPrefix;
@@ -1577,6 +1586,8 @@ public static partial class OresStructuredParser
                     if (!returns) throw Error("RETURN_EXPLICIT_REQUIRED: not every main path returns int");
                     return Finish("main", body);
                 }
+                if (frozenNamespaceBindings.ContainsKey(name))
+                    throw Error("E_DUPLICATE: provider callable shadows namespace binding");
                 if (visible.ContainsKey(name))
                     throw new FormatException($"Duplicate typed helper at offset {at}");
                 if (functions.Count + (trapped ? 2 : 1) > MaxHelpers)
@@ -3151,7 +3162,14 @@ public static partial class OresStructuredParser
                 return TaggedPostfix(new StructuredRead(offset, name, taggedType), depth);
             if (localBinding && Lookup(name, offset).Type == IrValueType.FixedArrayI64)
                 return ArrayPostfix(new StructuredRead(offset, name, IrValueType.FixedArrayI64), depth);
-            if (linking is not null)
+            StructuredFunction? frozenTarget=null;
+            if(frozenProvider&&frozenNamespaceBindings.TryGetValue(name,out var namespaceBinding)) {
+                if(localBinding) throw Error("E_IMPORT_KIND: local shadows provider namespace");
+                if(!Take(".")) throw Error("E_IMPORT_KIND: namespace is not a runtime value");
+                string member=Name();
+                if(Current.Text!="(") throw Error("E_IMPORT_KIND: expected direct namespace function call");
+                frozenTarget=namespaceBinding(member);
+            } else if (linking is not null)
                 while (Take("."))
                 {
                     if (localBinding) throw Error("Qualified access on local values requires nominal type lowering");
@@ -3160,7 +3178,8 @@ public static partial class OresStructuredParser
             if (Take("("))
             {
                 if (localBinding) throw Error("Local value is not a statically bound callable");
-                if (!visible.TryGetValue(name, out var target))
+                var target=frozenTarget;
+                if (target is null&&!visible.TryGetValue(name, out target))
                     throw new FormatException(
                         $"Undefined, recursive or forward typed helper call at offset {offset}");
                 var args = new List<StructuredExpr>();

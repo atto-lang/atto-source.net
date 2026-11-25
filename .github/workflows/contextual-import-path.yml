@@ -119,7 +119,7 @@ jobs:
           cmp verification/Ores.Net.Tests/FrozenScalarImportSelfTest.cs "$work/emitter/FrozenScalarImportSelfTest.cs"
           cp verification/Ores.Net.Tests/FrozenDependencyGraphSelfTest.cs "$work/emitter/"
           cmp verification/Ores.Net.Tests/FrozenDependencyGraphSelfTest.cs "$work/emitter/FrozenDependencyGraphSelfTest.cs"
-          printf '%s\n' 'FrozenScalarImportSelfTest.Run(args[0]);' 'FrozenDependencyGraphSelfTest.EmitTransitiveGuest(args[0]+".transitive.dll");' 'FrozenDependencyGraphSelfTest.EmitSessionGuests(args[0]+".session");' > "$work/emitter/Program.cs"
+          printf '%s\n' 'FrozenScalarImportSelfTest.Run(args[0]);' 'FrozenDependencyGraphSelfTest.EmitTransitiveGuest(args[0]+".transitive.dll");' 'FrozenDependencyGraphSelfTest.EmitSessionGuests(args[0]+".session");' 'FrozenDependencyGraphSelfTest.EmitNamespaceGuest(args[0]+".namespace.dll");' > "$work/emitter/Program.cs"
           dotnet run --project "$work/emitter" --configuration Release -- "$work/OresGenerated.dll"
           sha256sum "$work/OresGenerated.dll"
           mkdir "$work/host"
@@ -205,3 +205,12 @@ jobs:
             test "$("$root/native/FrozenGuest")" = "$expected"
             echo "FROZEN_NATIVEAOT_INCREMENTAL|variant=$variant|result=$expected"
           done
+          root="$work/provider-namespace"
+          mkdir -p "$root/host"
+          cp "$work/OresGenerated.dll.namespace.dll" "$root/OresGenerated.dll"
+          cmp "$work/OresGenerated.dll.namespace.dll" "$root/OresGenerated.dll"
+          cp "$work/host/FrozenGuest.csproj" "$work/host/Program.cs" "$root/host/"
+          dotnet publish "$root/host/FrozenGuest.csproj" -c Release -r linux-x64 -o "$root/native"
+          file "$root/native/FrozenGuest"
+          test "$("$root/native/FrozenGuest")" = 42
+          echo "FROZEN_NATIVEAOT_PROVIDER_NAMESPACE|result=42|three-authenticated-packages"
