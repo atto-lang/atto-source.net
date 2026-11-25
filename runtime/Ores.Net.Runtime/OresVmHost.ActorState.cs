@@ -404,8 +404,9 @@ public sealed partial class OresVmHost
             turn = BeginActorTurn(handle, actor);
         }
         ActorDispatchScope? scope = null;
+        ActorStateLoan? loan = null;
         try {
-            var loan = BeginActorStateLoan(handle, actor, turn, writable: true);
+            loan = BeginActorStateLoan(handle, actor, turn, writable: true);
             scope = new ActorDispatchScope(this, handle, actor, turn, loan);
             var result = generatedMethod(scope);
             scope.Revoke();
@@ -422,6 +423,8 @@ public sealed partial class OresVmHost
             // Request alone cannot release the lane.
             try {
                 CancelActorTurn(handle, actor, turn);
+                if (loan is not null && !loan.Released)
+                    EndActorStateLoan(handle, actor, turn, loan);
                 AcknowledgeActorTurnCancellation(handle, actor, turn);
             }
             catch (InvalidOperationException) { }
