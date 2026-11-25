@@ -12,6 +12,8 @@ on:
       - 'verification/Ores.Net.Tests/StaticImportGraphSelfTest.cs'
       - 'compiler/Ores.Net.Compiler.Core/FrozenImportSnapshot.cs'
       - 'verification/Ores.Net.Tests/FrozenImportSnapshotSelfTest.cs'
+      - 'compiler/Ores.Net.Compiler.Core/FrozenImportSnapshot.Graph.cs'
+      - 'verification/Ores.Net.Tests/FrozenImportGraphSelfTest.cs'
       - 'global.json'
 permissions:
   contents: read
@@ -67,5 +69,7 @@ jobs:
           dotnet add "$work" reference "$PWD/compiler/Ores.Net.Compiler.Core/Ores.Net.Compiler.Core.csproj"
           cp verification/Ores.Net.Tests/ContextualImportParserSelfTest.cs "$work/"
           cmp verification/Ores.Net.Tests/ContextualImportParserSelfTest.cs "$work/ContextualImportParserSelfTest.cs"
-          printf '%s\n' 'ContextualImportParserSelfTest.Run();' > "$work/Program.cs"
+          cp verification/Ores.Net.Tests/FrozenImportGraphSelfTest.cs "$work/"
+          cmp verification/Ores.Net.Tests/FrozenImportGraphSelfTest.cs "$work/FrozenImportGraphSelfTest.cs"
+          printf '%s\n' 'ContextualImportParserSelfTest.Run();' 'FrozenImportGraphSelfTest.Run();' > "$work/Program.cs"
           dotnet run --project "$work" --configuration Release
