@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../compiler/Ores.Net.Compiler.Core/Ores.Net.Compiler.Core.csproj" />
+    <ProjectReference Include="../../runtime/Ores.Net.Runtime/Ores.Net.Runtime.csproj" />
+    <Compile Include="../Ores.Net.Tests/ActorAwaitSourceTests.cs" Link="ActorAwaitSourceTests.cs" />
+    <Compile Include="../Ores.Net.Tests/GeneratedAwaitActor.g.cs" Link="GeneratedAwaitActor.g.cs" />
+    <None Include="../Ores.Net.Tests/GeneratedAwaitActor.g.cs" Link="GeneratedAwaitActor.g.cs" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../Ores.Net.Tests/AwaitCounter.atto" Link="AwaitCounter.atto" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
