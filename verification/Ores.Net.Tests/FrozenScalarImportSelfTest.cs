@@ -83,6 +83,29 @@ internal static class FrozenScalarImportSelfTest
         }
         if(baseline is null || !File.ReadAllBytes(output).AsSpan().SequenceEqual(baseline))
             throw new InvalidOperationException("negative tests altered generated artifact");
-        Console.WriteLine("Frozen scalar: eight byte-identical emitted CIL guests, thirteen rejections; NativeAOT execution separate");
+        var argsSnapshot=Snapshot("use namespace network; pub fnc answer(int x, int y):int{return x-y;}");
+        string argsHeader=header+"define alias web = network; pub fnc main()->int{return web.answer(";
+        string argsOutput=output+".args.dll";
+        CilEmitter.EmitLibrary(OresStructuredParser.CompileFrozenScalar(argsHeader+"40,-2);}",new[]{argsSnapshot}),argsOutput);
+        byte[] argBaseline=File.ReadAllBytes(argsOutput);
+        CilEmitter.EmitLibrary(OresStructuredParser.CompileFrozenScalar(argsHeader+"4_0,-2);}",new[]{argsSnapshot}),argsOutput);
+        if(!File.ReadAllBytes(argsOutput).AsSpan().SequenceEqual(argBaseline))
+            throw new InvalidOperationException("decimal separator changed emitted CIL");
+        foreach(string arguments in new[]{"40","40,-2,1","40,true","40,2.0","40,1+1",
+            "9223372036854775808,0","-9223372036854775809,0","40,-2,",string.Join(",",System.Linq.Enumerable.Repeat("1",17))})
+        {
+            try {
+                _=OresStructuredParser.CompileFrozenScalar(argsHeader+arguments+");}",new[]{argsSnapshot});
+                throw new InvalidOperationException("invalid argument list admitted: "+arguments);
+            } catch(FormatException) {}
+        }
+        var boolProvider=Snapshot("use namespace network; pub fnc answer(bool x,int y):int{return y;}");
+        try {
+            _=OresStructuredParser.CompileFrozenScalar(argsHeader+"40,-2);}",new[]{boolProvider});
+            throw new InvalidOperationException("bool formal coerced from int");
+        } catch(FormatException e) {
+            if(!e.Message.Contains("E_IMPORT_KIND",StringComparison.Ordinal)) throw;
+        }
+        Console.WriteLine("Frozen scalar: ten CIL candidates in two equivalent groups, twenty-three rejections; NativeAOT separate");
     }
 }
