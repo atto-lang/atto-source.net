@@ -68,6 +68,9 @@ public sealed partial class OresVmHost
         internal bool Suspended { get; set; }
         internal bool Completed { get; set; }
         internal bool CancellationRequested { get; set; }
+        // Non-null only while a synchronous scheduler-owned dispatch is live.
+        internal object? ScheduledCarrierLease { get; set; }
+        internal int ScheduledCarrierThread { get; set; }
         internal ulong NextStateLoanGeneration { get; set; } = 1;
         internal int StateLoanDepth { get; set; }
         internal ActorStateLoan? ActiveStateLoan { get; set; }
@@ -337,6 +340,7 @@ public sealed partial class OresVmHost
     {
         lock (_gate) {
             var s = Check(handle); CheckTurn(s, actor, turn);
+            CheckScheduledCarrierThread(turn);
             if (turn.Suspended || turn.CancellationRequested)
                 throw new InvalidOperationException("actor state access while suspended or cancelling");
             if (writable && turn.ActiveStateLoan is { Writable: false })
@@ -358,6 +362,7 @@ public sealed partial class OresVmHost
         ActorStateLoan loan, bool requireWrite, bool releasing = false)
     {
         CheckTurn(state, actor, turn);
+        CheckScheduledCarrierThread(turn);
         if (turn.CancellationRequested && !releasing)
             throw new InvalidOperationException("actor turn cancellation requested");
         if (turn.Suspended || loan is null || loan.Released ||
@@ -392,6 +397,13 @@ public sealed partial class OresVmHost
         }
     }
 
+    private static void CheckScheduledCarrierThread(ActorTurnTicket turn)
+    {
+        if (turn.ScheduledCarrierLease is not null &&
+            turn.ScheduledCarrierThread != Environment.CurrentManagedThreadId)
+            throw new InvalidOperationException("foreign scheduled carrier");
+    }
+
     public void SuspendActorTurn(
         IsolateHandle handle, ActorTicket actor, ActorTurnTicket turn)
     {
@@ -399,6 +411,8 @@ public sealed partial class OresVmHost
             var s = Check(handle); CheckTurn(s, actor, turn);
             if (turn.CancellationRequested)
                 throw new InvalidOperationException("actor turn cancellation requested");
+            if (turn.ScheduledCarrierLease is not null)
+                throw new InvalidOperationException("synchronous scheduled dispatch cannot suspend");
             if (turn.Suspended)
                 throw new InvalidOperationException("actor logical turn already suspended");
             if (turn.ActiveStateLoan is not null)
@@ -425,6 +439,8 @@ public sealed partial class OresVmHost
     {
         lock (_gate) {
             var s = Check(handle); CheckTurn(s, actor, turn);
+            if (turn.ScheduledCarrierLease is not null)
+                throw new InvalidOperationException("scheduled carrier has not retired");
             if (turn.CancellationRequested)
                 throw new InvalidOperationException("cancelled turn requires retirement acknowledgment");
             if (turn.ActiveStateLoan is not null)
@@ -458,6 +474,8 @@ public sealed partial class OresVmHost
             var s = Check(handle); CheckTurn(s, actor, turn);
             if (!turn.CancellationRequested)
                 throw new InvalidOperationException("actor turn cancellation was not requested");
+            if (turn.ScheduledCarrierLease is not null)
+                throw new InvalidOperationException("scheduled carrier has not retired");
             // Zero state loans are necessary, but not sufficient to prove
             // physical retirement: the caller is the trusted execution owner.
             if (turn.ActiveStateLoan is not null || turn.StateLoanDepth != 0)
