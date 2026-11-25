@@ -139,6 +139,7 @@ jobs:
           test -f "$output/$BINARY"
           "$output/$BINARY" | tee "$RUNNER_TEMP/actor-heap-nativeaot-guest.log"
           grep -Fx 'PASS attolang-actor-heap-v1-nativeaot: generated .atto Node graph executed in two independent actor heaps (narrow guest subset)' "$RUNNER_TEMP/actor-heap-nativeaot-guest.log"
+          grep -Fx 'ATTO_ACTOR_HEAP_WARMED_GUEST_ZERO_MANAGED_BYTES=4' "$RUNNER_TEMP/actor-heap-nativeaot-guest.log"
           sha256sum "$output/$BINARY" | tee "$RUNNER_TEMP/actor-heap-native-binary-sha256.txt"
 
       - name: Compile and execute a negative AttoLang assertion with actor heap cleanup
@@ -205,3 +206,31 @@ jobs:
           [[ "$negative_binary_sha" =~ ^[0-9a-f]{64}$ ]]
           test "$positive_binary_sha" != "$negative_binary_sha"
           printf 'ATTO_ACTOR_HEAP_POSITIVE_NEGATIVE_NATIVE_BINARIES_DISTINCT=PASS\n'
+
+      - name: Compile and execute the four-node deterministic cleanup candidate
+        shell: bash
+        env:
+          RID: ${{ matrix.rid }}
+          BINARY: ${{ matrix.binary }}
+        run: |
+          set -euo pipefail
+          fixture=contracts/actor-guest-heap/v1/node_chain4.atto
+          test "$(git rev-parse "HEAD:$fixture")" = "$(git hash-object "$fixture")"
+          printf 'ATTO_ACTOR_HEAP_CHAIN4_BLOB=%s\n' "$(git hash-object "$fixture")"
+          generated=verification/Ores.Net.ActorGuestV1Probe/ActorHeapV1.g.cs
+          dotnet run --project compiler/Ores.Net.Compiler/Ores.Net.Compiler.csproj -c Release -- \
+            emit-actor-heap-v1 "$fixture" --out "$generated"
+          grep -Fq 'WriteOwnedGuestReference32(node4, 8, node3)' "$generated"
+          grep -Fq 'DropOwnedGuestObject32(node4)' "$generated"
+          sha256sum "$generated"
+          dotnet clean verification/Ores.Net.ActorGuestV1Probe/Ores.Net.ActorGuestV1Probe.csproj \
+            -c Release -r "$RID" -p:PublishAot=true
+          output="$RUNNER_TEMP/atto-actor-heap-v1-chain4-nativeaot"
+          dotnet publish verification/Ores.Net.ActorGuestV1Probe/Ores.Net.ActorGuestV1Probe.csproj \
+            -c Release -r "$RID" -p:PublishAot=true -p:SelfContained=true -o "$output"
+          test -f "$output/$BINARY"
+          "$output/$BINARY" | tee "$RUNNER_TEMP/actor-heap-chain4.log"
+          grep -Fx 'ATTO_ACTOR_HEAP_WARMED_GUEST_ZERO_MANAGED_BYTES=4' "$RUNNER_TEMP/actor-heap-chain4.log"
+          grep -Fx 'PASS attolang-actor-heap-v1-nativeaot: generated .atto Node graph executed in two independent actor heaps (narrow guest subset)' "$RUNNER_TEMP/actor-heap-chain4.log"
+          sha256sum "$output/$BINARY"
+          test -z "$(git status --porcelain)"
