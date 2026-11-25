@@ -381,7 +381,7 @@ internal static class ActorAwaitSourceTests
         Reject(source.Replace("return result + 11", "return second + 11", StringComparison.Ordinal));
         Reject(source.Replace("return result + 11", "return self.count + 11", StringComparison.Ordinal));
         long original = 7;
-        var copy = new OresVmHost.ActorScalarTask(static (left, right) => checked(left + right), original, 5);
+        var copy = new OresVmHost.ActorScalarTask(AddCaptured, original, 5);
         original = 99;
         copy.Run();
         Require(original == 99 && copy.Future.GetAwaiter().GetResult() == 12, "scalar capture copied at construction");
@@ -424,6 +424,8 @@ internal static class ActorAwaitSourceTests
         host.RetireActor(tenant, actor);
         host.BeginShutdown(tenant); host.CompleteShutdown(tenant); host.Destroy(tenant);
     }
+
+    private static long AddCaptured(long left, long right) => checked(left + right);
 
     private sealed class CaptureReceiver
     {
