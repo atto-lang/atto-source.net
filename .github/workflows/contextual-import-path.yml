@@ -14,13 +14,15 @@ on:
       - 'verification/Ores.Net.Tests/FrozenImportSnapshotSelfTest.cs'
       - 'compiler/Ores.Net.Compiler.Core/FrozenImportSnapshot.Graph.cs'
       - 'verification/Ores.Net.Tests/FrozenImportGraphSelfTest.cs'
+      - 'compiler/Ores.Net.Compiler.Core/FrozenScalarImportCompiler.cs'
+      - 'verification/Ores.Net.Tests/FrozenScalarImportSelfTest.cs'
       - 'global.json'
 permissions:
   contents: read
 jobs:
   focused:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -73,3 +75,36 @@ jobs:
           cmp verification/Ores.Net.Tests/FrozenImportGraphSelfTest.cs "$work/FrozenImportGraphSelfTest.cs"
           printf '%s\n' 'ContextualImportParserSelfTest.Run();' 'FrozenImportGraphSelfTest.Run();' > "$work/Program.cs"
           dotnet run --project "$work" --configuration Release
+      - name: Emit frozen scalar guest and execute static NativeAOT host
+        run: |
+          set -eu
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          dotnet new console --framework net10.0 --no-restore --output "$work/emitter"
+          dotnet add "$work/emitter" reference "$PWD/compiler/Ores.Net.Compiler.Core/Ores.Net.Compiler.Core.csproj"
+          cp verification/Ores.Net.Tests/FrozenScalarImportSelfTest.cs "$work/emitter/"
+          cmp verification/Ores.Net.Tests/FrozenScalarImportSelfTest.cs "$work/emitter/FrozenScalarImportSelfTest.cs"
+          printf '%s\n' 'FrozenScalarImportSelfTest.Run(args[0]);' > "$work/emitter/Program.cs"
+          dotnet run --project "$work/emitter" --configuration Release -- "$work/OresGenerated.dll"
+          sha256sum "$work/OresGenerated.dll"
+          mkdir "$work/host"
+          cat > "$work/host/FrozenGuest.csproj" <<'EOF'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <OutputType>Exe</OutputType>
+              <TargetFramework>net10.0</TargetFramework>
+              <PublishAot>true</PublishAot>
+              <InvariantGlobalization>true</InvariantGlobalization>
+            </PropertyGroup>
+            <ItemGroup>
+              <Reference Include="OresGenerated">
+                <HintPath>../OresGenerated.dll</HintPath>
+              </Reference>
+            </ItemGroup>
+          </Project>
+          EOF
+          printf '%s\n' 'long value = Oreslang.Generated.OresProgram.Run();' 'System.Console.WriteLine(value);' 'return value == 42 ? 0 : 1;' > "$work/host/Program.cs"
+          dotnet publish "$work/host/FrozenGuest.csproj" -c Release -r linux-x64 -o "$work/native"
+          file "$work/native/FrozenGuest"
+          test "$("$work/native/FrozenGuest")" = 42
+          echo "FROZEN_NATIVEAOT_GUEST|result=42|static-reference|no-reflection"
