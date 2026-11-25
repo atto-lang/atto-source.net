@@ -278,6 +278,24 @@ internal static class VmIsolateHostTests
             scheduler.DispatchNext(tenant, parent, "Counter|1:I", scope => scope.AddInt64(0, 42)) != 42)
             throw new Exception("CONTROL drain or internal FIFO receipt failed");
         host.RetireActor(tenant, parent);
+        // An internal receipt without a configured dispatch layout cannot
+        // impose the ordinary FIFO opportunity and starve terminal CONTROL.
+        var unconfigured = host.RegisterActor(tenant, 1);
+        scheduler.Enqueue(tenant, unconfigured);
+        for (var i = 0; i < OresVmHost.SupervisorControlBurstLimit + 1; i++) {
+            var child = host.RegisterSupervisedActor(tenant, unconfigured, 2);
+            host.RetireActor(tenant, child);
+        }
+        for (var i = 0; i < OresVmHost.SupervisorControlBurstLimit + 1; i++)
+            if (!scheduler.TryDequeueSupervisorTerminal(tenant, unconfigured, out _))
+                throw new Exception("unrunnable FIFO receipt starved terminal CONTROL");
+        if (unconfigured.QueuedMessages != 1)
+            throw new Exception("unconfigured receipt was consumed");
+        host.ConfigureNamedActorState(tenant, unconfigured, "Counter", "Counter|1:I",
+            new[] { new OresVmHost.ActorStateField(OresVmHost.ActorStateScalarKind.Int64) });
+        if (scheduler.DispatchNext(tenant, unconfigured, "Counter|1:I", scope => scope.AddInt64(0, 42)) != 42)
+            throw new Exception("configured FIFO receipt did not recover");
+        host.RetireActor(tenant, unconfigured);
         host.BeginShutdown(tenant); host.CompleteShutdown(tenant); host.Destroy(tenant);
         Console.WriteLine("NET_SUPERVISOR_DISPATCH_PRIORITY_HOST_TESTS_PASS");
     }
