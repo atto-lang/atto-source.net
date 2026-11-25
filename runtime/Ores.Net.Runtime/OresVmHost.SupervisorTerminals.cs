@@ -23,7 +23,7 @@ public sealed partial class OresVmHost
     /// A replacement with a reused ID obtains a distinct incarnation ticket.
     /// </summary>
     internal ActorTicket RegisterSupervisedActor(IsolateHandle handle,
-        ActorTicket parent, ulong childId)
+        ActorTicket parent, ulong childId, bool serial = false, int maxLiveReceives = 32)
     {
         lock (_gate) {
             var state = Check(handle);
@@ -36,7 +36,7 @@ public sealed partial class OresVmHost
             // admission, so ordinary admission rejection cannot leak a slot.
             var reservation = new SupervisorTerminalReservation(parent);
             state.SupervisorTerminals.EnsureCapacity(state.SupervisorTerminals.Count + 1);
-            var child = RegisterActor(handle, childId);
+            var child = RegisterActor(handle, childId, serial, maxLiveReceives);
             state.SupervisorTerminals.Add((child.Id, child.Epoch), reservation);
             return child;
         }
@@ -109,6 +109,7 @@ public sealed partial class OresVmHost
             CheckActor(state, parent);
             if (state.Phase != Phase.Running || parent.ActiveTurn is not null)
                 throw new InvalidOperationException("supervisor CONTROL selection admission closed");
+            CheckNewReceiveAdmission(parent);
             notice = default;
             var canDispatchReceipt = parent.StateKinds is not null &&
                 parent.StateLayoutIdentity is not null &&
