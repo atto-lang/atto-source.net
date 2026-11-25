@@ -7,6 +7,7 @@ internal static class ActorArenaSelfTest
     {
         CheckedFourByteRefsRejectForeignAndStaleTargets();
         CheckedRef32SurvivesDynamicBackingGrowth();
+        Ref32NativeProofBudgetAndReclamation();
         DemandBackedGrowthPreservesActorRootsAndBudget();
         DemandBackedGrowthDeniedDuringFfiPin();
         DemandBackedScratchAndQuiescentPin();
@@ -107,7 +108,9 @@ internal static class ActorArenaSelfTest
             child = actor.AllocatePersistent(turn, 8);
             actor.WriteManagedRef32(turn, parent, 0, child);
             var enlarged = actor.AllocatePersistent(turn, 6000);
-            Require(enlarged.Length == 6000 && actor.ReservedNativeBytes == 8192,
+            Require(actor.ReferenceProofNativeBytes > 0 &&
+                    enlarged.Length == 6000 &&
+                    actor.ReservedNativeBytes == 8192 + actor.ReferenceProofNativeBytes,
                 "ref32 field remains four bytes when physical heap grows");
             Require(ReferenceEquals(actor.ReadManagedRef32(turn, parent, 0), child),
                 "logical guest field and sidecar proof survive native slab relocation");
@@ -119,6 +122,44 @@ internal static class ActorArenaSelfTest
         }
         Require(actor.Retire() && actor.ReservedNativeBytes == 0,
             "post-growth actor retirement scrubs and refunds ref32 sidecar + backing");
+    }
+
+    private static void Ref32NativeProofBudgetAndReclamation()
+    {
+        var budget = new ActorArenaBudget(4096);
+        using var a = new ActorArena(86002, 1, 2048, 2048, 8, 2, 2, budget: budget);
+        using (var turn = a.EnterTurn(86002, 1))
+        {
+            var parent = a.AllocatePersistent(turn, 16);
+            var child = a.AllocatePersistent(turn, 8);
+            ExpectInvalid(() => a.WriteManagedRef32(turn, parent, 0, child),
+                "native proof budget must be reserved before field publication");
+            Require(a.ReadManagedRef32(turn, parent, 0) is null &&
+                    a.ReferenceProofNativeBytes == 0 && budget.ReservedBytes == 4096,
+                "failed proof allocation leaves guest field and budget unchanged");
+        }
+        Require(a.Retire() && budget.ReservedBytes == 0, "failed proof allocation refunds arena");
+
+        var larger = new ActorArenaBudget(64 * 1024);
+        using var b = new ActorArena(86003, 1, 4096, 512, 8, 2, 2, budget: larger);
+        using (var turn = b.EnterTurn(86003, 1))
+        {
+            var parent = b.AllocatePersistent(turn, 128);
+            var child = b.AllocatePersistent(turn, 8);
+            for (int i = 0; i < 32; i++) b.WriteManagedRef32(turn, parent, i * 4, child);
+            Require(b.ReferenceProofNativeBytes > 0 && b.ReservedNativeBytes == larger.ReservedBytes,
+                "grown native ledger is included in the tenant charge");
+            for (int i = 0; i < 32; i++)
+                Require(ReferenceEquals(b.ReadManagedRef32(turn, parent, i * 4), child),
+                    "native proof growth preserves original issued target");
+            b.ReleasePersistent(turn, child);
+            b.ReleasePersistent(turn, parent);
+            var replacement = b.AllocatePersistent(turn, 128);
+            Require(b.ReadManagedRef32(turn, replacement, 0) is null,
+                "parent slot reuse must not inherit old proofs");
+        }
+        Require(b.Retire() && b.ReferenceProofNativeBytes == 0 && larger.ReservedBytes == 0,
+            "native proof ledger is scrubbed and refunded at quiescent retirement");
     }
 
     private static void DemandBackedGrowthPreservesActorRootsAndBudget()
