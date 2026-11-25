@@ -35,7 +35,33 @@ public enum CfgOpcode
     OptionEqualI64,
     PackOptionI64,
     ReadOptionI64Tag,
-    ReadOptionI64Payload
+    ReadOptionI64Payload,
+    TrapCall,
+    GuestErrorLiteral,
+    GuestErrorIsType,
+    GuestErrorHasMessage,
+    GuestErrorEqual,
+    GuestErrorNotEqual,
+    ResultOk,
+    ResultOkOption,
+    ResultErr,
+    ResultIsOk,
+    ResultIsErr,
+    ResultUnwrap,
+    ResultUnwrapOptionTag,
+    ResultUnwrapOptionPayload,
+    ResultUnwrapOr,
+    ResultUnwrapErr,
+    OptionUnwrap,
+    GuestTextLiteral,
+    GuestTextEqual,
+    GuestTextNotEqual,
+    ResultWiden,
+    ResultErrText,
+    ResultUnwrapTextErr,
+    CheckedRemainder,
+    CheckedModulo,
+    InlineCooperate
 }
 
 public readonly record struct CfgParameter(int Id, IrValueType Type);
@@ -44,11 +70,13 @@ public sealed record CfgInstruction(
     int ResultId, CfgOpcode Opcode, IrValueType Type,
     int? Left = null, int? Right = null,
     long? I64Constant = null, bool? BoolConstant = null,
-    string? Target = null, IReadOnlyList<int>? Arguments = null);
+    string? Target = null, IReadOnlyList<int>? Arguments = null, string? TextOperand = null);
 
 public abstract record CfgTerminator;
 public sealed record CfgReturn(int ValueId) : CfgTerminator;
 public sealed record CfgReturnVoid : CfgTerminator;
+public enum CfgGuestEffect { Throw, Panic, Raise }
+public sealed record CfgSignal(int Error, CfgGuestEffect Effect) : CfgTerminator;
 public sealed record CfgJump(string Target, IReadOnlyList<int> Arguments) : CfgTerminator;
 public sealed record CfgBranch(
     int Condition,
@@ -128,8 +156,7 @@ public static class OresCfgVerifier
     {
         ArgumentNullException.ThrowIfNull(function);
         if (!Identifier(function.Name) ||
-            function.ResultType is not (IrValueType.I64 or IrValueType.Bool or IrValueType.Void or
-                IrValueType.OptionI64) ||
+            !(IsValueType(function.ResultType) || function.ResultType is IrValueType.Void or IrValueType.OptionI64) ||
             !Identifier(function.Entry))
             throw new FormatException("Invalid CFG function signature");
 
@@ -141,7 +168,7 @@ public static class OresCfgVerifier
         // its Count can be bounded while its iterator is infinite.
         var frozenParameters = CopyIndexed(parameters, methodParameterCount);
         for (int i = 0; i < frozenParameters.Count; i++)
-            if (frozenParameters[i] is not (IrValueType.I64 or IrValueType.Bool))
+            if (!IsValueType(frozenParameters[i]))
                 throw new FormatException("Invalid CFG method signature");
         var sourceBlocks = function.Blocks ??
             throw new FormatException("Missing CFG blocks");
@@ -154,6 +181,7 @@ public static class OresCfgVerifier
         var blocks = new CfgBlock[blockCount];
         long totalDefinitions = 0;
         long totalEdgeArguments = 0;
+        long totalTextLength = 0;
 
         IReadOnlyList<int> FreezeArguments(IReadOnlyList<int>? arguments)
         {
@@ -197,6 +225,7 @@ public static class OresCfgVerifier
             {
                 CfgReturn r => new CfgReturn(r.ValueId),
                 CfgReturnVoid => new CfgReturnVoid(),
+                CfgSignal signal => new CfgSignal(signal.Error, signal.Effect),
                 CfgJump j => new CfgJump(j.Target, FreezeArguments(j.Arguments)),
                 CfgBranch c => new CfgBranch(c.Condition, c.TrueTarget,
                     FreezeArguments(c.TrueArguments),
@@ -208,6 +237,9 @@ public static class OresCfgVerifier
                 Array.AsReadOnly(CopyIndexed(instructions, instructionCount).Select(op =>
                 {
                     if (op is null) throw new FormatException("Null CFG instruction");
+                    if (op.TextOperand is { } text &&
+                        (text.Length > 16_384 || (totalTextLength += text.Length) > 1_048_576))
+                        throw new FormatException("CFG guest text budget exceeded");
                     return op with
                     {
                         Arguments = op.Arguments is null ? null : FreezeArguments(op.Arguments)
@@ -265,6 +297,7 @@ public static class OresCfgVerifier
             {
                 case CfgReturn: break;
                 case CfgReturnVoid: break;
+                case CfgSignal: break;
                 case CfgJump jump:
                     RegisterEdge(i, jump.Target, jump.Arguments);
                     break;
@@ -362,6 +395,9 @@ public static class OresCfgVerifier
             for (int opIndex = 0; opIndex < block.Instructions.Count; opIndex++)
             {
                 var op = block.Instructions[opIndex];
+                if (op.TextOperand is not null && op.Opcode is not
+                    (CfgOpcode.GuestErrorLiteral or CfgOpcode.GuestTextLiteral or CfgOpcode.GuestErrorIsType or CfgOpcode.GuestErrorHasMessage))
+                    throw new FormatException("Unexpected text in CFG instruction");
                 switch (op.Opcode)
                 {
                     case CfgOpcode.Argument:
@@ -374,6 +410,7 @@ public static class OresCfgVerifier
                             throw new FormatException("Malformed CFG argument load");
                         break;
                     case CfgOpcode.Call:
+                    case CfgOpcode.TrapCall:
                     {
                         if (op.Type == IrValueType.Void)
                             throw new FormatException("Void CFG call requires effect-only lowering");
@@ -382,12 +419,119 @@ public static class OresCfgVerifier
                             op.Left is not null || op.Right is not null ||
                             callees is null || !callees.TryGetValue(op.Target, out var callee) ||
                             op.Arguments.Count != callee.ParameterTypes.Count ||
-                            op.Type != callee.ResultType)
+                            op.Type != callee.ResultType || op.Opcode == CfgOpcode.TrapCall && !op.Type.HasError())
                             throw new FormatException("Unverified CFG static call");
                         for (int arg = 0; arg < op.Arguments.Count; arg++)
                             Use(i, opIndex, op.Arguments[arg], callee.ParameterTypes[arg]);
                         break;
                     }
+                    case CfgOpcode.GuestErrorLiteral:
+                    case CfgOpcode.GuestTextLiteral:
+                        RequireType(op.Type, op.Opcode == CfgOpcode.GuestErrorLiteral
+                            ? IrValueType.GuestError : IrValueType.GuestText);
+                        CheckGuestOp(op, left: false);
+                        if (op.TextOperand is null || op.TextOperand.Length > 16_384)
+                            throw new FormatException("Invalid guest Error literal");
+                        break;
+                    case CfgOpcode.GuestErrorIsType:
+                    case CfgOpcode.GuestErrorHasMessage:
+                        RequireType(op.Type, IrValueType.Bool);
+                        CheckGuestOp(op);
+                        if (op.TextOperand is null || op.TextOperand.Length > 16_384 ||
+                            op.Opcode == CfgOpcode.GuestErrorIsType && op.TextOperand is not
+                                ("Error" or "ArithmeticOverflowError" or "DivisionByZeroError"))
+                            throw new FormatException("Invalid guest Error comparison");
+                        Use(i, opIndex, op.Left!.Value, IrValueType.GuestError);
+                        break;
+                    case CfgOpcode.GuestErrorEqual:
+                    case CfgOpcode.GuestErrorNotEqual:
+                    case CfgOpcode.GuestTextEqual:
+                    case CfgOpcode.GuestTextNotEqual:
+                    {
+                        RequireType(op.Type, IrValueType.Bool);
+                        CheckGuestOp(op, right: true);
+                        var type = op.Opcode is CfgOpcode.GuestTextEqual or CfgOpcode.GuestTextNotEqual
+                            ? IrValueType.GuestText : IrValueType.GuestError;
+                        Use(i, opIndex, op.Left!.Value, type);
+                        Use(i, opIndex, op.Right!.Value, type);
+                        break;
+                    }
+                    case CfgOpcode.ResultOk:
+                        if (!op.Type.IsResult() || op.Type.Payload() != IrValueType.I64)
+                            throw new FormatException("Result scalar success requires a verified scalar Result layout");
+                        CheckGuestOp(op);
+                        Use(i, opIndex, op.Left!.Value, IrValueType.I64);
+                        break;
+                    case CfgOpcode.ResultOkOption:
+                    case CfgOpcode.OptionUnwrap:
+                        RequireType(op.Type, op.Opcode == CfgOpcode.ResultOkOption
+                            ? IrValueType.ResultOptionI64 : IrValueType.I64);
+                        CheckGuestOp(op, right: true);
+                        Use(i, opIndex, op.Left!.Value, IrValueType.Bool);
+                        Use(i, opIndex, op.Right!.Value, IrValueType.I64);
+                        break;
+                    case CfgOpcode.ResultErr:
+                        if (!op.Type.HasError()) throw new FormatException("Result cannot hold a guest Error");
+                        CheckGuestOp(op);
+                        Use(i, opIndex, op.Left!.Value, IrValueType.GuestError);
+                        break;
+                    case CfgOpcode.ResultErrText:
+                        if (!op.Type.HasTextError()) throw new FormatException("Result cannot hold an error string");
+                        CheckGuestOp(op);
+                        Use(i, opIndex, op.Left!.Value, IrValueType.GuestText);
+                        break;
+                    case CfgOpcode.ResultUnwrapTextErr:
+                        RequireType(op.Type, IrValueType.GuestText);
+                        CheckGuestOp(op);
+                        Use(i, opIndex, op.Left!.Value, IrValueType.ResultI64Text);
+                        break;
+                    case CfgOpcode.ResultWiden:
+                        RequireType(op.Type, IrValueType.ResultI64TextOrError);
+                        CheckGuestOp(op);
+                        Use(i, opIndex, op.Left!.Value, IrValueType.ResultI64Text);
+                        break;
+                    case CfgOpcode.CheckedRemainder:
+                    case CfgOpcode.CheckedModulo:
+                        RequireType(op.Type, IrValueType.I64);
+                        CheckGuestOp(op, right: true);
+                        Use(i, opIndex, op.Left!.Value, IrValueType.I64);
+                        Use(i, opIndex, op.Right!.Value, IrValueType.I64);
+                        break;
+                    case CfgOpcode.ResultIsOk:
+                    case CfgOpcode.ResultIsErr:
+                    case CfgOpcode.ResultUnwrapErr:
+                        RequireType(op.Type, op.Opcode == CfgOpcode.ResultUnwrapErr
+                            ? IrValueType.GuestError : IrValueType.Bool);
+                        CheckGuestOp(op);
+                        if (!definitions.TryGetValue(op.Left!.Value, out var source) || !source.Type.IsResult())
+                            throw new FormatException("Result projection requires a verified Result operand");
+                        if (op.Opcode == CfgOpcode.ResultUnwrapErr &&
+                            source.Type is not (IrValueType.ResultI64 or IrValueType.ResultOptionI64))
+                            throw new FormatException("Result error projection needs a proven Error layout");
+                        Use(i, opIndex, op.Left.Value, source.Type);
+                        break;
+                    case CfgOpcode.ResultUnwrap:
+                    case CfgOpcode.ResultUnwrapOr:
+                    case CfgOpcode.ResultUnwrapOptionTag:
+                    case CfgOpcode.ResultUnwrapOptionPayload:
+                        RequireType(op.Type, op.Opcode == CfgOpcode.ResultUnwrapOptionTag ? IrValueType.Bool : IrValueType.I64);
+                        CheckGuestOp(op, right: op.Opcode == CfgOpcode.ResultUnwrapOr);
+                        var requiredPayload = op.Opcode is CfgOpcode.ResultUnwrapOptionTag or CfgOpcode.ResultUnwrapOptionPayload
+                            ? IrValueType.OptionI64 : IrValueType.I64;
+                        if (!definitions.TryGetValue(op.Left!.Value, out var operand) || !operand.Type.IsResult() ||
+                            operand.Type.Payload() != requiredPayload)
+                            throw new FormatException("Result projection has the wrong success payload");
+                        Use(i, opIndex, op.Left.Value, operand.Type);
+                        if (op.Opcode == CfgOpcode.ResultUnwrapOr)
+                            Use(i, opIndex, op.Right!.Value, IrValueType.I64);
+                        break;
+                    case CfgOpcode.InlineCooperate:
+                        RequireType(op.Type, IrValueType.Bool);
+                        if (op.Left is not null || op.Right is not null || op.I64Constant is not null ||
+                            op.BoolConstant is not null || op.Target is not null || op.Arguments is not null ||
+                            op.TextOperand is not null)
+                            throw new FormatException("Malformed CFG inline cooperation");
+                        break;
                     case CfgOpcode.PackOptionI64:
                         RequireType(op.Type, IrValueType.OptionI64);
                         if (op.Left is not int tag || op.Right is not int payload ||
@@ -520,6 +664,10 @@ public static class OresCfgVerifier
                     if (function.ResultType != IrValueType.Void)
                         throw new FormatException("Non-void CFG method requires explicit return value");
                     break;
+                case CfgSignal signal:
+                    if (!Enum.IsDefined(signal.Effect)) throw new FormatException("Unknown guest control effect");
+                    Use(i, termIndex, signal.Error, IrValueType.GuestError);
+                    break;
                 case CfgJump jump:
                     VerifyEdgeValues(i, termIndex, jump.Target, jump.Arguments);
                     break;
@@ -536,7 +684,7 @@ public static class OresCfgVerifier
 
         void AddDefinition(int id, IrValueType type, int block, int instruction)
         {
-            if (id < 0 || (type is not (IrValueType.I64 or IrValueType.Bool) &&
+            if (id < 0 || (!IsValueType(type) &&
                            (type != IrValueType.OptionI64 || instruction < 0)) ||
                 !definitions.TryAdd(id, new Definition(block, instruction, type)))
                 throw new FormatException("Invalid or duplicate CFG SSA definition");
@@ -573,6 +721,16 @@ public static class OresCfgVerifier
             for (int i = 0; i < args.Count; i++)
                 Use(from, at, args[i], blocks[target].Parameters[i].Type);
         }
+    }
+
+    private static bool IsValueType(IrValueType type) =>
+        type is IrValueType.I64 or IrValueType.Bool or IrValueType.GuestError or IrValueType.GuestText || type.IsResult();
+
+    private static void CheckGuestOp(CfgInstruction op, bool left = true, bool right = false)
+    {
+        if (op.Left.HasValue != left || op.Right.HasValue != right || op.I64Constant is not null ||
+            op.BoolConstant is not null || op.Target is not null || op.Arguments is not null)
+            throw new FormatException("Malformed guest Result or Error instruction");
     }
 
     // The caller's IReadOnlyList implementation is untrusted. Explicitly

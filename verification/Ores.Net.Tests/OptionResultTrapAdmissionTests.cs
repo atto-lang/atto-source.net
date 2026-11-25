@@ -7,7 +7,7 @@ internal static class OptionResultTrapAdmissionTests
 
     // This corpus is the exact shared nine-case .atto acceptance set, not a
     // copied text interpretation. A rejected case is NOT a runtime parity pass.
-    private static void VerifyCanonicalSourceIsStillFailClosed()
+    private static void VerifyCanonicalSourceAdmission()
     {
         string[] names =
         [
@@ -44,26 +44,25 @@ internal static class OptionResultTrapAdmissionTests
                 throw new Exception("Canonical Atto caller-trap guest was modified: " + names[i]);
 
             string source = System.Text.Encoding.UTF8.GetString(raw);
-            try
+            if (i is 6 or 7)
             {
-                _ = OresStructuredCfgLowering.LowerModule(source);
-            }
-            catch (FormatException)
-            {
-                // Current NativeAOT CIL does NOT support any full canonical
-                // cases, including unwrap(), typed Result and ordinary throw.
-                // This only confirms an unsupported feature fails closed.
+                RejectStructured(source, i == 6 ? "Undefined" : "Local initializer has wrong type");
                 continue;
             }
-            throw new Exception(
-                "UNVERIFIED_PARITY: canonical Atto source reached CIL " +
-                "without native guest semantics: " + names[i]);
+            _ = OresStructuredCfgLowering.LowerModule(source);
         }
+    }
+
+    private static void RejectStructured(string source, string diagnostic)
+    {
+        try { _ = OresStructuredCfgLowering.LowerModule(source); }
+        catch (FormatException error) when (error.Message.Contains(diagnostic, StringComparison.Ordinal)) { return; }
+        throw new Exception("Structured CIL failed to reject source with the expected diagnostic: " + source);
     }
 
     public static void Run()
     {
-        VerifyCanonicalSourceIsStillFailClosed();
+        VerifyCanonicalSourceAdmission();
 
         // 12 genuine source spellings, none of which may be lowered as an
         // untyped scalar, or falsely counted as a semantic negative pass.
@@ -93,66 +92,25 @@ internal static class OptionResultTrapAdmissionTests
             throw new Exception("Scalar CIL admitted or misclassified tagged source: " + source);
         }
 
-        // Structured/linked CIL has a separately verified closed Option<int>
-        // lane. Unsupported Result/Ok/Err/trap must retain the stable
-        // refusal diagnostic instead of silently becoming scalar SSA.
-        foreach (var source in new[]
+        // The flattened scalar frontend remains independent. The module
+        // compiler admits verified Result shapes and rejects unsupported ABIs.
+        var rejected = new (string Source, string Diagnostic)[]
         {
-            "fnc main():int{return Ok(7);}",
-            "fnc main():int{return Err(7);}",
-            "fnc main():int{return Result(7);}",
-            "fnc main():int{val Result<int,int> x=Ok(7);return 7;}",
-            "fnc main():int{return trap true;}",
-            "trap fnc main():int{return 7;}"
-        })
-        {
-            try { _ = OresStructuredParser.Parse(source); }
-            catch (FormatException error) when (
-                error.Message.Contains(Diagnostic, StringComparison.Ordinal) &&
-                error.Message.Contains("offset ", StringComparison.Ordinal))
-            {
-                continue;
-            }
-            throw new Exception("Structured CIL admitted or misclassified unsupported tagged source: " + source);
-        }
+            ("fnc main():int{return Ok(7);}", "Return value does not match function result type"),
+            ("fnc main():int{return Err(7);}", "Err requires a contextual Result success type"),
+            ("fnc main():int{return Result(7);}", "Invalid identifier"),
+            ("fnc main():int{val Result<int,int> x=Ok(7);return 7;}", "E_RESULT_ERROR_ABI_UNSUPPORTED"),
+            ("fnc main():int{return trap true;}", "E_TRAP_PAYLOAD_UNSUPPORTED"),
+            ("trap fnc main():int{return 7;}", "main must have signature ():int"),
+            ("fnc main():int{val Option<int> outcome=trap Some(7);return 7;}", "Local initializer has wrong type"),
+            ("fnc main():int{val Result<int,String> outcome=Err(7);return 7;}", "Err payload does not match"),
+            ("fnc main():int{val Option<Result<int,String>> outcome=trap checked();return 7;}", "E_OPTION_I64_ONLY")
+        };
+        foreach (var item in rejected) RejectStructured(item.Source, item.Diagnostic);
 
-        // Exact .atto bytes are shared with the executable Java/Graal guest
-        // and LLVM's native-source gate. The current structured/CIL .NET
-        // backend must fail closed rather than accidentally promise parity.
         string sharedSource = File.ReadAllText(Path.Combine(
             AppContext.BaseDirectory, "trap-three-backend-target.atto"));
-        try
-        {
-            _ = OresStructuredCfgLowering.LowerModule(sharedSource);
-            throw new Exception("Unimplemented cross-backend trap guest reached .NET CFG/CIL");
-        }
-        catch (FormatException error) when
-            (error.Message.Contains(Diagnostic, StringComparison.Ordinal) &&
-             error.Message.Contains("offset ", StringComparison.Ordinal))
-        {
-            // Correct capability diagnostic, NOT an executable guest parity pass.
-        }
-        foreach (var source in new[]
-        {
-            "fnc main():int{return trap false;}",
-            "fnc checked():bool{return true;} fnc main():int{return (trap checked()).is_some();}",
-            "fnc main():int{val Option<int> outcome=trap Some(7);return 7;}",
-            "fnc main():int{val Result<int,String> outcome=Err(\"ordinary\");return 7;}",
-            "fnc main():int{val Option<Result<int,String>> outcome=trap checked();return 7;}"
-        })
-        {
-            try
-            {
-                _ = OresStructuredCfgLowering.LowerModule(source);
-            }
-            catch (FormatException error) when
-                (error.Message.Contains(Diagnostic, StringComparison.Ordinal) &&
-                 error.Message.Contains("offset ", StringComparison.Ordinal))
-            {
-                continue;
-            }
-            throw new Exception("Unsupported native trap/Result reached verified SSA: " + source);
-        }
+        _ = OresStructuredCfgLowering.LowerModule(sharedSource);
 
         // Reconcile with the experimental closed Option<int> path, rather
         // than applying a broad token deny that would invalidate its typed
@@ -182,38 +140,22 @@ internal static class OptionResultTrapAdmissionTests
             // Correct: a longer identifier is not a reserved ADT token.
         }
 
-        // Import discovery lexes all source before resolving any file path.
-        // Unsupported tagged tokens must be rejected in this entrypoint too;
-        // the experimental closed Option<int> still must be accepted.
+        // Linked admission must enforce the same tagged layouts after import discovery.
         string linkedRoot = Path.Combine(Path.GetTempPath(),
             "atto-linked-adt-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(linkedRoot);
         string linkedEntrypoint = Path.Combine(linkedRoot, "main.atto");
         try
         {
-            foreach (string unsupported in new[]
+            foreach (var entry in rejected)
             {
-                "fnc main():int { return Result(7); }",
-                "fnc main():int { return Ok(7); }",
-                "fnc main():int { return Err(7); }",
-                "fnc main():int { return trap true; }",
-                "trap fnc main():int { return 7; }"
-            })
-            {
-                File.WriteAllText(linkedEntrypoint, unsupported);
-                try
-                {
-                    _ = OresSourceModuleCompiler.Compile(
-                        linkedEntrypoint, new[] { linkedRoot });
-                }
-                catch (FormatException error) when (
-                    error.Message.Contains(Diagnostic, StringComparison.Ordinal)
-                    && error.Message.Contains("offset ", StringComparison.Ordinal))
+                File.WriteAllText(linkedEntrypoint, entry.Source);
+                try { _ = OresSourceModuleCompiler.Compile(linkedEntrypoint, new[] { linkedRoot }); }
+                catch (FormatException error) when (error.Message.Contains(entry.Diagnostic, StringComparison.Ordinal))
                 {
                     continue;
                 }
-                throw new Exception("Linked CIL admitted unsupported ADT syntax: "
-                    + unsupported);
+                throw new Exception("Linked CIL admitted unsupported ADT syntax: " + entry.Source);
             }
             File.WriteAllText(linkedEntrypoint,
                 "pub fnc main():int { val Option<int> x = Some(42); return x.unwrap_or(0); }");

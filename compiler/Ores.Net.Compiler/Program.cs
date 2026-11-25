@@ -295,12 +295,12 @@ try
         Console.WriteLine($"Emitted experimental static actor C# from verified increment IR: {Path.GetFullPath(args[3])}");
         return 0;
     }
-    bool normalGuardEntry = (validCheck || validCompile) && !mathI64Granted &&
+    bool normalStructuredEntry = (validCheck || validCompile) && !mathI64Granted &&
         !explicitLanguageVersion.HasValue &&
         string.Equals(Path.GetExtension(args[1]), ".atto", StringComparison.OrdinalIgnoreCase);
     var verifiedCfg = validStructuredCheck || validStructuredCompile
         ? OresStructuredCfgLowering.LowerModule(source)
-        : normalGuardEntry ? OresStructuredCfgLowering.TryLowerGuardedModule(source) : null;
+        : normalStructuredEntry ? OresStructuredCfgLowering.TryLowerProductionModule(source) : null;
     if (verifiedCfg is not null)
     {
         if (validCompile || validStructuredCompile)

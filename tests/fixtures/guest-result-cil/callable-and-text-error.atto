@@ -1,0 +1,14 @@
+trap! fnc checked(int divisor): int { return 7 / divisor; }
+
+fnc reject_text(): Result<int, String> { return Err("original result error"); }
+trap fnc widen(): Result<int, String> { return reject_text(); }
+
+pub fnc main(): int {
+  val result = checked(0);
+  guard result.unwrap_err() is DivisionByZeroError { return 1; }
+  val original = reject_text();
+  guard original.unwrap_err() eq "original result error" { return 2; }
+  val Result<int, String | Error> wrapped = widen();
+  guard wrapped.is_err() { return 3; }
+  return 42;
+}

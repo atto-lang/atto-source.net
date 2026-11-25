@@ -13,7 +13,13 @@ public enum IrValueType
     OptionI64,
     // Source-only bounded, immutable Array<int>: its elements are distinct
     // verified i64 SSA values, not CLR arrays or native guest pointers.
-    FixedArrayI64
+    FixedArrayI64,
+    GuestError,
+    ResultI64,
+    ResultOptionI64,
+    GuestText,
+    ResultI64Text,
+    ResultI64TextOrError
 }
 
 public enum IrOpcode

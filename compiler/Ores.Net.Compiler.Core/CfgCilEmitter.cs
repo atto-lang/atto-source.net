@@ -46,8 +46,10 @@ internal static class CfgCilEmitter
             throw new FormatException("Standalone CFG CIL requires parameterless i64 Run entry");
         if (UsesOptionResult(graph))
             throw new FormatException("Tagged callable results require module CIL emission");
+        if (CfgGuestResultEmitter.Uses(graph))
+            throw new FormatException("Guest Result requires module CIL emission");
         CilEmitter.EmitLibraryCore(outputFile, (metadata, bodies) =>
-            WriteMethod(graph, metadata, bodies, null));
+            WriteMethod(graph, metadata, bodies, null, null));
     }
 
     public static void EmitLibrary(VerifiedCfgModule module, string outputFile)
@@ -55,14 +57,14 @@ internal static class CfgCilEmitter
         ArgumentNullException.ThrowIfNull(module);
         ArgumentException.ThrowIfNullOrWhiteSpace(outputFile);
         CilEmitter.EmitLibraryModuleCore(outputFile, module,
-            (graph, metadata, bodies, handles) =>
-                WriteMethod(graph, metadata, bodies, handles));
+            (graph, metadata, bodies, handles, guest) =>
+                WriteMethod(graph, metadata, bodies, handles, guest));
     }
 
     private static (int BodyOffset, BlobBuilder Code, BlobBuilder? Locals) WriteMethod(
         VerifiedCfgFunction graph, MetadataBuilder metadata,
         MethodBodyStreamEncoder bodies,
-        IReadOnlyDictionary<string, MethodDefinitionHandle>? handles)
+        IReadOnlyDictionary<string, MethodDefinitionHandle>? handles, CfgGuestResultEmitter? guest)
     {
             var blocks = graph.Blocks;
             int valueCount = blocks.Sum(b => b.Parameters.Count + b.Instructions.Count);
@@ -110,6 +112,15 @@ internal static class CfgCilEmitter
                     case IrValueType.I64: encoded.Int64(); break;
                     case IrValueType.Bool: encoded.Boolean(); break;
                     case IrValueType.OptionI64: encoded.Type(OptionResultType, isValueType: true); break;
+                    case IrValueType.GuestError:
+                    case IrValueType.GuestText:
+                    case IrValueType.ResultI64:
+                    case IrValueType.ResultOptionI64:
+                    case IrValueType.ResultI64Text:
+                    case IrValueType.ResultI64TextOrError:
+                        if (guest is null) throw new FormatException("Missing guest Result metadata");
+                        guest.Encode(encoded, type);
+                        break;
                     default: throw new FormatException("Unsupported CFG local type");
                 }
             }
@@ -117,8 +128,10 @@ internal static class CfgCilEmitter
                 metadata.GetOrAddBlob(signatureBlob));
 
             var code = new BlobBuilder();
-            var il = new InstructionEncoder(code, new ControlFlowBuilder());
+            var flow = new ControlFlowBuilder();
+            var il = new InstructionEncoder(code, flow);
             var labels = new Dictionary<string, LabelHandle>(StringComparer.Ordinal);
+            MemberReferenceHandle cooperate = default;
             foreach (var block in blocks)
                 labels.Add(block.Name, il.DefineLabel());
 
@@ -158,10 +171,17 @@ internal static class CfgCilEmitter
                             il.LoadArgument(checked((int)op.I64Constant!.Value));
                             break;
                         case CfgOpcode.Call:
+                        case CfgOpcode.TrapCall:
                             if (handles is null || op.Target is null ||
                                 !handles.TryGetValue(op.Target, out var callee) ||
                                 op.Arguments is null)
                                 throw new FormatException("Unlinked CFG native static method call");
+                            if (op.Opcode == CfgOpcode.TrapCall)
+                            {
+                                if (guest is null) throw new FormatException("Missing typed trap metadata");
+                                guest.WriteTrap(il, flow, callee, op.Arguments, op.ResultId);
+                                continue;
+                            }
                             foreach (int argument in op.Arguments)
                                 il.LoadLocal(argument);
                             il.Call(callee);
@@ -171,6 +191,21 @@ internal static class CfgCilEmitter
                             break;
                         case CfgOpcode.ConstantBool:
                             il.LoadConstantI4(op.BoolConstant!.Value ? 1 : 0);
+                            break;
+                        case CfgOpcode.InlineCooperate:
+                            if (cooperate.IsNil)
+                            {
+                                var runtime = metadata.AddAssemblyReference(metadata.GetOrAddString("Ores.Net.Runtime"),
+                                    new Version(1, 0, 0, 0), default, default, default, default);
+                                var owner = metadata.AddTypeReference(runtime, metadata.GetOrAddString("Ores.Net.Runtime"),
+                                    metadata.GetOrAddString("RootInlineCooperation"));
+                                var cooperateSignature = new BlobBuilder();
+                                new BlobEncoder(cooperateSignature).MethodSignature().Parameters(0,
+                                    result => result.Type().Boolean(), _ => { });
+                                cooperate = metadata.AddMemberReference(owner, metadata.GetOrAddString("Yield"),
+                                    metadata.GetOrAddBlob(cooperateSignature));
+                            }
+                            il.Call(cooperate);
                             break;
                         case CfgOpcode.PackOptionI64:
                             il.LoadLocalAddress(op.ResultId);
@@ -309,6 +344,7 @@ internal static class CfgCilEmitter
                             }
                             break;
                         default:
+                            if (guest is not null && guest.WriteOperation(il, op)) break;
                             throw new FormatException("Unverified CFG instruction");
                     }
                     il.StoreLocal(op.ResultId);
@@ -323,6 +359,10 @@ internal static class CfgCilEmitter
                     case CfgReturnVoid:
                         // Void MethodDef signature and empty evaluation stack.
                         il.OpCode(ILOpCode.Ret);
+                        break;
+                    case CfgSignal signal:
+                        if (guest is null) throw new FormatException("Missing guest effect metadata");
+                        guest.WriteSignal(il, signal);
                         break;
                     case CfgJump jump:
                         Transfer(jump.Target, jump.Arguments);
@@ -352,7 +392,7 @@ internal static class CfgCilEmitter
             // stores its result immediately, and the maximum temporary depth
             // is two (binary operation); control-flow edges never merge stacks.
             int maxStack = Math.Max(2, blocks.SelectMany(b => b.Instructions)
-                .Where(op => op.Opcode == CfgOpcode.Call)
+                .Where(op => op.Opcode is CfgOpcode.Call or CfgOpcode.TrapCall)
                 .Select(op => op.Arguments!.Count).DefaultIfEmpty(0).Max());
             int offset = bodies.AddMethodBody(il, maxStack: maxStack,
                 localVariablesSignature: signature,
