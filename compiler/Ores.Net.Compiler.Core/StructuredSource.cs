@@ -232,13 +232,27 @@ public static partial class OresStructuredParser
         }
     }
 
-    private static StructuredLinkedUnit ParseCore(string source, LinkedModuleContext? linking)
+    internal static IReadOnlyList<StaticImportGraph.Export> ParseFrozenExports(FrozenImportSnapshot snapshot, string expectedNamespace)
+    {
+        var inventory = new List<StaticImportGraph.Export>();
+        _ = ParseCore(snapshot.ProviderSource(expectedNamespace), null, expectedNamespace, inventory);
+        return inventory.AsReadOnly();
+    }
+
+    // Reuse the exact structured parser over the original immutable bytes.
+    // A checked provider is not yet an executable module until CFG verification.
+    internal static StructuredProgram ParseFrozenProvider(FrozenImportSnapshot snapshot, string expectedNamespace, string methodPrefix = "")
+        => ParseCore(snapshot.ProviderSource(expectedNamespace), null, expectedNamespace,
+            new List<StaticImportGraph.Export>(), methodPrefix).Program;
+
+    private static StructuredLinkedUnit ParseCore(string source, LinkedModuleContext? linking,
+        string? frozenNamespace = null, List<StaticImportGraph.Export>? frozenExports = null, string frozenMethodPrefix = "", Func<string,string,StructuredFunction>? frozenResolve = null)
     {
         ValidateSourceInput(source);
         ActorPubSubSourceAdmission.RejectUnsupported(source);
         // No structural match lowering or readonly shape metadata in scalar CIL yet.
         StructuralShapeAdmission.RejectUnsupportedPatterns(source, allowCompileTimeRows: true);
-        var lexer = new Lexer(source, linking is not null);
+        var lexer = new Lexer(source, linking is not null || frozenNamespace is not null);
         var tokens = new List<Token>();
         // Distinguish a forbidden local nominal declaration from an
         // unsupported top-level class/actor before either reaches lowering.
@@ -364,7 +378,7 @@ public static partial class OresStructuredParser
                 throw new FormatException(
                     $"ACTOR_FORWARD_NATIVEAOT_UNSUPPORTED: actor forward requires nominal actor identity, ownership and executable CIL lowering at offset {token.Offset}");
             if (token.Text == "namespace" && i > 0 && tokens[i - 1].Text == "use" &&
-                !(linking is not null &&
+                frozenNamespace is null && !(linking is not null &&
                   linking.UnitIdentity.StartsWith("@atto.core/", StringComparison.Ordinal)))
                 throw new FormatException(
                     $"NAMESPACE_RUNTIME_NATIVEAOT_UNSUPPORTED: file namespace requires authenticated compiler-owned Core source or verified package linker at offset {token.Offset}");
@@ -535,6 +549,8 @@ public static partial class OresStructuredParser
         }
         RejectUnsupportedMacros(tokens);
         var reader = new Reader(tokens, linking);
+        if (frozenNamespace is not null)
+            return reader.ReadFrozenNamespace(frozenNamespace, frozenExports!, frozenMethodPrefix, frozenResolve);
         return linking is null
             ? new StructuredLinkedUnit(reader.ReadProgram(), null, new Dictionary<string, StructuredFunction>())
             : reader.ReadLinkedUnit();
@@ -1092,6 +1108,7 @@ public static partial class OresStructuredParser
 
         internal IReadOnlyList<SourceImport> ReadImports()
         {
+            string? currentNamespace = null;
             // File-level namespace metadata is not a runtime object or an
             // ambient import. It is admitted here only for SHA-pinned Core
             // source identities; all other namespaces remain fail-closed.
@@ -1108,6 +1125,7 @@ public static partial class OresStructuredParser
                 Expect(";");
                 if (linking is null && !allowCoreNamespace)
                     throw Error("Core namespace requires authenticated Core import provenance");
+                currentNamespace = "atto.core." + leaf;
                 if (linking is not null)
                 {
                     if (!string.Equals(linking.UnitIdentity, "@atto.core/" + leaf + ".atto",
@@ -1121,6 +1139,64 @@ public static partial class OresStructuredParser
             while (Take("import"))
             {
                 int offset = Current.Offset;
+                // Validate contextual path shape before any filesystem or
+                // external lookup. Linking requires authenticated package metadata.
+                if (Current.Text is "self" or "super" ||
+                    (Current.Text == "pkg" && index + 1 < tokens.Count &&
+                     tokens[index + 1].Text is "." or ";"))
+                {
+                    string logical = Current.Text;
+                    index++;
+                    int components = 1;
+                    while (Take("."))
+                    {
+                        if (++components > 8 || Current.Text.Length > 64)
+                            throw Error("E_IMPORT_PATH: contextual path exceeds budget");
+                        if (Current.Text is "." or ";" or "")
+                            throw Error("E_IMPORT_PATH: missing contextual path component");
+                        logical += "." + Current.Text;
+                        index++;
+                    }
+                    if (Take("as")) _ = Name();
+                    Expect(";");
+                    _ = ContextualImportPath.Normalize(logical, currentNamespace);
+                    throw Error("E_UNSUPPORTED: contextual import requires authenticated package-export graph");
+                }
+                // Closed compiler-owned namespace-first aliases only. Emit the
+                // identical import record used by the existing authenticated
+                // Core wildcard lane, never a caller-supplied path.
+                if (Take("namespace"))
+                {
+                    string alias = Name();
+                    if (!Take("from"))
+                        throw Error("import namespace requires manifest-verified multi-file package linker");
+                    string selector = Current.Text;
+                    if (selector.Length == 0) throw Error("import namespace requires manifest-verified multi-file package linker");
+                    index++;
+                    if (selector.Length >= 2 && (selector[0] == '"' || selector[0] == '\'') &&
+                        selector[^1] == selector[0])
+                        selector = selector[1..^1];
+                    else if (selector == "core" && Take("."))
+                    {
+                        if (Current.Text.Length == 0) throw Error("import namespace requires manifest-verified multi-file package linker");
+                        selector += "." + Current.Text;
+                        index++;
+                    }
+                    string? canonical = selector switch
+                    {
+                        "core.math" => "atto.core/math",
+                        "core.hash" => "atto.core/hash",
+                        "core.cell" => "atto.core/cell",
+                        _ => null
+                    };
+                    if (canonical is null || Current.Text != ";")
+                        throw Error("import namespace requires manifest-verified multi-file package linker");
+                    UnsafeStdlibImportAdmission.RequireGuestSafe(canonical);
+                    Expect(";");
+                    if (imports.Count >= 64) throw Error("Import declaration budget exceeded");
+                    imports.Add(new SourceImport("builtin_namespace", alias, canonical, offset));
+                    continue;
+                }
                 string kind;
                 string name;
                 if (Take("*"))
@@ -1136,9 +1212,6 @@ public static partial class OresStructuredParser
                 else
                 {
                     kind = Current.Text;
-                    // 'import namespace' is NOT file's 'use namespace' header.
-                    if (kind == "namespace")
-                        throw Error("import namespace requires manifest-verified multi-file package linker");
                     if (kind is not ("fnc" or "module"))
                         throw Error("Linked source supports fnc, module and authenticated Core wildcard imports");
                     index++;
@@ -1162,7 +1235,90 @@ public static partial class OresStructuredParser
                 if (imports.Count >= 64) throw Error("Import declaration budget exceeded");
                 imports.Add(new SourceImport(kind, name, quoted[1..^1], offset));
             }
+            RejectUnlinkedAliases();
             return imports.AsReadOnly();
+        }
+
+        // A bounded declaration batch is normalized before any source module
+        // discovery. Do not treat an acyclic alias as an executable constant.
+        private bool AtAlias() => Current.Text == "define" && index + 1 < tokens.Count
+            && tokens[index + 1].Text == "alias";
+
+        private string ReadAliasPath()
+        {
+            string first = Name();
+            if (first.Length > 64) throw Error("E_IMPORT_PATH: alias component too long");
+            string path = first;
+            int count = 1;
+            while (Take("."))
+            {
+                if (++count > 8) throw Error("E_IMPORT_PATH: alias path too deep");
+                string part = Name();
+                if (part.Length > 64) throw Error("E_IMPORT_PATH: alias component too long");
+                path += "." + part;
+            }
+            return path;
+        }
+
+        private void RejectUnlinkedAliases()
+        {
+            if (!AtAlias()) return;
+            var aliases = new List<StaticImportGraph.Alias>();
+            while (AtAlias())
+            {
+                index += 2;
+                if (aliases.Count >= 256) throw Error("E_SOURCE_LIMIT: namespace alias budget exceeded");
+                string left = ReadAliasPath();
+                string name, reference;
+                if (Take("=")) { name = left; reference = ReadAliasPath(); }
+                else { Expect("as"); reference = left; name = Name(); }
+                Expect(";");
+                aliases.Add(new StaticImportGraph.Alias(name, reference));
+            }
+            StaticImportGraph.PrecheckAliases(aliases);
+            throw Error("E_UNSUPPORTED: namespace aliases require authenticated static binding integration");
+        }
+
+        private bool frozenProvider;
+        private string frozenMethodPrefix = "";
+        internal StructuredLinkedUnit ReadFrozenNamespace(string expected, List<StaticImportGraph.Export> inventory, string methodPrefix, Func<string,string,StructuredFunction>? resolve)
+        {
+            // This entry point accepts bytes only from a verified snapshot.
+            // Do not confer compiler-owned Core authority on any package.
+            Expect("use"); Expect("namespace");
+            string[] parts = expected.Split('.');
+            for (int i=0; i<parts.Length; i++)
+            {
+                if (i != 0) Expect(".");
+                if (Current.Text != parts[i]) throw Error("E_MANIFEST: provider namespace mismatch");
+                index++;
+            }
+            Expect(";");
+            var importedNames=new HashSet<string>(StringComparer.Ordinal);
+            while(Take("import")) {
+                if(resolve is null) throw Error("E_UNSUPPORTED: frozen provider imports require complete dependency closure");
+                if(importedNames.Count>=32) throw Error("E_SOURCE_LIMIT: provider import budget exceeded");
+                Expect("fnc");
+                string member=Name(), binding=member;
+                if(Take("as")) binding=Name();
+                Expect("from"); Expect("pkg");
+                string raw=Current.Text;
+                if(raw.Length<3 || raw[0] is not ('"' or '\'') || raw[^1]!=raw[0] || raw.Contains('\\'))
+                    throw Error("E_IMPORT_PATH: expected static package subpath");
+                index++;
+                Expect(";");
+                if(!importedNames.Add(binding)) throw Error("E_DUPLICATE: provider import binding");
+                var target=resolve(raw[1..^1],member);
+                visible.Add(binding,target);
+            }
+            frozenProvider = true;
+            frozenMethodPrefix = methodPrefix;
+            var program = ReadDeclarations(false);
+            inventory.Add(new StaticImportGraph.Export(expected,StaticImportGraph.Kind.Namespace,true));
+            foreach (string name in visible.Keys.Where(x=>!importedNames.Contains(x)).OrderBy(x=>x,StringComparer.Ordinal))
+                inventory.Add(new StaticImportGraph.Export(expected+"."+name,StaticImportGraph.Kind.Fnc,exports.ContainsKey(name)));
+            return new StructuredLinkedUnit(program, null,
+                new System.Collections.ObjectModel.ReadOnlyDictionary<string, StructuredFunction>(exports));
         }
 
         internal StructuredLinkedUnit ReadLinkedUnit()
@@ -1233,7 +1389,11 @@ public static partial class OresStructuredParser
                         $"Option/Result/trap requires verified tagged-sum CIL and NativeAOT guest-control lowering at offset {Current.Offset}: trap function modifier is unsupported");
                 if (Current.Text is "class" or "actor")
                     throw Error("Nominal class/actor methods require receiver-erased method slots, type/borrow checking and Native AOT CIL lowering; unsupported in .NET structured frontend");
-                if (!Take("fnc")) Expect("routine");
+                if (!Take("fnc"))
+                {
+                    if (frozenProvider) throw Error("E_UNSUPPORTED: frozen provider supports ordinary root functions only");
+                    Expect("routine");
+                }
                 int at = Current.Offset;
                 string name = Name();
                 // This NativeAOT slice does not lower once-only initialization
@@ -1327,7 +1487,7 @@ public static partial class OresStructuredParser
                 StructuredExpr? inlineReturn =
                     helperBody.Count == 1 && helperBody[0] is StructuredReturn only
                         ? only.Value : null;
-                string methodName = linking?.CanonicalName(name) ?? name;
+                string methodName = linking?.CanonicalName(name) ?? (frozenMethodPrefix + name);
                 var declaration = new StructuredFunction(methodName,
                     Array.AsReadOnly(parameters.ToArray()), resultType,
                     inlineReturn, helperBody);

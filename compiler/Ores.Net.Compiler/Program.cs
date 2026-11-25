@@ -3,6 +3,16 @@ using System.Text;
 using System.Globalization;
 using Ores.Net.Runtime;
 
+if(args.Length>0 && args[0] is "check-frozen" or "compile-frozen")
+{
+    try { return FrozenPackageCommand.Run(args); }
+    catch(Exception ex) when(ex is FormatException or IOException or UnauthorizedAccessException or ArgumentException or System.IO.InvalidDataException)
+    {
+        Console.Error.WriteLine("oresnet: "+ex.Message);
+        return 1;
+    }
+}
+
 // The shipping default stays byte-for-byte unchanged. Only the scalar
 // check/compile lane may select the preview v1/v2 callable-body contract.
 int? explicitLanguageVersion = null;

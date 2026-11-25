@@ -408,6 +408,9 @@ Console.WriteLine("DURABLE_M0_REFERENCE_ONLY|sha256=" + durableM0PinnedSha +
             "manifest-verified multi-file package linker",
             "namespace import needs exact manifest ownership");
 
+        ContextualImportParserSelfTest.Run();
+        FrozenImportGraphSelfTest.Run();
+
         // Standalone compilation must also refuse lifecycle hooks; only
         // checking linked dependency imports is insufficient.
         File.WriteAllText(main, "fnc init()->int { return 9; } fnc main()->int { return 1; }");
