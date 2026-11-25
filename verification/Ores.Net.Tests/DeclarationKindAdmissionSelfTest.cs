@@ -25,6 +25,13 @@ internal static class DeclarationKindAdmissionSelfTest
             "define interface Reader as\nend\n",
             "define protocol Wire as\nend\n",
             "define service Api as\nend\n",
+            "define keyword entity as class end\n",
+            "define keyword entity as class end\ndefine entity Customer as end\n",
+            "define keyword durable_object as actor end\ndefine durable_object Counter as end\n",
+            "define keyword entity as class requires Entity; end\n",
+            "define entity Customer as end\n",
+            "define pub keyword entity as class end\n",
+            "import keyword entity from \"std.database\";\ndefine entity Customer as end\n",
         };
 
         foreach (string source in rejected)
@@ -41,6 +48,6 @@ internal static class DeclarationKindAdmissionSelfTest
         }
         // Positive control: a parser that rejects everything is not a valid gate.
         _ = OresParser.Parse("define fnc main():int{return 7;}\n");
-        Console.WriteLine(".NET nominal declaration gate: 16 denials + scalar positive; no Native AOT claim");
+        Console.WriteLine(".NET nominal declaration gate: 23 denials + scalar positive; no Native AOT claim");
     }
 }
