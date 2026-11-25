@@ -11,20 +11,20 @@ internal static class FrozenDependencyGraphSelfTest
     private const string Path="src/network.atto",Source="use namespace network; pub fnc answer():int{return 42;}";
     private static byte[] Bytes(string s)=>Encoding.UTF8.GetBytes(s);
     private static string Sha(byte[] b)=>Convert.ToHexString(SHA256.HashData(b)).ToLowerInvariant();
-    private static FrozenImportSnapshot Snapshot(string name,string version,Dictionary<string,string> declared,Dictionary<string,string> pins)
+    private static FrozenImportSnapshot Snapshot(string name,string version,Dictionary<string,string> declared,Dictionary<string,string> pins,string source=Source)
     {
-        var m=new StringBuilder("[package]\nname = \""+name+"\"\nversion = \""+version+"\"\n[namespaces]\nnetwork = \""+Path+"\"\n");
+        var m=new StringBuilder("[package]\nname = \""+name+"\"\nversion = \""+version+"\"\n[namespaces]\nnetwork = \""+Path+"\"\n[exports]\n\"api\" = \"network\"\n");
         if(declared.Count!=0){
             m.Append("[dependencies]\n");
             foreach(var e in declared.OrderBy(x=>x.Key,StringComparer.Ordinal)) m.Append("\"").Append(e.Key).Append("\" = \"").Append(e.Value).Append("\"\n");
         }
-        var l=new StringBuilder("[lock]\nmanifest_sha256 = \""+Sha(Bytes(m.ToString()))+"\"\n[files]\n\""+Path+"\" = \""+Sha(Bytes(Source))+"\"\n");
+        var l=new StringBuilder("[lock]\nmanifest_sha256 = \""+Sha(Bytes(m.ToString()))+"\"\n[files]\n\""+Path+"\" = \""+Sha(Bytes(source))+"\"\n");
         if(pins.Count!=0){
             l.Append("[dependencies]\n");
             foreach(var e in pins.OrderBy(x=>x.Key,StringComparer.Ordinal)) l.Append("\"").Append(e.Key).Append("\" = \"").Append(e.Value).Append("\"\n");
         }
         byte[] locked=Bytes(l.ToString());
-        return FrozenImportSnapshot.Verify(name,version,Sha(locked),Bytes(m.ToString()),locked,new Dictionary<string,byte[]>{{Path,Bytes(Source)}});
+        return FrozenImportSnapshot.Verify(name,version,Sha(locked),Bytes(m.ToString()),locked,new Dictionary<string,byte[]>{{Path,Bytes(source)}});
     }
     private static FrozenImportSnapshot WithDeps(string name,params FrozenImportSnapshot[] dependencies)
         => Snapshot(name,"1.0.0",dependencies.ToDictionary(p=>p.Name,p=>p.Version,StringComparer.Ordinal),
@@ -36,6 +36,30 @@ internal static class FrozenDependencyGraphSelfTest
             return;
         }
         throw new InvalidOperationException("expected "+code);
+    }
+    internal static void EmitTransitiveGuest(string output)
+    {
+        var c=Snapshot(C,"1.0.0",new(),new(),"use namespace network; fnc secret():int{return 99;} pub fnc answer(int x):int{return x*2;}");
+        var b=Snapshot(B,"1.0.0",new(){{C,c.Version}},new(){{C,c.LockDigest}},
+            "use namespace network; import fnc answer as twice from pkg '"+C+"/api'; pub fnc answer(int x):int{return twice(x)+1;}");
+        var a=Snapshot(A,"1.0.0",new(){{B,b.Version}},new(){{B,b.LockDigest}},
+            "use namespace network; import fnc answer as next from pkg '"+B+"/api'; pub fnc answer(int x):int{return next(x)+1;}");
+        string main="import pkg '"+A+"' as p; pub fnc main()->int{return p.network.answer(20);}";
+        var module=OresStructuredParser.CompileFrozenScalar(main,new[]{a,b,c});
+        CilEmitter.EmitLibrary(module,output);
+        byte[] baseline=System.IO.File.ReadAllBytes(output);
+        CilEmitter.EmitLibrary(OresStructuredParser.CompileFrozenScalar(main,new[]{c,b,a}),output);
+        if(!System.IO.File.ReadAllBytes(output).AsSpan().SequenceEqual(baseline))
+            throw new InvalidOperationException("dependency inventory order changed CIL");
+        Deny("E_UNBOUND",()=>OresStructuredParser.CompileFrozenScalar(main,new[]{a,b}));
+        var jump=Snapshot(A,"1.0.0",new(){{B,b.Version}},new(){{B,b.LockDigest}},
+            "use namespace network; import fnc answer as next from pkg '"+C+"/api'; pub fnc answer(int x):int{return next(x);}");
+        Deny("E_UNBOUND",()=>OresStructuredParser.CompileFrozenScalar(main,new[]{jump,b,c}));
+        var hidden=Snapshot(B,"1.0.0",new(){{C,c.Version}},new(){{C,c.LockDigest}},
+            "use namespace network; import fnc secret from pkg '"+C+"/api'; pub fnc answer(int x):int{return secret();}");
+        Deny("E_PRIVATE",()=>OresStructuredParser.CompileFrozenScalar("import pkg '"+B+"' as p; pub fnc main()->int{return p.network.answer(20);}",new[]{hidden,c}));
+        Deny("E_UNBOUND",()=>OresStructuredParser.CompileFrozenScalar("import pkg '"+B+"' as p; pub fnc main()->int{return p.network.twice(20);}",new[]{b,c}));
+        Console.WriteLine("FROZEN_TRANSITIVE_CIL|three packages|permutation-identical|four denials");
     }
     internal static void Run()
     {
