@@ -5,7 +5,34 @@ public sealed partial class OresVmHost
     // Trusted host state-machine ABI: null completes the receive; otherwise
     // the next segment waits on a task without retaining a physical carrier.
     // The readiness task is not execution authority or a guest Future ABI.
-    internal sealed record ActorPumpStep(Task Ready, Func<ActorDispatchScope, ActorPumpStep?> Next);
+    internal sealed record ActorPumpStep(Task Ready, Func<ActorDispatchScope, ActorPumpStep?> Next,
+        ActorScalarTask? Producer = null);
+
+    // A single capture-free scalar producer per suspended receive, executed
+    // as its own work item on the same bounded actor domain. No Task.Run,
+    // blocking wait, guest state scope or additional carrier reservation.
+    internal sealed class ActorScalarTask
+    {
+        private readonly Func<long> _body;
+        private readonly TaskCompletionSource<long> _completion =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _claimed;
+        internal ActorScalarTask(Func<long> body) =>
+            _body = body ?? throw new ArgumentNullException(nameof(body));
+        internal Task<long> Future => _completion.Task;
+        internal void Run()
+        {
+            if (Interlocked.Exchange(ref _claimed, 1) != 0)
+                throw new InvalidOperationException("scalar producer replay");
+            try { _completion.TrySetResult(_body()); }
+            catch (Exception error) { _completion.TrySetException(error); }
+        }
+        internal void CancelUnstarted()
+        {
+            if (Interlocked.CompareExchange(ref _claimed, 1, 0) == 0)
+                _completion.TrySetCanceled();
+        }
+    }
     private sealed record PendingPumpStep(ActorContinuation Ticket, ActorPumpStep Step);
 
     private static void SignalActorPump(ActorTicket actor)
@@ -64,6 +91,7 @@ public sealed partial class OresVmHost
             object? lease = null;
             Func<ActorDispatchScope, ActorPumpStep?>? segment = null;
             Task[]? waits = null;
+            ActorScalarTask? producer = null;
             lock (_gate) {
                 var state = Check(handle);
                 CheckActor(state, actor);
@@ -73,10 +101,12 @@ public sealed partial class OresVmHost
                 for (int i = pending.Count - 1; i >= 0; i--) {
                     var item = pending[i];
                     if (!item.Ticket.Turn.CancellationRequested) continue;
+                    item.Step.Producer?.CancelUnstarted();
                     DiscardScheduledContinuation(scheduler, handle, actor, item.Ticket);
                     pending.RemoveAt(i);
                 }
                 int readyIndex = pending.FindIndex(item => item.Step.Ready.IsCompleted);
+                int producerIndex = pending.FindIndex(item => item.Step.Producer is not null && !item.Step.Ready.IsCompleted);
                 if (actor.ActiveTurn is null) {
                     bool canStart = actor.LiveTurns.Count < actor.MaxLiveReceives &&
                         actor.NextTurnGeneration != ulong.MaxValue;
@@ -84,6 +114,8 @@ public sealed partial class OresVmHost
                     bool controlReady = canStart && HasReadySupervisorTerminal(state, actor) &&
                         (actor.SupervisorControlBurst < SupervisorControlBurstLimit || !ordinaryReady);
                     bool chooseResume = readyIndex >= 0 &&
+                        (preferResume || (!controlReady && !ordinaryReady));
+                    bool chooseProducer = producerIndex >= 0 &&
                         (preferResume || (!controlReady && !ordinaryReady));
                     if (chooseResume) {
                         var item = pending[readyIndex];
@@ -99,6 +131,9 @@ public sealed partial class OresVmHost
                         InstallSegmentCarrier(turn, lease);
                         segment = item.Step.Next;
                         pending.RemoveAt(readyIndex);
+                        preferResume = false;
+                    } else if (chooseProducer) {
+                        producer = pending[producerIndex].Step.Producer;
                         preferResume = false;
                     } else if (controlReady || ordinaryReady) {
                         lease = new object();
@@ -120,7 +155,7 @@ public sealed partial class OresVmHost
                         preferResume = true;
                     }
                 }
-                if (turn is null) {
+                if (turn is null && producer is null) {
                     // Register under the same gate used for publication:
                     // no empty-check/subscribe race. Do not wait on an
                     // already-completed task while a different turn runs.
@@ -133,6 +168,10 @@ public sealed partial class OresVmHost
                 }
             }
 
+            if (producer is not null) {
+                producer.Run(); // outside gate; no active actor state lease
+                return null;
+            }
             if (turn is null) return waits!;
 
             ActorPumpStep? next = null;
@@ -141,6 +180,8 @@ public sealed partial class OresVmHost
                 if (next is null) return false;
                 ArgumentNullException.ThrowIfNull(next.Ready);
                 ArgumentNullException.ThrowIfNull(next.Next);
+                if (next.Producer is not null && !ReferenceEquals(next.Ready, next.Producer.Future))
+                    throw new InvalidOperationException("producer readiness identity mismatch");
                 return true;
             });
             if (continuation is not null)
@@ -184,6 +225,7 @@ public sealed partial class OresVmHost
                     // has already physically suspended. Never clear a running
                     // sibling's state authority or abandon a live ticket.
                     foreach (var item in pending) {
+                        item.Step.Producer?.CancelUnstarted();
                         CancelActorTurn(handle, actor, item.Ticket.Turn);
                         DiscardScheduledContinuation(scheduler, handle, actor, item.Ticket);
                     }
