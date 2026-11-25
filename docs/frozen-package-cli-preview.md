@@ -41,3 +41,23 @@ Still outside this bounded profile: general CLI source linking, transitive provi
 dependencies, arbitrary declarations and control flow, and multi-file namespaces.
 CI receipts must show real execution on the exact PR head/tree; queued jobs do not
 establish compiler or native execution parity.
+
+## Dependency closure preview
+
+The candidate manifest can declare exact dependency versions; the corresponding lock table pins each dependency's complete lock SHA-256. For example, append to the manifest:
+
+```toml
+[dependencies]
+"@org/project/b" = "1.0.0"
+```
+
+Append to the lock after `[files]`:
+
+```toml
+[dependencies]
+"@org/project/b" = "<actual lowercase 64-digit dependency lock SHA-256>"
+```
+
+The example hash is a placeholder, not an admitted digest. Every supplied archive still requires an independent trusted pin. The manifest and lock dependency key sets must match exactly. Before any provider parsing, verify all supplied packages, reject absent dependencies, conflicting versions/lock digests, duplicates and cycles, and derive deterministic dependency-first order. A package may resolve only a directly declared edge, not a dependency merely reachable through another package. This profile permits at most 16 packages and 128 aggregate edges; unused supplied snapshots are checked too. Cycle diagnostics precede edge digest mismatch checks on structurally cyclic malformed input. These tables are an implementation preview, not yet a normative registry lock format.
+
+**Important:** metadata closure admission is integrated into check/compile/run. Provider source imports themselves remain unsupported: A can declare and authenticate B and B can declare and authenticate C, but guest calls from A into B and B into C still require transitive source linker integration. No transitive guest execution claim.
