@@ -1,0 +1,12 @@
+namespace counter;
+declare pub actor AwaitCounter;
+define state on actor AwaitCounter as { let int count: 0; }
+
+pub suspends mtd (AwaitCounter counter) add(int incoming, Future<int> pending): int {
+    val int saved = incoming;
+    val int result = await pending;
+    return self.handle_state(critical-write |s| -> {
+        s.count = s.count + (saved + result);
+        return s.count;
+    });
+}
