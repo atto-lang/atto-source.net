@@ -83,7 +83,7 @@ public static class ActorAwaitSourceEmitter
         ArgumentNullException.ThrowIfNull(plan);
         string initial = plan.InitialValue == long.MinValue ? "long.MinValue" :
             plan.InitialValue.ToString(CultureInfo.InvariantCulture) + "L";
-        string emitted = $"""
+        string emitted = $$"""
             // Verified one-await actor frame; static NativeAOT source.
             #nullable enable
             using Ores.Net.Runtime;
@@ -136,16 +136,16 @@ public static class ActorAwaitSourceEmitter
         // uses the same verified frame and a separate bounded carrier item.
         return emitted
             .Replace("private readonly Task<long> _pending;",
-                "private OresVmHost.ActorScalarTask? _producer;\n    private Task<long>? _pending;", StringComparison.Ordinal)
+                "private Task<long>? _pending;", StringComparison.Ordinal)
             .Replace("(long incoming, Task<long> pending)", "(long incoming)", StringComparison.Ordinal)
             .Replace("        _pending = pending ?? throw new System.ArgumentNullException(nameof(pending));\n",
                 "", StringComparison.Ordinal)
             .Replace("        _pc = 1;",
-                "        _producer = new OresVmHost.ActorScalarTask(static () => Produce(" +
+                "        var producer = new OresVmHost.ActorScalarTask(static () => Produce(" +
                     Literal(left) + ", " + Literal(right) + "));\n" +
-                "        _pending = _producer.Future;\n        _pc = 1;", StringComparison.Ordinal)
+                "        _pending = producer.Future;\n        _pc = 1;", StringComparison.Ordinal)
             .Replace("new OresVmHost.ActorPumpStep(_pending, Resume);",
-                "new OresVmHost.ActorPumpStep(_pending, Resume, _producer);", StringComparison.Ordinal)
+                "new OresVmHost.ActorPumpStep(producer.Future, Resume, producer);", StringComparison.Ordinal)
             .Replace("if (_pc != 1 || !_pending.IsCompletedSuccessfully)",
                 "if (_pc != 1 || _pending is null || !_pending.IsCompletedSuccessfully)", StringComparison.Ordinal)
             .Replace("    private OresVmHost.ActorPumpStep? Resume(",
