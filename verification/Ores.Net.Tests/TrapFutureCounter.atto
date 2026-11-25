@@ -1,0 +1,7 @@
+namespace counter;
+declare pub actor TrapFutureCounter;
+define state on actor TrapFutureCounter as { let int count: 0; }
+
+pub suspends mtd (TrapFutureCounter counter) observe(Future<int> pending): Result<int, Error> {
+    return trap!(await pending);
+}
