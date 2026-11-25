@@ -38,3 +38,5 @@ jobs:
           grep -Fx NET_SUPERVISOR_TERMINAL_RESERVATION_HOST_TESTS_PASS supervisor-terminal.log
           grep -Fx NET_NESTED_STATE_AUTHORITY_CURRENT_MAIN_TEST_PASS supervisor-terminal.log
           grep -Fx NET_ACTOR_CANCEL_RETIREMENT_HOST_TESTS_PASS supervisor-terminal.log
+          grep -Fx NET_SCHEDULED_CARRIER_RETIREMENT_HOST_TESTS_PASS supervisor-terminal.log
+          grep -Fx NET_SUPERVISOR_DISPATCH_PRIORITY_HOST_TESTS_PASS supervisor-terminal.log
