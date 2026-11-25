@@ -553,7 +553,7 @@ pub async routine main(): void {
         {
             try
             {
-                _ = readLinkedImports.Invoke(null, new object?[] { source });
+                _ = readLinkedImports.Invoke(null, new object?[] { source, false });
             }
             catch (System.Reflection.TargetInvocationException failure)
                 when (failure.InnerException is FormatException error &&
@@ -566,7 +566,7 @@ pub async routine main(): void {
                 "Linked import discovery admitted malformed source before full parse: " +
                 expectedError);
         }
-        _ = readLinkedImports.Invoke(null, new object?[] { "/* valid \uD83D\uDD12 */" });
+        _ = readLinkedImports.Invoke(null, new object?[] { "/* valid \uD83D\uDD12 */", false });
 
         // Local value types are block-local declarations on the structured
         // frontend. They are admitted into the AST but deliberately rejected
