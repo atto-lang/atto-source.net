@@ -657,6 +657,20 @@ public static partial class OresParser
                     (text[_i] is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9' or '_'))
                     _i++;
                 var word = text[start.._i];
+                // Mandatory whitespace follows the entire contextual keyword suffix.
+                // Keep exact inequality tokens distinct.
+                if ((word is "trap" or "throw" or "raise" or "panic" or "copy" or "take" or
+                    "borrow" or "share" or "pin" or "drop" or "pipe" or "rpipe" or "stop" or "expand") &&
+                    _i < text.Length && text[_i] == '!' &&
+                    (_i + 1 >= text.Length || text[_i + 1] != '=') &&
+                    !(text.AsSpan(_i).StartsWith("!eq", StringComparison.Ordinal) &&
+                      (_i + 3 == text.Length ||
+                       !(char.IsLetterOrDigit(text[_i + 3]) || text[_i + 3] == '_'))))
+                {
+                    int after = _i + (word == "copy" && _i + 1 < text.Length && text[_i + 1] == '!' ? 2 : 1);
+                    if (after >= text.Length || text[after] is not (' ' or '\t' or '\r' or '\n' or '\v' or '\f'))
+                        throw new FormatException($"E_BANG_KEYWORD_WHITESPACE: whitespace required after bang keyword at offset {start}");
+                }
                 if (word == "select" &&
                     StaticSelectAdmission.FollowedByStaticSelect(text, start))
                     throw StaticSelectAdmission.Unsupported(start);
